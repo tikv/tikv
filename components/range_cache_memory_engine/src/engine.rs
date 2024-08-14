@@ -339,7 +339,7 @@ impl RangeCacheMemoryEngine {
     ) -> RangeCacheStatus {
         let mut core = self.core.write();
         let range_manager = core.mut_range_manager();
-        let Some(mut region_state) = range_manager.check_region_status(region) else {
+        let Some(mut region_state) = range_manager.check_region_state(region) else {
             return RangeCacheStatus::NotInCache;
         };
 
@@ -370,7 +370,7 @@ impl RangeCacheMemoryEngine {
             || region_state == RegionState::Loading
             || region_state == RegionState::Active
         {
-            range_manager.record_in_region_being_written(write_batch_id, range, region.id);
+            range_manager.record_in_region_being_written(write_batch_id, range);
             if region_state == RegionState::Active {
                 result = RangeCacheStatus::Cached;
             } else {

@@ -2542,6 +2542,7 @@ dependencies = [
  "fail",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "online_config",
  "prometheus",
  "prometheus-static-metric",

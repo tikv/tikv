@@ -13,7 +13,10 @@ use raftstore::coprocessor::{
 
 #[derive(Clone)]
 pub struct Observer {
-    // TODO: remove the useless Mutex.
+    // observer is per thread so ther is no need to use mutex here,
+    // but current inteface only provides `&self` but not `&mut self`,
+    // so we use mutex to workaround this restriction.
+    // TODO: change Observer's interface to `&mut self`.
     pending_events: Arc<Mutex<Vec<RegionEvent>>>,
     cache_engine: Arc<dyn RangeCacheEngineExt + Send + Sync>,
 }
@@ -81,8 +84,8 @@ impl Observer {
                 "region_id" => ctx.region().get_id(),
                 "is_ingest_sst" => apply.pending_handle_ssts.is_some(),
                 "admin_command" => ?cmd.request.get_admin_request().get_cmd_type(),
-                "start_key" => ?ctx.region().start_key,
-                "end_key" => ?ctx.region().end_key,
+                "start_key" => ?log_wrappers::Value(&ctx.region().start_key),
+                "end_key" => ?log_wrappers::Value(&ctx.region().end_key),
             );
             self.pending_events
                 .lock()
@@ -132,7 +135,7 @@ impl Observer {
 
         let range = CacheRange::from_region(region);
         tikv_util::info!(
-           "evict range due to leader step down";
+           "evict region due to leader step down";
            "region_id" => region.get_id(),
            "epoch" => ?region.get_region_epoch(),
            "start_key" => ?region.start_key,

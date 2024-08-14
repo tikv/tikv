@@ -14,6 +14,11 @@ use crate::{Iterable, KvEngine, Snapshot, WriteBatchExt};
 pub enum FailedReason {
     NotCached,
     TooOldRead,
+    // while we always get rocksdb's snapshot first and then get IME's snapshot.
+    // epoch is first checked in get rocksdb's snaphsot by raftstore.
+    // But bacuse we update IME's epoch in apply batch, and update raft local reader's
+    // epoch after ApplyRes is returned, so it's possible that IME's region epoch is
+    // newer than raftstore's, so we still need to check epoch again in IME snapshot.
     EpochNotMatch,
 }
 
@@ -44,7 +49,7 @@ pub enum EvictReason {
     AutoEvict,
     DeleteRange,
     Merge,
-    InMemoryEngineDisabled,
+    Disabled,
 }
 
 /// RangeCacheEngine works as a range cache caching some ranges (in Memory or

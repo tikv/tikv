@@ -90,7 +90,7 @@ impl Display for BackgroundTask {
             BackgroundTask::LoadRegion(..) => f.debug_struct("LoadTask").finish(),
             BackgroundTask::MemoryCheckAndEvict => f.debug_struct("MemoryCheckAndEvict").finish(),
             BackgroundTask::DeleteRegions(r) => {
-                f.debug_struct("DeleteRange").field("region", r).finish()
+                f.debug_struct("DeleteRegions").field("region", r).finish()
             }
             BackgroundTask::TopRegionsLoadEvict => f.debug_struct("CheckTopRegions").finish(),
             BackgroundTask::CleanLockTombstone(r) => f
@@ -336,33 +336,26 @@ struct BackgroundRunnerCore {
 impl BackgroundRunnerCore {
     /// Returns the ranges that are eligible for garbage collection.
     ///
-    /// Returns `None` if there are no ranges cached or the previous gc is not
-    /// finished.
+    /// Returns empty vector if there are no ranges cached or the previous gc is
+    /// not finished.
     fn regions_for_gc(&self) -> Vec<Region> {
-        let regions: Vec<_> = {
-            let core = self.engine.read();
-            // another gc task is running, skipped.
-            if !core.range_manager().try_set_regions_in_gc(true) {
-                return vec![];
-            }
-
-            core.range_manager()
-                .regions()
-                .values()
-                .filter_map(|m| {
-                    if m.get_state() == RegionState::Active {
-                        Some(m.region().clone())
-                    } else {
-                        None
-                    }
-                })
-                .collect()
-        };
-        if regions.is_empty() {
-            self.on_gc_finished();
-            return regions;
+        let core = self.engine.read();
+        // another gc task is running, skipped.
+        if !core.range_manager().try_set_regions_in_gc(true) {
+            return vec![];
         }
-        regions
+
+        core.range_manager()
+            .regions()
+            .values()
+            .filter_map(|m| {
+                if m.get_state() == RegionState::Active {
+                    Some(m.region().clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     pub(crate) fn gc_region(
@@ -370,7 +363,6 @@ impl BackgroundRunnerCore {
         region: &Region,
         safe_point: u64,
         oldest_seqno: u64,
-        delete_scheduler: &Scheduler<BackgroundTask>,
     ) -> FilterMetrics {
         let range = CacheRange::from_region(region);
         let (skiplist_engine, safe_point) = {
@@ -429,18 +421,7 @@ impl BackgroundRunnerCore {
 
         {
             let mut engine = self.engine.write();
-            let deletable_regions = engine.mut_range_manager().on_gc_region_finished(region);
-            if !deletable_regions.is_empty() {
-                if let Err(e) = delete_scheduler
-                    .schedule_force(BackgroundTask::DeleteRegions(deletable_regions))
-                {
-                    error!(
-                        "schedule delete range failed";
-                        "err" => ?e,
-                    );
-                    assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
-                }
-            }
+            engine.mut_range_manager().on_gc_region_finished(region);
         }
 
         let duration = start.saturating_elapsed();
@@ -882,17 +863,11 @@ impl Runnable for BackgroundRunner {
                 );
                 let core = self.core.clone();
                 let regions = core.regions_for_gc();
-                let delete_region_scheduler = self.delete_range_scheduler.clone();
                 if !regions.is_empty() {
                     let f = async move {
                         let mut metrics = FilterMetrics::default();
                         for region in &regions {
-                            let m = core.gc_region(
-                                region,
-                                t.safe_point,
-                                seqno,
-                                &delete_region_scheduler,
-                            );
+                            let m = core.gc_region(region, t.safe_point, seqno);
                             metrics.merge(&m);
                         }
                         core.on_gc_finished();
@@ -900,6 +875,8 @@ impl Runnable for BackgroundRunner {
                         fail::fail_point!("in_memory_engine_gc_finish");
                     };
                     self.gc_range_remote.spawn(f);
+                } else {
+                    core.on_gc_finished();
                 }
             }
             BackgroundTask::LoadRegion(region, snapshot) => {
@@ -1895,7 +1872,7 @@ pub mod tests {
         iter_opts.set_lower_bound(&range.start, 0);
         iter_opts.set_upper_bound(&range.end, 0);
 
-        let (worker, scheduler) = BackgroundRunner::new(
+        let (worker, _) = BackgroundRunner::new(
             engine.core.clone(),
             memory_controller.clone(),
             None,
@@ -1903,7 +1880,7 @@ pub mod tests {
             Duration::from_secs(100),
             Arc::new(MockPdClient {}),
         );
-        worker.core.gc_region(&region, 40, 100, &scheduler);
+        worker.core.gc_region(&region, 40, 100);
 
         let mut iter = snap.iterator_opt("write", iter_opts).unwrap();
         iter.seek_to_first().unwrap();
@@ -1972,7 +1949,7 @@ pub mod tests {
         assert_eq!(3, element_count(&default));
         assert_eq!(3, element_count(&write));
 
-        let (worker, scheduler) = BackgroundRunner::new(
+        let (worker, _) = BackgroundRunner::new(
             engine.core.clone(),
             memory_controller.clone(),
             None,
@@ -1982,22 +1959,22 @@ pub mod tests {
         );
 
         // gc should not hanlde keys with larger seqno than oldest seqno
-        worker.core.gc_region(&region, 13, 10, &scheduler);
+        worker.core.gc_region(&region, 13, 10);
         assert_eq!(3, element_count(&default));
         assert_eq!(3, element_count(&write));
 
         // gc will not remove the latest mvcc put below safe point
-        worker.core.gc_region(&region, 14, 100, &scheduler);
+        worker.core.gc_region(&region, 14, 100);
         assert_eq!(2, element_count(&default));
         assert_eq!(2, element_count(&write));
 
-        worker.core.gc_region(&region, 16, 100, &scheduler);
+        worker.core.gc_region(&region, 16, 100);
         assert_eq!(1, element_count(&default));
         assert_eq!(1, element_count(&write));
 
         // rollback will not make the first older version be filtered
         rollback_data(b"key1", 17, 16, &write, memory_controller.clone());
-        worker.core.gc_region(&region, 17, 100, &scheduler);
+        worker.core.gc_region(&region, 17, 100);
         assert_eq!(1, element_count(&default));
         assert_eq!(1, element_count(&write));
         let key = encode_key(b"key1", TimeStamp::new(15));
@@ -2009,7 +1986,7 @@ pub mod tests {
         // unlike in WriteCompactionFilter, the latest mvcc delete below safe point will
         // be filtered
         delete_data(b"key1", 19, 18, &write, memory_controller.clone());
-        worker.core.gc_region(&region, 19, 100, &scheduler);
+        worker.core.gc_region(&region, 19, 100);
         assert_eq!(0, element_count(&write));
         assert_eq!(0, element_count(&default));
     }
@@ -2133,7 +2110,7 @@ pub mod tests {
         assert_eq!(6, element_count(&default));
         assert_eq!(6, element_count(&write));
 
-        let (worker, scheduler) = BackgroundRunner::new(
+        let (worker, _) = BackgroundRunner::new(
             engine.core.clone(),
             memory_controller.clone(),
             None,
@@ -2141,7 +2118,7 @@ pub mod tests {
             Duration::from_secs(100),
             Arc::new(MockPdClient {}),
         );
-        let filter = worker.core.gc_region(&region1, 100, 100, &scheduler);
+        let filter = worker.core.gc_region(&region1, 100, 100);
         assert_eq!(2, filter.filtered);
 
         verify(b"k05", 15, 18, &write);
@@ -2158,7 +2135,7 @@ pub mod tests {
             Duration::from_secs(100),
             Arc::new(MockPdClient {}),
         );
-        worker.core.gc_region(&region2, 100, 100, &scheduler);
+        worker.core.gc_region(&region2, 100, 100);
         assert_eq!(2, filter.filtered);
 
         verify(b"k35", 15, 20, &write);
@@ -2200,7 +2177,7 @@ pub mod tests {
         assert_eq!(1, element_count(&default));
         assert_eq!(2, element_count(&write));
 
-        let (worker, scheduler) = BackgroundRunner::new(
+        let (worker, _) = BackgroundRunner::new(
             engine.core.clone(),
             memory_controller.clone(),
             None,
@@ -2209,7 +2186,7 @@ pub mod tests {
             Arc::new(MockPdClient {}),
         );
 
-        let filter = worker.core.gc_region(&region, 20, 200, &scheduler);
+        let filter = worker.core.gc_region(&region, 20, 200);
         assert_eq!(1, filter.filtered);
         assert_eq!(1, element_count(&default));
         assert_eq!(1, element_count(&write));
@@ -2300,7 +2277,7 @@ pub mod tests {
         assert_eq!(6, element_count(&default));
         assert_eq!(6, element_count(&write));
 
-        let (worker, scheduler) = BackgroundRunner::new(
+        let (worker, _) = BackgroundRunner::new(
             engine.core.clone(),
             memory_controller,
             None,
@@ -2314,25 +2291,25 @@ pub mod tests {
         let s3 = engine.snapshot(1, 0, range.clone(), 20, u64::MAX);
 
         // nothing will be removed due to snapshot 5
-        let filter = worker.core.gc_region(&region, 30, 100, &scheduler);
+        let filter = worker.core.gc_region(&region, 30, 100);
         assert_eq!(0, filter.filtered);
         assert_eq!(6, element_count(&default));
         assert_eq!(6, element_count(&write));
 
         drop(s1);
-        let filter = worker.core.gc_region(&region, 30, 100, &scheduler);
+        let filter = worker.core.gc_region(&region, 30, 100);
         assert_eq!(1, filter.filtered);
         assert_eq!(5, element_count(&default));
         assert_eq!(5, element_count(&write));
 
         drop(s2);
-        let filter = worker.core.gc_region(&region, 30, 100, &scheduler);
+        let filter = worker.core.gc_region(&region, 30, 100);
         assert_eq!(1, filter.filtered);
         assert_eq!(4, element_count(&default));
         assert_eq!(4, element_count(&write));
 
         drop(s3);
-        let filter = worker.core.gc_region(&region, 30, 100, &scheduler);
+        let filter = worker.core.gc_region(&region, 30, 100);
         assert_eq!(1, filter.filtered);
         assert_eq!(3, element_count(&default));
         assert_eq!(3, element_count(&write));
@@ -2446,7 +2423,7 @@ pub mod tests {
         assert_eq!(6, element_count(&default));
         assert_eq!(6, element_count(&write));
 
-        let (worker, scheduler) = BackgroundRunner::new(
+        let (worker, _) = BackgroundRunner::new(
             engine.core.clone(),
             memory_controller,
             None,
@@ -2472,7 +2449,7 @@ pub mod tests {
         assert_eq!(regions.len(), 2);
         let mut filter = FilterMetrics::default();
         for r in &regions {
-            filter.merge(&worker.core.gc_region(r, 50, 1000, &scheduler));
+            filter.merge(&worker.core.gc_region(r, 50, 1000));
         }
         assert_eq!(2, filter.filtered);
         assert_eq!(4, element_count(&default));
@@ -2481,7 +2458,7 @@ pub mod tests {
         drop(snap1);
         let mut filter = FilterMetrics::default();
         for r in &regions {
-            filter.merge(&worker.core.gc_region(r, 50, 1000, &scheduler));
+            filter.merge(&worker.core.gc_region(r, 50, 1000));
         }
         assert_eq!(0, filter.filtered);
         assert_eq!(4, element_count(&default));
@@ -2490,7 +2467,7 @@ pub mod tests {
         drop(snap2);
         let mut filter = FilterMetrics::default();
         for r in &regions {
-            filter.merge(&worker.core.gc_region(r, 50, 1000, &scheduler));
+            filter.merge(&worker.core.gc_region(r, 50, 1000));
         }
         assert_eq!(2, filter.filtered);
         assert_eq!(2, element_count(&default));

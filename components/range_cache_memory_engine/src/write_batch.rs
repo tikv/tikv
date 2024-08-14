@@ -1,4 +1,5 @@
-use core::slice::SlicePattern;
+// Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::{
     sync::{atomic::Ordering, Arc},
     time::Duration,
@@ -253,7 +254,7 @@ impl RangeCacheWriteBatch {
                 "range_start" => log_wrappers::Value(&region.start_key),
                 "range_end" => log_wrappers::Value(&region.end_key),
             );
-            self.evict_current_region(EvictReason::InMemoryEngineDisabled);
+            self.evict_current_region(EvictReason::Disabled);
             return;
         }
         let memory_expect = entry_size();
@@ -335,7 +336,7 @@ impl WriteBatchEntryInternal {
 
     fn value(&self) -> &[u8] {
         match self {
-            WriteBatchEntryInternal::PutValue(value) => value.as_slice(),
+            WriteBatchEntryInternal::PutValue(value) => value,
             WriteBatchEntryInternal::Deletion => &[],
         }
     }
@@ -398,7 +399,7 @@ impl RangeCacheWriteBatchEntry {
     }
 
     fn memory_size_required(&self) -> usize {
-        Self::memory_size_required_for_key_value(self.key.as_slice(), self.inner.value())
+        Self::memory_size_required_for_key_value(&self.key, self.inner.value())
     }
 
     #[inline]

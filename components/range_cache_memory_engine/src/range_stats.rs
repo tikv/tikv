@@ -56,7 +56,7 @@ impl RangeStatsManager {
     }
 
     /// Prevents two instances of this from running concurrently.
-    /// Return `bool`
+    /// Return the previous checking status.
     pub fn set_checking_top_regions(&self, v: bool) -> bool {
         self.checking_top_regions.swap(v, Ordering::Relaxed)
     }

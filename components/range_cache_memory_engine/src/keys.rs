@@ -168,7 +168,9 @@ impl<'a> fmt::Debug for InternalKey<'a> {
         write!(
             f,
             "(key: {:?}, type: {:?}, seq: {})",
-            self.user_key, self.v_type, self.sequence
+            log_wrappers::Value(self.user_key),
+            self.v_type,
+            self.sequence
         )
     }
 }
