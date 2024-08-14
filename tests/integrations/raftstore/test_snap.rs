@@ -619,7 +619,7 @@ fn test_gen_during_heavy_recv() {
     let snap = do_snapshot(
         snap_mgr.clone(),
         &engine,
-        engine.snapshot(None),
+        engine.snapshot(),
         r2,
         snap_term,
         snap_apply_state,

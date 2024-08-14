@@ -96,6 +96,23 @@ where
             range_cache_engine,
         }
     }
+
+    pub fn new_snapshot(&self, ctx: Option<SnapshotContext>) -> HybridEngineSnapshot<EK, EC> {
+        let disk_snap = self.disk_engine.snapshot();
+        let range_cache_snap = if !self.range_cache_engine.enabled() {
+            None
+        } else if let Some(ctx) = ctx {
+            new_in_memory_snapshot(
+                &self.range_cache_engine,
+                ctx.region.unwrap(),
+                ctx.read_ts,
+                disk_snap.sequence_number(),
+            )
+        } else {
+            None
+        };
+        HybridEngineSnapshot::new(disk_snap, range_cache_snap)
+    }
 }
 
 impl<EK, EC> HybridEngine<EK, EC>
@@ -127,25 +144,8 @@ where
 {
     type Snapshot = HybridEngineSnapshot<EK, EC>;
 
-    fn snapshot(&self, ctx: Option<SnapshotContext>) -> Self::Snapshot {
-        let disk_snap = self.disk_engine.snapshot(ctx.clone());
-        let range_cache_snap = if !self.range_cache_engine.enabled() {
-            None
-        } else if let Some(ctx) = ctx {
-            new_in_memory_snapshot(
-                &self.range_cache_engine,
-                ctx.region.unwrap(),
-                ctx.read_ts,
-                disk_snap.sequence_number(),
-            )
-        } else {
-            RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
-                .no_read_ts
-                .inc();
-            SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
-            None
-        };
-        HybridEngineSnapshot::new(disk_snap, range_cache_snap)
+    fn snapshot(&self) -> Self::Snapshot {
+        unreachable!()
     }
 
     fn sync(&self) -> engine_traits::Result<()> {
@@ -222,7 +222,7 @@ mod tests {
     use std::sync::Arc;
 
     use engine_rocks::util::new_engine;
-    use engine_traits::{CacheRegion, KvEngine, SnapshotContext, CF_DEFAULT, CF_LOCK, CF_WRITE};
+    use engine_traits::{CacheRegion, SnapshotContext, CF_DEFAULT, CF_LOCK, CF_WRITE};
     use online_config::{ConfigChange, ConfigManager, ConfigValue};
     use range_cache_memory_engine::{
         config::RangeCacheConfigManager, test_util::new_region, RangeCacheEngineConfig,
@@ -254,18 +254,18 @@ mod tests {
         }
 
         let hybrid_engine = HybridEngine::new(disk_engine, memory_engine.clone());
-        let s = hybrid_engine.snapshot(None);
+        let s = hybrid_engine.new_snapshot(None);
         assert!(!s.range_cache_snapshot_available());
 
         let mut snap_ctx = SnapshotContext {
             read_ts: 15,
             region: Some(range.clone()),
         };
-        let s = hybrid_engine.snapshot(Some(snap_ctx.clone()));
+        let s = hybrid_engine.new_snapshot(Some(snap_ctx.clone()));
         assert!(s.range_cache_snapshot_available());
 
         snap_ctx.read_ts = 5;
-        let s = hybrid_engine.snapshot(Some(snap_ctx.clone()));
+        let s = hybrid_engine.new_snapshot(Some(snap_ctx.clone()));
         assert!(!s.range_cache_snapshot_available());
 
         let mut config_manager = RangeCacheConfigManager(config.clone());
@@ -274,7 +274,7 @@ mod tests {
         config_manager.dispatch(config_change).unwrap();
         assert!(!config.value().enabled);
         snap_ctx.read_ts = 15;
-        let s = hybrid_engine.snapshot(Some(snap_ctx));
+        let s = hybrid_engine.new_snapshot(Some(snap_ctx));
         assert!(!s.range_cache_snapshot_available());
     }
 }

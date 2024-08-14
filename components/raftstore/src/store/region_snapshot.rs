@@ -76,7 +76,7 @@ where
     where
         EK: KvEngine,
     {
-        RegionSnapshot::from_snapshot(Arc::new(db.snapshot(None)), Arc::new(region))
+        RegionSnapshot::from_snapshot(Arc::new(db.snapshot()), Arc::new(region))
     }
 
     pub fn from_snapshot(snap: Arc<S>, region: Arc<Region>) -> RegionSnapshot<S> {

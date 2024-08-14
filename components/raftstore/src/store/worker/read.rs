@@ -257,7 +257,7 @@ where
             }
 
             self.snap_cache.cached_read_id = self.read_id.clone();
-            self.snap_cache.snapshot = Some(Arc::new(engine.snapshot(None)));
+            self.snap_cache.snapshot = Some(Arc::new(engine.snapshot()));
 
             // Ensures the snapshot is acquired before getting the time
             atomic::fence(atomic::Ordering::Release);
@@ -265,7 +265,7 @@ where
         } else {
             // read_id being None means the snapshot acquired will only be used in this
             // request
-            self.snapshot = Some(Arc::new(engine.snapshot(None)));
+            self.snapshot = Some(Arc::new(engine.snapshot()));
 
             // Ensures the snapshot is acquired before getting the time
             atomic::fence(atomic::Ordering::Release);

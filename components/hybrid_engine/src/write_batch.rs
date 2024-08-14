@@ -152,7 +152,7 @@ mod tests {
     use std::time::Duration;
 
     use engine_traits::{
-        CacheRegion, KvEngine, Mutable, Peekable, RangeCacheEngine, SnapshotContext, WriteBatch,
+        CacheRegion, Mutable, Peekable, RangeCacheEngine, SnapshotContext, WriteBatch,
         WriteBatchExt,
     };
     use range_cache_memory_engine::{
@@ -194,7 +194,7 @@ mod tests {
             region: Some(cache_region.clone()),
             read_ts: 10,
         };
-        let snap = hybrid_engine.snapshot(Some(ctx));
+        let snap = hybrid_engine.new_snapshot(Some(ctx));
         let actual: &[u8] = &snap.get_value(b"zhello").unwrap().unwrap();
         assert_eq!(b"world", &actual);
         let actual: &[u8] = &snap.disk_snap().get_value(b"zhello").unwrap().unwrap();
