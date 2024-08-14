@@ -138,8 +138,8 @@ impl Observer {
            "evict region due to leader step down";
            "region_id" => region.get_id(),
            "epoch" => ?region.get_region_epoch(),
-           "start_key" => ?region.start_key,
-           "end_key" => ?region.end_key,
+           "start_key" => ?log_wrappers::Value(&region.start_key),
+           "end_key" => ?log_wrappers::Value(&region.end_key),
         );
         self.pending_events
             .lock()
