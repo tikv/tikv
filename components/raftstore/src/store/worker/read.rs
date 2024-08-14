@@ -1023,12 +1023,6 @@ where
         last_valid_ts: Timespec,
     ) -> Option<ReadResponse<E::Snapshot>> {
         let mut local_read_ctx = LocalReadContext::new(&mut self.snap_cache, read_id);
-        if snap_ctx.is_some() {
-            // When `snap_ctx` is some, it means we want to acquire the range cache engine
-            // snapshot which cannot be used across different regions. So we don't use
-            // cache.
-            local_read_ctx.read_id.take();
-        }
 
         (*snap_updated) = local_read_ctx.maybe_update_snapshot(
             delegate.get_tablet(),
@@ -2641,85 +2635,5 @@ mod tests {
         let s = get_snapshot(Some(snap_ctx.clone()), &mut reader, cmd.clone(), &rx);
         assert!(s.range_cache_snapshot_available());
         assert_eq!(s.get_value(kv.0).unwrap().unwrap(), kv.1);
-    }
-
-    #[test]
-    fn test_not_use_snap_cache_in_hybrid_engine() {
-        let store_id = 2;
-        let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
-        let (_tmp, mut reader, rx, _) = new_hybrid_engine_reader(
-            "test-not-use-snap-cache",
-            store_id,
-            store_meta.clone(),
-            RangeCacheEngineConfig::config_for_test(),
-        );
-
-        let epoch13 = {
-            let mut ep = metapb::RegionEpoch::default();
-            ep.set_conf_ver(1);
-            ep.set_version(3);
-            ep
-        };
-        let term6 = 6;
-
-        // Register region1
-        let pr_ids1 = vec![2, 3, 4];
-        let prs1 = new_peers(store_id, pr_ids1.clone());
-        prepare_read_delegate(
-            store_id,
-            1,
-            term6,
-            pr_ids1,
-            epoch13.clone(),
-            store_meta.clone(),
-        );
-        let leader1 = prs1[0].clone();
-
-        let mut cmd = RaftCmdRequest::default();
-        let mut header = RaftRequestHeader::default();
-        header.set_region_id(1);
-        header.set_peer(leader1);
-        header.set_region_epoch(epoch13.clone());
-        header.set_term(term6);
-        cmd.set_header(header);
-        let mut req = Request::default();
-        req.set_cmd_type(CmdType::Snap);
-        cmd.set_requests(vec![req].into());
-        let (snap_tx, snap_rx) = channel();
-        let task = RaftCommand::<HybridEngineTestSnapshot>::new(
-            cmd.clone(),
-            Callback::read(Box::new(
-                move |resp: ReadResponse<HybridEngineTestSnapshot>| {
-                    snap_tx.send(resp.snapshot.unwrap()).unwrap();
-                },
-            )),
-        );
-
-        let read_id = Some(ThreadReadId::new());
-        // If snap_ctx is None and read_id is Some, it will cache the snapshot.
-        reader.propose_raft_command(None, read_id.clone(), task.request, task.callback);
-        assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
-        let _ = snap_rx.recv().unwrap();
-        assert!(reader.snap_cache.snapshot.is_some());
-
-        // Release the snapshot and try with snap_ctx
-        let (snap_tx, snap_rx) = channel();
-        let task = RaftCommand::<HybridEngineTestSnapshot>::new(
-            cmd,
-            Callback::read(Box::new(
-                move |resp: ReadResponse<HybridEngineTestSnapshot>| {
-                    snap_tx.send(resp.snapshot.unwrap()).unwrap();
-                },
-            )),
-        );
-        reader.release_snapshot_cache();
-        let snap_ctx = SnapshotContext {
-            read_ts: 15,
-            region: None,
-        };
-        reader.propose_raft_command(Some(snap_ctx), read_id, task.request, task.callback);
-        assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
-        let _ = snap_rx.recv().unwrap();
-        assert!(reader.snap_cache.snapshot.is_none());
     }
 }
