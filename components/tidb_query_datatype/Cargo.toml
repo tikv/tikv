@@ -43,3 +43,11 @@ tidb_query_common = { workspace = true }
 tikv_alloc = { workspace = true }
 tikv_util = { workspace = true }
 tipb = { workspace = true }
+
+[dev-dependencies]
+criterion = "0.3"
+
+[[bench]]
+name = "bench_vector_distance"
+path = "benches/bench_vector_distance.rs"
+harness = false

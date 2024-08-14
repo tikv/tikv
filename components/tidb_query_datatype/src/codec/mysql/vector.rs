@@ -176,16 +176,37 @@ impl<'a> VectorFloat32Ref<'a> {
     }
 
     fn index(&self, idx: usize) -> f32 {
-        let byte_index: usize = idx * F32_SIZE;
-        if byte_index + F32_SIZE > self.value.len() {
+        if idx > self.len() {
             panic!(
                 "Index out of bounds: index = {}, length = {}",
                 idx,
                 self.len()
             );
         }
-        let float_ptr = unsafe { self.value.as_ptr().add(byte_index) as *const f32 };
-        unsafe { float_ptr.read_unaligned() }
+        let byte_index: usize = idx * F32_SIZE;
+        unsafe {
+            let float_ptr = self.value.as_ptr().add(byte_index) as *const f32;
+            float_ptr.read_unaligned()
+        }
+    }
+
+    // An unsafe function to get the 'f32' value without boundary check.
+    // it will check the bounding in debug model and remove the check in
+    // release.
+    unsafe fn index_unchecked(&self, idx: usize) -> f32 {
+        #[cfg(debug_assertions)]
+        {
+            if idx > self.len() {
+                panic!(
+                    "Index out of bounds: index = {}, length = {}",
+                    idx,
+                    self.len()
+                );
+            }
+        }
+        let byte_index: usize = idx * 4;
+        let float_ptr = self.value.as_ptr().add(byte_index) as *const f32;
+        float_ptr.read_unaligned()
     }
 
     pub fn l2_squared_distance(&self, b: VectorFloat32Ref<'a>) -> Result<f64> {
@@ -193,7 +214,7 @@ impl<'a> VectorFloat32Ref<'a> {
         let mut distance: f32 = 0.0;
 
         for i in 0..self.len() {
-            let diff = self.index(i) - b.index(i);
+            let diff = unsafe { self.index_unchecked(i) - b.index_unchecked(i) };
             distance += diff * diff;
         }
 
@@ -208,7 +229,7 @@ impl<'a> VectorFloat32Ref<'a> {
         self.check_dims(b)?;
         let mut distance: f32 = 0.0;
         for i in 0..self.len() {
-            distance += self.index(i) * b.index(i);
+            distance += unsafe { self.index_unchecked(i) * b.index_unchecked(i) };
         }
 
         Ok(distance as f64)
@@ -220,9 +241,11 @@ impl<'a> VectorFloat32Ref<'a> {
         let mut norma: f32 = 0.0;
         let mut normb: f32 = 0.0;
         for i in 0..self.len() {
-            distance += self.index(i) * b.index(i);
-            norma += self.index(i) * self.index(i);
-            normb += b.index(i) * b.index(i);
+            unsafe {
+                distance += self.index_unchecked(i) * b.index_unchecked(i);
+                norma += self.index_unchecked(i) * self.index_unchecked(i);
+                normb += b.index_unchecked(i) * b.index_unchecked(i);
+            }
         }
 
         let similarity = (distance as f64) / ((norma as f64) * (normb as f64)).sqrt();
@@ -238,7 +261,7 @@ impl<'a> VectorFloat32Ref<'a> {
         self.check_dims(b)?;
         let mut distance: f32 = 0.0;
         for i in 0..self.len() {
-            let diff = self.index(i) - b.index(i);
+            let diff = unsafe { self.index_unchecked(i) - b.index_unchecked(i) };
             distance += diff.abs();
         }
 
@@ -250,7 +273,7 @@ impl<'a> VectorFloat32Ref<'a> {
         // precision during calculation.
         let mut norm: f64 = 0.0;
         for i in 0..self.len() {
-            let v = self.index(i) as f64;
+            let v = unsafe { self.index_unchecked(i) as f64 };
             norm += v * v;
         }
 
