@@ -5,9 +5,9 @@ use std::{io, path::Path, pin::Pin, result::Result, sync::Arc};
 use async_trait::async_trait;
 pub use aws::{Config as S3Config, S3Storage};
 pub use azure::{AzureStorage, Config as AzureConfig};
-use cloud::blob::{
-    BlobConfig, BlobObject, BlobStorage, DeletableStorage, ExclusiveWritableStorage,
-    ExclusiveWriteTxn, IterableStorage, PutResource,
+use cloud::blob::BlobStream;
+pub use cloud::blob::{
+    BlobConfig, BlobObject, BlobStorage, DeletableStorage, IterableStorage, PutResource,
 };
 use encryption::DataKeyManager;
 use futures::prelude::Stream;
@@ -17,25 +17,20 @@ use kvproto::brpb::{
     AzureBlobStorage, Gcs, Noop, StorageBackend, StorageBackend_oneof_backend as Backend, S3,
 };
 use tikv_util::time::{Instant, Limiter};
+use url::Url;
 
 use crate::{
     compression_reader_dispatcher, encrypt_wrap_reader, read_external_storage_into_file,
-    record_storage_create, BackendConfig, ExternalData, ExternalStorage, HdfsStorage, LocalStorage,
-    NoopStorage, RestoreConfig, UnpinReader,
+    record_storage_create, record_storage_v2_create, BackendConfig, ExternalData, ExternalStorage,
+    HdfsStorage, LocalStorage, NoopStorage, RestoreConfig, UnpinReader,
 };
 
 /// An interface that supports more operations than `ExternalStorage`.
 /// Some of operations may not be required by all users. Using a thiner
 /// interface will make them easier to be tested.
-pub trait ExternalStorageV2:
-    ExternalStorage + IterableStorage + DeletableStorage + ExclusiveWritableStorage
-{
-}
+pub trait ExternalStorageV2: BlobStorage + IterableStorage + DeletableStorage {}
 
-impl<T: ExternalStorage + IterableStorage + DeletableStorage + ExclusiveWritableStorage>
-    ExternalStorageV2 for T
-{
-}
+impl<T: BlobStorage + IterableStorage + DeletableStorage> ExternalStorageV2 for T {}
 
 pub fn create_storage(
     storage_backend: &StorageBackend,
@@ -49,20 +44,20 @@ pub fn create_storage(
 }
 
 /// Create an full featured storage.
-/// If the `StorageBackend` provided isn't full-featured, will return a
+/// If the `StorageBackend` provided isn't ready for v2, will return a
 /// [`io::ErrorKind::NotFound`].
-pub fn create_iterable_storage(
+pub fn create_storage_v2(
     storage_backend: &StorageBackend,
     config: BackendConfig,
 ) -> io::Result<Box<dyn ExternalStorageV2>> {
     if let Some(backend) = &storage_backend.backend {
-        create_iterable_backend(backend, config)
+        create_v2_backend(backend, config)
     } else {
         Err(bad_storage_backend(storage_backend))
     }
 }
 
-fn not_iterable(backend: Backend) -> io::Error {
+fn v2_not_supported(backend: Backend) -> io::Error {
     let storage_backend = StorageBackend {
         backend: Some(backend),
         ..Default::default()
@@ -89,10 +84,10 @@ fn bad_backend(backend: Backend) -> io::Error {
 }
 
 fn blob_store<Blob: BlobStorage>(store: Blob) -> Box<dyn ExternalStorage> {
-    Box::new(BlobStore::new(store)) as Box<dyn ExternalStorage>
+    Box::new(Compat::new(store)) as Box<dyn ExternalStorage>
 }
 
-fn create_iterable_backend(
+fn create_v2_backend(
     backend: &Backend,
     backend_config: BackendConfig,
 ) -> io::Result<Box<dyn ExternalStorageV2>> {
@@ -101,19 +96,17 @@ fn create_iterable_backend(
         Backend::S3(config) => {
             let mut s = S3Storage::from_input(config.clone())?;
             s.set_multi_part_size(backend_config.s3_multi_part_size);
-            Box::new(BlobStore::new(s)) as _
+            Box::new(s) as _
         }
-        Backend::Gcs(config) => {
-            Box::new(BlobStore::new(GcsStorage::from_input(config.clone())?)) as _
-        }
+        Backend::Gcs(config) => Box::new(GcsStorage::from_input(config.clone())?) as _,
         Backend::Local(config) => {
             let p = Path::new(&config.path);
             Box::new(LocalStorage::new(p)?) as _
         }
         #[allow(unreachable_patterns)]
-        _ => return Err(not_iterable(backend.clone())),
+        _ => return Err(v2_not_supported(backend.clone())),
     };
-    record_storage_create(start, &*storage);
+    record_storage_v2_create(start, &*storage);
     Ok(storage)
 }
 
@@ -189,44 +182,22 @@ pub fn make_azblob_backend(config: AzureBlobStorage) -> StorageBackend {
     backend
 }
 
-pub struct BlobStore<Blob: BlobStorage>(Blob);
+pub struct Compat<Blob>(Blob);
 
-impl<Blob: BlobStorage> BlobStore<Blob> {
+impl<Blob> Compat<Blob> {
     pub fn new(inner: Blob) -> Self {
-        BlobStore(inner)
+        Compat(inner)
+    }
+
+    pub fn into_inner(self) -> Blob {
+        self.0
     }
 }
 
-impl<Blob: BlobStorage> std::ops::Deref for BlobStore<Blob> {
+impl<Blob> std::ops::Deref for Compat<Blob> {
     type Target = Blob;
     fn deref(&self) -> &Self::Target {
         &self.0
-    }
-}
-
-impl<Blob: BlobStorage + IterableStorage> IterableStorage for BlobStore<Blob> {
-    fn iter_prefix(
-        &self,
-        prefix: &str,
-    ) -> Pin<Box<dyn Stream<Item = Result<BlobObject, io::Error>> + '_>> {
-        self.0.iter_prefix(prefix)
-    }
-}
-
-impl<Blob: BlobStorage + DeletableStorage> DeletableStorage for BlobStore<Blob> {
-    fn delete(&self, name: &str) -> LocalBoxFuture<'_, io::Result<()>> {
-        self.0.delete(name)
-    }
-}
-
-impl<Blob: BlobStorage + DeletableStorage + IterableStorage> ExclusiveWritableStorage
-    for BlobStore<Blob>
-{
-    fn exclusive_write<'s: 'ret, 'txn: 'ret, 'ret>(
-        &'s self,
-        w: &'txn dyn ExclusiveWriteTxn,
-    ) -> LocalBoxFuture<'ret, io::Result<uuid::Uuid>> {
-        self.0.exclusive_write(w)
     }
 }
 
@@ -298,7 +269,7 @@ impl<S: ExternalStorage> ExternalStorage for EncryptedExternalStorage<S> {
 }
 
 #[async_trait]
-impl<Blob: BlobStorage> ExternalStorage for BlobStore<Blob> {
+impl<Blob: BlobStorage> ExternalStorage for Compat<Blob> {
     fn name(&self) -> &'static str {
         (**self).config().name()
     }
@@ -322,6 +293,35 @@ impl<Blob: BlobStorage> ExternalStorage for BlobStore<Blob> {
 
     fn read_part(&self, name: &str, off: u64, len: u64) -> ExternalData<'_> {
         (**self).get_part(name, off, len)
+    }
+}
+
+pub struct StaticConfig {
+    url: Result<Url, (io::ErrorKind, String)>,
+    name: &'static str,
+}
+
+impl BlobConfig for StaticConfig {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn url(&self) -> io::Result<url::Url> {
+        self.url
+            .as_ref()
+            .map_err(|(kind, desc)| io::Error::new(*kind, desc.clone()))
+            .cloned()
+    }
+}
+
+impl StaticConfig {
+    pub fn from_ext_storage(s: &impl ExternalStorage) -> Self {
+        let url = s.url();
+        let name = s.name();
+        Self {
+            url: url.map_err(|err| (err.kind(), err.to_string())),
+            name,
+        }
     }
 }
 

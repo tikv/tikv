@@ -21,13 +21,11 @@
 use std::io;
 
 use chrono::Utc;
-use cloud::blob::{
-    requirements::{nothing, only},
-    DeletableStorage, ExclusiveWritableStorage, ExclusiveWriteCtx, ExclusiveWriteTxn,
-};
+use cloud::blob::{BlobStorage, DeletableStorage, IterableStorage, PutResource};
 use futures_util::{
-    future::{FutureExt, LocalBoxFuture},
+    future::{ok, FutureExt, LocalBoxFuture},
     io::AsyncReadExt,
+    stream::TryStreamExt,
 };
 use tikv_util::sys::{
     hostname,
@@ -35,7 +33,7 @@ use tikv_util::sys::{
 };
 use uuid::Uuid;
 
-use crate::ExternalStorage;
+use crate::ExternalStorageV2;
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct LockMeta {
@@ -72,9 +70,9 @@ impl RemoteLock {
     /// Unlock this lock.
     ///
     /// If the lock was modified, this may return an error.
-    async fn unlock(&self, st: &(impl ExternalStorage + DeletableStorage)) -> io::Result<()> {
+    pub async fn unlock(&self, st: &dyn ExternalStorageV2) -> io::Result<()> {
         let mut buf = vec![];
-        st.read(&self.path).read_to_end(&mut buf).await?;
+        st.get(&self.path).read_to_end(&mut buf).await?;
         let meta = serde_json::from_slice::<LockMeta>(&buf)?;
         if meta.txn_id != self.txn_id {
             return Err(io::Error::new(
@@ -90,7 +88,8 @@ impl RemoteLock {
     }
 }
 
-pub struct PutRLock {
+/// The [`ExclusiveWriteTxn`] instance for putting a read lock for a path.
+struct PutRLock {
     basic_path: String,
     lock_path: String,
     hint: String,
@@ -122,14 +121,15 @@ impl ExclusiveWriteTxn for PutRLock {
         // We need capture `cx` here, or rustc complains that we are returning a future
         // reference to a local variable. (Yes indeed.)
         async move {
-            cx.check_files_of_prefix(&format!("{}.WRIT", self.basic_path), nothing)
+            cx.check_files_of_prefix(&format!("{}.WRIT", self.basic_path), requirements::nothing)
                 .await
         }
         .boxed_local()
     }
 }
 
-pub struct PutWLock {
+/// The [`ExclusiveWriteTxn`] instance for putting a write lock for a path.
+struct PutWLock {
     basic_path: String,
     lock_path: String,
     hint: String,
@@ -159,20 +159,32 @@ impl ExclusiveWriteTxn for PutWLock {
         cx: ExclusiveWriteCtx<'cx>,
     ) -> LocalBoxFuture<'ret, io::Result<()>> {
         async move {
-            cx.check_files_of_prefix(&self.basic_path, only(&cx.intent_file_name()))
+            cx.check_files_of_prefix(&self.basic_path, requirements::only(&cx.intent_file_name()))
                 .await
         }
         .boxed_local()
     }
 }
 
+/// LockExt allows you to create lock at some path.
 #[allow(async_fn_in_trait)]
 pub trait LockExt {
+    /// Create a read lock at the given path.
+    /// If there are write locks at that path, this will fail.
+    /// 
+    /// The hint will be saved as readable text in the lock file.
+    /// Will generate a lock file at `$path.READ.{random_hex_u64}`.
     async fn lock_for_read(&self, path: &str, hint: String) -> io::Result<RemoteLock>;
+
+    /// Create a write lock at the given path.
+    /// If there is any read lock or write lock at that path, this will fail.
+    /// 
+    /// The hint will be saved as readable text in the lock file.
+    /// Will generate a lock file at `$path.READ.WRIT`.
     async fn lock_for_write(&self, path: &str, hint: String) -> io::Result<RemoteLock>;
 }
 
-impl<S: ExclusiveWritableStorage> LockExt for S {
+impl<S: ExclusiveWriteExt + ?Sized> LockExt for S {
     async fn lock_for_read(&self, path: &str, hint: String) -> io::Result<RemoteLock> {
         let w = PutRLock::new(path, hint);
         let path = w.lock_path.clone();
@@ -188,18 +200,158 @@ impl<S: ExclusiveWritableStorage> LockExt for S {
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct ExclusiveWriteCtx<'a> {
+    file: &'a str,
+    txn_id: uuid::Uuid,
+    storage: &'a dyn IterableStorage,
+}
+
+pub mod requirements {
+    use std::io;
+
+    pub fn only(expect: &str) -> impl (Fn(&str) -> io::Result<()>) + '_ {
+        move |v| {
+            if v != expect {
+                Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    format!("there is a file {}", v),
+                ))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    pub fn nothing(v: &str) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!("there is a file {}", v),
+        ))
+    }
+}
+
+impl<'a> ExclusiveWriteCtx<'a> {
+    pub fn txn_id(&self) -> uuid::Uuid {
+        self.txn_id
+    }
+
+    pub async fn check_files_of_prefix(
+        &self,
+        prefix: &str,
+        mut requires: impl FnMut(&str) -> io::Result<()>,
+    ) -> io::Result<()> {
+        self.storage
+            .iter_prefix(prefix)
+            .try_for_each(|v| futures::future::ready(requires(&v.key)))
+            .await
+    }
+
+    pub async fn verify_only_my_intent(&self) -> io::Result<()> {
+        self.check_files_of_prefix(self.file, requirements::only(&self.intent_file_name()))
+            .await
+    }
+
+    pub fn intent_file_name(&self) -> String {
+        format!("{}.INTENT.{:032X}", self.file, self.txn_id)
+    }
+}
+
+#[allow(async_fn_in_trait)]
+pub trait ExclusiveWriteTxn {
+    fn path(&self) -> &str;
+    fn content(&self, cx: ExclusiveWriteCtx<'_>) -> io::Result<Vec<u8>>;
+    fn verify<'cx: 'ret, 's: 'ret, 'ret>(
+        &'s self,
+        _cx: ExclusiveWriteCtx<'cx>,
+    ) -> LocalBoxFuture<'ret, io::Result<()>> {
+        ok(()).boxed_local()
+    }
+}
+
+/// An storage that supports atomically write a file if the file not exists.
+pub trait ExclusiveWriteExt {
+    fn exclusive_write<'s: 'ret, 'txn: 'ret, 'ret>(
+        &'s self,
+        w: &'txn dyn ExclusiveWriteTxn,
+    ) -> LocalBoxFuture<'ret, io::Result<uuid::Uuid>>;
+}
+
+// In fact this can be implemented for all types that are `BlobStorage +
+// IterableStorage + DeletableStorage`.
+//
+// But we cannot replace this implementation with:
+// ```no-run
+// impl<T: BlobStorage + IterableStorage + DeleteStorage + ?Sized> ExclusiveWriteExt for T
+// ```
+// Because for some T is a blob storage, &T isn't a blob storage: which means,
+// we cannot downcast T (i.e. we have a &T, but we cannot cast it to `&dyn
+// IterableStorage`, even T itself is `impl IterableStorage`)! So we cannot
+// construct the `ExclusiveWriteCtx` here.
+//
+// We may remove the `?Sized` hence &T can be dereferenced and then downcasted.
+// But here `dyn ExternalStorageV2`, trait object of our universal storage
+// interface, isn't a [`ExclusiveWriteExt`] more -- it is simply `!Sized`.
+//
+// Writing a blank implementation for the types is also not helpful, because
+// `BlobStorage` requires `'static`... (Which was required by `async_trait`...)
+//
+// Can we make the `ExclusiveWriteCtx` contains a `&T` instead of a `&dyn ...`?
+// Perhaps. I have tried it. Eventually blocked by something like "cyclic
+// dependiencies" in query system. I have no idea how to solve it. I gave up.
+//
+// Hence, as a workaround, we directly implement this extension for the trait
+// object of the universal external storage interface.
+impl ExclusiveWriteExt for dyn ExternalStorageV2 {
+    fn exclusive_write<'s: 'ret, 'txn: 'ret, 'ret>(
+        &'s self,
+        w: &'txn dyn ExclusiveWriteTxn,
+    ) -> LocalBoxFuture<'ret, io::Result<uuid::Uuid>> {
+        async move {
+            let txn_id = Uuid::new_v4();
+            let cx = ExclusiveWriteCtx {
+                file: w.path(),
+                txn_id,
+                storage: self,
+            };
+            futures::future::try_join(cx.verify_only_my_intent(), w.verify(cx)).await?;
+            let target = cx.intent_file_name();
+            self.put(&target, PutResource(Box::new(futures::io::empty())), 0)
+                .await?;
+
+            let result = async {
+                futures::future::try_join(cx.verify_only_my_intent(), w.verify(cx)).await?;
+                let content = w.content(cx)?;
+                self.put(
+                    w.path(),
+                    PutResource(Box::new(futures::io::Cursor::new(&content))),
+                    content.len() as _,
+                )
+                .await?;
+                io::Result::Ok(txn_id)
+            }
+            .await;
+
+            let _ = self.delete(&target).await;
+            result
+        }
+        .boxed_local()
+    }
+}
+
 #[cfg(test)]
 mod test {
     use uuid::Uuid;
 
     use super::LockExt;
-    use crate::LocalStorage;
+    use crate::{ExternalStorageV2, LocalStorage};
 
     #[tokio::test]
     async fn test_read_blocks_write() {
         let temp_dir = tempfile::tempdir().unwrap();
         let path = temp_dir.path();
         let ls = LocalStorage::new(path).unwrap();
+        let ls = &ls as &dyn ExternalStorageV2;
 
         let res = ls
             .lock_for_read("my_lock", String::from("testing lock"))
@@ -215,8 +367,8 @@ mod test {
             .await;
         res.unwrap_err();
 
-        l1.unlock(&ls).await.unwrap();
-        l2.unlock(&ls).await.unwrap();
+        l1.unlock(ls).await.unwrap();
+        l2.unlock(ls).await.unwrap();
         let res = ls
             .lock_for_write("my_lock", String::from("testing lock"))
             .await;
@@ -228,6 +380,7 @@ mod test {
         let temp_dir = tempfile::tempdir().unwrap();
         let path = temp_dir.path();
         let ls = LocalStorage::new(path).unwrap();
+        let ls = &ls as &dyn ExternalStorageV2;
 
         let res = ls
             .lock_for_write("my_lock", String::from("testing lock"))
@@ -239,7 +392,7 @@ mod test {
             .await;
         res.unwrap_err();
 
-        l1.unlock(&ls).await.unwrap();
+        l1.unlock(ls).await.unwrap();
         let res = ls
             .lock_for_read("my_lock", String::from("testing lock"))
             .await;
@@ -251,6 +404,7 @@ mod test {
         let temp_dir = tempfile::tempdir().unwrap();
         let path = temp_dir.path();
         let ls = LocalStorage::new(path).unwrap();
+        let ls = &ls as &dyn ExternalStorageV2;
 
         let mut l1 = ls
             .lock_for_read("my_lock", String::from("test"))
@@ -258,6 +412,6 @@ mod test {
             .unwrap();
         l1.txn_id = Uuid::new_v4();
 
-        l1.unlock(&ls).await.unwrap_err();
+        l1.unlock(ls).await.unwrap_err();
     }
 }

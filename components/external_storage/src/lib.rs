@@ -18,6 +18,7 @@ use std::{
 
 use async_compression::futures::bufread::ZstdDecoder;
 use async_trait::async_trait;
+use cloud::blob::BlobStream;
 use encryption::{DecrypterReader, FileEncryptionInfo, Iv};
 use file_system::File;
 use futures::io::BufReader;
@@ -44,6 +45,13 @@ mod metrics;
 use metrics::EXT_STORAGE_CREATE_HISTOGRAM;
 mod export;
 pub use export::*;
+use url::Url;
+
+pub fn record_storage_v2_create(start: Instant, storage: &dyn BlobStorage) {
+    EXT_STORAGE_CREATE_HISTOGRAM
+        .with_label_values(&[storage.config().name()])
+        .observe(start.saturating_elapsed().as_secs_f64());
+}
 
 pub fn record_storage_create(start: Instant, storage: &dyn ExternalStorage) {
     EXT_STORAGE_CREATE_HISTOGRAM

@@ -58,7 +58,7 @@ pub trait BlobStorage: 'static + Send + Sync {
     fn get_part(&self, name: &str, off: u64, len: u64) -> BlobStream<'_>;
 }
 
-pub trait DeletableStorage: 'static + Send + Sync {
+pub trait DeletableStorage {
     fn delete(&self, name: &str) -> LocalBoxFuture<'_, io::Result<()>>;
 }
 
@@ -74,128 +74,13 @@ impl Display for BlobObject {
 }
 
 /// An storage that its content can be enumerated by prefix.
-pub trait IterableStorage: 'static + Send + Sync {
+pub trait IterableStorage {
     /// Walk the prefix of the blob storage.
     /// It returns the stream of items.
     fn iter_prefix(
         &self,
         prefix: &str,
     ) -> Pin<Box<dyn Stream<Item = std::result::Result<BlobObject, io::Error>> + '_>>;
-}
-
-#[derive(Clone, Copy)]
-pub struct ExclusiveWriteCtx<'a> {
-    file: &'a str,
-    txn_id: uuid::Uuid,
-    storage: &'a dyn IterableStorage,
-}
-
-pub mod requirements {
-    use std::io;
-
-    pub fn only(expect: &str) -> impl (Fn(&str) -> io::Result<()>) + '_ {
-        move |v| {
-            if v != expect {
-                Err(io::Error::new(
-                    io::ErrorKind::AlreadyExists,
-                    format!("there is a file {}", v),
-                ))
-            } else {
-                Ok(())
-            }
-        }
-    }
-
-    pub fn nothing(v: &str) -> io::Result<()> {
-        Err(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            format!("there is a file {}", v),
-        ))
-    }
-}
-
-impl<'a> ExclusiveWriteCtx<'a> {
-    pub fn txn_id(&self) -> uuid::Uuid {
-        self.txn_id
-    }
-
-    pub async fn check_files_of_prefix(
-        &self,
-        prefix: &str,
-        mut requires: impl FnMut(&str) -> io::Result<()>,
-    ) -> io::Result<()> {
-        self.storage
-            .iter_prefix(prefix)
-            .try_for_each(|v| futures::future::ready(requires(&v.key)))
-            .await
-    }
-
-    pub async fn verify_only_my_intent(&self) -> io::Result<()> {
-        self.check_files_of_prefix(self.file, requirements::only(&self.intent_file_name()))
-            .await
-    }
-
-    pub fn intent_file_name(&self) -> String {
-        format!("{}.INTENT.{:032X}", self.file, self.txn_id)
-    }
-}
-
-#[allow(async_fn_in_trait)]
-pub trait ExclusiveWriteTxn {
-    fn path(&self) -> &str;
-    fn content(&self, cx: ExclusiveWriteCtx<'_>) -> io::Result<Vec<u8>>;
-    fn verify<'cx: 'ret, 's: 'ret, 'ret>(
-        &'s self,
-        _cx: ExclusiveWriteCtx<'cx>,
-    ) -> LocalBoxFuture<'ret, io::Result<()>> {
-        ok(()).boxed_local()
-    }
-}
-
-/// An storage that supports atomically write a file if the file not exists.
-pub trait ExclusiveWritableStorage: 'static + Send + Sync {
-    fn exclusive_write<'s: 'ret, 'txn: 'ret, 'ret>(
-        &'s self,
-        w: &'txn dyn ExclusiveWriteTxn,
-    ) -> LocalBoxFuture<'ret, io::Result<uuid::Uuid>>;
-}
-
-// NOTE: maybe add `StrongConsistency`.
-impl<T: BlobStorage + IterableStorage + DeletableStorage> ExclusiveWritableStorage for T {
-    fn exclusive_write<'s: 'ret, 'txn: 'ret, 'ret>(
-        &'s self,
-        w: &'txn dyn ExclusiveWriteTxn,
-    ) -> LocalBoxFuture<'ret, io::Result<uuid::Uuid>> {
-        async move {
-            let txn_id = Uuid::new_v4();
-            let cx = ExclusiveWriteCtx {
-                file: w.path(),
-                txn_id,
-                storage: self,
-            };
-            futures::future::try_join(cx.verify_only_my_intent(), w.verify(cx)).await?;
-            let target = cx.intent_file_name();
-            self.put(&target, PutResource(Box::new(futures::io::empty())), 0)
-                .await?;
-
-            let result = async {
-                futures::future::try_join(cx.verify_only_my_intent(), w.verify(cx)).await?;
-                let content = w.content(cx)?;
-                self.put(
-                    w.path(),
-                    PutResource(Box::new(futures::io::Cursor::new(&content))),
-                    content.len() as _,
-                )
-                .await?;
-                io::Result::Ok(txn_id)
-            }
-            .await;
-
-            let _ = self.delete(&target).await;
-            result
-        }
-        .boxed_local()
-    }
 }
 
 impl BlobConfig for dyn BlobStorage {

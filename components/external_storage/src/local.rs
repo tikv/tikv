@@ -25,7 +25,7 @@ use tokio_util::compat::FuturesAsyncReadCompatExt;
 use walkdir::WalkDir;
 
 use super::ExternalStorage;
-use crate::UnpinReader;
+use crate::{UnpinReader, StaticConfig};
 
 const LOCAL_STORAGE_TMP_FILE_SUFFIX: &str = "tmp";
 
@@ -120,28 +120,12 @@ fn url_for(base: &Path) -> url::Url {
     u
 }
 
-struct LocalConfig {
-    base: PathBuf,
-}
-
-impl BlobConfig for LocalConfig {
-    fn name(&self) -> &'static str {
-        STORAGE_NAME
-    }
-
-    fn url(&self) -> io::Result<url::Url> {
-        Ok(url_for(&self.base.as_path()))
-    }
-}
-
 pub const STORAGE_NAME: &str = "local";
 
 #[async_trait]
 impl BlobStorage for LocalStorage {
     fn config(&self) -> Box<dyn BlobConfig> {
-        LocalConfig {
-            base: self.base.clone(),
-        }
+        Box::new(StaticConfig::from_ext_storage(self))
     }
 
     async fn put(
