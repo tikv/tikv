@@ -1,7 +1,7 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{
-    FailedReason, KvEngine, Mutable, Peekable, RangeCacheEngine, ReadOptions, Result,
+    CacheRegion, FailedReason, KvEngine, Mutable, Peekable, RangeCacheEngine, ReadOptions, Result,
     SnapshotContext, SnapshotMiscExt, SyncMutable, WriteBatch, WriteBatchExt,
 };
 
@@ -52,10 +52,11 @@ where
 
 pub fn new_in_memory_snapshot<EC: RangeCacheEngine>(
     range_cache_engine: &EC,
-    ctx: SnapshotContext,
+    region: CacheRegion,
+    read_ts: u64,
     sequence_number: u64,
 ) -> Option<EC::Snapshot> {
-    match range_cache_engine.snapshot(ctx.region.unwrap(), ctx.read_ts, sequence_number) {
+    match range_cache_engine.snapshot(region, read_ts, sequence_number) {
         Ok(snap) => {
             SNAPSHOT_TYPE_COUNT_STATIC.range_cache_engine.inc();
             Some(snap)
@@ -131,7 +132,12 @@ where
         let range_cache_snap = if !self.range_cache_engine.enabled() {
             None
         } else if let Some(ctx) = ctx {
-            new_in_memory_snapshot(&self.range_cache_engine, ctx, disk_snap.sequence_number())
+            new_in_memory_snapshot(
+                &self.range_cache_engine,
+                ctx.region.unwrap(),
+                ctx.read_ts,
+                disk_snap.sequence_number(),
+            )
         } else {
             RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
                 .no_read_ts

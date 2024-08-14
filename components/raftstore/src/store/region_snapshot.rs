@@ -229,11 +229,6 @@ where
     pub fn get_end_key(&self) -> &[u8] {
         self.region.get_end_key()
     }
-
-    #[cfg(test)]
-    pub fn snap(&self) -> Arc<S> {
-        self.snap.clone()
-    }
 }
 
 impl<S> Clone for RegionSnapshot<S>
