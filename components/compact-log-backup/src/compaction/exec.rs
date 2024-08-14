@@ -9,7 +9,7 @@ use engine_traits::{
     CfName, ExternalSstFileInfo, SstCompressionType, SstExt, SstWriter, SstWriterBuilder,
     DATA_KEY_PREFIX_LEN,
 };
-use external_storage::ExternalStorage;
+use external_storage::{BlobStorage, PutResource};
 use file_system::Sha256Reader;
 use futures::{future::TryFutureExt, io::AllowStdIo};
 use kvproto::brpb::{self, LogFileSubcompaction};
@@ -30,7 +30,7 @@ use crate::{
 /// The state of executing a subcompaction.
 pub struct SubcompactionExec<DB> {
     source: Source,
-    output: Arc<dyn ExternalStorage>,
+    output: Arc<dyn BlobStorage>,
     co: Cooperate,
     out_prefix: PathBuf,
 
@@ -70,7 +70,7 @@ pub struct SubcompactionExecArg<DB> {
     /// The RocksDB instance used for creating the SST writer.
     pub db: Option<DB>,
     /// The output storage.
-    pub storage: Arc<dyn ExternalStorage>,
+    pub storage: Arc<dyn BlobStorage>,
 }
 
 impl<DB> From<SubcompactionExecArg<DB>> for SubcompactionExec<DB> {
@@ -91,7 +91,7 @@ impl<DB> From<SubcompactionExecArg<DB>> for SubcompactionExec<DB> {
 
 impl SubcompactionExec<RocksEngine> {
     #[cfg(test)]
-    pub fn default_config(storage: Arc<dyn ExternalStorage>) -> Self {
+    pub fn default_config(storage: Arc<dyn BlobStorage>) -> Self {
         Self::from(SubcompactionExecArg {
             storage,
             out_prefix: None,
@@ -296,9 +296,9 @@ where
         sst.content.reset()?;
         let (rd, hasher) = Sha256Reader::new(&mut sst.content).adapt_err()?;
         self.output
-            .write(
+            .put(
                 &sst.meta.name,
-                external_storage::UnpinReader(Box::new(AllowStdIo::new(rd))),
+                PutResource(Box::new(AllowStdIo::new(rd))),
                 sst.physical_size,
             )
             .await?;

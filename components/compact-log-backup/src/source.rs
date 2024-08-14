@@ -5,7 +5,7 @@ use std::{
 };
 
 use async_compression::futures::write::ZstdDecoder;
-use external_storage::ExternalStorage;
+use external_storage::BlobStorage;
 use futures::io::{AsyncWriteExt, Cursor};
 use futures_io::AsyncWrite;
 use kvproto::brpb;
@@ -22,11 +22,11 @@ use crate::{compaction::Input, errors::Result};
 /// The manager of fetching log files from remote for compacting.
 #[derive(Clone)]
 pub struct Source {
-    inner: Arc<dyn ExternalStorage>,
+    inner: Arc<dyn BlobStorage>,
 }
 
 impl Source {
-    pub fn new(inner: Arc<dyn ExternalStorage>) -> Self {
+    pub fn new(inner: Arc<dyn BlobStorage>) -> Self {
         Self { inner }
     }
 }
@@ -69,7 +69,7 @@ impl Source {
                 let mut content = Vec::with_capacity(id.length as _);
                 let item = pin!(Cursor::new(&mut content));
                 let mut decompress = decompress(compression, item)?;
-                let source = storage.read_part(&id.name, id.offset, id.length);
+                let source = storage.get_part(&id.name, id.offset, id.length);
                 let n = futures::io::copy(source, &mut decompress).await?;
                 decompress.flush().await?;
                 drop(decompress);

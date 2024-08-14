@@ -434,7 +434,8 @@ fn main() {
             };
             let log_to_term = compact_log::hooks::TuiHooks::default();
             let save_meta = compact_log::hooks::SaveMeta::default();
-            exec.run((log_to_term, save_meta))
+            let with_lock = compact_log::hooks::WithLock::default();
+            exec.run((log_to_term, (save_meta, with_lock)))
                 .expect("failed to execute compact-log-backup")
         }
         // Commands below requires either the data dir or the host.

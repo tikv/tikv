@@ -9,7 +9,9 @@ use std::{
 };
 
 use derive_more::Display;
-use external_storage::{BlobObject, ExternalStorage, IterableExternalStorage, UnpinReader};
+use external_storage::{
+    BlobObject, BlobStorage, ExternalStorage, ExternalStorageV2, PutResource, UnpinReader,
+};
 use futures::{
     future::{FusedFuture, FutureExt, TryFutureExt},
     io::{AsyncReadExt, Cursor},
@@ -35,6 +37,7 @@ use crate::{errors::ErrorKind, util};
 pub const METADATA_PREFIX: &'static str = "v1/backupmeta";
 pub const COMPACTION_OUT_PREFIX: &'static str = "compaction_out";
 pub const MIGRATION_PREFIX: &'static str = "v1/migrations";
+pub const LOCK_PREFIX: &'static str = "v1/LOCK";
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct MetaFile {
@@ -182,7 +185,7 @@ pub struct StreamyMetaStorage<'a> {
     prefetch: VecDeque<
         Prefetch<Pin<Box<dyn Future<Output = Result<(MetaFile, LoadMetaStatistic)>> + 'a>>>,
     >,
-    ext_storage: &'a dyn ExternalStorage,
+    ext_storage: &'a dyn ExternalStorageV2,
     ext: LoadFromExt<'a>,
     stat: LoadMetaStatistic,
 
@@ -328,7 +331,7 @@ impl<'a> StreamyMetaStorage<'a> {
     /// Streaming metadata from an external storage.
     /// Defaultly this will fetch metadata from `v1/backupmeta`, you may
     /// override this in `ext`.
-    pub fn load_from_ext(s: &'a dyn IterableExternalStorage, ext: LoadFromExt<'a>) -> Self {
+    pub fn load_from_ext(s: &'a dyn ExternalStorageV2, ext: LoadFromExt<'a>) -> Self {
         let files = s.iter_prefix(ext.meta_prefix).fuse();
         Self {
             prefetch: VecDeque::new(),
@@ -340,7 +343,7 @@ impl<'a> StreamyMetaStorage<'a> {
     }
 
     /// Counter the number of the metadata prefix.
-    pub async fn count_objects(s: &'a dyn IterableExternalStorage) -> std::io::Result<u64> {
+    pub async fn count_objects(s: &'a dyn ExternalStorageV2) -> std::io::Result<u64> {
         let mut n = 0;
         // NOTE: should we allow user to specify the prefix?
         let mut items = s.iter_prefix(&METADATA_PREFIX);
@@ -353,10 +356,7 @@ impl<'a> StreamyMetaStorage<'a> {
 
 impl MetaFile {
     #[tracing::instrument(skip_all, fields(blob=%blob))]
-    async fn load_from(
-        s: &dyn ExternalStorage,
-        blob: BlobObject,
-    ) -> Result<(Self, LoadMetaStatistic)> {
+    async fn load_from(s: &dyn BlobStorage, blob: BlobObject) -> Result<(Self, LoadMetaStatistic)> {
         use protobuf::Message;
 
         let mut stat = LoadMetaStatistic::default();
@@ -371,7 +371,7 @@ impl MetaFile {
         let loading_file = tikv_util::stream::retry_all_ext(
             || async {
                 let mut content = vec![];
-                let n = s.read(&blob.key).read_to_end(&mut content).await?;
+                let n = s.get(&blob.key).read_to_end(&mut content).await?;
                 std::io::Result::Ok((n, content))
             },
             ext,
@@ -451,12 +451,12 @@ impl LogFile {
 }
 
 pub struct MigartionStorageWrapper<'a> {
-    storage: &'a dyn IterableExternalStorage,
+    storage: &'a dyn ExternalStorageV2,
     migartions_prefix: &'a str,
 }
 
 impl<'a> MigartionStorageWrapper<'a> {
-    pub fn new(storage: &'a dyn IterableExternalStorage) -> Self {
+    pub fn new(storage: &'a dyn ExternalStorageV2) -> Self {
         Self {
             storage,
             migartions_prefix: &MIGRATION_PREFIX,
@@ -472,9 +472,9 @@ impl<'a> MigartionStorageWrapper<'a> {
         let bytes = migration.write_to_bytes()?;
         retry_expr!(
             self.storage
-                .write(
+                .put(
                     &format!("{}/{}", self.migartions_prefix, name),
-                    UnpinReader(Box::new(Cursor::new(&bytes))),
+                    PutResource(Box::new(Cursor::new(&bytes))),
                     bytes.len() as u64
                 )
                 .map_err(|err| JustRetry(err))

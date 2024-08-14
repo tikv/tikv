@@ -9,7 +9,7 @@ use std::{borrow::Cow, path::Path, sync::Arc};
 use engine_rocks::RocksEngine;
 pub use engine_traits::SstCompressionType;
 use engine_traits::SstExt;
-use external_storage::{BackendConfig, IterableExternalStorage};
+use external_storage::{BackendConfig, ExternalStorageV2};
 use futures::stream::{self, StreamExt};
 use hooks::{
     AfterFinishCtx, BeforeStartCtx, CId, ExecHooks, SubcompactionFinishCtx, SubcompactionStartCtx,
@@ -20,6 +20,7 @@ use tokio::runtime::Handle;
 use tracing::{trace_span, Instrument};
 use tracing_active_tree::{frame, root};
 
+use self::hooks::AbortedCtx;
 use super::{
     compaction::{
         collector::{CollectSubcompaction, CollectSubcompactionConfig},
@@ -30,7 +31,7 @@ use super::{
 use crate::{
     compaction::{exec::SubcompactionExecArg, SubcompactionResult},
     errors::{Result, TraceResultExt},
-    util,
+    util, ErrorKind,
 };
 
 /// The config for an execution of a compaction.
@@ -85,6 +86,11 @@ pub struct Execution<DB: SstExt = RocksEngine> {
     pub out_prefix: String,
 }
 
+struct ExecuteCtx<'a, H: ExecHooks> {
+    storage: &'a Arc<dyn ExternalStorageV2>,
+    hooks: &'a mut H,
+}
+
 impl Execution {
     fn gen_name(&self) -> String {
         let compaction_name = Path::new(&self.out_prefix)
@@ -101,116 +107,146 @@ impl Execution {
         )
     }
 
+    async fn run_prepared(&self, cx: &mut ExecuteCtx<'_, impl ExecHooks>) -> Result<()> {
+        let mut ext = LoadFromExt::default();
+        let next_compaction = trace_span!("next_compaction");
+        ext.max_concurrent_fetch = 128;
+        ext.loading_content_span = Some(trace_span!(
+            parent: next_compaction.clone(),
+            "load_meta_file_names"
+        ));
+
+        let ExecuteCtx {
+            ref storage,
+            ref mut hooks,
+            ..
+        } = cx;
+
+        let cx = BeforeStartCtx {
+            storage: storage.as_ref(),
+            async_rt: &tokio::runtime::Handle::current(),
+            this: &self,
+        };
+        hooks.before_execution_started(cx).await?;
+        let meta = StreamyMetaStorage::load_from_ext(storage.as_ref(), ext);
+        let stream = meta.flat_map(|file| match file {
+            Ok(file) => stream::iter(file.into_logs()).map(Ok).left_stream(),
+            Err(err) => stream::once(futures::future::err(err)).right_stream(),
+        });
+        let mut compact_stream = CollectSubcompaction::new(
+            stream,
+            CollectSubcompactionConfig {
+                compact_from_ts: self.cfg.from_ts,
+                compact_to_ts: self.cfg.until_ts,
+                subcompaction_size_threshold: ReadableSize::mb(128).0,
+            },
+        );
+        let mut pending = Vec::new();
+        let mut id = 0;
+
+        while let Some(c) = compact_stream
+            .next()
+            .instrument(next_compaction.clone())
+            .await
+        {
+            let cstat = compact_stream.take_statistic();
+            let lstat = compact_stream.get_mut().get_mut().take_statistic();
+
+            let c = c?;
+            let cid = CId(id);
+            let cx = SubcompactionStartCtx {
+                subc: &c,
+                load_stat_diff: &lstat,
+                collect_compaction_stat_diff: &cstat,
+            };
+            hooks.before_a_subcompaction_start(cid, cx);
+
+            id += 1;
+
+            let compact_args = SubcompactionExecArg {
+                out_prefix: Some(Path::new(&self.out_prefix).to_owned()),
+                db: self.db.clone(),
+                storage: Arc::clone(&storage) as _,
+            };
+            let compact_worker = SubcompactionExec::from(compact_args);
+            let mut ext = SubcompactExt::default();
+            ext.max_load_concurrency = 32;
+            ext.compression = self.cfg.compression;
+            ext.compression_level = self.cfg.compression_level;
+
+            let compact_work = async move {
+                let res = compact_worker.run(c, ext).await.trace_err()?;
+                res.verify_checksum()
+                    .annotate(format_args!("the compaction is {:?}", res.origin))?;
+                Result::Ok((res, cid))
+            };
+            let join_handle = tokio::spawn(root!(compact_work));
+            pending.push(join_handle);
+
+            if pending.len() >= self.max_concurrent_subcompaction as _ {
+                let join = util::select_vec(&mut pending);
+                let (cres, cid) = frame!("wait_for_compaction"; join).await.unwrap()?;
+                self.on_compaction_finish(cid, &cres, storage.as_ref(), *hooks)
+                    .await?;
+            }
+        }
+        drop(next_compaction);
+
+        for join in pending {
+            let (cres, cid) = frame!("final_wait"; join).await.unwrap()?;
+            self.on_compaction_finish(cid, &cres, storage.as_ref(), *hooks)
+                .await?;
+        }
+        let cx = AfterFinishCtx {
+            async_rt: &Handle::current(),
+            storage: storage.as_ref(),
+        };
+        hooks.after_execution_finished(cx).await?;
+
+        Result::Ok(())
+    }
+
     pub fn run(self, mut hooks: impl ExecHooks) -> Result<()> {
-        let storage = external_storage::create_iterable_storage(
-            &self.external_storage,
-            BackendConfig::default(),
-        )?;
-        let storage: Arc<dyn IterableExternalStorage> = Arc::from(storage);
+        let storage =
+            external_storage::create_storage_v2(&self.external_storage, BackendConfig::default())?;
+        let storage: Arc<dyn ExternalStorageV2> = Arc::from(storage);
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
             .unwrap();
 
-        let all_works = async move {
-            let mut ext = LoadFromExt::default();
-            let next_compaction = trace_span!("next_compaction");
-            ext.max_concurrent_fetch = 128;
-            ext.loading_content_span = Some(trace_span!(
-                parent: next_compaction.clone(),
-                "load_meta_file_names"
-            ));
-
-            let cx = BeforeStartCtx {
-                storage: storage.as_ref(),
-                async_rt: &tokio::runtime::Handle::current(),
-                this: &self,
-            };
-            hooks.before_execution_started(cx).await?;
-            let meta = StreamyMetaStorage::load_from_ext(storage.as_ref(), ext);
-            let stream = meta.flat_map(|file| match file {
-                Ok(file) => stream::iter(file.into_logs()).map(Ok).left_stream(),
-                Err(err) => stream::once(futures::future::err(err)).right_stream(),
-            });
-            let mut compact_stream = CollectSubcompaction::new(
-                stream,
-                CollectSubcompactionConfig {
-                    compact_from_ts: self.cfg.from_ts,
-                    compact_to_ts: self.cfg.until_ts,
-                    subcompaction_size_threshold: ReadableSize::mb(128).0,
-                },
-            );
-            let mut pending = Vec::new();
-            let mut id = 0;
-
-            while let Some(c) = compact_stream
-                .next()
-                .instrument(next_compaction.clone())
-                .await
-            {
-                let cstat = compact_stream.take_statistic();
-                let lstat = compact_stream.get_mut().get_mut().take_statistic();
-
-                let c = c?;
-                let cid = CId(id);
-                let cx = SubcompactionStartCtx {
-                    subc: &c,
-                    load_stat_diff: &lstat,
-                    collect_compaction_stat_diff: &cstat,
-                };
-                hooks.before_a_subcompaction_start(cid, cx);
-
-                id += 1;
-
-                let compact_args = SubcompactionExecArg {
-                    out_prefix: Some(Path::new(&self.out_prefix).to_owned()),
-                    db: self.db.clone(),
-                    storage: Arc::clone(&storage) as _,
-                };
-                let compact_worker = SubcompactionExec::from(compact_args);
-                let compact_work = async move {
-                    let mut ext = SubcompactExt::default();
-                    ext.max_load_concurrency = 32;
-                    ext.compression = self.cfg.compression;
-                    ext.compression_level = self.cfg.compression_level;
-                    let res = compact_worker.run(c, ext).await.trace_err()?;
-                    res.verify_checksum()
-                        .annotate(format_args!("the compaction is {:?}", res.origin))?;
-                    Result::Ok((res, cid))
-                };
-                let join_handle = tokio::spawn(root!(compact_work));
-                pending.push(join_handle);
-
-                if pending.len() >= self.max_concurrent_subcompaction as _ {
-                    let join = util::select_vec(&mut pending);
-                    let (cres, cid) = frame!("wait_for_compaction"; join).await.unwrap()?;
-                    self.on_compaction_finish(cid, &cres, storage.as_ref(), &mut hooks)
-                        .await?;
-                }
-            }
-            drop(next_compaction);
-
-            for join in pending {
-                let (cres, cid) = frame!("final_wait"; join).await.unwrap()?;
-                self.on_compaction_finish(cid, &cres, storage.as_ref(), &mut hooks)
-                    .await?;
-            }
-            let cx = AfterFinishCtx {
-                async_rt: &Handle::current(),
-                external_storage: storage.as_ref(),
-            };
-            hooks.after_execution_finished(cx).await?;
-
-            Result::Ok(())
+        let mut cx = ExecuteCtx {
+            storage: &storage,
+            hooks: &mut hooks,
         };
-        runtime.block_on(frame!(all_works))
+
+        let guarded = async {
+            let all_works = self.run_prepared(&mut cx);
+            let res = tokio::select! {
+                res = all_works => res,
+                _ = tokio::signal::ctrl_c() => Err(ErrorKind::Other("User canceled by Ctrl-C".to_owned()).into())
+            };
+
+            if let Err(ref err) = res {
+                cx.hooks
+                    .on_aborted(AbortedCtx {
+                        storage: cx.storage.as_ref(),
+                        err,
+                    })
+                    .await
+            }
+
+            res
+        };
+
+        runtime.block_on(frame!(guarded))
     }
 
     async fn on_compaction_finish(
         &self,
         cid: CId,
         result: &SubcompactionResult,
-        external_storage: &dyn IterableExternalStorage,
+        external_storage: &dyn ExternalStorageV2,
         hooks: &mut impl ExecHooks,
     ) -> Result<()> {
         let cx = SubcompactionFinishCtx {

@@ -2,7 +2,7 @@
 use std::{any::Any, collections::HashMap, sync::Arc, time::Instant};
 
 use engine_rocks::RocksEngine;
-use external_storage::{BackendConfig, BlobStore, IterableExternalStorage, S3Storage};
+use external_storage::{BackendConfig, BlobStorage, Compat, ExternalStorageV2, S3Storage};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use kvproto::brpb::{self, Gcs, StorageBackend, S3};
 use tikv_util::config::ReadableSize;
@@ -32,9 +32,7 @@ async fn playground() {
     s3.bucket = "astro".to_owned();
     s3.prefix = "tpcc-1000-incr-with-crc64".to_owned();
     backend.set_s3(s3);
-    let storage = external_storage::create_storage(&backend, BackendConfig::default()).unwrap()
-        as Box<dyn Any>;
-    let storage = storage.downcast::<BlobStore<S3Storage>>().unwrap();
+    let storage = external_storage::create_storage_v2(&backend, BackendConfig::default()).unwrap();
     let now = Instant::now();
 
     let mut ext = LoadFromExt::default();
@@ -64,7 +62,7 @@ async fn playground() {
     println!("{}", compactions.len());
     let compaction = compactions.pop().unwrap();
     println!("{:?}", compaction);
-    let arc_store = Arc::from(*storage);
+    let arc_store = Arc::from(storage as Box<dyn BlobStorage>);
     let compact_worker =
         SubcompactionExec::<RocksEngine>::default_config(Arc::clone(&arc_store) as _);
     let _load_stat = LoadStatistic::default();
@@ -125,9 +123,7 @@ async fn playground_no_pref() {
     s3.prefix = "tpcc-1000-incr-with-crc64".to_owned();
     backend.set_s3(s3);
 
-    let storage = external_storage::create_storage(&backend, BackendConfig::default()).unwrap()
-        as Box<dyn Any>;
-    let storage = storage.downcast::<BlobStore<S3Storage>>().unwrap();
+    let storage = external_storage::create_storage_v2(&backend, BackendConfig::default()).unwrap();
     let _now = Instant::now();
 
     let mut ext = LoadFromExt::default();
@@ -234,8 +230,7 @@ async fn gcloud() {
     )
     .unwrap();
     backend.set_gcs(gcs);
-    let storage =
-        external_storage::create_iterable_storage(&backend, BackendConfig::default()).unwrap();
+    let storage = external_storage::create_storage_v2(&backend, BackendConfig::default()).unwrap();
 
     let now = Instant::now();
     let mut ext = LoadFromExt::default();
@@ -261,7 +256,7 @@ async fn gcloud() {
         ..Default::default()
     };
     drop(coll);
-    let arc_store: Arc<dyn IterableExternalStorage> = Arc::from(storage);
+    let arc_store: Arc<dyn ExternalStorageV2> = Arc::from(storage);
     let compact_worker =
         SubcompactionExec::<RocksEngine>::default_config(Arc::clone(&arc_store) as _);
     let result = compact_worker
@@ -284,8 +279,7 @@ async fn gcloud_count() {
     )
     .unwrap();
     backend.set_gcs(gcs);
-    let storage =
-        external_storage::create_iterable_storage(&backend, BackendConfig::default()).unwrap();
+    let storage = external_storage::create_storage_v2(&backend, BackendConfig::default()).unwrap();
 
     let n = StreamyMetaStorage::count_objects(storage.as_ref())
         .await

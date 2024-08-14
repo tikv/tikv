@@ -4,7 +4,7 @@ use std::{
     sync::Arc,
 };
 
-use external_storage::IterableExternalStorage;
+use external_storage::ExternalStorageV2;
 use futures::stream::TryStreamExt;
 use kvproto::brpb::{self, DeleteSpansOfFile};
 
@@ -259,7 +259,7 @@ impl CompactionRunInfoBuilder {
         &mut self.compaction
     }
 
-    pub async fn write_migration(&self, s: &dyn IterableExternalStorage) -> Result<()> {
+    pub async fn write_migration(&self, s: &dyn ExternalStorageV2) -> Result<()> {
         let migration = self.migration_of(self.find_expiring_files(s).await?);
         let wrapped_storage = MigartionStorageWrapper::new(s);
         wrapped_storage.write(migration).await?;
@@ -288,7 +288,7 @@ impl CompactionRunInfoBuilder {
 
     async fn find_expiring_files(
         &self,
-        s: &dyn IterableExternalStorage,
+        s: &dyn ExternalStorageV2,
     ) -> Result<Vec<ExpiringFilesOfMeta>> {
         let ext = LoadFromExt::default();
         let mut storage = StreamyMetaStorage::load_from_ext(s, ext);
@@ -355,7 +355,7 @@ impl CompactionRunInfoBuilder {
 
 #[cfg(test)]
 mod test {
-    use external_storage::IterableExternalStorage;
+    use external_storage::ExternalStorageV2;
     use kvproto::brpb;
 
     use super::CompactionRunInfoBuilder;
@@ -365,7 +365,7 @@ mod test {
     };
 
     impl CompactionRunInfoBuilder {
-        async fn mig(&self, s: &dyn IterableExternalStorage) -> crate::Result<brpb::Migration> {
+        async fn mig(&self, s: &dyn ExternalStorageV2) -> crate::Result<brpb::Migration> {
             Ok(self.migration_of(self.find_expiring_files(s).await?))
         }
     }
