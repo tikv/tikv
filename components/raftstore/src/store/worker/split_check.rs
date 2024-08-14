@@ -895,7 +895,7 @@ where
 {
     type Task = Task;
     fn run(&mut self, task: Task) {
-        let _io_type_guard = WithIoType::new(IoType::LoadBalance);
+        // let _io_type_guard = WithIoType::new(IoType::LoadBalance);
         match task {
             Task::SplitCheckTask {
                 region,

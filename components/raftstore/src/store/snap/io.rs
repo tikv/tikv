@@ -160,6 +160,7 @@ where
         })();
 
         let sst_reader = E::SstReader::open(&path, key_mgr)?;
+        let _with_io_type = file_system::WithIoType::new(file_system::IoType::VerifyChecksum);
         if let Err(e) = sst_reader.verify_checksum() {
             // use sst reader to verify block checksum, it would detect corrupted SST due to
             // memory bit-flip

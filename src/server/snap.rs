@@ -128,6 +128,7 @@ impl Stream for SnapChunk {
             n if n > SNAP_CHUNK_LEN => vec![0; SNAP_CHUNK_LEN],
             n => vec![0; n],
         };
+        let _with_io_type = WithIoType::new(IoType::Export);
         let result = self.snap.read_exact(buf.as_mut_slice());
         match result {
             Ok(_) => {
@@ -387,7 +388,7 @@ fn recv_snap<R: RaftExtension + 'static>(
                 return Err(box_err!("{} receive chunk with empty data", context.key));
             }
             let f = context.file.as_mut().unwrap();
-            let _with_io_type = WithIoType::new(context.io_type);
+            let _with_io_type = WithIoType::new(IoType::Import);
             if let Err(e) = Write::write_all(&mut *f, &data) {
                 let key = &context.key;
                 let path = context.file.as_mut().unwrap().path();

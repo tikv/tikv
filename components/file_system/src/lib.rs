@@ -76,6 +76,7 @@ pub enum IoType {
     Import = 9,
     Export = 10,
     RewriteLog = 11,
+    VerifyChecksum = 12,
 }
 
 impl IoType {
@@ -93,6 +94,7 @@ impl IoType {
             IoType::Import => "import",
             IoType::Export => "export",
             IoType::RewriteLog => "log_rewrite",
+            IoType::VerifyChecksum => "verify_checksum",
         }
     }
 }
