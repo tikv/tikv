@@ -562,7 +562,7 @@ where
     pub cleanup_scheduler: Scheduler<CleanupTask>,
     pub raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
     pub raftlog_fetch_scheduler: Scheduler<ReadTask<EK>>,
-    pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+    pub region_scheduler: Scheduler<RegionTask<EK>>,
     pub apply_router: ApplyRouter<EK>,
     pub router: RaftRouter<EK, ER>,
     pub importer: Arc<SstImporter<EK>>,
@@ -1251,7 +1251,7 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     cleanup_scheduler: Scheduler<CleanupTask>,
     raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
     raftlog_fetch_scheduler: Scheduler<ReadTask<EK>>,
-    pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+    pub region_scheduler: Scheduler<RegionTask<EK>>,
     apply_router: ApplyRouter<EK>,
     pub router: RaftRouter<EK, ER>,
     pub importer: Arc<SstImporter<EK>>,
@@ -1698,6 +1698,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         mgr.init()?;
         let region_runner = RegionRunner::new(
             engines.kv.clone(),
+            engines.raft.clone(),
             mgr.clone(),
             cfg.clone(),
             workers.coprocessor_host.clone(),

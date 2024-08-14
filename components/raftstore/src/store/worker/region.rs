@@ -18,12 +18,12 @@ use std::{
 
 use collections::HashMap;
 use engine_traits::{
-    CacheRange, DeleteStrategy, KvEngine, Mutable, Range, WriteBatch, WriteOptions, CF_DEFAULT,
-    CF_LOCK, CF_RAFT, CF_WRITE,
+    CacheRange, DeleteStrategy, KvEngine, Mutable, RaftEngine, RaftLogBatch, Range, WriteBatch,
+    WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use fail::fail_point;
 use file_system::{IoType, WithIoType};
-use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
+use kvproto::raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RegionLocalState};
 use pd_client::PdClient;
 use raft::eraftpb::Snapshot as RaftSnapshot;
 use tikv_util::{
@@ -60,12 +60,12 @@ const ENGINE: &str = "engine";
 
 /// Region related task
 #[derive(Debug)]
-pub enum Task<S> {
+pub enum Task<EK: KvEngine> {
     Gen {
         region_id: u64,
         last_applied_term: u64,
         last_applied_state: RaftApplyState,
-        kv_snap: S,
+        kv_snap: EK::Snapshot,
         canceled: Arc<AtomicBool>,
         notifier: SyncSender<RaftSnapshot>,
         for_balance: bool,
@@ -80,6 +80,7 @@ pub enum Task<S> {
         region_id: u64,
         start_key: Vec<u8>,
         end_key: Vec<u8>,
+        kv_wb: EK::WriteBatch,
     },
 }
 
@@ -91,17 +92,23 @@ pub struct ApplySnapTask {
     pub create_time: Instant,
 }
 
-impl<S> Task<S> {
-    pub fn destroy(region_id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Task<S> {
+impl<EK: KvEngine> Task<EK> {
+    pub fn destroy(
+        region_id: u64,
+        start_key: Vec<u8>,
+        end_key: Vec<u8>,
+        kv_wb: EK::WriteBatch,
+    ) -> Task<EK> {
         Task::Destroy {
             region_id,
             start_key,
             end_key,
+            kv_wb,
         }
     }
 }
 
-impl<S> Display for Task<S> {
+impl<EK: KvEngine> Display for Task<EK> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             Task::Gen { region_id, .. } => write!(f, "Snap gen for {}", region_id),
@@ -112,6 +119,7 @@ impl<S> Display for Task<S> {
                 region_id,
                 ref start_key,
                 ref end_key,
+                ..
             } => write!(
                 f,
                 "Destroy {} [{}, {})",
@@ -556,9 +564,10 @@ where
     }
 }
 
-pub struct Runner<EK, R, T>
+pub struct Runner<EK, ER, R, T>
 where
     EK: KvEngine,
+    ER: RaftEngine,
     T: PdClient + 'static,
 {
     batch_size: usize,
@@ -573,6 +582,7 @@ where
     pending_applies: VecDeque<ApplySnapTask>,
 
     engine: EK,
+    raft_engine: ER,
     mgr: SnapManager,
     coprocessor_host: CoprocessorHost<EK>,
     router: R,
@@ -587,20 +597,22 @@ struct ApplySnapCtx {
     res: Result<(Box<Snapshot>, RegionLocalState)>,
 }
 
-impl<EK, R, T> Runner<EK, R, T>
+impl<EK, ER, R, T> Runner<EK, ER, R, T>
 where
     EK: KvEngine,
+    ER: RaftEngine,
     R: CasualRouter<EK>,
     T: PdClient + 'static,
 {
     pub fn new(
         engine: EK,
+        raft_engine: ER,
         mgr: SnapManager,
         cfg: Arc<VersionTrack<Config>>,
         coprocessor_host: CoprocessorHost<EK>,
         router: R,
         pd_client: Option<Arc<T>>,
-    ) -> Runner<EK, R, T> {
+    ) -> Runner<EK, ER, R, T> {
         Runner {
             batch_size: cfg.value().snap_apply_batch_size.0 as usize,
             ingest_copy_symlink: cfg.value().snap_apply_copy_symlink,
@@ -612,6 +624,7 @@ where
             tiflash_stores: HashMap::default(),
             pending_applies: VecDeque::new(),
             engine: engine.clone(),
+            raft_engine,
             mgr: mgr.clone(),
             coprocessor_host,
             router,
@@ -969,15 +982,16 @@ where
     }
 }
 
-impl<EK, R, T> Runnable for Runner<EK, R, T>
+impl<EK, ER, R, T> Runnable for Runner<EK, ER, R, T>
 where
     EK: KvEngine,
+    ER: RaftEngine,
     R: CasualRouter<EK> + Send + Clone + 'static,
     T: PdClient,
 {
-    type Task = Task<EK::Snapshot>;
+    type Task = Task<EK>;
 
-    fn run(&mut self, task: Task<EK::Snapshot>) {
+    fn run(&mut self, task: Task<EK>) {
         match task {
             Task::Gen {
                 region_id,
@@ -1057,8 +1071,23 @@ where
                 region_id,
                 start_key,
                 end_key,
+                mut kv_wb,
             } => {
                 let region_cleaner = self.region_cleaner.clone();
+                // write kv rocksdb first in case of restart happen between two write
+                let mut write_opts = WriteOptions::new();
+                write_opts.set_sync(false);
+                kv_wb.write_opt(&write_opts).unwrap();
+
+                let mut raft_wb = self.raft_engine.log_batch(1024);
+                self.raft_engine
+                    .clean(region_id, 0, &RaftLocalState::default(), &mut raft_wb)
+                    .unwrap();
+                self.raft_engine.consume(&mut raft_wb, false).unwrap();
+
+                if start_key.is_empty() && end_key.is_empty() {
+                    return;
+                }
                 self.region_cleanup_pool
                     .spawn(async move {
                         fail_point!("on_region_worker_destroy", region_id == 1000, |_| {});
@@ -1076,9 +1105,10 @@ where
     }
 }
 
-impl<EK, R, T> RunnableWithTimer for Runner<EK, R, T>
+impl<EK, ER, R, T> RunnableWithTimer for Runner<EK, ER, R, T>
 where
     EK: KvEngine,
+    ER: RaftEngine,
     R: CasualRouter<EK> + Send + Clone + 'static,
     T: PdClient + 'static,
 {

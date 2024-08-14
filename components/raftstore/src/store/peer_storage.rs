@@ -230,7 +230,7 @@ where
 
     snap_state: RefCell<SnapState>,
     gen_snap_task: RefCell<Option<GenSnapTask>>,
-    region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+    pub region_scheduler: Scheduler<RegionTask<EK>>,
     snap_tried_cnt: RefCell<usize>,
 
     entry_storage: EntryStorage<EK, ER>,
@@ -300,7 +300,7 @@ where
     pub fn new(
         engines: Engines<EK, ER>,
         region: &metapb::Region,
-        region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+        region_scheduler: Scheduler<RegionTask<EK>>,
         raftlog_fetch_scheduler: Scheduler<ReadTask<EK>>,
         peer_id: u64,
         tag: String,
@@ -735,18 +735,6 @@ where
         Ok(())
     }
 
-    /// Delete all data belong to the region.
-    /// If return Err, data may get partial deleted.
-    pub fn clear_data(&self) -> Result<()> {
-        let (start_key, end_key) = (enc_start_key(self.region()), enc_end_key(self.region()));
-        let region_id = self.get_region_id();
-        box_try!(
-            self.region_scheduler
-                .schedule(RegionTask::destroy(region_id, start_key, end_key))
-        );
-        Ok(())
-    }
-
     /// Delete all data that is not covered by `new_region`.
     fn clear_extra_data(
         &self,
@@ -759,14 +747,16 @@ where
             box_try!(self.region_scheduler.schedule(RegionTask::destroy(
                 old_region.get_id(),
                 old_start_key,
-                new_start_key
+                new_start_key,
+                self.engines.kv.write_batch(),
             )));
         }
         if new_end_key < old_end_key {
             box_try!(self.region_scheduler.schedule(RegionTask::destroy(
                 old_region.get_id(),
                 new_end_key,
-                old_end_key
+                old_end_key,
+                self.engines.kv.write_batch(),
             )));
         }
         Ok(())
@@ -777,7 +767,8 @@ where
         box_try!(self.region_scheduler.schedule(RegionTask::destroy(
             self.get_region_id(),
             start_key,
-            end_key
+            end_key,
+            self.engines.kv.write_batch(),
         )));
         Ok(())
     }

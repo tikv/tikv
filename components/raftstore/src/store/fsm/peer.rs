@@ -255,7 +255,7 @@ where
     pub fn create(
         store_id: u64,
         cfg: &Config,
-        region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+        region_scheduler: Scheduler<RegionTask<EK>>,
         raftlog_fetch_scheduler: Scheduler<ReadTask<EK>>,
         engines: Engines<EK, ER>,
         region: &metapb::Region,
@@ -317,7 +317,7 @@ where
     pub fn replicate(
         store_id: u64,
         cfg: &Config,
-        region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+        region_scheduler: Scheduler<RegionTask<EK>>,
         raftlog_fetch_scheduler: Scheduler<ReadTask<EK>>,
         engines: Engines<EK, ER>,
         region_id: u64,
@@ -7007,7 +7007,7 @@ where
                 if is_witness {
                     self.fsm.peer.raft_group.set_priority(-1);
                     if !self.fsm.peer.is_leader() {
-                        let _ = self.fsm.peer.get_store().clear_data();
+                        // let _ = self.fsm.peer.get_store().clear_data();
                     } else {
                         // Avoid calling `clear_data` as the region worker may be scanning snapshot,
                         // to avoid problems (although no problems were found by testing).

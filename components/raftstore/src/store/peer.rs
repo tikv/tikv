@@ -937,7 +937,7 @@ where
     pub fn new(
         store_id: u64,
         cfg: &Config,
-        region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+        region_scheduler: Scheduler<RegionTask<EK>>,
         raftlog_fetch_scheduler: Scheduler<ReadTask<EK>>,
         engines: Engines<EK, ER>,
         region: &metapb::Region,
@@ -1451,31 +1451,33 @@ where
             )?;
 
             // write kv rocksdb first in case of restart happen between two write
-            let t1 = TiInstant::now();
-            let mut write_opts = WriteOptions::new();
-            write_opts.set_sync(false);
-            kv_wb.write_opt(&write_opts)?;
-            info!("kv rocksdb write finish"; "region_id" => self.region_id, "peer_id" => self.peer.get_id(), "takes" => ?t1.saturating_elapsed());
+            // let t1 = TiInstant::now();
+            // let mut write_opts = WriteOptions::new();
+            // write_opts.set_sync(false);
+            // kv_wb.write_opt(&write_opts)?;
+            // info!("kv rocksdb write finish"; "region_id" => self.region_id, "peer_id" =>
+            // self.peer.get_id(), "takes" => ?t1.saturating_elapsed());
 
-            drop(pending_create_peers);
+            // drop(pending_create_peers);
 
-            let t2 = TiInstant::now();
-            perf_context.start_observe();
-            engines.raft.consume(&mut raft_wb, false)?;
-            perf_context.report_metrics(&[]);
-            info!("raft rocksdb consume finish"; "region_id" => self.region_id, "peer_id" => self.peer.get_id(), "takes" => ?t2.saturating_elapsed());
+            // let t2 = TiInstant::now();
+            // perf_context.start_observe();
+            // engines.raft.consume(&mut raft_wb, false)?;
+            // perf_context.report_metrics(&[]);
+            // info!("raft rocksdb consume finish"; "region_id" => self.region_id, "peer_id"
+            // => self.peer.get_id(), "takes" => ?t2.saturating_elapsed());
 
-            if self.get_store().is_initialized() && !keep_data {
-                // If we meet panic when deleting data and raft log, the dirty data
-                // will be cleared by a newer snapshot applying or restart.
-                if let Err(e) = self.get_store().clear_data() {
-                    error!(?e;
-                        "failed to schedule clear data task";
-                        "region_id" => self.region_id,
-                        "peer_id" => self.peer.get_id(),
-                    );
-                }
-            }
+            let delete_data = self.get_store().is_initialized() && !keep_data;
+            let (start_key, end_key) = if delete_data {
+                (enc_start_key(self.region()), enc_end_key(self.region()))
+            } else {
+                (vec![], vec![])
+            };
+            let region_id = self.get_store().get_region_id();
+            self.get_store()
+                .region_scheduler
+                .schedule(RegionTask::destroy(region_id, start_key, end_key, kv_wb))
+                .unwrap();
         }
 
         self.pending_reads.clear_all(Some(region.get_id()));
@@ -2316,10 +2318,10 @@ where
                     self.mut_store().cancel_generating_snap(None);
                     self.clear_disk_full_peers(ctx);
                     self.clear_in_memory_pessimistic_locks();
-                    if self.peer.is_witness && self.delay_clean_data {
-                        let _ = self.get_store().clear_data();
-                        self.delay_clean_data = false;
-                    }
+                    // if self.peer.is_witness && self.delay_clean_data {
+                    //     let _ = self.get_store().clear_data();
+                    //     self.delay_clean_data = false;
+                    // }
                     // only evict when region is initialized
                     if !self.region().get_peers().is_empty() {
                         let range = CacheRange::from_region(self.region());
