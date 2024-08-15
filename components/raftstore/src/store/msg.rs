@@ -41,7 +41,7 @@ use crate::store::{
     },
     util::KeysInfoFormatter,
     worker::{Bucket, BucketRange},
-    SnapKey,
+    PeerPessimisticLocks, PeerStat, SnapKey,
 };
 
 #[derive(Debug)]
@@ -920,6 +920,15 @@ where
         abnormal_stores: Vec<u64>,
     },
 
+    CreatePeer {
+        new_region: metapb::Region,
+        share_size: Option<u64>,
+        share_keys: Option<u64>,
+        locks: PeerPessimisticLocks,
+        peer_stat: PeerStat,
+        is_leader: bool,
+    },
+
     /// Message only used for test.
     #[cfg(any(test, feature = "testexport"))]
     Validate(Box<dyn FnOnce(&crate::store::Config) + Send>),
@@ -956,6 +965,7 @@ where
             }
             StoreMsg::GcSnapshotFinish => write!(fmt, "GcSnapshotFinish"),
             StoreMsg::AwakenRegions { .. } => write!(fmt, "AwakenRegions"),
+            StoreMsg::CreatePeer { .. } => write!(fmt, "CreatePeer"),
             #[cfg(any(test, feature = "testexport"))]
             StoreMsg::Validate(_) => write!(fmt, "Validate config"),
         }
@@ -977,8 +987,9 @@ impl<EK: KvEngine> StoreMsg<EK> {
             StoreMsg::UnsafeRecoveryCreatePeer { .. } => 9,
             StoreMsg::GcSnapshotFinish => 10,
             StoreMsg::AwakenRegions { .. } => 11,
+            StoreMsg::CreatePeer { .. } => 12,
             #[cfg(any(test, feature = "testexport"))]
-            StoreMsg::Validate(_) => 12, // Please keep this always be the last one.
+            StoreMsg::Validate(_) => 13, // Please keep this always be the last one.
         }
     }
 }

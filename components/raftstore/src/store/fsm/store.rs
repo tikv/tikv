@@ -899,6 +899,100 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                 StoreMsg::AwakenRegions { abnormal_stores } => {
                     self.on_wake_up_regions(abnormal_stores);
                 }
+                StoreMsg::CreatePeer {
+                    new_region,
+                    share_size,
+                    share_keys,
+                    locks,
+                    peer_stat,
+                    is_leader,
+                } => {
+                    let new_region_id = new_region.get_id();
+                    info!(
+                        "insert new region";
+                        "region_id" => new_region_id,
+                        "region" => ?new_region,
+                        "store_id" => self.ctx.store_id(),
+                    );
+
+                    let (sender, mut new_peer) = match PeerFsm::create(
+                        self.ctx.store_id(),
+                        &self.ctx.cfg,
+                        self.ctx.region_scheduler.clone(),
+                        self.ctx.raftlog_fetch_scheduler.clone(),
+                        self.ctx.engines.clone(),
+                        &new_region,
+                        false,
+                    ) {
+                        Ok((sender, new_peer)) => (sender, new_peer),
+                        Err(e) => {
+                            // peer information is already written into db, can't recover.
+                            // there is probably a bug.
+                            panic!("create new split region {:?} err {:?}", new_region, e);
+                        }
+                    };
+                    let mut replication_state = self.ctx.global_replication_state.lock().unwrap();
+                    new_peer.peer.init_replication_mode(&mut replication_state);
+                    drop(replication_state);
+
+                    let meta_peer = new_peer.peer.peer.clone();
+
+                    for p in new_region.get_peers() {
+                        // Add this peer to cache.
+                        new_peer.peer.insert_peer_cache(p.clone());
+                    }
+
+                    // New peer derive write flow from parent region,
+                    // this will be used by balance write flow.
+                    new_peer.peer.peer_stat = peer_stat;
+                    new_peer.peer.last_compacted_idx = new_peer
+                        .peer
+                        .get_store()
+                        .apply_state()
+                        .get_truncated_state()
+                        .get_index()
+                        + 1;
+                    let campaigned = new_peer.peer.maybe_campaign(is_leader);
+                    new_peer.has_ready |= campaigned;
+
+                    if is_leader {
+                        new_peer.peer.split_check_trigger.approximate_size = share_size;
+                        new_peer.peer.split_check_trigger.approximate_keys = share_keys;
+                        *new_peer.peer.txn_ext.pessimistic_locks.write() = locks;
+                        // The new peer is likely to become leader, send a heartbeat immediately to
+                        // reduce client query miss.
+                        new_peer.peer.heartbeat_pd(self.ctx);
+                    }
+
+                    new_peer.peer.activate(self.ctx);
+                    let mut meta = self.ctx.store_meta.lock().unwrap();
+                    meta.readers
+                        .insert(new_region_id, ReadDelegate::from_peer(new_peer.get_peer()));
+                    meta.region_read_progress
+                        .insert(new_region_id, new_peer.peer.read_progress.clone());
+                    let mailbox =
+                        BasicMailbox::new(sender, new_peer, self.ctx.router.state_cnt().clone());
+                    self.ctx.router.register(new_region_id, mailbox);
+                    self.ctx
+                        .router
+                        .force_send(new_region_id, PeerMsg::Start)
+                        .unwrap();
+
+                    if !campaigned {
+                        if let Some(msg) = meta
+                            .pending_msgs
+                            .swap_remove_front(|m| m.get_to_peer() == &meta_peer)
+                        {
+                            let peer_msg = PeerMsg::RaftMessage(
+                                InspectedRaftMessage { heap_size: 0, msg },
+                                Some(TiInstant::now()),
+                            );
+                            if let Err(e) = self.ctx.router.force_send(new_region_id, peer_msg) {
+                                warn!("handle first request failed"; "region_id" => new_region_id, "error" => ?e);
+                            }
+                        }
+                    }
+                }
             }
         }
         slow_log!(

@@ -337,6 +337,29 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
 
     /// Polls for readiness and forwards them to handler. Removes stale peers if
     /// necessary.
+    pub fn control_poll(&mut self) {
+        let mut batch = Batch::with_capacity(self.max_batch_size);
+        while let Ok(fsm) = self.fsm_receiver.recv() {
+            if !batch.push(fsm) {
+                break;
+            }
+            assert!(batch.control.is_some());
+            let len = self.handler.handle_control(batch.control.as_mut().unwrap());
+            if batch.control.as_ref().unwrap().is_stopped() {
+                batch.remove_control(&self.router.control_box);
+            } else if let Some(len) = len {
+                batch.release_control(&self.router.control_box, len);
+            }
+        }
+        if let Some(fsm) = batch.control.take() {
+            self.router.control_scheduler.schedule(fsm);
+            info!("poller will exit, release the left ControlFsm");
+        }
+        batch.clear();
+    }
+
+    /// Polls for readiness and forwards them to handler. Removes stale peers if
+    /// necessary.
     pub fn poll(&mut self) {
         fail_point!("poll");
         let mut batch = Batch::with_capacity(self.max_batch_size);
@@ -365,6 +388,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
             }
             max_batch_size = std::cmp::max(self.max_batch_size, batch.normals.len());
 
+            assert!(batch.control.is_none());
             if batch.control.is_some() {
                 let len = self.handler.handle_control(batch.control.as_mut().unwrap());
                 if batch.control.as_ref().unwrap().is_stopped() {
@@ -486,6 +510,7 @@ pub struct BatchSystem<N: Fsm, C: Fsm> {
     router: BatchRouter<N, C>,
     receiver: Receiver<FsmTypes<N, C>>,
     low_receiver: Receiver<FsmTypes<N, C>>,
+    control_receiver: Receiver<FsmTypes<N, C>>,
     pool_size: usize,
     max_batch_size: usize,
     workers: Arc<Mutex<Vec<JoinHandle<()>>>>,
@@ -554,6 +579,33 @@ where
         self.workers.lock().unwrap().push(t);
     }
 
+    pub fn start_control_poller<B>(&mut self, name: String, builder: &mut B)
+    where
+        B: HandlerBuilder<N, C>,
+        B::Handler: Send + 'static,
+    {
+        let handler = builder.build(Priority::Normal);
+        let mut poller = Poller {
+            router: self.router.clone(),
+            fsm_receiver: self.control_receiver.clone(),
+            handler,
+            max_batch_size: self.max_batch_size,
+            reschedule_duration: self.reschedule_duration,
+            joinable_workers: None,
+        };
+        let props = tikv_util::thread_group::current_properties();
+        let t = thread::Builder::new()
+            .name(name)
+            .spawn_wrapper(move || {
+                tikv_alloc::thread_allocate_exclusive_arena().unwrap();
+                tikv_util::thread_group::set_properties(props);
+                set_io_type(IoType::ForegroundWrite);
+                poller.control_poll();
+            })
+            .unwrap();
+        self.workers.lock().unwrap().push(t);
+    }
+
     /// Start the batch system.
     pub fn spawn<B>(&mut self, name_prefix: String, mut builder: B)
     where
@@ -574,6 +626,7 @@ where
                 &mut builder,
             );
         }
+        self.start_control_poller(thd_name!(format!("{}-control", name_prefix)), &mut builder);
         self.name_prefix = Some(name_prefix);
     }
 
@@ -668,8 +721,9 @@ pub fn create_system<N: Fsm, C: Fsm>(
         sender: sender.clone(),
         low_sender,
     };
+    let (control_sender, control_receiver) = unbounded(None);
     let control_scheduler = ControlScheduler {
-        sender: sender.clone(),
+        sender: control_sender,
     };
     let pool_state_builder = PoolStateBuilder {
         max_batch_size: cfg.max_batch_size(),
@@ -684,6 +738,7 @@ pub fn create_system<N: Fsm, C: Fsm>(
         router: router.clone(),
         receiver,
         low_receiver,
+        control_receiver,
         pool_size: cfg.pool_size,
         max_batch_size: cfg.max_batch_size(),
         workers: Arc::new(Mutex::new(Vec::new())),
