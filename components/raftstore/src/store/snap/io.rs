@@ -2,7 +2,6 @@
 use std::{
     cell::RefCell,
     fs,
-    fs::{File, OpenOptions},
     io::{self, BufReader, Read, Write},
     sync::Arc,
     usize,
@@ -14,6 +13,7 @@ use engine_traits::{
     SstWriter, SstWriterBuilder, WriteBatch,
 };
 use fail::fail_point;
+use file_system::{File, OpenOptions};
 use kvproto::encryptionpb::EncryptionMethod;
 use tikv_util::{
     box_try,
