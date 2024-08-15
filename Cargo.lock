@@ -485,6 +485,7 @@ dependencies = [
  "crossbeam",
  "crossbeam-channel",
  "dashmap",
+ "encryption",
  "engine_panic",
  "engine_rocks",
  "engine_test",
@@ -2841,7 +2842,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#c699538f7aa18394ae5e09cd1291209079b391d6"
+source = "git+https://github.com/pingcap/kvproto.git#4fa2b26b2d8003523908b124ab6e70580023eee6"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -2912,7 +2913,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#224bed6ffa29ba3bbe9a91ef6bda7186200c59a8"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c92c467a3ab0b60484a0db83fcf89366791716cd"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -2931,7 +2932,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#224bed6ffa29ba3bbe9a91ef6bda7186200c59a8"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c92c467a3ab0b60484a0db83fcf89366791716cd"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4155,8 +4156,8 @@ dependencies = [
 
 [[package]]
 name = "raft-engine"
-version = "0.4.1"
-source = "git+https://github.com/tikv/raft-engine.git#e505d631c8c6d63f7fc63d83ea6e8fb88cf970a5"
+version = "0.4.2"
+source = "git+https://github.com/tikv/raft-engine.git#cd1533d79cfea02d005b458bd70fd9675846c9c6"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -4189,8 +4190,8 @@ dependencies = [
 
 [[package]]
 name = "raft-engine-ctl"
-version = "0.4.1"
-source = "git+https://github.com/tikv/raft-engine.git#fa56f891fdf0b1cb5b7849b7bee3c5dadbb96103"
+version = "0.4.2"
+source = "git+https://github.com/tikv/raft-engine.git#cd1533d79cfea02d005b458bd70fd9675846c9c6"
 dependencies = [
  "clap 3.1.6",
  "env_logger 0.10.0",
@@ -4803,7 +4804,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#224bed6ffa29ba3bbe9a91ef6bda7186200c59a8"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c92c467a3ab0b60484a0db83fcf89366791716cd"
 dependencies = [
  "libc 0.2.151",
  "librocksdb_sys",
@@ -6437,7 +6438,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "8.1.0"
+version = "8.1.1"
 dependencies = [
  "anyhow",
  "api_version",
@@ -7078,7 +7079,7 @@ version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
- "cfg-if 0.1.10",
+ "cfg-if 1.0.0",
  "static_assertions",
 ]
 

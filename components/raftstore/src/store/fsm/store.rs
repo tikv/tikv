@@ -190,6 +190,10 @@ pub struct StoreMeta {
     pub region_read_progress: RegionReadProgressRegistry,
     /// record sst_file_name -> (sst_smallest_key, sst_largest_key)
     pub damaged_ranges: HashMap<String, (Vec<u8>, Vec<u8>)>,
+    /// Record regions are damaged on some corner cases, the relative peer must
+    /// be safely removed from the store, such as applying snapshot or
+    /// compacting raft logs.
+    pub damaged_regions: HashSet<u64>,
     /// Record peers are busy with applying logs
     /// (applied_index <= last_idx - leader_transfer_max_log_lag).
     /// `busy_apply_peers` and `completed_apply_peers_count` are used
@@ -252,6 +256,7 @@ impl StoreMeta {
             destroyed_region_for_snap: HashMap::default(),
             region_read_progress: RegionReadProgressRegistry::new(),
             damaged_ranges: HashMap::default(),
+            damaged_regions: HashSet::default(),
             busy_apply_peers: HashSet::default(),
             completed_apply_peers_count: Some(0),
         }
@@ -2747,6 +2752,12 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         busy_apply_peers_count: u64,
         completed_apply_peers_count: Option<u64>,
     ) -> bool {
+        STORE_BUSY_ON_APPLY_REGIONS_GAUGE_VEC
+            .busy_apply_peers
+            .set(busy_apply_peers_count as i64);
+        STORE_BUSY_ON_APPLY_REGIONS_GAUGE_VEC
+            .completed_apply_peers
+            .set(completed_apply_peers_count.unwrap_or_default() as i64);
         // No need to check busy status if there are no regions.
         if completed_apply_peers_count.is_none() || region_count == 0 {
             return false;
@@ -2763,7 +2774,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         // regarded as the candidate for balancing leaders.
         if during_starting_stage {
             let completed_target_count = (|| {
-                fail_point!("on_mock_store_completed_target_count", |_| 100);
+                fail_point!("on_mock_store_completed_target_count", |_| 0);
                 std::cmp::max(
                     1,
                     STORE_CHECK_COMPLETE_APPLY_REGIONS_PERCENT * region_count / 100,
@@ -2772,12 +2783,22 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             // If the number of regions on completing applying logs does not occupy the
             // majority of regions, the store is regarded as busy.
             if completed_apply_peers_count < completed_target_count {
+                debug!("check store is busy on apply";
+                    "region_count" => region_count,
+                    "completed_apply_peers_count" => completed_apply_peers_count,
+                    "completed_target_count" => completed_target_count);
                 true
             } else {
                 let pending_target_count = std::cmp::min(
                     self.ctx.cfg.min_pending_apply_region_count,
                     region_count.saturating_sub(completed_target_count),
                 );
+                debug!("check store is busy on apply, has pending peers";
+                    "region_count" => region_count,
+                    "completed_apply_peers_count" => completed_apply_peers_count,
+                    "completed_target_count" => completed_target_count,
+                    "pending_target_count" => pending_target_count,
+                    "busy_apply_peers_count" => busy_apply_peers_count);
                 pending_target_count > 0 && busy_apply_peers_count >= pending_target_count
             }
         } else {
@@ -2800,6 +2821,13 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             if !meta.damaged_ranges.is_empty() {
                 let damaged_regions_id = meta.get_all_damaged_region_ids().into_iter().collect();
                 stats.set_damaged_regions_id(damaged_regions_id);
+            }
+            if !meta.damaged_regions.is_empty() {
+                // Note: no need to filter overlapped regions, since the regions in
+                // `damaged_ranges` are already non-overlapping.
+                stats
+                    .mut_damaged_regions_id()
+                    .extend(meta.damaged_regions.iter());
             }
             completed_apply_peers_count = meta.completed_apply_peers_count;
             busy_apply_peers_count = meta.busy_apply_peers.len() as u64;
@@ -2847,6 +2875,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         if !busy_on_apply && completed_apply_peers_count.is_some() {
             let mut meta = self.ctx.store_meta.lock().unwrap();
             meta.completed_apply_peers_count = None;
+            meta.busy_apply_peers.clear();
         }
         let store_is_busy = self
             .ctx
@@ -2855,6 +2884,12 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             .is_busy
             .swap(false, Ordering::Relaxed);
         stats.set_is_busy(store_is_busy || busy_on_apply);
+        STORE_PROCESS_BUSY_GAUGE_VEC
+            .applystore_busy
+            .set(busy_on_apply as i64);
+        STORE_PROCESS_BUSY_GAUGE_VEC
+            .raftstore_busy
+            .set(store_is_busy as i64);
 
         let mut query_stats = QueryStats::default();
         query_stats.set_put(

@@ -344,6 +344,7 @@ where
 
                     // SAFETY: we will call `remove_thread_memory_accessor` at before_stop.
                     unsafe { add_thread_memory_accessor() };
+                    tikv_alloc::thread_allocate_exclusive_arena().unwrap();
                 })
                 .before_stop(|| {
                     remove_thread_memory_accessor();
@@ -927,6 +928,7 @@ where
                     pd_client::meta_storage::Source::LogBackup,
                 ))),
                 self.core.config.log_backup.clone(),
+                self.core.config.resolved_ts.clone(),
                 backup_stream_scheduler.clone(),
                 backup_stream_ob,
                 self.region_info_accessor.clone(),
@@ -934,6 +936,7 @@ where
                 self.pd_client.clone(),
                 self.concurrency_manager.clone(),
                 BackupStreamResolver::V1(leadership_resolver),
+                self.core.encryption_key_manager.clone(),
             );
             backup_stream_worker.start(backup_stream_endpoint);
             self.core.to_stop.push(backup_stream_worker);
@@ -1067,6 +1070,7 @@ where
         let cdc_endpoint = cdc::Endpoint::new(
             self.core.config.server.cluster_id,
             &self.core.config.cdc,
+            &self.core.config.resolved_ts,
             self.core.config.storage.engine == EngineType::RaftKv2,
             self.core.config.storage.api_version(),
             self.pd_client.clone(),

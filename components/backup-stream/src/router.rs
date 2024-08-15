@@ -13,6 +13,7 @@ use std::{
     time::Duration,
 };
 
+use encryption::DataKeyManager;
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use external_storage::{create_storage, BackendConfig, ExternalStorage, UnpinReader};
 use futures::io::Cursor;
@@ -325,6 +326,7 @@ pub struct Config {
     pub temp_file_size_limit: u64,
     pub temp_file_memory_quota: u64,
     pub max_flush_interval: Duration,
+    pub data_key_manager: Option<Arc<DataKeyManager>>,
 }
 
 impl From<tikv::config::BackupStreamConfig> for Config {
@@ -338,6 +340,7 @@ impl From<tikv::config::BackupStreamConfig> for Config {
             temp_file_size_limit,
             temp_file_memory_quota,
             max_flush_interval,
+            data_key_manager: None,
         }
     }
 }
@@ -384,6 +387,7 @@ pub struct RouterInner {
     temp_file_memory_quota: AtomicU64,
     /// The max duration the local data can be pending.
     max_flush_interval: SyncRwLock<Duration>,
+    data_key_manager: Option<Arc<DataKeyManager>>,
 }
 
 impl std::fmt::Debug for RouterInner {
@@ -406,6 +410,7 @@ impl RouterInner {
             temp_file_size_limit: AtomicU64::new(config.temp_file_size_limit),
             temp_file_memory_quota: AtomicU64::new(config.temp_file_memory_quota),
             max_flush_interval: SyncRwLock::new(config.max_flush_interval),
+            data_key_manager: config.data_key_manager,
         }
     }
 
@@ -502,6 +507,7 @@ impl RouterInner {
             content_compression: task.info.get_compression_type(),
             minimal_swap_out_file_size: ReadableSize::mb(1).0 as _,
             write_buffer_size: ReadableSize::kb(4).0 as _,
+            encryption: self.data_key_manager.clone(),
         }
     }
 
@@ -1619,6 +1625,7 @@ mod tests {
             content_compression: CompressionType::Zstd,
             minimal_swap_out_file_size: 0,
             write_buffer_size: 0,
+            encryption: None,
         }
     }
 
@@ -1716,6 +1723,7 @@ mod tests {
                 temp_file_size_limit: 1024,
                 temp_file_memory_quota: 1024 * 2,
                 max_flush_interval: Duration::from_secs(300),
+                data_key_manager: None,
             },
         );
         // -----t1.start-----t1.end-----t2.start-----t2.end------
@@ -1826,6 +1834,7 @@ mod tests {
                 temp_file_size_limit: 32,
                 temp_file_memory_quota: 32 * 2,
                 max_flush_interval: Duration::from_secs(300),
+                data_key_manager: None,
             },
         );
         let (stream_task, storage_path) = task("dummy".to_owned()).await.unwrap();
@@ -2075,6 +2084,7 @@ mod tests {
                 temp_file_size_limit: 1,
                 temp_file_memory_quota: 2,
                 max_flush_interval: Duration::from_secs(300),
+                data_key_manager: None,
             },
         ));
         let (task, _path) = task("error_prone".to_owned()).await?;
@@ -2113,6 +2123,7 @@ mod tests {
                 temp_file_size_limit: 32,
                 temp_file_memory_quota: 32 * 2,
                 max_flush_interval: Duration::from_secs(300),
+                data_key_manager: None,
             },
         );
         let mut stream_task = StreamBackupTaskInfo::default();
@@ -2148,6 +2159,7 @@ mod tests {
                 temp_file_size_limit: 1,
                 temp_file_memory_quota: 2,
                 max_flush_interval: Duration::from_secs(300),
+                data_key_manager: None,
             },
         ));
         let (task, _path) = task("cleanup_test".to_owned()).await?;
@@ -2204,6 +2216,7 @@ mod tests {
                 temp_file_size_limit: 1,
                 temp_file_memory_quota: 2,
                 max_flush_interval: Duration::from_secs(300),
+                data_key_manager: None,
             },
         ));
         let (task, _path) = task("flush_failure".to_owned()).await?;
@@ -2465,6 +2478,7 @@ mod tests {
                 temp_file_size_limit: 1,
                 temp_file_memory_quota: 2,
                 max_flush_interval: cfg.max_flush_interval.0,
+                data_key_manager: None,
             },
         ));
 
@@ -2521,6 +2535,7 @@ mod tests {
                 temp_file_size_limit: 1000,
                 temp_file_memory_quota: 2,
                 max_flush_interval: Duration::from_secs(300),
+                data_key_manager: None,
             },
         ));
 

@@ -55,13 +55,18 @@ ignore = [
     # are required by TiKV.
     # See https://github.com/time-rs/time/blob/8067540c/CHANGELOG.md#L703
     "RUSTSEC-2020-0071",
-    # Ignore RUSTSEC-2023-0072 as we bans the unsound `X509StoreRef::objects`.
+    # Ignore RUSTSEC-2023-0072 as we ban the unsound `X509StoreRef::objects`.
     #
     # NB: Upgrading rust-openssl the latest version do fix the issue but it
     # also upgrade the OpenSSL to v3.x which causes performance degradation.
     # See https://github.com/openssl/openssl/issues/17064
     "RUSTSEC-2023-0072",
-    # Ignore RUSTSEC-2023-0072 (unsound issue of "atty" crate) as it only
+    # Ignore RUSTSEC-2024-0357 as there is no `MemBio::get_buf` in TiKV, also
+    # we ban all openssl (Rust) APIs that call `MemBio::get_buf`.
+    #
+    # See https://github.com/sfackler/rust-openssl/pull/2266
+    "RUSTSEC-2024-0357",
+    # Ignore RUSTSEC-2021-0145 (unsound issue of "atty" crate) as it only
     # affects Windows plaform which is not supported offically by TiKV, and 2)
     # we have disabled the clap feature "color" so that the "atty" crate is not
     # included in production code.
@@ -83,15 +88,7 @@ unlicensed = "deny"
 copyleft = "deny"
 private = { ignore = false }
 # Allow licenses in Category A
-allow = [
-    "0BSD",
-    "Apache-2.0",
-    "BSD-3-Clause",
-    "CC0-1.0",
-    "ISC",
-    "MIT",
-    "Zlib",
-]
+allow = ["0BSD", "Apache-2.0", "BSD-3-Clause", "CC0-1.0", "ISC", "MIT", "Zlib"]
 exceptions = [
     # unicode-ident includes data generated from Unicode Character Database
     # which is licensed under Unicode-DFS-2016.

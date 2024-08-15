@@ -490,6 +490,13 @@ Full""",
                         ),
                         legend_format=r"store-write-channelfull-{{instance}}",
                     ),
+                    target(
+                        expr=expr_sum(
+                            "tikv_raftstore_process_busy",
+                            by_labels=["instance", "type"],
+                        ),
+                        legend_format=r"{{instance}}-{{type}}",
+                    ),
                 ],
             ),
             graph_panel(
@@ -1070,7 +1077,7 @@ def gRPC() -> RowPanel:
             graph_panel(
                 title="gRPC request sources duration",
                 description="The duration of different sources of gRPC request",
-                yaxes=yaxes(left_format=UNITS.SECONDS),
+                yaxes=yaxes(left_format=UNITS.MICRO_SECONDS),
                 lines=False,
                 stack=True,
                 targets=[
@@ -5908,6 +5915,12 @@ def RaftEngine() -> RowPanel:
                     ),
                 ],
             ),
+            graph_panel_histogram_quantiles(
+                title="Write Compression Ratio",
+                description="The compression ratio per write",
+                yaxes=yaxes(left_format=UNITS.NONE_FORMAT),
+                metric="raft_engine_write_compression_ratio",
+            ),
         ]
     )
     return layout.row_panel
@@ -7600,7 +7613,7 @@ def Memory() -> RowPanel:
     layout.row(
         [
             graph_panel(
-                title="Newly Allocated Bytes by Thread",
+                title="Allocated Bytes Rate per Thread",
                 description=None,
                 yaxes=yaxes(left_format=UNITS.BYTES_IEC),
                 targets=[
@@ -7614,7 +7627,7 @@ def Memory() -> RowPanel:
                 ],
             ),
             graph_panel(
-                title="Recently Released Bytes by Thread",
+                title="Released Bytes Rate per Thread",
                 description=None,
                 yaxes=yaxes(left_format=UNITS.BYTES_IEC),
                 targets=[
@@ -7624,6 +7637,36 @@ def Memory() -> RowPanel:
                             label_selectors=['type="dealloc"'],
                             by_labels=["thread_name"],
                         ),
+                    )
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Mapped Allocation per Thread",
+                description=None,
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_allocator_thread_stats",
+                            label_selectors=['type="mapped"'],
+                            by_labels=["thread_name"],
+                        )
+                    )
+                ],
+            ),
+            graph_panel(
+                title="Arena Count",
+                description=None,
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_allocator_arena_count",
+                            by_labels=["instance"],
+                        )
                     )
                 ],
             ),
