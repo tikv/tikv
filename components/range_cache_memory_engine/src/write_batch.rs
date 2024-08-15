@@ -63,7 +63,7 @@ pub struct RangeCacheWriteBatch {
     memory_controller: Arc<MemoryController>,
     memory_usage_reach_hard_limit: bool,
     region_save_point: usize,
-    currnet_region_evicted: bool,
+    current_region_evicted: bool,
     current_region: Option<Region>,
 
     // record the total durations of the prepare work for write in the write batch
@@ -92,7 +92,7 @@ impl From<&RangeCacheMemoryEngine> for RangeCacheWriteBatch {
             memory_controller: engine.memory_controller(),
             memory_usage_reach_hard_limit: false,
             region_save_point: 0,
-            currnet_region_evicted: false,
+            current_region_evicted: false,
             prepare_for_write_duration: Duration::default(),
             current_region: None,
         }
@@ -112,7 +112,7 @@ impl RangeCacheWriteBatch {
             memory_controller: engine.memory_controller(),
             memory_usage_reach_hard_limit: false,
             region_save_point: 0,
-            currnet_region_evicted: false,
+            current_region_evicted: false,
             prepare_for_write_duration: Duration::default(),
             current_region: None,
         }
@@ -219,7 +219,7 @@ impl RangeCacheWriteBatch {
     }
 
     fn evict_current_region(&mut self, reason: EvictReason) {
-        if self.currnet_region_evicted {
+        if self.current_region_evicted {
             return;
         }
         self.engine
@@ -235,7 +235,7 @@ impl RangeCacheWriteBatch {
             self.memory_controller.release(total_size);
             self.buffer.truncate(self.region_save_point);
         }
-        self.currnet_region_evicted = true;
+        self.current_region_evicted = true;
     }
 
     fn process_cf_operation<F1, F2>(&mut self, entry_size: F1, entry: F2)
@@ -243,7 +243,7 @@ impl RangeCacheWriteBatch {
         F1: FnOnce() -> usize,
         F2: FnOnce() -> RangeCacheWriteBatchEntry,
     {
-        if self.range_cache_status == RangeCacheStatus::NotInCache || self.currnet_region_evicted {
+        if self.range_cache_status == RangeCacheStatus::NotInCache || self.current_region_evicted {
             return;
         }
 
@@ -468,7 +468,7 @@ impl WriteBatch for RangeCacheWriteBatch {
         self.sequence_number = None;
         self.prepare_for_write_duration = Duration::ZERO;
         self.current_region = None;
-        self.currnet_region_evicted = false;
+        self.current_region_evicted = false;
         self.region_save_point = 0;
     }
 
@@ -505,7 +505,7 @@ impl WriteBatch for RangeCacheWriteBatch {
         self.set_range_cache_status(self.engine.prepare_for_apply(self.id, range, region));
         self.memory_usage_reach_hard_limit = false;
         self.region_save_point = self.buffer.len();
-        self.currnet_region_evicted = false;
+        self.current_region_evicted = false;
         self.prepare_for_write_duration += time.saturating_elapsed();
     }
 }

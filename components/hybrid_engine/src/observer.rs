@@ -13,7 +13,7 @@ use raftstore::coprocessor::{
 
 #[derive(Clone)]
 pub struct Observer {
-    // observer is per thread so ther is no need to use mutex here,
+    // observer is per thread so there is no need to use mutex here,
     // but current inteface only provides `&self` but not `&mut self`,
     // so we use mutex to workaround this restriction.
     // TODO: change Observer's interface to `&mut self`.

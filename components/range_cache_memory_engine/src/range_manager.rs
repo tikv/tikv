@@ -17,7 +17,7 @@ use tikv_util::{info, time::Instant};
 
 use crate::{metrics::observe_eviction_duration, read::RangeCacheSnapshotMeta};
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Clone, Copy, Default)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Clone, Copy, Default, Hash)]
 pub enum RegionState {
     // waiting to be load.
     // NOTE: in this state, the region's epoch may be older than
@@ -37,6 +37,21 @@ pub enum RegionState {
     PendingEvict,
     // evicting event is running, the region will be removed after the evict task finished.
     Evicting,
+}
+
+impl RegionState {
+    pub fn as_str(&self) -> &'static str {
+        use RegionState::*;
+        match *self {
+            Pending => "pending",
+            ReadyToLoad => "ready_to_load",
+            Loading => "loading",
+            Active => "cached",
+            LoadingCanceled => "loading_canceled",
+            PendingEvict => "pending_evict",
+            Evicting => "evicting",
+        }
+    }
 }
 
 // read_ts -> ref_count
@@ -114,7 +129,7 @@ impl RangeMeta {
     // happen for pending region because otherwise we will always update
     // the region epoch with ApplyObserver(for loading/active regions) or
     // no need to update the epoch for evicting regions.
-    pub(crate) fn update_region(&mut self, region: &Region) -> bool {
+    fn amend_pending_region(&mut self, region: &Region) -> bool {
         assert!(
             self.region.id == region.id
                 && self.region.get_region_epoch().version < region.get_region_epoch().version
@@ -377,7 +392,7 @@ impl RegionManager {
         };
         if cached_meta.state == Pending
             && cached_meta.region.get_region_epoch().version != region.get_region_epoch().version
-            && !cached_meta.update_region(region)
+            && !cached_meta.amend_pending_region(region)
         {
             info!("remove outdated pending region"; "pending_region" => ?cached_meta.region, "new_region" => ?region);
             self.remove_region(region.id);
@@ -410,24 +425,27 @@ impl RegionManager {
     /// be removed first.
     fn check_overlap_with_region(&mut self, region: &Region) -> Option<RegionState> {
         let region_range = CacheRange::from_region(region);
-        let mut removed_region = vec![];
+        let mut removed_regions = vec![];
         let mut overlapped_region_state = None;
         self.iter_overlapped_regions(&region_range, |region_meta| {
-            if region_meta.state != RegionState::Pending
-                || region_meta.region.get_region_epoch().version
-                    >= region.get_region_epoch().version
-            {
-                tikv_util::warn!("load region overlaps with existing region"; 
-                    "region" => ?region,
-                    "exist_meta" => ?region_meta);
-                overlapped_region_state = Some(region_meta.state);
-                return false;
-            }
             // pending region with out-dated epoch, should be removed.
-            removed_region.push(region_meta.region.id);
-            true
+            if region_meta.state == RegionState::Pending
+                && region_meta.region.get_region_epoch().version < region.get_region_epoch().version
+            {
+                removed_regions.push(region_meta.region.id);
+                return true;
+            }
+            tikv_util::warn!("load region overlaps with existing region"; 
+                "region" => ?region,
+                "exist_meta" => ?region_meta);
+            overlapped_region_state = Some(region_meta.state);
+            false
         });
-        for id in removed_region {
+        if !removed_regions.is_empty() {
+            info!("load region meet pending region with stale epoch, removed";
+                "region" => ?region, "stale_regions" => ?removed_regions);
+        }
+        for id in removed_regions {
             self.remove_region(id);
         }
         overlapped_region_state

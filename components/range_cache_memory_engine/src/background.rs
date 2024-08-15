@@ -1,6 +1,6 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{fmt::Display, sync::Arc, thread::JoinHandle, time::Duration};
+use std::{collections::HashMap, fmt::Display, sync::Arc, thread::JoinHandle, time::Duration};
 
 use bytes::Bytes;
 use crossbeam::{
@@ -185,7 +185,9 @@ impl PdRangeHintService {
             for key_range in &label_rule.data {
                 match parse_range(key_range) {
                     Ok((start, end)) => {
-                        info!("Requested to cache range";"start" => ?log_wrappers::Value(&start), "end" => ?log_wrappers::Value(&end));
+                        info!("Requested to cache range";
+                            "start" => ?log_wrappers::Value(&start),
+                            "end" => ?log_wrappers::Value(&end));
                         range_manager_load_cb(&start, &end);
                     }
                     Err(e) => {
@@ -1188,22 +1190,16 @@ impl RunnableWithTimer for BackgroundRunner {
         RANGE_CACHE_MEMORY_USAGE.set(mem_usage as i64);
 
         let core = self.core.engine.read();
-        let mut pending = 0i64;
-        let mut cached = 0i64;
+        let mut count_by_state = HashMap::new();
         for m in core.range_manager.regions().values() {
-            if m.get_state() == RegionState::Active {
-                cached += 1;
-            } else if m.get_state() == RegionState::Pending {
-                pending += 1;
-            }
+            *count_by_state.entry(m.get_state()).or_default() += 1;
         }
         drop(core);
-        RANGE_CACHE_COUNT
-            .with_label_values(&["pending_range"])
-            .set(pending);
-        RANGE_CACHE_COUNT
-            .with_label_values(&["cached_range"])
-            .set(cached);
+        for (state, count) in count_by_state {
+            RANGE_CACHE_COUNT
+                .with_label_values(&[state.as_str()])
+                .set(count);
+        }
     }
 
     fn get_interval(&self) -> Duration {
