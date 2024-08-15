@@ -488,31 +488,36 @@ mod tests {
 
     #[test]
     fn test_scanned_event() {
-        let memory_quota = Arc::new(MemoryQuota::new(1024));
-        let (mut tx, mut rx) = channel(10, memory_quota);
-
         let mut e = Event::default();
         e.region_id = 233;
         {
+            let memory_quota = Arc::new(MemoryQuota::new(1024));
+            let (mut tx, mut rx) = channel(10, memory_quota);
+
             let truncated = Arc::new(AtomicBool::new(false));
-            let _ = block_on(tx.send_all(vec![CdcEvent::Event(e.clone())], truncated));
+            let event = CdcEvent::Event(e.clone());
+            let size = event.size() as usize;
+            let _ = block_on(tx.send_all(vec![event], truncated));
 
             let memory_quota = rx.memory_quota.clone();
             let mut drain = rx.drain();
-            let (event, _) = block_on(drain.next()).unwrap();
-            assert_eq!(memory_quota.in_use(), event.size() as usize);
+            assert_matches!(block_on(drain.next()), Some((CdcEvent::Event(_), _)));
+            assert_eq!(memory_quota.in_use(), size);
         }
         {
+            let memory_quota = Arc::new(MemoryQuota::new(1024));
+            let (mut tx, mut rx) = channel(10, memory_quota);
+
             let truncated = Arc::new(AtomicBool::new(true));
             let _ = block_on(tx.send_all(vec![CdcEvent::Event(e)], truncated));
 
             let memory_quota = rx.memory_quota.clone();
             let mut drain = rx.drain();
-            let (..) = block_on(drain.next()).unwrap();
+            block_on_timeout(drain.next(), Duration::from_millis(100)).unwrap_err();
             assert_eq!(memory_quota.in_use(), 0);
         }
     }
-
+    
     #[test]
     fn test_barrier() {
         let force_send = false;
