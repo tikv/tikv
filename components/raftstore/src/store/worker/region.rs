@@ -501,10 +501,10 @@ where
                 error!("failed to delete files in range"; "err" => %e);
             })
             .unwrap();
-        if let Err(e) = self.delete_all_in_range(&ranges, false) {
-            error!("failed to cleanup stale range"; "err" => %e);
-            return;
-        }
+        // if let Err(e) = self.delete_all_in_range(&ranges, false) {
+        //     error!("failed to cleanup stale range"; "err" => %e);
+        //     return;
+        // }
         self.engine
             .delete_ranges_cfs(
                 &WriteOptions::default(),
