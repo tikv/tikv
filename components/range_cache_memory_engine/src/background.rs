@@ -2580,7 +2580,7 @@ pub mod tests {
             .snapshot(
                 region2.id,
                 0,
-                CacheRange::from_region(&region1),
+                CacheRange::from_region(&region2),
                 u64::MAX,
                 u64::MAX,
             )

@@ -1,6 +1,7 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    assert_matches::assert_matches,
     collections::{
         BTreeMap,
         Bound::{self, Excluded, Unbounded},
@@ -34,7 +35,7 @@ pub enum RegionState {
     LoadingCanceled,
     // region should be evicted, but there are possible active snapshot or gc task.
     PendingEvict,
-    // evicting event is running, the region will be removed after the evcit task finished.
+    // evicting event is running, the region will be removed after the evict task finished.
     Evicting,
 }
 
@@ -80,7 +81,7 @@ pub struct RangeMeta {
     state: RegionState,
     // whether a gc task is running with this region.
     in_gc: bool,
-    // region evcit triggers info, use for logging.
+    // region eviction triggers info, used for logging.
     evict_info: Option<EvictInfo>,
 }
 
@@ -110,7 +111,7 @@ impl RangeMeta {
     }
 
     // update region info due to epoch version changes. This can only
-    // happend for pending region because otherwise we will always update
+    // happen for pending region because otherwise we will always update
     // the region epoch with ApplyObserver(for loading/active regions) or
     // no need to update the epoch for evicting regions.
     pub(crate) fn update_region(&mut self, region: &Region) -> bool {
@@ -162,13 +163,19 @@ impl RangeMeta {
 
     pub(crate) fn set_state(&mut self, new_state: RegionState) {
         assert!(self.validate_update_region_state(new_state));
+        info!(
+            "update region meta state"; 
+            "region_id" => self.region.id, 
+            "epoch" => self.region.get_region_epoch().version,
+            "curr_state" => ?self.state, 
+            "new_state" => ?new_state);
         self.state = new_state;
     }
 
     pub(crate) fn mark_evict(&mut self, state: RegionState, reason: EvictReason) {
         use RegionState::*;
-        assert!(matches!(self.state, Loading | Active | LoadingCanceled));
-        assert!(matches!(state, PendingEvict | Evicting));
+        assert_matches!(self.state, Loading | Active | LoadingCanceled);
+        assert_matches!(state, PendingEvict | Evicting);
         self.set_state(state);
         self.evict_info = Some(EvictInfo {
             start: Instant::now_coarse(),
@@ -188,7 +195,7 @@ impl RangeMeta {
     // Build a new RangeMeta from a existing meta, the new meta should inherit
     // the safe_point, state, in_gc and evict_info.
     // This method is currently only used for handling region split.
-    pub(crate) fn dervie_from(region: Region, source_meta: &Self) -> Self {
+    pub(crate) fn derive_from(region: Region, source_meta: &Self) -> Self {
         let range = CacheRange::from_region(&region);
         assert!(source_meta.range.contains_range(&range));
         Self {
@@ -216,7 +223,7 @@ struct KeyAndVersion(Vec<u8>, u64);
 // (whether created by new_region/load_region or by split)'s range is unique and
 // is not overlap with any other regions.
 //
-// Eech region is first added with `pending` state. Because `pending` can be
+// Each region is first added with `pending` state. Because `pending` can be
 // added by the background workers, it is possible the pending region is added
 // with an outdated epoch. We handle this outdated epoch in the raft apply
 // thread, before handling a region, the apply worker will check the region in
@@ -231,9 +238,9 @@ struct KeyAndVersion(Vec<u8>, u64);
 // to watch following event:
 // - PrepareMerge/CommitMerge. We evict target region currently for simplicity.
 // - Leader Resign. evict the region.
-// - SST Ingestion. evict the regoin.
+// - SST Ingestion. evict the region.
 // - Split/BatchSplit. For split event, we just replace the source region with
-//   the split new reigons. The new regions should inherit the state of the
+//   the split new regions. The new regions should inherit the state of the
 //   source region including(state, safe_point, in_gc). If there are ongoing
 //   snapshot in the source region, the source region meta should be put in
 //   `historical_regions`.
@@ -249,7 +256,7 @@ pub struct RegionManager {
     // Outdated regions that are split but still hold some on going snapshots.
     // These on going snapshot should block regions fell in this range from gc or eviction.
     // It's possible that multi region with the same end key are in `historical_regions`,
-    // so we add epoch verion into the key to ensure the uniqueness.
+    // so we add epoch version into the key to ensure the uniqueness.
     // (data_end_key, epoch_version) --> region_id
     historical_regions: BTreeMap<KeyAndVersion, RangeMeta>,
     // Record the region ranges that are being written.
@@ -258,7 +265,7 @@ pub struct RegionManager {
     // the range is evicted or failed to load, the range is marked as `PendingEvict`
     // which means no further write of it is allowed, and a DeleteRegion task of the range will be
     // scheduled to cleanup the KVs of this region. However, it is possible that the apply thread
-    // is writting data for this range. Therefore, we have to delay the DeleteRange task until
+    // is writing data for this range. Therefore, we have to delay the DeleteRange task until
     // the range leaves the `ranges_being_written`.
     //
     // The key in this map is the id of the write batch, and the value is a collection
@@ -399,7 +406,7 @@ impl RegionManager {
 
     /// `check_overlap_with_region` check whether there are regions overlap with
     /// target region. If there are regions with `pending` state and whose
-    /// epoch verion is smaller than target region, the pending regions will
+    /// epoch version is smaller than target region, the pending regions will
     /// be removed first.
     fn check_overlap_with_region(&mut self, region: &Region) -> Option<RegionState> {
         let region_range = CacheRange::from_region(region);
@@ -410,7 +417,9 @@ impl RegionManager {
                 || region_meta.region.get_region_epoch().version
                     >= region.get_region_epoch().version
             {
-                tikv_util::warn!("load region overlaps with existing region"; "region" => ?region, "exist_meta" => ?region_meta);
+                tikv_util::warn!("load region overlaps with existing region"; 
+                    "region" => ?region,
+                    "exist_meta" => ?region_meta);
                 overlapped_region_state = Some(region_meta.state);
                 return false;
             }
@@ -456,7 +465,7 @@ impl RegionManager {
     // historical_regions, it means one or some evicted_ranges may be ready to be
     // removed physically.
     // So, we return a vector of ranges to denote the ranges that are ready to be
-    // removed.range_key
+    // removed.
     pub(crate) fn remove_region_snapshot(
         &mut self,
         snapshot_meta: &RangeCacheSnapshotMeta,
@@ -609,6 +618,11 @@ impl RegionManager {
             evict_ids.push(meta.region.id);
             true
         });
+        if evict_ids.is_empty() {
+            info!("evict a region that is not cached"; 
+                "reason" => ?evict_reason, 
+                "region" => ?evict_region);
+        }
         for rid in evict_ids {
             if let Some(region) = self.do_evict_region(rid, evict_region, evict_reason) {
                 deleteable_regions.push(region);
@@ -782,13 +796,19 @@ impl RegionManager {
                     && (source_region.end_key.is_empty()
                         || (source_region.end_key >= r.end_key && !r.end_key.as_slice().is_empty()))
             });
-            info!("[IME] handle split region met pending region epoch stale"; "cached" => ?region_meta, "split_source" => ?source_region, "cache_new_regions" => ?new_regions);
+            info!("[IME] handle split region met pending region epoch stale"; 
+                "cached" => ?region_meta, 
+                "split_source" => ?source_region, 
+                "cache_new_regions" => ?new_regions);
         }
 
-        info!("handle region split"; "region_id" => source_region.id, "meta" => ?region_meta, "new_regions" => ?new_regions);
+        info!("handle region split"; 
+            "region_id" => source_region.id, 
+            "meta" => ?region_meta, 
+            "new_regions" => ?new_regions);
 
         for r in new_regions {
-            let meta = RangeMeta::dervie_from(r, &region_meta);
+            let meta = RangeMeta::derive_from(r, &region_meta);
             self.new_region_meta(meta);
         }
 

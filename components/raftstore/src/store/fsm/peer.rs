@@ -2627,7 +2627,7 @@ where
             MEMTRACE_RAFT_MESSAGES.trace(TraceEvent::Sub(heap_size));
             if stepped.get() {
                 unsafe {
-                    // It could be less than exact for entry overwritting.
+                    // It could be less than exact for entry overwriting.
                     *memtrace_raft_entries += heap_size;
                     MEMTRACE_RAFT_ENTRIES.trace(TraceEvent::Add(heap_size));
                 }
@@ -3806,7 +3806,7 @@ where
         if self.fsm.peer.has_unpersisted_ready() {
             assert!(self.ctx.sync_write_worker.is_none());
             // The destroy must be delayed if there are some unpersisted readies.
-            // Otherwise there is a race of writting kv db and raft db between here
+            // Otherwise there is a race of writing kv db and raft db between here
             // and write worker.
             return Some(DelayReason::UnPersistedReady);
         }

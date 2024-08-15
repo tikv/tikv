@@ -700,7 +700,7 @@ mod tests {
         assert_eq!(skip_engine.node_count(), 0);
 
         // epoch changes but new range is contained by the pending region, will update
-        // the reigon.
+        // the region.
         engine.load_region(r1.clone()).unwrap();
         let mut r1_new = new_region(1, b"k01".to_vec(), b"k05".to_vec());
         r1_new.mut_region_epoch().version = 2;

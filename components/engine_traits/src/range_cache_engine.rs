@@ -16,7 +16,7 @@ pub enum FailedReason {
     TooOldRead,
     // while we always get rocksdb's snapshot first and then get IME's snapshot.
     // epoch is first checked in get rocksdb's snaphsot by raftstore.
-    // But bacuse we update IME's epoch in apply batch, and update raft local reader's
+    // But because we update IME's epoch in apply batch, and update raft local reader's
     // epoch after ApplyRes is returned, so it's possible that IME's region epoch is
     // newer than raftstore's, so we still need to check epoch again in IME snapshot.
     EpochNotMatch,
@@ -65,7 +65,7 @@ pub trait RangeCacheEngine:
     // provide atomic write
     fn snapshot(
         &self,
-        reigon_id: u64,
+        region_id: u64,
         region_epoch: u64,
         range: CacheRange,
         read_ts: u64,

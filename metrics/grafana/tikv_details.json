@@ -21353,7 +21353,7 @@
           "thresholds": [],
           "timeFrom": null,
           "timeShift": null,
-          "title": "Enable apply unpersisted log regoin count",
+          "title": "Enable apply unpersisted log region count",
           "tooltip": {
             "msResolution": true,
             "shared": true,

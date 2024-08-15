@@ -7423,7 +7423,7 @@ mod tests {
         let cmd_batch = cmdbatch_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert_eq!(2, cmd_batch.len());
 
-        // Stop observer regoin 1.
+        // Stop observer region 1.
         observe_handle.stop_observing();
 
         let observe_handle = ObserveHandle::new();
