@@ -19,8 +19,8 @@ use bytes::Bytes;
 use collections::{HashMap, HashSet};
 use crossbeam::{atomic::AtomicCell, channel::TrySendError};
 use engine_traits::{
-    CacheRange, Engines, KvEngine, PerfContext, RaftEngine, Snapshot, SnapshotContext, WriteBatch,
-    WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    Engines, KvEngine, PerfContext, RaftEngine, Snapshot, WriteBatch, WriteOptions, CF_DEFAULT,
+    CF_LOCK, CF_WRITE,
 };
 use error_code::ErrorCodeExt;
 use fail::fail_point;
@@ -5013,16 +5013,7 @@ where
             }
         }
 
-        let snap_ctx = if let Ok(read_ts) = decode_u64(&mut req.get_header().get_flag_data()) {
-            Some(SnapshotContext {
-                range: Some(CacheRange::from_region(&region)),
-                read_ts,
-            })
-        } else {
-            None
-        };
-
-        let mut resp = reader.execute(&req, &Arc::new(region), read_index, snap_ctx, None);
+        let mut resp = reader.execute(&req, &Arc::new(region), read_index, None);
         if let Some(snap) = resp.snapshot.as_mut() {
             snap.txn_ext = Some(self.txn_ext.clone());
             snap.bucket_meta = self
@@ -6018,12 +6009,8 @@ where
         &self.engines.kv
     }
 
-    fn get_snapshot(
-        &mut self,
-        snap_ctx: Option<SnapshotContext>,
-        _: &Option<LocalReadContext<'_, EK>>,
-    ) -> Arc<EK::Snapshot> {
-        Arc::new(self.engines.kv.snapshot(snap_ctx))
+    fn get_snapshot(&mut self, _: &Option<LocalReadContext<'_, EK>>) -> Arc<EK::Snapshot> {
+        Arc::new(self.engines.kv.snapshot())
     }
 }
 

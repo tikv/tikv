@@ -1,9 +1,6 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{
-    FailedReason, KvEngine, Mutable, Peekable, RangeCacheEngine, ReadOptions, Result,
-    SnapshotContext, SnapshotMiscExt, SyncMutable, WriteBatch, WriteBatchExt,
-};
+use engine_traits::{FailedReason, KvEngine, RangeCacheEngine, SnapshotContext, SnapshotMiscExt};
 
 use crate::{
     metrics::{
@@ -48,6 +45,44 @@ where
     pub fn mut_range_cache_engine(&mut self) -> &mut EC {
         &mut self.range_cache_engine
     }
+
+    pub fn new_in_memory_snapshot(
+        &self,
+        sequence_number: u64,
+        ctx: Option<SnapshotContext>,
+    ) -> Option<EC::Snapshot> {
+        if let Some(ctx) = ctx {
+            match self
+                .range_cache_engine
+                .snapshot(ctx.range.unwrap(), ctx.read_ts, sequence_number)
+            {
+                Ok(snap) => {
+                    SNAPSHOT_TYPE_COUNT_STATIC.range_cache_engine.inc();
+                    Some(snap)
+                }
+                Err(FailedReason::TooOldRead) => {
+                    RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
+                        .too_old_read
+                        .inc();
+                    SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
+                    None
+                }
+                Err(FailedReason::NotCached) => {
+                    RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
+                        .not_cached
+                        .inc();
+                    SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
+                    None
+                }
+            }
+        } else {
+            RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
+                .no_read_ts
+                .inc();
+            SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
+            None
+        }
+    }
 }
 
 impl<EK, EC> HybridEngine<EK, EC>
@@ -61,157 +96,11 @@ where
             range_cache_engine,
         }
     }
-}
 
-// todo: implement KvEngine methods as well as it's super traits.
-impl<EK, EC> KvEngine for HybridEngine<EK, EC>
-where
-    EK: KvEngine,
-    EC: RangeCacheEngine,
-    HybridEngine<EK, EC>: WriteBatchExt,
-{
-    type Snapshot = HybridEngineSnapshot<EK, EC>;
-
-    fn snapshot(&self, ctx: Option<SnapshotContext>) -> Self::Snapshot {
-        let disk_snap = self.disk_engine.snapshot(ctx.clone());
-        let range_cache_snap = if !self.range_cache_engine.enabled() {
-            None
-        } else if let Some(ctx) = ctx {
-            match self.range_cache_engine.snapshot(
-                ctx.range.unwrap(),
-                ctx.read_ts,
-                disk_snap.sequence_number(),
-            ) {
-                Ok(snap) => {
-                    SNAPSHOT_TYPE_COUNT_STATIC.range_cache_engine.inc();
-                    Some(snap)
-                }
-                Err(FailedReason::TooOldRead) => {
-                    RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
-                        .too_old_read
-                        .inc();
-                    None
-                }
-                Err(FailedReason::NotCached) => {
-                    RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
-                        .not_cached
-                        .inc();
-                    None
-                }
-            }
-        } else {
-            RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
-                .no_read_ts
-                .inc();
-            None
-        };
-        if range_cache_snap.is_none() {
-            SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
-        }
+    pub fn snapshot(&self, ctx: Option<SnapshotContext>) -> HybridEngineSnapshot<EK, EC> {
+        let disk_snap = self.disk_engine.snapshot();
+        let range_cache_snap = self.new_in_memory_snapshot(disk_snap.sequence_number(), ctx);
         HybridEngineSnapshot::new(disk_snap, range_cache_snap)
-    }
-
-    fn sync(&self) -> engine_traits::Result<()> {
-        self.disk_engine.sync()
-    }
-
-    fn bad_downcast<T: 'static>(&self) -> &T {
-        self.disk_engine.bad_downcast()
-    }
-
-    #[cfg(feature = "testexport")]
-    fn inner_refcount(&self) -> usize {
-        self.disk_engine.inner_refcount()
-    }
-}
-
-impl<EK, EC> Peekable for HybridEngine<EK, EC>
-where
-    EK: KvEngine,
-    EC: RangeCacheEngine,
-{
-    type DbVector = EK::DbVector;
-
-    // region cache engine only supports peekable trait in the snapshot of it
-    fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<Self::DbVector>> {
-        self.disk_engine.get_value_opt(opts, key)
-    }
-
-    // region cache engine only supports peekable trait in the snapshot of it
-    fn get_value_cf_opt(
-        &self,
-        opts: &ReadOptions,
-        cf: &str,
-        key: &[u8],
-    ) -> Result<Option<Self::DbVector>> {
-        self.disk_engine.get_value_cf_opt(opts, cf, key)
-    }
-}
-
-impl<EK, EC> SyncMutable for HybridEngine<EK, EC>
-where
-    EK: KvEngine,
-    EC: RangeCacheEngine,
-    HybridEngine<EK, EC>: WriteBatchExt,
-{
-    fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
-        let mut batch = self.write_batch();
-        if let Some(range) = self.range_cache_engine.get_range_for_key(key) {
-            batch.prepare_for_range(range);
-        }
-        batch.put(key, value)?;
-        let _ = batch.write()?;
-        Ok(())
-    }
-
-    fn put_cf(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
-        let mut batch = self.write_batch();
-        if let Some(range) = self.range_cache_engine.get_range_for_key(key) {
-            batch.prepare_for_range(range);
-        }
-        batch.put_cf(cf, key, value)?;
-        let _ = batch.write()?;
-        Ok(())
-    }
-
-    fn delete(&self, key: &[u8]) -> Result<()> {
-        let mut batch = self.write_batch();
-        if let Some(range) = self.range_cache_engine.get_range_for_key(key) {
-            batch.prepare_for_range(range);
-        }
-        batch.delete(key)?;
-        let _ = batch.write()?;
-        Ok(())
-    }
-
-    fn delete_cf(&self, cf: &str, key: &[u8]) -> Result<()> {
-        let mut batch = self.write_batch();
-        if let Some(range) = self.range_cache_engine.get_range_for_key(key) {
-            batch.prepare_for_range(range);
-        }
-        batch.delete_cf(cf, key)?;
-        let _ = batch.write()?;
-        Ok(())
-    }
-
-    fn delete_range(&self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
-        let mut batch = self.write_batch();
-        if let Some(range) = self.range_cache_engine.get_range_for_key(begin_key) {
-            batch.prepare_for_range(range);
-        }
-        batch.delete_range(begin_key, end_key)?;
-        let _ = batch.write()?;
-        Ok(())
-    }
-
-    fn delete_range_cf(&self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
-        let mut batch = self.write_batch();
-        if let Some(range) = self.range_cache_engine.get_range_for_key(begin_key) {
-            batch.prepare_for_range(range);
-        }
-        batch.delete_range_cf(cf, begin_key, end_key)?;
-        let _ = batch.write()?;
-        Ok(())
     }
 }
 
@@ -221,7 +110,7 @@ mod tests {
     use std::sync::Arc;
 
     use engine_rocks::util::new_engine;
-    use engine_traits::{CacheRange, KvEngine, SnapshotContext, CF_DEFAULT, CF_LOCK, CF_WRITE};
+    use engine_traits::{CacheRange, SnapshotContext, CF_DEFAULT, CF_LOCK, CF_WRITE};
     use online_config::{ConfigChange, ConfigManager, ConfigValue};
     use range_cache_memory_engine::{
         config::RangeCacheConfigManager, RangeCacheEngineConfig, RangeCacheEngineContext,
@@ -252,19 +141,20 @@ mod tests {
         }
 
         let hybrid_engine = HybridEngine::new(disk_engine, memory_engine.clone());
-        let s = hybrid_engine.snapshot(None);
-        assert!(!s.range_cache_snapshot_available());
+        let s: crate::HybridEngineSnapshot<engine_rocks::RocksEngine, RangeCacheMemoryEngine> =
+            hybrid_engine.snapshot(None);
+        assert!(!s.is_range_cache_snapshot_available());
 
         let mut snap_ctx = SnapshotContext {
             read_ts: 15,
             range: Some(range.clone()),
         };
         let s = hybrid_engine.snapshot(Some(snap_ctx.clone()));
-        assert!(s.range_cache_snapshot_available());
+        assert!(s.is_range_cache_snapshot_available());
 
         snap_ctx.read_ts = 5;
         let s = hybrid_engine.snapshot(Some(snap_ctx.clone()));
-        assert!(!s.range_cache_snapshot_available());
+        assert!(!s.is_range_cache_snapshot_available());
 
         let mut config_manager = RangeCacheConfigManager(config.clone());
         let mut config_change = ConfigChange::new();
@@ -273,6 +163,6 @@ mod tests {
         assert!(!config.value().enabled);
         snap_ctx.read_ts = 15;
         let s = hybrid_engine.snapshot(Some(snap_ctx));
-        assert!(!s.range_cache_snapshot_available());
+        assert!(!s.is_range_cache_snapshot_available());
     }
 }

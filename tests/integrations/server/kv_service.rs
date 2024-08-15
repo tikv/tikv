@@ -11,7 +11,6 @@ use std::{
 
 use api_version::{ApiV1, ApiV1Ttl, ApiV2, KvFormat};
 use concurrency_manager::ConcurrencyManager;
-use engine_rocks::RocksEngine;
 use engine_traits::{
     MiscExt, Peekable, RaftEngine, RaftEngineReadOnly, RaftLogBatch, SyncMutable, CF_DEFAULT,
     CF_LOCK, CF_RAFT, CF_WRITE,
@@ -1385,8 +1384,7 @@ fn test_double_run_node() {
     let mut sim = cluster.sim.wl();
     let node = sim.get_node(id).unwrap();
     let pd_worker = LazyWorker::new("test-pd-worker");
-    let simulate_trans =
-        SimulateTransport::<_, RocksEngine>::new(ChannelTransport::<RocksEngine>::new());
+    let simulate_trans = SimulateTransport::new(ChannelTransport::new());
     let tmp = Builder::new().prefix("test_cluster").tempdir().unwrap();
     let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap());
     let coprocessor_host = CoprocessorHost::new(router, raftstore::coprocessor::Config::default());

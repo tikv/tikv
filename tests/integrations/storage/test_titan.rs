@@ -372,7 +372,7 @@ fn test_delete_files_in_range_for_titan() {
     build_sst_cf_file_list::<RocksEngine>(
         &mut cf_file,
         &engines.kv,
-        &engines.kv.snapshot(None),
+        &engines.kv.snapshot(),
         b"",
         b"{",
         u64::MAX,
@@ -389,7 +389,7 @@ fn test_delete_files_in_range_for_titan() {
     build_sst_cf_file_list::<RocksEngine>(
         &mut cf_file_write,
         &engines.kv,
-        &engines.kv.snapshot(None),
+        &engines.kv.snapshot(),
         b"",
         b"{",
         u64::MAX,

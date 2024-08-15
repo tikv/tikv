@@ -113,7 +113,7 @@ macro_rules! test_renew_lease {
 
 #[test_case(test_raftstore::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
-#[test_case(test_raftstore::new_node_cluster_with_hybrid_engine)]
+#[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_one_node_renew_lease() {
     let count = 1;
     let mut cluster = new_cluster(0, count);
@@ -122,7 +122,7 @@ fn test_one_node_renew_lease() {
 
 #[test_case(test_raftstore::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
-#[test_case(test_raftstore::new_node_cluster_with_hybrid_engine)]
+#[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_node_renew_lease() {
     let count = 3;
     let mut cluster = new_cluster(0, count);
@@ -134,7 +134,7 @@ fn test_node_renew_lease() {
 // the old leader will fail to renew its lease.
 #[test_case(test_raftstore::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
-#[test_case(test_raftstore::new_node_cluster_with_hybrid_engine)]
+#[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_node_lease_expired() {
     let count = 3;
     let mut cluster = new_cluster(0, count);
@@ -175,7 +175,7 @@ fn test_node_lease_expired() {
 // the lease as usual.
 #[test_case(test_raftstore::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
-#[test_case(test_raftstore::new_node_cluster_with_hybrid_engine)]
+#[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_node_lease_unsafe_during_leader_transfers() {
     let count = 3;
     let mut cluster = new_cluster(0, count);
@@ -586,7 +586,7 @@ fn test_read_index_stale_in_suspect_lease() {
 
 #[test_case(test_raftstore::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
-#[test_case(test_raftstore::new_node_cluster_with_hybrid_engine)]
+#[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_local_read_cache() {
     let mut cluster = new_cluster(0, 3);
     configure_for_lease_read(&mut cluster.cfg, Some(50), None);
@@ -740,7 +740,7 @@ fn test_read_index_after_write() {
 
 #[test_case(test_raftstore::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
-#[test_case(test_raftstore::new_node_cluster_with_hybrid_engine)]
+#[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_infinite_lease() {
     let mut cluster = new_cluster(0, 3);
     // Avoid triggering the log compaction in this test case.
@@ -799,7 +799,7 @@ fn test_infinite_lease() {
 // continuous reads should not go to hibernate.
 #[test_case(test_raftstore::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
-#[test_case(test_raftstore::new_node_cluster_with_hybrid_engine)]
+#[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_node_local_read_renew_lease() {
     let mut cluster = new_cluster(0, 3);
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(500);
@@ -843,7 +843,7 @@ fn test_node_local_read_renew_lease() {
 
 #[test_case(test_raftstore::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
-#[test_case(test_raftstore::new_node_cluster_with_hybrid_engine)]
+#[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_node_lease_restart_during_isolation() {
     let mut cluster = new_cluster(0, 3);
     let election_timeout = configure_for_lease_read(&mut cluster.cfg, Some(500), Some(3));

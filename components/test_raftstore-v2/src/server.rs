@@ -147,6 +147,12 @@ impl<EK: KvEngine> Engine for TestRaftKv2<EK> {
         self.raftkv.async_snapshot(ctx)
     }
 
+    type IMSnap = Self::Snap;
+    type IMSnapshotRes = Self::SnapshotRes;
+    fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes {
+        self.async_snapshot(ctx)
+    }
+
     type WriteRes = <SimulateEngine<EK> as Engine>::WriteRes;
     fn async_write(
         &self,

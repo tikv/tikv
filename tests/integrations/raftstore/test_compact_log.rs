@@ -1,13 +1,12 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use collections::HashMap;
-use engine_rocks::RocksEngine;
 use kvproto::raft_serverpb::RaftApplyState;
 use raftstore::store::*;
 use test_raftstore::*;
 use tikv_util::config::*;
 
-fn test_compact_log<T: Simulator<RocksEngine>>(cluster: &mut Cluster<RocksEngine, T>) {
+fn test_compact_log<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
 
     let mut before_states = HashMap::default();
@@ -43,7 +42,7 @@ fn test_compact_log<T: Simulator<RocksEngine>>(cluster: &mut Cluster<RocksEngine
     );
 }
 
-fn test_compact_count_limit<T: Simulator<RocksEngine>>(cluster: &mut Cluster<RocksEngine, T>) {
+fn test_compact_count_limit<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(100);
     cluster.cfg.raft_store.raft_log_gc_threshold = 500;
     cluster.cfg.raft_store.raft_log_gc_size_limit = Some(ReadableSize::mb(20));
@@ -108,7 +107,7 @@ fn test_compact_count_limit<T: Simulator<RocksEngine>>(cluster: &mut Cluster<Roc
     );
 }
 
-fn test_compact_many_times<T: Simulator<RocksEngine>>(cluster: &mut Cluster<RocksEngine, T>) {
+fn test_compact_many_times<T: Simulator>(cluster: &mut Cluster<T>) {
     let gc_limit: u64 = 100;
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(gc_limit);
     cluster.cfg.raft_store.raft_log_gc_threshold = 500;
@@ -177,7 +176,7 @@ fn test_node_compact_many_times() {
     test_compact_many_times(&mut cluster);
 }
 
-fn test_compact_size_limit<T: Simulator<RocksEngine>>(cluster: &mut Cluster<RocksEngine, T>) {
+fn test_compact_size_limit<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(100000);
     cluster.cfg.raft_store.raft_log_gc_size_limit = Some(ReadableSize::mb(1));
     cluster.run();
@@ -252,9 +251,7 @@ fn test_node_compact_size_limit() {
     test_compact_size_limit(&mut cluster);
 }
 
-fn test_compact_reserve_max_ticks<T: Simulator<RocksEngine>>(
-    cluster: &mut Cluster<RocksEngine, T>,
-) {
+fn test_compact_reserve_max_ticks<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(100);
     cluster.cfg.raft_store.raft_log_gc_threshold = 500;
     cluster.cfg.raft_store.raft_log_gc_size_limit = Some(ReadableSize::mb(20));

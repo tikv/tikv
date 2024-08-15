@@ -1,9 +1,10 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use collections::HashMap;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
+use pd_client::PdClient;
 use test_storage::SyncTestStorageApiV1;
 use tidb_query_datatype::{
     codec::{
@@ -23,6 +24,7 @@ use tikv::{
         SnapshotStore, StorageApiV1, TestStorageBuilderApiV1,
     },
 };
+use tikv_util::future::block_on_timeout;
 use txn_types::{Key, Mutation, TimeStamp};
 
 use super::*;
@@ -166,6 +168,7 @@ pub struct Store<E: Engine> {
     current_ts: TimeStamp,
     last_committed_ts: TimeStamp,
     handles: Vec<Vec<u8>>,
+    pd_client: Option<Arc<dyn PdClient>>,
 }
 
 impl Store<RocksEngine> {
@@ -185,11 +188,29 @@ impl Default for Store<RocksEngine> {
 
 impl<E: Engine> Store<E> {
     pub fn from_storage(storage: StorageApiV1<E, MockLockManager>) -> Self {
+        Self::from_storage_pd_client(storage, None)
+    }
+
+    pub fn from_storage_pd_client(
+        storage: StorageApiV1<E, MockLockManager>,
+        pd_client: Option<Arc<dyn PdClient>>,
+    ) -> Self {
         Self {
             store: SyncTestStorageApiV1::from_storage(0, storage, GcConfig::default()).unwrap(),
             current_ts: 1.into(),
             last_committed_ts: TimeStamp::zero(),
             handles: vec![],
+            pd_client,
+        }
+    }
+
+    fn get_ts(&self) -> TimeStamp {
+        if let Some(client) = self.pd_client.as_ref() {
+            block_on_timeout(client.get_tso(), Duration::from_secs(5))
+                .unwrap()
+                .unwrap()
+        } else {
+            (next_id() as u64).into()
         }
     }
 
@@ -198,7 +219,7 @@ impl<E: Engine> Store<E> {
     }
 
     pub fn begin(&mut self) {
-        self.current_ts = (next_id() as u64).into();
+        self.current_ts = self.get_ts();
         self.handles.clear();
     }
 
@@ -233,7 +254,7 @@ impl<E: Engine> Store<E> {
     }
 
     pub fn commit_with_ctx(&mut self, ctx: Context) {
-        let commit_ts = (next_id() as u64).into();
+        let commit_ts = self.get_ts();
         let handles: Vec<_> = self.handles.drain(..).map(|x| Key::from_raw(&x)).collect();
         if !handles.is_empty() {
             self.store

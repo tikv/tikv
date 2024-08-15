@@ -59,7 +59,7 @@ where
     where
         EK: KvEngine,
     {
-        RegionSnapshot::from_snapshot(Arc::new(db.snapshot(None)), Arc::new(region))
+        RegionSnapshot::from_snapshot(Arc::new(db.snapshot()), Arc::new(region))
     }
 
     pub fn from_snapshot(snap: Arc<S>, region: Arc<Region>) -> RegionSnapshot<S> {
@@ -74,6 +74,23 @@ where
             txn_extra_op: TxnExtraOp::Noop,
             txn_ext: None,
             bucket_meta: None,
+        }
+    }
+
+    pub fn replace_snapshot<Sp, F>(self, snap_fn: F) -> RegionSnapshot<Sp>
+    where
+        Sp: Snapshot,
+        F: FnOnce(S, &Region) -> Sp,
+    {
+        RegionSnapshot {
+            snap: Arc::new(snap_fn(Arc::unwrap_or_clone(self.snap), &self.region)),
+            region: self.region,
+            apply_index: self.apply_index,
+            from_v2: self.from_v2,
+            term: self.term,
+            txn_extra_op: self.txn_extra_op,
+            txn_ext: self.txn_ext,
+            bucket_meta: self.bucket_meta,
         }
     }
 

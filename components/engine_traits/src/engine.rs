@@ -33,17 +33,13 @@ pub trait KvEngine:
     + Debug
     + Unpin
     + Checkpointable
-    + RangeCacheEngineExt
     + 'static
 {
     /// A consistent read-only snapshot of the database
     type Snapshot: Snapshot;
 
     /// Create a snapshot
-    ///
-    /// SnapCtx will only be used by some type of trait implementors (ex:
-    /// HybridEngine)
-    fn snapshot(&self, snap_ctx: Option<SnapshotContext>) -> Self::Snapshot;
+    fn snapshot(&self) -> Self::Snapshot;
 
     /// Syncs any writes to disk
     fn sync(&self) -> Result<()>;

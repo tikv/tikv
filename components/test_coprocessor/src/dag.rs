@@ -12,6 +12,7 @@ use tipb::{
     Aggregation, ByItem, Chunk, ColumnInfo, DagRequest, ExecType, Executor, Expr, ExprType,
     IndexScan, Limit, Selection, TableScan, TopN,
 };
+use txn_types::TimeStamp;
 
 use super::*;
 
@@ -25,6 +26,7 @@ pub struct DagSelect {
     pub key_ranges: Vec<KeyRange>,
     pub output_offsets: Option<Vec<u32>>,
     pub paging_size: Option<u64>,
+    pub start_ts: Option<u64>,
 }
 
 impl DagSelect {
@@ -48,6 +50,7 @@ impl DagSelect {
             key_ranges: vec![table.get_record_range_all()],
             output_offsets: None,
             paging_size: None,
+            start_ts: None,
         }
     }
 
@@ -75,6 +78,7 @@ impl DagSelect {
             key_ranges: vec![range],
             output_offsets: None,
             paging_size: None,
+            start_ts: None,
         }
     }
 
@@ -213,6 +217,11 @@ impl DagSelect {
         self
     }
 
+    pub fn start_ts(mut self, start_ts: TimeStamp) -> DagSelect {
+        self.start_ts = Some(start_ts.into_inner());
+        self
+    }
+
     pub fn build(self) -> Request {
         self.build_with(Context::default(), &[0])
     }
@@ -267,7 +276,7 @@ impl DagSelect {
         dag.set_output_offsets(output_offsets);
 
         let mut req = Request::default();
-        req.set_start_ts(next_id() as u64);
+        req.set_start_ts(self.start_ts.unwrap_or_else(|| next_id() as u64));
         req.set_tp(REQ_TYPE_DAG);
         req.set_data(dag.write_to_bytes().unwrap());
         req.set_ranges(self.key_ranges.into());

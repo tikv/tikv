@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use codec::{buffer::BufferWriter, number::NumberEncoder as _};
 use kvproto::coprocessor::KeyRange;
 use tidb_query_datatype::codec::table;
 use tikv_util::codec::number::NumberEncoder;
@@ -115,6 +116,13 @@ impl Table {
         buf.encode_i64(i64::MAX).unwrap();
         range.set_end(table::encode_index_seek_key(self.id, idx, &buf));
         range
+    }
+
+    pub fn get_table_prefix(&self) -> Vec<u8> {
+        let mut buf = vec![];
+        buf.write_bytes(table::TABLE_PREFIX).unwrap();
+        buf.write_i64(self.id).unwrap();
+        buf
     }
 }
 

@@ -21,7 +21,6 @@ use backup_stream::{
     utils, BackupStreamGrpcService, BackupStreamResolver, Endpoint, GetCheckpointResult,
     RegionCheckpointOperation, RegionSet, Task,
 };
-use engine_rocks::RocksEngine;
 use futures::{executor::block_on, AsyncWriteExt, Future, Stream, StreamExt};
 use grpcio::{ChannelBuilder, Server, ServerBuilder};
 use kvproto::{
@@ -264,7 +263,7 @@ impl<S: MetaStore> MetaStore for ErrorStore<S> {
 pub struct Suite {
     pub endpoints: HashMap<u64, LazyWorker<Task>>,
     pub meta_store: ErrorStore<SlashEtcStore>,
-    pub cluster: Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    pub cluster: Cluster<ServerCluster>,
     tikv_cli: HashMap<u64, TikvClient>,
     log_backup_cli: HashMap<u64, LogBackupClient>,
     obs: HashMap<u64, BackupStreamObserver>,

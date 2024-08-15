@@ -9,6 +9,7 @@ use engine_traits::{
 
 use crate::{db_vector::HybridDbVector, engine_iterator::HybridEngineIterator};
 
+#[derive(Clone)]
 pub struct HybridEngineSnapshot<EK, EC>
 where
     EK: KvEngine,
@@ -30,7 +31,7 @@ where
         }
     }
 
-    pub fn range_cache_snapshot_available(&self) -> bool {
+    pub fn is_range_cache_snapshot_available(&self) -> bool {
         self.range_cache_snap.is_some()
     }
 
@@ -132,8 +133,8 @@ where
 mod tests {
 
     use engine_traits::{
-        CacheRange, IterOptions, Iterable, Iterator, KvEngine, Mutable, SnapshotContext,
-        WriteBatch, WriteBatchExt, CF_DEFAULT,
+        CacheRange, IterOptions, Iterable, Iterator, Mutable, SnapshotContext, WriteBatch,
+        WriteBatchExt, CF_DEFAULT,
     };
     use range_cache_memory_engine::{RangeCacheEngineConfig, RangeCacheStatus};
 

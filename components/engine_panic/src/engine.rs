@@ -13,7 +13,7 @@ pub struct PanicEngine;
 impl KvEngine for PanicEngine {
     type Snapshot = PanicSnapshot;
 
-    fn snapshot(&self, _: Option<SnapshotContext>) -> Self::Snapshot {
+    fn snapshot(&self) -> Self::Snapshot {
         panic!()
     }
     fn sync(&self) -> Result<()> {

@@ -2,7 +2,6 @@
 
 use std::{sync::Arc, time::*};
 
-use engine_rocks::RocksEngine;
 use kvproto::{
     metapb::{self, PeerRole, Region},
     raft_cmdpb::{ChangePeerRequest, RaftCmdRequest, RaftCmdResponse},
@@ -474,12 +473,12 @@ fn test_leader_down_in_joint_state() {
 }
 
 fn call_conf_change_v2<T>(
-    cluster: &mut Cluster<RocksEngine, T>,
+    cluster: &mut Cluster<T>,
     region_id: u64,
     changes: Vec<ChangePeerRequest>,
 ) -> Result<RaftCmdResponse>
 where
-    T: Simulator<RocksEngine>,
+    T: Simulator,
 {
     let conf_change = new_change_peer_v2_request(changes);
     let epoch = cluster.pd_client.get_region_epoch(region_id);
@@ -488,13 +487,13 @@ where
 }
 
 fn call_conf_change<T>(
-    cluster: &mut Cluster<RocksEngine, T>,
+    cluster: &mut Cluster<T>,
     region_id: u64,
     conf_change_type: ConfChangeType,
     peer: metapb::Peer,
 ) -> Result<RaftCmdResponse>
 where
-    T: Simulator<RocksEngine>,
+    T: Simulator,
 {
     let conf_change = new_change_peer_request(conf_change_type, peer);
     let epoch = cluster.pd_client.get_region_epoch(region_id);
@@ -502,9 +501,9 @@ where
     cluster.call_command_on_leader(admin_req, Duration::from_secs(3))
 }
 
-fn leave_joint<T>(cluster: &mut Cluster<RocksEngine, T>, region_id: u64) -> Result<RaftCmdResponse>
+fn leave_joint<T>(cluster: &mut Cluster<T>, region_id: u64) -> Result<RaftCmdResponse>
 where
-    T: Simulator<RocksEngine>,
+    T: Simulator,
 {
     call_conf_change_v2(cluster, region_id, vec![])
 }

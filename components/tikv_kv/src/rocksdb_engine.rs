@@ -64,7 +64,7 @@ impl Runnable for Runner {
         match t {
             Task::Write(modifies, cb) => cb(write_modifies(&self.0.kv, modifies)),
             Task::Snapshot(sender) => {
-                let _ = sender.send(Arc::new(self.0.kv.snapshot(None)));
+                let _ = sender.send(Arc::new(self.0.kv.snapshot()));
             }
             Task::Pause(dur) => std::thread::sleep(dur),
         }
@@ -310,6 +310,12 @@ impl<RE: RaftExtension + 'static> Engine for RocksEngine<RE> {
         })();
 
         async move { Ok(res?.await.unwrap()) }
+    }
+
+    type IMSnap = Self::Snap;
+    type IMSnapshotRes = Self::SnapshotRes;
+    fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes {
+        self.async_snapshot(ctx)
     }
 }
 

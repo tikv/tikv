@@ -1128,7 +1128,7 @@ pub(crate) mod tests {
             ranges.push(key);
         }
         engine.kv.put(b"k1", b"v1").unwrap();
-        let snap = engine.kv.snapshot(None);
+        let snap = engine.kv.snapshot();
         engine.kv.put(b"k2", b"v2").unwrap();
 
         sched
@@ -1241,7 +1241,7 @@ pub(crate) mod tests {
             sched
                 .schedule(Task::Gen {
                     region_id: id,
-                    kv_snap: engine.kv.snapshot(None),
+                    kv_snap: engine.kv.snapshot(),
                     last_applied_term: entry.get_term(),
                     last_applied_state: apply_state,
                     canceled: Arc::new(AtomicBool::new(false)),

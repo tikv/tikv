@@ -9,10 +9,6 @@ where
     EK: KvEngine,
     EC: RangeCacheEngine,
 {
-    fn range_cache_engine_enabled(&self) -> bool {
-        true
-    }
-
     #[inline]
     fn evict_range(&self, range: &CacheRange, evict_range: EvictReason) {
         self.range_cache_engine().evict_range(range, evict_range);

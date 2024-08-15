@@ -152,8 +152,7 @@ mod tests {
     use std::time::Duration;
 
     use engine_traits::{
-        CacheRange, KvEngine, Mutable, Peekable, RangeCacheEngine, SnapshotContext, WriteBatch,
-        WriteBatchExt,
+        CacheRange, Mutable, Peekable, RangeCacheEngine, SnapshotContext, WriteBatch, WriteBatchExt,
     };
     use range_cache_memory_engine::{RangeCacheEngineConfig, RangeCacheStatus};
 
@@ -183,7 +182,11 @@ mod tests {
         write_batch.put(b"hello", b"world").unwrap();
         let seq = write_batch.write().unwrap();
         assert!(seq > 0);
-        let actual: &[u8] = &hybrid_engine.get_value(b"hello").unwrap().unwrap();
+        let actual: &[u8] = &hybrid_engine
+            .disk_engine()
+            .get_value(b"hello")
+            .unwrap()
+            .unwrap();
         assert_eq!(b"world", &actual);
         let ctx = SnapshotContext {
             range: Some(range.clone()),

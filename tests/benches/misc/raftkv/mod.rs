@@ -53,7 +53,7 @@ impl SyncBenchRouter {
         cmd_resp::bind_term(&mut response, 1);
         match cmd.callback {
             Callback::Read { cb, .. } => {
-                let snapshot = self.db.snapshot(None);
+                let snapshot = self.db.snapshot();
                 let region = Arc::new(self.region.to_owned());
                 cb(ReadResponse {
                     response,
@@ -143,7 +143,7 @@ fn new_engine() -> (TempDir, RocksEngine) {
 #[bench]
 fn bench_async_snapshots_noop(b: &mut test::Bencher) {
     let (_dir, db) = new_engine();
-    let snapshot = db.snapshot(None);
+    let snapshot = db.snapshot();
     let resp = ReadResponse {
         response: RaftCmdResponse::default(),
         snapshot: Some(RegionSnapshot::from_snapshot(
@@ -185,6 +185,7 @@ fn bench_async_snapshot(b: &mut test::Bencher) {
     let mut kv = RaftKv::new(
         SyncBenchRouter::new(region.clone(), db.clone()),
         db,
+        None,
         Arc::new(RwLock::new(HashSet::default())),
     );
 
@@ -219,6 +220,7 @@ fn bench_async_write(b: &mut test::Bencher) {
     let kv = RaftKv::new(
         SyncBenchRouter::new(region.clone(), db.clone()),
         db,
+        None,
         Arc::new(RwLock::new(HashSet::default())),
     );
 
