@@ -272,7 +272,11 @@ impl BgWorkManager {
             let regions = match info_provider.get_regions_in_range(start, end) {
                 Ok(r) => r,
                 Err(e) => {
-                    warn!("get regions in range failed"; "err" => ?e, "start" => ?log_wrappers::Value(start), "end" => ?log_wrappers::Value(end));
+                    warn!(
+                        "get regions in range failed"; "err" => ?e,
+                        "start" => ?log_wrappers::Value(start),
+                        "end" => ?log_wrappers::Value(end)
+                    );
                     return;
                 }
             };
@@ -287,9 +291,10 @@ impl BgWorkManager {
                     warn!("load region by label failed"; "err" => ?e, "region" => ?r);
                 }
             }
-            // TODO (afeinberg): This does not actually load the range. The load happens
-            // the apply thread begins to apply raft entries. To force this (for read-only
-            // use-cases) we should propose a No-Op command.
+            // TODO (afeinberg): This does not actually load the range. The load
+            // happens the apply thread begins to apply raft
+            // entries. To force this (for read-only use-cases) we
+            // should propose a No-Op command.
         });
     }
 
@@ -2632,18 +2637,54 @@ pub mod tests {
         assert_eq!(2, regions.len());
     }
 
+    #[derive(Default)]
+    struct MockRegionInfoProvider {
+        regions: Mutex<Vec<Region>>,
+    }
+
+    impl MockRegionInfoProvider {
+        fn add_region(&self, region: Region) {
+            self.regions.lock().unwrap().push(region);
+        }
+    }
+
+    impl RegionInfoProvider for MockRegionInfoProvider {
+        fn get_regions_in_range(
+            &self,
+            start: &[u8],
+            end: &[u8],
+        ) -> raftstore::coprocessor::Result<Vec<Region>> {
+            let regions: Vec<_> = self
+                .regions
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|r| {
+                    (r.end_key.is_empty() || r.end_key.as_slice() > start)
+                        && (end.is_empty() || end > r.start_key.as_slice())
+                })
+                .cloned()
+                .collect();
+            Ok(regions)
+        }
+    }
+
     // Test creating and loading cache hint using a region label rule:
     // 1. Insert some data into rocks engine, which is set as disk engine for the
     //    memory engine.
     // 2. Use test pd client server to create a label rule for portion of the data.
     // 3. Wait until data is loaded.
     // 4. Verify that only the labeled key range has been loaded.
-    #[ignore] // TODO: ignore as pd_hint_service is not implemented currently.
     #[test]
     fn test_load_from_pd_hint_service() {
-        let mut engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(
-            Arc::new(VersionTrack::new(RangeCacheEngineConfig::config_for_test())),
-        ));
+        let region_info_provider = Arc::new(MockRegionInfoProvider::default());
+
+        let mut engine = RangeCacheMemoryEngine::with_region_info_provider(
+            RangeCacheEngineContext::new_for_tests(Arc::new(VersionTrack::new(
+                RangeCacheEngineConfig::config_for_test(),
+            ))),
+            Some(region_info_provider.clone()),
+        );
         let path = Builder::new()
             .prefix("test_load_from_pd_hint_service")
             .tempdir()
@@ -2654,7 +2695,6 @@ pub mod tests {
 
         for i in 10..20 {
             let key = construct_key(i, 1);
-            let key = data_key(&key);
             let value = construct_value(i, i);
             rocks_engine
                 .put_cf(CF_DEFAULT, &key, value.as_bytes())
@@ -2663,6 +2703,8 @@ pub mod tests {
                 .put_cf(CF_WRITE, &key, value.as_bytes())
                 .unwrap();
         }
+        let region = new_region(1, format!("k{:08}", 10), format!("k{:08}", 15));
+        region_info_provider.add_region(region.clone());
 
         let (mut pd_server, pd_client) = new_test_server_and_client(ReadableDuration::millis(100));
         let cluster_id = pd_client.get_cluster_id().unwrap();
@@ -2671,19 +2713,37 @@ pub mod tests {
         let meta_client = region_label_meta_client(pd_client.clone());
         let label_rule = new_region_label_rule(
             "cache/0",
-            &hex::encode(format!("k{:08}", 10).into_bytes()),
-            &hex::encode(format!("k{:08}", 15).into_bytes()),
+            &hex::encode(format!("k{:08}", 0).into_bytes()),
+            &hex::encode(format!("k{:08}", 20).into_bytes()),
         );
         add_region_label_rule(meta_client, cluster_id, &label_rule);
 
         // Wait for the watch to fire.
-        std::thread::sleep(Duration::from_millis(200));
-        // let r1 = CacheRange::try_from(&label_rule.data[0]).unwrap();
-        // engine.prepare_for_apply(1, &r1, );
+        test_util::eventually(
+            Duration::from_millis(10),
+            Duration::from_millis(200),
+            || !engine.core.read().range_manager().regions().is_empty(),
+        );
+        engine.prepare_for_apply(1, CacheRange::from_region(&region), &region);
 
         // Wait for the range to be loaded.
-        std::thread::sleep(Duration::from_secs(1));
-        // let _ = engine.snapshot(r1, u64::MAX, u64::MAX).unwrap();
+        test_util::eventually(
+            Duration::from_millis(50),
+            Duration::from_millis(1000),
+            || {
+                let core = engine.core.read();
+                core.range_manager().region_meta(1).unwrap().get_state() == RegionState::Active
+            },
+        );
+        let _ = engine
+            .snapshot(
+                region.id,
+                0,
+                CacheRange::from_region(&region),
+                u64::MAX,
+                u64::MAX,
+            )
+            .unwrap();
 
         let (write, default) = {
             let core = engine.core().write();
@@ -2697,7 +2757,6 @@ pub mod tests {
         let guard = &epoch::pin();
         for i in 10..15 {
             let key = construct_key(i, 1);
-            let key = data_key(&key);
             let value = construct_value(i, i);
             let key = encode_seek_key(&key, u64::MAX);
             assert_eq!(
