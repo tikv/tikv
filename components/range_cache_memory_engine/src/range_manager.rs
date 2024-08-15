@@ -23,8 +23,8 @@ pub enum RegionState {
     // target region in raftstore.
     #[default]
     Pending,
-    // Region is ready to do batch load. In this state, apply thread
-    // will directly write new kv into the skiplist.
+    // Region is ready to do batch load but not started. In this state,
+    // apply thread starts directly write new KVs into the skiplist.
     ReadyToLoad,
     // Region is handling batch loading from rocksdb snapshot.
     Loading,

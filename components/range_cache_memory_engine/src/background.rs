@@ -1102,7 +1102,7 @@ impl Runnable for BackgroundRunner {
                         if user_key != last_user_key {
                             if let Some(remove) = cached_to_remove.take() {
                                 removed += 1;
-                                lock_handle.remove(&InternalBytes::from_vec(remove), guard);
+                                lock_handle.remove(&*remove, guard);
                             }
                             last_user_key = user_key.to_vec();
                             if sequence >= snapshot_seqno {
@@ -1129,7 +1129,7 @@ impl Runnable for BackgroundRunner {
                     }
                     if let Some(remove) = cached_to_remove.take() {
                         removed += 1;
-                        lock_handle.remove(&InternalBytes::from_vec(remove), guard);
+                        lock_handle.remove(&*remove, guard);
                     }
 
                     info!(
@@ -1324,13 +1324,11 @@ impl Drop for Filter {
     fn drop(&mut self) {
         if let Some(cached_delete_key) = self.cached_mvcc_delete_key.take() {
             let guard = &epoch::pin();
-            self.write_cf_handle
-                .remove(&InternalBytes::from_vec(cached_delete_key), guard);
+            self.write_cf_handle.remove(&*cached_delete_key, guard);
         }
         if let Some(cached_delete_key) = self.cached_skiplist_delete_key.take() {
             let guard = &epoch::pin();
-            self.write_cf_handle
-                .remove(&InternalBytes::from_vec(cached_delete_key), guard);
+            self.write_cf_handle.remove(&*cached_delete_key, guard);
         }
     }
 }
@@ -1408,7 +1406,7 @@ impl Filter {
                 // In either cases, we can delete the previous one directly.
                 let guard = &epoch::pin();
                 self.write_cf_handle
-                    .remove(&InternalBytes::from_vec(cache_skiplist_delete_key), guard)
+                    .remove(&*cache_skiplist_delete_key, guard)
             }
             self.cached_skiplist_delete_key = Some(key.to_vec());
             return Ok(());
@@ -1420,15 +1418,12 @@ impl Filter {
             let guard = &epoch::pin();
             if cache_skiplist_delete_user_key == user_key {
                 self.metrics.filtered += 1;
-                self.write_cf_handle
-                    .remove(&InternalBytes::from_bytes(key.clone()), guard);
+                self.write_cf_handle.remove(&**key, guard);
                 return Ok(());
             } else {
                 self.metrics.filtered += 1;
-                self.write_cf_handle.remove(
-                    &InternalBytes::from_vec(self.cached_skiplist_delete_key.take().unwrap()),
-                    guard,
-                )
+                self.write_cf_handle
+                    .remove(&*self.cached_skiplist_delete_key.take().unwrap(), guard)
             }
         }
 
@@ -1439,8 +1434,7 @@ impl Filter {
             self.last_user_key = user_key.to_vec();
         } else {
             self.metrics.filtered += 1;
-            self.write_cf_handle
-                .remove(&InternalBytes::from_bytes(key.clone()), guard);
+            self.write_cf_handle.remove(&**key, guard);
             return Ok(());
         }
 
@@ -1452,8 +1446,7 @@ impl Filter {
             self.remove_older = false;
             if let Some(cached_delete_key) = self.cached_mvcc_delete_key.take() {
                 self.metrics.filtered += 1;
-                self.write_cf_handle
-                    .remove(&InternalBytes::from_vec(cached_delete_key), guard);
+                self.write_cf_handle.remove(&*cached_delete_key, guard);
             }
         }
 
@@ -1482,8 +1475,7 @@ impl Filter {
             return Ok(());
         }
         self.metrics.filtered += 1;
-        self.write_cf_handle
-            .remove(&InternalBytes::from_bytes(key.clone()), guard);
+        self.write_cf_handle.remove(&**key, guard);
         self.handle_filtered_write(write, guard);
 
         Ok(())

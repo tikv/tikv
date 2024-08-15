@@ -465,7 +465,11 @@ impl WriteBatch for RangeCacheWriteBatch {
     fn clear(&mut self) {
         self.buffer.clear();
         self.save_points.clear();
-        _ = self.sequence_number.take();
+        self.sequence_number = None;
+        self.prepare_for_write_duration = Duration::ZERO;
+        self.current_region = None;
+        self.currnet_region_evicted = false;
+        self.region_save_point = 0;
     }
 
     fn set_save_point(&mut self) {

@@ -2,6 +2,7 @@
 
 use core::slice::SlicePattern;
 use std::{
+    borrow::Borrow,
     cmp::{self, Ordering},
     fmt,
     sync::Arc,
@@ -130,6 +131,12 @@ impl Ord for InternalBytes {
 impl PartialOrd for InternalBytes {
     fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
         Some(self.cmp(other))
+    }
+}
+
+impl Borrow<[u8]> for InternalBytes {
+    fn borrow(&self) -> &[u8] {
+        &self.bytes
     }
 }
 

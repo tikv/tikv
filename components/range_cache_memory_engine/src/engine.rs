@@ -1,6 +1,7 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    borrow::Borrow,
     fmt::{self, Debug},
     ops::Bound,
     result,
@@ -96,7 +97,11 @@ impl SkiplistHandle {
         self.0.insert(key, value, guard).release(guard);
     }
 
-    pub fn remove(&self, key: &InternalBytes, guard: &Guard) {
+    pub fn remove<Q>(&self, key: &Q, guard: &Guard)
+    where
+        InternalBytes: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
         if let Some(entry) = self.0.remove(key, guard) {
             entry.release(guard);
         }
@@ -343,25 +348,14 @@ impl RangeCacheMemoryEngine {
             return RangeCacheStatus::NotInCache;
         };
 
-        if region_state == RegionState::Pending {
-            let rocks_snap = Arc::new(self.rocks_engine.as_ref().unwrap().snapshot(None));
+        let schedule_load = region_state == RegionState::Pending;
+        if schedule_load {
             range_manager.update_region_state(region.id, RegionState::ReadyToLoad);
             info!(
                 "range to load";
                 "region" => ?region,
                 "cached" => range_manager.regions().len(),
             );
-            if let Err(e) = self
-                .bg_work_manager
-                .schedule_task(BackgroundTask::LoadRegion(region.clone(), rocks_snap))
-            {
-                error!(
-                    "schedule region load failed";
-                    "err" => ?e,
-                    "region" => ?region,
-                );
-                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
-            }
             region_state = RegionState::ReadyToLoad;
         }
 
@@ -375,6 +369,24 @@ impl RangeCacheMemoryEngine {
                 result = RangeCacheStatus::Cached;
             } else {
                 result = RangeCacheStatus::Loading;
+            }
+        }
+        drop(core);
+
+        // get snapshot and schedule loading task at last to avoid locking IME for too
+        // long.
+        if schedule_load {
+            let rocks_snap = Arc::new(self.rocks_engine.as_ref().unwrap().snapshot(None));
+            if let Err(e) = self
+                .bg_work_manager
+                .schedule_task(BackgroundTask::LoadRegion(region.clone(), rocks_snap))
+            {
+                error!(
+                    "schedule region load failed";
+                    "err" => ?e,
+                    "region" => ?region,
+                );
+                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
             }
         }
 
