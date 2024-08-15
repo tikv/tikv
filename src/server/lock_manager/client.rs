@@ -11,6 +11,7 @@ use futures::{
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, WriteFlags};
 use kvproto::deadlock::*;
 use security::SecurityManager;
+use super::metrics::*;
 
 use super::{Error, Result};
 
@@ -60,7 +61,11 @@ impl Client {
         let send_task = Box::pin(async move {
             let mut sink = sink.sink_map_err(Error::Grpc);
 
-            sink.send_all(&mut rx.map(|r| Ok((r, WriteFlags::default()))))
+            sink.send_all(&mut rx.map(|r| {
+                // update metrics
+                DETECTOR_SEND_BUFFER_SIZE_GAUGE.dec();
+                Ok((r, WriteFlags::default()))
+            }))
                 .await
                 .map(|_| {
                     info!("cancel detect sender");
@@ -78,10 +83,14 @@ impl Client {
     }
 
     pub fn detect(&self, req: DeadlockRequest) -> Result<()> {
+        DETECTOR_SEND_BUFFER_SIZE_GAUGE.inc();
         self.sender
             .as_ref()
             .unwrap()
             .unbounded_send(req)
-            .map_err(|e| Error::Other(box_err!(e)))
+            .map_err(|e| {
+                DETECTOR_SEND_BUFFER_SIZE_GAUGE.dec();
+                Error::Other(box_err!(e))
+            })
     }
 }
