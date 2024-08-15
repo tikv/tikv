@@ -734,10 +734,6 @@ impl RegionManager {
         }
     }
 
-    pub fn add_pinned_range(&mut self, _cache_range: CacheRange) {
-        // TODO: handle pinned range later
-    }
-
     pub fn load_region(&mut self, region: Region) -> Result<(), LoadFailedReason> {
         use RegionState::*;
         if let Some(state) = self.check_overlap_with_region(&region) {

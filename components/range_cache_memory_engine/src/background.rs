@@ -12,6 +12,7 @@ use engine_traits::{
     CacheRange, EvictReason, IterOptions, Iterable, Iterator, MiscExt, RangeHintService,
     SnapshotMiscExt, CF_DEFAULT, CF_WRITE, DATA_CFS,
 };
+use hex::FromHexError;
 use kvproto::metapb::Region;
 use parking_lot::RwLock;
 use pd_client::{PdClient, RpcClient};
@@ -38,10 +39,11 @@ use crate::{
         GC_FILTERED_STATIC, RANGE_CACHE_COUNT, RANGE_CACHE_MEMORY_USAGE, RANGE_GC_TIME_HISTOGRAM,
         RANGE_LOAD_TIME_HISTOGRAM,
     },
-    range_manager::{LoadFailedReason, RangeMeta, RegionState},
+    range_manager::{RangeMeta, RegionState},
     range_stats::{RangeStatsManager, DEFAULT_EVICT_MIN_DURATION},
     region_label::{
-        LabelRule, RegionLabelAddedCb, RegionLabelRulesManager, RegionLabelServiceBuilder,
+        KeyRangeRule, LabelRule, RegionLabelAddedCb, RegionLabelRulesManager,
+        RegionLabelServiceBuilder,
     },
     write_batch::RangeCacheWriteBatchEntry,
 };
@@ -125,6 +127,7 @@ pub struct BgWorkManager {
     delete_region_scheduler: Scheduler<BackgroundTask>,
     tick_stopper: Option<(JoinHandle<()>, Sender<bool>)>,
     core: Arc<RwLock<RangeCacheMemoryEngineCore>>,
+    region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
 }
 
 impl Drop for BgWorkManager {
@@ -161,8 +164,14 @@ impl PdRangeHintService {
     /// label is removed or no longer set to always.
     pub fn start<F>(&self, remote: Remote<yatp::task::future::TaskCell>, range_manager_load_cb: F)
     where
-        F: Fn(&CacheRange) -> Result<(), LoadFailedReason> + Send + Sync + 'static,
+        F: Fn(&[u8], &[u8]) + Send + Sync + 'static,
     {
+        let parse_range = |key_range: &KeyRangeRule| {
+            let start = hex::decode(&key_range.start_key)?;
+            let end = hex::decode(&key_range.end_key)?;
+            Ok::<_, FromHexError>((start, end))
+        };
+
         let pd_client = self.0.clone();
         let region_label_added_cb: RegionLabelAddedCb = Arc::new(move |label_rule: &LabelRule| {
             if !label_rule
@@ -174,12 +183,10 @@ impl PdRangeHintService {
                 return;
             }
             for key_range in &label_rule.data {
-                match CacheRange::try_from(key_range) {
-                    Ok(cache_range) => {
-                        info!("Requested to cache range"; "cache_range" => ?&cache_range);
-                        if let Err(reason) = range_manager_load_cb(&cache_range) {
-                            error!("Cache range load failed"; "range" => ?&cache_range, "reason" => ?reason);
-                        }
+                match parse_range(key_range) {
+                    Ok((start, end)) => {
+                        info!("Requested to cache range";"start" => ?log_wrappers::Value(&start), "end" => ?log_wrappers::Value(&end));
+                        range_manager_load_cb(&start, &end);
                     }
                     Err(e) => {
                         error!("Unable to convert key_range rule to cache range"; "err" => ?e);
@@ -220,7 +227,7 @@ impl BgWorkManager {
         let (runner, delete_range_scheduler) = BackgroundRunner::new(
             core.clone(),
             memory_controller,
-            region_info_provider,
+            region_info_provider.clone(),
             expected_region_size,
             gc_interval,
             pd_client.clone(),
@@ -240,6 +247,7 @@ impl BgWorkManager {
             delete_region_scheduler: delete_range_scheduler,
             tick_stopper: Some((h, tx)),
             core,
+            region_info_provider,
         }
     }
 
@@ -254,15 +262,34 @@ impl BgWorkManager {
 
     pub fn start_bg_hint_service(&self, range_hint_service: PdRangeHintService) {
         let core = self.core.clone();
-        range_hint_service.start(self.worker.remote(), move |cache_range: &CacheRange| {
+        let region_info_provider = self.region_info_provider.clone();
+        range_hint_service.start(self.worker.remote(), move |start: &[u8], end: &[u8]| {
+            let Some(ref info_provider) = region_info_provider else {
+                warn!("[IME] region info provider is none, skip load pinned range.");
+                return;
+            };
+
+            let regions = match info_provider.get_regions_in_range(start, end) {
+                Ok(r) => r,
+                Err(e) => {
+                    warn!("get regions in range failed"; "err" => ?e, "start" => ?log_wrappers::Value(start), "end" => ?log_wrappers::Value(end));
+                    return;
+                }
+            };
+
+            if regions.is_empty() {
+                return;
+            }
+
             let mut engine = core.write();
-            engine
-                .mut_range_manager()
-                .add_pinned_range(cache_range.clone());
+            for r in regions {
+                if let Err(e) = engine.mut_range_manager().load_region(r.clone()) {
+                    warn!("load region by label failed"; "err" => ?e, "region" => ?r);
+                }
+            }
             // TODO (afeinberg): This does not actually load the range. The load happens
             // the apply thread begins to apply raft entries. To force this (for read-only
             // use-cases) we should propose a No-Op command.
-            Ok(())
         });
     }
 
@@ -1102,7 +1129,7 @@ impl Runnable for BackgroundRunner {
                         if user_key != last_user_key {
                             if let Some(remove) = cached_to_remove.take() {
                                 removed += 1;
-                                lock_handle.remove(&*remove, guard);
+                                lock_handle.remove(&InternalBytes::from_vec(remove), guard);
                             }
                             last_user_key = user_key.to_vec();
                             if sequence >= snapshot_seqno {
@@ -1129,7 +1156,7 @@ impl Runnable for BackgroundRunner {
                     }
                     if let Some(remove) = cached_to_remove.take() {
                         removed += 1;
-                        lock_handle.remove(&*remove, guard);
+                        lock_handle.remove(&InternalBytes::from_vec(remove), guard);
                     }
 
                     info!(
@@ -1324,11 +1351,13 @@ impl Drop for Filter {
     fn drop(&mut self) {
         if let Some(cached_delete_key) = self.cached_mvcc_delete_key.take() {
             let guard = &epoch::pin();
-            self.write_cf_handle.remove(&*cached_delete_key, guard);
+            self.write_cf_handle
+                .remove(&InternalBytes::from_vec(cached_delete_key), guard);
         }
         if let Some(cached_delete_key) = self.cached_skiplist_delete_key.take() {
             let guard = &epoch::pin();
-            self.write_cf_handle.remove(&*cached_delete_key, guard);
+            self.write_cf_handle
+                .remove(&InternalBytes::from_vec(cached_delete_key), guard);
         }
     }
 }
@@ -1406,7 +1435,7 @@ impl Filter {
                 // In either cases, we can delete the previous one directly.
                 let guard = &epoch::pin();
                 self.write_cf_handle
-                    .remove(&*cache_skiplist_delete_key, guard)
+                    .remove(&InternalBytes::from_vec(cache_skiplist_delete_key), guard)
             }
             self.cached_skiplist_delete_key = Some(key.to_vec());
             return Ok(());
@@ -1418,12 +1447,15 @@ impl Filter {
             let guard = &epoch::pin();
             if cache_skiplist_delete_user_key == user_key {
                 self.metrics.filtered += 1;
-                self.write_cf_handle.remove(&**key, guard);
+                self.write_cf_handle
+                    .remove(&InternalBytes::from_bytes(key.clone()), guard);
                 return Ok(());
             } else {
                 self.metrics.filtered += 1;
-                self.write_cf_handle
-                    .remove(&*self.cached_skiplist_delete_key.take().unwrap(), guard)
+                self.write_cf_handle.remove(
+                    &InternalBytes::from_vec(self.cached_skiplist_delete_key.take().unwrap()),
+                    guard,
+                )
             }
         }
 
@@ -1434,7 +1466,8 @@ impl Filter {
             self.last_user_key = user_key.to_vec();
         } else {
             self.metrics.filtered += 1;
-            self.write_cf_handle.remove(&**key, guard);
+            self.write_cf_handle
+                .remove(&InternalBytes::from_bytes(key.clone()), guard);
             return Ok(());
         }
 
@@ -1446,7 +1479,8 @@ impl Filter {
             self.remove_older = false;
             if let Some(cached_delete_key) = self.cached_mvcc_delete_key.take() {
                 self.metrics.filtered += 1;
-                self.write_cf_handle.remove(&*cached_delete_key, guard);
+                self.write_cf_handle
+                    .remove(&InternalBytes::from_vec(cached_delete_key), guard);
             }
         }
 
@@ -1475,7 +1509,8 @@ impl Filter {
             return Ok(());
         }
         self.metrics.filtered += 1;
-        self.write_cf_handle.remove(&**key, guard);
+        self.write_cf_handle
+            .remove(&InternalBytes::from_bytes(key.clone()), guard);
         self.handle_filtered_write(write, guard);
 
         Ok(())

@@ -2,7 +2,6 @@
 
 use core::slice::SlicePattern;
 use std::{
-    borrow::Borrow,
     cmp::{self, Ordering},
     fmt,
     sync::Arc,
@@ -117,26 +116,13 @@ impl Ord for InternalBytes {
                 .unwrap(),
         );
 
-        #[allow(clippy::comparison_chain)]
-        if n1 < n2 {
-            Ordering::Greater
-        } else if n1 > n2 {
-            Ordering::Less
-        } else {
-            Ordering::Equal
-        }
+        n2.cmp(&n1)
     }
 }
 
 impl PartialOrd for InternalBytes {
     fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
         Some(self.cmp(other))
-    }
-}
-
-impl Borrow<[u8]> for InternalBytes {
-    fn borrow(&self) -> &[u8] {
-        &self.bytes
     }
 }
 

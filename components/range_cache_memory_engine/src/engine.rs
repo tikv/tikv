@@ -1,7 +1,6 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    borrow::Borrow,
     fmt::{self, Debug},
     ops::Bound,
     result,
@@ -97,11 +96,7 @@ impl SkiplistHandle {
         self.0.insert(key, value, guard).release(guard);
     }
 
-    pub fn remove<Q>(&self, key: &Q, guard: &Guard)
-    where
-        InternalBytes: Borrow<Q>,
-        Q: Ord + ?Sized,
-    {
+    pub fn remove(&self, key: &InternalBytes, guard: &Guard) {
         if let Some(entry) = self.0.remove(key, guard) {
             entry.release(guard);
         }
