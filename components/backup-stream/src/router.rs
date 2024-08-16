@@ -22,6 +22,7 @@ use kvproto::{
         CompressionType, DataFileGroup, DataFileInfo, FileType, MetaVersion, Metadata,
         StreamBackupTaskInfo,
     },
+    metapb::{self, Region, RegionEpoch},
     raft_cmdpb::CmdType,
 };
 use openssl::hash::{Hasher, MessageDigest};
@@ -56,6 +57,7 @@ use crate::{
     errors::{ContextualResultExt, Error},
     metadata::StreamTask,
     metrics::{HANDLE_KV_HISTOGRAM, SKIP_KV_COUNTER},
+    subscription_manager::ResolvedRegions,
     subscription_track::TwoPhaseResolver,
     tempfiles::{self, TempFilePool},
     try_send,
@@ -146,6 +148,14 @@ pub struct ApplyEvents {
     region_id: u64,
     // TODO: this field is useless, maybe remove it.
     region_resolved_ts: u64,
+}
+
+#[derive(Clone, Copy)]
+pub struct FlushContext<'a> {
+    pub task_name: &'a str,
+    pub store_id: u64,
+    pub resolved_regions: &'a ResolvedRegions,
+    pub resolved_ts: TimeStamp,
 }
 
 impl ApplyEvents {
@@ -610,17 +620,12 @@ impl RouterInner {
 
     /// flush the specified task, once once success, return the min resolved ts
     /// of this flush. returns `None` if failed.
-    #[instrument(skip(self, resolve_to))]
-    pub async fn do_flush(
-        &self,
-        task_name: &str,
-        store_id: u64,
-        resolve_to: TimeStamp,
-    ) -> Option<u64> {
-        let task = self.tasks.lock().await.get(task_name).cloned();
+    #[instrument(skip(self, cx))]
+    pub async fn do_flush(&self, cx: FlushContext<'_>) -> Option<u64> {
+        let task = self.tasks.lock().await.get(cx.task_name).cloned();
         match task {
             Some(task_info) => {
-                let result = task_info.do_flush(store_id, resolve_to).await;
+                let result = task_info.do_flush(cx).await;
                 // set false to flushing whether success or fail
                 task_info.set_flushing_status(false);
 
@@ -632,7 +637,7 @@ impl RouterInner {
                         try_send!(
                             self.scheduler,
                             Task::FatalError(
-                                TaskSelector::ByName(task_name.to_owned()),
+                                TaskSelector::ByName(cx.task_name.to_owned()),
                                 Box::new(e)
                             )
                         );
@@ -1008,6 +1013,36 @@ impl StreamTaskInfo {
         Ok(metadata)
     }
 
+    fn fill_region_info(&self, cx: FlushContext<'_>, metas: &mut MetadataInfo) {
+        let mut rmap = HashMap::<u64, (Vec<&RegionEpoch>, &[u8], &[u8])>::new();
+        for res in cx.resolved_regions.resolve_results() {
+            rmap.entry(res.region.id)
+                .and_modify(|(epoch, start, end)| {
+                    epoch.push(res.region.get_region_epoch());
+                    if *start > res.region.start_key.as_slice() {
+                        *start = &res.region.start_key;
+                    }
+                    if *end < res.region.end_key.as_slice() {
+                        *end = &res.region.end_key;
+                    }
+                })
+                .or_insert({
+                    let r = &res.region;
+                    (vec![r.get_region_epoch()], &r.start_key, &r.end_key)
+                });
+        }
+
+        for fg in metas.file_groups.iter_mut() {
+            for f in fg.data_files_info.iter_mut() {
+                if let Some((epoches, start_key, end_key)) = rmap.get(&(f.region_id as _)) {
+                    f.set_region_epoch(epoches.clone());
+                    f.set_region_start_key(start_key.to_vec());
+                    f.set_region_end_key(end_key.to_vec());
+                }
+            }
+        }
+    }
+
     pub fn set_flushing_status_cas(&self, expect: bool, new: bool) -> result::Result<bool, bool> {
         self.flushing
             .compare_exchange(expect, new, Ordering::SeqCst, Ordering::SeqCst)
@@ -1258,11 +1293,7 @@ impl StreamTaskInfo {
     /// function, and we would use `max(resolved_ts_provided,
     /// resolved_ts_from_file)`.
     #[instrument(skip_all)]
-    pub async fn do_flush(
-        &self,
-        store_id: u64,
-        resolved_ts_provided: TimeStamp,
-    ) -> Result<Option<u64>> {
+    pub async fn do_flush(&self, cx: FlushContext<'_>) -> Result<Option<u64>> {
         // do nothing if not flushing status.
         let result: Result<Option<u64>> = async move {
             if !self.is_flushing() {
@@ -1275,7 +1306,7 @@ impl StreamTaskInfo {
             let mut metadata_info = self
                 .move_to_flushing_files()
                 .await?
-                .generate_metadata(store_id)
+                .generate_metadata(cx.store_id)
                 .await?;
 
             fail::fail_point!("after_moving_to_flushing_files");
@@ -1289,7 +1320,7 @@ impl StreamTaskInfo {
             // only after flush is done.
             metadata_info.min_resolved_ts = metadata_info
                 .min_resolved_ts
-                .max(Some(resolved_ts_provided.into_inner()));
+                .max(Some(cx.resolved_ts.into_inner()));
             let rts = metadata_info.min_resolved_ts;
 
             // compress length
@@ -1619,6 +1650,8 @@ mod tests {
 
     use super::*;
     use crate::{config::BackupStreamConfigManager, utils};
+
+    static EMPTY_RESOLVE: ResolvedRegions = ResolvedRegions::new(TimeStamp::zero(), vec![]);
 
     #[derive(Debug)]
     struct KvEventsBuilder {
@@ -1981,7 +2014,13 @@ mod tests {
         }
         // do_flush
         task.set_flushing_status(true);
-        task.do_flush(1, TimeStamp::new(1)).await.unwrap();
+        let cx = FlushContext {
+            task_name: &task.task.info.name,
+            store_id: 1,
+            resolved_regions: &EMPTY_RESOLVE,
+            resolved_ts: TimeStamp::new(1),
+        };
+        task.do_flush(cx).await.unwrap();
         assert_eq!(task.flush_failure_count(), 0);
         assert_eq!(task.files.read().await.is_empty(), true);
         assert_eq!(task.flushing_files.read().await.is_empty(), true);
@@ -2094,6 +2133,12 @@ mod tests {
                 data_key_manager: None,
             },
         ));
+        let cx = FlushContext {
+            task_name: "error_prone",
+            store_id: 42,
+            resolved_regions: &EMPTY_RESOLVE,
+            resolved_ts: TimeStamp::max(),
+        };
         let (task, _path) = task("error_prone".to_owned()).await?;
         must_register_table(router.as_ref(), task, 1).await;
         router
@@ -2102,19 +2147,14 @@ mod tests {
             })
             .await;
         check_on_events_result(&router.on_events(build_kv_event(0, 10)).await);
-        assert!(
-            router
-                .do_flush("error_prone", 42, TimeStamp::max())
-                .await
-                .is_none()
-        );
+        assert!(router.do_flush(cx).await.is_none());
         check_on_events_result(&router.on_events(build_kv_event(10, 10)).await);
         let t = router.get_task_info("error_prone").await.unwrap();
-        let _ = router.do_flush("error_prone", 42, TimeStamp::max()).await;
+        let _ = router.do_flush(cx).await;
         assert_eq!(t.total_size() > 0, true);
 
         t.set_flushing_status(true);
-        let _ = router.do_flush("error_prone", 42, TimeStamp::max()).await;
+        let _ = router.do_flush(cx).await;
         assert_eq!(t.total_size(), 0);
         Ok(())
     }
@@ -2151,7 +2191,13 @@ mod tests {
         let task = router.get_task_info("nothing").await.unwrap();
         task.set_flushing_status_cas(false, true).unwrap();
         let ts = TimeStamp::compose(TimeStamp::physical_now(), 42);
-        let rts = router.do_flush("nothing", 1, ts).await.unwrap();
+        let cx = FlushContext {
+            task_name: "nothing",
+            store_id: 1,
+            resolved_regions: &EMPTY_RESOLVE,
+            resolved_ts: ts,
+        };
+        let rts = router.do_flush(cx).await.unwrap();
         assert_eq!(ts.into_inner(), rts);
     }
 
@@ -2233,14 +2279,15 @@ mod tests {
                 i.storage = Arc::new(ErrorStorage::with_always_error(i.storage.clone()))
             })
             .await;
+        let cx = FlushContext {
+            task_name: "flush_failure",
+            store_id: 42,
+            resolved_regions: &EMPTY_RESOLVE,
+            resolved_ts: TimeStamp::zero(),
+        };
         for i in 0..=FLUSH_FAILURE_BECOME_FATAL_THRESHOLD {
             check_on_events_result(&router.on_events(build_kv_event((i * 10) as _, 10)).await);
-            assert_eq!(
-                router
-                    .do_flush("flush_failure", 42, TimeStamp::zero())
-                    .await,
-                None,
-            );
+            assert_eq!(router.do_flush(cx).await, None,);
         }
         let messages = collect_recv(rx);
         assert!(
@@ -2594,13 +2641,19 @@ mod tests {
         })
         .unwrap();
 
+        let cx = FlushContext {
+            task_name: "race",
+            store_id: 42,
+            resolved_regions: &EMPTY_RESOLVE,
+            resolved_ts: TimeStamp::max(),
+        };
         // set flush status to true, because we disabled the auto flush.
         t.set_flushing_status(true);
         let router_clone = router.clone();
         let _ = tokio::join!(
             // do flush in another thread
             tokio::spawn(async move {
-                router_clone.do_flush("race", 42, TimeStamp::max()).await;
+                router_clone.do_flush(cx).await;
             }),
             router.on_events(events_after_flush)
         );
@@ -2611,7 +2664,7 @@ mod tests {
 
         // set flush status to true, because we disabled the auto flush.
         t.set_flushing_status(true);
-        let res = router.do_flush("race", 42, TimeStamp::max()).await;
+        let res = router.do_flush(cx).await;
         // this time flush should success.
         assert!(res.is_some());
         assert_eq!(t.files.read().await.len(), 0,);

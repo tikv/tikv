@@ -89,7 +89,7 @@ async fn test_exec_simple() {
     assert_eq!(mig.edit_meta.len(), 3);
     assert_eq!(mig.compactions.len(), 1);
     let subc = st
-        .load_subcompactions(mig.compactions[0].get_artifactes())
+        .load_subcompactions(mig.compactions[0].get_artifacts())
         .await
         .unwrap();
     assert_eq!(subc.len(), 10);

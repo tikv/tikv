@@ -361,7 +361,7 @@ impl ExecHooks for SaveMeta {
             .set_compaction_until_ts(cx.this.cfg.until_ts);
         run_info
             .mut_meta()
-            .set_artifactes(format!("{}/{}", cx.this.out_prefix, META_OUT_REL));
+            .set_artifacts(format!("{}/{}", cx.this.out_prefix, META_OUT_REL));
         run_info
             .mut_meta()
             .set_generated_files(format!("{}/{}", cx.this.out_prefix, SST_OUT_REL));
