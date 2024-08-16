@@ -18,6 +18,7 @@ make_auto_flush_static_metric! {
         no_read_ts,
         not_cached,
         too_old_read,
+        epoch_not_match,
     }
 
     pub struct FailedReasonCountVec: LocalIntCounter {

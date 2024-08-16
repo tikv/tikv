@@ -3,6 +3,7 @@
 use core::slice::SlicePattern;
 use std::{
     cmp::{self, Ordering},
+    fmt,
     sync::Arc,
 };
 
@@ -115,14 +116,7 @@ impl Ord for InternalBytes {
                 .unwrap(),
         );
 
-        #[allow(clippy::comparison_chain)]
-        if n1 < n2 {
-            Ordering::Greater
-        } else if n1 > n2 {
-            Ordering::Less
-        } else {
-            Ordering::Equal
-        }
+        n2.cmp(&n1)
     }
 }
 
@@ -154,11 +148,24 @@ impl TryFrom<u8> for ValueType {
     }
 }
 
+#[derive(PartialEq)]
 pub struct InternalKey<'a> {
     // key with mvcc version in memory comparable format
     pub user_key: &'a [u8],
     pub v_type: ValueType,
     pub sequence: u64,
+}
+
+impl<'a> fmt::Debug for InternalKey<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "(key: {:?}, type: {:?}, seq: {})",
+            log_wrappers::Value(self.user_key),
+            self.v_type,
+            self.sequence
+        )
+    }
 }
 
 // The size of sequence number suffix
@@ -268,13 +275,19 @@ pub fn encoding_for_filter(mvcc_prefix: &[u8], start_ts: TimeStamp) -> InternalB
 
 #[cfg(test)]
 pub fn construct_user_key(i: u64) -> Vec<u8> {
+    let k = format!("zk{:08}", i);
+    k.as_bytes().to_owned()
+}
+
+#[cfg(test)]
+pub fn construct_region_key(i: u64) -> Vec<u8> {
     let k = format!("k{:08}", i);
     k.as_bytes().to_owned()
 }
 
 #[cfg(test)]
 pub fn construct_key(i: u64, ts: u64) -> Vec<u8> {
-    let k = format!("k{:08}", i);
+    let k = format!("zk{:08}", i);
     Key::from_encoded(k.as_bytes().to_vec())
         .append_ts(TimeStamp::new(ts))
         .into_encoded()
