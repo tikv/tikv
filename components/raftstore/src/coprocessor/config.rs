@@ -69,10 +69,8 @@ pub enum ConsistencyCheckMethod {
     Mvcc = 1,
 }
 
-/// Default region split size. In version < 8.3.0, the default split size is
-/// 96MB. In version >= 8.3.0, the default split size is increased to 256MB to
-/// allow for larger region size in TiKV.
-pub const SPLIT_SIZE: ReadableSize = ReadableSize::mb(256);
+/// Default region split size.
+pub const SPLIT_SIZE: ReadableSize = ReadableSize::mb(96);
 pub const RAFTSTORE_V2_SPLIT_SIZE: ReadableSize = ReadableSize::gb(10);
 
 /// Default batch split limit.
