@@ -513,11 +513,11 @@ mod tests {
 
             let memory_quota = rx.memory_quota.clone();
             let mut drain = rx.drain();
-            block_on_timeout(drain.next(), Duration::from_millis(100)).unwrap_err();
+            recv_timeout(&mut drain, Duration::from_millis(100)).unwrap_err();
             assert_eq!(memory_quota.in_use(), 0);
         }
     }
-    
+
     #[test]
     fn test_barrier() {
         let force_send = false;
