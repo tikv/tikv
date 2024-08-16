@@ -405,8 +405,7 @@
 ## When Region size change exceeds this config, TiKV will check whether the Region should be split
 ## or not. To reduce the cost of scanning data in the checking process, you can set the value to
 ## 32MB during checking and set it back to the default value in normal operations.
-## It's recommanded to set it to 1/16 of `region-split-size`.
-# region-split-check-diff = "16MB"
+# region-split-check-diff = "6MB"
 
 ## The interval of triggering Region split check.
 # split-region-check-tick-interval = "10s"
@@ -424,11 +423,11 @@
 # raft-log-gc-threshold = 50
 
 ## When the entry count exceeds this value, GC will be forced to trigger.
-# raft-log-gc-count-limit = 196608
+# raft-log-gc-count-limit = 73728
 
 ## When the approximate size of Raft log entries exceeds this value, GC will be forced trigger.
 ## It's recommanded to set it to 3/4 of `region-split-size`.
-# raft-log-gc-size-limit = "192MB"
+# raft-log-gc-size-limit = "72MB"
 
 ## Old Raft logs could be reserved if `raft_log_gc_threshold` is not reached.
 ## GC them after ticks `raft_log_reserve_max_ticks` times.
@@ -507,14 +506,14 @@
 ## When Region [a,e) size exceeds `region_max_size`, it will be split into several Regions [a,b),
 ## [b,c), [c,d), [d,e) and the size of [a,b), [b,c), [c,d) will be `region_split_size` (or a
 ## little larger).
-# region-max-size = "384MB"
-# region-split-size = "256MB"
+# region-max-size = "144MB"
+# region-split-size = "96MB"
 
 ## When the number of keys in Region [a,e) exceeds the `region_max_keys`, it will be split into
 ## several Regions [a,b), [b,c), [c,d), [d,e) and the number of keys in [a,b), [b,c), [c,d) will be
 ## `region_split_keys`.
-# region-max-keys = 3840000
-# region-split-keys = 2560000
+# region-max-keys = 1440000
+# region-split-keys = 960000
 
 ## Set to "mvcc" to do consistency check for MVCC data, or "raw" for raw data.
 # consistency-check-method = "mvcc"
@@ -1296,7 +1295,7 @@
 ## When Backup region [a,e) size exceeds `sst-max-size`, it will be backuped into several Files [a,b),
 ## [b,c), [c,d), [d,e) and the size of [a,b), [b,c), [c,d) will be `sst-max-size` (or a
 ## little larger).
-# sst-max-size = "384MB"
+# sst-max-size = "144MB"
 
 ## Automatically reduce the number of backup threads when the current workload is high,
 ## in order to reduce impact on the cluster's performance during back up.
