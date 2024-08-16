@@ -17,7 +17,7 @@ use tikv_util::{info, time::Instant};
 
 use crate::{metrics::observe_eviction_duration, read::RangeCacheSnapshotMeta};
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Clone, Copy, Default, Hash)]
+#[derive(PartialEq, Eq, Debug, Clone, Copy, Default, Hash)]
 pub enum RegionState {
     // waiting to be load.
     // NOTE: in this state, the region's epoch may be older than
@@ -51,6 +51,11 @@ impl RegionState {
             PendingEvict => "pending_evict",
             Evicting => "evicting",
         }
+    }
+
+    pub fn is_evict(&self) -> bool {
+        use RegionState::*;
+        matches!(*self, LoadingCanceled | PendingEvict | Evicting)
     }
 }
 
@@ -514,7 +519,10 @@ impl RegionManager {
         if meta.region_snapshot_list.is_empty() {
             self.historical_regions.remove(&hist_key).unwrap();
             self.iter_overlapped_regions(&snapshot_meta.range, |meta| {
-                if meta.get_state() >= RegionState::PendingEvict {
+                if matches!(
+                    meta.get_state(),
+                    RegionState::PendingEvict | RegionState::Evicting
+                ) {
                     assert_eq!(meta.get_state(), RegionState::PendingEvict);
                     if Self::region_ready_to_evict(meta, &self.historical_regions) {
                         deletable_regions.push(meta.region.clone());
@@ -674,7 +682,7 @@ impl RegionManager {
                 "state" => ?prev_state,
             );
             return None;
-        } else if prev_state >= RegionState::LoadingCanceled {
+        } else if prev_state.is_evict() {
             info!("region already evicted"; "region" => ?meta.region, "state" => ?prev_state);
             return None;
         }
@@ -789,7 +797,7 @@ impl RegionManager {
     ) {
         if let Some(region_meta) = self.region_meta(source_region.id) {
             // if region is evicting, skip handling split for simplicity.
-            if region_meta.state >= RegionState::LoadingCanceled {
+            if region_meta.state.is_evict() {
                 info!("region is evicted, skip split"; "meta" => ?&region_meta, "new_regions" => ?new_regions);
                 return;
             }
@@ -799,7 +807,7 @@ impl RegionManager {
         }
 
         let region_meta = self.remove_region(source_region.id);
-        assert!(region_meta.state <= RegionState::Active);
+        assert!(!region_meta.state.is_evict());
         if region_meta.region.get_region_epoch().version != source_region.get_region_epoch().version
         {
             // for pending regions, we keep regions that still fall in this range if epoch

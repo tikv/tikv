@@ -1573,6 +1573,7 @@ pub mod tests {
             encoding_for_filter, InternalBytes, ValueType,
         },
         memory_controller::MemoryController,
+        range_manager::RegionState::*,
         region_label::{
             region_label_meta_client,
             tests::{add_region_label_rule, new_region_label_rule, new_test_server_and_client},
@@ -2842,7 +2843,7 @@ pub mod tests {
                 .range_manager()
                 .regions()
                 .values()
-                .any(|m| m.get_state() <= RegionState::Loading)
+                .any(|m| matches!(m.get_state(), Pending | ReadyToLoad | Loading))
         });
 
         let verify = |region: &Region, exist, expect_count| {
@@ -2949,7 +2950,7 @@ pub mod tests {
                 .range_manager()
                 .regions()
                 .values()
-                .any(|m| m.get_state() <= RegionState::Loading)
+                .any(|m| matches!(m.get_state(), Pending | ReadyToLoad | Loading))
         });
 
         let verify = |r: &Region, exist, expect_count| {

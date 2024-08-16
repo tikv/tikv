@@ -1781,7 +1781,7 @@ mod tests {
                     .range_manager()
                     .regions()
                     .values()
-                    .any(|m| m.get_state() >= RegionState::LoadingCanceled)
+                    .any(|m| m.get_state().is_evict())
             },
         );
         let write_handle = engine.core.read().engine.cf_handle("write");

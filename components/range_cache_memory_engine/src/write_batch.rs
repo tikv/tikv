@@ -776,7 +776,7 @@ mod tests {
                     .range_manager()
                     .regions()
                     .values()
-                    .any(|meta| meta.get_state() >= RegionState::LoadingCanceled)
+                    .any(|meta| meta.get_state().is_evict())
             },
         );
     }

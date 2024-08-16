@@ -521,7 +521,7 @@ pub mod tests {
     use crate::{
         keys::{construct_key, construct_user_key, encode_key},
         memory_controller::MemoryController,
-        range_manager::{RangeMeta, RegionManager, RegionState},
+        range_manager::{RangeMeta, RegionManager, RegionState, RegionState::*},
         test_util::new_region,
         InternalBytes, RangeCacheEngineConfig, RangeCacheEngineContext, RangeCacheMemoryEngine,
         ValueType,
@@ -543,7 +543,7 @@ pub mod tests {
         engine.prepare_for_apply(1, CacheRange::from_region(&region2), &region2);
         assert_eq!(
             count_region(engine.core.read().range_manager(), |m| {
-                m.get_state() <= RegionState::Loading
+                matches!(m.get_state(), Pending | ReadyToLoad | Loading)
             }),
             0
         );
@@ -556,7 +556,7 @@ pub mod tests {
         engine.prepare_for_apply(1, CacheRange::from_region(&region2), &region2);
         assert_eq!(
             count_region(engine.core.read().range_manager(), |m| {
-                m.get_state() <= RegionState::Loading
+                matches!(m.get_state(), Pending | ReadyToLoad | Loading)
             }),
             0
         );
