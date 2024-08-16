@@ -1989,7 +1989,26 @@
               "hide": false,
               "interval": "",
               "legendFormat": "store-write-channelfull-{{instance}}",
-              "refId": "E"
+              "metric": "",
+              "query": "sum(rate(\n    tikv_raftstore_store_write_msg_block_wait_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum((\n    tikv_raftstore_process_busy\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance, type) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{instance}}-{{type}}",
+              "metric": "",
+              "query": "sum((\n    tikv_raftstore_process_busy\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance, type) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
             }
           ],
           "thresholds": [],
@@ -14520,7 +14539,7 @@
             "defaults": {},
             "overrides": []
           },
-           "gridPos": {
+          "gridPos": {
             "h": 7,
             "w": 12,
             "x": 0,
@@ -25968,6 +25987,117 @@
           "yaxis": {
             "align": false,
             "alignLevel": null
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "Total bytes of memory used by coprocessor requests",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "links": []
+            },
+            "overrides": []
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 24,
+            "x": 0,
+            "y": 71
+          },
+          "hiddenSeries": false,
+          "hideTimeOverride": false,
+          "id": 24763573286,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true
+          },
+          "percentage": false,
+          "pluginVersion": "8.5.27",
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "sum((\n    tikv_coprocessor_memory_quota\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=~\"$tidb_cluster.*\",instance=~\"$instance\"}\n    \n)) by (instance, type) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{instance}}-{{type}}",
+              "metric": "",
+              "query": "sum((\n    tikv_coprocessor_memory_quota\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=~\"$tidb_cluster.*\",instance=~\"$instance\"}\n    \n)) by (instance, type) ",
+              "refId": "A",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeRegions": [],
+          "title": "Memory Quota",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "bytes",
+              "logBase": 1,
+              "show": true
+            },
+            {
+              "format": "short",
+              "logBase": 1,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
           }
         }
       ],

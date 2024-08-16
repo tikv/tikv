@@ -12,7 +12,10 @@ use std::{
 };
 
 use file_system::{set_io_type, IoType};
-use futures::{channel::oneshot, future::TryFutureExt};
+use futures::{
+    channel::oneshot,
+    future::{FutureExt, TryFutureExt},
+};
 use kvproto::{errorpb, kvrpcpb::CommandPri};
 use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResult};
 use prometheus::{core::Metric, Histogram, IntCounter, IntGauge};
@@ -171,10 +174,9 @@ impl ReadPoolHandle {
                     TaskCell::new(
                         TrackedFuture::new(with_resource_limiter(
                             ControlledFuture::new(
-                                async move {
-                                    f.await;
+                                f.map(move |_| {
                                     running_tasks.dec();
-                                },
+                                }),
                                 resource_ctl.clone(),
                                 group_name,
                             ),
@@ -184,10 +186,9 @@ impl ReadPoolHandle {
                     )
                 } else {
                     TaskCell::new(
-                        TrackedFuture::new(async move {
-                            f.await;
+                        TrackedFuture::new(f.map(move |_| {
                             running_tasks.dec();
-                        }),
+                        })),
                         extras,
                     )
                 };
@@ -211,10 +212,9 @@ impl ReadPoolHandle {
     {
         let (tx, rx) = oneshot::channel::<T>();
         let res = self.spawn(
-            async move {
-                let res = f.await;
+            f.map(move |res| {
                 let _ = tx.send(res);
-            },
+            }),
             priority,
             task_id,
             metadata,
@@ -312,6 +312,10 @@ impl ReadPoolHandle {
         let mut busy_err = errorpb::ServerIsBusy::default();
         busy_err.set_reason("estimated wait time exceeds threshold".to_owned());
         busy_err.estimated_wait_ms = u32::try_from(estimated_wait.as_millis()).unwrap_or(u32::MAX);
+        warn!("Already many pending tasks in the read queue, task is rejected";
+            "busy_threshold" => ?&busy_threshold,
+            "busy_err" => ?&busy_err,
+        );
         Err(busy_err)
     }
 }
@@ -492,8 +496,12 @@ pub fn build_yatp_read_pool_with_name<E: Engine, R: FlowStatsReporter>(
         pool,
         running_tasks: UNIFIED_READ_POOL_RUNNING_TASKS
             .with_label_values(&[&unified_read_pool_name]),
-        running_threads: UNIFIED_READ_POOL_RUNNING_THREADS
-            .with_label_values(&[&unified_read_pool_name]),
+        running_threads: {
+            let running_threads =
+                UNIFIED_READ_POOL_RUNNING_THREADS.with_label_values(&[&unified_read_pool_name]);
+            running_threads.set(config.max_thread_count as _);
+            running_threads
+        },
         max_tasks: config
             .max_tasks_per_worker
             .saturating_mul(config.max_thread_count),

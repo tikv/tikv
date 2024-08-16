@@ -897,6 +897,16 @@ where
     pub snapshot_recovery_state: Option<SnapshotBrState>,
 
     last_record_safe_point: u64,
+    /// Used for checking whether the peer is busy on apply.
+    /// * `None` => the peer has no pending logs for apply or already finishes
+    ///   applying.
+    /// * `Some(false)` => initial state, not be recorded.
+    /// * `Some(true)` => busy on apply, and already recorded.
+    pub busy_on_apply: Option<bool>,
+    /// The index of last commited idx in the leader. It's used to check whether
+    /// this peer has raft log gaps and whether should be marked busy on
+    /// apply.
+    pub last_leader_committed_idx: Option<u64>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -1041,6 +1051,8 @@ where
             lead_transferee: raft::INVALID_ID,
             unsafe_recovery_state: None,
             snapshot_recovery_state: None,
+            busy_on_apply: Some(false),
+            last_leader_committed_idx: None,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -2682,9 +2694,10 @@ where
 
         if let Some(hs) = ready.hs() {
             let pre_commit_index = self.get_store().commit_index();
-            assert!(hs.get_commit() >= pre_commit_index);
+            let cur_commit_index = hs.get_commit();
+            assert!(cur_commit_index >= pre_commit_index);
             if self.is_leader() {
-                self.on_leader_commit_idx_changed(pre_commit_index, hs.get_commit());
+                self.on_leader_commit_idx_changed(pre_commit_index, cur_commit_index);
             }
         }
 
@@ -2842,7 +2855,13 @@ where
             if for_witness {
                 // inform next round to check apply status
                 ctx.router
-                    .send_casual_msg(snap_region.get_id(), CasualMessage::SnapshotApplied)
+                    .send_casual_msg(
+                        snap_region.get_id(),
+                        CasualMessage::SnapshotApplied {
+                            peer_id: self.peer.get_id(),
+                            tombstone: false,
+                        },
+                    )
                     .unwrap();
             }
             // When applying snapshot, there is no log applied and not compacted yet.
@@ -4640,9 +4659,9 @@ where
             .coprocessor_host
             .pre_transfer_leader(self.region(), transfer_leader)
         {
-            warn!("Coprocessor rejected transfer leader."; "err" => ?err, 
-                "region_id" => self.region_id, 
-                "peer_id" => self.peer.get_id(), 
+            warn!("Coprocessor rejected transfer leader."; "err" => ?err,
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
                 "transferee" => transfer_leader.get_peer().get_id());
             let mut resp = RaftCmdResponse::new();
             *resp.mut_header().mut_error() = Error::from(err).into();
@@ -5228,6 +5247,37 @@ where
                 self.snapshot_recovery_state = None;
             }
         }
+    }
+
+    pub fn update_last_leader_committed_idx(&mut self, committed_index: u64) {
+        if self.is_leader() {
+            // Ignore.
+            return;
+        }
+
+        let local_committed_index = self.get_store().commit_index();
+        if committed_index < local_committed_index {
+            warn!(
+                "stale committed index";
+                "region_id" => self.region().get_id(),
+                "peer_id" => self.peer_id(),
+                "last_committed_index" => committed_index,
+                "local_index" => local_committed_index,
+            );
+        } else {
+            self.last_leader_committed_idx = Some(committed_index);
+            debug!(
+                "update last committed index from leader";
+                "region_id" => self.region().get_id(),
+                "peer_id" => self.peer_id(),
+                "last_committed_index" => committed_index,
+                "local_index" => local_committed_index,
+            );
+        }
+    }
+
+    pub fn needs_update_last_leader_committed_idx(&self) -> bool {
+        self.busy_on_apply.is_some() && self.last_leader_committed_idx.is_none()
     }
 }
 
@@ -5882,9 +5932,9 @@ mod memtrace {
         ER: RaftEngine,
     {
         pub fn proposal_size(&self) -> usize {
-            let mut heap_size = self.pending_reads.heap_size();
+            let mut heap_size = self.pending_reads.approximate_heap_size();
             for prop in &self.proposals.queue {
-                heap_size += prop.heap_size();
+                heap_size += prop.approximate_heap_size();
             }
             heap_size
         }

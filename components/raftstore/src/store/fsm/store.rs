@@ -34,6 +34,7 @@ use fail::fail_point;
 use file_system::{IoType, WithIoType};
 use futures::{compat::Future01CompatExt, FutureExt};
 use grpcio_health::HealthService;
+use itertools::Itertools;
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use kvproto::{
     metapb::{self, Region, RegionEpoch},
@@ -49,6 +50,7 @@ use resource_control::{channel::unbounded, ResourceGroupManager};
 use resource_metering::CollectorRegHandle;
 use service::service_manager::GrpcServiceManager;
 use sst_importer::SstImporter;
+use strum::{EnumCount, VariantNames};
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
     box_try,
@@ -61,7 +63,7 @@ use tikv_util::{
     store::{find_peer, region_on_stores},
     sys as sys_util,
     sys::disk::{get_disk_status, DiskUsage},
-    time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant},
+    time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant, SlowTimer},
     timer::SteadyTimer,
     warn,
     worker::{LazyWorker, Scheduler, Worker},
@@ -117,6 +119,15 @@ pub const PENDING_MSG_CAP: usize = 100;
 pub const ENTRY_CACHE_EVICT_TICK_DURATION: Duration = Duration::from_secs(1);
 pub const MULTI_FILES_SNAPSHOT_FEATURE: Feature = Feature::require(6, 1, 0); // it only makes sense for large region
 
+// When the store is started, it will take some time for applying pending
+// snapshots and delayed raft logs. Before the store is ready, it will report
+// `is_busy` to PD, so PD will not schedule operators to the store.
+const STORE_CHECK_PENDING_APPLY_DURATION: Duration = Duration::from_secs(5 * 60);
+// The minimal percent of region finishing applying pending logs.
+// Only when the count of regions which finish applying logs exceed
+// the threshold, can the raftstore supply service.
+const STORE_CHECK_COMPLETE_APPLY_REGIONS_PERCENT: u64 = 99;
+
 pub struct StoreInfo<EK, ER> {
     pub kv_engine: EK,
     pub raft_engine: ER,
@@ -169,6 +180,22 @@ pub struct StoreMeta {
     pub region_read_progress: RegionReadProgressRegistry,
     /// record sst_file_name -> (sst_smallest_key, sst_largest_key)
     pub damaged_ranges: HashMap<String, (Vec<u8>, Vec<u8>)>,
+    /// Record regions are damaged on some corner cases, the relative peer must
+    /// be safely removed from the store, such as applying snapshot or
+    /// compacting raft logs.
+    pub damaged_regions: HashSet<u64>,
+    /// Record peers are busy with applying logs
+    /// (applied_index <= last_idx - leader_transfer_max_log_lag).
+    /// `busy_apply_peers` and `completed_apply_peers_count` are used
+    /// to record the accurate count of busy apply peers and peers complete
+    /// applying logs
+    pub busy_apply_peers: HashSet<u64>,
+    /// Record the number of peers done for applying logs.
+    /// Without `completed_apply_peers_count`, it's hard to know whether all
+    /// peers are ready for applying logs.
+    /// If None, it means the store is start from empty, no need to check and
+    /// update it anymore.
+    pub completed_apply_peers_count: Option<u64>,
 }
 
 impl StoreRegionMeta for StoreMeta {
@@ -219,6 +246,9 @@ impl StoreMeta {
             destroyed_region_for_snap: HashMap::default(),
             region_read_progress: RegionReadProgressRegistry::new(),
             damaged_ranges: HashMap::default(),
+            damaged_regions: HashSet::default(),
+            busy_apply_peers: HashSet::default(),
+            completed_apply_peers_count: Some(0),
         }
     }
 
@@ -783,15 +813,19 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             .observe(duration_to_sec(elapsed));
         slow_log!(
             elapsed,
-            "[store {}] handle timeout {:?}",
+            "[store {}] handle tick {:?}",
             self.fsm.store.id,
             tick
         );
     }
 
     fn handle_msgs(&mut self, msgs: &mut Vec<StoreMsg<EK>>) {
-        let timer = TiInstant::now_coarse();
+        let timer = SlowTimer::from_millis(100);
+        let count = msgs.len();
+        #[allow(const_evaluatable_unchecked)]
+        let mut distribution = [0; StoreMsg::<EK>::COUNT];
         for m in msgs.drain(..) {
+            distribution[m.discriminant()] += 1;
             match m {
                 StoreMsg::Tick(tick) => self.on_tick(tick),
                 StoreMsg::RaftMessage(msg) => {
@@ -844,11 +878,18 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                 }
             }
         }
+        slow_log!(
+            T timer,
+            "[store {}] handle {} store messages {:?}",
+            self.fsm.store.id,
+            count,
+            StoreMsg::<EK>::VARIANTS.iter().zip(distribution).filter(|(_, c)| *c > 0).format(", "),
+        );
         self.ctx
             .raft_metrics
             .event_time
             .store_msg
-            .observe(timer.saturating_elapsed_secs());
+            .observe(timer.saturating_elapsed().as_secs_f64());
     }
 
     fn start(&mut self, store: metapb::Store) {
@@ -2536,10 +2577,75 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         }
     }
 
+    fn check_store_is_busy_on_apply(
+        &self,
+        start_ts_sec: u32,
+        region_count: u64,
+        busy_apply_peers_count: u64,
+        completed_apply_peers_count: Option<u64>,
+    ) -> bool {
+        STORE_BUSY_ON_APPLY_REGIONS_GAUGE_VEC
+            .busy_apply_peers
+            .set(busy_apply_peers_count as i64);
+        STORE_BUSY_ON_APPLY_REGIONS_GAUGE_VEC
+            .completed_apply_peers
+            .set(completed_apply_peers_count.unwrap_or_default() as i64);
+        // No need to check busy status if there are no regions.
+        if completed_apply_peers_count.is_none() || region_count == 0 {
+            return false;
+        }
+
+        let completed_apply_peers_count = completed_apply_peers_count.unwrap();
+        let during_starting_stage = {
+            (time::get_time().sec as u32).saturating_sub(start_ts_sec)
+                <= STORE_CHECK_PENDING_APPLY_DURATION.as_secs() as u32
+        };
+        // If the store is busy in handling applying logs when starting, it should not
+        // be treated as a normal store for balance. Only when the store is
+        // almost idle (no more pending regions on applying logs), it can be
+        // regarded as the candidate for balancing leaders.
+        if during_starting_stage {
+            let completed_target_count = (|| {
+                fail_point!("on_mock_store_completed_target_count", |_| 0);
+                std::cmp::max(
+                    1,
+                    STORE_CHECK_COMPLETE_APPLY_REGIONS_PERCENT * region_count / 100,
+                )
+            })();
+            // If the number of regions on completing applying logs does not occupy the
+            // majority of regions, the store is regarded as busy.
+            if completed_apply_peers_count < completed_target_count {
+                debug!("check store is busy on apply";
+                    "region_count" => region_count,
+                    "completed_apply_peers_count" => completed_apply_peers_count,
+                    "completed_target_count" => completed_target_count);
+                true
+            } else {
+                let pending_target_count = std::cmp::min(
+                    self.ctx.cfg.min_pending_apply_region_count,
+                    region_count.saturating_sub(completed_target_count),
+                );
+                debug!("check store is busy on apply, has pending peers";
+                    "region_count" => region_count,
+                    "completed_apply_peers_count" => completed_apply_peers_count,
+                    "completed_target_count" => completed_target_count,
+                    "pending_target_count" => pending_target_count,
+                    "busy_apply_peers_count" => busy_apply_peers_count);
+                pending_target_count > 0 && busy_apply_peers_count >= pending_target_count
+            }
+        } else {
+            // Already started for a fairy long time.
+            false
+        }
+    }
+
     fn store_heartbeat_pd(&mut self, report: Option<pdpb::StoreReport>) {
         let mut stats = StoreStats::default();
 
         stats.set_store_id(self.ctx.store_id());
+
+        let completed_apply_peers_count: Option<u64>;
+        let busy_apply_peers_count: u64;
         {
             let meta = self.ctx.store_meta.lock().unwrap();
             stats.set_region_count(meta.regions.len() as u32);
@@ -2548,6 +2654,16 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 let damaged_regions_id = meta.get_all_damaged_region_ids().into_iter().collect();
                 stats.set_damaged_regions_id(damaged_regions_id);
             }
+
+            if !meta.damaged_regions.is_empty() {
+                // Note: no need to filter overlapped regions, since the regions in
+                // `damaged_ranges` are already non-overlapping.
+                stats
+                    .mut_damaged_regions_id()
+                    .extend(meta.damaged_regions.iter());
+            }
+            completed_apply_peers_count = meta.completed_apply_peers_count;
+            busy_apply_peers_count = meta.busy_apply_peers.len() as u64;
         }
 
         let snap_stats = self.ctx.snap_mgr.stats();
@@ -2562,7 +2678,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             .with_label_values(&["receiving"])
             .set(snap_stats.receiving_count as i64);
 
-        stats.set_start_time(self.fsm.store.start_time.unwrap().sec as u32);
+        let start_time = self.fsm.store.start_time.unwrap().sec as u32;
+        stats.set_start_time(start_time);
 
         // report store write flow to pd
         stats.set_bytes_written(
@@ -2580,13 +2697,32 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 .swap(0, Ordering::Relaxed),
         );
 
-        stats.set_is_busy(
-            self.ctx
-                .global_stat
-                .stat
-                .is_busy
-                .swap(false, Ordering::Relaxed),
+        let busy_on_apply = self.check_store_is_busy_on_apply(
+            start_time,
+            stats.get_region_count() as u64,
+            busy_apply_peers_count,
+            completed_apply_peers_count,
         );
+        // If the store already pass the check, it should clear the
+        // `completed_apply_peers_count` to skip the check next time.
+        if !busy_on_apply {
+            let mut meta = self.ctx.store_meta.lock().unwrap();
+            meta.completed_apply_peers_count = None;
+            meta.busy_apply_peers.clear();
+        }
+        let store_is_busy = self
+            .ctx
+            .global_stat
+            .stat
+            .is_busy
+            .swap(false, Ordering::Relaxed);
+        stats.set_is_busy(store_is_busy || busy_on_apply);
+        STORE_PROCESS_BUSY_GAUGE_VEC
+            .applystore_busy
+            .set(busy_on_apply as i64);
+        STORE_PROCESS_BUSY_GAUGE_VEC
+            .raftstore_busy
+            .set(store_is_busy as i64);
 
         let mut query_stats = QueryStats::default();
         query_stats.set_put(
