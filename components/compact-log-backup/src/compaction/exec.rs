@@ -1,5 +1,6 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -303,7 +304,7 @@ where
             .await?;
         sst.meta.sha256 = hasher.lock().unwrap().finish().adapt_err()?.to_vec();
         let mut meta = brpb::LogFileSubcompaction::new();
-        meta.set_meta(c.pb_meta());
+        meta.set_meta(c.to_pb_meta());
         meta.set_sst_outputs(vec![sst.meta.clone()].into());
         Ok(meta)
     }

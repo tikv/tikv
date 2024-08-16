@@ -86,7 +86,7 @@ impl ResolvedRegions {
     /// Note: Maybe we can compute the global checkpoint internal and getting
     /// the interface clear. However we must take the `min_ts` or we cannot
     /// provide valid global checkpoint if there isn't any region checkpoint.
-    pub fn new(checkpoint: TimeStamp, checkpoints: Vec<ResolveResult>) -> Self {
+    pub const fn new(checkpoint: TimeStamp, checkpoints: Vec<ResolveResult>) -> Self {
         Self {
             items: checkpoints,
             checkpoint,
@@ -105,6 +105,11 @@ impl ResolvedRegions {
     /// take the resolve result from this struct.
     pub fn take_resolve_result(&mut self) -> Vec<ResolveResult> {
         std::mem::take(&mut self.items)
+    }
+
+    /// Get the resolve results.
+    pub fn resolve_results(&self) -> &[ResolveResult] {
+        &self.items
     }
 
     /// get the global checkpoint.

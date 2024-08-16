@@ -32,9 +32,9 @@ use super::{
 };
 use crate::{errors::ErrorKind, util};
 
-pub const METADATA_PREFIX: &'static str = "v1/backupmeta";
-pub const COMPACTION_OUT_PREFIX: &'static str = "compaction_out";
-pub const MIGRATION_PREFIX: &'static str = "v1/migrations";
+pub const METADATA_PREFIX: &str = "v1/backupmeta";
+pub const COMPACTION_OUT_PREFIX: &str = "compaction_out";
+pub const MIGRATION_PREFIX: &str = "v1/migrations";
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct MetaFile {
@@ -520,7 +520,7 @@ pub fn id_of_migration(name: &str) -> Option<u64> {
 pub fn hash_migration(m: &Migration) -> u64 {
     let mut crc64 = 0;
     for compaction in m.compactions.iter() {
-        crc64 ^= compaction.artifactes_hash;
+        crc64 ^= compaction.artifacts_hash;
     }
     for meta_edit in m.edit_meta.iter() {
         crc64 ^= hash_meta_edit(meta_edit);

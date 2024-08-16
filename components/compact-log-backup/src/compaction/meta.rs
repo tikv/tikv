@@ -76,20 +76,8 @@ impl Subcompaction {
         crc64_xor
     }
 
-    pub fn pb_meta(&self) -> brpb::LogFileSubcompactionMeta {
+    pub fn to_pb_meta(&self) -> brpb::LogFileSubcompactionMeta {
         let mut out = brpb::LogFileSubcompactionMeta::default();
-        let mut source = HashMap::<Arc<str>, brpb::SpansOfFile>::new();
-        for input in &self.inputs {
-            match source.entry(Arc::clone(&input.id.name)) {
-                Entry::Occupied(mut o) => o.get_mut().mut_spans().push(input.id.span()),
-                Entry::Vacant(v) => {
-                    let mut so = brpb::SpansOfFile::new();
-                    so.mut_spans().push(input.id.span());
-                    so.path = input.id.name.to_string();
-                    v.insert(so);
-                }
-            }
-        }
         out.set_table_id(self.table_id);
         out.set_region_id(self.region_id);
         out.set_cf(self.cf.to_owned());
@@ -100,7 +88,23 @@ impl Subcompaction {
         out.set_compact_until_ts(self.compact_to_ts);
         out.set_min_key(self.min_key.to_vec());
         out.set_max_key(self.max_key.to_vec());
+        out.set_sources(self.inputs_to_pb().into());
         out
+    }
+
+    fn inputs_to_pb(&self) -> Vec<brpb::SpansOfFile> {
+        let mut res = HashMap::<&str, brpb::SpansOfFile>::new();
+
+        for input in &self.inputs {
+            let spans = res.entry(&input.id.name).or_insert_with(|| {
+                let mut s = brpb::SpansOfFile::new();
+                s.set_path(input.id.name.to_string());
+                s
+            });
+            spans.mut_spans().push(input.id.span());
+        }
+
+        res.into_values().collect()
     }
 
     pub fn singleton(c: LogFile) -> Self {
@@ -252,7 +256,7 @@ impl CompactionRunInfoBuilder {
                 .unwrap()
                 .insert(SortByOffset(file.id.clone()));
         }
-        self.compaction.artifactes_hash ^= c.origin.crc64();
+        self.compaction.artifacts_hash ^= c.origin.crc64();
     }
 
     pub fn mut_meta(&mut self) -> &mut brpb::LogFileCompaction {
