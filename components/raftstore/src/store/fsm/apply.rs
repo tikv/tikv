@@ -70,7 +70,7 @@ use tikv_util::{
     Either, MustConsumeVec,
 };
 use time::Timespec;
-use tracker::GLOBAL_TRACKERS;
+use tracker::{TrackerToken, TrackerTokenArray, GLOBAL_TRACKERS};
 use uuid::Builder as UuidBuilder;
 
 use self::memtrace::*;
@@ -643,6 +643,19 @@ where
         } = mem::replace(&mut self.applied_batch, ApplyCallbackBatch::new());
         // Call it before invoking callback for preventing Commit is executed before
         // Prewrite is observed.
+        debug!("raft log is applied to the kv db";
+            "req_info" => TrackerTokenArray::new(
+                &cb_batch.iter().fold(vec![], |mut acc: Vec<TrackerToken>, cb| {
+                    acc.extend(
+                        cb.0.write_trackers().into_iter().
+                        filter_map(|time_tracker| time_tracker.as_tracker_token())
+                        .collect::<Vec<_>>().as_slice()
+                    );
+                    acc
+                })
+            ),
+            "cmd_batch" => ?cmd_batch.len(),
+        );
         self.host
             .on_flush_applied_cmd_batch(batch_max_level, cmd_batch, &self.engine);
         // Invoke callbacks
@@ -1248,7 +1261,7 @@ where
                     // just return Yield
                     return ApplyResult::Yield;
                 }
-                let mut has_unflushed_data =
+                let has_unflushed_data =
                     self.last_flush_applied_index != self.apply_state.get_applied_index();
                 if (has_unflushed_data
                     && should_write_to_engine(!apply_ctx.kv_wb().is_empty(), &cmd)
@@ -1265,12 +1278,8 @@ where
                     {
                         return ApplyResult::Yield;
                     }
-                    has_unflushed_data = false;
                 }
                 if self.priority != apply_ctx.priority {
-                    if has_unflushed_data {
-                        apply_ctx.commit(self);
-                    }
                     return ApplyResult::Yield;
                 }
 

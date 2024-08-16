@@ -7064,6 +7064,7 @@ dependencies = [
  "pin-project",
  "prometheus",
  "slab",
+ "slog",
 ]
 
 [[package]]

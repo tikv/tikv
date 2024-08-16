@@ -141,8 +141,6 @@ trait InitialScan: Clone + Sync + Send + 'static {
         start_ts: TimeStamp,
         handle: ObserveHandle,
     ) -> Result<Statistics>;
-
-    fn handle_fatal_error(&self, region: &Region, err: Error);
 }
 
 #[async_trait::async_trait]
@@ -170,19 +168,6 @@ where
         fail::fail_point!("scan_after_get_snapshot");
         let stat = self.do_initial_scan(region, h, start_ts, snap).await?;
         Ok(stat)
-    }
-
-    fn handle_fatal_error(&self, region: &Region, err: Error) {
-        try_send!(
-            self.scheduler,
-            Task::FatalError(
-                TaskSelector::ByRange(
-                    region.get_start_key().to_owned(),
-                    region.get_end_key().to_owned()
-                ),
-                Box::new(err),
-            )
-        );
     }
 }
 
@@ -897,14 +882,10 @@ mod test {
         async fn do_initial_scan(
             &self,
             region: &Region,
-            start_ts: txn_types::TimeStamp,
-            handle: raftstore::coprocessor::ObserveHandle,
-        ) -> crate::errors::Result<tikv::storage::Statistics> {
+            start_ts: TimeStamp,
+            handle: ObserveHandle,
+        ) -> crate::errors::Result<Statistics> {
             (self.0)(region, start_ts, handle)
-        }
-
-        fn handle_fatal_error(&self, region: &Region, err: crate::errors::Error) {
-            panic!("fatal {:?} {}", region, err)
         }
     }
 
@@ -918,7 +899,7 @@ mod test {
         use super::ScanCmd;
         use crate::{subscription_manager::spawn_executors, utils::FutureWaitGroup};
 
-        fn should_finish_in(f: impl FnOnce() + Send + 'static, d: std::time::Duration) {
+        fn should_finish_in(f: impl FnOnce() + Send + 'static, d: Duration) {
             let (tx, rx) = futures::channel::oneshot::channel();
             std::thread::spawn(move || {
                 f();
