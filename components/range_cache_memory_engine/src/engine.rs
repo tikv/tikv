@@ -521,7 +521,7 @@ pub mod tests {
     use crate::{
         keys::{construct_key, construct_user_key, encode_key},
         memory_controller::MemoryController,
-        range_manager::{RangeMeta, RegionManager, RegionState, RegionState::*},
+        range_manager::{RangeMeta, RegionManager, RegionState::*},
         test_util::new_region,
         InternalBytes, RangeCacheEngineConfig, RangeCacheEngineContext, RangeCacheMemoryEngine,
         ValueType,
