@@ -626,6 +626,8 @@ where
             // When range cache engine is enabled, we need snapshot context to determine
             // whether we should use range cache engine snapshot for this request.
             ctx.start_ts.map(|ts| SnapshotContext {
+                region_id: 0,
+                epoch_version: 0,
                 read_ts: ts.into_inner(),
                 range: None,
             })
@@ -636,6 +638,8 @@ where
         async_snapshot(&mut self.router, ctx, snap_ctx.clone()).map_ok(|region_snap| {
             region_snap.replace_snapshot(move |disk_snap, region| {
                 if let Some(ref mut ctx) = snap_ctx {
+                    ctx.region_id = region.id;
+                    ctx.epoch_version = region.get_region_epoch().version;
                     ctx.set_range(CacheRange::from_region(region))
                 }
                 let in_memory_snapshot = in_memory_engine.as_ref().and_then(|he| {

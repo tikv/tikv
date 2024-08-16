@@ -18,8 +18,8 @@ use backup_stream::{
     },
     observer::BackupStreamObserver,
     router::{Router, TaskSelector},
-    utils, BackupStreamResolver, Endpoint, GetCheckpointResult, RegionCheckpointOperation,
-    RegionSet, Service, Task,
+    utils, BackupStreamGrpcService, BackupStreamResolver, Endpoint, GetCheckpointResult,
+    RegionCheckpointOperation, RegionSet, Task,
 };
 use futures::{executor::block_on, AsyncWriteExt, Future, Stream, StreamExt};
 use grpcio::{ChannelBuilder, Server, ServerBuilder};
@@ -356,7 +356,7 @@ impl Suite {
             .get(&id)
             .expect("must register endpoint first");
 
-        let serv = Service::new(endpoint.scheduler());
+        let serv = BackupStreamGrpcService::new(endpoint.scheduler());
         let builder =
             ServerBuilder::new(self.env.clone()).register_service(create_log_backup(serv));
         let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
@@ -434,7 +434,7 @@ impl Suite {
         ))
         .unwrap();
         let name = name.to_owned();
-        self.wait_with_router(move |r| r.get_task_info(&name).is_ok())
+        self.wait_with_router(move |r| r.get_task_handler(&name).is_ok())
     }
 
     /// This function tries to calculate the global checkpoint from the flush
@@ -927,7 +927,7 @@ impl Suite {
         self.wait_with_router(move |r| {
             let task_names = r.select_task(TaskSelector::All.reference());
             for task_name in task_names {
-                let tsk = r.get_task_info(&task_name);
+                let tsk = r.get_task_handler(&task_name);
                 if tsk.unwrap().is_flushing() {
                     return false;
                 }

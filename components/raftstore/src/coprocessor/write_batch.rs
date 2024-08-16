@@ -2,7 +2,8 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use engine_traits::{CacheRange, Mutable, Result, WriteBatch, WriteOptions, CF_DEFAULT};
+use engine_traits::{Mutable, Result, WriteBatch, WriteOptions, CF_DEFAULT};
+use kvproto::metapb::Region;
 
 pub trait WriteBatchObserver: Send {
     fn create_observable_write_batch(&self) -> Box<dyn ObservableWriteBatch>;
@@ -23,7 +24,7 @@ pub trait ObservableWriteBatch: Send {
     fn rollback_to_save_point(&mut self);
     fn clear(&mut self);
     fn write_opt(&mut self, opts: &WriteOptions, seq_num: u64);
-    fn prepare_for_range(&mut self, range: CacheRange);
+    fn prepare_for_region(&mut self, region: &Region);
 }
 
 pub struct WriteBatchWrapper<WB> {
@@ -108,9 +109,9 @@ impl<WB: WriteBatch> WriteBatch for WriteBatchWrapper<WB> {
         unimplemented!("merge is not supported in WriteBatchWrapper")
     }
 
-    fn prepare_for_range(&mut self, range: CacheRange) {
+    fn prepare_for_region(&mut self, region: &Region) {
         if let Some(w) = self.observable_write_batch.as_mut() {
-            w.prepare_for_range(range)
+            w.prepare_for_region(region)
         }
     }
 }

@@ -986,7 +986,7 @@ where
         }
 
         if let Some(sched) = self.backup_stream_scheduler.take() {
-            let pitr_service = backup_stream::Service::new(sched);
+            let pitr_service = backup_stream::BackupStreamGrpcService::new(sched);
             if servers
                 .server
                 .register_service(create_log_backup(pitr_service))

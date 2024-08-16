@@ -85,6 +85,10 @@ pub trait KvEngine:
 #[derive(Debug, Clone)]
 pub struct SnapshotContext {
     pub range: Option<CacheRange>,
+    pub region_id: u64,
+    // the version of region epoch.
+    pub epoch_version: u64,
+
     pub read_ts: u64,
 }
 

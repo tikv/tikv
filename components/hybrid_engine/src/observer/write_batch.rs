@@ -1,6 +1,7 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{is_data_cf, CacheRange, KvEngine, Mutable, WriteBatch as _, WriteOptions};
+use engine_traits::{is_data_cf, KvEngine, Mutable, WriteBatch as _, WriteOptions};
+use kvproto::metapb::Region;
 use raftstore::coprocessor::{
     dispatcher::BoxWriteBatchObserver, Coprocessor, CoprocessorHost, ObservableWriteBatch,
     WriteBatchObserver,
@@ -70,7 +71,7 @@ impl ObservableWriteBatch for HybridObservableWriteBatch {
         self.cache_write_batch.set_sequence_number(seq_num).unwrap();
         self.cache_write_batch.write_opt(opts).unwrap();
     }
-    fn prepare_for_range(&mut self, range: CacheRange) {
-        self.cache_write_batch.prepare_for_range(range);
+    fn prepare_for_region(&mut self, region: &Region) {
+        self.cache_write_batch.prepare_for_region(region);
     }
 }

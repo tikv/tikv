@@ -29,9 +29,9 @@ use batch_system::{
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::{
-    util::SequenceNumber, CacheRange, DeleteStrategy, KvEngine, Mutable, PerfContext,
-    PerfContextKind, RaftEngine, RaftEngineReadOnly, Range as EngineRange, Snapshot, SstMetaInfo,
-    WriteBatch, WriteOptions, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    util::SequenceNumber, DeleteStrategy, KvEngine, Mutable, PerfContext, PerfContextKind,
+    RaftEngine, RaftEngineReadOnly, Range as EngineRange, Snapshot, SstMetaInfo, WriteBatch,
+    WriteOptions, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use fail::fail_point;
 use health_controller::types::LatencyInspector;
@@ -70,7 +70,7 @@ use tikv_util::{
     Either, MustConsumeVec,
 };
 use time::Timespec;
-use tracker::GLOBAL_TRACKERS;
+use tracker::{TrackerToken, TrackerTokenArray, GLOBAL_TRACKERS};
 use uuid::Builder as UuidBuilder;
 
 use self::memtrace::*;
@@ -543,8 +543,7 @@ where
     pub fn prepare_for(&mut self, delegate: &mut ApplyDelegate<EK>) {
         self.applied_batch
             .push_batch(&delegate.observe_info, delegate.region.get_id());
-        let range = CacheRange::from_region(&delegate.region);
-        self.kv_wb.prepare_for_range(range);
+        self.kv_wb.prepare_for_region(&delegate.region);
     }
 
     /// Commits all changes have done for delegate. `persistent` indicates
@@ -647,6 +646,19 @@ where
         } = mem::replace(&mut self.applied_batch, ApplyCallbackBatch::new());
         // Call it before invoking callback for preventing Commit is executed before
         // Prewrite is observed.
+        debug!("raft log is applied to the kv db";
+            "req_info" => TrackerTokenArray::new(
+                &cb_batch.iter().fold(vec![], |mut acc: Vec<TrackerToken>, cb| {
+                    acc.extend(
+                        cb.0.write_trackers().into_iter().
+                        filter_map(|time_tracker| time_tracker.as_tracker_token())
+                        .collect::<Vec<_>>().as_slice()
+                    );
+                    acc
+                })
+            ),
+            "cmd_batch" => ?cmd_batch.len(),
+        );
         self.host
             .on_flush_applied_cmd_batch(batch_max_level, cmd_batch, &self.engine);
         // Invoke callbacks
@@ -1252,7 +1264,7 @@ where
                     // just return Yield
                     return ApplyResult::Yield;
                 }
-                let mut has_unflushed_data =
+                let has_unflushed_data =
                     self.last_flush_applied_index != self.apply_state.get_applied_index();
                 if (has_unflushed_data
                     && should_write_to_engine(!apply_ctx.kv_wb().is_empty(), &cmd)
@@ -1269,12 +1281,8 @@ where
                     {
                         return ApplyResult::Yield;
                     }
-                    has_unflushed_data = false;
                 }
                 if self.priority != apply_ctx.priority {
-                    if has_unflushed_data {
-                        apply_ctx.commit(self);
-                    }
                     return ApplyResult::Yield;
                 }
 
@@ -1514,17 +1522,19 @@ where
         self.apply_state.set_applied_index(index);
         self.applied_term = term;
 
-        let (modified_region, mut pending_handle_ssts) = match exec_result {
-            ApplyResult::Res(ref e) => match e {
-                ExecResult::SplitRegion { ref derived, .. } => (Some(derived.clone()), None),
-                ExecResult::PrepareMerge { ref region, .. } => (Some(region.clone()), None),
-                ExecResult::CommitMerge { ref region, .. } => (Some(region.clone()), None),
-                ExecResult::RollbackMerge { ref region, .. } => (Some(region.clone()), None),
-                ExecResult::IngestSst { ref ssts } => (None, Some(ssts.clone())),
-                ExecResult::Flashback { ref region } => (Some(region.clone()), None),
-                _ => (None, None),
+        let (modified_region, new_regions, mut pending_handle_ssts) = match &exec_result {
+            ApplyResult::Res(e) => match e {
+                ExecResult::SplitRegion { regions, .. } => {
+                    (Some(self.region.clone()), regions.clone(), None)
+                }
+                ExecResult::PrepareMerge { region, .. } => (Some(region.clone()), vec![], None),
+                ExecResult::CommitMerge { region, .. } => (Some(region.clone()), vec![], None),
+                ExecResult::RollbackMerge { region, .. } => (Some(region.clone()), vec![], None),
+                ExecResult::IngestSst { ssts } => (None, vec![], Some(ssts.clone())),
+                ExecResult::Flashback { region } => (Some(region.clone()), vec![], None),
+                _ => (None, vec![], None),
             },
-            _ => (None, None),
+            _ => (None, vec![], None),
         };
         let mut apply_ctx_info = ApplyCtxInfo {
             pending_handle_ssts: &mut pending_handle_ssts,
@@ -1539,9 +1549,11 @@ where
                 peer_id: self.id(),
                 pending_remove: self.pending_remove,
                 modified_region,
+                new_regions,
             },
             &mut apply_ctx_info,
         );
+
         match pending_handle_ssts {
             None => (),
             Some(mut v) => {
@@ -7423,7 +7435,7 @@ mod tests {
         let cmd_batch = cmdbatch_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert_eq!(2, cmd_batch.len());
 
-        // Stop observer regoin 1.
+        // Stop observer region 1.
         observe_handle.stop_observing();
 
         let observe_handle = ObserveHandle::new();

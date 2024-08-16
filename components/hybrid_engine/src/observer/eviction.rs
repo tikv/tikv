@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use engine_traits::{CacheRange, EvictReason, KvEngine, RangeCacheEngineExt};
+use engine_traits::{CacheRange, EvictReason, KvEngine, RangeCacheEngineExt, RegionEvent};
 use kvproto::{metapb::Region, raft_cmdpb::AdminCmdType, raft_serverpb::RaftApplyState};
 use raft::StateRole;
 use raftstore::coprocessor::{
@@ -13,14 +13,18 @@ use raftstore::coprocessor::{
 
 #[derive(Clone)]
 pub struct EvictionObserver {
-    pending_evict: Arc<Mutex<Vec<(CacheRange, EvictReason)>>>,
+    // observer is per thread so there is no need to use mutex here,
+    // but current inteface only provides `&self` but not `&mut self`,
+    // so we use mutex to workaround this restriction.
+    // TODO: change Observer's interface to `&mut self`.
+    pending_events: Arc<Mutex<Vec<RegionEvent>>>,
     cache_engine: Arc<dyn RangeCacheEngineExt + Send + Sync>,
 }
 
 impl EvictionObserver {
     pub fn new(cache_engine: Arc<dyn RangeCacheEngineExt + Send + Sync>) -> Self {
         EvictionObserver {
-            pending_evict: Arc::default(),
+            pending_events: Arc::default(),
             cache_engine,
         }
     }
@@ -77,36 +81,62 @@ impl EvictionObserver {
                 "region_id" => ctx.region().get_id(),
                 "is_ingest_sst" => apply.pending_handle_ssts.is_some(),
                 "admin_command" => ?cmd.request.get_admin_request().get_cmd_type(),
-                "range" => ?range,
+                "start_key" => ?log_wrappers::Value(&ctx.region().start_key),
+                "end_key" => ?log_wrappers::Value(&ctx.region().end_key),
             );
-            self.pending_evict
+            self.pending_events
                 .lock()
                 .unwrap()
-                .push((range, EvictReason::Merge));
+                .push(RegionEvent::Eviction {
+                    region: ctx.region().clone(),
+                    reason: EvictReason::Merge,
+                });
+        }
+        // there are new_regions, this must be a split event.
+        if !state.new_regions.is_empty() {
+            let cmd_type = cmd.request.get_admin_request().get_cmd_type();
+            assert!(cmd_type == AdminCmdType::BatchSplit || cmd_type == AdminCmdType::Split);
+            tikv_util::info!(
+                "in-memory-engine handle region split";
+                "region_id" => ctx.region().get_id(),
+                "admin_command" => ?cmd.request.get_admin_request().get_cmd_type(),
+                "region" => ?state.modified_region.as_ref().unwrap(),
+                "new_regions" => ?state.new_regions,
+            );
+
+            self.pending_events
+                .lock()
+                .unwrap()
+                .push(RegionEvent::Split {
+                    source: ctx.region().clone(),
+                    new_regions: state.new_regions.clone(),
+                });
         }
     }
 
     fn on_flush_cmd(&self) {
-        let ranges = {
-            let mut ranges = self.pending_evict.lock().unwrap();
-            std::mem::take(&mut *ranges)
-        };
-        for (range, evict_reason) in ranges {
-            self.cache_engine.evict_range(&range, evict_reason);
+        let events = std::mem::take(&mut *self.pending_events.lock().unwrap());
+        for e in events {
+            self.cache_engine.on_region_event(e);
         }
     }
 
     fn evict_range_on_leader_steps_down(&self, region: &Region) {
         let range = CacheRange::from_region(region);
         tikv_util::info!(
-            "evict range due to leader step down";
-            "region_id" => region.get_id(),
-            "range" => ?range,
+           "evict region due to leader step down";
+           "region_id" => region.get_id(),
+           "epoch" => ?region.get_region_epoch(),
+           "start_key" => ?log_wrappers::Value(&region.start_key),
+           "end_key" => ?log_wrappers::Value(&region.end_key),
         );
-        self.pending_evict
+        self.pending_events
             .lock()
             .unwrap()
-            .push((range, EvictReason::BecomeFollower));
+            .push(RegionEvent::Eviction {
+                region: region.clone(),
+                reason: EvictReason::BecomeFollower,
+            });
     }
 }
 
@@ -172,7 +202,7 @@ impl<E> CmdObserver<E> for EvictionObserver {
 
 #[cfg(test)]
 mod tests {
-    use engine_traits::SstMetaInfo;
+    use engine_traits::{RegionEvent, SstMetaInfo};
     use kvproto::{
         import_sstpb::SstMeta,
         metapb::Peer,
@@ -183,11 +213,11 @@ mod tests {
 
     #[derive(Default)]
     struct MockRangeCacheEngine {
-        evicted_ranges: Arc<Mutex<Vec<CacheRange>>>,
+        region_events: Arc<Mutex<Vec<RegionEvent>>>,
     }
     impl RangeCacheEngineExt for MockRangeCacheEngine {
-        fn evict_range(&self, range: &CacheRange, _: EvictReason) {
-            self.evicted_ranges.lock().unwrap().push(range.clone());
+        fn on_region_event(&self, event: RegionEvent) {
+            self.region_events.lock().unwrap().push(event);
         }
     }
 
@@ -226,7 +256,7 @@ mod tests {
         observer.post_exec_cmd(&mut ctx, &cmd, &RegionState::default(), &mut apply);
         observer.on_flush_cmd();
         let expected = CacheRange::from_region(&region);
-        assert!(&cache_engine.evicted_ranges.lock().unwrap().is_empty());
+        assert!(&cache_engine.region_events.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -262,6 +292,10 @@ mod tests {
         observer.post_exec_cmd(&mut ctx, &cmd, &RegionState::default(), &mut apply);
         observer.on_flush_cmd();
         let expected = CacheRange::from_region(&region);
-        assert_eq!(&cache_engine.evicted_ranges.lock().unwrap()[0], &expected);
+        let expected = RegionEvent::Eviction {
+            region,
+            reason: EvictReason::Merge,
+        };
+        assert_eq!(&cache_engine.region_events.lock().unwrap()[0], &expected);
     }
 }

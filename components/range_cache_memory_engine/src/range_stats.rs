@@ -11,7 +11,6 @@ use std::{
 };
 
 use crossbeam::sync::ShardedLock;
-use engine_traits::CacheRange;
 use kvproto::metapb::Region;
 use parking_lot::Mutex;
 use raftstore::coprocessor::RegionInfoProvider;
@@ -57,13 +56,9 @@ impl RangeStatsManager {
     }
 
     /// Prevents two instances of this from running concurrently.
-    pub fn set_checking_top_regions(&self, v: bool) {
-        self.checking_top_regions.store(v, Ordering::Relaxed);
-    }
-
-    /// Returns true if another thread is checking top regions.
-    pub fn checking_top_regions(&self) -> bool {
-        self.checking_top_regions.load(Ordering::Relaxed)
+    /// Return the previous checking status.
+    pub fn set_checking_top_regions(&self, v: bool) -> bool {
+        self.checking_top_regions.swap(v, Ordering::Relaxed)
     }
 
     fn set_max_num_regions(&self, v: usize) {
@@ -89,20 +84,19 @@ impl RangeStatsManager {
     /// 4. Store the results in `ranges_out` using [Vec::extend].
     pub fn collect_candidates_for_eviction<F>(
         &self,
-        ranges_out: &mut Vec<(CacheRange, u64)>,
+        regions_out: &mut Vec<(Region, u64)>,
         is_cached_pred: F,
     ) where
-        F: Fn(&CacheRange) -> bool,
+        F: Fn(&Region) -> bool,
     {
         // Gets all of the regions, sorted by activity.
         let all_regions = self.info_provider.get_top_regions(None).unwrap();
         let regions_loaded = self.region_loaded_at.read().unwrap();
-        ranges_out.extend(
+        regions_out.extend(
             all_regions
                 .iter()
                 .filter_map(|(region, approx_size)| {
-                    let r = CacheRange::from_region(region);
-                    is_cached_pred(&r)
+                    is_cached_pred(region)
                         .then(|| {
                             match regions_loaded.get(&region.get_id()) {
                                 // Do not evict ranges that were loaded less than
@@ -115,7 +109,7 @@ impl RangeStatsManager {
                                 Some(_) | None =>
                                 // None indicates range loaded from a hint, not by this manager.
                                 {
-                                    Some((r, *approx_size))
+                                    Some((region.clone(), *approx_size))
                                 }
                             }
                         })
@@ -134,19 +128,9 @@ impl RangeStatsManager {
     ///
     /// TODO (afeinberg): This is inefficient, either make this method bulk, or
     /// find another way to avoid calling `find_region_by_key` in a loop.
-    pub fn handle_range_evicted(&self, evicted_range: &CacheRange) {
-        // TODO (afeinberg): This is inefficient.
-        let _ = self
-            .info_provider
-            .find_region_by_key(&evicted_range.start)
-            .map(|region| {
-                let id = region.get_id();
-                let _ = self.prev_top_regions.lock().remove(&id);
-                let _ = {
-                    let mut regions_loaded = self.region_loaded_at.write().unwrap();
-                    regions_loaded.remove(&id)
-                };
-            });
+    pub fn handle_region_evicted(&self, region: &Region) {
+        self.prev_top_regions.lock().remove(&region.id);
+        self.region_loaded_at.write().unwrap().remove(&region.id);
     }
 
     /// Attempt to adjust the maximum number of cached regions based on memory
@@ -212,8 +196,8 @@ impl RangeStatsManager {
     ///     current ones are stored in `ranges_removed_out`.
     pub fn collect_changed_ranges(
         &self,
-        ranges_added_out: &mut Vec<CacheRange>,
-        ranges_removed_out: &mut Vec<CacheRange>,
+        regions_added_out: &mut Vec<Region>,
+        regions_removed_out: &mut Vec<Region>,
     ) {
         info!("collect_changed_ranges"; "num_regions" => self.max_num_regions());
         let curr_top_regions = self
@@ -236,13 +220,13 @@ impl RangeStatsManager {
             ret
         };
         if prev_top_regions.is_empty() {
-            ranges_added_out.extend(curr_top_regions.values().map(CacheRange::from_region));
+            regions_added_out.extend(curr_top_regions.values().cloned());
             return;
         }
         let added_ranges = curr_top_regions
             .iter()
             .filter(|(id, _)| !prev_top_regions.contains_key(id))
-            .map(|(_, region)| CacheRange::from_region(region));
+            .map(|(_, region)| region.clone());
         let regions_loaded = self.region_loaded_at.read().unwrap();
         let removed_ranges = prev_top_regions.iter().filter_map(|(&id, region)| {
             if !curr_top_regions.contains_key(&id) {
@@ -255,25 +239,24 @@ impl RangeStatsManager {
                         let _ = mut_prev_top_regions.insert(id, region.clone());
                         None
                     }
-                    _ => Some(CacheRange::from_region(region)),
+                    _ => Some(region.clone()),
                 }
             } else {
                 None
             }
         });
-        ranges_added_out.extend(added_ranges);
-        ranges_removed_out.extend(removed_ranges);
+        regions_added_out.extend(added_ranges);
+        regions_removed_out.extend(removed_ranges);
     }
 }
 
 #[cfg(test)]
 pub mod tests {
-    use kvproto::metapb::Peer;
     use raftstore::coprocessor::{self, region_info_accessor::TopRegions, RegionInfoProvider};
     use tikv_util::box_err;
 
     use super::*;
-    use crate::RangeCacheEngineConfig;
+    use crate::{test_util::new_region, RangeCacheEngineConfig};
 
     struct RegionInfoSimulator {
         regions: Mutex<TopRegions>,
@@ -312,21 +295,11 @@ pub mod tests {
         }
     }
 
-    fn new_region(id: u64, start_key: &[u8], end_key: &[u8], version: u64) -> Region {
-        let mut region = Region::default();
-        region.set_id(id);
-        region.set_start_key(start_key.to_vec());
-        region.set_end_key(end_key.to_vec());
-        region.mut_region_epoch().set_version(version);
-        region.mut_peers().push(Peer::default());
-        region
-    }
-
     #[test]
     fn test_collect_changed_regions() {
-        let region_1 = new_region(1, b"k1", b"k2", 0);
+        let region_1 = new_region(1, b"k1", b"k2");
 
-        let region_2 = new_region(2, b"k3", b"k4", 0);
+        let region_2 = new_region(2, b"k3", b"k4");
         let sim = Arc::new(RegionInfoSimulator {
             regions: Mutex::new(vec![(region_1.clone(), 42)]),
         });
@@ -337,22 +310,22 @@ pub mod tests {
             RangeCacheEngineConfig::config_for_test().expected_region_size(),
             sim.clone(),
         );
-        let mut added = Vec::<CacheRange>::new();
-        let mut removed = Vec::<CacheRange>::new();
+        let mut added = Vec::new();
+        let mut removed = Vec::new();
         rsm.collect_changed_ranges(&mut added, &mut removed);
-        assert_eq!(&added, &[CacheRange::from_region(&region_1)]);
+        assert_eq!(&added, &[region_1.clone()]);
         assert!(removed.is_empty());
         let top_regions = vec![(region_1.clone(), 42), (region_2.clone(), 7)];
         sim.set_top_regions(&top_regions);
         added.clear();
         removed.clear();
         rsm.collect_changed_ranges(&mut added, &mut removed);
-        assert_eq!(&added, &[CacheRange::from_region(&region_2)]);
+        assert_eq!(&added, &[region_2.clone()]);
         assert!(removed.is_empty());
-        let region_3 = new_region(3, b"k5", b"k6", 0);
-        let region_4 = new_region(4, b"k7", b"k8", 0);
-        let region_5 = new_region(5, b"k9", b"k10", 0);
-        let region_6 = new_region(6, b"k11", b"k12", 0);
+        let region_3 = new_region(3, b"k5", b"k6");
+        let region_4 = new_region(4, b"k7", b"k8");
+        let region_5 = new_region(5, b"k9", b"k10");
+        let region_6 = new_region(6, b"k11", b"k12");
         let top_regions = vec![
             (region_6.clone(), 42),
             (region_2.clone(), 7),
@@ -364,22 +337,14 @@ pub mod tests {
         added.clear();
         removed.clear();
         rsm.collect_changed_ranges(&mut added, &mut removed);
-        assert_eq!(
-            &added,
-            &[
-                CacheRange::from_region(&region_3),
-                CacheRange::from_region(&region_4),
-                CacheRange::from_region(&region_5),
-                CacheRange::from_region(&region_6)
-            ]
-        );
+        assert_eq!(&added, &[region_3, region_4, region_5, region_6]);
         // `region_1` is no longer in the top regions list, but since it was loaded less
         // than 10 ms ago, it should not be included in the removed ranges.
         assert!(removed.is_empty());
         std::thread::sleep(Duration::from_millis(100));
         // After 100 ms passed, check again, and verify `region_1` is evictable.
         rsm.collect_changed_ranges(&mut added, &mut removed);
-        assert_eq!(&removed, &[CacheRange::from_region(&region_1)]);
+        assert_eq!(&removed, &[region_1.clone()]);
     }
 
     #[test]
@@ -388,12 +353,12 @@ pub mod tests {
             rs.iter().map(|&r| (r.clone(), 42)).collect::<Vec<_>>()
         }
 
-        let region_1 = new_region(1, b"k1", b"k2", 0);
-        let region_2 = new_region(2, b"k3", b"k4", 0);
-        let region_3 = new_region(3, b"k5", b"k6", 0);
-        let region_4 = new_region(4, b"k7", b"k8", 0);
-        let region_5 = new_region(5, b"k9", b"k10", 0);
-        let region_6 = new_region(6, b"k11", b"k12", 0);
+        let region_1 = new_region(1, b"k1", b"k2");
+        let region_2 = new_region(2, b"k3", b"k4");
+        let region_3 = new_region(3, b"k5", b"k6");
+        let region_4 = new_region(4, b"k7", b"k8");
+        let region_5 = new_region(5, b"k9", b"k10");
+        let region_6 = new_region(6, b"k11", b"k12");
 
         let all_regions = make_region_vec(&[
             &region_1, &region_2, &region_3, &region_4, &region_5, &region_6,
@@ -410,17 +375,13 @@ pub mod tests {
             sim.clone(),
         );
         let r_i_p: Arc<dyn RegionInfoProvider> = sim.clone();
-        let check_is_cached = move |range: &CacheRange| -> bool {
-            r_i_p
-                .find_region_by_key(&range.start[1..])
-                .unwrap()
-                .get_id()
-                <= 5
+        let check_is_cached = move |r: &Region| -> bool {
+            r_i_p.find_region_by_key(&r.start_key).unwrap().get_id() <= 5
         };
-        let mut _added = Vec::<CacheRange>::new();
-        let mut _removed = Vec::<CacheRange>::new();
+        let mut _added = Vec::new();
+        let mut _removed = Vec::new();
         rsm.collect_changed_ranges(&mut _added, &mut _removed);
-        let mut candidates_for_eviction = Vec::<(CacheRange, u64)>::new();
+        let mut candidates_for_eviction = Vec::new();
         rsm.collect_candidates_for_eviction(&mut candidates_for_eviction, &check_is_cached);
         assert!(candidates_for_eviction.is_empty());
         std::thread::sleep(Duration::from_millis(100));
@@ -430,7 +391,7 @@ pub mod tests {
             .rev()
             .filter_map(|(r, s)| {
                 if r.get_id() <= 5 {
-                    Some((CacheRange::from_region(r), *s))
+                    Some((r.clone(), *s))
                 } else {
                     None
                 }

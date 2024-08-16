@@ -148,7 +148,7 @@ fn test_early_apply_yield_followed_with_many_entries() {
 
     fail::remove(before_handle_normal_3_fp);
 
-    // Wait for apply state writting to kv db
+    // Wait for apply state writing to kv db
     sleep_ms(200);
 
     cluster.shutdown();

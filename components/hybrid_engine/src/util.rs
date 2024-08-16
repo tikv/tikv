@@ -19,14 +19,12 @@ use crate::HybridEngine;
 ///
 /// ```
 /// use hybrid_engine::util::hybrid_engine_for_tests;
-/// let (_path, _hybrid_engine) = hybrid_engine_for_tests("temp", |memory_engine| {
-///     let range = engine_traits::CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
-///     memory_engine.new_range(range.clone());
-///     {
-///         let mut core = memory_engine.core().write().unwrap();
-///         core.mut_range_manager().set_range_readable(&range, true);
-///         core.mut_range_manager().set_safe_ts(&range, 10);
-///     }
+/// use range_cache_memory_engine::{test_util::new_region, RangeCacheEngineConfig};
+/// let mut config = RangeCacheEngineConfig::default();
+/// config.enabled = true;
+/// let (_path, _hybrid_engine) = hybrid_engine_for_tests("temp", config, |memory_engine| {
+///     let region = new_region(1, b"", b"z");
+///     memory_engine.new_region(region);
 /// })
 /// .unwrap();
 /// ```
