@@ -176,7 +176,7 @@
               "instant": false,
               "interval": "",
               "intervalFactor": 1,
-              "legendFormat": "Replicate Raft Log .99",
+              "legendFormat": "Raft Commit Log .99",
               "metric": "",
               "query": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_raftstore_commit_log_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
               "refId": "",
