@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use engine_traits::{CacheRange, KvEngine, RangeCacheEngineExt};
+use engine_traits::{CacheRange, EvictReason, KvEngine, RangeCacheEngineExt};
 use kvproto::{metapb::Region, raft_cmdpb::AdminCmdType, raft_serverpb::RaftApplyState};
 use raft::StateRole;
 use raftstore::coprocessor::{
@@ -13,7 +13,7 @@ use raftstore::coprocessor::{
 
 #[derive(Clone)]
 pub struct Observer {
-    pending_evict: Arc<Mutex<Vec<CacheRange>>>,
+    pending_evict: Arc<Mutex<Vec<(CacheRange, EvictReason)>>>,
     cache_engine: Arc<dyn RangeCacheEngineExt + Send + Sync>,
 }
 
@@ -82,7 +82,10 @@ impl Observer {
                 "admin_command" => ?cmd.request.get_admin_request().get_cmd_type(),
                 "range" => ?range,
             );
-            self.pending_evict.lock().unwrap().push(range);
+            self.pending_evict
+                .lock()
+                .unwrap()
+                .push((range, EvictReason::Merge));
         }
     }
 
@@ -95,8 +98,8 @@ impl Observer {
             let mut ranges = self.pending_evict.lock().unwrap();
             std::mem::take(&mut *ranges)
         };
-        for range in ranges {
-            self.cache_engine.evict_range(&range);
+        for (range, evict_reason) in ranges {
+            self.cache_engine.evict_range(&range, evict_reason);
         }
     }
 
@@ -111,7 +114,10 @@ impl Observer {
             "region_id" => region.get_id(),
             "range" => ?range,
         );
-        self.pending_evict.lock().unwrap().push(range);
+        self.pending_evict
+            .lock()
+            .unwrap()
+            .push((range, EvictReason::BecomeFollower));
     }
 }
 
@@ -197,7 +203,7 @@ mod tests {
         fn range_cache_engine_enabled(&self) -> bool {
             self.enabled.load(Ordering::Relaxed)
         }
-        fn evict_range(&self, range: &CacheRange) {
+        fn evict_range(&self, range: &CacheRange, _: EvictReason) {
             self.evicted_ranges.lock().unwrap().push(range.clone());
         }
     }
