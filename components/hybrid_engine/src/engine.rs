@@ -84,6 +84,7 @@ where
                     RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
                         .epoch_not_match
                         .inc();
+                    SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
                     None
                 }
             }
@@ -143,46 +144,9 @@ where
         let disk_snap = self.disk_engine.snapshot(ctx.clone());
         let range_cache_snap = if !self.range_cache_engine.enabled() {
             None
-        } else if let Some(ctx) = ctx {
-            match self.range_cache_engine.snapshot(
-                ctx.region_id,
-                ctx.epoch_version,
-                ctx.range.unwrap(),
-                ctx.read_ts,
-                disk_snap.sequence_number(),
-            ) {
-                Ok(snap) => {
-                    SNAPSHOT_TYPE_COUNT_STATIC.range_cache_engine.inc();
-                    Some(snap)
-                }
-                Err(FailedReason::TooOldRead) => {
-                    RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
-                        .too_old_read
-                        .inc();
-                    None
-                }
-                Err(FailedReason::NotCached) => {
-                    RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
-                        .not_cached
-                        .inc();
-                    None
-                }
-                Err(FailedReason::EpochNotMatch) => {
-                    RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
-                        .epoch_not_match
-                        .inc();
-                    None
-                }
-            }
         } else {
-            RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
-                .no_read_ts
-                .inc();
-            None
+            self.new_in_memory_snapshot(disk_snap.sequence_number(), ctx)
         };
-        if range_cache_snap.is_none() {
-            SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
-        }
         HybridEngineSnapshot::new(disk_snap, range_cache_snap)
     }
 

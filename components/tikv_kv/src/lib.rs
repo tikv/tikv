@@ -731,7 +731,7 @@ pub fn snapshot<E: Engine>(
     }
 }
 
-/// Get a snapshot of `engine`.
+/// Get an in memory snapshot of `engine`.
 pub fn in_memory_snapshot<E: Engine>(
     engine: &mut E,
     ctx: SnapContext<'_>,
