@@ -589,6 +589,10 @@
 # wal-ttl-seconds = 0
 # wal-size-limit = 0
 
+## Whether to enable WAL compression, which might benefit workloads with long and repetitive keys.
+## See https://github.com/facebook/rocksdb/wiki/WAL-Compression
+# enable-wal-compression = false
+
 ## Max RocksDB WAL size in total
 ## When storage.engine is "raft-kv", default value is 4GB.
 ## When storage.engine is "partitioned-raft-kv", default value is 1.

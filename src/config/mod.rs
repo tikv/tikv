@@ -1246,6 +1246,8 @@ pub struct DbConfig {
     pub wal_ttl_seconds: u64,
     #[online_config(skip)]
     pub wal_size_limit: ReadableSize,
+    #[online_config(skip)]
+    pub enable_wal_compression: bool,
     pub max_total_wal_size: Option<ReadableSize>,
     pub max_background_jobs: i32,
     pub max_background_flushes: i32,
@@ -1339,6 +1341,7 @@ impl Default for DbConfig {
             wal_dir: "".to_owned(),
             wal_ttl_seconds: 0,
             wal_size_limit: ReadableSize::kb(0),
+            enable_wal_compression: false,
             max_total_wal_size: None,
             max_background_jobs: 0,
             max_background_flushes: 0,
@@ -1493,6 +1496,10 @@ impl DbConfig {
         }
         opts.set_wal_ttl_seconds(self.wal_ttl_seconds);
         opts.set_wal_size_limit_mb(self.wal_size_limit.as_mb());
+        if self.enable_wal_compression {
+            // As of RocksDB 8.10, WAL compression supports only zstd.
+            opts.set_wal_compression(CompressionType::Zstd.into());
+        }
         opts.set_max_total_wal_size(self.max_total_wal_size.unwrap_or(ReadableSize(0)).0);
         opts.set_max_background_jobs(self.max_background_jobs);
         // RocksDB will cap flush and compaction threads to at least one

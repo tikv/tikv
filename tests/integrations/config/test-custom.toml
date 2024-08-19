@@ -256,6 +256,7 @@ wal-recovery-mode = "absolute-consistency"
 wal-dir = "/var"
 wal-ttl-seconds = 1
 wal-size-limit = "1KB"
+enable-wal-compression = false
 max-total-wal-size = "1GB"
 max-background-jobs = 12
 max-background-flushes = 4
