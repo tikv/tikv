@@ -179,7 +179,7 @@ Join the TiKV community on [Slack](https://slack.tidb.io/invite?team=tikv-wg&cha
 
 TiKV is under the Apache 2.0 license. See the [LICENSE](./LICENSE) file for details.
 
-## Acknowledgments
+## Acknowledgment
 
 - Thanks [etcd](https://github.com/coreos/etcd) for providing some great open source tools.
 - Thanks [RocksDB](https://github.com/facebook/rocksdb) for their powerful storage engines.
