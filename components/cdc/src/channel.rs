@@ -194,7 +194,7 @@ impl EventBatcher {
     }
 }
 
-pub fn channel(buffer: usize, memory_quota: Arc<MemoryQuota>) -> (Sink, Drain) {
+pub fn channel(conn_id: ConnId, buffer: usize, memory_quota: Arc<MemoryQuota>) -> (Sink, Drain) {
     let (unbounded_sender, unbounded_receiver) = unbounded();
     let (bounded_sender, bounded_receiver) = bounded(buffer);
     (
@@ -207,7 +207,7 @@ pub fn channel(buffer: usize, memory_quota: Arc<MemoryQuota>) -> (Sink, Drain) {
             unbounded_receiver,
             bounded_receiver,
             memory_quota,
-            conn_id: Default::default(),
+            conn_id,
         },
     )
 }
