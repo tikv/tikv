@@ -360,10 +360,6 @@ pub struct Drain {
 }
 
 impl<'a> Drain {
-    pub fn set_conn_id(&'a mut self, conn_id: ConnId) {
-        self.conn_id = conn_id;
-    }
-
     pub fn drain(&'a mut self) -> impl Stream<Item = (CdcEvent, usize)> + 'a {
         let observed = (&mut self.unbounded_receiver).map(|x| (x.created, x.event, x.size));
         let scaned = (&mut self.bounded_receiver).filter_map(|x| {
