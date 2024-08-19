@@ -8,8 +8,8 @@ use std::{
 use crossbeam::epoch;
 use engine_rocks::util::new_engine;
 use engine_traits::{
-    CacheRange, EvictReason, Mutable, RangeCacheEngine, WriteBatch, WriteBatchExt, CF_DEFAULT,
-    CF_LOCK, CF_WRITE, DATA_CFS,
+    CacheRange, EvictReason, Mutable, RangeCacheEngine, RegionEvent, WriteBatch, WriteBatchExt,
+    CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
 use keys::data_key;
 use kvproto::metapb::Region;
@@ -17,7 +17,7 @@ use range_cache_memory_engine::{
     decode_key, encode_key_for_boundary_without_mvcc, encoding_for_filter,
     test_util::{new_region, put_data, put_data_in_rocks},
     BackgroundTask, InternalBytes, InternalKey, RangeCacheEngineConfig, RangeCacheEngineContext,
-    RangeCacheMemoryEngine, SkiplistHandle, ValueType,
+    RangeCacheMemoryEngine, RegionState, SkiplistHandle, ValueType,
 };
 use tempfile::Builder;
 use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
@@ -644,4 +644,102 @@ fn test_load_with_gc() {
         .snapshot(region.id, 0, range.clone(), 6, 100)
         .unwrap_err();
     engine.snapshot(region.id, 0, range, 7, 100).unwrap();
+}
+
+#[test]
+fn test_region_split_before_batch_loading_start() {
+    let path = Builder::new().prefix("test").tempdir().unwrap();
+    let path_str = path.path().to_str().unwrap();
+    let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
+
+    let mut config = RangeCacheEngineConfig::config_for_test();
+    config.gc_interval = ReadableDuration(Duration::from_secs(1));
+    let mut engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
+        VersionTrack::new(config),
+    )));
+    engine.set_disk_engine(rocks_engine.clone());
+
+    let (tx, rx) = sync_channel(0);
+    fail::cfg_callback("before_start_loading_region", move || {
+        let _ = tx.send(());
+    })
+    .unwrap();
+    fail::cfg("on_start_loading_region", "pause").unwrap();
+
+    let region = new_region(1, b"k00", b"k30");
+
+    for i in 0..30 {
+        let key = format!("k{:02}", i);
+        put_data_in_rocks(
+            key.as_bytes(),
+            b"val",
+            2,
+            1,
+            false,
+            &rocks_engine,
+            WriteType::Put,
+        );
+    }
+
+    engine.load_region(region.clone()).unwrap();
+
+    let mut wb = engine.write_batch();
+    wb.prepare_for_region(&region);
+    wb.set_sequence_number(10).unwrap();
+    wb.put(b"k00", b"val2").unwrap();
+    wb.put(b"k10", b"val2").unwrap();
+    wb.put(b"k20", b"val2").unwrap();
+    wb.write().unwrap();
+    assert_eq!(
+        engine
+            .core()
+            .read()
+            .range_manager()
+            .region_meta(1)
+            .unwrap()
+            .get_state(),
+        RegionState::Loading
+    );
+
+    // wait for task start.
+    rx.recv().unwrap();
+
+    let mut new_regions = vec![
+        new_region(1, b"k00", b"k10"),
+        new_region(2, b"k10", b"k20"),
+        new_region(3, b"k20", b"k30"),
+    ];
+
+    for r in &mut new_regions {
+        r.mut_region_epoch().version = 2;
+    }
+
+    let event = RegionEvent::Split {
+        source: region.clone(),
+        new_regions: new_regions.clone(),
+    };
+    engine.on_region_event(event);
+
+    {
+        let core = engine.core().read();
+        for i in 1..=3 {
+            assert_eq!(
+                core.range_manager().region_meta(i).unwrap().get_state(),
+                RegionState::Loading
+            );
+        }
+    }
+
+    fail::remove("on_start_loading_region");
+
+    test_util::eventually(
+        Duration::from_millis(50),
+        Duration::from_millis(2000),
+        || {
+            let core = engine.core().read();
+            (1..=3).all(|i| {
+                core.range_manager().region_meta(i).unwrap().get_state() == RegionState::Active
+            })
+        },
+    );
 }

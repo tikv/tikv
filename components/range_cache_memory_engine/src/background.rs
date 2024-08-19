@@ -919,24 +919,20 @@ impl Runnable for BackgroundRunner {
                 let pd_client = self.pd_client.clone();
                 let gc_interval = self.gc_interval;
                 let f = async move {
+                    fail::fail_point!("before_start_loading_region");
                     fail::fail_point!("on_start_loading_region");
                     let mut is_canceled = false;
                     let region_range = CacheRange::from_region(&region);
                     let skiplist_engine = {
-                        let mut engine = core.engine.write();
-                        let region_meta = engine
-                            .mut_range_manager()
-                            .mut_region_meta(region.id)
-                            .unwrap();
+                        let engine = core.engine.read();
+                        let region_meta = engine.range_manager().region_meta(region.id).unwrap();
                         // if loading is canceled, we skip the batch load.
                         // NOTE: here we don't check the region epoch version change,
                         // We will handle possible region split and partial cancelation
                         // in `on_snapshot_load_canceled` and `on_snapshot_load_finished`.
-                        if region_meta.get_state() != RegionState::ReadyToLoad {
+                        if region_meta.get_state() != RegionState::Loading {
                             assert_eq!(region_meta.get_state(), RegionState::LoadingCanceled);
                             is_canceled = true;
-                        } else {
-                            region_meta.set_state(RegionState::Loading);
                         }
 
                         engine.engine.clone()
@@ -2843,7 +2839,7 @@ pub mod tests {
                 .range_manager()
                 .regions()
                 .values()
-                .any(|m| matches!(m.get_state(), Pending | ReadyToLoad | Loading))
+                .any(|m| matches!(m.get_state(), Pending | Loading))
         });
 
         let verify = |region: &Region, exist, expect_count| {
@@ -2950,7 +2946,7 @@ pub mod tests {
                 .range_manager()
                 .regions()
                 .values()
-                .any(|m| matches!(m.get_state(), Pending | ReadyToLoad | Loading))
+                .any(|m| matches!(m.get_state(), Pending | Loading))
         });
 
         let verify = |r: &Region, exist, expect_count| {
