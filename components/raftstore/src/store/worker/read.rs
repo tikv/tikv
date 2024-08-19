@@ -12,7 +12,7 @@ use std::{
 };
 
 use crossbeam::{atomic::AtomicCell, channel::TrySendError};
-use engine_traits::{KvEngine, Peekable, RaftEngine, SnapshotContext, CacheRange};
+use engine_traits::{CacheRange, KvEngine, Peekable, RaftEngine, SnapshotContext};
 use fail::fail_point;
 use kvproto::{
     errorpb,
