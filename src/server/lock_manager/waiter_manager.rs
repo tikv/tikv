@@ -3,6 +3,7 @@
 use std::{
     cell::RefCell,
     fmt::{self, Debug, Display, Formatter},
+    mem,
     pin::Pin,
     rc::Rc,
     sync::{
@@ -337,6 +338,13 @@ impl WaitTable {
         self.wait_table
             .insert((waiter.wait_info.lock_digest.hash, waiter.start_ts), token);
         assert!(self.waiter_pool.insert(token, waiter).is_none());
+        WAITER_WAIT_TABLE_ESTIMATED_MEM.add(
+            (mem::size_of::<u64>() /*hash u64*/ +
+                mem::size_of::<u64>() /*ts u64*/ +
+                mem::size_of::<LockWaitToken>() +
+                mem::size_of::<LockWaitToken>() +
+                mem::size_of::<Waiter>()) as i64,
+        );
     }
 
     fn take_waiter(&mut self, token: LockWaitToken) -> Option<Waiter> {
@@ -344,6 +352,13 @@ impl WaitTable {
         self.waiter_count.fetch_sub(1, Ordering::SeqCst);
         self.wait_table
             .remove(&(waiter.wait_info.lock_digest.hash, waiter.start_ts));
+        WAITER_WAIT_TABLE_ESTIMATED_MEM.sub(
+            (mem::size_of::<u64>() /*hash u64*/ +
+                mem::size_of::<u64>() /*ts u64*/ +
+                mem::size_of::<LockWaitToken>() +
+                mem::size_of::<LockWaitToken>() +
+                mem::size_of::<Waiter>()) as i64,
+        );
         Some(waiter)
     }
 
@@ -362,7 +377,7 @@ impl WaitTable {
             return None;
         }
 
-        let result = std::mem::replace(&mut waiter.wait_info, update_event.wait_info.clone());
+        let result = mem::replace(&mut waiter.wait_info, update_event.wait_info.clone());
 
         Some((result, waiter.diag_ctx.clone()))
     }

@@ -71,6 +71,16 @@ lazy_static! {
         "Size of the send buffer of the deadlock detector"
     )
     .unwrap();
+    pub static ref WAITER_WAIT_TABLE_ESTIMATED_MEM: IntGauge = register_int_gauge!(
+        "tikv_lock_manager_waiter_wait_table_estimated_mem",
+        "Estimated memory usage of the wait table"
+    )
+    .unwrap();
+    pub static ref DETECTOR_DETECT_TABLE_ESTIMATED_MEM: IntGauge = register_int_gauge!(
+        "tikv_lock_manager_detector_detect_table_estimated_mem",
+        "Estimated memory usage of the detect table"
+    )
+    .unwrap();
     pub static ref TASK_COUNTER_METRICS: LocalTaskCounter =
         auto_flush_from!(TASK_COUNTER_VEC, LocalTaskCounter);
     pub static ref ERROR_COUNTER_METRICS: LocalErrorCounter =

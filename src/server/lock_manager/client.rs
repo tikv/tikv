@@ -11,9 +11,8 @@ use futures::{
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, WriteFlags};
 use kvproto::deadlock::*;
 use security::SecurityManager;
-use super::metrics::*;
 
-use super::{Error, Result};
+use super::{metrics::*, Error, Result};
 
 type DeadlockFuture<T> = BoxFuture<'static, Result<T>>;
 
@@ -66,11 +65,11 @@ impl Client {
                 DETECTOR_SEND_BUFFER_SIZE_GAUGE.dec();
                 Ok((r, WriteFlags::default()))
             }))
-                .await
-                .map(|_| {
-                    info!("cancel detect sender");
-                    sink.get_mut().cancel();
-                })
+            .await
+            .map(|_| {
+                info!("cancel detect sender");
+                sink.get_mut().cancel();
+            })
         });
         self.sender = Some(tx);
 
