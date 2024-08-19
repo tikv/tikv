@@ -986,7 +986,7 @@ fn test_msgsnapshot_before_msgappend() {
         .unwrap();
 
     let mut t = 0;
-    while true {
+    loop {
         let mut buf = Vec::<raft::eraftpb::Entry>::new();
         cluster
             .get_engines(1)
