@@ -473,7 +473,7 @@ mod tests {
     type Send = Box<dyn FnMut(CdcEvent) -> Result<(), SendError>>;
     fn new_test_channel(buffer: usize, capacity: usize, force_send: bool) -> (Send, Drain) {
         let memory_quota = Arc::new(MemoryQuota::new(capacity));
-        let (mut tx, rx) = channel(buffer, memory_quota);
+        let (mut tx, rx) = channel(ConnId::default(), buffer, memory_quota);
         let mut flag = true;
         let send = move |event| {
             flag = !flag;
@@ -492,7 +492,7 @@ mod tests {
         e.region_id = 233;
         {
             let memory_quota = Arc::new(MemoryQuota::new(1024));
-            let (mut tx, mut rx) = channel(10, memory_quota);
+            let (mut tx, mut rx) = channel(ConnId::default(), 10, memory_quota);
 
             let truncated = Arc::new(AtomicBool::new(false));
             let event = CdcEvent::Event(e.clone());
@@ -506,7 +506,7 @@ mod tests {
         }
         {
             let memory_quota = Arc::new(MemoryQuota::new(1024));
-            let (mut tx, mut rx) = channel(10, memory_quota);
+            let (mut tx, mut rx) = channel(ConnId::default(), 10, memory_quota);
 
             let truncated = Arc::new(AtomicBool::new(true));
             let _ = block_on(tx.send_all(vec![CdcEvent::Event(e)], truncated));
@@ -653,7 +653,7 @@ mod tests {
         let max_pending_bytes = 1024;
         let buffer = max_pending_bytes / event.size();
         let memory_quota = Arc::new(MemoryQuota::new(max_pending_bytes as _));
-        let (tx, _rx) = channel(buffer as _, memory_quota);
+        let (tx, _rx) = channel(ConnId::default(), buffer as _, memory_quota);
         for _ in 0..buffer {
             tx.unbounded_send(CdcEvent::Event(e.clone()), false)
                 .unwrap();
