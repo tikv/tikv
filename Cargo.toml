@@ -243,7 +243,7 @@ procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "7693954bd1dd86e
 #
 # After the PR to rust-rocksdb is merged, remember to comment this out and run `cargo update -p rocksdb`.
 # [patch.'https://github.com/tikv/rust-rocksdb']
-rocksdb = { git = "https://github.com/hbisheng/rust-rocksdb", branch = "fix-pri" }
+rocksdb = { git = "https://github.com/hbisheng/rust-rocksdb", branch = "8.10.tikv-revert-xxh" }
 
 [workspace]
 # See https://github.com/rust-lang/rfcs/blob/master/text/2957-cargo-features2.md
