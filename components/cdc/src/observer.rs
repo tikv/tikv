@@ -119,9 +119,14 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
         let mut region = Region::default();
         region.mut_peers().push(Peer::default());
         // Create a snapshot here for preventing the old value was GC-ed.
+<<<<<<< HEAD
         // TODO: only need it after enabling old value, may add a flag to indicate
         // whether to get it.
         let snapshot = RegionSnapshot::from_snapshot(Arc::new(engine.snapshot()), Arc::new(region));
+=======
+        let snapshot =
+            RegionSnapshot::from_snapshot(Arc::new(engine.snapshot(None)), Arc::new(region));
+>>>>>>> 9734214510 (cdc: print log to indicate memory free, and adjust finish_scan_lock method (#17357))
         let get_old_value = move |key,
                                   query_ts,
                                   old_value_cache: &mut OldValueCache,
