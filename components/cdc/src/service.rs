@@ -409,7 +409,6 @@ impl Service {
         let (event_sink, mut event_drain) =
             channel(conn_id, CDC_CHANNLE_CAPACITY, self.memory_quota.clone());
         let conn = Conn::new(conn_id, event_sink, ctx.peer());
-        event_drain.set_conn_id(conn_id);
         let mut explicit_features = vec![];
 
         if event_feed_v2 {
