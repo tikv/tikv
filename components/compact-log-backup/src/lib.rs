@@ -171,4 +171,25 @@ mod util {
             SstCompressionType::Zstd => 2,
         }
     }
+
+    #[derive(Eq, PartialEq)]
+    pub struct EndKey<'a>(pub &'a [u8]);
+
+    impl<'a> PartialOrd for EndKey<'a> {
+        fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+            use std::cmp::Ordering::*;
+            match (self, other) {
+                (EndKey(b""), EndKey(b"")) => Some(Equal),
+                (EndKey(b""), _) => Some(Greater),
+                (_, EndKey(b"")) => Some(Less),
+                (EndKey(a), EndKey(b)) => Some(a.cmp(b)),
+            }
+        }
+    }
+
+    impl<'a> Ord for EndKey<'a> {
+        fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+            self.partial_cmp(other).unwrap()
+        }
+    }
 }

@@ -9,6 +9,7 @@ use crate::{
     errors::{Result, TraceResultExt},
     statistic::CollectSubcompactionStatistic,
     storage::LogFile,
+    util::EndKey,
 };
 
 /// A collecting subcompaction.
@@ -19,6 +20,8 @@ struct UnformedSubcompaction {
     max_ts: u64,
     min_key: Arc<[u8]>,
     max_key: Arc<[u8]>,
+    region_start_key: Arc<[u8]>,
+    region_end_key: Arc<[u8]>,
 }
 
 /// Collecting a stream of [`LogFile`], and generate a stream of compactions.
@@ -129,6 +132,14 @@ impl SubcompactionCollector {
                 if u.min_key > file.min_key {
                     u.min_key = file.min_key;
                 }
+                // Even from the same region ID, the region boundary varies due to split or
+                // merge. We choose the largest boundary here.
+                if u.region_start_key > file.region_start_key {
+                    u.region_start_key = file.region_start_key;
+                }
+                if EndKey(&u.region_end_key) < EndKey(&file.region_end_key) {
+                    u.region_end_key = file.region_end_key;
+                }
 
                 if u.size > self.cfg.subcompaction_size_threshold {
                     let c = Subcompaction {
@@ -141,6 +152,8 @@ impl SubcompactionCollector {
                         compact_from_ts: self.cfg.compact_from_ts,
                         compact_to_ts: self.cfg.compact_to_ts,
                         subc_key: key.clone(),
+                        region_start_key: Arc::clone(&u.region_start_key),
+                        region_end_key: Arc::clone(&u.region_end_key),
                     };
                     o.remove();
                     self.stat.compactions_out += 1;
@@ -156,6 +169,8 @@ impl SubcompactionCollector {
                     max_ts: file.max_ts,
                     min_key: file.min_key.clone(),
                     max_key: file.max_key.clone(),
+                    region_start_key: file.region_start_key.clone(),
+                    region_end_key: file.region_end_key.clone(),
                 };
                 v.insert(u);
             }
@@ -177,6 +192,8 @@ impl SubcompactionCollector {
                 compact_from_ts: self.cfg.compact_from_ts,
                 compact_to_ts: self.cfg.compact_to_ts,
                 subc_key: key,
+                region_start_key: c.region_start_key,
+                region_end_key: c.region_end_key,
             };
             // Hacking: update the statistic when we really yield the compaction.
             // (At `poll_next`.)
@@ -260,6 +277,8 @@ mod test {
             table_id: 0,
             resolved_ts: 0,
             sha256: Arc::from([]),
+            region_start_key: Arc::from([]),
+            region_end_key: Arc::from([]),
         }
     }
 
@@ -451,5 +470,43 @@ mod test {
         assert_eq!(stat.files_in + stat.files_filtered_out, files.len() as u64);
         assert_eq!(stat.compactions_out, 6);
         assert_eq!(stat.files_filtered_out, 3);
+    }
+
+    #[tokio::test]
+    async fn test_region_boundary() {
+        let r = SubcompactionCollectKey::of_region;
+        let rr = |mut l: LogFile, start: &[u8], end: &[u8]| {
+            l.region_start_key = start.to_vec().into_boxed_slice().into();
+            l.region_end_key = end.to_vec().into_boxed_slice().into();
+            l
+        };
+
+        let files = [
+            rr(log_file("a", 1, r(1)), b"001", b"010"),
+            rr(log_file("b", 2, r(1)), b"000", b"012"),
+            rr(log_file("c", 3, r(1)), b"003", b""),
+            rr(log_file("d", 4, r(1)), b"004", b"020"),
+        ];
+
+        let collector = CollectSubcompaction::new(
+            stream::iter(files.iter().cloned().map(Ok)),
+            CollectSubcompactionConfig {
+                compact_from_ts: 0,
+                compact_to_ts: u64::MAX,
+                subcompaction_size_threshold: 128,
+            },
+        );
+
+        let res = collector
+            .map_ok(|v| (v.size, v.region_id, v.region_start_key, v.region_end_key))
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+
+        assert_eq!(res.len(), 1);
+        assert_eq!(res[0].0, 10);
+        assert_eq!(res[0].1, 1);
+        assert_eq!(res[0].2.as_ref(), b"000");
+        assert_eq!(res[0].3.as_ref(), b"");
     }
 }

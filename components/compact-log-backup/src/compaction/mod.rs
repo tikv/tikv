@@ -54,6 +54,8 @@ pub struct Subcompaction {
     pub compact_to_ts: u64,
     pub min_key: Arc<[u8]>,
     pub max_key: Arc<[u8]>,
+    pub region_start_key: Arc<[u8]>,
+    pub region_end_key: Arc<[u8]>,
 }
 
 // "Embed" the subcompaction collect key field here.

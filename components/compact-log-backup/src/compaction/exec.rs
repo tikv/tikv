@@ -217,10 +217,11 @@ where
     async fn write_sst(
         &mut self,
         name: &str,
-        cf: CfName,
+        c: &Subcompaction,
         sorted_items: &[Record],
         ext: &mut SubcompactExt,
     ) -> Result<WrittenSst<<DB::SstWriter as SstWriter>::ExternalSstFileReader>> {
+        let cf = c.cf;
         let mut wb = <DB as SstExt>::SstWriterBuilder::new()
             .set_cf(cf)
             .set_compression_type(Some(ext.compression))
@@ -234,15 +235,23 @@ where
         let mut w = wb.build(name)?;
         let mut meta = kvproto::brpb::File::default();
 
-        let mut start_key = sorted_items[0].key.clone();
-        // `File::{start,end}_key` should be raw key.
-        decode_bytes_in_place(&mut start_key, false).adapt_err()?;
-        let mut end_key = sorted_items.last().unwrap().key.clone();
-        decode_bytes_in_place(&mut end_key, false).adapt_err()?;
-        // `File::end_key` should be exclusive. (!)
-        // Also we cannot just call next_key, or the table ID of the end key may be
-        // different, some versions of BR panics in that scenario.
-        end_key.push(0u8);
+        let (start_key, end_key) = if c.region_start_key.is_empty() && c.region_end_key.is_empty() {
+            // For legacy backup contents: no region boundaries recorded.
+
+            let mut start_key = sorted_items[0].key.clone();
+            // `File::{start,end}_key` should be raw key.
+            decode_bytes_in_place(&mut start_key, false).adapt_err()?;
+            let mut end_key = sorted_items.last().unwrap().key.clone();
+            decode_bytes_in_place(&mut end_key, false).adapt_err()?;
+            // `File::end_key` should be exclusive. (!)
+            // Also we cannot just call next_key, or the table ID of the end key may be
+            // different, some versions of BR panics in that scenario.
+            end_key.push(0u8);
+
+            (start_key, end_key)
+        } else {
+            (c.region_start_key.to_vec(), c.region_end_key.to_vec())
+        };
 
         meta.set_start_key(start_key);
         meta.set_end_key(end_key);
@@ -361,7 +370,7 @@ where
         let begin = Instant::now();
         assert!(!sorted_items.is_empty());
         let mut sst = self
-            .write_sst(&out_name, c.cf, sorted_items.as_slice(), &mut ext)
+            .write_sst(&out_name, &c, sorted_items.as_slice(), &mut ext)
             .await?;
 
         self.compact_stat.write_sst_duration += begin.saturating_elapsed();

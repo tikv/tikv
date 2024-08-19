@@ -1035,7 +1035,7 @@ impl StreamTaskInfo {
         for fg in metas.file_groups.iter_mut() {
             for f in fg.data_files_info.iter_mut() {
                 if let Some((epoches, start_key, end_key)) = rmap.get(&(f.region_id as _)) {
-                    f.set_region_epoch(epoches.clone());
+                    f.set_region_epoch(epoches.iter().copied().cloned().collect::<Vec<_>>().into());
                     f.set_region_start_key(start_key.to_vec());
                     f.set_region_end_key(end_key.to_vec());
                 }
@@ -1330,6 +1330,7 @@ impl StreamTaskInfo {
                 .map(|d| (d.length, d.data_files_info.len()))
                 .collect::<Vec<_>>();
             // flush meta file to storage.
+            self.fill_region_info(cx, &mut metadata_info);
             self.flush_meta(metadata_info).await?;
             crate::metrics::FLUSH_DURATION
                 .with_label_values(&["save_files"])

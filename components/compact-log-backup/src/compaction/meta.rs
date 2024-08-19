@@ -130,6 +130,8 @@ impl Subcompaction {
                 is_meta: c.is_meta,
                 table_id: c.table_id,
             },
+            region_start_key: c.region_start_key,
+            region_end_key: c.region_end_key,
         }
     }
 
