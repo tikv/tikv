@@ -22,7 +22,7 @@ use kvproto::{
         CompressionType, DataFileGroup, DataFileInfo, FileType, MetaVersion, Metadata,
         StreamBackupTaskInfo,
     },
-    metapb::{self, Region, RegionEpoch},
+    metapb::RegionEpoch,
     raft_cmdpb::CmdType,
 };
 use openssl::hash::{Hasher, MessageDigest};
@@ -750,6 +750,7 @@ impl TempFileKey {
     }
 
     /// The full name of the file owns the key.
+    #[allow(clippy::redundant_closure_call)]
     fn temp_file_name(&self) -> String {
         let timestamp = (|| {
             fail::fail_point!("temp_file_name_timestamp", |t| t.map_or_else(
@@ -1637,8 +1638,8 @@ struct TaskRange {
 mod tests {
     use std::{ffi::OsStr, io, time::Duration};
 
-    use external_storage::{ExternalData, NoopStorage};
-    use futures::AsyncReadExt;
+    use external_storage::{BlobObject, ExternalData, NoopStorage};
+    use futures::{future::LocalBoxFuture, stream::LocalBoxStream, AsyncReadExt};
     use kvproto::brpb::{Local, Noop, StorageBackend, StreamBackupTaskInfo};
     use online_config::{ConfigManager, OnlineConfig};
     use tempfile::TempDir;
@@ -2105,6 +2106,17 @@ mod tests {
         fn read_part(&self, name: &str, off: u64, len: u64) -> ExternalData<'_> {
             self.inner.read_part(name, off, len)
         }
+
+        fn iter_prefix(
+            &self,
+            _prefix: &str,
+        ) -> LocalBoxStream<'_, std::result::Result<BlobObject, io::Error>> {
+            unreachable!()
+        }
+
+        fn delete(&self, _name: &str) -> LocalBoxFuture<'_, io::Result<()>> {
+            unreachable!()
+        }
     }
 
     fn build_kv_event(base: i32, count: i32) -> ApplyEvents {
@@ -2486,6 +2498,19 @@ mod tests {
 
         fn read_part(&self, name: &str, off: u64, len: u64) -> external_storage::ExternalData<'_> {
             self.s.read_part(name, off, len)
+        }
+
+        /// Walk the prefix of the blob storage.
+        /// It returns the stream of items.
+        fn iter_prefix(
+            &self,
+            _prefix: &str,
+        ) -> LocalBoxStream<'_, std::result::Result<BlobObject, io::Error>> {
+            unreachable!()
+        }
+
+        fn delete(&self, _name: &str) -> LocalBoxFuture<'_, io::Result<()>> {
+            unreachable!()
         }
     }
 

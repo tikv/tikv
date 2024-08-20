@@ -1,7 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    ffi::OsStr,
     fs::File as StdFile,
     io::{self, BufReader, Read, Seek},
     os::unix::ffi::OsStrExt,
@@ -10,9 +9,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use cloud::blob::{
-    BlobConfig, BlobObject, BlobStorage, BlobStream, DeletableStorage, IterableStorage, PutResource,
-};
+use cloud::blob::BlobObject;
 use futures::{io::AllowStdIo, prelude::Stream};
 use futures_util::{
     future::{FutureExt, LocalBoxFuture},
@@ -25,7 +22,7 @@ use tokio_util::compat::FuturesAsyncReadCompatExt;
 use walkdir::WalkDir;
 
 use super::ExternalStorage;
-use crate::{UnpinReader, StaticConfig};
+use crate::UnpinReader;
 
 const LOCAL_STORAGE_TMP_FILE_SUFFIX: &str = "tmp";
 
@@ -34,65 +31,6 @@ const LOCAL_STORAGE_TMP_FILE_SUFFIX: &str = "tmp";
 pub struct LocalStorage {
     base: PathBuf,
     base_dir: Arc<File>,
-}
-
-impl DeletableStorage for LocalStorage {
-    fn delete(&self, name: &str) -> LocalBoxFuture<'_, io::Result<()>> {
-        let path = self.base.join(name);
-        async move {
-            match fs::remove_file(&path).await {
-                Err(err) if err.kind() != io::ErrorKind::NotFound => return Err(err),
-                _ => {}
-            };
-            // sync the inode.
-            self.base_dir.sync_all().await
-        }
-        .boxed_local()
-    }
-}
-
-impl IterableStorage for LocalStorage {
-    fn iter_prefix(
-        &self,
-        prefix: &str,
-    ) -> std::pin::Pin<Box<dyn Stream<Item = io::Result<BlobObject>> + '_>> {
-        let p = Path::new(prefix);
-        let dir_name = p.parent().unwrap_or_else(|| Path::new("")).to_owned();
-        let file_name = p.file_name().unwrap_or(OsStr::new("")).to_owned();
-        Box::pin(
-            futures::stream::iter(
-                WalkDir::new(self.base.join(dir_name))
-                    .follow_links(false)
-                    .into_iter()
-                    .filter(move |v| v.as_ref().map(|d| {
-                    let is_file = d.file_type().is_file();
-                    let target_file_name = d.file_name();
-                    is_file && target_file_name.as_bytes().starts_with(file_name.as_bytes())
-            } ).unwrap_or(false)),
-            )
-            .map_err(|err| {
-                let kind = err
-                    .io_error()
-                    .map(|err| err.kind())
-                    .unwrap_or(io::ErrorKind::Other);
-                io::Error::new(kind, err)
-            })
-            .and_then(|v| {
-                let rel = v
-                    .path()
-                    .strip_prefix(&self.base);
-                    match rel {
-                        Err(_) => futures::future::err(io::Error::new(
-                            io::ErrorKind::Other,
-                            format!("unknown: we found something not match the prefix... it is {}, our prefix is {}", v.path().display(), self.base.display()),
-                        )),
-                        Ok(item) => futures::future::ok(BlobObject{
-                            key: item.to_string_lossy().into_owned(),
-                        })
-                    }
-            })
-        )
-    }
 }
 
 impl LocalStorage {
@@ -121,32 +59,6 @@ fn url_for(base: &Path) -> url::Url {
 }
 
 pub const STORAGE_NAME: &str = "local";
-
-#[async_trait]
-impl BlobStorage for LocalStorage {
-    fn config(&self) -> Box<dyn BlobConfig> {
-        Box::new(StaticConfig::from_ext_storage(self))
-    }
-
-    async fn put(
-        &self,
-        name: &str,
-        reader: PutResource<'_>,
-        content_length: u64,
-    ) -> io::Result<()> {
-        ExternalStorage::write(self, name, UnpinReader(reader.0), content_length).await
-    }
-
-    /// Read all contents of the given path.
-    fn get(&self, name: &str) -> BlobStream<'_> {
-        ExternalStorage::read(self, name)
-    }
-
-    /// Read part of contents of the given path.
-    fn get_part(&self, name: &str, off: u64, len: u64) -> BlobStream<'_> {
-        ExternalStorage::read_part(self, name, off, len)
-    }
-}
 
 #[async_trait]
 impl ExternalStorage for LocalStorage {
@@ -243,6 +155,77 @@ impl ExternalStorage for LocalStorage {
         let reader = BufReader::new(file);
         let take = reader.take(len);
         Box::new(AllowStdIo::new(take)) as _
+    }
+
+    fn iter_prefix(
+        &self,
+        prefix: &str,
+    ) -> std::pin::Pin<Box<dyn Stream<Item = io::Result<BlobObject>> + '_>> {
+        let p = Path::new(prefix);
+        let (dir_name, require_prefix) = if self.base.join(p).is_dir() {
+            // Fast path: when we are going to enumerate content of a directory, just walk
+            // through this dir.
+            (p.to_owned(), None)
+        } else {
+            let dir = p.parent().unwrap_or_else(|| Path::new("")).to_owned();
+            let qualified_prefix = self.base.join(prefix).to_owned();
+            (dir, Some(qualified_prefix))
+        };
+
+        Box::pin(
+            futures::stream::iter(
+                WalkDir::new(self.base.join(dir_name))
+                    .follow_links(false)
+                    .into_iter()
+                    .filter(move |v| { 
+                        let require_prefix = require_prefix.as_ref(); 
+                        v.as_ref().map(|d| {
+                            let is_file = d.file_type().is_file();
+                            let target_file_name = match require_prefix {
+                                None => true,
+                                // We need to compare by bytes instead of using Path::starts_with.
+                                // Because we want get ``
+                                Some(pfx) => d.path().as_os_str().as_bytes().starts_with(pfx.as_os_str().as_bytes()),
+                            };
+                            is_file && target_file_name
+                        })
+                    }.unwrap_or(false)),
+            )
+            .map_err(|err| {
+                let kind = err
+                    .io_error()
+                    .map(|err| err.kind())
+                    .unwrap_or(io::ErrorKind::Other);
+                io::Error::new(kind, err)
+            })
+            .and_then(|v| {
+                let rel = v
+                    .path()
+                    .strip_prefix(&self.base);
+                    match rel {
+                        Err(_) => futures::future::err(io::Error::new(
+                            io::ErrorKind::Other,
+                            format!("unknown: we found something not match the prefix... it is {}, our prefix is {}", v.path().display(), self.base.display()),
+                        )),
+                        Ok(item) => futures::future::ok(BlobObject{
+                            key: item.to_string_lossy().into_owned(),
+                        })
+                    }
+            })
+        )
+    }
+
+    fn delete(&self, name: &str) -> LocalBoxFuture<'_, io::Result<()>> {
+        let path = self.base.join(name);
+        async move {
+            match fs::remove_file(&path).await {
+                Err(err) if err.kind() != io::ErrorKind::NotFound => return Err(err),
+                _ => {}
+            };
+            // sync the inode.
+            self.base_dir.sync_all().await
+        }
+        .boxed_local()
     }
 }
 

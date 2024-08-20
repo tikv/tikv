@@ -1,14 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{fmt::Display, io, marker::Unpin, pin::Pin, task::Poll};
+use std::{fmt::Display, io, marker::Unpin, panic::Location, pin::Pin, task::Poll};
 
 use async_trait::async_trait;
-use futures::{
-    future::{ok, BoxFuture, FutureExt, LocalBoxFuture, TryFutureExt},
-    stream::{Stream, TryStreamExt},
-};
+use futures::{future::LocalBoxFuture, stream::Stream};
 use futures_io::AsyncRead;
-use uuid::Uuid;
 
 pub trait BlobConfig: 'static + Send + Sync {
     fn name(&self) -> &'static str;
@@ -60,6 +56,17 @@ pub trait BlobStorage: 'static + Send + Sync {
 
 pub trait DeletableStorage {
     fn delete(&self, name: &str) -> LocalBoxFuture<'_, io::Result<()>>;
+}
+
+#[track_caller]
+pub fn unimplemented() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::Unsupported,
+        format!(
+            "this method isn't supported, check more details at {:?}",
+            Location::caller()
+        ),
+    )
 }
 
 #[derive(Debug)]

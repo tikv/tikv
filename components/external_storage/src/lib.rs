@@ -12,18 +12,19 @@ use std::{
     any::Any,
     io::{self, Write},
     marker::Unpin,
+    panic::Location,
     sync::Arc,
     time::Duration,
 };
 
 use async_compression::futures::bufread::ZstdDecoder;
 use async_trait::async_trait;
-use cloud::blob::BlobStream;
+
 use encryption::{DecrypterReader, FileEncryptionInfo, Iv};
 use file_system::File;
 use futures::io::BufReader;
 use futures_io::AsyncRead;
-use futures_util::AsyncReadExt;
+use futures_util::{future::LocalBoxFuture, stream::LocalBoxStream, AsyncReadExt};
 use kvproto::brpb::CompressionType;
 use openssl::hash::{Hasher, MessageDigest};
 use tikv_util::{
@@ -45,13 +46,6 @@ mod metrics;
 use metrics::EXT_STORAGE_CREATE_HISTOGRAM;
 mod export;
 pub use export::*;
-use url::Url;
-
-pub fn record_storage_v2_create(start: Instant, storage: &dyn BlobStorage) {
-    EXT_STORAGE_CREATE_HISTOGRAM
-        .with_label_values(&[storage.config().name()])
-        .observe(start.saturating_elapsed().as_secs_f64());
-}
 
 pub fn record_storage_create(start: Instant, storage: &dyn ExternalStorage) {
     EXT_STORAGE_CREATE_HISTOGRAM
@@ -175,6 +169,26 @@ pub trait ExternalStorage: 'static + Send + Sync + Any {
         )
         .await
     }
+
+    /// Walk the prefix of the blob storage.
+    /// It returns the stream of items.
+    fn iter_prefix(
+        &self,
+        prefix: &str,
+    ) -> LocalBoxStream<'_, std::result::Result<BlobObject, io::Error>>;
+
+    fn delete(&self, name: &str) -> LocalBoxFuture<'_, io::Result<()>>;
+}
+
+#[track_caller]
+pub fn unimplemented() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::Unsupported,
+        format!(
+            "this method isn't supported, check more details at {:?}",
+            Location::caller()
+        ),
+    )
 }
 
 #[async_trait]
@@ -222,6 +236,17 @@ impl ExternalStorage for Arc<dyn ExternalStorage> {
             )
             .await
     }
+
+    fn iter_prefix(
+        &self,
+        prefix: &str,
+    ) -> LocalBoxStream<'_, std::result::Result<BlobObject, io::Error>> {
+        (**self).iter_prefix(prefix)
+    }
+
+    fn delete(&self, name: &str) -> LocalBoxFuture<'_, io::Result<()>> {
+        (**self).delete(name)
+    }
 }
 
 #[async_trait]
@@ -268,6 +293,17 @@ impl ExternalStorage for Box<dyn ExternalStorage> {
                 restore_config,
             )
             .await
+    }
+
+    fn iter_prefix(
+        &self,
+        prefix: &str,
+    ) -> LocalBoxStream<'_, std::result::Result<BlobObject, io::Error>> {
+        self.as_ref().iter_prefix(prefix)
+    }
+
+    fn delete(&self, name: &str) -> LocalBoxFuture<'_, io::Result<()>> {
+        self.as_ref().delete(name)
     }
 }
 

@@ -1,5 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
-use std::{fmt::Display, io, pin::Pin};
+use std::{fmt::Display, io};
 
 use async_trait::async_trait;
 use cloud::{
@@ -15,13 +15,12 @@ use futures_util::{
     stream::{self, Stream, StreamExt, TryStreamExt},
 };
 use http::HeaderValue;
-use hyper::{body::Bytes, Body, Request, Response};
+use hyper::{Body, Request, Response};
 pub use kvproto::brpb::Gcs as InputConfig;
 use tame_gcs::{
     common::{PredefinedAcl, StorageClass},
     objects::{InsertObjectOptional, ListOptional, ListResponse, Metadata, Object},
     types::{BucketName, ObjectId},
-    ApiResponse,
 };
 use tame_oauth::gcp::ServiceAccountInfo;
 use tikv_util::{
