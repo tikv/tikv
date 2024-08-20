@@ -339,10 +339,17 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
     /// necessary.
     pub fn control_poll(&mut self) {
         let mut batch = Batch::with_capacity(self.max_batch_size);
-        while let Ok(fsm) = self.fsm_receiver.recv() {
-            if !batch.push(fsm) {
-                break;
+        loop {
+            if batch.control.is_none() {
+                if let Ok(fsm) = self.fsm_receiver.recv() {
+                    if !batch.push(fsm) {
+                        break;
+                    }
+                } else {
+                    break;
+                }
             }
+
             assert!(batch.control.is_some());
             let len = self.handler.handle_control(batch.control.as_mut().unwrap());
             if batch.control.as_ref().unwrap().is_stopped() {
