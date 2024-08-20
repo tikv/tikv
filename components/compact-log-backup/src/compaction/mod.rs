@@ -11,8 +11,8 @@ use crate::{
     util::{self, EndKey},
 };
 
-pub const SST_OUT_REL: &'static str = "outputs";
-pub const META_OUT_REL: &'static str = "metas";
+pub const SST_OUT_REL: &str = "outputs";
+pub const META_OUT_REL: &str = "metas";
 
 #[derive(Debug, Clone)]
 pub struct Input {
@@ -117,7 +117,7 @@ impl UnformedSubcompaction {
     fn by_file(file: &LogFile) -> Self {
         UnformedSubcompaction {
             size: file.file_real_size,
-            inputs: vec![to_input(&file)],
+            inputs: vec![to_input(file)],
             min_ts: file.min_ts,
             max_ts: file.max_ts,
             min_key: file.min_key.clone(),
@@ -142,7 +142,7 @@ impl UnformedSubcompaction {
             max_key: self.max_key.clone(),
             compact_from_ts: cfg.compact_from_ts,
             compact_to_ts: cfg.compact_to_ts,
-            subc_key: key.clone(),
+            subc_key: *key,
             region_start_key: self.region_start_key.clone(),
             region_end_key: self.region_end_key.clone(),
         }

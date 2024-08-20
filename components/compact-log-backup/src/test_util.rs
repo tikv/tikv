@@ -9,7 +9,7 @@ use std::{
 
 use engine_rocks::RocksEngine;
 use engine_traits::{IterOptions, Iterator as _, RefIterable, SstExt};
-use external_storage::{ExternalStorage, IterableStorage};
+use external_storage::ExternalStorage;
 use file_system::sha256;
 use futures::{
     io::{AsyncReadExt, Cursor as ACursor},
@@ -178,10 +178,9 @@ pub struct KvGen<S> {
 }
 
 pub fn sow((table_id, handle_id, ts): KeySeed) -> Vec<u8> {
-    let key = Key::from_raw(&encode_row_key(table_id, handle_id))
+    Key::from_raw(&encode_row_key(table_id, handle_id))
         .append_ts(ts.into())
-        .into_encoded();
-    key
+        .into_encoded()
 }
 
 impl<S> KvGen<S> {

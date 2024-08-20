@@ -1,15 +1,15 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{
-    collections::{hash_map::Entry, BTreeSet, HashMap},
+    collections::{BTreeSet, HashMap},
     sync::Arc,
 };
 
-use external_storage::ExternalStorageV2;
+use external_storage::ExternalStorage;
 use futures::stream::TryStreamExt;
 use kvproto::brpb::{self, DeleteSpansOfFile};
 
 use super::{
-    collector::CollectSubcompactionConfig, Input, Subcompaction, SubcompactionCollectKey,
+    collector::CollectSubcompactionConfig, Subcompaction, SubcompactionCollectKey,
     SubcompactionResult, UnformedSubcompaction,
 };
 use crate::{
@@ -232,7 +232,7 @@ impl CompactionRunInfoBuilder {
         &mut self.compaction
     }
 
-    pub async fn write_migration(&self, s: &dyn ExternalStorageV2) -> Result<()> {
+    pub async fn write_migration(&self, s: &dyn ExternalStorage) -> Result<()> {
         let migration = self.migration_of(self.find_expiring_files(s).await?);
         let wrapped_storage = MigartionStorageWrapper::new(s);
         wrapped_storage.write(migration).await?;
@@ -253,15 +253,13 @@ impl CompactionRunInfoBuilder {
             medit.destruct_self = files.destruct_self;
             migration.edit_meta.push(medit);
         }
-        migration
-            .mut_compactions()
-            .push(self.compaction.clone().into());
+        migration.mut_compactions().push(self.compaction.clone());
         migration
     }
 
     async fn find_expiring_files(
         &self,
-        s: &dyn ExternalStorageV2,
+        s: &dyn ExternalStorage,
     ) -> Result<Vec<ExpiringFilesOfMeta>> {
         let ext = LoadFromExt::default();
         let mut storage = StreamyMetaStorage::load_from_ext(s, ext);
@@ -328,7 +326,7 @@ impl CompactionRunInfoBuilder {
 
 #[cfg(test)]
 mod test {
-    use external_storage::ExternalStorageV2;
+    use external_storage::ExternalStorage;
     use kvproto::brpb;
 
     use super::CompactionRunInfoBuilder;
@@ -338,7 +336,7 @@ mod test {
     };
 
     impl CompactionRunInfoBuilder {
-        async fn mig(&self, s: &dyn ExternalStorageV2) -> crate::Result<brpb::Migration> {
+        async fn mig(&self, s: &dyn ExternalStorage) -> crate::Result<brpb::Migration> {
             Ok(self.migration_of(self.find_expiring_files(s).await?))
         }
     }
@@ -360,7 +358,7 @@ mod test {
         let subc = Subcompaction::singleton(m.physical_files[0].files[0].clone());
         let res = cr.run(subc, Default::default()).await.unwrap();
         coll.add_subcompaction(&res);
-        let mig = dbg!(&coll).mig(st.storage().as_ref()).await.unwrap();
+        let mig = coll.mig(st.storage().as_ref()).await.unwrap();
         assert_eq!(mig.edit_meta.len(), 1);
         assert!(!mig.edit_meta[0].destruct_self);
 

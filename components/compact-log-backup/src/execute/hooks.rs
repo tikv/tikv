@@ -2,11 +2,8 @@
 
 use chrono::Local;
 pub use engine_traits::SstCompressionType;
-use external_storage::{locking::RemoteLock, ExternalStorageV2, PutResource};
-use futures::{
-    future::{err, TryFutureExt},
-    io::Cursor,
-};
+use external_storage::{locking::RemoteLock, ExternalStorage, UnpinReader};
+use futures::{future::TryFutureExt, io::Cursor};
 use kvproto::brpb;
 use tikv_util::{
     info,
@@ -51,7 +48,7 @@ pub struct BeforeStartCtx<'a> {
     /// Reference to the execution context.
     pub this: &'a Execution,
     /// The source external storage of this compaction.
-    pub storage: &'a dyn ExternalStorageV2,
+    pub storage: &'a dyn ExternalStorage,
 }
 
 #[derive(Clone, Copy)]
@@ -61,7 +58,7 @@ pub struct AfterFinishCtx<'a> {
     /// The target external storage of this compaction.
     ///
     /// For now, it is always the same as the source storage.
-    pub storage: &'a dyn ExternalStorageV2,
+    pub storage: &'a dyn ExternalStorage,
 }
 
 #[derive(Clone, Copy)]
@@ -69,7 +66,7 @@ pub struct SubcompactionFinishCtx<'a> {
     /// Reference to the execution context.
     pub this: &'a Execution,
     /// The target external storage of this compaction.
-    pub external_storage: &'a dyn ExternalStorageV2,
+    pub external_storage: &'a dyn ExternalStorage,
     /// The result of this compaction.
     ///
     /// If this is an `Err`, the whole procedure may fail soon.
@@ -95,13 +92,14 @@ pub struct SubcompactionStartCtx<'a> {
 
 #[derive(Clone, Copy)]
 pub struct AbortedCtx<'a> {
-    pub storage: &'a dyn ExternalStorageV2,
+    pub storage: &'a dyn ExternalStorage,
     pub err: &'a Error,
 }
 
 /// The hook points of an execution of compaction.
 // We don't need the returned future be either `Send` or `Sync`.
 #[allow(async_fn_in_trait)]
+#[allow(clippy::unused_async)]
 pub trait ExecHooks: 'static {
     /// This hook will be called when a subcompaction is about to start.
     fn before_a_subcompaction_start(&mut self, _cid: CId, _c: SubcompactionStartCtx<'_>) {}
@@ -224,7 +222,7 @@ impl ExecHooks for TuiHooks {
         let total_take =
             cst.load_duration + cst.sort_duration + cst.save_duration + cst.write_sst_duration;
         let speed = logical_input_size as f64 / total_take.as_millis() as f64;
-        self.stats.update_subcompaction(&cx.result);
+        self.stats.update_subcompaction(cx.result);
 
         info!("Finishing compaction."; "meta_completed" => self.stats.load_meta_stat.meta_files_in, 
             "meta_total" => self.meta_len, 
@@ -248,7 +246,7 @@ impl ExecHooks for TuiHooks {
 
         let sigusr1_handler = async {
             let mut signal = tokio::signal::unix::signal(SignalKind::user_defined1()).unwrap();
-            while let Some(_) = signal.recv().await {
+            while signal.recv().await.is_some() {
                 let file_name = "/tmp/compact-sst.dump".to_owned();
                 let res = async {
                     let mut file = tokio::fs::File::create(&file_name).await?;
@@ -381,8 +379,8 @@ impl ExecHooks for SaveMeta {
     ) -> Result<()> {
         use protobuf::Message;
 
-        self.collector.add_subcompaction(&cx.result);
-        self.stats.update_subcompaction(&cx.result);
+        self.collector.add_subcompaction(cx.result);
+        self.stats.update_subcompaction(cx.result);
 
         let meta_name = format!(
             "{}_{}_{}.cmeta",
@@ -395,9 +393,9 @@ impl ExecHooks for SaveMeta {
         metas.mut_subcompactions().push(cx.result.meta.clone());
         let meta_bytes = metas.write_to_bytes()?;
         retry(|| async {
-            let reader = PutResource(Box::new(Cursor::new(&meta_bytes)));
+            let reader = UnpinReader(Box::new(Cursor::new(&meta_bytes)));
             cx.external_storage
-                .put(&meta_name, reader, meta_bytes.len() as _)
+                .write(&meta_name, reader, meta_bytes.len() as _)
                 .map_err(JustRetry)
                 .await
         })

@@ -1,15 +1,14 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
-use std::{cmp::Reverse, collections::HashMap, sync::Arc, task::ready};
+use std::{collections::HashMap, task::ready};
 
 use tokio_stream::Stream;
 
-use super::{Input, SubcompactionCollectKey, UnformedSubcompaction};
+use super::{SubcompactionCollectKey, UnformedSubcompaction};
 use crate::{
     compaction::Subcompaction,
     errors::{Result, TraceResultExt},
     statistic::CollectSubcompactionStatistic,
     storage::LogFile,
-    util::EndKey,
 };
 
 /// A collecting subcompaction.
@@ -233,7 +232,7 @@ mod test {
             log_file("008", 1, r(4)),
         ];
         let mut collector = CollectSubcompaction::new(
-            stream::iter(items.into_iter()).map(Result::Ok),
+            stream::iter(items).map(Result::Ok),
             CollectSubcompactionConfig {
                 compact_from_ts: 0,
                 compact_to_ts: u64::MAX,
@@ -269,7 +268,7 @@ mod test {
         ];
 
         let collector = CollectSubcompaction::new(
-            stream::iter(items.into_iter()),
+            stream::iter(items),
             CollectSubcompactionConfig {
                 compact_from_ts: 0,
                 compact_to_ts: u64::MAX,

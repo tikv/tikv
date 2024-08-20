@@ -5,7 +5,7 @@ use std::{
 };
 
 use async_compression::futures::write::ZstdDecoder;
-use external_storage::BlobStorage;
+use external_storage::ExternalStorage;
 use futures::io::{AsyncWriteExt, Cursor};
 use futures_io::AsyncWrite;
 use kvproto::brpb;
@@ -22,11 +22,11 @@ use crate::{compaction::Input, errors::Result};
 /// The manager of fetching log files from remote for compacting.
 #[derive(Clone)]
 pub struct Source {
-    inner: Arc<dyn BlobStorage>,
+    inner: Arc<dyn ExternalStorage>,
 }
 
 impl Source {
-    pub fn new(inner: Arc<dyn BlobStorage>) -> Self {
+    pub fn new(inner: Arc<dyn ExternalStorage>) -> Self {
         Self { inner }
     }
 }
@@ -69,7 +69,7 @@ impl Source {
                 let mut content = Vec::with_capacity(id.length as _);
                 let item = pin!(Cursor::new(&mut content));
                 let mut decompress = decompress(compression, item)?;
-                let source = storage.get_part(&id.name, id.offset, id.length);
+                let source = storage.read_part(&id.name, id.offset, id.length);
                 let n = futures::io::copy(source, &mut decompress).await?;
                 decompress.flush().await?;
                 drop(decompress);
@@ -77,10 +77,10 @@ impl Source {
             }
         };
         let (content, size) = retry_all_ext(fetch, ext).await?;
-        stat.as_mut().map(|stat| {
+        if let Some(stat) = stat.as_mut() {
             stat.physical_bytes_in += size;
             stat.error_during_downloading += error_during_downloading.get();
-        });
+        }
         Ok(content)
     }
 
@@ -104,21 +104,23 @@ impl Source {
             iter.next()?;
             co.step().await;
             on_key_value(iter.key(), iter.value());
-            stat.as_mut().map(|stat| {
+            if let Some(stat) = stat.as_mut() {
                 stat.keys_in += 1;
                 stat.logical_key_bytes_in += iter.key().len() as u64;
                 stat.logical_value_bytes_in += iter.value().len() as u64;
-            });
+            }
         }
-        stat.as_mut().map(|stat| stat.files_in += 1);
+        if let Some(stat) = stat.as_mut() {
+            stat.files_in += 1;
+        }
         Ok(())
     }
 }
 
-fn decompress<'a>(
+fn decompress(
     compression: brpb::CompressionType,
-    input: Pin<&'a mut (impl AsyncWrite + Send)>,
-) -> std::io::Result<impl AsyncWrite + Send + 'a> {
+    input: Pin<&mut (impl AsyncWrite + Send)>,
+) -> std::io::Result<impl AsyncWrite + Send + '_> {
     match compression {
         kvproto::brpb::CompressionType::Zstd => Ok(ZstdDecoder::new(input)),
         compress => Err(std::io::Error::new(

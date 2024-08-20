@@ -9,7 +9,7 @@ use std::{borrow::Cow, path::Path, sync::Arc};
 use engine_rocks::RocksEngine;
 pub use engine_traits::SstCompressionType;
 use engine_traits::SstExt;
-use external_storage::{BackendConfig, ExternalStorageV2};
+use external_storage::{BackendConfig, ExternalStorage};
 use futures::stream::{self, StreamExt};
 use hooks::{
     AfterFinishCtx, BeforeStartCtx, CId, ExecHooks, SubcompactionFinishCtx, SubcompactionStartCtx,
@@ -87,7 +87,7 @@ pub struct Execution<DB: SstExt = RocksEngine> {
 }
 
 struct ExecuteCtx<'a, H: ExecHooks> {
-    storage: &'a Arc<dyn ExternalStorageV2>,
+    storage: &'a Arc<dyn ExternalStorage>,
     hooks: &'a mut H,
 }
 
@@ -125,7 +125,7 @@ impl Execution {
         let cx = BeforeStartCtx {
             storage: storage.as_ref(),
             async_rt: &tokio::runtime::Handle::current(),
-            this: &self,
+            this: self,
         };
         hooks.before_execution_started(cx).await?;
         let meta = StreamyMetaStorage::load_from_ext(storage.as_ref(), ext);
@@ -166,7 +166,7 @@ impl Execution {
             let compact_args = SubcompactionExecArg {
                 out_prefix: Some(Path::new(&self.out_prefix).to_owned()),
                 db: self.db.clone(),
-                storage: Arc::clone(&storage) as _,
+                storage: Arc::clone(storage) as _,
             };
             let compact_worker = SubcompactionExec::from(compact_args);
             let mut ext = SubcompactExt::default();
@@ -208,8 +208,8 @@ impl Execution {
 
     pub fn run(self, mut hooks: impl ExecHooks) -> Result<()> {
         let storage =
-            external_storage::create_storage_v2(&self.external_storage, BackendConfig::default())?;
-        let storage: Arc<dyn ExternalStorageV2> = Arc::from(storage);
+            external_storage::create_storage(&self.external_storage, BackendConfig::default())?;
+        let storage: Arc<dyn ExternalStorage> = Arc::from(storage);
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -246,11 +246,11 @@ impl Execution {
         &self,
         cid: CId,
         result: &SubcompactionResult,
-        external_storage: &dyn ExternalStorageV2,
+        external_storage: &dyn ExternalStorage,
         hooks: &mut impl ExecHooks,
     ) -> Result<()> {
         let cx = SubcompactionFinishCtx {
-            this: &self,
+            this: self,
             external_storage,
             result,
         };

@@ -1,16 +1,15 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{
-    collections::HashMap,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
 use engine_rocks::RocksEngine;
 use engine_traits::{
-    CfName, ExternalSstFileInfo, SstCompressionType, SstExt, SstWriter, SstWriterBuilder,
+    ExternalSstFileInfo, SstCompressionType, SstExt, SstWriter, SstWriterBuilder,
     DATA_KEY_PREFIX_LEN,
 };
-use external_storage::{BlobStorage, PutResource};
+use external_storage::{ExternalStorage, UnpinReader};
 use file_system::Sha256Reader;
 use futures::{future::TryFutureExt, io::AllowStdIo};
 use kvproto::brpb::{self, LogFileSubcompaction};
@@ -31,7 +30,7 @@ use crate::{
 /// The state of executing a subcompaction.
 pub struct SubcompactionExec<DB> {
     source: Source,
-    output: Arc<dyn BlobStorage>,
+    output: Arc<dyn ExternalStorage>,
     co: Cooperate,
     out_prefix: PathBuf,
 
@@ -53,7 +52,7 @@ pub struct SubcompactExt {
     pub compression_level: Option<i32>,
 }
 
-impl<'a> Default for SubcompactExt {
+impl Default for SubcompactExt {
     fn default() -> Self {
         Self {
             max_load_concurrency: Default::default(),
@@ -71,7 +70,7 @@ pub struct SubcompactionExecArg<DB> {
     /// The RocksDB instance used for creating the SST writer.
     pub db: Option<DB>,
     /// The output storage.
-    pub storage: Arc<dyn BlobStorage>,
+    pub storage: Arc<dyn ExternalStorage>,
 }
 
 impl<DB> From<SubcompactionExecArg<DB>> for SubcompactionExec<DB> {
@@ -92,7 +91,7 @@ impl<DB> From<SubcompactionExecArg<DB>> for SubcompactionExec<DB> {
 
 impl SubcompactionExec<RocksEngine> {
     #[cfg(test)]
-    pub fn default_config(storage: Arc<dyn BlobStorage>) -> Self {
+    pub fn default_config(storage: Arc<dyn ExternalStorage>) -> Self {
         Self::from(SubcompactionExecArg {
             storage,
             out_prefix: None,
@@ -150,7 +149,7 @@ where
             .flat_map(|v| v.into_iter())
             .collect::<Vec<_>>();
         tokio::task::yield_now().await;
-        flatten_items.sort_unstable_by(|k1, k2| k1.cmp_key(&k2));
+        flatten_items.sort_unstable_by(|k1, k2| k1.cmp_key(k2));
         tokio::task::yield_now().await;
         let mut diff = ChecksumDiff::default();
         flatten_items.dedup_by(|k1, k2| {
@@ -310,9 +309,9 @@ where
         sst.content.reset()?;
         let (rd, hasher) = Sha256Reader::new(&mut sst.content).adapt_err()?;
         self.output
-            .put(
+            .write(
                 &sst.meta.name,
-                PutResource(Box::new(AllowStdIo::new(rd))),
+                UnpinReader(Box::new(AllowStdIo::new(rd))),
                 sst.physical_size,
             )
             .await?;
@@ -335,22 +334,23 @@ where
             if input.crc64xor == 0 {
                 result.expected_crc64 = None;
             }
-            result.expected_crc64.as_mut().map(|v| *v ^= input.crc64xor);
+            if let Some(v) = result.expected_crc64.as_mut() {
+                *v ^= input.crc64xor;
+            }
             result.expected_keys += input.num_of_entries;
             result.expected_size += input.key_value_size;
         }
 
         let begin = Instant::now();
-        let items = self.load(&c, &mut ext).await?;
+        let items = self.load(c, &mut ext).await?;
         self.compact_stat.load_duration += begin.saturating_elapsed();
 
         let begin = Instant::now();
         let (sorted_items, cdiff) = self.process_input(items).await;
         self.compact_stat.sort_duration += begin.saturating_elapsed();
-        result
-            .expected_crc64
-            .as_mut()
-            .map(|v| *v ^= cdiff.crc64xor_diff);
+        if let Some(v) = result.expected_crc64.as_mut() {
+            *v ^= cdiff.crc64xor_diff;
+        }
         result.expected_keys -= cdiff.removed_key;
         result.expected_size -= cdiff.decreaed_size;
 
@@ -374,14 +374,14 @@ where
         let begin = Instant::now();
         assert!(!sorted_items.is_empty());
         let mut sst = self
-            .write_sst(&out_name, &c, sorted_items.as_slice(), &mut ext)
+            .write_sst(&out_name, c, sorted_items.as_slice(), &mut ext)
             .await?;
 
         self.compact_stat.write_sst_duration += begin.saturating_elapsed();
 
         let begin = Instant::now();
         result.meta =
-            retry_expr! { self.upload_compaction_artifact(&c, &mut sst).map_err(JustRetry) }
+            retry_expr! { self.upload_compaction_artifact(c, &mut sst).map_err(JustRetry) }
                 .await
                 .map_err(|err| err.0)?;
         self.compact_stat.save_duration += begin.saturating_elapsed();
