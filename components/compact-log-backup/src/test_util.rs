@@ -44,8 +44,8 @@ pub struct LogFileBuilder {
     pub cf: &'static str,
     pub ty: brpb::FileType,
     pub is_meta: bool,
-    pub region_start_key: Vec<u8>,
-    pub region_end_key: Vec<u8>,
+    pub region_start_key: Option<Vec<u8>>,
+    pub region_end_key: Option<Vec<u8>>,
 
     content: zstd::Encoder<'static, Cursor<Vec<u8>>>,
     min_ts: u64,
@@ -245,8 +245,8 @@ impl LogFileBuilder {
             crc64xor: 0,
             compression: brpb::CompressionType::Zstd,
             file_real_size: 0,
-            region_start_key: vec![],
-            region_end_key: vec![],
+            region_start_key: None,
+            region_end_key: None,
         };
         configure(&mut res);
         res
@@ -327,8 +327,8 @@ impl LogFileBuilder {
                     .expect("cannot calculate sha256 for file")
                     .into_boxed_slice(),
             ),
-            region_start_key: self.region_start_key.into_boxed_slice().into(),
-            region_end_key: self.region_end_key.into_boxed_slice().into(),
+            region_start_key: self.region_start_key.map(|v| v.into_boxed_slice().into()),
+            region_end_key: self.region_end_key.map(|v| v.into_boxed_slice().into()),
         };
         (file, cnt.into_inner())
     }
@@ -504,8 +504,10 @@ impl TmpStorage {
                 .read(&file.key)
                 .read_to_end(&mut content)
                 .await?;
-            let mig = parse_from_bytes::<brpb::LogFileSubcompaction>(&content)?;
-            output.push(mig);
+            let mig = parse_from_bytes::<brpb::LogFileSubcompactions>(&content)?;
+            for c in mig.subcompactions.into_iter() {
+                output.push(c)
+            }
         }
         Ok(output)
     }

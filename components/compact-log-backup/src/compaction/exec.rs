@@ -235,24 +235,28 @@ where
         let mut w = wb.build(name)?;
         let mut meta = kvproto::brpb::File::default();
 
-        let (start_key, end_key) = if c.region_start_key.is_empty() && c.region_end_key.is_empty() {
+        let (start_key, end_key) = match (&c.region_start_key, &c.region_end_key) {
+            (Some(start), Some(end)) => {
+                let mut res = (start.to_vec(), end.to_vec());
+                decode_bytes_in_place(&mut res.0, false).adapt_err()?;
+                decode_bytes_in_place(&mut res.1, false).adapt_err()?;
+                res
+            }
             // For legacy backup contents: no region boundaries recorded.
+            _ => {
+                let mut start_key = sorted_items[0].key.clone();
+                // `File::{start,end}_key` should be raw key.
+                decode_bytes_in_place(&mut start_key, false).adapt_err()?;
+                let mut end_key = sorted_items.last().unwrap().key.clone();
+                decode_bytes_in_place(&mut end_key, false).adapt_err()?;
+                // `File::end_key` should be exclusive. (!)
+                // Also we cannot just call next_key, or the table ID of the end key may be
+                // different, some versions of BR panics in that scenario.
+                end_key.push(0u8);
 
-            let mut start_key = sorted_items[0].key.clone();
-            // `File::{start,end}_key` should be raw key.
-            decode_bytes_in_place(&mut start_key, false).adapt_err()?;
-            let mut end_key = sorted_items.last().unwrap().key.clone();
-            decode_bytes_in_place(&mut end_key, false).adapt_err()?;
-            // `File::end_key` should be exclusive. (!)
-            // Also we cannot just call next_key, or the table ID of the end key may be
-            // different, some versions of BR panics in that scenario.
-            end_key.push(0u8);
-
-            (start_key, end_key)
-        } else {
-            (c.region_start_key.to_vec(), c.region_end_key.to_vec())
+                (start_key, end_key)
+            }
         };
-
         meta.set_start_key(start_key);
         meta.set_end_key(end_key);
         meta.set_cf(cf.to_owned());

@@ -8,7 +8,10 @@ use external_storage::ExternalStorageV2;
 use futures::stream::TryStreamExt;
 use kvproto::brpb::{self, DeleteSpansOfFile};
 
-use super::{Input, Subcompaction, SubcompactionCollectKey, SubcompactionResult};
+use super::{
+    collector::CollectSubcompactionConfig, Input, Subcompaction, SubcompactionCollectKey,
+    SubcompactionResult, UnformedSubcompaction,
+};
 use crate::{
     errors::Result,
     storage::{
@@ -108,63 +111,27 @@ impl Subcompaction {
     }
 
     pub fn singleton(c: LogFile) -> Self {
-        Self {
-            inputs: vec![Input {
-                key_value_size: c.hacky_key_value_size(),
-                id: c.id,
-                compression: c.compression,
-                crc64xor: c.crc64xor,
-                num_of_entries: c.number_of_entries as u64,
-            }],
-            size: c.file_real_size,
-            input_max_ts: c.min_ts,
-            input_min_ts: c.max_ts,
-            compact_from_ts: 0,
-            compact_to_ts: u64::MAX,
-            min_key: c.min_key,
-            max_key: c.max_key,
-            subc_key: SubcompactionCollectKey {
-                cf: c.cf,
-                region_id: c.region_id,
-                ty: c.ty,
-                is_meta: c.is_meta,
-                table_id: c.table_id,
-            },
-            region_start_key: c.region_start_key,
-            region_end_key: c.region_end_key,
-        }
+        Self::of_many([c])
     }
 
     pub fn of_many(items: impl IntoIterator<Item = LogFile>) -> Self {
         let mut it = items.into_iter();
-        let mut c = Self::singleton(it.next().expect("of_many: empty iterator"));
+        let initial_file = it.next().expect("of_many: empty iterator");
+        let mut c = UnformedSubcompaction::by_file(&initial_file);
+        let key = SubcompactionCollectKey::by_file(&initial_file);
         for item in it {
+            assert_eq!(key, SubcompactionCollectKey::by_file(&item));
             c.add_file(item);
         }
-        c
-    }
 
-    pub fn add_file(&mut self, c: LogFile) {
-        self.inputs.push(Input {
-            key_value_size: c.hacky_key_value_size(),
-            id: c.id,
-            compression: c.compression,
-            crc64xor: c.crc64xor,
-            num_of_entries: c.number_of_entries as u64,
-        });
-        self.size += c.file_real_size;
-        self.input_max_ts = self.input_max_ts.max(c.min_ts);
-        self.input_min_ts = self.input_min_ts.min(c.max_ts);
-        if self.min_key > c.min_key {
-            self.min_key = c.min_key;
-        }
-        if self.max_key < c.max_key {
-            self.max_key = c.max_key;
-        }
-
-        assert_eq!(c.ty, self.ty);
-        assert_eq!(c.region_id, self.region_id);
-        assert_eq!(c.cf, self.cf);
+        c.compose(
+            &key,
+            &CollectSubcompactionConfig {
+                compact_from_ts: 0,
+                compact_to_ts: u64::MAX,
+                subcompaction_size_threshold: 0,
+            },
+        )
     }
 }
 
@@ -195,7 +162,7 @@ impl Ord for SortByOffset {
 /// Collecting metadata of subcomapctions.
 ///
 /// Finally, it calculates which files can be deleted.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct CompactionRunInfoBuilder {
     files: HashMap<Arc<str>, BTreeSet<SortByOffset>>,
     compaction: brpb::LogFileCompaction,
@@ -393,7 +360,7 @@ mod test {
         let subc = Subcompaction::singleton(m.physical_files[0].files[0].clone());
         let res = cr.run(subc, Default::default()).await.unwrap();
         coll.add_subcompaction(&res);
-        let mig = coll.mig(st.storage().as_ref()).await.unwrap();
+        let mig = dbg!(&coll).mig(st.storage().as_ref()).await.unwrap();
         assert_eq!(mig.edit_meta.len(), 1);
         assert!(!mig.edit_meta[0].destruct_self);
 

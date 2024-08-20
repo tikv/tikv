@@ -1,9 +1,9 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
-use std::{collections::HashMap, sync::Arc, task::ready};
+use std::{cmp::Reverse, collections::HashMap, sync::Arc, task::ready};
 
 use tokio_stream::Stream;
 
-use super::{Input, SubcompactionCollectKey};
+use super::{Input, SubcompactionCollectKey, UnformedSubcompaction};
 use crate::{
     compaction::Subcompaction,
     errors::{Result, TraceResultExt},
@@ -13,16 +13,6 @@ use crate::{
 };
 
 /// A collecting subcompaction.
-struct UnformedSubcompaction {
-    size: u64,
-    inputs: Vec<Input>,
-    min_ts: u64,
-    max_ts: u64,
-    min_key: Arc<[u8]>,
-    max_key: Arc<[u8]>,
-    region_start_key: Arc<[u8]>,
-    region_end_key: Arc<[u8]>,
-}
 
 /// Collecting a stream of [`LogFile`], and generate a stream of compactions.
 #[pin_project::pin_project]
@@ -82,27 +72,10 @@ struct SubcompactionCollector {
 }
 
 impl SubcompactionCollector {
-    /// Convert a log file to an input of compaction.
-    fn to_input(file: &LogFile) -> Input {
-        Input {
-            id: file.id.clone(),
-            compression: file.compression,
-            crc64xor: file.crc64xor,
-            key_value_size: file.hacky_key_value_size(),
-            num_of_entries: file.number_of_entries as u64,
-        }
-    }
-
     /// Adding a new log file input to the collector.
     fn add_new_file(&mut self, file: LogFile) -> Option<Subcompaction> {
         use std::collections::hash_map::Entry;
-        let key = SubcompactionCollectKey {
-            is_meta: file.is_meta,
-            region_id: file.region_id,
-            cf: file.cf,
-            ty: file.ty,
-            table_id: file.table_id,
-        };
+        let key = SubcompactionCollectKey::by_file(&file);
 
         // Skip out-of-range files and schema meta files.
         // Meta files need to have a simpler format so other BR client can easily open
@@ -122,57 +95,17 @@ impl SubcompactionCollector {
             Entry::Occupied(mut o) => {
                 let key = *o.key();
                 let u = o.get_mut();
-                u.inputs.push(Self::to_input(&file));
-                u.size += file.file_real_size;
-                u.min_ts = u.min_ts.min(file.min_ts);
-                u.max_ts = u.max_ts.max(file.max_ts);
-                if u.max_key < file.max_key {
-                    u.max_key = file.max_key;
-                }
-                if u.min_key > file.min_key {
-                    u.min_key = file.min_key;
-                }
-                // Even from the same region ID, the region boundary varies due to split or
-                // merge. We choose the largest boundary here.
-                if u.region_start_key > file.region_start_key {
-                    u.region_start_key = file.region_start_key;
-                }
-                if EndKey(&u.region_end_key) < EndKey(&file.region_end_key) {
-                    u.region_end_key = file.region_end_key;
-                }
-
+                u.add_file(file);
                 if u.size > self.cfg.subcompaction_size_threshold {
-                    let c = Subcompaction {
-                        inputs: std::mem::take(&mut u.inputs),
-                        size: u.size,
-                        input_min_ts: u.min_ts,
-                        input_max_ts: u.max_ts,
-                        min_key: u.min_key.clone(),
-                        max_key: u.max_key.clone(),
-                        compact_from_ts: self.cfg.compact_from_ts,
-                        compact_to_ts: self.cfg.compact_to_ts,
-                        subc_key: key.clone(),
-                        region_start_key: Arc::clone(&u.region_start_key),
-                        region_end_key: Arc::clone(&u.region_end_key),
-                    };
-                    o.remove();
+                    let uc = o.remove();
+                    let c = uc.compose(&key, &self.cfg);
                     self.stat.compactions_out += 1;
                     self.stat.bytes_out += c.size;
                     return Some(c);
                 }
             }
             Entry::Vacant(v) => {
-                let u = UnformedSubcompaction {
-                    size: file.file_real_size,
-                    inputs: vec![Self::to_input(&file)],
-                    min_ts: file.min_ts,
-                    max_ts: file.max_ts,
-                    min_key: file.min_key.clone(),
-                    max_key: file.max_key.clone(),
-                    region_start_key: file.region_start_key.clone(),
-                    region_end_key: file.region_end_key.clone(),
-                };
-                v.insert(u);
+                v.insert(UnformedSubcompaction::by_file(&file));
             }
         }
         None
@@ -182,22 +115,9 @@ impl SubcompactionCollector {
     /// subcompactions. These subcompaction will be undersized.
     fn take_pending_subcompactions(&mut self) -> impl Iterator<Item = Subcompaction> + '_ {
         self.items.drain().map(|(key, c)| {
-            let c = Subcompaction {
-                inputs: c.inputs,
-                size: c.size,
-                input_max_ts: c.max_ts,
-                input_min_ts: c.min_ts,
-                min_key: c.min_key,
-                max_key: c.max_key,
-                compact_from_ts: self.cfg.compact_from_ts,
-                compact_to_ts: self.cfg.compact_to_ts,
-                subc_key: key,
-                region_start_key: c.region_start_key,
-                region_end_key: c.region_end_key,
-            };
             // Hacking: update the statistic when we really yield the compaction.
             // (At `poll_next`.)
-            c
+            c.compose(&key, &self.cfg)
         })
     }
 }
@@ -277,8 +197,8 @@ mod test {
             table_id: 0,
             resolved_ts: 0,
             sha256: Arc::from([]),
-            region_start_key: Arc::from([]),
-            region_end_key: Arc::from([]),
+            region_start_key: None,
+            region_end_key: None,
         }
     }
 
@@ -476,37 +396,80 @@ mod test {
     async fn test_region_boundary() {
         let r = SubcompactionCollectKey::of_region;
         let rr = |mut l: LogFile, start: &[u8], end: &[u8]| {
-            l.region_start_key = start.to_vec().into_boxed_slice().into();
-            l.region_end_key = end.to_vec().into_boxed_slice().into();
+            l.region_start_key = Some(start.to_vec().into_boxed_slice().into());
+            l.region_end_key = Some(end.to_vec().into_boxed_slice().into());
             l
         };
 
-        let files = [
-            rr(log_file("a", 1, r(1)), b"001", b"010"),
-            rr(log_file("b", 2, r(1)), b"000", b"012"),
-            rr(log_file("c", 3, r(1)), b"003", b""),
-            rr(log_file("d", 4, r(1)), b"004", b"020"),
+        struct Input<'a> {
+            files: &'a [LogFile],
+            total_size: u64,
+            start_key: Option<&'a [u8]>,
+            end_key: Option<&'a [u8]>,
+        }
+
+        async fn run(input: Input<'_>) {
+            let collector = CollectSubcompaction::new(
+                stream::iter(input.files.iter().cloned().map(Ok)),
+                CollectSubcompactionConfig {
+                    compact_from_ts: 0,
+                    compact_to_ts: u64::MAX,
+                    subcompaction_size_threshold: 128,
+                },
+            );
+
+            let res = collector
+                .map_ok(|v| (v.size, v.region_id, v.region_start_key, v.region_end_key))
+                .try_collect::<Vec<_>>()
+                .await
+                .unwrap();
+
+            assert_eq!(res.len(), 1);
+            assert_eq!(res[0].0, input.total_size);
+            assert_eq!(res[0].1, 1);
+            assert_eq!(res[0].2.as_deref(), input.start_key);
+            assert_eq!(res[0].3.as_deref(), input.end_key);
+        }
+
+        let cases = [
+            Input {
+                files: &[
+                    log_file("z", 0, r(1)),
+                    rr(log_file("a", 1, r(1)), b"001", b"010"),
+                    rr(log_file("b", 2, r(1)), b"000", b"012"),
+                    rr(log_file("c", 3, r(1)), b"003", b""),
+                    rr(log_file("d", 4, r(1)), b"004", b"020"),
+                ],
+                total_size: 10,
+                start_key: None,
+                end_key: None,
+            },
+            Input {
+                files: &[
+                    rr(log_file("a", 1, r(1)), b"001", b"010"),
+                    rr(log_file("b", 2, r(1)), b"004", b"012"),
+                    rr(log_file("c", 3, r(1)), b"003", b""),
+                    rr(log_file("d", 4, r(1)), b"002", b"020"),
+                ],
+                total_size: 10,
+                start_key: Some(b"001"),
+                end_key: Some(b""),
+            },
+            Input {
+                files: &[
+                    rr(log_file("a", 1, r(1)), b"006", b"010"),
+                    rr(log_file("b", 2, r(1)), b"004", b"012"),
+                    rr(log_file("c", 3, r(1)), b"003", b"024"),
+                    rr(log_file("d", 4, r(1)), b"002", b"020"),
+                ],
+                total_size: 10,
+                start_key: Some(b"002"),
+                end_key: Some(b"024"),
+            },
         ];
 
-        let collector = CollectSubcompaction::new(
-            stream::iter(files.iter().cloned().map(Ok)),
-            CollectSubcompactionConfig {
-                compact_from_ts: 0,
-                compact_to_ts: u64::MAX,
-                subcompaction_size_threshold: 128,
-            },
-        );
-
-        let res = collector
-            .map_ok(|v| (v.size, v.region_id, v.region_start_key, v.region_end_key))
-            .try_collect::<Vec<_>>()
-            .await
-            .unwrap();
-
-        assert_eq!(res.len(), 1);
-        assert_eq!(res[0].0, 10);
-        assert_eq!(res[0].1, 1);
-        assert_eq!(res[0].2.as_ref(), b"000");
-        assert_eq!(res[0].3.as_ref(), b"");
+        for c in cases {
+            run(c).await;
+        }
     }
 }
