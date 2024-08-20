@@ -62,6 +62,7 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserFirst {
                 Bytes => BytesRef<'static>,
                 Enum => EnumRef<'static>,
                 Set => SetRef<'static>,
+                VectorFloat32 => VectorFloat32Ref<'static>,
             ],
             match eval_type {
                 EvalType::TT => Ok(Box::new(AggrFnFirst::<TT>::new())),
