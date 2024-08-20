@@ -13,7 +13,7 @@ use std::{
 use collections::HashMap;
 use engine_traits::{CacheRange, EvictReason, FailedReason};
 use kvproto::metapb::Region;
-use tikv_util::{info, time::Instant};
+use tikv_util::{info, time::Instant, warn};
 
 use crate::{metrics::observe_eviction_duration, read::RangeCacheSnapshotMeta};
 
@@ -184,10 +184,10 @@ impl RangeMeta {
     pub(crate) fn set_state(&mut self, new_state: RegionState) {
         assert!(self.validate_update_region_state(new_state));
         info!(
-            "update region meta state"; 
-            "region_id" => self.region.id, 
+            "ime update region meta state";
+            "region_id" => self.region.id,
             "epoch" => self.region.get_region_epoch().version,
-            "curr_state" => ?self.state, 
+            "curr_state" => ?self.state,
             "new_state" => ?new_state);
         self.state = new_state;
     }
@@ -399,7 +399,9 @@ impl RegionManager {
             && cached_meta.region.get_region_epoch().version != region.get_region_epoch().version
             && !cached_meta.amend_pending_region(region)
         {
-            info!("remove outdated pending region"; "pending_region" => ?cached_meta.region, "new_region" => ?region);
+            info!("ime remove outdated pending region";
+                "pending_region" => ?cached_meta.region,
+                "new_region" => ?region);
             self.remove_region(region.id);
             return None;
         }
@@ -440,14 +442,14 @@ impl RegionManager {
                 removed_regions.push(region_meta.region.id);
                 return true;
             }
-            tikv_util::warn!("load region overlaps with existing region"; 
+            warn!("ime load region overlaps with existing region";
                 "region" => ?region,
                 "exist_meta" => ?region_meta);
             overlapped_region_state = Some(region_meta.state);
             false
         });
         if !removed_regions.is_empty() {
-            info!("load region meet pending region with stale epoch, removed";
+            info!("ime load region meet pending region with stale epoch, removed";
                 "region" => ?region, "stale_regions" => ?removed_regions);
         }
         for id in removed_regions {
@@ -618,7 +620,7 @@ impl RegionManager {
         evict_reason: EvictReason,
     ) -> Vec<Region> {
         info!(
-            "try to evict region";
+            "ime try to evict region";
             "evict_region" => ?evict_region,
             "reason" => ?evict_reason,
         );
@@ -645,8 +647,8 @@ impl RegionManager {
             true
         });
         if evict_ids.is_empty() {
-            info!("evict a region that is not cached"; 
-                "reason" => ?evict_reason, 
+            info!("ime evict a region that is not cached";
+                "reason" => ?evict_reason,
                 "region" => ?evict_region);
         }
         for rid in evict_ids {
@@ -675,7 +677,7 @@ impl RegionManager {
         if prev_state == RegionState::Pending {
             let meta = self.remove_region(id);
             info!(
-                "evict overlap pending region in cache range engine";
+                "ime evict overlap pending region in cache range engine";
                 "reason" => ?evict_reason,
                 "target_region" => ?evict_region,
                 "overlap_region" => ?meta.region,
@@ -683,7 +685,8 @@ impl RegionManager {
             );
             return None;
         } else if prev_state.is_evict() {
-            info!("region already evicted"; "region" => ?meta.region, "state" => ?prev_state);
+            info!("ime region already evicted";
+                "region" => ?meta.region, "state" => ?prev_state);
             return None;
         }
 
@@ -694,7 +697,7 @@ impl RegionManager {
         };
 
         info!(
-            "evict overlap region in cache range engine";
+            "ime evict overlap region in cache range engine";
             "reason" => ?evict_reason,
             "target_region" => ?evict_region,
             "overlap_region" => ?meta.region,
@@ -731,7 +734,7 @@ impl RegionManager {
                 evict_info.reason,
             );
             info!(
-                "range eviction done";
+                "ime range eviction done";
                 "region" => ?r,
             );
         }
@@ -798,11 +801,12 @@ impl RegionManager {
         if let Some(region_meta) = self.region_meta(source_region.id) {
             // if region is evicting, skip handling split for simplicity.
             if region_meta.state.is_evict() {
-                info!("region is evicted, skip split"; "meta" => ?&region_meta, "new_regions" => ?new_regions);
+                info!("ime region is evicted, skip split";
+                    "meta" => ?&region_meta, "new_regions" => ?new_regions);
                 return;
             }
         } else {
-            info!("split source region not cached"; "region_id" => source_region.id);
+            info!("ime split source region not cached"; "region_id" => source_region.id);
             return;
         }
 
@@ -822,15 +826,15 @@ impl RegionManager {
                     && (source_region.end_key.is_empty()
                         || (source_region.end_key >= r.end_key && !r.end_key.as_slice().is_empty()))
             });
-            info!("[IME] handle split region met pending region epoch stale"; 
-                "cached" => ?region_meta, 
-                "split_source" => ?source_region, 
+            info!("ime handle split region met pending region epoch stale";
+                "cached" => ?region_meta,
+                "split_source" => ?source_region,
                 "cache_new_regions" => ?new_regions);
         }
 
-        info!("handle region split"; 
-            "region_id" => source_region.id, 
-            "meta" => ?region_meta, 
+        info!("ime handle region split";
+            "region_id" => source_region.id,
+            "meta" => ?region_meta,
             "new_regions" => ?new_regions);
 
         for r in new_regions {

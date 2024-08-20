@@ -151,7 +151,7 @@ impl RangeStatsManager {
                     let curr_num_regions = self.max_num_regions();
                     let next_num_regions =
                         curr_num_regions + room_to_grow / (self.expected_region_size * 3);
-                    info!("increasing number of top regions to cache";
+                    info!("ime increasing number of top regions to cache";
                         "from" => curr_num_regions,
                         "to" => next_num_regions,
                     );
@@ -165,7 +165,7 @@ impl RangeStatsManager {
                     .checked_sub(1.max(to_shrink_by / self.expected_region_size))
                     .unwrap_or(1)
                     .max(1);
-                info!("decreasing number of top regions to cache";
+                info!("ime decreasing number of top regions to cache";
                     "from" => curr_num_regions,
                     "to" => next_num_regions,
                 );
@@ -199,7 +199,7 @@ impl RangeStatsManager {
         regions_added_out: &mut Vec<Region>,
         regions_removed_out: &mut Vec<Region>,
     ) {
-        info!("collect_changed_ranges"; "num_regions" => self.max_num_regions());
+        info!("ime collect_changed_ranges"; "num_regions" => self.max_num_regions());
         let curr_top_regions = self
             .info_provider
             .get_top_regions(Some(NonZeroUsize::try_from(self.max_num_regions()).unwrap()))
