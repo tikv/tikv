@@ -2542,6 +2542,7 @@ dependencies = [
  "fail",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "online_config",
  "prometheus",
  "prometheus-static-metric",
@@ -2551,6 +2552,7 @@ dependencies = [
  "slog",
  "slog-global",
  "tempfile",
+ "test_util",
  "tikv_util",
  "txn_types",
 ]
@@ -2914,7 +2916,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#224bed6ffa29ba3bbe9a91ef6bda7186200c59a8"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c92c467a3ab0b60484a0db83fcf89366791716cd"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -2933,7 +2935,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#224bed6ffa29ba3bbe9a91ef6bda7186200c59a8"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c92c467a3ab0b60484a0db83fcf89366791716cd"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4816,7 +4818,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#224bed6ffa29ba3bbe9a91ef6bda7186200c59a8"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c92c467a3ab0b60484a0db83fcf89366791716cd"
 dependencies = [
  "libc 0.2.151",
  "librocksdb_sys",
@@ -5304,7 +5306,6 @@ dependencies = [
  "error_code",
  "fail",
  "file_system",
- "fs2",
  "futures 0.3.15",
  "grpcio",
  "grpcio-health",
@@ -6203,6 +6204,7 @@ dependencies = [
  "raftstore-v2",
  "rand 0.8.5",
  "rand_xorshift",
+ "range_cache_memory_engine",
  "resource_control",
  "resource_metering",
  "security",
@@ -6753,6 +6755,7 @@ dependencies = [
  "derive_more",
  "error_code",
  "fail",
+ "fs2",
  "futures 0.3.15",
  "futures-util",
  "gag",
@@ -7061,6 +7064,7 @@ dependencies = [
  "pin-project",
  "prometheus",
  "slab",
+ "slog",
 ]
 
 [[package]]

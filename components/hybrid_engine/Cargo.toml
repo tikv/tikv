@@ -19,6 +19,7 @@ engine_traits = { workspace = true }
 txn_types = { workspace = true }
 tikv_util = { workspace = true }
 engine_rocks = { workspace = true }
+log_wrappers = { workspace = true }
 online_config = { workspace = true }
 range_cache_memory_engine = { workspace = true }
 slog = { workspace = true }
@@ -35,3 +36,4 @@ kvproto = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3.0"
+test_util = { workspace = true }

@@ -59,7 +59,7 @@ pub struct Config {
     /// Prevent files with size less than this being swapped out.
     /// We perfer to swap larger files for reducing IOps.
     pub minimal_swap_out_file_size: usize,
-    /// The buffer size for writting swap files.
+    /// The buffer size for writing swap files.
     /// Even some of files has been swapped out, when new content appended,
     /// those content would be kept in memory before they reach a threshold.
     /// This would help us to reduce the I/O system calls.
@@ -334,7 +334,7 @@ impl TempFilePool {
         self.current.load(Ordering::Acquire)
     }
 
-    /// Create a file for writting.
+    /// Create a file for writing.
     /// This function is synchronous so we can call it easier in the polling
     /// context. (Anyway, it is really hard to call an async function in the
     /// polling context.)

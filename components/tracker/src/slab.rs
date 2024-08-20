@@ -188,6 +188,35 @@ impl Default for TrackerToken {
     }
 }
 
+pub struct TrackerTokenArray<'a>(&'a [TrackerToken]);
+impl<'a> slog::Value for TrackerTokenArray<'a> {
+    fn serialize(
+        &self,
+        _record: &slog::Record<'_>,
+        key: slog::Key,
+        serializer: &mut dyn slog::Serializer,
+    ) -> slog::Result {
+        let trackers_str = self
+            .0
+            .iter()
+            .map(|tracker_token| {
+                format!(
+                    "{:?}",
+                    GLOBAL_TRACKERS.with_tracker(*tracker_token, |t| t.req_info.clone())
+                )
+            })
+            .collect::<Vec<String>>()
+            .join(", ");
+        serializer.emit_str(key, &trackers_str)
+    }
+}
+
+impl<'a> TrackerTokenArray<'a> {
+    pub fn new(tokens: &'a [TrackerToken]) -> Self {
+        TrackerTokenArray(tokens)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{sync::Arc, thread};

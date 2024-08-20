@@ -817,7 +817,7 @@ pub trait RegionInfoProvider: Send + Sync {
 
     fn find_region_by_id(
         &self,
-        _reigon_id: u64,
+        _region_id: u64,
         _callback: Callback<Option<RegionInfo>>,
     ) -> Result<()> {
         unimplemented!()

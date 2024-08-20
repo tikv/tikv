@@ -286,7 +286,7 @@ fn test_stale_read_during_merging() {
     // Note: L: leader, F: follower, X: peer is not exist.
     // TODO: what if cluster runs slow and lease is expired.
     // Epoch changed by prepare merge.
-    // We can not use `get_region_with` to get the latest info of reigon 1000,
+    // We can not use `get_region_with` to get the latest info of region 1000,
     // because leader1 is not paused, it executes commit merge very fast
     // and reports pd, its range covers region1000.
     //

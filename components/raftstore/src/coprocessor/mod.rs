@@ -87,6 +87,7 @@ pub struct RegionState {
     pub peer_id: u64,
     pub pending_remove: bool,
     pub modified_region: Option<Region>,
+    pub new_regions: Vec<Region>,
 }
 
 /// Context for exec observers of mutation to be applied to ApplyContext.
