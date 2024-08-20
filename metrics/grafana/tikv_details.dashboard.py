@@ -7367,6 +7367,44 @@ def PessimisticLocking() -> RowPanel:
             ),
         ]
     )
+    layout.row(
+        [
+            graph_panel(
+                title="Deadlock detector sizes",
+                description="The number of entries, blockers and total keys in deadlock detector",
+                targets=[
+                    target(
+                        expr=expr_sum("tikv_lock_manager_detector_wait_for_map_size"),
+                        legend_format="entry",
+                    ),
+                    target(
+                        expr=expr_sum("tikv_lock_manager_detector_total_blockers"),
+                        legend_format="blockers",
+                    ),
+                    target(
+                        expr=expr_sum("tikv_lock_manager_detector_total_keys"),
+                        legend_format="keys",
+                    ),
+                    target(
+                        expr=expr_sum("tikv_lock_manager_detector_send_channel_size"),
+                        legend_format="send_channel",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="WaitTable memory",
+                description="Estimated memory usage of the wait table",
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_lock_manager_waiter_wait_table_estimated_mem"
+                        ),
+                        legend_format="mem",
+                    ),
+                ],
+            ),
+        ],
+    )
     return layout.row_panel
 
 

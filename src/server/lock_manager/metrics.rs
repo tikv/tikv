@@ -66,7 +66,7 @@ lazy_static! {
         "Heartbeat of the leader of the deadlock detector"
     )
     .unwrap();
-    pub static ref DETECTOR_SEND_BUFFER_SIZE_GAUGE: IntGauge = register_int_gauge!(
+    pub static ref DETECTOR_SEND_CHANNEL_SIZE_GAUGE: IntGauge = register_int_gauge!(
         "tikv_lock_manager_detector_send_buffer_size",
         "Size of the send buffer of the deadlock detector"
     )
