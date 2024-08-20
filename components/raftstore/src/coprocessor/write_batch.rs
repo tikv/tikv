@@ -24,6 +24,7 @@ pub trait ObservableWriteBatch: Send {
     fn rollback_to_save_point(&mut self);
     fn clear(&mut self);
     fn write_opt(&mut self, opts: &WriteOptions, seq_num: u64);
+    fn post_write_opt(&mut self);
     fn prepare_for_region(&mut self, region: &Region);
 }
 
@@ -51,14 +52,18 @@ impl<WB: WriteBatch> WriteBatch for WriteBatchWrapper<WB> {
 
     fn write_callback_opt(&mut self, opts: &WriteOptions, mut cb: impl FnMut(u64)) -> Result<u64> {
         let called = AtomicBool::new(false);
-        self.write_batch.write_callback_opt(opts, |s| {
+        let res = self.write_batch.write_callback_opt(opts, |s| {
             if !called.fetch_or(true, Ordering::SeqCst) {
                 if let Some(w) = self.observable_write_batch.as_mut() {
                     w.write_opt(opts, s)
                 }
             }
             cb(s);
-        })
+        });
+        if let Some(w) = self.observable_write_batch.as_mut() {
+            w.post_write_opt();
+        }
+        res
     }
 
     fn data_size(&self) -> usize {

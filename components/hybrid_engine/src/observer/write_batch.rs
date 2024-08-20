@@ -71,6 +71,9 @@ impl ObservableWriteBatch for HybridObservableWriteBatch {
         self.cache_write_batch.set_sequence_number(seq_num).unwrap();
         self.cache_write_batch.write_opt(opts).unwrap();
     }
+    fn post_write_opt(&mut self) {
+        self.cache_write_batch.maybe_compact_lock_cf();
+    }
     fn prepare_for_region(&mut self, region: &Region) {
         self.cache_write_batch.prepare_for_region(region);
     }
