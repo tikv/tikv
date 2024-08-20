@@ -424,7 +424,7 @@ pub fn check_term(header: &RaftRequestHeader, term: u64) -> Result<()> {
     if header.get_term() == 0 || term <= header.get_term() + 1 {
         Ok(())
     } else {
-        // If header's term is 2 verions behind current term,
+        // If header's term is 2 versions behind current term,
         // leadership may have been changed away.
         Err(Error::StaleCommand)
     }
@@ -2304,7 +2304,7 @@ mod tests {
         header.set_term(7);
         check_term(&header, 7).unwrap();
         check_term(&header, 8).unwrap();
-        // If header's term is 2 verions behind current term,
+        // If header's term is 2 versions behind current term,
         // leadership may have been changed away.
         check_term(&header, 9).unwrap_err();
         check_term(&header, 10).unwrap_err();

@@ -1,5 +1,6 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
+#![feature(assert_matches)]
 #![feature(let_chains)]
 #![allow(internal_features)]
 #![feature(core_intrinsics)]
@@ -38,7 +39,7 @@ pub use keys::{
     InternalKey, ValueType,
 };
 pub use metrics::flush_range_cache_engine_statistics;
-pub use range_manager::RangeCacheStatus;
+pub use range_manager::{RangeCacheStatus, RegionState};
 pub use statistics::Statistics as RangeCacheMemoryEngineStatistics;
 use txn_types::TimeStamp;
 pub use write_batch::RangeCacheWriteBatch;
@@ -65,10 +66,8 @@ impl Default for RangeCacheEngineConfig {
         Self {
             enabled: false,
             gc_interval: ReadableDuration(Duration::from_secs(180)),
-            load_evict_interval: ReadableDuration(Duration::from_secs(300)), /* Each load/evict
-                                                                              * operation should
-                                                                              * run within five
-                                                                              * minutes. */
+            // Each load/evict operation should run within five minutes.
+            load_evict_interval: ReadableDuration(Duration::from_secs(300)),
             soft_limit_threshold: None,
             hard_limit_threshold: None,
             expected_region_size: None,

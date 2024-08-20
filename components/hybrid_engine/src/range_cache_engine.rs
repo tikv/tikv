@@ -1,6 +1,6 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{CacheRange, EvictReason, KvEngine, RangeCacheEngine, RangeCacheEngineExt};
+use engine_traits::{KvEngine, RangeCacheEngine, RangeCacheEngineExt, RegionEvent};
 
 use crate::HybridEngine;
 
@@ -14,7 +14,7 @@ where
     }
 
     #[inline]
-    fn evict_range(&self, range: &CacheRange, evict_range: EvictReason) {
-        self.range_cache_engine().evict_range(range, evict_range);
+    fn on_region_event(&self, event: RegionEvent) {
+        self.range_cache_engine().on_region_event(event);
     }
 }

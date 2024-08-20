@@ -96,8 +96,9 @@ impl MemoryController {
     }
 
     #[inline]
-    pub(crate) fn set_memory_checking(&self, v: bool) {
-        self.memory_checking.store(v, Ordering::Relaxed);
+    // return the previous status.
+    pub(crate) fn set_memory_checking(&self, v: bool) -> bool {
+        self.memory_checking.swap(v, Ordering::Relaxed)
     }
 
     #[inline]
