@@ -646,6 +646,10 @@ fn test_load_with_gc() {
     engine.snapshot(region.id, 0, range, 7, 100).unwrap();
 }
 
+// test in-memory-engine can handle region split event after load region task
+// is scheduled but before the task start running. As source region is split
+// into multiple regions, IME should handle all the regions with in the range
+// and update their state to active when batch loading task is finished.
 #[test]
 fn test_region_split_before_batch_loading_start() {
     let path = Builder::new().prefix("test").tempdir().unwrap();
@@ -668,6 +672,7 @@ fn test_region_split_before_batch_loading_start() {
 
     let region = new_region(1, b"k00", b"k30");
 
+    // write some data into rocksdb to trigger batch loading.
     for i in 0..30 {
         let key = format!("k{:02}", i);
         put_data_in_rocks(
@@ -683,6 +688,7 @@ fn test_region_split_before_batch_loading_start() {
 
     engine.load_region(region.clone()).unwrap();
 
+    // use write batch to trigger scheduling pending region loading task.
     let mut wb = engine.write_batch();
     wb.prepare_for_region(&region);
     wb.set_sequence_number(10).unwrap();
@@ -704,22 +710,20 @@ fn test_region_split_before_batch_loading_start() {
     // wait for task start.
     rx.recv().unwrap();
 
+    // split source region into multiple new regions.
     let mut new_regions = vec![
         new_region(1, b"k00", b"k10"),
         new_region(2, b"k10", b"k20"),
         new_region(3, b"k20", b"k30"),
     ];
-
     for r in &mut new_regions {
         r.mut_region_epoch().version = 2;
     }
-
     let event = RegionEvent::Split {
         source: region.clone(),
         new_regions: new_regions.clone(),
     };
     engine.on_region_event(event);
-
     {
         let core = engine.core().read();
         for i in 1..=3 {
@@ -730,8 +734,10 @@ fn test_region_split_before_batch_loading_start() {
         }
     }
 
+    // unblock batch loading.
     fail::remove("on_start_loading_region");
 
+    // all new regions should be active after batch loading task finished.
     test_util::eventually(
         Duration::from_millis(50),
         Duration::from_millis(2000),
