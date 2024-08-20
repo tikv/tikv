@@ -3666,6 +3666,10 @@ pub struct GenSnapTask {
     pub to_peer: metapb::Peer,
     // Tracks remaining iterations before sending a snapshot precheck request.
     pub precheck_remaining_ticks: usize,
+
+    // The following fields are used to report approximate size and keys of the snapshot.
+    approximate_size: Option<u64>,
+    approximate_keys: Option<u64>,
 }
 
 impl GenSnapTask {
@@ -3684,6 +3688,8 @@ impl GenSnapTask {
             for_balance: false,
             to_peer,
             precheck_remaining_ticks: 0,
+            approximate_size: None,
+            approximate_keys: None,
         }
     }
 
@@ -3705,6 +3711,8 @@ impl GenSnapTask {
             .store(last_applied_state.applied_index, Ordering::SeqCst);
         let snapshot = RegionTask::Gen {
             region_id: self.region_id,
+            approximate_keys: self.approximate_keys,
+            approximate_size: self.approximate_size,
             notifier: self.snap_notifier,
             for_balance: self.for_balance,
             last_applied_term,
@@ -3717,6 +3725,11 @@ impl GenSnapTask {
         };
         box_try!(region_sched.schedule(snapshot));
         Ok(())
+    }
+
+    pub fn set_approximate_size_and_keys(&mut self, size: Option<u64>, keys: Option<u64>) {
+        self.approximate_size = size;
+        self.approximate_keys = keys;
     }
 }
 
