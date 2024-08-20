@@ -110,6 +110,7 @@ struct SnapChunk {
     first: Option<SnapshotChunk>,
     snap: Box<Snapshot>,
     remain_bytes: usize,
+    io_type: IoType,
 }
 
 pub const SNAP_CHUNK_LEN: usize = 1024 * 1024;
@@ -128,6 +129,7 @@ impl Stream for SnapChunk {
             n if n > SNAP_CHUNK_LEN => vec![0; SNAP_CHUNK_LEN],
             n => vec![0; n],
         };
+        let _with_io_type = WithIoType::new(self.io_type);
         let result = self.snap.read_exact(buf.as_mut_slice());
         match result {
             Ok(_) => {
@@ -164,7 +166,7 @@ pub fn send_snap(
 
     let send_timer = SEND_SNAP_HISTOGRAM.start_coarse_timer();
 
-    let (key, snap_start, generate_duration_sec) = {
+    let (key, snap_start, generate_duration_sec, io_type) = {
         let snap = msg.get_message().get_snapshot();
         let mut snap_data = RaftSnapshotData::default();
         if let Err(e) = snap_data.merge_from_bytes(snap.get_data()) {
@@ -173,7 +175,12 @@ pub fn send_snap(
         let key = SnapKey::from_region_snap(msg.get_region_id(), snap);
         let snap_start = snap_data.get_meta().get_start();
         let generate_duration_sec = snap_data.get_meta().get_generate_duration_sec();
-        (key, snap_start, generate_duration_sec)
+        let io_type = if snap_data.get_meta().get_for_balance() {
+            IoType::LoadBalance
+        } else {
+            IoType::Replication
+        };
+        (key, snap_start, generate_duration_sec, io_type)
     };
 
     mgr.register(key.clone(), SnapEntry::Sending);
@@ -198,6 +205,7 @@ pub fn send_snap(
             first: Some(first_chunk),
             snap: s,
             remain_bytes: total_size as usize,
+            io_type,
         }
     };
 

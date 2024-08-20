@@ -397,6 +397,7 @@ where
 
         let store_id = self.get_or_init_store_id();
         let mut stats = Stats::default();
+        let now = self.approximate_now_tso();
         self.region_read_progress.with(|registry| {
             for (region_id, read_progress) in registry {
                 let (leader_info, leader_store_id) = read_progress.dump_leader_info();
@@ -419,6 +420,9 @@ where
                     }
                 } else {
                     // follower safe-ts
+                    RTS_MIN_FOLLOWER_SAFE_TS_GAP_HISTOGRAM
+                        .observe(now.saturating_sub(TimeStamp::from(safe_ts).physical()) as f64);
+
                     if safe_ts > 0 && safe_ts < stats.min_follower_safe_ts.safe_ts {
                         stats.min_follower_safe_ts.set(*region_id, &core);
                     }
