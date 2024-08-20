@@ -47,12 +47,14 @@ pub enum FieldTypeTp {
     VarString = 0xfd,
     String = 0xfe,
     Geometry = 0xff,
+    TiDbVectorFloat32 = 0xe1,
 }
 
 impl FieldTypeTp {
     pub fn from_i32(i: i32) -> Option<FieldTypeTp> {
         if (i >= FieldTypeTp::Unspecified as i32 && i <= FieldTypeTp::Bit as i32)
             || (i >= FieldTypeTp::Json as i32 && i <= FieldTypeTp::Geometry as i32)
+            || (i == FieldTypeTp::TiDbVectorFloat32 as i32)
         {
             Some(unsafe { ::std::mem::transmute::<i32, FieldTypeTp>(i) })
         } else {
