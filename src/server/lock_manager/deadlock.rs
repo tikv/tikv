@@ -392,7 +392,7 @@ impl DetectTable {
         let mut total_blockers = 0;
         let mut total_keys = 0;
 
-        for (_, inner_map) in &self.wait_for_map {
+        for inner_map in self.wait_for_map.values() {
             total_blockers += inner_map.len();
             for locks in inner_map.values() {
                 total_keys += locks.keys.len();
