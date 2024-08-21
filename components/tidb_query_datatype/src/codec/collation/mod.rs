@@ -121,7 +121,7 @@ pub trait Collator: 'static + std::marker::Send + std::marker::Sync + std::fmt::
     }
 
     /// Compares `a` and `b` based on their SortKey.
-    fn sort_compare(a: &[u8], b: &[u8]) -> Result<Ordering>;
+    fn sort_compare(a: &[u8], b: &[u8], force_no_pad: bool) -> Result<Ordering>;
 
     /// Hashes `bstr` based on its SortKey directly.
     ///
@@ -238,7 +238,7 @@ where
 {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
-        C::sort_compare(self.inner.as_ref(), other.inner.as_ref()).unwrap()
+        C::sort_compare(self.inner.as_ref(), other.inner.as_ref(), false).unwrap()
             == std::cmp::Ordering::Equal
     }
 }
@@ -251,7 +251,7 @@ where
 {
     #[inline]
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        C::sort_compare(self.inner.as_ref(), other.inner.as_ref()).ok()
+        C::sort_compare(self.inner.as_ref(), other.inner.as_ref(), false).ok()
     }
 }
 
@@ -261,7 +261,7 @@ where
 {
     #[inline]
     fn cmp(&self, other: &Self) -> Ordering {
-        C::sort_compare(self.inner.as_ref(), other.inner.as_ref()).unwrap()
+        C::sort_compare(self.inner.as_ref(), other.inner.as_ref(), false).unwrap()
     }
 }
 
