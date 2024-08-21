@@ -433,7 +433,7 @@ impl TmpStorage {
     pub async fn try_run_subcompaction(&self, c: Subcompaction) -> Result<SubcompactionResult> {
         let cw = SubcompactionExec::<RocksEngine>::default_config(self.storage.clone());
         let ext = SubcompactExt::default();
-        Ok(cw.run(c, ext).await?)
+        cw.run(c, ext).await
     }
 
     #[track_caller]

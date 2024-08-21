@@ -66,11 +66,10 @@ mod all {
         let a_meta = WalkDir::new(suite.flushed_files.path().join("v1/backupmeta"))
             .contents_first(true)
             .into_iter()
-            .filter(|v| {
+            .find(|v| {
                 v.as_ref()
                     .is_ok_and(|v| v.file_name().as_bytes().ends_with(b".meta"))
             })
-            .next()
             .unwrap()
             .unwrap();
         let mut a_meta_content = protobuf::parse_from_bytes::<kvproto::brpb::Metadata>(

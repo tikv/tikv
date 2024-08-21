@@ -624,8 +624,8 @@ impl RouterInner {
     pub async fn do_flush(&self, cx: FlushContext<'_>) -> Option<u64> {
         let task = self.tasks.get(cx.task_name);
         match task {
-            Some(task_info) => {
-                let result = task_info.do_flush(cx).await;
+            Some(task_handler) => {
+                let result = task_handler.do_flush(cx).await;
                 // set false to flushing whether success or fail
                 task_handler.set_flushing_status(false);
 
@@ -1811,7 +1811,7 @@ mod tests {
         backend
     }
 
-    async fn task(name: String) -> Result<(StreamBackupTaskInfo, PathBuf)> {
+    async fn task_handler(name: String) -> Result<(StreamBackupTaskInfo, PathBuf)> {
         let mut stream_task = StreamBackupTaskInfo::default();
         stream_task.set_name(name);
         let storage_path = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
@@ -1883,7 +1883,7 @@ mod tests {
                 data_key_manager: None,
             },
         );
-        let (stream_task, storage_path) = task("dummy".to_owned()).await.unwrap();
+        let (stream_task, storage_path) = task_handler("dummy".to_owned()).await.unwrap();
         must_register_table(&router, stream_task, 1).await;
 
         let start_ts = write_simple_data(&router).await;
@@ -2019,17 +2019,17 @@ mod tests {
             task_handler.on_events(kv_events).await.unwrap();
         }
         // do_flush
-        task.set_flushing_status(true);
+        task_handler.set_flushing_status(true);
         let cx = FlushContext {
-            task_name: &task.task.info.name,
+            task_name: &task_handler.task.info.name,
             store_id: 1,
             resolved_regions: &EMPTY_RESOLVE,
             resolved_ts: TimeStamp::new(1),
         };
-        task.do_flush(cx).await.unwrap();
-        assert_eq!(task.flush_failure_count(), 0);
-        assert_eq!(task.files.read().await.is_empty(), true);
-        assert_eq!(task.flushing_files.read().await.is_empty(), true);
+        task_handler.do_flush(cx).await.unwrap();
+        assert_eq!(task_handler.flush_failure_count(), 0);
+        assert_eq!(task_handler.files.read().await.is_empty(), true);
+        assert_eq!(task_handler.flushing_files.read().await.is_empty(), true);
 
         // assert backup log files
         let mut meta_count = 0;
@@ -2156,7 +2156,7 @@ mod tests {
             resolved_regions: &EMPTY_RESOLVE,
             resolved_ts: TimeStamp::max(),
         };
-        let (task, _path) = task("error_prone".to_owned()).await?;
+        let (task, _path) = task_handler("error_prone".to_owned()).await?;
         must_register_table(router.as_ref(), task, 1).await;
         router.must_mut_task_info("error_prone", |i| {
             i.storage = Arc::new(ErrorStorage::with_first_time_error(i.storage.clone()))
@@ -2164,7 +2164,7 @@ mod tests {
         check_on_events_result(&router.on_events(build_kv_event(0, 10)).await);
         assert!(router.do_flush(cx).await.is_none());
         check_on_events_result(&router.on_events(build_kv_event(10, 10)).await);
-        let t = router.get_task_info("error_prone").await.unwrap();
+        let t = router.get_task_handler("error_prone").unwrap();
         let _ = router.do_flush(cx).await;
         assert_eq!(t.total_size() > 0, true);
 
@@ -2230,7 +2230,7 @@ mod tests {
                 data_key_manager: None,
             },
         ));
-        let (task, _path) = task("cleanup_test".to_owned()).await?;
+        let (task, _path) = task_handler("cleanup_test".to_owned()).await?;
         must_register_table(&router, task, 1).await;
         write_simple_data(&router).await;
         let tempfiles = router
@@ -2285,13 +2285,11 @@ mod tests {
                 data_key_manager: None,
             },
         ));
-        let (task, _path) = task("flush_failure".to_owned()).await?;
+        let (task, _path) = task_handler("flush_failure".to_owned()).await?;
         must_register_table(router.as_ref(), task, 1).await;
-        router
-            .must_mut_task_info("flush_failure", |i| {
-                i.storage = Arc::new(ErrorStorage::with_always_error(i.storage.clone()))
-            })
-            .await;
+        router.must_mut_task_info("flush_failure", |i| {
+            i.storage = Arc::new(ErrorStorage::with_always_error(i.storage.clone()))
+        });
         let cx = FlushContext {
             task_name: "flush_failure",
             store_id: 42,
@@ -2624,7 +2622,7 @@ mod tests {
             },
         ));
 
-        let (task, _path) = task("race".to_owned()).await?;
+        let (task, _path) = task_handler("race".to_owned()).await?;
         must_register_table(router.as_ref(), task, 1).await;
         router.must_mut_task_info("race", |i| {
             i.storage = Arc::new(NoopStorage::default());
