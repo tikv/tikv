@@ -986,7 +986,6 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let wait_timeout = lock_info.parameters.wait_timeout;
 
         let diag_ctx = DiagnosticContext {
-            key: lock_info.key.to_raw().unwrap(),
             resource_group_tag: ctx.get_resource_group_tag().into(),
             tracker,
         };

@@ -408,11 +408,12 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
         }
         Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
             box MvccErrorInner::Deadlock {
+                start_ts: _,
                 lock_ts,
                 lock_key,
                 deadlock_key_hash,
+                deadlock_key,
                 wait_chain,
-                ..
             },
         ))))) => {
             warn!("txn deadlocks"; "err" => ?err);
@@ -420,6 +421,7 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
             deadlock.set_lock_ts(lock_ts.into_inner());
             deadlock.set_lock_key(lock_key.to_owned());
             deadlock.set_deadlock_key_hash(*deadlock_key_hash);
+            deadlock.set_deadlock_key(deadlock_key.to_vec());
             deadlock.set_wait_chain(wait_chain.clone().into());
             key_error.set_deadlock(deadlock);
         }

@@ -2845,7 +2845,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#0ad602a429126e39bd4a87c687be64f9ae173c02"
+source = "git+https://github.com/MyonKeminta/kvproto?branch=m/deadlock-replace-lock-by-key#958193645707aa39554a68d01973c4b63cede10b"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -7089,7 +7089,7 @@ version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
- "cfg-if 0.1.10",
+ "cfg-if 1.0.0",
  "static_assertions",
 ]
 

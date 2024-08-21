@@ -131,9 +131,13 @@ pub enum Task {
     Deadlock {
         // Which txn causes deadlock
         start_ts: TimeStamp,
+        // The key that is currently being detected and finally formed the deadlock.
         key: Vec<u8>,
         lock: LockDigest,
+        // The key on which the current transaction has already acquired and is blocking another
+        // transaction that causes the deadlock.
         deadlock_key_hash: u64,
+        deadlock_key: Vec<u8>,
         wait_chain: Vec<WaitForEntry>,
     },
     ChangeConfig {
@@ -292,6 +296,7 @@ impl Waiter {
         lock_digest: LockDigest,
         key: Vec<u8>,
         deadlock_key_hash: u64,
+        deadlock_key: Vec<u8>,
         wait_chain: Vec<WaitForEntry>,
     ) -> KeyLockWaitInfo {
         let e = MvccError::from(MvccErrorInner::Deadlock {
@@ -299,6 +304,7 @@ impl Waiter {
             lock_ts: lock_digest.ts,
             lock_key: key,
             deadlock_key_hash,
+            deadlock_key,
             wait_chain,
         });
         self.cancel(Some(StorageError::from(TxnError::from(e))))
@@ -459,6 +465,7 @@ impl Scheduler {
         key: Vec<u8>,
         lock: LockDigest,
         deadlock_key_hash: u64,
+        deadlock_key: Vec<u8>,
         wait_chain: Vec<WaitForEntry>,
     ) {
         self.notify_scheduler(Task::Deadlock {
@@ -466,6 +473,7 @@ impl Scheduler {
             key,
             lock,
             deadlock_key_hash,
+            deadlock_key,
             wait_chain,
         });
     }
@@ -573,6 +581,7 @@ impl WaiterManager {
         key: Vec<u8>,
         lock: LockDigest,
         deadlock_key_hash: u64,
+        deadlock_key: Vec<u8>,
         wait_chain: Vec<WaitForEntry>,
     ) {
         let waiter = self
@@ -580,7 +589,7 @@ impl WaiterManager {
             .borrow_mut()
             .take_waiter_by_lock_digest(lock, waiter_ts);
         if let Some(waiter) = waiter {
-            waiter.cancel_for_deadlock(lock, key, deadlock_key_hash, wait_chain);
+            waiter.cancel_for_deadlock(lock, key, deadlock_key_hash, deadlock_key, wait_chain);
         }
     }
 
@@ -641,9 +650,17 @@ impl FutureRunnable<Task> for WaiterManager {
                 key,
                 lock,
                 deadlock_key_hash,
+                deadlock_key,
                 wait_chain,
             } => {
-                self.handle_deadlock(start_ts, key, lock, deadlock_key_hash, wait_chain);
+                self.handle_deadlock(
+                    start_ts,
+                    key,
+                    lock,
+                    deadlock_key_hash,
+                    deadlock_key,
+                    wait_chain,
+                );
             }
             Task::ChangeConfig { timeout } => self.handle_config_change(timeout),
             #[cfg(any(test, feature = "testexport"))]
