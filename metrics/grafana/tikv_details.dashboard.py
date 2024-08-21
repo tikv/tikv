@@ -2195,7 +2195,7 @@ def RaftProcess() -> RowPanel:
     layout.row(
         [
             graph_panel(
-                title="Enable apply unpersisted log regoin count",
+                title="Enable apply unpersisted log region count",
                 description="The number of regions that enable apply unpersisted raft log",
                 yaxes=yaxes(left_format=UNITS.SHORT),
                 targets=[
@@ -4084,7 +4084,7 @@ def CoprocessorDetail() -> RowPanel:
                     target(
                         expr=expr_sum_rate(
                             "tikv_coprocessor_scan_details",
-                            label_selectors=['req="select"'],
+                            label_selectors=['req=~"select|select_by_range_cache"'],
                             by_labels=["tag"],
                         ),
                     ),
@@ -4097,7 +4097,7 @@ def CoprocessorDetail() -> RowPanel:
                     target(
                         expr=expr_sum_rate(
                             "tikv_coprocessor_scan_details",
-                            label_selectors=['req="index"'],
+                            label_selectors=['req=~"index|index_by_range_cache"'],
                             by_labels=["tag"],
                         ),
                     ),
@@ -4114,7 +4114,7 @@ def CoprocessorDetail() -> RowPanel:
                     target(
                         expr=expr_sum_rate(
                             "tikv_coprocessor_scan_details",
-                            label_selectors=['req="select"'],
+                            label_selectors=['req=~"select|select_by_range_cache"'],
                             by_labels=["cf", "tag"],
                         ),
                     ),
@@ -4127,7 +4127,7 @@ def CoprocessorDetail() -> RowPanel:
                     target(
                         expr=expr_sum_rate(
                             "tikv_coprocessor_scan_details",
-                            label_selectors=['req="index"'],
+                            label_selectors=['req=~"index|index_by_range_cache"'],
                             by_labels=["cf", "tag"],
                         ),
                     ),
@@ -4268,10 +4268,10 @@ def RangeCacheMemoryEngine() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_sum_rate(
-                            "tikv_range_load_duration_secs_count",
-                            by_labels=["instance"],
+                            "tikv_range_eviction_duration_secs_count",
+                            by_labels=["type"],
                         ),
-                        legend_format="{{instance}}--loading2",
+                        legend_format="{{type}}",
                     ),
                 ],
             ),

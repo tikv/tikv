@@ -715,9 +715,9 @@ checksum = "7f30e7476521f6f8af1a1c4c0b8cc94f0bee37d91763d0ca2665f299b6cd8aec"
 
 [[package]]
 name = "bytemuck"
-version = "1.9.1"
+version = "1.16.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cdead85bdec19c194affaeeb670c0e41fe23de31459efd1c174d049269cf02cc"
+checksum = "102087e286b4677862ea56cf8fc58bb2cdfa8725c40ffb80fe3a008eb7f2fc83"
 
 [[package]]
 name = "byteorder"
@@ -2542,6 +2542,7 @@ dependencies = [
  "fail",
  "kvproto",
  "lazy_static",
+ "log_wrappers",
  "online_config",
  "prometheus",
  "prometheus-static-metric",
@@ -2551,6 +2552,7 @@ dependencies = [
  "slog",
  "slog-global",
  "tempfile",
+ "test_util",
  "tikv_util",
  "txn_types",
 ]
@@ -2914,7 +2916,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#224bed6ffa29ba3bbe9a91ef6bda7186200c59a8"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c92c467a3ab0b60484a0db83fcf89366791716cd"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -2933,7 +2935,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#224bed6ffa29ba3bbe9a91ef6bda7186200c59a8"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c92c467a3ab0b60484a0db83fcf89366791716cd"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4816,7 +4818,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#224bed6ffa29ba3bbe9a91ef6bda7186200c59a8"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c92c467a3ab0b60484a0db83fcf89366791716cd"
 dependencies = [
  "libc 0.2.151",
  "librocksdb_sys",
@@ -5304,7 +5306,6 @@ dependencies = [
  "error_code",
  "fail",
  "file_system",
- "fs2",
  "futures 0.3.15",
  "grpcio",
  "grpcio-health",
@@ -6203,6 +6204,7 @@ dependencies = [
  "raftstore-v2",
  "rand 0.8.5",
  "rand_xorshift",
+ "range_cache_memory_engine",
  "resource_control",
  "resource_metering",
  "security",
@@ -6344,11 +6346,13 @@ dependencies = [
  "bitflags 1.3.2",
  "boolinator",
  "bstr",
+ "bytemuck",
  "chrono",
  "chrono-tz",
  "codec",
  "collections",
  "crc32fast",
+ "criterion",
  "encoding_rs 0.8.29",
  "error_code",
  "hex 0.4.2",
@@ -6444,7 +6448,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "8.3.0-alpha"
+version = "8.4.0-alpha"
 dependencies = [
  "anyhow",
  "api_version",
@@ -6753,6 +6757,7 @@ dependencies = [
  "derive_more",
  "error_code",
  "fail",
+ "fs2",
  "futures 0.3.15",
  "futures-util",
  "gag",
@@ -7061,6 +7066,7 @@ dependencies = [
  "pin-project",
  "prometheus",
  "slab",
+ "slog",
 ]
 
 [[package]]

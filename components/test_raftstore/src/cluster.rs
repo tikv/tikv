@@ -369,9 +369,15 @@ where
         self.bootstrap_region().unwrap();
         self.start().unwrap();
         if self.range_cache_engine_enabled_with_whole_range {
+            let pd_regions = self.pd_client.scan_regions(&[], &[], i32::MAX).unwrap();
+            let regions: Vec<_> = pd_regions
+                .into_iter()
+                .map(|mut r| r.take_region())
+                .collect();
+
             self.engines
                 .iter()
-                .for_each(|(_, engines)| engines.kv.cache_all());
+                .for_each(|(_, engines)| engines.kv.cache_regions(&regions));
         }
     }
 
@@ -1023,6 +1029,8 @@ where
                     DATA_MIN_KEY.to_vec(),
                     DATA_MAX_KEY.to_vec(),
                 )),
+                region_id: 0,
+                epoch_version: 0,
             };
             self.get_cf_with_snap_ctx(CF_DEFAULT, key, true, ctx)
         }
@@ -1038,6 +1046,8 @@ where
                     DATA_MIN_KEY.to_vec(),
                     DATA_MAX_KEY.to_vec(),
                 )),
+                region_id: 0,
+                epoch_version: 0,
             };
             self.get_cf_with_snap_ctx(cf, key, true, ctx)
         }
@@ -1053,6 +1063,8 @@ where
                     DATA_MIN_KEY.to_vec(),
                     DATA_MAX_KEY.to_vec(),
                 )),
+                region_id: 0,
+                epoch_version: 0,
             };
             self.get_cf_with_snap_ctx(CF_DEFAULT, key, true, ctx)
         }

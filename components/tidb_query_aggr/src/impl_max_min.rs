@@ -92,6 +92,7 @@ impl<E: Extremum> super::AggrDefinitionParser for AggrFnDefinitionParserExtremum
                 Decimal => &'static Decimal,
                 DateTime => &'static DateTime,
                 Json => JsonRef<'static>,
+                VectorFloat32 => VectorFloat32Ref<'static>,
             ],
             match eval_type {
                 EvalType::T => Ok(Box::new(AggFnExtremum::<T, E>::new())),

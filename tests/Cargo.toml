@@ -100,6 +100,7 @@ raft_log_engine = { workspace = true }
 raftstore = { workspace = true }
 raftstore-v2 = { workspace = true }
 rand = "0.8.3"
+range_cache_memory_engine = { workspace = true }
 resource_control = { workspace = true }
 server = { workspace = true }
 service = { workspace = true }

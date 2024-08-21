@@ -103,9 +103,9 @@ struct DownstreamValue {
 }
 
 impl Conn {
-    pub fn new(sink: Sink, peer: String) -> Conn {
+    pub fn new(conn_id: ConnId, sink: Sink, peer: String) -> Conn {
         Conn {
-            id: ConnId::new(),
+            id: conn_id,
             sink,
             downstreams: HashMap::default(),
             peer,
@@ -338,8 +338,12 @@ impl Service {
             .unwrap_or_else(|e| {
                 warn!(
                     "cdc invalid observed start key or end key version";
-                    "downstream" => ?peer, "region_id" => request.region_id,
+                    "downstream" => ?peer,
+                    "region_id" => request.region_id,
+                    "request_id" => request.region_id,
                     "error" => ?e,
+                    "start_key" => log_wrappers::Value::key(&request.start_key),
+                    "end_key" => log_wrappers::Value::key(&request.end_key),
                 );
                 ObservedRange::default()
             });
@@ -401,10 +405,10 @@ impl Service {
         event_feed_v2: bool,
     ) {
         sink.enhance_batch(true);
+        let conn_id = ConnId::new();
         let (event_sink, mut event_drain) =
-            channel(CDC_CHANNLE_CAPACITY, self.memory_quota.clone());
-        let conn = Conn::new(event_sink, ctx.peer());
-        let conn_id = conn.get_id();
+            channel(conn_id, CDC_CHANNLE_CAPACITY, self.memory_quota.clone());
+        let conn = Conn::new(conn_id, event_sink, ctx.peer());
         let mut explicit_features = vec![];
 
         if event_feed_v2 {

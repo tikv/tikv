@@ -707,7 +707,7 @@ mod tests {
     ) {
         let (receiver_worker, rx) = new_receiver_worker();
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
-        let (sink, drain) = crate::channel::channel(buffer, quota);
+        let (sink, drain) = crate::channel::channel(ConnId::default(), buffer, quota);
 
         let pool = Builder::new_multi_thread()
             .thread_name("test-initializer-worker")
