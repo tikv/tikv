@@ -42,7 +42,9 @@ use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
 use health_controller::HealthController;
 use hybrid_engine::{
-    observer::{EvictionObserver as HybridEngineObserver, HybridWriteBatchObserver},
+    observer::{
+        EvictionObserver as HybridEngineObserver, HybridSnapshotObserver, HybridWriteBatchObserver,
+    },
     HybridEngine,
 };
 use kvproto::{
@@ -278,7 +280,6 @@ struct TikvEngines<RocksEngine: KvEngine, ER: RaftEngine> {
     engines: Engines<RocksEngine, ER>,
     store_meta: Arc<Mutex<StoreMeta>>,
     engine: RaftKv<RocksEngine, ServerRaftStoreRouter<RocksEngine, ER>>,
-    in_memory_engine: Option<HybridEngine<RocksEngine, RangeCacheMemoryEngine>>,
 }
 
 struct Servers<RocksEngine: KvEngine, ER: RaftEngine, F: KvFormat> {
@@ -504,6 +505,7 @@ where
                     engines.kv.clone(),
                     StoreMetaDelegate::new(store_meta.clone(), engines.kv.clone()),
                     self.router.clone(),
+                    self.coprocessor_host.as_ref().unwrap().clone(),
                 ),
             ),
             engines.kv.clone(),
@@ -515,7 +517,6 @@ where
             engines,
             store_meta,
             engine,
-            in_memory_engine,
         });
     }
 
@@ -722,15 +723,6 @@ where
 
         ReplicaReadLockChecker::new(self.concurrency_manager.clone())
             .register(self.coprocessor_host.as_mut().unwrap());
-
-        // Hybrid engine observer.
-        if let Some(in_memory_engine) = engines.in_memory_engine.as_ref() {
-            let eviction_observer = HybridEngineObserver::new(Arc::new(in_memory_engine.clone()));
-            eviction_observer.register_to(self.coprocessor_host.as_mut().unwrap());
-            let write_batch_observer =
-                HybridWriteBatchObserver::new(in_memory_engine.range_cache_engine().clone());
-            write_batch_observer.register_to(self.coprocessor_host.as_mut().unwrap());
-        }
 
         // Create snapshot manager, server.
         let snap_path = self
@@ -1653,12 +1645,24 @@ where
             RangeCacheEngineContext::new(range_cache_engine_config.clone(), self.pd_client.clone());
         let range_cache_engine_statistics = range_cache_engine_context.statistics();
         let in_memory_engine = if self.core.config.range_cache_engine.enabled {
-            Some(build_in_memory_engine(
+            let in_memory_engine = build_in_memory_engine(
                 range_cache_engine_context,
                 kv_engine.clone(),
                 Some(self.pd_client.clone()),
                 Some(Arc::new(self.region_info_accessor.clone())),
-            ))
+            );
+
+            // Hybrid engine observer.
+            let eviction_observer = HybridEngineObserver::new(Arc::new(in_memory_engine.clone()));
+            eviction_observer.register_to(self.coprocessor_host.as_mut().unwrap());
+            let write_batch_observer =
+                HybridWriteBatchObserver::new(in_memory_engine.range_cache_engine().clone());
+            write_batch_observer.register_to(self.coprocessor_host.as_mut().unwrap());
+            let snapshot_observer =
+                HybridSnapshotObserver::new(in_memory_engine.range_cache_engine().clone());
+            snapshot_observer.register_to(self.coprocessor_host.as_mut().unwrap());
+
+            Some(in_memory_engine)
         } else {
             None
         };

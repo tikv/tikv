@@ -20,7 +20,7 @@ use engine_traits::{Engines, MiscExt, SnapshotContext};
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
 use health_controller::HealthController;
-use hybrid_engine::observer::{EvictionObserver, HybridWriteBatchObserver};
+use hybrid_engine::observer::{EvictionObserver, HybridSnapshotObserver, HybridWriteBatchObserver};
 use kvproto::{
     deadlock::create_deadlock,
     debugpb::{create_debug, DebugClient},
@@ -305,12 +305,6 @@ impl ServerCluster {
             }
         }
 
-        let local_reader = LocalReader::new(
-            engines.kv.clone(),
-            StoreMetaDelegate::new(store_meta.clone(), engines.kv.clone()),
-            router.clone(),
-        );
-
         // Create coprocessor.
         let enable_region_stats_mgr_cb: Arc<dyn Fn() -> bool + Send + Sync> =
             if cfg.range_cache_engine.enabled {
@@ -319,6 +313,11 @@ impl ServerCluster {
                 Arc::new(|| false)
             };
         let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
+        if let Some(hooks) = self.coprocessor_hooks.get(&node_id) {
+            for hook in hooks {
+                hook(&mut coprocessor_host);
+            }
+        }
         let region_info_accessor = RegionInfoAccessor::new(
             &mut coprocessor_host,
             enable_region_stats_mgr_cb,
@@ -340,17 +339,30 @@ impl ServerCluster {
                 None,
                 Some(Arc::new(region_info_accessor.clone())),
             );
+            // Eviction observer
             let observer = EvictionObserver::new(Arc::new(in_memory_engine.clone()));
             observer.register_to(&mut coprocessor_host);
+            // Write batch observer
             let write_batch_observer =
                 HybridWriteBatchObserver::new(in_memory_engine.range_cache_engine().clone());
             write_batch_observer.register_to(&mut coprocessor_host);
+            // Snapshot observer
+            let snapshot_observer =
+                HybridSnapshotObserver::new(in_memory_engine.range_cache_engine().clone());
+            snapshot_observer.register_to(&mut coprocessor_host);
             Some(in_memory_engine)
         } else {
             None
         };
         self.in_memory_engines
             .insert(node_id, in_memory_engine.clone());
+
+        let local_reader = LocalReader::new(
+            engines.kv.clone(),
+            StoreMetaDelegate::new(store_meta.clone(), engines.kv.clone()),
+            router.clone(),
+            coprocessor_host.clone(),
+        );
         let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
         let sim_router = SimulateTransport::new(raft_router.clone());
         let mut raft_kv = RaftKv::new(
@@ -359,12 +371,6 @@ impl ServerCluster {
             in_memory_engine,
             region_info_accessor.region_leaders(),
         );
-
-        if let Some(hooks) = self.coprocessor_hooks.get(&node_id) {
-            for hook in hooks {
-                hook(&mut coprocessor_host);
-            }
-        }
 
         // Create storage.
         let pd_worker = LazyWorker::new("test-pd-worker");

@@ -319,6 +319,7 @@ impl Simulator for NodeCluster {
             engines.kv.clone(),
             StoreMetaDelegate::new(store_meta.clone(), engines.kv.clone()),
             router.clone(),
+            coprocessor_host.clone(),
         );
         let cfg_controller = ConfigController::new(cfg.tikv.clone());
 

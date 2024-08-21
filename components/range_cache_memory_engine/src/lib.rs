@@ -40,6 +40,7 @@ pub use keys::{
 };
 pub use metrics::flush_range_cache_engine_statistics;
 pub use range_manager::{RangeCacheStatus, RegionState};
+pub use read::RangeCacheSnapshot;
 pub use statistics::Statistics as RangeCacheMemoryEngineStatistics;
 use txn_types::TimeStamp;
 pub use write_batch::RangeCacheWriteBatch;

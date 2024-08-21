@@ -31,7 +31,7 @@ pub mod region_info_accessor;
 mod split_check;
 pub mod split_observer;
 use kvproto::raft_serverpb::RaftMessage;
-mod write_batch;
+mod read_write;
 
 pub use self::{
     config::{Config, ConsistencyCheckMethod},
@@ -43,6 +43,9 @@ pub use self::{
         StoreHandle,
     },
     error::{Error, Result},
+    read_write::{
+        ObservableWriteBatch, SnapshotObserver, SnapshotPin, WriteBatchObserver, WriteBatchWrapper,
+    },
     region_info_accessor::{
         Callback as RegionInfoCallback, RangeKey, RegionCollector, RegionInfo, RegionInfoAccessor,
         RegionInfoProvider, SeekRegionCallback,
@@ -52,7 +55,6 @@ pub use self::{
         HalfCheckObserver, Host as SplitCheckerHost, KeysCheckObserver, SizeCheckObserver,
         TableCheckObserver,
     },
-    write_batch::{ObservableWriteBatch, WriteBatchObserver, WriteBatchWrapper},
 };
 pub use crate::store::{Bucket, KeyEntry};
 

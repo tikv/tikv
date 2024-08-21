@@ -4963,9 +4963,9 @@ where
         Ok(propose_index)
     }
 
-    fn handle_read<E: ReadExecutor<Tablet = EK>>(
+    fn handle_read<T>(
         &self,
-        reader: &mut E,
+        ctx: &mut PollContext<EK, ER, T>,
         req: RaftCmdRequest,
         check_epoch: bool,
         read_index: Option<u64>,
@@ -5024,7 +5024,17 @@ where
             None
         };
 
-        let mut resp = reader.execute(&req, &Arc::new(region), read_index, snap_ctx, None);
+        let mut reader = PollContextReader {
+            engines: &ctx.engines,
+        };
+        let mut resp = reader.execute(
+            &req,
+            &Arc::new(region),
+            read_index,
+            snap_ctx,
+            None,
+            &ctx.coprocessor_host,
+        );
         if let Some(snap) = resp.snapshot.as_mut() {
             snap.txn_ext = Some(self.txn_ext.clone());
             snap.bucket_meta = self
@@ -6009,7 +6019,11 @@ where
     }
 }
 
-impl<EK, ER, T> ReadExecutor for PollContext<EK, ER, T>
+struct PollContextReader<'a, EK, ER> {
+    engines: &'a Engines<EK, ER>,
+}
+
+impl<'a, EK, ER> ReadExecutor for PollContextReader<'a, EK, ER>
 where
     EK: KvEngine,
     ER: RaftEngine,

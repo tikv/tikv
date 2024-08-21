@@ -2,6 +2,7 @@
 
 // #[PerformanceCriticalPath]
 use std::{
+    fmt,
     num::NonZeroU64,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -23,6 +24,7 @@ use tikv_util::{
 };
 
 use crate::{
+    coprocessor::SnapshotPin,
     store::{util, PeerStorage, TxnExt},
     Error, Result,
 };
@@ -30,7 +32,6 @@ use crate::{
 /// Snapshot of a region.
 ///
 /// Only data within a region can be accessed.
-#[derive(Debug)]
 pub struct RegionSnapshot<S: Snapshot> {
     snap: Arc<S>,
     region: Arc<Region>,
@@ -41,6 +42,22 @@ pub struct RegionSnapshot<S: Snapshot> {
     // `None` means the snapshot does not provide peer related transaction extensions.
     pub txn_ext: Option<Arc<TxnExt>>,
     pub bucket_meta: Option<Arc<BucketMeta>>,
+
+    _pin: Option<Arc<dyn SnapshotPin>>,
+}
+
+impl<S: Snapshot> fmt::Debug for RegionSnapshot<S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RegionSnapshot")
+            .field("region", &self.region)
+            .field("apply_index", &self.apply_index)
+            .field("from_v2", &self.from_v2)
+            .field("term", &self.term)
+            .field("txn_extra_op", &self.txn_extra_op)
+            .field("txn_ext", &self.txn_ext)
+            .field("bucket_meta", &self.bucket_meta)
+            .finish()
+    }
 }
 
 impl<S> RegionSnapshot<S>
@@ -74,7 +91,12 @@ where
             txn_extra_op: TxnExtraOp::Noop,
             txn_ext: None,
             bucket_meta: None,
+            _pin: None,
         }
+    }
+
+    pub fn pin_snapshot(&mut self, snap_pin: Arc<dyn SnapshotPin>) {
+        self._pin = Some(snap_pin);
     }
 
     pub fn replace_snapshot<Sp, F>(self, snap_fn: F) -> RegionSnapshot<Sp>
@@ -91,6 +113,7 @@ where
             txn_extra_op: self.txn_extra_op,
             txn_ext: self.txn_ext,
             bucket_meta: self.bucket_meta,
+            _pin: None,
         }
     }
 
@@ -213,6 +236,7 @@ where
             txn_extra_op: self.txn_extra_op,
             txn_ext: self.txn_ext.clone(),
             bucket_meta: self.bucket_meta.clone(),
+            _pin: None,
         }
     }
 }

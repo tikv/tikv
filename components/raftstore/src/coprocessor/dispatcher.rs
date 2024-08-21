@@ -12,8 +12,8 @@ use kvproto::{
 };
 use protobuf::Message;
 use raft::eraftpb;
+use read_write::WriteBatchObserver;
 use tikv_util::box_try;
-use write_batch::WriteBatchObserver;
 
 use super::{split_observer::SplitObserver, *};
 use crate::store::BucketRange;
@@ -301,6 +301,11 @@ impl_box_observer!(
     WriteBatchObserver,
     WrappedBoxWriteBatchObserver
 );
+impl_box_observer!(
+    BoxSnapshotObserver,
+    SnapshotObserver,
+    WrappedBoxSnapshotObserver
+);
 
 /// Registry contains all registered coprocessors.
 #[derive(Clone)]
@@ -322,6 +327,7 @@ where
     message_observers: Vec<Entry<BoxMessageObserver>>,
     region_heartbeat_observers: Vec<Entry<BoxRegionHeartbeatObserver>>,
     write_batch_observer: Option<BoxWriteBatchObserver>,
+    snapshot_observer: Option<BoxSnapshotObserver>,
     // TODO: add endpoint
 }
 
@@ -342,6 +348,7 @@ impl<E: KvEngine> Default for Registry<E> {
             message_observers: Default::default(),
             region_heartbeat_observers: Default::default(),
             write_batch_observer: None,
+            snapshot_observer: None,
         }
     }
 }
@@ -425,6 +432,10 @@ impl<E: KvEngine> Registry<E> {
 
     pub fn register_write_batch_observer(&mut self, write_batch_observer: BoxWriteBatchObserver) {
         self.write_batch_observer = Some(write_batch_observer);
+    }
+
+    pub fn register_snapshot_observer(&mut self, snapshot_observer: BoxSnapshotObserver) {
+        self.snapshot_observer = Some(snapshot_observer);
     }
 }
 
@@ -906,6 +917,13 @@ impl<E: KvEngine> CoprocessorHost<E> {
             .as_ref()
             .map(|observer| observer.inner().create_observable_write_batch());
         WriteBatchWrapper::new(wb, observable_wb)
+    }
+
+    pub fn on_snapshot(&self, region: &Region, seqno: u64) -> Option<Arc<dyn SnapshotPin>> {
+        self.registry
+            .snapshot_observer
+            .as_ref()
+            .map(move |observer| observer.inner().on_snapshot(region, seqno))
     }
 
     pub fn shutdown(&self) {
