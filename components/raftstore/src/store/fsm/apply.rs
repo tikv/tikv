@@ -58,7 +58,7 @@ use sst_importer::SstImporter;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
     box_err, box_try,
-    config::{Tracker, VersionTrack},
+    config::{ReadableSize, Tracker, VersionTrack},
     debug, error, info,
     memory::HeapSize,
     mpsc::{loose_bounded, LooseBoundedSender, Receiver},
@@ -3666,10 +3666,8 @@ pub struct GenSnapTask {
     pub to_peer: metapb::Peer,
     // Tracks remaining iterations before sending a snapshot precheck request.
     pub precheck_remaining_ticks: usize,
-
-    // The following fields are used to report approximate size and keys of the snapshot.
-    approximate_size: Option<u64>,
-    approximate_keys: Option<u64>,
+    // Whether to use plain file to store the snapshot.
+    use_plain_file: bool,
 }
 
 impl GenSnapTask {
@@ -3688,8 +3686,7 @@ impl GenSnapTask {
             for_balance: false,
             to_peer,
             precheck_remaining_ticks: 0,
-            approximate_size: None,
-            approximate_keys: None,
+            use_plain_file: false,
         }
     }
 
@@ -3711,8 +3708,6 @@ impl GenSnapTask {
             .store(last_applied_state.applied_index, Ordering::SeqCst);
         let snapshot = RegionTask::Gen {
             region_id: self.region_id,
-            approximate_keys: self.approximate_keys,
-            approximate_size: self.approximate_size,
             notifier: self.snap_notifier,
             for_balance: self.for_balance,
             last_applied_term,
@@ -3722,14 +3717,31 @@ impl GenSnapTask {
             // open files in rocksdb.
             kv_snap,
             to_store_id: self.to_peer.store_id,
+            use_plain_file: self.use_plain_file,
         };
         box_try!(region_sched.schedule(snapshot));
         Ok(())
     }
 
-    pub fn set_approximate_size_and_keys(&mut self, size: Option<u64>, keys: Option<u64>) {
-        self.approximate_size = size;
-        self.approximate_keys = keys;
+    pub fn set_use_plain_file(
+        &mut self,
+        snap_min_approximate_size: ReadableSize,
+        region_approximate_size: Option<u64>,
+        region_approximate_keys: Option<u64>,
+    ) {
+        let snap_min_approximate_keys = std::cmp::max(
+            10000,
+            (snap_min_approximate_size.as_mb_f64() * 10000.0) as u64,
+        );
+        // If the size or the count of keys of cf is relatively small, it's recommended
+        // to use plain file for mitigating performance issue when ingesting snapshot.
+        // TODO:
+        // (1) should make the check more accurate and configurable.
+        // (2) should consider the size of each column family rather than the total
+        // size.
+        self.use_plain_file = region_approximate_size.unwrap_or(u64::MAX)
+            <= snap_min_approximate_size.0
+            && region_approximate_keys.unwrap_or(u64::MAX) <= snap_min_approximate_keys;
     }
 }
 

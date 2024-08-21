@@ -3071,12 +3071,12 @@ where
                 );
                 if passed {
                     if let Some(mut gen_task) = self.fsm.peer.mut_store().take_gen_snap_task() {
-                        // get the approximate size of the region.
-                        let (approximate_size, approximate_keys) = (
+                        // Get the approximate size of the region and set it to the task.
+                        gen_task.set_use_plain_file(
+                            self.ctx.cfg.snap_min_approximate_size,
                             self.fsm.peer.approximate_size(),
                             self.fsm.peer.approximate_keys(),
                         );
-                        gen_task.set_approximate_size_and_keys(approximate_size, approximate_keys);
                         self.fsm
                             .peer
                             .pending_request_snapshot_count

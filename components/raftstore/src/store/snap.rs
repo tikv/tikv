@@ -127,24 +127,6 @@ pub fn plain_file_used(cf: &str) -> bool {
 }
 
 #[inline]
-pub fn should_use_plain_file(
-    cf: &str,
-    approximate_size: Option<u64>,
-    approximate_keys: Option<u64>,
-) -> bool {
-    if plain_file_used(cf) {
-        return true;
-    }
-    // If the size or the count of keys of cf is relatively small, it's recommended
-    // to use plain file for mitigating performance issue when ingesting snapshot.
-    // TODO:
-    // (1) should make the check more accurate and configurable.
-    // (2) should consider the size of each column family rather than the total
-    // size.
-    approximate_size.unwrap_or(0) <= 2 * 1024 * 1024 && approximate_keys.unwrap_or(0) <= 20_000
-}
-
-#[inline]
 pub fn check_abort(status: &AtomicUsize) -> Result<()> {
     if status.load(Ordering::Relaxed) == JOB_STATUS_CANCELLING {
         return Err(Error::Abort);
@@ -464,8 +446,7 @@ struct MetaFile {
     // for writing snapshot
     pub tmp_path: PathBuf,
     // for loading snapshot
-    pub region_approximate_size: Option<u64>,
-    pub region_approximate_keys: Option<u64>,
+    pub use_plain_file: bool,
 }
 
 pub struct Snapshot {
@@ -698,7 +679,27 @@ impl Snapshot {
     fn read_snapshot_meta(&mut self) -> RaftStoreResult<SnapshotMeta> {
         let buf = file_system::read(&self.meta_file.path)?;
         let mut snapshot_meta = SnapshotMeta::default();
-        snapshot_meta.merge_from_bytes(&buf)?;
+        let raw_size = snapshot_meta.compute_size() as usize;
+        if buf.len() < raw_size {
+            return Err(box_err!(
+                "invalid snapshot meta length {} < {}",
+                buf.len(),
+                raw_size
+            ));
+        } else if buf.len() == raw_size {
+            snapshot_meta.merge_from_bytes(&buf)?;
+        } else {
+            // TODO: better to move this part into the proto definition.
+            snapshot_meta.merge_from_bytes(&buf[..raw_size])?;
+            let mut extra = buf[raw_size..].to_vec();
+            if extra.len() != 1 {
+                return Err(box_err!(
+                    "invalid extra metadata length, expect 1, got {}",
+                    extra.len()
+                ));
+            }
+            self.meta_file.use_plain_file = extra.pop().unwrap() == 1;
+        }
         Ok(snapshot_meta)
     }
 
@@ -707,13 +708,11 @@ impl Snapshot {
         let mut cf_file_count_from_meta: Vec<usize> = vec![];
         let mut file_count = 0;
         let mut current_cf = "";
-        let mut total_size = 0;
         info!(
             "set_snapshot_meta total cf files count: {}",
             snapshot_meta.get_cf_files().len()
         );
         for cf_file in snapshot_meta.get_cf_files() {
-            total_size += cf_file.get_size();
             if current_cf.is_empty() {
                 current_cf = cf_file.get_cf();
                 file_count = 1;
@@ -765,7 +764,6 @@ impl Snapshot {
             }
         }
         self.meta_file.meta = Some(snapshot_meta);
-        self.meta_file.region_approximate_size = Some(total_size);
         Ok(())
     }
 
@@ -842,7 +840,9 @@ impl Snapshot {
     // Save `SnapshotMeta` to file.
     // Used in `do_build` and by external crates.
     pub fn save_meta_file(&mut self) -> RaftStoreResult<()> {
-        let v = box_try!(self.meta_file.meta.as_ref().unwrap().write_to_bytes());
+        let mut v = box_try!(self.meta_file.meta.as_ref().unwrap().write_to_bytes());
+        // TODO: add extra metadata to the proto definition.
+        v.push(self.meta_file.use_plain_file as u8);
         if let Some(mut f) = self.meta_file.file.take() {
             // `meta_file` could be None for this case: in `init_for_building` the snapshot
             // exists so no temporary meta file is created, and this field is
@@ -868,8 +868,7 @@ impl Snapshot {
         engine: &EK,
         kv_snap: &EK::Snapshot,
         region: &Region,
-        approximate_size: Option<u64>,
-        approximate_keys: Option<u64>,
+        use_plain_file: bool,
         allow_multi_files_snapshot: bool,
         for_balance: bool,
     ) -> RaftStoreResult<()>
@@ -904,7 +903,7 @@ impl Snapshot {
         for (cf_enum, cf) in SNAPSHOT_CFS_ENUM_PAIR {
             self.switch_to_cf_file(cf)?;
             let cf_file = &mut self.cf_files[self.cf_index];
-            let cf_stat = if should_use_plain_file(cf_file.cf, approximate_size, approximate_keys) {
+            let cf_stat = if plain_file_used(cf_file.cf) || use_plain_file {
                 snap_io::build_plain_cf_file::<EK>(
                     cf_file,
                     self.mgr.encryption_key_manager.as_ref(),
@@ -961,6 +960,7 @@ impl Snapshot {
 
         // save snapshot meta to meta file
         self.meta_file.meta = Some(gen_snapshot_meta(&self.cf_files[..], for_balance)?);
+        self.meta_file.use_plain_file = use_plain_file;
         self.save_meta_file()?;
         Ok(())
     }
@@ -1094,8 +1094,7 @@ impl Snapshot {
         engine: &EK,
         kv_snap: &EK::Snapshot,
         region: &Region,
-        approximate_size: Option<u64>,
-        approximate_keys: Option<u64>,
+        use_plain_file: bool,
         allow_multi_files_snapshot: bool,
         for_balance: bool,
         start: UnixSecs,
@@ -1108,8 +1107,7 @@ impl Snapshot {
             engine,
             kv_snap,
             region,
-            approximate_size,
-            approximate_keys,
+            use_plain_file,
             allow_multi_files_snapshot,
             for_balance,
         )?;
@@ -1140,12 +1138,9 @@ impl Snapshot {
     }
 
     pub fn apply<EK: KvEngine>(&mut self, options: ApplyOptions<EK>) -> Result<()> {
-        let (approximate_size, approximate_keys) = (
-            self.meta_file.region_approximate_size,
-            self.meta_file.region_approximate_keys,
-        );
+        let use_plain_file = self.meta_file.use_plain_file;
         let post_check = |cf_file: &CfFile, offset: usize| {
-            if !should_use_plain_file(cf_file.cf, approximate_size, approximate_keys) {
+            if !plain_file_used(cf_file.cf) && !use_plain_file {
                 let file_paths = cf_file.file_paths();
                 let clone_file_paths = cf_file.clone_file_paths();
                 if options.ingest_copy_symlink && is_symlink(&file_paths[offset])? {
@@ -1177,7 +1172,7 @@ impl Snapshot {
                 continue;
             }
             let cf = cf_file.cf;
-            if should_use_plain_file(cf_file.cf, approximate_size, approximate_keys) {
+            if plain_file_used(cf_file.cf) || use_plain_file {
                 let path = &cf_file.file_paths()[0];
                 let batch_size = options.write_batch_size;
                 let cb = |kv: &[(Vec<u8>, Vec<u8>)]| {
@@ -2835,16 +2830,7 @@ pub mod tests {
         assert_eq!(mgr_core.get_total_snap_size().unwrap(), 0);
 
         let mut snap_data = s1
-            .build(
-                &db,
-                &snapshot,
-                &region,
-                None,
-                None,
-                true,
-                false,
-                UnixSecs::now(),
-            )
+            .build(&db, &snapshot, &region, false, true, false, UnixSecs::now())
             .unwrap();
 
         // Ensure that this snapshot file does exist after being built.
@@ -2947,16 +2933,7 @@ pub mod tests {
         assert!(!s1.exists());
 
         let _ = s1
-            .build(
-                &db,
-                &snapshot,
-                &region,
-                None,
-                None,
-                true,
-                false,
-                UnixSecs::now(),
-            )
+            .build(&db, &snapshot, &region, false, true, false, UnixSecs::now())
             .unwrap();
         assert!(s1.exists());
 
@@ -2964,16 +2941,7 @@ pub mod tests {
         assert!(s2.exists());
 
         let _ = s2
-            .build(
-                &db,
-                &snapshot,
-                &region,
-                None,
-                None,
-                true,
-                false,
-                UnixSecs::now(),
-            )
+            .build(&db, &snapshot, &region, false, true, false, UnixSecs::now())
             .unwrap();
         assert!(s2.exists());
     }
@@ -3098,16 +3066,7 @@ pub mod tests {
         assert!(!s1.exists());
 
         let snap_data = s1
-            .build(
-                &db,
-                &snapshot,
-                &region,
-                None,
-                None,
-                true,
-                false,
-                UnixSecs::now(),
-            )
+            .build(&db, &snapshot, &region, false, true, false, UnixSecs::now())
             .unwrap();
         assert!(s1.exists());
 
@@ -3166,16 +3125,7 @@ pub mod tests {
         assert!(!s1.exists());
 
         let _ = s1
-            .build(
-                &db,
-                &snapshot,
-                &region,
-                None,
-                None,
-                true,
-                false,
-                UnixSecs::now(),
-            )
+            .build(&db, &snapshot, &region, false, true, false, UnixSecs::now())
             .unwrap();
         assert!(s1.exists());
 
@@ -3186,16 +3136,7 @@ pub mod tests {
         let mut s2 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s2.exists());
         let mut snap_data = s2
-            .build(
-                &db,
-                &snapshot,
-                &region,
-                None,
-                None,
-                true,
-                false,
-                UnixSecs::now(),
-            )
+            .build(&db, &snapshot, &region, false, true, false, UnixSecs::now())
             .unwrap();
         assert!(s2.exists());
 
@@ -3259,16 +3200,7 @@ pub mod tests {
         let mut s1 = Snapshot::new_for_building(&path, &key1, &mgr_core).unwrap();
         let mut region = gen_test_region(1, 1, 1);
         let mut snap_data = s1
-            .build(
-                &db,
-                &snapshot,
-                &region,
-                None,
-                None,
-                true,
-                false,
-                UnixSecs::now(),
-            )
+            .build(&db, &snapshot, &region, false, true, false, UnixSecs::now())
             .unwrap();
         let mut s = Snapshot::new_for_sending(&path, &key1, &mgr_core).unwrap();
         let expected_size = s.total_size();
@@ -3342,16 +3274,7 @@ pub mod tests {
         src_mgr.register(key.clone(), SnapEntry::Generating);
         let mut s1 = src_mgr.get_snapshot_for_building(&key).unwrap();
         let mut snap_data = s1
-            .build(
-                &db,
-                &snapshot,
-                &region,
-                None,
-                None,
-                true,
-                false,
-                UnixSecs::now(),
-            )
+            .build(&db, &snapshot, &region, false, true, false, UnixSecs::now())
             .unwrap();
 
         check_registry_around_deregister(&src_mgr, &key, &SnapEntry::Generating);
@@ -3434,8 +3357,7 @@ pub mod tests {
                 &engine.kv,
                 &snapshot,
                 &gen_test_region(100, 1, 1),
-                None,
-                None,
+                false,
                 true,
                 false,
                 UnixSecs::now(),
@@ -3466,8 +3388,7 @@ pub mod tests {
                     &engine.kv,
                     &snapshot,
                     &region,
-                    None,
-                    None,
+                    false,
                     true,
                     false,
                     UnixSecs::now(),
@@ -3569,16 +3490,7 @@ pub mod tests {
         for _ in 0..2 {
             let mut s1 = snap_mgr.get_snapshot_for_building(&key).unwrap();
             let _ = s1
-                .build(
-                    &db,
-                    &snapshot,
-                    &region,
-                    None,
-                    None,
-                    true,
-                    false,
-                    UnixSecs::now(),
-                )
+                .build(&db, &snapshot, &region, false, true, false, UnixSecs::now())
                 .unwrap();
             assert!(snap_mgr.delete_snapshot(&key, &s1, false));
         }
