@@ -48,53 +48,53 @@ where
     pub fn mut_range_cache_engine(&mut self) -> &mut EC {
         &mut self.range_cache_engine
     }
+}
 
-    pub fn new_in_memory_snapshot(
-        &self,
-        sequence_number: u64,
-        ctx: Option<SnapshotContext>,
-    ) -> Option<EC::Snapshot> {
-        if let Some(ctx) = ctx {
-            match self.range_cache_engine.snapshot(
-                ctx.region_id,
-                ctx.epoch_version,
-                ctx.range.unwrap(),
-                ctx.read_ts,
-                sequence_number,
-            ) {
-                Ok(snap) => {
-                    SNAPSHOT_TYPE_COUNT_STATIC.range_cache_engine.inc();
-                    Some(snap)
-                }
-                Err(FailedReason::TooOldRead) => {
-                    RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
-                        .too_old_read
-                        .inc();
-                    SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
-                    None
-                }
-                Err(FailedReason::NotCached) => {
-                    RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
-                        .not_cached
-                        .inc();
-                    SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
-                    None
-                }
-                Err(FailedReason::EpochNotMatch) => {
-                    RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
-                        .epoch_not_match
-                        .inc();
-                    SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
-                    None
-                }
+pub fn new_in_memory_snapshot<EC: RangeCacheEngine>(
+    range_cache_engine: &EC,
+    sequence_number: u64,
+    ctx: Option<SnapshotContext>,
+) -> Option<EC::Snapshot> {
+    if let Some(ctx) = ctx {
+        match range_cache_engine.snapshot(
+            ctx.region_id,
+            ctx.epoch_version,
+            ctx.range.unwrap(),
+            ctx.read_ts,
+            sequence_number,
+        ) {
+            Ok(snap) => {
+                SNAPSHOT_TYPE_COUNT_STATIC.range_cache_engine.inc();
+                Some(snap)
             }
-        } else {
-            RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
-                .no_read_ts
-                .inc();
-            SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
-            None
+            Err(FailedReason::TooOldRead) => {
+                RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
+                    .too_old_read
+                    .inc();
+                SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
+                None
+            }
+            Err(FailedReason::NotCached) => {
+                RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
+                    .not_cached
+                    .inc();
+                SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
+                None
+            }
+            Err(FailedReason::EpochNotMatch) => {
+                RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
+                    .epoch_not_match
+                    .inc();
+                SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
+                None
+            }
         }
+    } else {
+        RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
+            .no_read_ts
+            .inc();
+        SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
+        None
     }
 }
 
@@ -145,7 +145,7 @@ where
         let range_cache_snap = if !self.range_cache_engine.enabled() {
             None
         } else {
-            self.new_in_memory_snapshot(disk_snap.sequence_number(), ctx)
+            new_in_memory_snapshot(&self.range_cache_engine, disk_snap.sequence_number(), ctx)
         };
         HybridEngineSnapshot::new(disk_snap, range_cache_snap)
     }

@@ -22,9 +22,7 @@ use std::{
 
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{
-    CacheRange, CfName, KvEngine, MvccProperties, Snapshot, SnapshotContext, SnapshotMiscExt,
-};
+use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot, SnapshotContext};
 use futures::{future::BoxFuture, task::AtomicWaker, Future, Stream, StreamExt, TryFutureExt};
 use hybrid_engine::{HybridEngine, HybridEngineSnapshot};
 use kvproto::{
@@ -622,7 +620,7 @@ where
     type IMSnap = RegionSnapshot<HybridEngineSnapshot<E, RangeCacheMemoryEngine>>;
     type IMSnapshotRes = impl Future<Output = kv::Result<Self::IMSnap>> + Send;
     fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes {
-        let mut snap_ctx = if self.in_memory_engine.is_some() {
+        let snap_ctx = if self.in_memory_engine.is_some() {
             // When range cache engine is enabled, we need snapshot context to determine
             // whether we should use range cache engine snapshot for this request.
             ctx.start_ts.map(|ts| SnapshotContext {
@@ -634,18 +632,9 @@ where
         } else {
             None
         };
-        let in_memory_engine = self.in_memory_engine.clone();
         async_snapshot(&mut self.router, ctx, snap_ctx.clone()).map_ok(|region_snap| {
-            region_snap.replace_snapshot(move |disk_snap, region| {
-                if let Some(ref mut ctx) = snap_ctx {
-                    ctx.region_id = region.id;
-                    ctx.epoch_version = region.get_region_epoch().version;
-                    ctx.set_range(CacheRange::from_region(region))
-                }
-                let in_memory_snapshot = in_memory_engine.as_ref().and_then(|he| {
-                    he.new_in_memory_snapshot(disk_snap.sequence_number(), snap_ctx)
-                });
-                HybridEngineSnapshot::new(disk_snap, in_memory_snapshot)
+            region_snap.replace_snapshot(move |disk_snap, pinned| {
+                HybridEngineSnapshot::from_snapshot_pin(disk_snap, pinned)
             })
         })
     }

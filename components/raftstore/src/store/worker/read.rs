@@ -146,8 +146,8 @@ pub trait ReadExecutor {
                         self.get_snapshot(snap_ctx.clone(), &local_read_ctx),
                         region.clone(),
                     );
-                    if let Some(snap_ctx) = snap_ctx.as_ref() {
-                        if let Some(snap_pin) = host.on_snapshot(&region, snap_ctx.read_ts, seqno) {
+                    if snap_ctx.is_some() {
+                        if let Some(snap_pin) = host.on_snapshot(snap_ctx.clone(), seqno) {
                             snapshot.pin_snapshot(snap_pin);
                         }
                     }

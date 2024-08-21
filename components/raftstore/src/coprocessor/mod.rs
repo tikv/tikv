@@ -44,7 +44,8 @@ pub use self::{
     },
     error::{Error, Result},
     read_write::{
-        ObservableWriteBatch, SnapshotObserver, SnapshotPin, WriteBatchObserver, WriteBatchWrapper,
+        ObservableWriteBatch, ObservedSnapshot, SnapshotObserver, WriteBatchObserver,
+        WriteBatchWrapper,
     },
     region_info_accessor::{
         Callback as RegionInfoCallback, RangeKey, RegionCollector, RegionInfo, RegionInfoAccessor,

@@ -1,19 +1,20 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
-
-use engine_traits::{CacheRange, KvEngine, RangeCacheEngine};
-use kvproto::metapb::Region;
+use engine_traits::{KvEngine, SnapshotContext};
 use raftstore::coprocessor::{
-    dispatcher::BoxSnapshotObserver, CoprocessorHost, SnapshotObserver, SnapshotPin,
+    dispatcher::BoxSnapshotObserver, CoprocessorHost, ObservedSnapshot, SnapshotObserver,
 };
 use range_cache_memory_engine::{RangeCacheMemoryEngine, RangeCacheSnapshot};
 
-struct RangeCacheSnapshotPin {
-    snap: Option<RangeCacheSnapshot>,
+use crate::new_in_memory_snapshot;
+
+/// RangeCacheSnapshotPin pins data of a RangeCacheMemoryEngine during taking
+/// snapshot. It prevents the data from being evicted or deleted from the cache.
+pub struct RangeCacheSnapshotPin {
+    pub snap: Option<RangeCacheSnapshot>,
 }
 
-impl SnapshotPin for RangeCacheSnapshotPin {}
+impl ObservedSnapshot for RangeCacheSnapshotPin {}
 
 #[derive(Clone)]
 pub struct HybridSnapshotObserver {
@@ -33,17 +34,12 @@ impl HybridSnapshotObserver {
 }
 
 impl SnapshotObserver for HybridSnapshotObserver {
-    fn on_snapshot(&self, region: &Region, read_ts: u64, seqno: u64) -> Arc<dyn SnapshotPin> {
-        let snap = self
-            .cache_engine
-            .snapshot(
-                region.id,
-                region.get_region_epoch().version,
-                CacheRange::from_region(region),
-                read_ts,
-                seqno,
-            )
-            .ok();
-        Arc::new(RangeCacheSnapshotPin { snap })
+    fn on_snapshot(
+        &self,
+        ctx: Option<SnapshotContext>,
+        sequence_number: u64,
+    ) -> Box<dyn ObservedSnapshot> {
+        let snap = new_in_memory_snapshot(&self.cache_engine, sequence_number, ctx);
+        Box::new(RangeCacheSnapshotPin { snap })
     }
 }

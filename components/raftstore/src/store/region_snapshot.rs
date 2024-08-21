@@ -6,7 +6,7 @@ use std::{
     num::NonZeroU64,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc,
+        Arc, Mutex,
     },
 };
 
@@ -24,7 +24,7 @@ use tikv_util::{
 };
 
 use crate::{
-    coprocessor::SnapshotPin,
+    coprocessor::ObservedSnapshot,
     store::{util, PeerStorage, TxnExt},
     Error, Result,
 };
@@ -43,7 +43,7 @@ pub struct RegionSnapshot<S: Snapshot> {
     pub txn_ext: Option<Arc<TxnExt>>,
     pub bucket_meta: Option<Arc<BucketMeta>>,
 
-    _pin: Option<Arc<dyn SnapshotPin>>,
+    pinned: Option<Arc<Mutex<Option<Box<dyn ObservedSnapshot>>>>>,
 }
 
 impl<S: Snapshot> fmt::Debug for RegionSnapshot<S> {
@@ -91,21 +91,25 @@ where
             txn_extra_op: TxnExtraOp::Noop,
             txn_ext: None,
             bucket_meta: None,
-            _pin: None,
+            pinned: None,
         }
     }
 
-    pub fn pin_snapshot(&mut self, snap_pin: Arc<dyn SnapshotPin>) {
-        self._pin = Some(snap_pin);
+    pub fn pin_snapshot(&mut self, snap_pin: Box<dyn ObservedSnapshot>) {
+        self.pinned = Some(Arc::new(Mutex::new(Some(snap_pin))));
     }
 
-    pub fn replace_snapshot<Sp, F>(self, snap_fn: F) -> RegionSnapshot<Sp>
+    pub fn replace_snapshot<Sp, F>(mut self, snap_fn: F) -> RegionSnapshot<Sp>
     where
         Sp: Snapshot,
-        F: FnOnce(S, &Region) -> Sp,
+        F: FnOnce(S, Option<Box<dyn ObservedSnapshot>>) -> Sp,
     {
+        let mut pinned = None;
+        if let Some(snap_pin) = self.pinned.take() {
+            pinned = snap_pin.lock().unwrap().take();
+        }
         RegionSnapshot {
-            snap: Arc::new(snap_fn(Arc::unwrap_or_clone(self.snap), &self.region)),
+            snap: Arc::new(snap_fn(Arc::unwrap_or_clone(self.snap), pinned)),
             region: self.region,
             apply_index: self.apply_index,
             from_v2: self.from_v2,
@@ -113,7 +117,7 @@ where
             txn_extra_op: self.txn_extra_op,
             txn_ext: self.txn_ext,
             bucket_meta: self.bucket_meta,
-            _pin: self._pin,
+            pinned: None,
         }
     }
 
@@ -236,7 +240,7 @@ where
             txn_extra_op: self.txn_extra_op,
             txn_ext: self.txn_ext.clone(),
             bucket_meta: self.bucket_meta.clone(),
-            _pin: self._pin.clone(),
+            pinned: self.pinned.clone(),
         }
     }
 }
