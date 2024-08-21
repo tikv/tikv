@@ -76,6 +76,7 @@ pub trait AggrFunctionState:
     + AggrFunctionStateUpdatePartial<JsonRef<'static>>
     + AggrFunctionStateUpdatePartial<EnumRef<'static>>
     + AggrFunctionStateUpdatePartial<SetRef<'static>>
+    + AggrFunctionStateUpdatePartial<VectorFloat32Ref<'static>>
 {
     // TODO: A better implementation is to specialize different push result targets.
     // However current aggregation executor cannot utilize it.

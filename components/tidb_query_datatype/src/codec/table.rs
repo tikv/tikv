@@ -291,6 +291,7 @@ fn unflatten(
                     FieldTypeTp::String,
                     FieldTypeTp::NewDecimal,
                     FieldTypeTp::Json,
+                    FieldTypeTp::TiDbVectorFloat32,
                 ]
                 .contains(&t),
                 "unknown type {} {}",

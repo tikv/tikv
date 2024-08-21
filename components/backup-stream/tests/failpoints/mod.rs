@@ -254,7 +254,7 @@ mod all {
         .unwrap();
 
         suite.sync();
-        suite.wait_with_router(move |r| block_on(r.get_task_info("retry_abort")).is_ok());
+        suite.wait_with_router(move |r| r.get_task_handler("retry_abort").is_ok());
         let items = run_async_test(suite.write_records(0, 128, 1));
         suite.force_flush_files("retry_abort");
         suite.wait_for_flush();

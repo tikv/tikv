@@ -137,6 +137,12 @@ pub fn is_null_json(arg: Option<JsonRef>) -> Result<Option<i64>> {
 
 #[rpn_fn(nullable)]
 #[inline]
+pub fn is_null_vector_float32(arg: Option<VectorFloat32Ref>) -> Result<Option<i64>> {
+    is_null_ref(arg)
+}
+
+#[rpn_fn(nullable)]
+#[inline]
 pub fn bit_and(lhs: Option<&Int>, rhs: Option<&Int>) -> Result<Option<Int>> {
     Ok(match (lhs, rhs) {
         (Some(lhs), Some(rhs)) => Some(lhs & rhs),

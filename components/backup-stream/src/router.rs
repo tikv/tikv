@@ -13,6 +13,7 @@ use std::{
     time::Duration,
 };
 
+use dashmap::DashMap;
 use encryption::DataKeyManager;
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use external_storage::{create_storage, BackendConfig, ExternalStorage, UnpinReader};
@@ -339,8 +340,8 @@ pub struct Config {
     pub data_key_manager: Option<Arc<DataKeyManager>>,
 }
 
-impl From<tikv::config::BackupStreamConfig> for Config {
-    fn from(value: tikv::config::BackupStreamConfig) -> Self {
+impl From<BackupStreamConfig> for Config {
+    fn from(value: BackupStreamConfig) -> Self {
         let prefix = PathBuf::from(value.temp_path);
         let temp_file_size_limit = value.file_size_limit.0;
         let temp_file_memory_quota = value.temp_file_memory_quota.0;
@@ -385,7 +386,7 @@ pub struct RouterInner {
     /// which range a point belongs to.
     ranges: SyncRwLock<SegmentMap<Vec<u8>, String>>,
     /// The temporary files associated to some task.
-    tasks: Mutex<HashMap<String, Arc<StreamTaskInfo>>>,
+    tasks: DashMap<String, Arc<StreamTaskHandler>>,
     /// The temporary directory for all tasks.
     prefix: PathBuf,
 
@@ -414,7 +415,7 @@ impl RouterInner {
     pub fn new(scheduler: Scheduler<Task>, config: Config) -> Self {
         RouterInner {
             ranges: SyncRwLock::new(SegmentMap::default()),
-            tasks: Mutex::new(HashMap::default()),
+            tasks: DashMap::new(),
             prefix: config.prefix,
             scheduler,
             temp_file_size_limit: AtomicU64::new(config.temp_file_size_limit),
@@ -430,9 +431,9 @@ impl RouterInner {
             .store(config.file_size_limit.0, Ordering::SeqCst);
         self.temp_file_memory_quota
             .store(config.temp_file_memory_quota.0, Ordering::SeqCst);
-        let tasks = self.tasks.blocking_lock();
-        for task in tasks.values() {
-            task.temp_file_pool
+        for entry in self.tasks.iter() {
+            entry
+                .temp_file_pool
                 .config()
                 .cache_size
                 .store(config.temp_file_memory_quota.0 as usize, Ordering::SeqCst);
@@ -492,13 +493,12 @@ impl RouterInner {
 
         // register task info
         let cfg = self.tempfile_config_for_task(&task);
-        let stream_task =
-            StreamTaskInfo::new(task, ranges.clone(), merged_file_size_limit, cfg).await?;
-        frame!(self.tasks.lock())
-            .await
-            .insert(task_name.clone(), Arc::new(stream_task));
+        let stream_task_handler =
+            StreamTaskHandler::new(task, ranges.clone(), merged_file_size_limit, cfg).await?;
+        self.tasks
+            .insert(task_name.clone(), Arc::new(stream_task_handler));
 
-        // register ragnes
+        // register ranges
         self.register_ranges(&task_name, ranges);
 
         Ok(())
@@ -521,14 +521,14 @@ impl RouterInner {
         }
     }
 
-    pub async fn unregister_task(&self, task_name: &str) -> Option<StreamBackupTaskInfo> {
-        frame!(self.tasks.lock()).await.remove(task_name).map(|t| {
+    pub fn unregister_task(&self, task_name: &str) -> Option<StreamBackupTaskInfo> {
+        self.tasks.remove(task_name).map(|t| {
             info!(
                 "backup stream unregister task";
                 "task" => task_name,
             );
             self.unregister_ranges(task_name);
-            t.task.info.clone()
+            t.1.task.info.clone()
         })
     }
 
@@ -538,11 +538,11 @@ impl RouterInner {
         r.get_value_by_point(key).cloned()
     }
 
-    #[instrument(skip(self))]
-    pub async fn select_task(&self, selector: TaskSelectorRef<'_>) -> Vec<String> {
-        let s = frame!(self.tasks.lock()).await;
-        s.iter()
-            .filter(|(name, info)| {
+    pub fn select_task(&self, selector: TaskSelectorRef<'_>) -> Vec<String> {
+        self.tasks
+            .iter()
+            .filter(|entry| {
+                let (name, info) = entry.pair();
                 selector.matches(
                     name.as_str(),
                     info.ranges
@@ -550,25 +550,24 @@ impl RouterInner {
                         .map(|(s, e)| (s.as_slice(), e.as_slice())),
                 )
             })
-            .map(|(name, _)| name.to_owned())
+            .map(|entry| entry.key().to_owned())
             .collect()
     }
 
     #[cfg(test)]
-    pub(crate) async fn must_mut_task_info<F>(&self, task_name: &str, mutator: F)
+    pub(crate) fn must_mut_task_info<F>(&self, task_name: &str, mutator: F)
     where
-        F: FnOnce(&mut StreamTaskInfo),
+        F: FnOnce(&mut StreamTaskHandler),
     {
-        let mut tasks = self.tasks.lock().await;
-        let t = tasks.remove(task_name);
-        let mut raw = Arc::try_unwrap(t.unwrap()).unwrap();
+        let t = self.tasks.remove(task_name);
+        let mut raw = Arc::try_unwrap(t.unwrap().1).unwrap();
         mutator(&mut raw);
-        tasks.insert(task_name.to_owned(), Arc::new(raw));
+        self.tasks.insert(task_name.to_owned(), Arc::new(raw));
     }
 
     #[instrument(skip(self))]
-    pub async fn get_task_info(&self, task_name: &str) -> Result<Arc<StreamTaskInfo>> {
-        let task_info = match frame!(self.tasks.lock()).await.get(task_name) {
+    pub fn get_task_handler(&self, task_name: &str) -> Result<Arc<StreamTaskHandler>> {
+        let task_handler = match self.tasks.get(task_name) {
             Some(t) => t.clone(),
             None => {
                 info!("backup stream no task"; "task" => ?task_name);
@@ -577,13 +576,13 @@ impl RouterInner {
                 });
             }
         };
-        Ok(task_info)
+        Ok(task_handler)
     }
 
     #[instrument(skip_all, fields(task))]
-    async fn on_event(&self, task: String, events: ApplyEvents) -> Result<()> {
-        let task_info = self.get_task_info(&task).await?;
-        task_info.on_events(events).await?;
+    async fn on_events_by_task(&self, task: String, events: ApplyEvents) -> Result<()> {
+        let task_handler = self.get_task_handler(&task)?;
+        task_handler.on_events(events).await?;
         let file_size_limit = self.temp_file_size_limit.load(Ordering::SeqCst);
 
         // When this event make the size of temporary files exceeds the size limit, make
@@ -592,16 +591,16 @@ impl RouterInner {
         debug!(
             "backup stream statics size";
             "task" => ?task,
-            "next_size" => task_info.total_size(),
+            "next_size" => task_handler.total_size(),
             "size_limit" => file_size_limit,
         );
-        let cur_size = task_info.total_size();
-        if cur_size > file_size_limit && !task_info.is_flushing() {
+        let cur_size = task_handler.total_size();
+        if cur_size > file_size_limit && !task_handler.is_flushing() {
             info!("try flushing task"; "task" => %task, "size" => %cur_size);
-            if task_info.set_flushing_status_cas(false, true).is_ok() {
+            if task_handler.set_flushing_status_cas(false, true).is_ok() {
                 if let Err(e) = self.scheduler.schedule(Task::Flush(task)) {
                     error!("backup stream schedule task failed"; "error" => ?e);
-                    task_info.set_flushing_status(false);
+                    task_handler.set_flushing_status(false);
                 }
             }
         }
@@ -612,27 +611,28 @@ impl RouterInner {
         use futures::FutureExt;
         HANDLE_KV_HISTOGRAM.observe(kv.len() as _);
         let partitioned_events = kv.partition_by_range(&self.ranges.rl());
-        let tasks = partitioned_events
-            .into_iter()
-            .map(|(task, events)| self.on_event(task.clone(), events).map(move |r| (task, r)));
+        let tasks = partitioned_events.into_iter().map(|(task, events)| {
+            self.on_events_by_task(task.clone(), events)
+                .map(move |r| (task, r))
+        });
         futures::future::join_all(tasks).await
     }
 
-    /// flush the specified task, once once success, return the min resolved ts
+    /// flush the specified task, once success, return the min resolved ts
     /// of this flush. returns `None` if failed.
     #[instrument(skip(self, cx))]
     pub async fn do_flush(&self, cx: FlushContext<'_>) -> Option<u64> {
-        let task = self.tasks.lock().await.get(cx.task_name).cloned();
+        let task = self.tasks.get(cx.task_name);
         match task {
             Some(task_info) => {
                 let result = task_info.do_flush(cx).await;
                 // set false to flushing whether success or fail
-                task_info.set_flushing_status(false);
+                task_handler.set_flushing_status(false);
 
                 if let Err(e) = result {
                     e.report("failed to flush task.");
                     warn!("backup steam do flush fail"; "err" => ?e);
-                    if task_info.flush_failure_count() > FLUSH_FAILURE_BECOME_FATAL_THRESHOLD {
+                    if task_handler.flush_failure_count() > FLUSH_FAILURE_BECOME_FATAL_THRESHOLD {
                         // NOTE: Maybe we'd better record all errors and send them to the client?
                         try_send!(
                             self.scheduler,
@@ -645,7 +645,7 @@ impl RouterInner {
                     return None;
                 }
                 // if succeed in flushing, update flush_time. Or retry do_flush immediately.
-                task_info.update_flush_time();
+                task_handler.update_flush_time();
                 result.ok().flatten()
             }
             _ => None,
@@ -659,8 +659,7 @@ impl RouterInner {
         global_checkpoint: u64,
         store_id: u64,
     ) -> Result<bool> {
-        self.get_task_info(task_name)
-            .await?
+        self.get_task_handler(task_name)?
             .update_global_checkpoint(global_checkpoint, store_id)
             .await
     }
@@ -670,7 +669,9 @@ impl RouterInner {
     pub async fn tick(&self) {
         let max_flush_interval = self.max_flush_interval.rl().to_owned();
 
-        for (name, task_info) in self.tasks.lock().await.iter() {
+        for entry in self.tasks.iter() {
+            let name = entry.key();
+            let task_info = entry.value();
             if let Err(e) = self
                 .scheduler
                 .schedule(Task::UpdateGlobalCheckpoint(name.to_string()))
@@ -830,7 +831,10 @@ impl TempFileKey {
     }
 }
 
-pub struct StreamTaskInfo {
+/// StreamTaskHandler acts on the events for the backup stream task.
+/// It writes the key value pair changes from raft store to local temp files and
+/// flushes it to the external storage.
+pub struct StreamTaskHandler {
     pub(crate) task: StreamTask,
     /// support external storage. eg local/s3.
     pub(crate) storage: Arc<dyn ExternalStorage>,
@@ -866,7 +870,7 @@ pub struct StreamTaskInfo {
     temp_file_pool: Arc<TempFilePool>,
 }
 
-impl Drop for StreamTaskInfo {
+impl Drop for StreamTaskHandler {
     fn drop(&mut self) {
         let (success, failed): (Vec<_>, Vec<_>) = self
             .flushing_files
@@ -876,7 +880,7 @@ impl Drop for StreamTaskInfo {
             .map(|(_, f, _)| f.inner.path().to_owned())
             .map(|p| self.temp_file_pool.remove(&p))
             .partition(|r| *r);
-        info!("stream task info dropped[1/2], removing flushing_temp files"; "success" => %success.len(), "failure" => %failed.len());
+        info!("stream task handler dropped[1/2], removing flushing_temp files"; "success" => %success.len(), "failure" => %failed.len());
         let (success, failed): (Vec<_>, Vec<_>) = self
             .files
             .get_mut()
@@ -884,13 +888,13 @@ impl Drop for StreamTaskInfo {
             .map(|(_, f)| f.into_inner().inner.path().to_owned())
             .map(|p| self.temp_file_pool.remove(&p))
             .partition(|r| *r);
-        info!("stream task info dropped[2/2], removing temp files"; "success" => %success.len(), "failure" => %failed.len());
+        info!("stream task handler dropped[2/2], removing temp files"; "success" => %success.len(), "failure" => %failed.len());
     }
 }
 
-impl std::fmt::Debug for StreamTaskInfo {
+impl std::fmt::Debug for StreamTaskHandler {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("StreamTaskInfo")
+        f.debug_struct("StreamTaskHandler")
             .field("task", &self.task.info.name)
             .field("min_resolved_ts", &self.min_resolved_ts)
             .field("total_size", &self.total_size)
@@ -899,7 +903,7 @@ impl std::fmt::Debug for StreamTaskInfo {
     }
 }
 
-impl StreamTaskInfo {
+impl StreamTaskHandler {
     /// Create a new temporary file set at the `temp_dir`.
     pub async fn new(
         task: StreamTask,
@@ -1886,7 +1890,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(200)).await;
 
         let end_ts = TimeStamp::physical_now();
-        let files = router.tasks.lock().await.get("dummy").unwrap().clone();
+        let files = router.tasks.get("dummy").unwrap().clone();
         let mut meta = files
             .move_to_flushing_files()
             .await
@@ -1999,7 +2003,7 @@ mod tests {
             is_paused: false,
         };
         let merged_file_size_limit = 0x10000;
-        let task = StreamTaskInfo::new(
+        let task_handler = StreamTaskHandler::new(
             stream_task,
             vec![(vec![], vec![])],
             merged_file_size_limit,
@@ -2012,7 +2016,7 @@ mod tests {
         let region_count = merged_file_size_limit / (4 * 1024); // 2 merged log files
         for i in 1..=region_count {
             let kv_events = mock_build_large_kv_events(i as _, i as _, i as _);
-            task.on_events(kv_events).await.unwrap();
+            task_handler.on_events(kv_events).await.unwrap();
         }
         // do_flush
         task.set_flushing_status(true);
@@ -2154,11 +2158,9 @@ mod tests {
         };
         let (task, _path) = task("error_prone".to_owned()).await?;
         must_register_table(router.as_ref(), task, 1).await;
-        router
-            .must_mut_task_info("error_prone", |i| {
-                i.storage = Arc::new(ErrorStorage::with_first_time_error(i.storage.clone()))
-            })
-            .await;
+        router.must_mut_task_info("error_prone", |i| {
+            i.storage = Arc::new(ErrorStorage::with_first_time_error(i.storage.clone()))
+        });
         check_on_events_result(&router.on_events(build_kv_event(0, 10)).await);
         assert!(router.do_flush(cx).await.is_none());
         check_on_events_result(&router.on_events(build_kv_event(10, 10)).await);
@@ -2201,7 +2203,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let task = router.get_task_info("nothing").await.unwrap();
+        let task = router.get_task_handler("nothing").unwrap();
         task.set_flushing_status_cas(false, true).unwrap();
         let ts = TimeStamp::compose(TimeStamp::physical_now(), 42);
         let cx = FlushContext {
@@ -2232,14 +2234,12 @@ mod tests {
         must_register_table(&router, task, 1).await;
         write_simple_data(&router).await;
         let tempfiles = router
-            .get_task_info("cleanup_test")
-            .await
+            .get_task_handler("cleanup_test")
             .unwrap()
             .temp_file_pool
             .clone();
         router
-            .get_task_info("cleanup_test")
-            .await?
+            .get_task_handler("cleanup_test")?
             .move_to_flushing_files()
             .await?;
         write_simple_data(&router).await;
@@ -2414,7 +2414,7 @@ mod tests {
             info: task_info,
             is_paused: false,
         };
-        let task = StreamTaskInfo::new(
+        let task_handler = StreamTaskHandler::new(
             stream_task,
             vec![(vec![], vec![])],
             0x100000,
@@ -2422,25 +2422,30 @@ mod tests {
         )
         .await
         .unwrap();
-        task.global_checkpoint_ts.store(10001, Ordering::SeqCst);
+        task_handler
+            .global_checkpoint_ts
+            .store(10001, Ordering::SeqCst);
 
         // test no need to update global checkpoint
         let store_id = 3;
         let mut global_checkpoint = 10000;
-        let is_updated = task
+        let is_updated = task_handler
             .update_global_checkpoint(global_checkpoint, store_id)
             .await?;
         assert_eq!(is_updated, false);
-        assert_eq!(task.global_checkpoint_ts.load(Ordering::SeqCst), 10001);
+        assert_eq!(
+            task_handler.global_checkpoint_ts.load(Ordering::SeqCst),
+            10001
+        );
 
         // test update global checkpoint
         global_checkpoint = 10002;
-        let is_updated = task
+        let is_updated = task_handler
             .update_global_checkpoint(global_checkpoint, store_id)
             .await?;
         assert_eq!(is_updated, true);
         assert_eq!(
-            task.global_checkpoint_ts.load(Ordering::SeqCst),
+            task_handler.global_checkpoint_ts.load(Ordering::SeqCst),
             global_checkpoint
         );
 
@@ -2535,7 +2540,7 @@ mod tests {
         let tmp_key = TempFileKey::of(&kv_event.events[0], 1);
         data_file.inner.done().await?;
         let mut files = vec![(tmp_key, data_file, info)];
-        let result = StreamTaskInfo::merge_and_flush_log_files_to(
+        let result = StreamTaskHandler::merge_and_flush_log_files_to(
             Arc::new(ms),
             &mut files[0..],
             &mut meta,
@@ -2621,11 +2626,9 @@ mod tests {
 
         let (task, _path) = task("race".to_owned()).await?;
         must_register_table(router.as_ref(), task, 1).await;
-        router
-            .must_mut_task_info("race", |i| {
-                i.storage = Arc::new(NoopStorage::default());
-            })
-            .await;
+        router.must_mut_task_info("race", |i| {
+            i.storage = Arc::new(NoopStorage::default());
+        });
         let mut b = KvEventsBuilder::new(42, 0);
         b.put_table(CF_DEFAULT, 1, b"k1", b"v1");
         let events_before_flush = b.finish();
@@ -2642,7 +2645,7 @@ mod tests {
         let (fp_tx, fp_rx) = std::sync::mpsc::sync_channel(0);
         let fp_rx = std::sync::Mutex::new(fp_rx);
 
-        let t = router.get_task_info("race").await.unwrap();
+        let t = router.get_task_handler("race").unwrap();
         let _ = router.on_events(events_before_flush).await;
 
         // make generate temp files ***happen after*** moving files to flushing_files
