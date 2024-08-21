@@ -445,8 +445,6 @@ struct MetaFile {
 
     // for writing snapshot
     pub tmp_path: PathBuf,
-    // for loading snapshot
-    pub use_plain_file: bool,
 }
 
 pub struct Snapshot {
@@ -679,27 +677,7 @@ impl Snapshot {
     fn read_snapshot_meta(&mut self) -> RaftStoreResult<SnapshotMeta> {
         let buf = file_system::read(&self.meta_file.path)?;
         let mut snapshot_meta = SnapshotMeta::default();
-        let raw_size = snapshot_meta.compute_size() as usize;
-        if buf.len() < raw_size {
-            return Err(box_err!(
-                "invalid snapshot meta length {} < {}",
-                buf.len(),
-                raw_size
-            ));
-        } else if buf.len() == raw_size {
-            snapshot_meta.merge_from_bytes(&buf)?;
-        } else {
-            // TODO: better to move this part into the proto definition.
-            snapshot_meta.merge_from_bytes(&buf[..raw_size])?;
-            let mut extra = buf[raw_size..].to_vec();
-            if extra.len() != 1 {
-                return Err(box_err!(
-                    "invalid extra metadata length, expect 1, got {}",
-                    extra.len()
-                ));
-            }
-            self.meta_file.use_plain_file = extra.pop().unwrap() == 1;
-        }
+        snapshot_meta.merge_from_bytes(&buf)?;
         Ok(snapshot_meta)
     }
 
@@ -840,9 +818,7 @@ impl Snapshot {
     // Save `SnapshotMeta` to file.
     // Used in `do_build` and by external crates.
     pub fn save_meta_file(&mut self) -> RaftStoreResult<()> {
-        let mut v = box_try!(self.meta_file.meta.as_ref().unwrap().write_to_bytes());
-        // TODO: add extra metadata to the proto definition.
-        v.push(self.meta_file.use_plain_file as u8);
+        let v = box_try!(self.meta_file.meta.as_ref().unwrap().write_to_bytes());
         if let Some(mut f) = self.meta_file.file.take() {
             // `meta_file` could be None for this case: in `init_for_building` the snapshot
             // exists so no temporary meta file is created, and this field is
@@ -955,12 +931,14 @@ impl Snapshot {
                 "cf" => cf,
                 "key_count" => cf_stat.key_count,
                 "size" => cf_stat.total_size,
+                "use_plain_file" => use_plain_file,
             );
         }
 
         // save snapshot meta to meta file
-        self.meta_file.meta = Some(gen_snapshot_meta(&self.cf_files[..], for_balance)?);
-        self.meta_file.use_plain_file = use_plain_file;
+        let mut snapshot_meta = gen_snapshot_meta(&self.cf_files[..], for_balance)?;
+        snapshot_meta.set_use_plain_file(use_plain_file);
+        self.meta_file.meta = Some(snapshot_meta);
         self.save_meta_file()?;
         Ok(())
     }
@@ -1138,7 +1116,7 @@ impl Snapshot {
     }
 
     pub fn apply<EK: KvEngine>(&mut self, options: ApplyOptions<EK>) -> Result<()> {
-        let use_plain_file = self.meta_file.use_plain_file;
+        let use_plain_file = self.meta_file.meta.as_ref().unwrap().get_use_plain_file();
         let post_check = |cf_file: &CfFile, offset: usize| {
             if !plain_file_used(cf_file.cf) && !use_plain_file {
                 let file_paths = cf_file.file_paths();

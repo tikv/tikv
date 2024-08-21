@@ -3729,6 +3729,12 @@ impl GenSnapTask {
         region_approximate_size: Option<u64>,
         region_approximate_keys: Option<u64>,
     ) {
+        fail_point!("on_snap_use_plain_file", |_| {
+            self.use_plain_file = true;
+        });
+        if snap_min_approximate_size.0 == 0 {
+            return;
+        }
         let snap_min_approximate_keys = std::cmp::max(
             10000,
             (snap_min_approximate_size.as_mb_f64() * 10000.0) as u64,
