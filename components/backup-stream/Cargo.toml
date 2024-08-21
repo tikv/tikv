@@ -88,10 +88,6 @@ engine_panic = { workspace = true }
 engine_test = { workspace = true }
 grpcio = { workspace = true }
 hex = "0.4"
-pprof = { version = "0.13", default-features = false, features = [
-  "flamegraph",
-  "protobuf-codec",
-] } 
 protobuf = { version = "2.8", features = ["bytes"] }
 rand = "0.8.0"
 tempdir = "0.3"
