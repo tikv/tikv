@@ -12,7 +12,7 @@ use std::{
 };
 
 use crossbeam::{atomic::AtomicCell, channel::TrySendError};
-use engine_traits::{CacheRange, KvEngine, Peekable, RaftEngine, SnapshotContext};
+use engine_traits::{CacheRange, KvEngine, Peekable, RaftEngine, SnapshotContext, SnapshotMiscExt};
 use fail::fail_point;
 use kvproto::{
     errorpb,
@@ -140,12 +140,16 @@ pub trait ReadExecutor {
                     }
                 }
                 CmdType::Snap => {
+                    let snap = self.get_snapshot(snap_ctx.clone(), &local_read_ctx);
+                    let seqno = snap.sequence_number();
                     let mut snapshot = RegionSnapshot::from_snapshot(
                         self.get_snapshot(snap_ctx.clone(), &local_read_ctx),
                         region.clone(),
                     );
-                    if let Some(snap_pin) = host.on_snapshot(&region, 0) {
-                        snapshot.pin_snapshot(snap_pin);
+                    if let Some(snap_ctx) = snap_ctx.as_ref() {
+                        if let Some(snap_pin) = host.on_snapshot(&region, snap_ctx.read_ts, seqno) {
+                            snapshot.pin_snapshot(snap_pin);
+                        }
                     }
                     response.snapshot = Some(snapshot);
                     Response::default()

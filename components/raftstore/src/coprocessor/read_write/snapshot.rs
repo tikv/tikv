@@ -7,5 +7,5 @@ use kvproto::metapb::Region;
 pub trait SnapshotPin: Send + Sync {}
 
 pub trait SnapshotObserver: Send {
-    fn on_snapshot(&self, region: &Region, seqno: u64) -> Arc<dyn SnapshotPin>;
+    fn on_snapshot(&self, region: &Region, read_ts: u64, seqno: u64) -> Arc<dyn SnapshotPin>;
 }

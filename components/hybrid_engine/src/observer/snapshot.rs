@@ -33,14 +33,14 @@ impl HybridSnapshotObserver {
 }
 
 impl SnapshotObserver for HybridSnapshotObserver {
-    fn on_snapshot(&self, region: &Region, seqno: u64) -> Arc<dyn SnapshotPin> {
+    fn on_snapshot(&self, region: &Region, read_ts: u64, seqno: u64) -> Arc<dyn SnapshotPin> {
         let snap = self
             .cache_engine
             .snapshot(
                 region.id,
                 region.get_region_epoch().version,
                 CacheRange::from_region(region),
-                u64::MAX,
+                read_ts,
                 seqno,
             )
             .ok();

@@ -113,7 +113,7 @@ where
             txn_extra_op: self.txn_extra_op,
             txn_ext: self.txn_ext,
             bucket_meta: self.bucket_meta,
-            _pin: None,
+            _pin: self._pin,
         }
     }
 
@@ -236,7 +236,7 @@ where
             txn_extra_op: self.txn_extra_op,
             txn_ext: self.txn_ext.clone(),
             bucket_meta: self.bucket_meta.clone(),
-            _pin: None,
+            _pin: self._pin.clone(),
         }
     }
 }

@@ -919,11 +919,17 @@ impl<E: KvEngine> CoprocessorHost<E> {
         WriteBatchWrapper::new(wb, observable_wb)
     }
 
-    pub fn on_snapshot(&self, region: &Region, seqno: u64) -> Option<Arc<dyn SnapshotPin>> {
+    pub fn on_snapshot(
+        &self,
+        region: &Region,
+        read_ts: u64,
+        seqno: u64,
+    ) -> Option<Arc<dyn SnapshotPin>> {
+        assert!(self.registry.snapshot_observer.is_some());
         self.registry
             .snapshot_observer
             .as_ref()
-            .map(move |observer| observer.inner().on_snapshot(region, seqno))
+            .map(move |observer| observer.inner().on_snapshot(region, read_ts, seqno))
     }
 
     pub fn shutdown(&self) {
