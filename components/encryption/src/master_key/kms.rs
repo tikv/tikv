@@ -141,7 +141,11 @@ impl KmsBackend {
                             self.kms_provider.decrypt_data_key(&ciphertext_key),
                         )
                     }))
-                    .map_err(cloud_convert_error("decrypt encrypted key failed".into()))?;
+                    .map_err(|e| {
+                        Error::WrongMasterKey(box_err!(cloud_convert_error(
+                            "decrypt encrypted key failed".into(),
+                        )(e)))
+                    })?;
                 let data_key = DataKeyPair {
                     encrypted: ciphertext_key,
                     plaintext: PlainKey::new(plaintext, CryptographyType::AesGcm256)
@@ -153,6 +157,12 @@ impl KmsBackend {
                 Ok(content)
             }
         }
+    }
+
+    #[cfg(test)]
+    fn clear_state(&mut self) {
+        let mut opt_state = self.state.lock().unwrap();
+        *opt_state = None;
     }
 }
 
@@ -173,7 +183,10 @@ impl Backend for KmsBackend {
 #[cfg(test)]
 mod fake {
     use async_trait::async_trait;
-    use cloud::{error::Result, kms::KmsProvider};
+    use cloud::{
+        error::{Error as CloudError, KmsError, Result},
+        kms::KmsProvider,
+    };
 
     use super::*;
 
@@ -183,12 +196,14 @@ mod fake {
     #[derive(Debug)]
     pub struct FakeKms {
         plaintext_key: PlainKey,
+        should_decrypt_data_key_fail: bool,
     }
 
     impl FakeKms {
-        pub fn new(plaintext_key: Vec<u8>) -> Self {
+        pub fn new(plaintext_key: Vec<u8>, should_decrypt_data_key_fail: bool) -> Self {
             Self {
                 plaintext_key: PlainKey::new(plaintext_key, CryptographyType::AesGcm256).unwrap(),
+                should_decrypt_data_key_fail,
             }
         }
     }
@@ -204,7 +219,13 @@ mod fake {
         }
 
         async fn decrypt_data_key(&self, _ciphertext: &EncryptedKey) -> Result<Vec<u8>> {
-            Ok(vec![1u8, 32])
+            if self.should_decrypt_data_key_fail {
+                Err(CloudError::KmsError(KmsError::WrongMasterKey(box_err!(
+                    "wrong master key"
+                ))))
+            } else {
+                Ok(vec![1u8, 32])
+            }
         }
 
         fn name(&self) -> &str {
@@ -241,21 +262,36 @@ mod tests {
         assert_eq!(state2.cached(&encrypted2), true);
     }
 
+    const PLAIN_TEXT_HEX: &str = "25431587e9ecffc7c37f8d6d52a9bc3310651d46fb0e3bad2726c8f2db653749";
+    const CIPHER_TEXT_HEX: &str =
+        "84e5f23f95648fa247cb28eef53abec947dbf05ac953734618111583840bd980";
+    const PLAINKEY_HEX: &str = "c3d99825f2181f4808acd2068eac7441a65bd428f14d2aab43fefc0129091139";
+    const IV_HEX: &str = "cafabd9672ca6c79a2fbdc22";
+
+    #[cfg(test)]
+    fn prepare_data_for_encrypt() -> (Iv, Vec<u8>, Vec<u8>, Vec<u8>) {
+        let iv = Vec::from_hex(IV_HEX).unwrap();
+        let iv = Iv::from_slice(iv.as_slice()).unwrap();
+        let pt = Vec::from_hex(PLAIN_TEXT_HEX).unwrap();
+        let plainkey = Vec::from_hex(PLAINKEY_HEX).unwrap();
+        let ct = Vec::from_hex(CIPHER_TEXT_HEX).unwrap();
+        (iv, pt, plainkey, ct)
+    }
+
+    #[cfg(test)]
+    fn prepare_kms_backend(plainkey: Vec<u8>, should_decrypt_data_key_fail: bool) -> KmsBackend {
+        KmsBackend::new(Box::new(FakeKms::new(
+            plainkey,
+            should_decrypt_data_key_fail,
+        )))
+        .unwrap()
+    }
+
     #[test]
     fn test_kms_backend() {
-        // See more http://csrc.nist.gov/groups/STM/cavp/documents/mac/gcmtestvectors.zip
-        let pt = Vec::from_hex("25431587e9ecffc7c37f8d6d52a9bc3310651d46fb0e3bad2726c8f2db653749")
-            .unwrap();
-        let ct = Vec::from_hex("84e5f23f95648fa247cb28eef53abec947dbf05ac953734618111583840bd980")
-            .unwrap();
-        let plainkey =
-            Vec::from_hex("c3d99825f2181f4808acd2068eac7441a65bd428f14d2aab43fefc0129091139")
-                .unwrap();
+        let (iv, pt, plainkey, ct) = prepare_data_for_encrypt();
+        let backend = prepare_kms_backend(plainkey, false);
 
-        let iv = Vec::from_hex("cafabd9672ca6c79a2fbdc22").unwrap();
-
-        let backend = KmsBackend::new(Box::new(FakeKms::new(plainkey))).unwrap();
-        let iv = Iv::from_slice(iv.as_slice()).unwrap();
         let encrypted_content = backend.encrypt_content(&pt, iv).unwrap();
         assert_eq!(encrypted_content.get_content(), ct.as_slice());
         let plaintext = backend.decrypt_content(&encrypted_content).unwrap();
@@ -292,5 +328,20 @@ mod tests {
                 .unwrap_err(),
             Error::Other(_)
         );
+    }
+
+    #[test]
+    fn test_kms_backend_wrong_key() {
+        let (iv, pt, plainkey, ..) = prepare_data_for_encrypt();
+        let mut backend = prepare_kms_backend(plainkey, true);
+
+        let encrypted_content = backend.encrypt_content(&pt, iv).unwrap();
+        // Clear the cached state to ensure that the subsequent
+        // backend.decrypt_content() invocation bypasses the cache and triggers the
+        // mocked FakeKMS::decrypt_data_key() function.
+        backend.clear_state();
+
+        let err = backend.decrypt_content(&encrypted_content).unwrap_err();
+        assert_matches!(err, Error::WrongMasterKey(_));
     }
 }
