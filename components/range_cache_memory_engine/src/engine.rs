@@ -345,20 +345,17 @@ impl RangeCacheMemoryEngine {
 
         let schedule_load = region_state == RegionState::Pending;
         if schedule_load {
-            range_manager.update_region_state(region.id, RegionState::ReadyToLoad);
+            range_manager.update_region_state(region.id, RegionState::Loading);
             info!(
                 "ime range to load";
                 "region" => ?region,
                 "cached" => range_manager.regions().len(),
             );
-            region_state = RegionState::ReadyToLoad;
+            region_state = RegionState::Loading;
         }
 
         let mut result = RangeCacheStatus::NotInCache;
-        if region_state == RegionState::ReadyToLoad
-            || region_state == RegionState::Loading
-            || region_state == RegionState::Active
-        {
+        if region_state == RegionState::Loading || region_state == RegionState::Active {
             range_manager.record_in_region_being_written(write_batch_id, range);
             if region_state == RegionState::Active {
                 result = RangeCacheStatus::Cached;
@@ -543,7 +540,7 @@ pub mod tests {
         engine.prepare_for_apply(1, CacheRange::from_region(&region2), &region2);
         assert_eq!(
             count_region(engine.core.read().range_manager(), |m| {
-                matches!(m.get_state(), Pending | ReadyToLoad | Loading)
+                matches!(m.get_state(), Pending | Loading)
             }),
             0
         );
@@ -556,7 +553,7 @@ pub mod tests {
         engine.prepare_for_apply(1, CacheRange::from_region(&region2), &region2);
         assert_eq!(
             count_region(engine.core.read().range_manager(), |m| {
-                matches!(m.get_state(), Pending | ReadyToLoad | Loading)
+                matches!(m.get_state(), Pending | Loading)
             }),
             0
         );

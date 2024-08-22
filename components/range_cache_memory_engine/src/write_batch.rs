@@ -710,7 +710,7 @@ mod tests {
             let core = engine.core.read();
             let region_meta = core.range_manager().region_meta(1).unwrap();
             assert_eq!(region_meta.region(), &r1_new);
-            assert_eq!(region_meta.get_state(), RegionState::ReadyToLoad);
+            assert_eq!(region_meta.get_state(), RegionState::Loading);
         }
         wb.put(b"zk02", b"val1").unwrap();
         wb.put(b"zk04", b"val1").unwrap();
