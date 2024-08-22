@@ -442,7 +442,7 @@ impl RegionManager {
                 removed_regions.push(region_meta.region.id);
                 return true;
             }
-            tikv_util::warn!("load region overlaps with existing region";
+            tikv_util::debug!("load region overlaps with existing region";
                 "region" => ?region,
                 "exist_meta" => ?region_meta);
             overlapped_region_state = Some(region_meta.state);
