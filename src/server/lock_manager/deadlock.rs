@@ -83,8 +83,8 @@ impl Locks {
         }
         // If either of the keys is missing, this may caused by TiKV nodes in too-old
         // versions in the cluster, which may happen theoretically if some user
-        // rolling-upgrades the cluster from a too-old version. In this case,
-        // skip checking equality of the keys.
+        // rolling-upgrades the cluster from a too-old version (before 5.1). In this
+        // case, skip checking equality of the keys.
         if lhs_key.is_empty() || rhs_key.is_empty() {
             return true;
         }
@@ -93,26 +93,38 @@ impl Locks {
     }
 
     /// Pushes the `hash` if not exist and updates `last_detect_time`.
-    fn push(&mut self, lock_hash: u64, key: Vec<u8>, now: Instant) {
+    fn push(&mut self, lock_hash: u64, key: Vec<u8>, now: Instant) -> bool {
+        self.last_detect_time = now;
+
         if !self
             .keys
             .iter()
             .any(|(hash, k)| Self::lock_matches(*hash, k, lock_hash, &key))
         {
-            self.keys.push((lock_hash, key))
+            self.keys.push((lock_hash, key));
+            true
+        } else {
+            false
         }
-        self.last_detect_time = now
     }
 
-    /// Removes the `lock_hash` and returns true if the `Locks` is empty.
-    fn remove(&mut self, lock_hash: u64, key: &[u8]) -> bool {
+    /// Removes the lock-waiting relationship by given hash and key.
+    ///
+    /// Returns the removed lock_hash and key if an entry is successfully
+    /// removed. The return value is useful when sometimes the `key` is
+    /// missing due to remote TiKV nodes in out-of-date versions.
+    fn remove(&mut self, lock_hash: u64, key: &[u8]) -> Option<(u64, Vec<u8>)> {
         if let Some(idx) = self
             .keys
             .iter()
             .position(|(hash, k)| Self::lock_matches(*hash, k, lock_hash, &key))
         {
-            self.keys.swap_remove(idx);
+            return Some(self.keys.swap_remove(idx));
         }
+        None
+    }
+
+    fn is_empty(&self) -> bool {
         self.keys.is_empty()
     }
 
@@ -133,6 +145,8 @@ impl Locks {
     }
 }
 
+type KeyReverseMap = HashMap<Vec<u8>, HashMap<TimeStamp, HashSet<TimeStamp>>>;
+
 /// Used to detect the deadlock of wait-for-lock in the cluster.
 pub struct DetectTable {
     /// Keeps the DAG of wait-for-lock. Every edge from `txn_ts` to `lock_ts`
@@ -144,8 +158,19 @@ pub struct DetectTable {
     wait_for_map: HashMap<TimeStamp, HashMap<TimeStamp, Locks>>,
 
     /// For finding lock-waiting and lock-holding transactions by key.
-    // key => ({waiting_txn_ts}, lock_ts).
-    key_reverse_map: HashMap<Vec<u8>, (HashSet<TimeStamp>, TimeStamp)>,
+    ///
+    /// Theoretically, keys occurring in `wait_for_map` should be unique.
+    /// However, considering that in some rare cases, it's possible that the
+    /// leader leader of some region is transferring between nodes; with
+    /// uncertain network latency, different lock-waiting relationship on a
+    /// same key can be received at the same time, while the detector leader has
+    /// no way to determine which one is the latest. Considering this, if
+    /// `key_reverse_map` is fully synced with `wait_for_map`, then a key is
+    /// possible to map to multiple existing locks, each of which has its
+    /// own set of waiting transactions.
+    // key => (lock_ts => {waiting_txn_ts})
+    // TODO: Use the pre-calculated lock hash instead to reduce the overhead of hash calculation.
+    key_reverse_map: KeyReverseMap,
 
     /// The ttl of every edge.
     ttl: Duration,
@@ -225,7 +250,20 @@ impl DetectTable {
         while let Some(curr_ts) = stack.pop() {
             if let Some(wait_for) = self.wait_for_map.get_mut(&curr_ts) {
                 // Remove expired edges.
-                wait_for.retain(|_, locks| !locks.is_expired(now, ttl));
+                let expired_locks = wait_for.extract_if(|_, locks| locks.is_expired(now, ttl));
+                // Remove the entries in `key_reverse_map` corresponding to expired locks (if
+                // any).
+                for (lock_ts, locks) in expired_locks {
+                    for (_, key) in locks.keys {
+                        Self::remove_key_reverse_index(
+                            &mut self.key_reverse_map,
+                            &key,
+                            lock_ts,
+                            curr_ts,
+                        );
+                    }
+                }
+
                 if wait_for.is_empty() {
                     self.wait_for_map.remove(&curr_ts);
                 } else {
@@ -306,8 +344,13 @@ impl DetectTable {
     ) -> bool {
         if let Some(wait_for) = self.wait_for_map.get_mut(&txn_ts) {
             if let Some(locks) = wait_for.get_mut(&lock_ts) {
-                locks.push(lock_hash, key.to_vec(), self.now);
+                let pushed = locks.push(lock_hash, key.to_vec(), self.now);
                 locks.resource_group_tag = resource_group_tag.to_vec();
+
+                if pushed {
+                    Self::insert_key_reverse_index(&mut self.key_reverse_map, key, lock_ts, txn_ts);
+                }
+
                 return true;
             }
         }
@@ -334,32 +377,107 @@ impl DetectTable {
             self.now,
         );
         wait_for.insert(locks.ts, locks);
+
+        Self::insert_key_reverse_index(&mut self.key_reverse_map, key, lock_ts, txn_ts);
     }
 
     /// Removes the corresponding wait_for_entry.
     fn clean_up_wait_for(&mut self, txn_ts: TimeStamp, lock_digest: LockDigest, key: &[u8]) {
         if let Some(wait_for) = self.wait_for_map.get_mut(&txn_ts) {
             if let Some(locks) = wait_for.get_mut(&lock_digest.ts) {
-                if locks.remove(lock_digest.hash, key) {
+                let removed_lock = locks.remove(lock_digest.hash, key);
+                if locks.is_empty() {
                     wait_for.remove(&lock_digest.ts);
                     if wait_for.is_empty() {
                         self.wait_for_map.remove(&txn_ts);
                     }
+                }
+
+                // If the lock-waiting is registered by a TiKV node in new version, but
+                // the `clean_up_wait_for` is sent from a node in old version (before v5.1), the
+                // parameter `key` can be empty while the `wait_for_map` has stored the key.
+                // In this case, use the key from the deleted entry from `locks`.
+                if let Some((_, removed_key)) = removed_lock {
+                    Self::remove_key_reverse_index(
+                        &mut self.key_reverse_map,
+                        &removed_key,
+                        lock_digest.ts,
+                        txn_ts,
+                    )
                 }
             }
         }
         TASK_COUNTER_METRICS.clean_up_wait_for.inc();
     }
 
+    /// Insert an entry to te `key_reverse_map`, but skip if the `key` is
+    /// missing, which may be caused by TiKV nodes in old version.
+    ///
+    /// Panics if the entry already exists.
+    fn insert_key_reverse_index(
+        key_reverse_map: &mut KeyReverseMap,
+        key: &[u8],
+        lock_ts: TimeStamp,
+        txn_ts: TimeStamp,
+    ) {
+        if key.is_empty() {
+            return;
+        }
+        let waiting_txns_on_key = key_reverse_map
+            .entry(key.to_vec())
+            .or_default()
+            .entry(lock_ts)
+            .or_default();
+        assert!(waiting_txns_on_key.insert(txn_ts));
+    }
+
+    /// Remove an entry from the `key_reverse_map`, but skip if the `key` is
+    /// missing. Panics if the entry doesn't exist in the map.
+    fn remove_key_reverse_index(
+        key_reverse_map: &mut KeyReverseMap,
+        key: &[u8],
+        lock_ts: TimeStamp,
+        txn_ts: TimeStamp,
+    ) {
+        if key.is_empty() {
+            return;
+        }
+
+        if let Some(locks_on_key) = key_reverse_map.get_mut(key) {
+            if let Some(waiting_txn_set) = locks_on_key.get_mut(&lock_ts) {
+                waiting_txn_set.remove(&txn_ts);
+                if waiting_txn_set.is_empty() {
+                    locks_on_key.remove(&lock_ts);
+                    if locks_on_key.is_empty() {
+                        key_reverse_map.remove(key);
+                    }
+                }
+            }
+        }
+    }
+
     /// Removes the entries of the transaction.
     fn clean_up(&mut self, txn_ts: TimeStamp) {
-        self.wait_for_map.remove(&txn_ts);
+        if let Some(entry) = self.wait_for_map.remove(&txn_ts) {
+            for (lock_ts, locks) in entry {
+                for (_, key) in locks.keys {
+                    Self::remove_key_reverse_index(
+                        &mut self.key_reverse_map,
+                        &key,
+                        lock_ts,
+                        txn_ts,
+                    );
+                }
+            }
+        }
+
         TASK_COUNTER_METRICS.clean_up.inc();
     }
 
     /// Clears the whole detect table.
     fn clear(&mut self) {
         self.wait_for_map.clear();
+        self.key_reverse_map.clear();
     }
 
     /// Reset the ttl
@@ -380,8 +498,25 @@ impl DetectTable {
         {
             let now = self.now;
             let ttl = self.ttl;
-            for (_, wait_for) in self.wait_for_map.iter_mut() {
-                wait_for.retain(|_, locks| !locks.is_expired(now, ttl));
+
+            let removed_locks = self.wait_for_map.iter_mut().flat_map(|(txn_ts, wait_for)| {
+                // Extract expired (lock_ts, locks) pairs, and attach the txn_ts to each of
+                // them.
+                wait_for
+                    .extract_if(|_, locks| locks.is_expired(now, ttl))
+                    .map(|(lock_ts, locks)| (*txn_ts, lock_ts, locks))
+            });
+            // Then, for each key in removed locks, remove its corresponding entry in
+            // `key_reverse_map`.
+            for (txn_ts, lock_ts, locks) in removed_locks {
+                for (_, key) in locks.keys.into_iter() {
+                    Self::remove_key_reverse_index(
+                        &mut self.key_reverse_map,
+                        &key,
+                        lock_ts,
+                        txn_ts,
+                    );
+                }
             }
             self.wait_for_map.retain(|_, wait_for| !wait_for.is_empty());
             self.last_active_expire = self.now;
