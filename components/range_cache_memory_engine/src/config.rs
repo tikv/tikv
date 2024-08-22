@@ -25,7 +25,7 @@ impl ConfigManager for RangeCacheConfigManager {
                 .update(move |cfg: &mut RangeCacheEngineConfig| cfg.update(change))?;
         }
         info!(
-            "range cache config changed";
+            "ime range cache config changed";
             "change" => ?change,
         );
         Ok(())
