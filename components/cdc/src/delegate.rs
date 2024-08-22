@@ -769,7 +769,7 @@ impl Delegate {
                     }
                     decode_default(default.1, &mut row, &mut _has_value);
                     row.old_value = old_value.finalized().unwrap_or_default();
-                    row_size = row.key.len() + row.value.len();
+                    row_size = row.key.len() + row.value.len() + row.old_value.len();
                 }
                 Some(KvEntry::TxnEntry(TxnEntry::Commit {
                     default,
@@ -797,7 +797,7 @@ impl Delegate {
                     }
                     set_event_row_type(&mut row, EventLogType::Committed);
                     row.old_value = old_value.finalized().unwrap_or_default();
-                    row_size = row.key.len() + row.value.len();
+                    row_size = row.key.len() + row.value.len() + row.old_value.len();
                 }
                 None => {
                     // This type means scan has finished.
@@ -1433,7 +1433,7 @@ mod tests {
         let region_epoch = region.get_region_epoch().clone();
 
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
-        let (sink, mut drain) = crate::channel::channel(1, quota.clone());
+        let (sink, mut drain) = channel(ConnId::default(), 1, quota.clone());
         let rx = drain.drain();
         let request_id = RequestId(123);
         let mut downstream = Downstream::new(
@@ -1725,7 +1725,7 @@ mod tests {
         }
         assert_eq!(rows_builder.txns_by_key.len(), 5);
 
-        let (sink, mut drain) = channel(1, Arc::new(MemoryQuota::new(1024)));
+        let (sink, mut drain) = channel(ConnId::default(), 1, Arc::new(MemoryQuota::new(1024)));
         let mut downstream = Downstream::new(
             "peer".to_owned(),
             RegionEpoch::default(),
@@ -1792,7 +1792,7 @@ mod tests {
         }
         assert_eq!(rows_builder.txns_by_key.len(), 5);
 
-        let (sink, mut drain) = channel(1, Arc::new(MemoryQuota::new(1024)));
+        let (sink, mut drain) = channel(ConnId::default(), 1, Arc::new(MemoryQuota::new(1024)));
         let mut downstream = Downstream::new(
             "peer".to_owned(),
             RegionEpoch::default(),

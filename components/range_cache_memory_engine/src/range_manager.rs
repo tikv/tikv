@@ -24,9 +24,6 @@ pub enum RegionState {
     // target region in raftstore.
     #[default]
     Pending,
-    // Region is ready to do batch load but not started. In this state,
-    // apply thread starts directly write new KVs into the skiplist.
-    ReadyToLoad,
     // Region is handling batch loading from rocksdb snapshot.
     Loading,
     // Region is cached, ready to handle foreground read.
@@ -44,7 +41,6 @@ impl RegionState {
         use RegionState::*;
         match *self {
             Pending => "pending",
-            ReadyToLoad => "ready_to_load",
             Loading => "loading",
             Active => "cached",
             LoadingCanceled => "loading_canceled",
@@ -170,8 +166,7 @@ impl RangeMeta {
     fn validate_update_region_state(&self, new_state: RegionState) -> bool {
         use RegionState::*;
         let valid_new_states: &[RegionState] = match self.state {
-            Pending => &[ReadyToLoad],
-            ReadyToLoad => &[Loading, LoadingCanceled],
+            Pending => &[Loading],
             Loading => &[Active, LoadingCanceled, Evicting],
             Active => &[PendingEvict],
             LoadingCanceled => &[PendingEvict, Evicting],
@@ -780,7 +775,7 @@ impl RegionManager {
         use RegionState::*;
         if let Some(state) = self.check_overlap_with_region(&region) {
             let reason = match state {
-                Pending | ReadyToLoad | Loading => LoadFailedReason::PendingRange,
+                Pending | Loading => LoadFailedReason::PendingRange,
                 Active => LoadFailedReason::Overlapped,
                 LoadingCanceled | PendingEvict | Evicting => LoadFailedReason::Evicting,
             };
