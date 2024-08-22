@@ -150,7 +150,7 @@ impl RangeCacheWriteBatch {
                     .schedule_task(BackgroundTask::CleanLockTombstone(snapshot_seqno))
                 {
                     error!(
-                        "schedule lock tombstone cleanup failed";
+                        "ime schedule lock tombstone cleanup failed";
                         "err" => ?e,
                     );
                     assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
@@ -250,7 +250,7 @@ impl RangeCacheWriteBatch {
         if !self.engine.enabled() {
             let region = self.current_region.as_ref().unwrap();
             info!(
-                "range cache is disabled, evict the range";
+                "ime range cache is disabled, evict the range";
                 "range_start" => log_wrappers::Value(&region.start_key),
                 "range_end" => log_wrappers::Value(&region.end_key),
             );
@@ -261,7 +261,7 @@ impl RangeCacheWriteBatch {
         if !self.memory_acquire(memory_expect) {
             let region = self.current_region.as_ref().unwrap();
             info!(
-                "memory acquire failed due to reaching hard limit";
+                "ime memory acquire failed due to reaching hard limit";
                 "range_start" => log_wrappers::Value(&region.start_key),
                 "range_end" => log_wrappers::Value(&region.end_key),
             );
@@ -283,7 +283,7 @@ impl RangeCacheWriteBatch {
                 .schedule_task(BackgroundTask::MemoryCheckAndEvict)
             {
                 error!(
-                    "schedule memory check failed";
+                    "ime schedule memory check failed";
                     "err" => ?e,
                 );
                 assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
@@ -298,7 +298,7 @@ impl RangeCacheWriteBatch {
             MemoryUsage::HardLimitReached(n) => {
                 self.memory_usage_reach_hard_limit = true;
                 warn!(
-                    "the memory usage of in-memory engine reaches to hard limit";
+                    "ime the memory usage of in-memory engine reaches to hard limit";
                     "region" => ?self.current_region.as_ref().unwrap(),
                     "memory_usage(MB)" => ReadableSize(n as u64).as_mb_f64(),
                 );

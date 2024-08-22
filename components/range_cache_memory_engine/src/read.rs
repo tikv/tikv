@@ -117,7 +117,7 @@ impl Drop for RangeCacheSnapshot {
                 .schedule_task(BackgroundTask::DeleteRegions(regions_removable))
             {
                 error!(
-                    "schedule delete range failed";
+                    "ime schedule delete range failed";
                     "err" => ?e,
                 );
                 assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
