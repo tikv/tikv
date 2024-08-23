@@ -2,6 +2,7 @@
 
 use std::{
     cell::RefCell,
+    collections::hash_map::Entry,
     fmt::{self, Display, Formatter},
     rc::Rc,
     sync::{Arc, Mutex},
@@ -410,6 +411,64 @@ impl DetectTable {
         TASK_COUNTER_METRICS.clean_up_wait_for.inc();
     }
 
+    fn replace_lock_by_key(
+        &mut self,
+        lock_hash: u64,
+        key: Vec<u8>,
+        old_lock_ts: TimeStamp,
+        new_lock_ts: TimeStamp,
+        now: Instant,
+    ) {
+        if old_lock_ts == new_lock_ts {
+            return;
+        }
+
+        // Find a list of transactions that is blocked by `old_lock_ts` on `key`.
+        let locks_and_waiters_of_key = match self.key_reverse_map.get_mut(&key) {
+            Some(v) => v,
+            None => return,
+        };
+        let waiting_txn = match locks_and_waiters_of_key.remove(&old_lock_ts) {
+            Some(v) => v,
+            None => return,
+        };
+
+        // For each txn, update their entries in `wait_for_map` to change their blockers
+        // from `old_lock_ts` to `new_lock_ts`.
+        for txn_ts in &waiting_txn {
+            // Unwrap as `wait_for_map` and `key_reverse_map` should be synchronized.
+            let blockers = self.wait_for_map.get_mut(txn_ts).unwrap();
+            let old_locks = blockers.get_mut(&old_lock_ts).unwrap();
+            assert!(old_locks.remove(lock_hash, &key).is_some());
+            let resource_group_tag = old_locks.resource_group_tag.clone();
+            if old_locks.is_empty() {
+                blockers.remove(&old_lock_ts);
+            }
+
+            let new_locks = blockers
+                .entry(new_lock_ts)
+                .and_modify(|locks| {
+                    // It's possible that the new lock-waiting info already exists. Ignore it in
+                    // this case.
+                    locks.push(lock_hash, key.clone(), now);
+                })
+                .or_insert_with(|| Locks::new(new_lock_ts, lock_hash, key.clone(), vec![], now));
+            new_locks.resource_group_tag = resource_group_tag;
+        }
+
+        // Insert the waiting_txn back to `key_reverse_map`, but waiting for
+        // `new_lock_ts` instead. If the `new_lock_ts` entry already exists for
+        // the key, merge the two set.
+        match locks_and_waiters_of_key.entry(new_lock_ts) {
+            Entry::Occupied(mut e) => {
+                e.get_mut().extend(waiting_txn);
+            }
+            Entry::Vacant(e) => {
+                e.insert(waiting_txn);
+            }
+        }
+    }
+
     /// Insert an entry to te `key_reverse_map`, but skip if the `key` is
     /// missing, which may be caused by TiKV nodes in old version.
     ///
@@ -550,6 +609,14 @@ pub enum DetectType {
     CleanUp,
 }
 
+#[derive(Debug)]
+pub struct ReplaceLockByKeyItem {
+    pub key: Vec<u8>,
+    pub key_hash: u64,
+    pub old_lock_ts: TimeStamp,
+    pub new_lock_ts: TimeStamp,
+}
+
 pub enum Task {
     /// The detect request of itself.
     Detect {
@@ -559,6 +626,9 @@ pub enum Task {
         // Only valid when `tp == Detect`.
         diag_ctx: DiagnosticContext,
     },
+    /// Replace locks on specific key to another transaction's lock, update all
+    /// its waiters and redo deadlock check.
+    ReplaceLocksByKeys { items: Vec<ReplaceLockByKeyItem> },
     /// The detect request of other nodes.
     DetectRpc {
         stream: RequestStream<DeadlockRequest>,
@@ -592,6 +662,9 @@ impl Display for Task {
                 "Detect {{ tp: {:?}, txn_ts: {}, wait_info: {:?} }}",
                 tp, txn_ts, wait_info
             ),
+            Task::ReplaceLocksByKeys { items } => {
+                write!(f, "ReplaeLocksByKeys {{ items: {:?} }}", items,)
+            }
             Task::DetectRpc { .. } => write!(f, "Detect Rpc"),
             Task::ChangeRole(role) => write!(f, "ChangeRole {{ role: {:?} }}", role),
             Task::ChangeTtl(ttl) => write!(f, "ChangeTtl {{ ttl: {:?} }}", ttl),
@@ -651,6 +724,12 @@ impl Scheduler {
             txn_ts,
             wait_info: None,
             diag_ctx: DiagnosticContext::default(),
+        });
+    }
+
+    pub fn replace_locks_by_keys(&self, items: Vec<ReplaceLockByKeyItem>) {
+        self.notify_scheduler(Task::ReplaceLocksByKeys {
+            items
         });
     }
 
@@ -1104,6 +1183,34 @@ where
         }
     }
 
+    fn handle_replace_locks_by_keys_locally(&mut self, items: Vec<ReplaceLockByKeyItem>) {
+        let detect_table = &mut self.inner.borrow_mut().detect_table;
+        let now = Instant::now_coarse();
+        for item in items {
+            detect_table.replace_lock_by_key(item.key_hash, item.key, item.old_lock_ts, item.new_lock_ts, now);
+        }
+    }
+
+
+    fn handle_replace_locks_by_keys(&mut self, items: Vec<ReplaceLockByKeyItem>) {
+        if self.is_leader() {
+            self.handle_replace_locks_by_keys_locally(items);
+        } else {
+            for _ in 0..2 {
+                // TODO: If the leader hasn't been elected, it requests Pd for
+                // each detect request. Maybe need flow control here.
+                //
+                // Refresh leader info when the connection to the leader is disconnected.
+                if self.leader_client.is_none() && !self.refresh_leader_info() {
+                    break;
+                }
+
+            }
+            warn!("detect request dropped"; "tp" => ?tp, "txn_ts" => txn_ts, "wait_info" => ?wait_info);
+            ERROR_COUNTER_METRICS.dropped.inc();
+        }
+    }
+
     /// Handles detect requests of other nodes.
     fn handle_detect_rpc(
         &self,
@@ -1393,6 +1500,7 @@ pub mod tests {
                 ts: 1.into(),
                 hash: 1,
             },
+            b"k1",
         );
         assert_eq!(
             detect_table
@@ -1411,6 +1519,7 @@ pub mod tests {
                 ts: 1.into(),
                 hash: 2,
             },
+            b"k2",
         );
         assert_eq!(detect_table.wait_for_map.get(&3.into()).unwrap().len(), 1);
         detect_table.clean_up_wait_for(
@@ -1419,6 +1528,7 @@ pub mod tests {
                 ts: 2.into(),
                 hash: 2,
             },
+            b"k2",
         );
         assert_eq!(detect_table.wait_for_map.contains_key(&3.into()), false);
 
@@ -1430,6 +1540,7 @@ pub mod tests {
                 ts: 1.into(),
                 hash: 1,
             },
+            b"k2",
         );
     }
 
@@ -1563,7 +1674,7 @@ pub mod tests {
             }
 
             let last = edges.last().unwrap();
-            let (_, wait_chain) = detect_table
+            let (_, _, wait_chain) = detect_table
                 .detect(
                     last.ts.into(),
                     last.lock_ts.into(),

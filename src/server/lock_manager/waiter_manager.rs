@@ -27,6 +27,7 @@ use tikv_util::{
 };
 use tokio::task::spawn_local;
 use tracker::GLOBAL_TRACKERS;
+use crate::server::lock_manager::deadlock::ReplaceLockByKeyItem;
 
 use super::{config::Config, deadlock::Scheduler as DetectorScheduler, metrics::*};
 use crate::storage::{
@@ -555,6 +556,9 @@ impl WaiterManager {
     fn handle_update_wait_for(&mut self, events: Vec<UpdateWaitForEvent>) {
         let mut wait_table = self.wait_table.borrow_mut();
         let now = Instant::now();
+
+        let mut replace_items = vec![];
+
         for event in events {
             let previous_wait_info = wait_table.update_waiter(&event, now);
 
@@ -563,12 +567,22 @@ impl WaiterManager {
             }
 
             if let Some((previous_wait_info, diag_ctx)) = previous_wait_info {
-                self.detector_scheduler
-                    .clean_up_wait_for(event.start_ts, previous_wait_info);
-                self.detector_scheduler
-                    .detect(event.start_ts, event.wait_info, diag_ctx);
+                if replace_items.capacity() == 0 {
+                    replace_items.reserve(events.len())
+                }
+                replace_items.push(ReplaceLockByKeyItem {
+                    key: event.wait_info.key.to_raw().unwrap(),
+                    key_hash: event.wait_info.lock_digest.hash,
+                    old_lock_ts: previous_wait_info.lock_digest.ts,
+                    new_lock_ts: event.wait_info.lock_digest.ts,
+                })
             }
         }
+
+        replace_items.sort_by_key(|x|x.key);
+        replace_items.dedup_by_key(|x|x.key);
+
+        self.detector_scheduler.replace_locks_by_keys(replace_items);
     }
 
     fn handle_dump(&self, cb: Callback) {
@@ -837,7 +851,8 @@ pub mod tests {
         error: StorageError,
         waiter_ts: TimeStamp,
         mut lock_info: LockInfo,
-        deadlock_hash: u64,
+        expected_deadlock_hash: u64,
+        expected_deadlock_key: &[u8],
         expect_wait_chain: &[(u64, u64, &[u8], &[u8])], /* (waiter_ts, wait_for_ts, key,
                                                          * resource_group_tag) */
     ) {
@@ -848,13 +863,15 @@ pub mod tests {
                     lock_ts,
                     lock_key,
                     deadlock_key_hash,
+                    deadlock_key,
                     wait_chain,
                 }),
             )))) => {
                 assert_eq!(start_ts, waiter_ts);
                 assert_eq!(lock_ts, lock_info.get_lock_version().into());
                 assert_eq!(lock_key, lock_info.take_key());
-                assert_eq!(deadlock_key_hash, deadlock_hash);
+                assert_eq!(deadlock_key_hash, expected_deadlock_hash);
+                assert_eq!(deadlock_key, expected_deadlock_key);
                 assert_eq!(
                     wait_chain.len(),
                     expect_wait_chain.len(),
@@ -910,9 +927,10 @@ pub mod tests {
             },
             b"foo".to_vec(),
             111,
+            b"bar".to_vec(),
             vec![],
         );
-        expect_deadlock(block_on(f).unwrap(), waiter_ts, lock_info, 111, &[]);
+        expect_deadlock(block_on(f).unwrap(), waiter_ts, lock_info, 111, b"bar", &[]);
     }
 
     #[test]
@@ -1160,9 +1178,16 @@ pub mod tests {
             waiter.cancel_callback,
             DiagnosticContext::default(),
         );
-        scheduler.deadlock(waiter_ts, b"foo".to_vec(), lock, 30, vec![]);
+        scheduler.deadlock(
+            waiter_ts,
+            b"foo".to_vec(),
+            lock,
+            30,
+            b"bar".to_vec(),
+            vec![],
+        );
         assert_elapsed(
-            || expect_deadlock(block_on(f).unwrap(), waiter_ts, lock_info, 30, &[]),
+            || expect_deadlock(block_on(f).unwrap(), waiter_ts, lock_info, 30, b"bar", &[]),
             0,
             200,
         );

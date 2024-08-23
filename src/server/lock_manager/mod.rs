@@ -357,9 +357,8 @@ mod tests {
         lock_mgr
     }
 
-    fn diag_ctx(key: &[u8], resource_group_tag: &[u8], tracker: TrackerToken) -> DiagnosticContext {
+    fn diag_ctx(resource_group_tag: &[u8], tracker: TrackerToken) -> DiagnosticContext {
         DiagnosticContext {
-            key: key.to_owned(),
             resource_group_tag: resource_group_tag.to_owned(),
             tracker,
         }
@@ -441,7 +440,7 @@ mod tests {
             false,
             Some(WaitTimeout::Default),
             waiter1.cancel_callback,
-            diag_ctx(b"k1", b"tag1", INVALID_TRACKER_TOKEN),
+            diag_ctx(b"tag1", INVALID_TRACKER_TOKEN),
         );
         assert!(lock_mgr.has_waiter());
         let (waiter2, lock_info2, f2) = new_test_waiter_with_key(20.into(), 10.into(), b"k2");
@@ -455,7 +454,7 @@ mod tests {
             false,
             Some(WaitTimeout::Default),
             waiter2.cancel_callback,
-            diag_ctx(b"k2", b"tag2", INVALID_TRACKER_TOKEN),
+            diag_ctx(b"tag2", INVALID_TRACKER_TOKEN),
         );
         assert!(lock_mgr.has_waiter());
         assert_elapsed(
@@ -465,6 +464,7 @@ mod tests {
                     20.into(),
                     lock_info2,
                     Key::from_raw(b"k1").gen_hash(),
+                    b"k1",
                     &[(10, 20, b"k1", b"tag1"), (20, 10, b"k2", b"tag2")],
                 )
             },
@@ -500,7 +500,7 @@ mod tests {
             false,
             Some(WaitTimeout::Default),
             waiter1.cancel_callback,
-            diag_ctx(b"k1", b"tag1", INVALID_TRACKER_TOKEN),
+            diag_ctx(b"tag1", INVALID_TRACKER_TOKEN),
         );
         for is_first_lock in &[true, false] {
             let (waiter, lock_info2, f2) = new_test_waiter_with_key(30.into(), 40.into(), b"k2");
@@ -515,7 +515,7 @@ mod tests {
                 *is_first_lock,
                 Some(WaitTimeout::Default),
                 waiter.cancel_callback,
-                diag_ctx(b"k2", b"tag2", INVALID_TRACKER_TOKEN),
+                diag_ctx(b"tag2", INVALID_TRACKER_TOKEN),
             );
             assert!(lock_mgr.has_waiter());
             if *is_first_lock {
@@ -529,6 +529,7 @@ mod tests {
                             30.into(),
                             lock_info2,
                             Key::from_raw(b"k1").gen_hash(),
+                            b"k1",
                             &[(40, 30, b"k1", b"tag1"), (30, 40, b"k2", b"tag2")],
                         )
                     },
