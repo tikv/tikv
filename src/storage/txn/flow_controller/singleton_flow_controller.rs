@@ -115,6 +115,11 @@ impl EngineFlowController {
         let limiter = Arc::new(
             <Limiter>::builder(f64::INFINITY)
                 .refill(Duration::from_millis(1))
+                // min_wait is used in the `consume_duration` method of `Limiter`.
+                // The final delay duration is calculated by the `consume` method of `Bucket`.
+                // Specifically, the delay is computed as: self.min_wait - self.value / self.speed_limit.
+                // Here, `self.value` represents the current accumulated tokens (i.e., the amount of traffic that has exceeded the speed limit and needs to be throttled).
+                // By setting min_wait to 0, we let TiKV's speed_limit parameter fully control the delay duration, making the flow control logic simpler and the write speed smoother.
                 .min_wait(Duration::from_millis(0))
                 .build(),
         );
