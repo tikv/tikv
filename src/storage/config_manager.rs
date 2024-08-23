@@ -68,6 +68,8 @@ impl<EK: Engine, K: ConfigurableDb, L: LockManager> ConfigManager
                 .schedule(TtlCheckerTask::UpdatePollInterval(interval.into()))
                 .unwrap();
         } else if let Some(ConfigValue::Module(flow_control)) = change.remove("flow_control") {
+            // we first update the config here then trigger the side-effect of `flow-control.enable`.
+            self.flow_controller.update_config(flow_control.clone())?;
             if let Some(v) = flow_control.get("enable") {
                 let enable: bool = v.into();
                 let enable_str = if enable { "true" } else { "false" };
@@ -78,7 +80,6 @@ impl<EK: Engine, K: ConfigurableDb, L: LockManager> ConfigManager
                 }
                 self.flow_controller.enable(enable);
             }
-            self.flow_controller.update_config(flow_control)?;
         } else if let Some(v) = change.get("scheduler_worker_pool_size") {
             let pool_size: usize = v.into();
             self.scheduler.scale_pool_size(pool_size);
