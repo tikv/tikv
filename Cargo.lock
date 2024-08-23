@@ -4519,6 +4519,7 @@ version = "0.0.1"
 dependencies = [
  "api_version",
  "async-stream",
+ "backtrace",
  "backup",
  "backup-stream",
  "causal_ts",

@@ -100,7 +100,11 @@ impl<'a, I, T> Future for ProfileGuard<'a, I, T> {
 
 /// Trigger a heap profie and return the content.
 #[allow(dead_code)]
-pub async fn start_one_heap_profile<F>(end: F, use_jeprof: bool) -> Result<Vec<u8>, String>
+pub async fn start_one_heap_profile<F>(
+    end: F,
+    use_jeprof: bool,
+    output_format: String,
+) -> Result<Vec<u8>, String>
 where
     F: Future<Output = Result<(), String>> + Send + 'static,
 {
@@ -112,8 +116,10 @@ where
         let path = f.path().to_str().unwrap();
         dump_prof(path).map_err(|e| format!("dump_prof: {}", e))?;
         if use_jeprof {
-            jeprof_heap_profile(path)
+            // Use jeprof to transform heap file into svg/raw/collapsed...
+            jeprof_heap_profile(path, output_format)
         } else {
+            // Juse return the heap file.
             read_file(path)
         }
     };
@@ -231,22 +237,50 @@ pub fn read_file(path: &str) -> Result<Vec<u8>, String> {
     Ok(buf)
 }
 
-pub fn jeprof_heap_profile(path: &str) -> Result<Vec<u8>, String> {
+pub fn jeprof_heap_profile(path: &str, output_format: String) -> Result<Vec<u8>, String> {
     let bin = std::env::current_exe().map_err(|e| format!("get current exe path fail: {}", e))?;
+    let mut bin_proxy = bin.clone();
+    let mut bin_proxy_str = String::from("");
+    if bin_proxy.pop() {
+        bin_proxy.push("libtiflash_proxy.so");
+        if let Some(s) = &bin_proxy.to_str() {
+            if std::path::Path::new(s).exists() {
+                bin_proxy_str = s.to_string();
+            }
+        }
+    }
     let bin_str = &bin.as_os_str().to_string_lossy();
     info!(
-        "using jeprof to process {} bin {} exist {}",
+        "using jeprof to process {} bin {} bin_proxy {} exist {}",
         path,
         bin_str,
+        bin_proxy_str,
         std::path::Path::new(path).exists()
     );
-    let mut jeprof = Command::new("perl")
-        .args(["/dev/stdin", "--show_bytes", bin_str, path, "--svg"])
-        .stdin(Stdio::piped())
-        .stderr(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("spawn jeprof fail: {}", e))?;
+    let mut jeprof = if !bin_proxy_str.is_empty() {
+        Command::new("perl")
+            .args([
+                "/dev/stdin",
+                "--show_bytes",
+                bin_str,
+                path,
+                &output_format,
+                &format!("--add_lib={}", bin_proxy_str),
+            ])
+            .stdin(Stdio::piped())
+            .stderr(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("spawn jeprof fail: {}", e))
+    } else {
+        Command::new("perl")
+            .args(["/dev/stdin", "--show_bytes", bin_str, path, &output_format])
+            .stdin(Stdio::piped())
+            .stderr(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("spawn jeprof fail: {}", e))
+    }?;
     jeprof
         .stdin
         .take()

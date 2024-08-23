@@ -4,6 +4,7 @@ pub mod profile;
 pub mod vendored_utils;
 
 use std::{
+    env::args,
     error::Error as StdError,
     marker::PhantomData,
     net::SocketAddr,
@@ -239,10 +240,19 @@ where
         let query_pairs: HashMap<_, _> = url::form_urlencoded::parse(query.as_bytes()).collect();
 
         let use_jeprof = query_pairs.get("jeprof").map(|x| x.as_ref()) == Some("true");
+        let output_format = match query_pairs.get("text").map(|x| x.as_ref()) {
+            None => "--svg",
+            Some("svg") => "--svg",
+            Some("text") => "--text",
+            Some("raw") => "--raw",
+            Some("collapsed") => "--collapsed",
+            _ => "--svg",
+        }
+        .to_string();
 
         let result = if let Some(name) = query_pairs.get("name") {
             if use_jeprof {
-                jeprof_heap_profile(name)
+                jeprof_heap_profile(name, output_format)
             } else {
                 read_file(name)
             }
@@ -261,7 +271,7 @@ where
             let end = Compat01As03::new(timer)
                 .map_err(|_| TIMER_CANCELED.to_owned())
                 .into_future();
-            start_one_heap_profile(end, use_jeprof).await
+            start_one_heap_profile(end, use_jeprof, output_format).await
         };
 
         match result {
@@ -337,6 +347,83 @@ where
                 "Internal Server Error",
             ),
         })
+    }
+
+    fn get_cmdline(_req: Request<Body>) -> hyper::Result<Response<Body>> {
+        let args = args().fold(String::new(), |mut a, b| {
+            a.push_str(&b);
+            a.push('\x00');
+            a
+        });
+        let response = Response::builder()
+            .header("Content-Type", mime::TEXT_PLAIN.to_string())
+            .header("X-Content-Type-Options", "nosniff")
+            .body(args.into())
+            .unwrap();
+        Ok(response)
+    }
+
+    fn get_symbol_count(req: Request<Body>) -> hyper::Result<Response<Body>> {
+        assert_eq!(req.method(), Method::GET);
+        // We don't know how many symbols we have, but we
+        // do have symbol information. pprof only cares whether
+        // this number is 0 (no symbols available) or > 0.
+        let text = "num_symbols: 1\n";
+        let response = Response::builder()
+            .header("Content-Type", mime::TEXT_PLAIN.to_string())
+            .header("X-Content-Type-Options", "nosniff")
+            .header("Content-Length", text.len())
+            .body(text.into())
+            .unwrap();
+        Ok(response)
+    }
+
+    // The request and response format follows pprof remote server
+    // https://gperftools.github.io/gperftools/pprof_remote_servers.html
+    // Here is the go pprof implementation:
+    // https://github.com/golang/go/blob/3857a89e7eb872fa22d569e70b7e076bec74ebbb/src/net/http/pprof/pprof.go#L191
+    async fn get_symbol(req: Request<Body>) -> hyper::Result<Response<Body>> {
+        assert_eq!(req.method(), Method::POST);
+        let mut text = String::new();
+        let body_bytes = hyper::body::to_bytes(req.into_body()).await?;
+        let body = String::from_utf8(body_bytes.to_vec()).unwrap();
+
+        // The request body is a list of addr to be resolved joined by '+'.
+        // Resolve addrs with addr2line and write the symbols each per line in
+        // response.
+        for pc in body.split('+') {
+            let addr = usize::from_str_radix(pc.trim_start_matches("0x"), 16).unwrap_or(0);
+            if addr == 0 {
+                info!("invalid addr: {}", addr);
+                continue;
+            }
+
+            // Would be multiple symbols if inlined.
+            let mut syms = vec![];
+            backtrace::resolve(addr as *mut std::ffi::c_void, |sym| {
+                let name = sym
+                    .name()
+                    .unwrap_or_else(|| backtrace::SymbolName::new(b"<unknown>"));
+                syms.push(name.to_string());
+            });
+
+            if !syms.is_empty() {
+                // join inline functions with '--'
+                let f = syms.join("--");
+                // should be <hex address> <function name>
+                text.push_str(format!("{:#x} {}\n", addr, f).as_str());
+            } else {
+                info!("can't resolve mapped addr: {:#x}", addr);
+                text.push_str(format!("{:#x} ??\n", addr).as_str());
+            }
+        }
+        let response = Response::builder()
+            .header("Content-Type", mime::TEXT_PLAIN.to_string())
+            .header("X-Content-Type-Options", "nosniff")
+            .header("Content-Length", text.len())
+            .body(text.into())
+            .unwrap();
+        Ok(response)
     }
 
     async fn update_config(
@@ -712,6 +799,9 @@ where
                             (Method::GET, "/debug/pprof/profile") => {
                                 Self::dump_cpu_prof_to_resp(req).await
                             }
+                            (Method::GET, "/debug/pprof/cmdline") => Self::get_cmdline(req),
+                            (Method::GET, "/debug/pprof/symbol") => Self::get_symbol_count(req),
+                            (Method::POST, "/debug/pprof/symbol") => Self::get_symbol(req).await,
                             (Method::GET, "/debug/fail_point") => {
                                 info!("debug fail point API start");
                                 fail_point!("debug_fail_point");
@@ -731,7 +821,10 @@ where
                                 Self::handle_http_request(req, engine_store_server_helper).await
                             }
 
-                            _ => Ok(make_response(StatusCode::NOT_FOUND, "path not found")),
+                            _ => Ok(make_response(
+                                StatusCode::NOT_FOUND,
+                                format!("path not found, {:?}", req),
+                            )),
                         }
                     }
                 }))

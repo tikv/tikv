@@ -3718,6 +3718,7 @@ BEGIN {
     my $slots = $self->{slots};
     my $str;
     read($self->{file}, $str, 8);
+
     # Set the global $address_length based on what we see here.
     # 8 is 32-bit (8 hexadecimal chars); 16 is 64-bit (16 hexadecimal chars).
     $address_length = ($str eq (chr(0)x8)) ? 16 : 8;

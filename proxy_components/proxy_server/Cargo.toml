@@ -42,6 +42,7 @@ range_cache_memory_engine = { workspace = true }
 health_controller = { workspace = true }
 api_version = { workspace = true }
 async-stream = "0.2"
+backtrace = "0.3"
 backup = { workspace = true, default-features = false }
 backup-stream = { workspace = true, default-features = false }
 causal_ts = { workspace = true }

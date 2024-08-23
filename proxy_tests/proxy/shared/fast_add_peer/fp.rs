@@ -1007,6 +1007,8 @@ fn test_msgsnapshot_before_msgappend() {
 
     pd_client.must_add_peer(1, new_learner_peer(2, 2));
 
+    std::thread::sleep(std::time::Duration::from_secs(1));
+
     iter_ffi_helpers(&cluster, Some(vec![2]), &mut |_, ffi: &mut FFIHelperSet| {
         let mut x: u64 = 0;
         let mut y: u64 = 0;
