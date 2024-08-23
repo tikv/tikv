@@ -2230,7 +2230,6 @@ dependencies = [
  "log_wrappers",
  "protobuf",
  "raft",
- "rand 0.8.5",
  "serde",
  "slog",
  "slog-global",
