@@ -198,6 +198,7 @@ mod test {
             sha256: Arc::from([]),
             region_start_key: None,
             region_end_key: None,
+            region_epoches: None,
         }
     }
 

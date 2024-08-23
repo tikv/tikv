@@ -16,7 +16,10 @@ use futures::{
     io::{AsyncReadExt, Cursor},
     stream::{Fuse, FusedStream, StreamExt, TryStreamExt},
 };
-use kvproto::brpb::{self, FileType, Migration};
+use kvproto::{
+    brpb::{self, FileType, Migration},
+    metapb::RegionEpoch,
+};
 use prometheus::core::{Atomic, AtomicU64};
 use tikv_util::{
     retry_expr,
@@ -97,6 +100,31 @@ pub struct PhysicalLogFile {
     pub files: Vec<LogFile>,
 }
 
+/// An [`RegionEpoch`] without protocol buffer fields and comparable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Epoch {
+    pub version: u64,
+    pub conf_ver: u64,
+}
+
+impl From<RegionEpoch> for Epoch {
+    fn from(value: RegionEpoch) -> Self {
+        Self {
+            version: value.version,
+            conf_ver: value.conf_ver,
+        }
+    }
+}
+
+impl From<Epoch> for RegionEpoch {
+    fn from(value: Epoch) -> Self {
+        let mut v = Self::new();
+        v.version = value.version;
+        v.conf_ver = value.conf_ver;
+        v
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 
 pub struct LogFile {
@@ -113,6 +141,7 @@ pub struct LogFile {
     pub max_key: Arc<[u8]>,
     pub region_start_key: Option<Arc<[u8]>>,
     pub region_end_key: Option<Arc<[u8]>>,
+    pub region_epoches: Option<Arc<[Epoch]>>,
     pub is_meta: bool,
     pub ty: FileType,
     pub compression: brpb::CompressionType,
@@ -401,6 +430,14 @@ impl MetaFile {
 
 impl LogFile {
     fn from_pb(host_file: Arc<str>, mut pb_info: brpb::DataFileInfo) -> Self {
+        let region_epoches = pb_info.region_epoch.is_empty().not().then(|| {
+            pb_info
+                .region_epoch
+                .iter()
+                .cloned()
+                .map(From::from)
+                .collect()
+        });
         Self {
             id: LogFileId {
                 name: host_file,
@@ -433,6 +470,7 @@ impl LogFile {
             resolved_ts: pb_info.resolved_ts,
             table_id: pb_info.table_id,
             compression: pb_info.compression_type,
+            region_epoches,
         }
     }
 
@@ -456,6 +494,17 @@ impl LogFile {
         pb.resolved_ts = self.resolved_ts;
         pb.table_id = self.table_id;
         pb.compression_type = self.compression;
+        pb.set_region_start_key(
+            self.region_start_key
+                .map(|v| v.to_vec())
+                .unwrap_or_default(),
+        );
+        pb.set_region_end_key(self.region_end_key.map(|v| v.to_vec()).unwrap_or_default());
+        pb.set_region_epoch(
+            self.region_epoches
+                .map(|v| v.iter().cloned().map(From::from).collect())
+                .unwrap_or_default(),
+        );
         pb
     }
 }

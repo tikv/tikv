@@ -96,14 +96,9 @@ impl Source {
 
         let mut co = Cooperate::new(4096);
         let mut iter = stream_event::EventIterator::new(&content);
-        loop {
-            if !iter.valid() {
-                break;
-            }
-
-            iter.next()?;
+        while let Some((k, v)) = iter.get_next()? {
             co.step().await;
-            on_key_value(iter.key(), iter.value());
+            on_key_value(k, v);
             if let Some(stat) = stat.as_mut() {
                 stat.keys_in += 1;
                 stat.logical_key_bytes_in += iter.key().len() as u64;

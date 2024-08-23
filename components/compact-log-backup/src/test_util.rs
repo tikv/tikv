@@ -3,6 +3,7 @@
 use std::{
     collections::BTreeMap,
     io::{Cursor, Write},
+    ops::Not,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
@@ -29,7 +30,7 @@ use crate::{
         Subcompaction, SubcompactionResult,
     },
     errors::{OtherErrExt, Result},
-    storage::{id_of_migration, LogFile, LogFileId, MetaFile},
+    storage::{id_of_migration, Epoch, LogFile, LogFileId, MetaFile},
 };
 
 #[derive(Debug, PartialEq, Eq)]
@@ -46,6 +47,7 @@ pub struct LogFileBuilder {
     pub is_meta: bool,
     pub region_start_key: Option<Vec<u8>>,
     pub region_end_key: Option<Vec<u8>>,
+    pub region_epoches: Vec<Epoch>,
 
     content: zstd::Encoder<'static, Cursor<Vec<u8>>>,
     min_ts: u64,
@@ -84,17 +86,19 @@ impl CompactInMem {
         }
     }
 
-    // Note: will panic if there are other references to `self`.
+    // Note: will panic if there are other concurrency writing.
+    #[track_caller]
     pub fn must_iter(&mut self) -> impl Iterator<Item = Kv> + '_ {
-        Arc::get_mut(&mut self.collect)
-            .unwrap()
-            .get_mut()
+        self.collect
+            .try_lock()
             .unwrap()
             .iter()
             .map(|(k, v)| Kv {
                 key: k.clone(),
                 value: v.clone(),
             })
+            .collect::<Vec<_>>()
+            .into_iter()
     }
 }
 
@@ -177,6 +181,7 @@ pub struct KvGen<S> {
     sources: S,
 }
 
+/// Sow a seed, and return the fruit it grow.
 pub fn sow((table_id, handle_id, ts): KeySeed) -> Vec<u8> {
     Key::from_raw(&encode_row_key(table_id, handle_id))
         .append_ts(ts.into())
@@ -246,6 +251,7 @@ impl LogFileBuilder {
             file_real_size: 0,
             region_start_key: None,
             region_end_key: None,
+            region_epoches: vec![],
         };
         configure(&mut res);
         res
@@ -328,11 +334,18 @@ impl LogFileBuilder {
             ),
             region_start_key: self.region_start_key.map(|v| v.into_boxed_slice().into()),
             region_end_key: self.region_end_key.map(|v| v.into_boxed_slice().into()),
+            region_epoches: self
+                .region_epoches
+                .is_empty()
+                .not()
+                .then(|| self.region_epoches.into_boxed_slice().into()),
         };
         (file, cnt.into_inner())
     }
 }
 
+/// Simulating a flush: save all log files and generate a metadata by them.
+/// Unlike [`save_many_log_files`], this returns the generated metadata.
 pub fn build_many_log_files(
     log_files: impl IntoIterator<Item = LogFileBuilder>,
     mut w: impl Write,
@@ -359,6 +372,8 @@ pub fn build_many_log_files(
     Ok(md)
 }
 
+/// Simulating a flush: save all log files and generate a metadata by them.
+/// Then save the generated metadata.
 pub async fn save_many_log_files(
     name: &str,
     log_files: impl IntoIterator<Item = LogFileBuilder>,

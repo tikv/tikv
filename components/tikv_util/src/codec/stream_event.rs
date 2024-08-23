@@ -57,6 +57,16 @@ impl EventIterator<'_> {
         }
     }
 
+    pub fn get_next<'a, 'this>(&'this mut self) -> Result<Option<(&'this [u8], &'this [u8])>> {
+        let it = self;
+        if !it.valid() {
+            return Ok(None);
+        }
+        it.next()?;
+
+        Ok(Some((it.key(), it.value())))
+    }
+
     fn get_size(&mut self) -> u32 {
         let result = byteorder::LE::read_u32(&self.buf[self.offset..]);
         self.offset += 4;

@@ -395,11 +395,15 @@ where
 
 #[cfg(test)]
 mod test {
+    use tidb_query_datatype::codec::table::encode_row_key;
+    use txn_types::Key;
+
     use crate::{
         compaction::Subcompaction,
-        storage::MetaFile,
+        storage::{Epoch, MetaFile},
         test_util::{
-            gen_step, save_many_log_files, CompactInMem, KvGen, LogFileBuilder, TmpStorage,
+            gen_step, save_many_log_files, sow, CompactInMem, KeySeed, KvGen, LogFileBuilder,
+            TmpStorage,
         },
     };
 
@@ -461,6 +465,111 @@ mod test {
         let c = Subcompaction::of_many(ml.into_logs());
         let res = st.run_subcompaction(c).await;
         st.verify_result(res, cm);
+    }
+
+    #[tokio::test]
+    async fn test_region_boundaries() {
+        let st = TmpStorage::create();
+        let cm = CompactInMem::default();
+
+        let s1 = KvGen::new(gen_step(1, 0, 2).take(100), |_| b"value".to_vec());
+        let enc = |v| Key::from_raw(v).into_encoded();
+        let mut i1 = LogFileBuilder::new(|v| {
+            v.name = "a.log".to_owned();
+            v.region_start_key = Some(enc(b"t"));
+            v.region_end_key = Some(enc(b"t\xff"));
+            v.region_epoches.push(Epoch {
+                version: 42,
+                conf_ver: 42,
+            });
+        });
+        cm.tap_on(s1)
+            .for_each(|kv| i1.add_encoded(&kv.key, &kv.value));
+        let meta = save_many_log_files("data.log", [i1], st.storage().as_ref())
+            .await
+            .unwrap();
+        let ml = MetaFile::from(meta);
+        let c = Subcompaction::of_many(ml.into_logs());
+        let res = st.run_subcompaction(c).await;
+        let sst_out = &res.meta.get_sst_outputs()[0];
+        assert_eq!(sst_out.get_start_key(), b"t");
+        assert_eq!(sst_out.get_end_key(), b"t\xff");
+        assert!(
+            sst_out.get_start_key() < enc(b"t").as_slice(),
+            "{:?}",
+            sst_out.get_start_key()
+        );
+        assert!(
+            sst_out.get_end_key() > enc(b"t\xff").as_slice(),
+            "{:?}",
+            sst_out.get_end_key()
+        );
+
+        st.verify_result(res, cm);
+    }
+
+    #[tokio::test]
+    async fn test_elide_region_boundaries() {
+        let st = TmpStorage::create();
+        let cm = CompactInMem::default();
+
+        let s1 = KvGen::new(gen_step(1, 0, 2).take(100), |_| b"value".to_vec());
+        let enc = |v| Key::from_raw(v).into_encoded();
+        let mut i1 = LogFileBuilder::new(|v| {
+            v.name = "a.log".to_owned();
+            v.region_start_key = Some(enc(b"t"));
+            v.region_end_key = Some(enc(b"t\xff"));
+            v.region_epoches.push(Epoch {
+                version: 42,
+                conf_ver: 42,
+            });
+        });
+        cm.tap_on(s1)
+            .for_each(|kv| i1.add_encoded(&kv.key, &kv.value));
+
+        let s2 = KvGen::new(gen_step(1, 200, 2).take(100), |_| b"value".to_vec());
+        let mut i2 = LogFileBuilder::new(|v| {
+            v.name = "b.log".to_owned();
+        });
+        cm.tap_on(s2)
+            .for_each(|kv| i2.add_encoded(&kv.key, &kv.value));
+
+        let meta = save_many_log_files("data.log", [i1, i2], st.storage().as_ref())
+            .await
+            .unwrap();
+        let ml = MetaFile::from(meta);
+        let logs = ml.into_logs().collect::<Vec<_>>();
+        assert_eq!(logs.len(), 2, "{:?}", logs);
+
+        // Case 1: with ranges only.
+        let c = Subcompaction::of_many([logs[0].clone()]);
+        let res = st.run_subcompaction(c).await;
+        let sst_out = &res.meta.get_sst_outputs()[0];
+        let bgn = sst_out.get_start_key();
+        let end = sst_out.get_end_key();
+        let cbgn = res.meta.get_meta().get_min_key();
+        let cend = res.meta.get_meta().get_max_key();
+        assert_eq!(bgn, b"t");
+        assert_eq!(end, b"t\xff");
+        assert!(cbgn > enc(bgn).as_slice(), "{:?}", cbgn);
+        assert!(cend < enc(end).as_slice(), "{:?}", cend);
+
+        // Case 2: should elide range.
+        let c = Subcompaction::of_many(logs);
+        let res = st.run_subcompaction(c).await;
+        let sst_out = &res.meta.get_sst_outputs()[0];
+        let bgn = sst_out.get_start_key();
+        let end = sst_out.get_end_key();
+        let cbgn = res.meta.get_meta().get_min_key();
+        let cend = res.meta.get_meta().get_max_key();
+        let row = |r| encode_row_key(1, r);
+        assert_eq!(bgn, row(0));
+        let mut ek = row(398);
+        ek.push(0);
+        assert_eq!(end, ek);
+        assert!(cbgn > enc(bgn).as_slice(), "{:?}", cbgn);
+        assert!(cend < enc(end).as_slice(), "{:?}", cend);
+        st.verify_result(res.clone(), cm);
     }
 
     #[tokio::test]

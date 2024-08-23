@@ -71,11 +71,14 @@ pub trait OtherErrExt<T> {
 impl<T, E: Display> OtherErrExt<T> for std::result::Result<T, E> {
     #[track_caller]
     fn adapt_err(self) -> Result<T> {
-        self.map_err(|err| Error {
-            kind: ErrorKind::Other(err.to_string()),
-            notes: String::new(),
-            attached_frames: vec![*Location::caller()],
-        })
+        match self {
+            Ok(t) => Ok(t),
+            Err(err) => Err(Error {
+                kind: ErrorKind::Other(err.to_string()),
+                notes: String::new(),
+                attached_frames: vec![*Location::caller()],
+            }),
+        }
     }
 }
 
