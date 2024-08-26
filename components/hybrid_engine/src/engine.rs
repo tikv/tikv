@@ -75,7 +75,7 @@ where
     {
         let mut batch = self.write_batch();
         if let Some(region) = self.range_cache_engine.get_region_for_key(key) {
-            batch.prepare_for_region(&region);
+            batch.prepare_for_region(region);
         }
         f(&mut batch)?;
         let _ = batch.write()?;
@@ -98,9 +98,7 @@ where
             None
         } else if let Some(ctx) = ctx {
             match self.range_cache_engine.snapshot(
-                ctx.region_id,
-                ctx.epoch_version,
-                ctx.range.unwrap(),
+                ctx.region.unwrap(),
                 ctx.read_ts,
                 disk_snap.sequence_number(),
             ) {
@@ -213,7 +211,7 @@ mod tests {
     use std::sync::Arc;
 
     use engine_rocks::util::new_engine;
-    use engine_traits::{CacheRange, KvEngine, SnapshotContext, CF_DEFAULT, CF_LOCK, CF_WRITE};
+    use engine_traits::{CacheRegion, KvEngine, SnapshotContext, CF_DEFAULT, CF_LOCK, CF_WRITE};
     use online_config::{ConfigChange, ConfigManager, ConfigValue};
     use range_cache_memory_engine::{
         config::RangeCacheConfigManager, test_util::new_region, RangeCacheEngineConfig,
@@ -237,7 +235,7 @@ mod tests {
             RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(config.clone()));
 
         let region = new_region(1, b"k00", b"k10");
-        let range = CacheRange::from_region(&region);
+        let range = CacheRegion::from_region(&region);
         memory_engine.new_region(region.clone());
         {
             let mut core = memory_engine.core().write();
@@ -249,10 +247,8 @@ mod tests {
         assert!(!s.range_cache_snapshot_available());
 
         let mut snap_ctx = SnapshotContext {
-            region_id: 1,
-            epoch_version: 0,
             read_ts: 15,
-            range: Some(range.clone()),
+            region: Some(range.clone()),
         };
         let s = hybrid_engine.snapshot(Some(snap_ctx.clone()));
         assert!(s.range_cache_snapshot_available());

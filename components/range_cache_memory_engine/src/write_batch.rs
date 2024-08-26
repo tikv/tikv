@@ -8,10 +8,9 @@ use std::{
 use bytes::Bytes;
 use crossbeam::epoch;
 use engine_traits::{
-    CacheRange, EvictReason, MiscExt, Mutable, RangeCacheEngine, Result, WriteBatch, WriteBatchExt,
-    WriteOptions, CF_DEFAULT,
+    CacheRegion, EvictReason, MiscExt, Mutable, RangeCacheEngine, Result, WriteBatch,
+    WriteBatchExt, WriteOptions, CF_DEFAULT,
 };
-use kvproto::metapb::Region;
 use tikv_util::{box_err, config::ReadableSize, error, info, time::Instant, warn};
 
 use crate::{
@@ -64,7 +63,7 @@ pub struct RangeCacheWriteBatch {
     memory_usage_reach_hard_limit: bool,
     region_save_point: usize,
     current_region_evicted: bool,
-    current_region: Option<Region>,
+    current_region: Option<CacheRegion>,
 
     // record the total durations of the prepare work for write in the write batch
     prepare_for_write_duration: Duration,
@@ -249,22 +248,14 @@ impl RangeCacheWriteBatch {
 
         if !self.engine.enabled() {
             let region = self.current_region.as_ref().unwrap();
-            info!(
-                "ime range cache is disabled, evict the range";
-                "range_start" => log_wrappers::Value(&region.start_key),
-                "range_end" => log_wrappers::Value(&region.end_key),
-            );
+            info!("ime range cache is disabled, evict the range"; "region" => ?region);
             self.evict_current_region(EvictReason::Disabled);
             return;
         }
         let memory_expect = entry_size();
         if !self.memory_acquire(memory_expect) {
             let region = self.current_region.as_ref().unwrap();
-            info!(
-                "ime memory acquire failed due to reaching hard limit";
-                "range_start" => log_wrappers::Value(&region.start_key),
-                "range_end" => log_wrappers::Value(&region.end_key),
-            );
+            info!("ime memory acquire failed due to reaching hard limit"; "region" => ?region);
             self.evict_current_region(EvictReason::MemoryLimitReached);
             return;
         }
@@ -497,12 +488,11 @@ impl WriteBatch for RangeCacheWriteBatch {
         Ok(())
     }
 
-    fn prepare_for_region(&mut self, region: &Region) {
+    fn prepare_for_region(&mut self, region: CacheRegion) {
         let time = Instant::now();
-        self.current_region = Some(region.clone());
         // TODO: remote range.
-        let range = CacheRange::from_region(region);
-        self.set_range_cache_status(self.engine.prepare_for_apply(self.id, range, region));
+        self.set_range_cache_status(self.engine.prepare_for_apply(self.id, &region));
+        self.current_region = Some(region);
         self.memory_usage_reach_hard_limit = false;
         self.region_save_point = self.buffer.len();
         self.current_region_evicted = false;
@@ -555,7 +545,7 @@ mod tests {
     use crossbeam_skiplist::SkipList;
     use engine_rocks::util::new_engine;
     use engine_traits::{
-        CacheRange, FailedReason, Peekable, RangeCacheEngine, WriteBatch, DATA_CFS,
+        CacheRegion, FailedReason, Peekable, RangeCacheEngine, WriteBatch, DATA_CFS,
     };
     use online_config::{ConfigChange, ConfigManager, ConfigValue};
     use tempfile::Builder;
@@ -657,7 +647,7 @@ mod tests {
         wb.set_sequence_number(2).unwrap();
         _ = wb.write();
         let snapshot = engine
-            .snapshot(r.id, 0, CacheRange::from_region(&r), u64::MAX, 3)
+            .snapshot(r.id, 0, CacheRegion::from_region(&r), u64::MAX, 3)
             .unwrap();
         assert_eq!(
             snapshot.get_value(&b"zbbb"[..]).unwrap().unwrap(),
@@ -709,7 +699,7 @@ mod tests {
         {
             let core = engine.core.read();
             let region_meta = core.range_manager().region_meta(1).unwrap();
-            assert_eq!(region_meta.region(), &r1_new);
+            assert_eq!(region_meta.get_region(), &r1_new);
             assert_eq!(region_meta.get_state(), RegionState::Loading);
         }
         wb.put(b"zk02", b"val1").unwrap();
@@ -726,7 +716,7 @@ mod tests {
             },
         );
         let snapshot = engine
-            .snapshot(r1.id, 2, CacheRange::from_region(&r1_new), u64::MAX, 6)
+            .snapshot(r1.id, 2, CacheRegion::from_region(&r1_new), u64::MAX, 6)
             .unwrap();
         for i in 1..5 {
             let res = snapshot.get_value(format!("zk0{}", i).as_bytes()).unwrap();
@@ -804,7 +794,7 @@ mod tests {
                 core.mut_range_manager().set_safe_point(r.id, 10);
             }
             let _ = engine
-                .snapshot(r.id, 0, CacheRange::from_region(r), 1000, 1000)
+                .snapshot(r.id, 0, CacheRegion::from_region(r), 1000, 1000)
                 .unwrap();
         }
         let memory_controller = engine.memory_controller();
@@ -865,7 +855,7 @@ mod tests {
             .snapshot(
                 regions[0].id,
                 0,
-                CacheRange::from_region(&regions[0]),
+                CacheRegion::from_region(&regions[0]),
                 1000,
                 1010,
             )
@@ -875,7 +865,7 @@ mod tests {
             .snapshot(
                 regions[1].id,
                 0,
-                CacheRange::from_region(&regions[1]),
+                CacheRegion::from_region(&regions[1]),
                 1000,
                 1010,
             )
@@ -887,7 +877,7 @@ mod tests {
                 .snapshot(
                     regions[2].id,
                     0,
-                    CacheRange::from_region(&regions[2]),
+                    CacheRegion::from_region(&regions[2]),
                     1000,
                     1000
                 )
@@ -899,7 +889,7 @@ mod tests {
             .snapshot(
                 regions[3].id,
                 0,
-                CacheRange::from_region(&regions[3]),
+                CacheRegion::from_region(&regions[3]),
                 1000,
                 1010,
             )
@@ -910,7 +900,7 @@ mod tests {
             .snapshot(
                 regions[4].id,
                 0,
-                CacheRange::from_region(&regions[4]),
+                CacheRegion::from_region(&regions[4]),
                 1000,
                 1010,
             )
@@ -941,7 +931,7 @@ mod tests {
                 core.mut_range_manager().set_safe_point(r.id, 10);
             }
             let _ = engine
-                .snapshot(r.id, 0, CacheRange::from_region(r), 1000, 1000)
+                .snapshot(r.id, 0, CacheRegion::from_region(r), 1000, 1000)
                 .unwrap();
         }
 
@@ -950,7 +940,7 @@ mod tests {
         wb.prepare_for_region(&r2);
         wb.put(b"zkk11", &val1).unwrap();
         let snap1 = engine
-            .snapshot(r1.id, 0, CacheRange::from_region(&r1), 1000, 1000)
+            .snapshot(r1.id, 0, CacheRegion::from_region(&r1), 1000, 1000)
             .unwrap();
 
         // disable the range cache
@@ -971,10 +961,10 @@ mod tests {
         wb.write_impl(1000).unwrap();
 
         // new snapshot will fail to create as it's evicted already
-        let snap1 = engine.snapshot(r1.id, 0, CacheRange::from_region(&r1), 1000, 1000);
+        let snap1 = engine.snapshot(r1.id, 0, CacheRegion::from_region(&r1), 1000, 1000);
         assert_eq!(snap1.unwrap_err(), FailedReason::NotCached);
         let snap2 = engine
-            .snapshot(r2.id, 0, CacheRange::from_region(&r2), 1000, 1000)
+            .snapshot(r2.id, 0, CacheRegion::from_region(&r2), 1000, 1000)
             .unwrap();
         // if no new write, the range cache can still be used.
         assert_eq!(snap2.get_value(b"zkk11").unwrap().unwrap(), &val1);
@@ -985,10 +975,10 @@ mod tests {
         config_change.insert(String::from("enabled"), ConfigValue::Bool(true));
         config_manager.dispatch(config_change).unwrap();
 
-        let snap1 = engine.snapshot(r1.id, 0, CacheRange::from_region(&r1), 1000, 1000);
+        let snap1 = engine.snapshot(r1.id, 0, CacheRegion::from_region(&r1), 1000, 1000);
         assert_eq!(snap1.unwrap_err(), FailedReason::NotCached);
         let snap2 = engine
-            .snapshot(r2.id, 0, CacheRange::from_region(&r2), 1000, 1000)
+            .snapshot(r2.id, 0, CacheRegion::from_region(&r2), 1000, 1000)
             .unwrap();
         assert_eq!(snap2.get_value(b"zkk11").unwrap().unwrap(), &val1);
     }

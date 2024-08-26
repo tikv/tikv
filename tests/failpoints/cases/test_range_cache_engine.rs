@@ -7,7 +7,7 @@ use std::{
 
 use engine_rocks::RocksSstWriterBuilder;
 use engine_traits::{
-    CacheRange, EvictReason, RangeCacheEngine, SnapshotContext, SstWriter, SstWriterBuilder,
+    CacheRegion, EvictReason, RangeCacheEngine, SnapshotContext, SstWriter, SstWriterBuilder,
     CF_DEFAULT, CF_WRITE,
 };
 use file_system::calc_crc32_bytes;
@@ -46,7 +46,7 @@ fn test_basic_put_get() {
         region_id: 0,
         epoch_version: 0,
         read_ts: 1001,
-        range: None,
+        region: None,
     };
     let (tx, rx) = sync_channel(1);
     fail::cfg_callback("on_range_cache_get_value", move || {
@@ -134,7 +134,7 @@ fn test_load() {
         region_id: 0,
         epoch_version: 0,
         read_ts: 20,
-        range: None,
+        region: None,
     };
 
     for i in 0..30 {
@@ -229,7 +229,7 @@ fn test_load_with_split() {
         region_id: 0,
         epoch_version: 0,
         read_ts: 20,
-        range: None,
+        region: None,
     };
 
     for i in 0..30 {
@@ -314,8 +314,8 @@ fn test_load_with_split2() {
         let range_cache_engine = cluster.get_range_cache_engine(1);
         let core = range_cache_engine.core().read();
         let meta = core.range_manager().region_meta(r_split.id).unwrap();
-        let split_range = CacheRange::from_region(&r_split);
-        assert_eq!(&split_range, meta.get_range());
+        let split_range = CacheRegion::from_region(&r_split);
+        assert_eq!(&split_range, meta.get_region());
     }
 
     fail::remove("on_handle_put");
@@ -330,7 +330,7 @@ fn test_load_with_split2() {
         region_id: 0,
         epoch_version: 0,
         read_ts: 20,
-        range: None,
+        region: None,
     };
 
     let _ = cluster
@@ -403,7 +403,7 @@ fn test_load_with_eviction() {
         let range_cache_engine = cluster.get_range_cache_engine(1);
         let mut tried_count = 0;
         while range_cache_engine
-            .snapshot(1, 0, CacheRange::from_region(&r), u64::MAX, u64::MAX)
+            .snapshot(1, 0, CacheRegion::from_region(&r), u64::MAX, u64::MAX)
             .is_err()
             && tried_count < 5
         {
@@ -429,7 +429,7 @@ fn test_load_with_eviction() {
         region_id: 0,
         epoch_version: 0,
         read_ts: u64::MAX,
-        range: None,
+        region: None,
     };
     let val = cluster
         .get_cf_with_snap_ctx(CF_DEFAULT, b"k01", false, snap_ctx.clone())
@@ -465,7 +465,7 @@ fn test_evictions_after_transfer_leader() {
         .snapshot(
             cache_region.id,
             0,
-            CacheRange::from_region(&cache_region),
+            CacheRegion::from_region(&cache_region),
             100,
             100,
         )
@@ -476,7 +476,7 @@ fn test_evictions_after_transfer_leader() {
         .snapshot(
             cache_region.id,
             0,
-            CacheRange::from_region(&cache_region),
+            CacheRegion::from_region(&cache_region),
             100,
             100,
         )
@@ -491,9 +491,9 @@ fn test_eviction_after_merge() {
     cluster.must_split(&r, b"key1");
 
     let r = cluster.get_region(b"");
-    let range1 = CacheRange::from_region(&r);
+    let range1 = CacheRegion::from_region(&r);
     let r2 = cluster.get_region(b"key1");
-    let range2 = CacheRange::from_region(&r2);
+    let range2 = CacheRegion::from_region(&r2);
 
     let range_cache_engine = {
         let range_cache_engine = cluster.get_range_cache_engine(1);
@@ -544,7 +544,7 @@ fn test_eviction_after_ingest_sst() {
 
     // Add region r to cache.
     let region = cluster.get_region(b"");
-    let range = CacheRange::from_region(&region);
+    let range = CacheRegion::from_region(&region);
     let range_cache_engine = {
         let range_cache_engine = cluster.get_range_cache_engine(1);
         let mut core = range_cache_engine.core().write();

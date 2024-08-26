@@ -132,7 +132,7 @@ where
 mod tests {
 
     use engine_traits::{
-        CacheRange, IterOptions, Iterable, Iterator, KvEngine, Mutable, SnapshotContext,
+        CacheRegion, IterOptions, Iterable, Iterator, KvEngine, Mutable, SnapshotContext,
         WriteBatch, WriteBatchExt, CF_DEFAULT,
     };
     use range_cache_memory_engine::{
@@ -144,7 +144,7 @@ mod tests {
     #[test]
     fn test_iterator() {
         let region = new_region(1, b"", b"z");
-        let range = CacheRange::from_region(&region);
+        let range = CacheRegion::from_region(&region);
         let mut iter_opt = IterOptions::default();
         iter_opt.set_upper_bound(&range.end, 0);
         iter_opt.set_lower_bound(&range.start, 0);
@@ -178,7 +178,7 @@ mod tests {
         let ctx = SnapshotContext {
             region_id: 1,
             epoch_version: 0,
-            range: Some(CacheRange::from_region(&region)),
+            region: Some(CacheRegion::from_region(&region)),
             read_ts: 10,
         };
         let snap = hybrid_engine.snapshot(Some(ctx));

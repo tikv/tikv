@@ -3,9 +3,8 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use engine_traits::{
-    is_data_cf, KvEngine, Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions,
+    is_data_cf, CacheRegion, KvEngine, Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions,
 };
-use kvproto::metapb::Region;
 use range_cache_memory_engine::{RangeCacheMemoryEngine, RangeCacheWriteBatch};
 
 use crate::engine::HybridEngine;
@@ -101,7 +100,7 @@ impl<EK: KvEngine> WriteBatch for HybridEngineWriteBatch<EK> {
         self.cache_write_batch.merge(other.cache_write_batch)
     }
 
-    fn prepare_for_region(&mut self, r: &Region) {
+    fn prepare_for_region(&mut self, r: CacheRegion) {
         self.cache_write_batch.prepare_for_region(r);
     }
 }
@@ -153,7 +152,7 @@ mod tests {
     use std::time::Duration;
 
     use engine_traits::{
-        CacheRange, KvEngine, Mutable, Peekable, RangeCacheEngine, SnapshotContext, WriteBatch,
+        CacheRegion, KvEngine, Mutable, Peekable, RangeCacheEngine, SnapshotContext, WriteBatch,
         WriteBatchExt,
     };
     use range_cache_memory_engine::{
@@ -193,7 +192,7 @@ mod tests {
         let ctx = SnapshotContext {
             region_id: 1,
             epoch_version: 0,
-            range: Some(CacheRange::from_region(&region)),
+            region: Some(CacheRegion::from_region(&region)),
             read_ts: 10,
         };
         let snap = hybrid_engine.snapshot(Some(ctx));
@@ -267,11 +266,23 @@ mod tests {
 
         hybrid_engine
             .range_cache_engine()
-            .snapshot(region1.id, 0, CacheRange::from_region(&region1), 1000, 1000)
+            .snapshot(
+                region1.id,
+                0,
+                CacheRegion::from_region(&region1),
+                1000,
+                1000,
+            )
             .unwrap();
         hybrid_engine
             .range_cache_engine()
-            .snapshot(region2.id, 0, CacheRange::from_region(&region2), 1000, 1000)
+            .snapshot(
+                region2.id,
+                0,
+                CacheRegion::from_region(&region2),
+                1000,
+                1000,
+            )
             .unwrap();
         assert_eq!(
             4,
@@ -294,11 +305,23 @@ mod tests {
 
         hybrid_engine
             .range_cache_engine()
-            .snapshot(region1.id, 0, CacheRange::from_region(&region1), 1000, 1000)
+            .snapshot(
+                region1.id,
+                0,
+                CacheRegion::from_region(&region1),
+                1000,
+                1000,
+            )
             .unwrap_err();
         hybrid_engine
             .range_cache_engine()
-            .snapshot(region2.id, 0, CacheRange::from_region(&region2), 1000, 1000)
+            .snapshot(
+                region2.id,
+                0,
+                CacheRegion::from_region(&region2),
+                1000,
+                1000,
+            )
             .unwrap_err();
         let m_engine = hybrid_engine.range_cache_engine();
 

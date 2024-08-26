@@ -19,7 +19,7 @@ use encryption_export::DataKeyManager;
 use engine_rocks::{RocksCompactedEvent, RocksEngine, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
-    CacheRange, Engines, Iterable, KvEngine, ManualCompactionOptions, Mutable, Peekable,
+    CacheRegion, Engines, Iterable, KvEngine, ManualCompactionOptions, Mutable, Peekable,
     RaftEngineReadOnly, SnapshotContext, SyncMutable, WriteBatch, CF_DEFAULT, CF_RAFT,
 };
 use file_system::IoRateLimiter;
@@ -1025,7 +1025,7 @@ where
         } else {
             let ctx = SnapshotContext {
                 read_ts: u64::MAX,
-                range: Some(CacheRange::new(
+                region: Some(CacheRegion::new(
                     DATA_MIN_KEY.to_vec(),
                     DATA_MAX_KEY.to_vec(),
                 )),
@@ -1042,7 +1042,7 @@ where
         } else {
             let ctx = SnapshotContext {
                 read_ts: u64::MAX,
-                range: Some(CacheRange::new(
+                region: Some(CacheRegion::new(
                     DATA_MIN_KEY.to_vec(),
                     DATA_MAX_KEY.to_vec(),
                 )),
@@ -1059,7 +1059,7 @@ where
         } else {
             let ctx = SnapshotContext {
                 read_ts: u64::MAX,
-                range: Some(CacheRange::new(
+                region: Some(CacheRegion::new(
                     DATA_MIN_KEY.to_vec(),
                     DATA_MAX_KEY.to_vec(),
                 )),

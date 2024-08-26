@@ -8,7 +8,7 @@ use std::{
 use crossbeam::epoch;
 use engine_rocks::util::new_engine;
 use engine_traits::{
-    CacheRange, EvictReason, Mutable, RangeCacheEngine, RegionEvent, WriteBatch, WriteBatchExt,
+    CacheRegion, EvictReason, Mutable, RangeCacheEngine, RegionEvent, WriteBatch, WriteBatchExt,
     CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
 use keys::data_key;
@@ -291,13 +291,13 @@ fn test_evict_with_loading_range() {
 
     let read_ts = TimeStamp::compose(TimeStamp::physical_now(), 0).into_inner();
     engine
-        .snapshot(r1.id, 0, CacheRange::from_region(&r1), read_ts, 100)
+        .snapshot(r1.id, 0, CacheRegion::from_region(&r1), read_ts, 100)
         .unwrap_err();
     engine
-        .snapshot(r2.id, 0, CacheRange::from_region(&r2), read_ts, 100)
+        .snapshot(r2.id, 0, CacheRegion::from_region(&r2), read_ts, 100)
         .unwrap_err();
     engine
-        .snapshot(r3.id, 0, CacheRange::from_region(&r3), read_ts, 100)
+        .snapshot(r3.id, 0, CacheRegion::from_region(&r3), read_ts, 100)
         .unwrap();
 }
 
@@ -446,7 +446,7 @@ fn test_concurrency_between_delete_range_and_write_to_memory() {
 
     let verify_data = |r: &Region, expected_num: u64| {
         let handle = engine.core().read().engine().cf_handle(CF_LOCK);
-        let (start, end) = encode_key_for_boundary_without_mvcc(&CacheRange::from_region(r));
+        let (start, end) = encode_key_for_boundary_without_mvcc(&CacheRegion::from_region(r));
         let mut iter = handle.iterator();
         let guard = &epoch::pin();
         let mut count = 0;
@@ -545,10 +545,10 @@ fn test_double_delete_range_schedule() {
     engine.load_region(r3.clone()).unwrap();
 
     let snap1 = engine
-        .snapshot(r1.id, 0, CacheRange::from_region(&r1), 100, 100)
+        .snapshot(r1.id, 0, CacheRegion::from_region(&r1), 100, 100)
         .unwrap();
     let snap2 = engine
-        .snapshot(r2.id, 0, CacheRange::from_region(&r2), 100, 100)
+        .snapshot(r2.id, 0, CacheRegion::from_region(&r2), 100, 100)
         .unwrap();
 
     let mut wb = engine.write_batch();
@@ -615,7 +615,7 @@ fn test_load_with_gc() {
     .unwrap();
 
     let region = new_region(1, b"", b"z");
-    let range = CacheRange::from_region(&region);
+    let range = CacheRegion::from_region(&region);
     engine.load_region(region.clone()).unwrap();
     let mut wb = engine.write_batch();
     wb.prepare_for_region(&region);

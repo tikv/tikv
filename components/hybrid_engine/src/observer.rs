@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use engine_traits::{CacheRange, EvictReason, KvEngine, RangeCacheEngineExt, RegionEvent};
+use engine_traits::{CacheRegion, EvictReason, KvEngine, RangeCacheEngineExt, RegionEvent};
 use kvproto::{metapb::Region, raft_cmdpb::AdminCmdType, raft_serverpb::RaftApplyState};
 use raft::StateRole;
 use raftstore::coprocessor::{
@@ -79,20 +79,18 @@ impl Observer {
                     AdminCmdType::PrepareMerge | AdminCmdType::CommitMerge
                 ))
         {
-            let range = CacheRange::from_region(ctx.region());
+            let cache_region = CacheRegion::from_region(ctx.region());
             info!(
                 "ime evict range due to apply commands";
-                "region_id" => ctx.region().get_id(),
+                "region" => ?cache_region,
                 "is_ingest_sst" => apply.pending_handle_ssts.is_some(),
                 "admin_command" => ?cmd.request.get_admin_request().get_cmd_type(),
-                "start_key" => ?log_wrappers::Value(&ctx.region().start_key),
-                "end_key" => ?log_wrappers::Value(&ctx.region().end_key),
             );
             self.pending_events
                 .lock()
                 .unwrap()
                 .push(RegionEvent::Eviction {
-                    region: ctx.region().clone(),
+                    region: cache_region,
                     reason: EvictReason::Merge,
                 });
         }
@@ -112,8 +110,12 @@ impl Observer {
                 .lock()
                 .unwrap()
                 .push(RegionEvent::Split {
-                    source: ctx.region().clone(),
-                    new_regions: state.new_regions.clone(),
+                    source: CacheRegion::from_region(ctx.region()),
+                    new_regions: state
+                        .new_regions
+                        .iter()
+                        .map(CacheRegion::from_region)
+                        .collect(),
                 });
         }
     }
@@ -134,19 +136,17 @@ impl Observer {
             return;
         }
 
-        let range = CacheRange::from_region(region);
+        let cache_region = CacheRegion::from_region(region);
         info!(
            "ime evict region due to leader step down";
-           "region_id" => region.get_id(),
+           "region" => ?cache_region,
            "epoch" => ?region.get_region_epoch(),
-           "start_key" => ?log_wrappers::Value(&region.start_key),
-           "end_key" => ?log_wrappers::Value(&region.end_key),
         );
         self.pending_events
             .lock()
             .unwrap()
             .push(RegionEvent::Eviction {
-                region: region.clone(),
+                region: cache_region,
                 reason: EvictReason::BecomeFollower,
             });
     }
@@ -276,7 +276,7 @@ mod tests {
         cache_engine.enabled.store(true, Ordering::Relaxed);
         observer.post_exec_cmd(&mut ctx, &cmd, &RegionState::default(), &mut apply);
         observer.on_flush_cmd();
-        let expected = CacheRange::from_region(&region);
+        let expected = CacheRegion::from_region(&region);
         assert!(&cache_engine.region_events.lock().unwrap().is_empty());
     }
 
@@ -319,9 +319,9 @@ mod tests {
         cache_engine.enabled.store(true, Ordering::Relaxed);
         observer.post_exec_cmd(&mut ctx, &cmd, &RegionState::default(), &mut apply);
         observer.on_flush_cmd();
-        let expected = CacheRange::from_region(&region);
+        let cached_region = CacheRegion::from_region(&region);
         let expected = RegionEvent::Eviction {
-            region,
+            region: cached_region,
             reason: EvictReason::Merge,
         };
         assert_eq!(&cache_engine.region_events.lock().unwrap()[0], &expected);
