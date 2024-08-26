@@ -131,6 +131,7 @@ mod tests {
             soft_limit_threshold: Some(ReadableSize(300)),
             hard_limit_threshold: Some(ReadableSize(500)),
             expected_region_size: Default::default(),
+            mvcc_amplification_threshold: 10,
         }));
         let mc = MemoryController::new(config, skiplist_engine.clone());
         assert_eq!(mc.acquire(100), MemoryUsage::NormalUsage(100));

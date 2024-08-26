@@ -572,6 +572,7 @@ pub mod tests {
                 soft_limit_threshold: Some(ReadableSize(300)),
                 hard_limit_threshold: Some(ReadableSize(500)),
                 expected_region_size: Some(ReadableSize::mb(20)),
+                mvcc_amplification_threshold: 10,
             }));
             let mem_controller = Arc::new(MemoryController::new(config.clone(), skiplist.clone()));
 
@@ -627,6 +628,7 @@ pub mod tests {
             soft_limit_threshold: Some(ReadableSize(300)),
             hard_limit_threshold: Some(ReadableSize(500)),
             expected_region_size: Some(ReadableSize::mb(20)),
+            mvcc_amplification_threshold: 10,
         }));
         let mem_controller = Arc::new(MemoryController::new(config.clone(), skiplist.clone()));
 

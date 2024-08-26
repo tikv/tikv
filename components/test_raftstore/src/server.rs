@@ -308,8 +308,11 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
                 Arc::new(|| false)
             };
         let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
-        let region_info_accessor =
-            RegionInfoAccessor::new(&mut coprocessor_host, enable_region_stats_mgr_cb);
+        let region_info_accessor = RegionInfoAccessor::new(
+            &mut coprocessor_host,
+            enable_region_stats_mgr_cb,
+            cfg.range_cache_engine.mvcc_amplification_threshold,
+        );
 
         let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
         let sim_router = SimulateTransport::new(raft_router.clone());
