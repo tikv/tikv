@@ -18,7 +18,10 @@ use futures::{
     future::Future,
     task::{Context, Poll},
 };
-use kvproto::{deadlock::WaitForEntry, metapb::RegionEpoch};
+use kvproto::{
+    deadlock::{ReplaceLockByKeyItem, WaitForEntry},
+    metapb::RegionEpoch,
+};
 use tikv_util::{
     config::ReadableDuration,
     time::{duration_to_sec, InstantExt},
@@ -27,7 +30,6 @@ use tikv_util::{
 };
 use tokio::task::spawn_local;
 use tracker::GLOBAL_TRACKERS;
-use crate::server::lock_manager::deadlock::ReplaceLockByKeyItem;
 
 use super::{config::Config, deadlock::Scheduler as DetectorScheduler, metrics::*};
 use crate::storage::{
@@ -559,6 +561,7 @@ impl WaiterManager {
 
         let mut replace_items = vec![];
 
+        let len = events.len();
         for event in events {
             let previous_wait_info = wait_table.update_waiter(&event, now);
 
@@ -566,21 +569,21 @@ impl WaiterManager {
                 continue;
             }
 
-            if let Some((previous_wait_info, diag_ctx)) = previous_wait_info {
+            if let Some((previous_wait_info, _)) = previous_wait_info {
                 if replace_items.capacity() == 0 {
-                    replace_items.reserve(events.len())
+                    replace_items.reserve(len)
                 }
-                replace_items.push(ReplaceLockByKeyItem {
-                    key: event.wait_info.key.to_raw().unwrap(),
-                    key_hash: event.wait_info.lock_digest.hash,
-                    old_lock_ts: previous_wait_info.lock_digest.ts,
-                    new_lock_ts: event.wait_info.lock_digest.ts,
-                })
+                let mut item = ReplaceLockByKeyItem::default();
+                item.set_key(event.wait_info.key.to_raw().unwrap());
+                item.set_key_hash(event.wait_info.lock_digest.hash);
+                item.set_old_lock_ts(previous_wait_info.lock_digest.ts.into_inner());
+                item.set_new_lock_ts(event.wait_info.lock_digest.ts.into_inner());
+                replace_items.push(item);
             }
         }
 
-        replace_items.sort_by_key(|x|x.key);
-        replace_items.dedup_by_key(|x|x.key);
+        replace_items.sort_by(|lhs, rhs| lhs.key.cmp(&rhs.key));
+        replace_items.dedup_by(|lhs, rhs| lhs.key == rhs.key);
 
         self.detector_scheduler.replace_locks_by_keys(replace_items);
     }

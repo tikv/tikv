@@ -2,8 +2,8 @@
 
 use std::{
     cell::RefCell,
-    collections::hash_map::Entry,
     fmt::{self, Display, Formatter},
+    pin::Pin,
     rc::Rc,
     sync::{Arc, Mutex},
 };
@@ -15,10 +15,12 @@ use futures::{
     sink::SinkExt,
     stream::TryStreamExt,
 };
+use futures_util::stream;
 use grpcio::{
     self, DuplexSink, Environment, RequestStream, RpcContext, RpcStatus, RpcStatusCode, UnarySink,
     WriteFlags,
 };
+use itertools::Itertools;
 use kvproto::{deadlock::*, metapb::Region};
 use pd_client::{PdClient, INVALID_ID};
 use raft::StateRole;
@@ -194,8 +196,8 @@ impl DetectTable {
         }
     }
 
-    /// Returns the key hash which causes deadlock, and the current wait chain
-    /// that forms the deadlock with `txn_ts`'s waiting for txn at
+    /// Returns the key and its hash which causes deadlock, and the current wait
+    /// chain that forms the deadlock with `txn_ts`'s waiting for txn at
     /// `lock_ts`. Note that the current detecting edge is not included in
     /// the returned wait chain. This is intended to reduce RPC message size
     /// since the information about current detecting txn is included in a
@@ -411,27 +413,35 @@ impl DetectTable {
         TASK_COUNTER_METRICS.clean_up_wait_for.inc();
     }
 
+    /// Replaces the specific lock on the specific key, and re-detect all
+    /// waiters on this lock. For each detected deadlocks, returns a tuple
+    /// `(txn_id, key_hash, key, wait_chain, resource_group_tag)`. Note that
+    /// the `key_hash` and `key` differs from the one given in parameter. Same
+    /// as the `detect` function's return value, the key is the one on which
+    /// the transaction aborting by the deadlock blocks another transaction
+    /// in the deadlock circle.
     fn replace_lock_by_key(
         &mut self,
         lock_hash: u64,
         key: Vec<u8>,
         old_lock_ts: TimeStamp,
         new_lock_ts: TimeStamp,
-        now: Instant,
-    ) {
+    ) -> Vec<(TimeStamp, u64, Vec<u8>, Vec<WaitForEntry>, Vec<u8>)> {
         if old_lock_ts == new_lock_ts {
-            return;
+            return vec![];
         }
 
         // Find a list of transactions that is blocked by `old_lock_ts` on `key`.
         let locks_and_waiters_of_key = match self.key_reverse_map.get_mut(&key) {
             Some(v) => v,
-            None => return,
+            None => return vec![],
         };
         let waiting_txn = match locks_and_waiters_of_key.remove(&old_lock_ts) {
             Some(v) => v,
-            None => return,
+            None => return vec![],
         };
+
+        let mut result = vec![];
 
         // For each txn, update their entries in `wait_for_map` to change their blockers
         // from `old_lock_ts` to `new_lock_ts`.
@@ -445,28 +455,40 @@ impl DetectTable {
                 blockers.remove(&old_lock_ts);
             }
 
-            let new_locks = blockers
-                .entry(new_lock_ts)
-                .and_modify(|locks| {
-                    // It's possible that the new lock-waiting info already exists. Ignore it in
-                    // this case.
-                    locks.push(lock_hash, key.clone(), now);
-                })
-                .or_insert_with(|| Locks::new(new_lock_ts, lock_hash, key.clone(), vec![], now));
-            new_locks.resource_group_tag = resource_group_tag;
-        }
+            // let new_locks = blockers
+            //     .entry(new_lock_ts)
+            //     .and_modify(|locks| {
+            //         // It's possible that the new lock-waiting info already exists.
+            // Ignore it in         // this case.
+            //         locks.push(lock_hash, key.clone(), now);
+            //     })
+            //     .or_insert_with(|| Locks::new(new_lock_ts, lock_hash, key.clone(),
+            // vec![], now)); new_locks.resource_group_tag = resource_group_tag;
 
-        // Insert the waiting_txn back to `key_reverse_map`, but waiting for
-        // `new_lock_ts` instead. If the `new_lock_ts` entry already exists for
-        // the key, merge the two set.
-        match locks_and_waiters_of_key.entry(new_lock_ts) {
-            Entry::Occupied(mut e) => {
-                e.get_mut().extend(waiting_txn);
-            }
-            Entry::Vacant(e) => {
-                e.insert(waiting_txn);
+            if let Some((deadlock_key_hash, deadlock_key, wait_chain)) =
+                self.detect(*txn_ts, old_lock_ts, lock_hash, &key, &resource_group_tag)
+            {
+                result.push((
+                    *txn_ts,
+                    deadlock_key_hash,
+                    deadlock_key,
+                    wait_chain,
+                    resource_group_tag,
+                ));
             }
         }
+        // // Insert the waiting_txn back to `key_reverse_map`, but waiting for
+        // // `new_lock_ts` instead. If the `new_lock_ts` entry already exists for
+        // // the key, merge the two set.
+        // match locks_and_waiters_of_key.entry(new_lock_ts) {
+        //     Entry::Occupied(mut e) => {
+        //         e.get_mut().extend(waiting_txn);
+        //     }
+        //     Entry::Vacant(e) => {
+        //         e.insert(waiting_txn);
+        //     }
+        // }
+        return result;
     }
 
     /// Insert an entry to te `key_reverse_map`, but skip if the `key` is
@@ -609,14 +631,6 @@ pub enum DetectType {
     CleanUp,
 }
 
-#[derive(Debug)]
-pub struct ReplaceLockByKeyItem {
-    pub key: Vec<u8>,
-    pub key_hash: u64,
-    pub old_lock_ts: TimeStamp,
-    pub new_lock_ts: TimeStamp,
-}
-
 pub enum Task {
     /// The detect request of itself.
     Detect {
@@ -728,9 +742,7 @@ impl Scheduler {
     }
 
     pub fn replace_locks_by_keys(&self, items: Vec<ReplaceLockByKeyItem>) {
-        self.notify_scheduler(Task::ReplaceLocksByKeys {
-            items
-        });
+        self.notify_scheduler(Task::ReplaceLocksByKeys { items });
     }
 
     fn change_role(&self, role: Role) {
@@ -1061,7 +1073,7 @@ where
     /// If the client is None, reconnects the leader first, then sends the
     /// request to the leader. If sends failed, sets the client to None for
     /// retry.
-    fn send_request_to_leader(
+    fn send_detect_request_to_leader(
         &mut self,
         tp: DetectType,
         txn_ts: TimeStamp,
@@ -1090,13 +1102,49 @@ where
             let mut req = DeadlockRequest::default();
             req.set_tp(tp);
             req.set_entry(entry);
-            if leader_client.detect(req).is_ok() {
+            if leader_client.send(req).is_ok() {
                 return true;
             }
             // The client is disconnected. Take it for retry.
             self.leader_client.take();
         }
         false
+    }
+
+    /// Send `replace_locks_by_keys` request to the leader.
+    ///
+    /// Returns `Ok` if the request is sent to the client's channel. Otherwise,
+    /// the `items` will be returned back in the `Err`, so that the caller
+    /// can retry sending without cloning `items`.
+    fn send_replace_locks_by_keys_to_leader(
+        &mut self,
+        items: Vec<ReplaceLockByKeyItem>,
+    ) -> std::result::Result<(), Vec<ReplaceLockByKeyItem>> {
+        assert!(!self.is_leader() && self.leader_info.is_some());
+
+        if self.leader_client.is_none() {
+            self.reconnect_leader();
+        }
+        if let Some(leader_client) = &self.leader_client {
+            let mut replace_locks_by_keys_req = ReplaceLocksByKeysRequest::default();
+            replace_locks_by_keys_req.set_items(items.into());
+            let mut req = DeadlockRequest::default();
+            req.set_tp(DeadlockRequestType::ReplaceLockByKey);
+            req.set_replace_locks_by_keys(replace_locks_by_keys_req);
+
+            match leader_client.send(req) {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    self.leader_client.take();
+                    return Err(e
+                        .into_inner()
+                        .take_replace_locks_by_keys()
+                        .take_items()
+                        .into_vec());
+                }
+            }
+        }
+        Err(items)
     }
 
     fn handle_detect_locally(
@@ -1168,7 +1216,7 @@ where
                 if self.leader_client.is_none() && !self.refresh_leader_info() {
                     break;
                 }
-                if self.send_request_to_leader(tp, txn_ts, &wait_info, diag_ctx.clone()) {
+                if self.send_detect_request_to_leader(tp, txn_ts, &wait_info, diag_ctx.clone()) {
                     return;
                 }
                 // Because the client is asynchronous, it won't be closed until
@@ -1185,14 +1233,43 @@ where
 
     fn handle_replace_locks_by_keys_locally(&mut self, items: Vec<ReplaceLockByKeyItem>) {
         let detect_table = &mut self.inner.borrow_mut().detect_table;
-        let now = Instant::now_coarse();
         for item in items {
-            detect_table.replace_lock_by_key(item.key_hash, item.key, item.old_lock_ts, item.new_lock_ts, now);
+            let deadlocks = detect_table.replace_lock_by_key(
+                item.key_hash,
+                item.key.clone(),
+                item.old_lock_ts.into(),
+                item.new_lock_ts.into(),
+            );
+            for (txn_ts, deadlock_key_hash, deadlock_key, mut wait_chain, resource_group_tag) in
+                deadlocks
+            {
+                let mut last_entry = WaitForEntry::default();
+                last_entry.set_txn(txn_ts.into_inner());
+                last_entry.set_wait_for_txn(item.new_lock_ts);
+                last_entry.set_key_hash(item.key_hash);
+                last_entry.set_key(item.key.clone());
+                last_entry.set_resource_group_tag(resource_group_tag);
+                wait_chain.push(last_entry);
+                self.waiter_mgr_scheduler.deadlock(
+                    txn_ts,
+                    item.key.clone(),
+                    LockDigest {
+                        ts: item.new_lock_ts.into(),
+                        hash: item.key_hash,
+                    },
+                    deadlock_key_hash,
+                    deadlock_key,
+                    wait_chain,
+                );
+            }
         }
     }
 
+    fn handle_replace_locks_by_keys(&mut self, mut items: Vec<ReplaceLockByKeyItem>) {
+        if items.is_empty() {
+            return;
+        }
 
-    fn handle_replace_locks_by_keys(&mut self, items: Vec<ReplaceLockByKeyItem>) {
         if self.is_leader() {
             self.handle_replace_locks_by_keys_locally(items);
         } else {
@@ -1204,9 +1281,12 @@ where
                 if self.leader_client.is_none() && !self.refresh_leader_info() {
                     break;
                 }
-
+                match self.send_replace_locks_by_keys_to_leader(items) {
+                    Ok(()) => return,
+                    Err(i) => items = i,
+                }
             }
-            warn!("detect request dropped"; "tp" => ?tp, "txn_ts" => txn_ts, "wait_info" => ?wait_info);
+            warn!("replace_locks_by_keys request dropped"; "items" => ?items);
             ERROR_COUNTER_METRICS.dropped.inc();
         }
     }
@@ -1229,64 +1309,106 @@ where
         }
 
         let inner = Rc::clone(&self.inner);
-        let mut s = stream.map_err(Error::Grpc).try_filter_map(move |mut req| {
-            // It's possible the leader changes after registering this handler.
-            let mut inner = inner.borrow_mut();
-            if inner.role != Role::Leader {
-                ERROR_COUNTER_METRICS.not_leader.inc();
-                return future::ready(Err(Error::Other(box_err!("leader changed"))));
-            }
-            let WaitForEntry {
-                txn,
-                wait_for_txn,
-                key_hash,
-                key,
-                resource_group_tag,
-                ..
-            } = req.get_entry();
-            let detect_table = &mut inner.detect_table;
-            let res = match req.get_tp() {
-                DeadlockRequestType::Detect => {
-                    if let Some((deadlock_key_hash, deadlock_key, wait_chain)) = detect_table
-                        .detect(
+        let mut s = stream
+            .map_err(Error::Grpc)
+            .try_filter_map(move |mut req| {
+                // It's possible the leader changes after registering this handler.
+                let mut inner = inner.borrow_mut();
+                if inner.role != Role::Leader {
+                    ERROR_COUNTER_METRICS.not_leader.inc();
+                    return future::ready(Err(Error::Other(box_err!("leader changed"))));
+                }
+                let WaitForEntry {
+                    txn,
+                    wait_for_txn,
+                    key_hash,
+                    key,
+                    resource_group_tag,
+                    ..
+                } = req.get_entry();
+                let detect_table = &mut inner.detect_table;
+                let res: Option<Pin<Box<dyn futures::Stream<Item = _>>>> = match req.get_tp() {
+                    DeadlockRequestType::Detect => {
+                        if let Some((deadlock_key_hash, deadlock_key, wait_chain)) = detect_table
+                            .detect(
+                                txn.into(),
+                                wait_for_txn.into(),
+                                *key_hash,
+                                key,
+                                resource_group_tag,
+                            )
+                        {
+                            let mut resp = DeadlockResponse::default();
+                            resp.set_entry(req.take_entry());
+                            resp.set_deadlock_key_hash(deadlock_key_hash);
+                            resp.set_deadlock_key(deadlock_key);
+                            resp.set_wait_chain(wait_chain.into());
+                            Some(Box::pin(stream::once(future::ok((
+                                resp,
+                                WriteFlags::default(),
+                            )))))
+                        } else {
+                            None
+                        }
+                    }
+                    DeadlockRequestType::CleanUpWaitFor => {
+                        detect_table.clean_up_wait_for(
                             txn.into(),
-                            wait_for_txn.into(),
-                            *key_hash,
+                            LockDigest {
+                                ts: wait_for_txn.into(),
+                                hash: *key_hash,
+                            },
                             key,
-                            resource_group_tag,
-                        )
-                    {
-                        let mut resp = DeadlockResponse::default();
-                        resp.set_entry(req.take_entry());
-                        resp.set_deadlock_key_hash(deadlock_key_hash);
-                        resp.set_deadlock_key(deadlock_key);
-                        resp.set_wait_chain(wait_chain.into());
-                        Some((resp, WriteFlags::default()))
-                    } else {
+                        );
                         None
                     }
-                }
-                DeadlockRequestType::CleanUpWaitFor => {
-                    detect_table.clean_up_wait_for(
-                        txn.into(),
-                        LockDigest {
-                            ts: wait_for_txn.into(),
-                            hash: *key_hash,
-                        },
-                        key,
-                    );
-                    None
-                }
-                DeadlockRequestType::CleanUp => {
-                    detect_table.clean_up(txn.into());
-                    None
-                }
-                DeadlockRequestType::ReplaceLockByKey => {
-                    todo!()
-                }
-            };
-            future::ok(res)
-        });
+                    DeadlockRequestType::CleanUp => {
+                        detect_table.clean_up(txn.into());
+                        None
+                    }
+                    DeadlockRequestType::ReplaceLockByKey => {
+                        let items = req.take_replace_locks_by_keys().take_items();
+                        let result = items.into_iter().flat_map(move |item| {
+                            detect_table
+                                .replace_lock_by_key(
+                                    item.key_hash,
+                                    item.key.clone(),
+                                    item.old_lock_ts.into(),
+                                    item.new_lock_ts.into(),
+                                )
+                                .into_iter()
+                                .map(move |(
+                                        txn_ts,
+                                        deadlock_key_hash,
+                                        deadlock_key,
+                                        wait_chain,
+                                        resource_group_tag,
+                                    )| {
+                                        let mut entry = WaitForEntry::default();
+                                        entry.set_key(item.key.clone());
+                                        entry.set_key_hash(item.key_hash);
+                                        entry.set_txn(txn_ts.into_inner());
+                                        entry.set_wait_for_txn(item.new_lock_ts);
+                                        entry.set_resource_group_tag(resource_group_tag);
+
+                                        let mut resp = DeadlockResponse::default();
+                                        resp.set_entry(entry);
+                                        resp.set_deadlock_key_hash(deadlock_key_hash);
+                                        resp.set_deadlock_key(deadlock_key);
+                                        resp.set_wait_chain(wait_chain.into());
+
+                                        Ok((resp, WriteFlags::default()))
+                                    },
+                                )
+                            })
+                            // Needs to drain the iterator to remove the reference to `inner`.
+                            .collect_vec();
+                        Some(Box::pin(stream::iter(result)))
+                    }
+                };
+                future::ok(res)
+            })
+            .try_flatten();
         let send_task = async move {
             let mut sink = sink.sink_map_err(Error::from);
             sink.send_all(&mut s).await?;
@@ -1323,6 +1445,9 @@ where
                 diag_ctx,
             } => {
                 self.handle_detect(tp, txn_ts, wait_info, diag_ctx);
+            }
+            Task::ReplaceLocksByKeys { items } => {
+                self.handle_replace_locks_by_keys(items);
             }
             Task::DetectRpc { stream, sink } => {
                 self.handle_detect_rpc(stream, sink);

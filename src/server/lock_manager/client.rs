@@ -3,7 +3,7 @@
 use std::{sync::Arc, time::Duration};
 
 use futures::{
-    channel::mpsc::{self, UnboundedSender},
+    channel::mpsc::{self, TrySendError, UnboundedSender},
     future::{self, BoxFuture},
     sink::SinkExt,
     stream::{StreamExt, TryStreamExt},
@@ -77,11 +77,10 @@ impl Client {
         (send_task, recv_task)
     }
 
-    pub fn detect(&self, req: DeadlockRequest) -> Result<()> {
-        self.sender
-            .as_ref()
-            .unwrap()
-            .unbounded_send(req)
-            .map_err(|e| Error::Other(box_err!(e)))
+    pub fn send(
+        &self,
+        req: DeadlockRequest,
+    ) -> std::result::Result<(), TrySendError<DeadlockRequest>> {
+        self.sender.as_ref().unwrap().unbounded_send(req)
     }
 }
