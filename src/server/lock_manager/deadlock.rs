@@ -466,7 +466,7 @@ impl DetectTable {
             // vec![], now)); new_locks.resource_group_tag = resource_group_tag;
 
             if let Some((deadlock_key_hash, deadlock_key, wait_chain)) =
-                self.detect(*txn_ts, old_lock_ts, lock_hash, &key, &resource_group_tag)
+                self.detect(*txn_ts, new_lock_ts, lock_hash, &key, &resource_group_tag)
             {
                 result.push((
                     *txn_ts,
