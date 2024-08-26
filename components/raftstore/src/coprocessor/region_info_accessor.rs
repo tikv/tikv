@@ -644,37 +644,37 @@ impl RegionCollector {
         };
 
         // TODO(SpadeA): remove it when auto load/evict is stable
-        let debug: Vec<_> = top_regions
-            .iter()
-            .map(|(r, s)| {
-                format!(
-                    "region_id={}, read_keys={}, cop={}, cop_detail={:?}",
-                    r.get_id(),
-                    s.read_keys,
-                    s.query_stats.coprocessor,
-                    s.cop_detail,
-                )
-            })
-            .collect_vec();
-
-        info!(
-            "get top k regions before filter";
-            "count" => count,
-            "max_qps" => max_qps,
-            "regions" => ?debug,
-        );
-
-        if !top_regions.is_empty() {
-            top_regions = top_regions
-                .into_iter()
-                .filter(|(_, s)| {
-                    s.cop_detail.next + s.cop_detail.prev >= max_next_prev / 10
-                        && s.cop_detail.processed_keys != 0
-                        && (s.cop_detail.next + s.cop_detail.prev) / s.cop_detail.processed_keys
-                            >= self.mvcc_amplification_threshold
+        {
+            let debug: Vec<_> = top_regions
+                .iter()
+                .map(|(r, s)| {
+                    format!(
+                        "region_id={}, read_keys={}, cop={}, cop_detail={:?}",
+                        r.get_id(),
+                        s.read_keys,
+                        s.query_stats.coprocessor,
+                        s.cop_detail,
+                    )
                 })
                 .collect_vec();
 
+            info!(
+                "get top k regions before filter";
+                "count" => count,
+                "max_qps" => max_qps,
+                "regions" => ?debug,
+            );
+        }
+
+        top_regions.retain(|(_, s)| {
+            s.cop_detail.next + s.cop_detail.prev >= max_next_prev / 10
+                && s.cop_detail.processed_keys != 0
+                && (s.cop_detail.next + s.cop_detail.prev) / s.cop_detail.processed_keys
+                    >= self.mvcc_amplification_threshold
+        });
+
+        // TODO(SpadeA): remove it when auto load/evict is stable
+        {
             let debug: Vec<_> = top_regions
                 .iter()
                 .map(|(r, s)| {
