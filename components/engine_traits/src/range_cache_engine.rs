@@ -50,6 +50,7 @@ pub enum EvictReason {
     DeleteRange,
     Merge,
     Disabled,
+    ApplySnapshot,
 }
 
 /// RangeCacheEngine works as a range cache caching some ranges (in Memory or
