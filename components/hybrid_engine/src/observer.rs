@@ -45,6 +45,8 @@ impl Observer {
             .registry
             .register_admin_observer(priority, BoxAdminObserver::new(self.clone()));
         // Evict cache when a peer applies snapshot.
+        // Applying snapshot changes the data in rocksdb but not IME,
+        // so we trigger region eviction to keep compatibility.
         coprocessor_host.registry.register_apply_snapshot_observer(
             priority,
             BoxApplySnapshotObserver::new(self.clone()),
@@ -149,7 +151,7 @@ impl Observer {
             .unwrap()
             .push(RegionEvent::Eviction {
                 region: region.clone(),
-                reason: reason,
+                reason,
             });
     }
 }
