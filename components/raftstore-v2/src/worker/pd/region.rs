@@ -5,7 +5,9 @@ use std::{sync::Arc, time::Duration};
 use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{metapb, pdpb};
-use pd_client::{metrics::PD_HEARTBEAT_COUNTER_VEC, BucketStat, PdClient, RegionStat, RegionWriteCfCopDetail};
+use pd_client::{
+    metrics::PD_HEARTBEAT_COUNTER_VEC, BucketStat, PdClient, RegionStat, RegionWriteCfCopDetail,
+};
 use raftstore::store::{ReadStats, WriteStats};
 use resource_metering::RawRecords;
 use slog::{debug, error, info};
