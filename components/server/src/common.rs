@@ -1180,7 +1180,7 @@ mod tests {
         let disk_usage_checker = DiskUsageChecker::new(
             kvdb_path,
             raft_path,
-            Some(raft_spill_path.clone()),
+            Some(raft_spill_path),
             true,
             true,
             true,
