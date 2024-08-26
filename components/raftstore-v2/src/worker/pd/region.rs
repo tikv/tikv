@@ -5,7 +5,7 @@ use std::{sync::Arc, time::Duration};
 use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{metapb, pdpb};
-use pd_client::{metrics::PD_HEARTBEAT_COUNTER_VEC, BucketStat, PdClient, RegionStat};
+use pd_client::{metrics::PD_HEARTBEAT_COUNTER_VEC, BucketStat, PdClient, RegionStat, RegionWriteCfCopDetail};
 use raftstore::store::{ReadStats, WriteStats};
 use resource_metering::RawRecords;
 use slog::{debug, error, info};
@@ -160,6 +160,7 @@ where
             read_bytes: read_bytes_delta,
             read_keys: read_keys_delta,
             query_stats: query_stats.0,
+            cop_detail: RegionWriteCfCopDetail::default(),
             approximate_size,
             approximate_keys,
             last_report_ts,

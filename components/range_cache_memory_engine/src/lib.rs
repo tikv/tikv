@@ -59,6 +59,8 @@ pub struct RangeCacheEngineConfig {
     pub soft_limit_threshold: Option<ReadableSize>,
     pub hard_limit_threshold: Option<ReadableSize>,
     pub expected_region_size: Option<ReadableSize>,
+    // used in getting top regions to filter those with less mvcc amplification
+    pub mvcc_amplification_threshold: usize,
 }
 
 impl Default for RangeCacheEngineConfig {
@@ -71,6 +73,7 @@ impl Default for RangeCacheEngineConfig {
             soft_limit_threshold: None,
             hard_limit_threshold: None,
             expected_region_size: None,
+            mvcc_amplification_threshold: 10,
         }
     }
 }
@@ -128,6 +131,7 @@ impl RangeCacheEngineConfig {
             soft_limit_threshold: Some(ReadableSize::gb(1)),
             hard_limit_threshold: Some(ReadableSize::gb(2)),
             expected_region_size: Some(ReadableSize::mb(20)),
+            mvcc_amplification_threshold: 10,
         }
     }
 }
