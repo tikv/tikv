@@ -10,6 +10,7 @@ use raftstore::coprocessor::{
     BoxRoleObserver, Cmd, CmdBatch, CmdObserver, Coprocessor, CoprocessorHost, ObserveLevel,
     ObserverContext, QueryObserver, RegionState, RoleObserver,
 };
+use tikv_util::info;
 
 #[derive(Clone)]
 pub struct EvictionObserver {
@@ -76,8 +77,8 @@ impl EvictionObserver {
                 ))
         {
             let range = CacheRange::from_region(ctx.region());
-            tikv_util::info!(
-                "evict range due to apply commands";
+            info!(
+                "ime evict range due to apply commands";
                 "region_id" => ctx.region().get_id(),
                 "is_ingest_sst" => apply.pending_handle_ssts.is_some(),
                 "admin_command" => ?cmd.request.get_admin_request().get_cmd_type(),
@@ -96,8 +97,8 @@ impl EvictionObserver {
         if !state.new_regions.is_empty() {
             let cmd_type = cmd.request.get_admin_request().get_cmd_type();
             assert!(cmd_type == AdminCmdType::BatchSplit || cmd_type == AdminCmdType::Split);
-            tikv_util::info!(
-                "in-memory-engine handle region split";
+            info!(
+                "ime handle region split";
                 "region_id" => ctx.region().get_id(),
                 "admin_command" => ?cmd.request.get_admin_request().get_cmd_type(),
                 "region" => ?state.modified_region.as_ref().unwrap(),
@@ -123,8 +124,8 @@ impl EvictionObserver {
 
     fn evict_range_on_leader_steps_down(&self, region: &Region) {
         let range = CacheRange::from_region(region);
-        tikv_util::info!(
-           "evict region due to leader step down";
+        info!(
+           "ime evict region due to leader step down";
            "region_id" => region.get_id(),
            "epoch" => ?region.get_region_epoch(),
            "start_key" => ?log_wrappers::Value(&region.start_key),

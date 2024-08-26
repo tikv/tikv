@@ -185,13 +185,13 @@ impl PdRangeHintService {
             for key_range in &label_rule.data {
                 match parse_range(key_range) {
                     Ok((start, end)) => {
-                        info!("Requested to cache range";
+                        info!("ime requested to cache range";
                             "start" => ?log_wrappers::Value(&start),
                             "end" => ?log_wrappers::Value(&end));
                         range_manager_load_cb(&start, &end);
                     }
                     Err(e) => {
-                        error!("Unable to convert key_range rule to cache range"; "err" => ?e);
+                        error!("ime unable to convert key_range rule to cache range"; "err" => ?e);
                     }
                 }
             }
@@ -267,7 +267,7 @@ impl BgWorkManager {
         let region_info_provider = self.region_info_provider.clone();
         range_hint_service.start(self.worker.remote(), move |start: &[u8], end: &[u8]| {
             let Some(ref info_provider) = region_info_provider else {
-                warn!("[IME] region info provider is none, skip load pinned range.");
+                warn!("ime region info provider is none, skip load pinned range.");
                 return;
             };
 
@@ -275,7 +275,7 @@ impl BgWorkManager {
                 Ok(r) => r,
                 Err(e) => {
                     warn!(
-                        "get regions in range failed"; "err" => ?e,
+                        "ime get regions in range failed"; "err" => ?e,
                         "start" => ?log_wrappers::Value(start),
                         "end" => ?log_wrappers::Value(end)
                     );
@@ -290,7 +290,7 @@ impl BgWorkManager {
             let mut engine = core.write();
             for r in regions {
                 if let Err(e) = engine.mut_range_manager().load_region(r.clone()) {
-                    warn!("load region by label failed"; "err" => ?e, "region" => ?r);
+                    warn!("ime load region by label failed"; "err" => ?e, "region" => ?r);
                 }
             }
             // TODO (afeinberg): This does not actually load the range. The load
@@ -320,7 +320,7 @@ impl BgWorkManager {
                             Ok(Ok(ts)) => ts,
                             err => {
                                 error!(
-                                    "schedule range cache engine gc failed ";
+                                    "ime schedule range cache engine gc failed ";
                                     "timeout_duration" => ?tso_timeout,
                                     "error" => ?err,
                                 );
@@ -331,7 +331,7 @@ impl BgWorkManager {
                         let safe_point = TimeStamp::compose(safe_point, 0).into_inner();
                         if let Err(e) = scheduler.schedule(BackgroundTask::Gc(GcTask {safe_point})) {
                             error!(
-                                "schedule range cache engine gc failed";
+                                "ime schedule range cache engine gc failed";
                                 "err" => ?e,
                             );
                         }
@@ -339,7 +339,7 @@ impl BgWorkManager {
                     recv(load_evict_ticker) -> _ => {
                         if let Err(e) = scheduler.schedule(BackgroundTask::TopRegionsLoadEvict) {
                             error!(
-                                "schedule load evict failed";
+                                "ime schedule load evict failed";
                                 "err" => ?e,
                             );
                         }
@@ -347,7 +347,7 @@ impl BgWorkManager {
                     recv(rx) -> r => {
                         if let Err(e) = r {
                             error!(
-                                "receive error in range cache engien gc ticker";
+                                "ime receive error in range cache engien gc ticker";
                                 "err" => ?e,
                             );
                         }
@@ -425,7 +425,7 @@ impl BackgroundRunnerCore {
             let safe_point = safe_point.min(min_snapshot).min(historical_safe_point);
             if safe_point <= region_meta.safe_point() {
                 info!(
-                    "safe point not large enough";
+                    "ime safe point not large enough";
                     "prev" => region_meta.safe_point(),
                     "current" => safe_point,
                 );
@@ -434,7 +434,7 @@ impl BackgroundRunnerCore {
 
             // todo: change it to debug!
             info!(
-                "safe point update";
+                "ime safe point update";
                 "prev" => region_meta.safe_point(),
                 "current" => safe_point,
                 "range" => ?range,
@@ -461,7 +461,7 @@ impl BackgroundRunnerCore {
         let duration = start.saturating_elapsed();
         RANGE_GC_TIME_HISTOGRAM.observe(duration.as_secs_f64());
         info!(
-            "range gc complete";
+            "ime range gc complete";
             "range" => ?range,
             "gc_duration" => ?duration,
             "total_version" => filter.metrics.total,
@@ -542,7 +542,7 @@ impl BackgroundRunnerCore {
                 delete_range_scheduler.schedule_force(BackgroundTask::DeleteRegions(remove_regions))
             {
                 error!(
-                    "schedule delete range failed";
+                    "ime schedule delete range failed";
                     "err" => ?e,
                 );
                 assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
@@ -595,7 +595,7 @@ impl BackgroundRunnerCore {
             delete_range_scheduler.schedule_force(BackgroundTask::DeleteRegions(remove_regions))
         {
             error!(
-                "schedule delete range failed";
+                "ime schedule delete range failed";
                 "err" => ?e,
             );
             assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
@@ -610,7 +610,7 @@ impl BackgroundRunnerCore {
     /// excess memory usage.
     fn evict_on_soft_limit_reached(&self, delete_range_scheduler: &Scheduler<BackgroundTask>) {
         if self.range_stats_manager.is_none() {
-            warn!("range stats manager is not initialized, cannot evict on soft limit reached");
+            warn!("ime range stats manager is not initialized, cannot evict on soft limit reached");
             return;
         }
         let range_stats_manager = self.range_stats_manager.as_ref().unwrap();
@@ -646,7 +646,7 @@ impl BackgroundRunnerCore {
                 .evict_region(&region, EvictReason::MemoryLimitReached);
             if !deleteable_regions.is_empty() {
                 info!(
-                    "evict on soft limit reached";
+                    "ime evict on soft limit reached";
                     "region_to_evict" => ?region,
                     "regions_evicted" => ?&deleteable_regions,
                     "approx_size" => approx_size,
@@ -663,7 +663,7 @@ impl BackgroundRunnerCore {
                 .schedule_force(BackgroundTask::DeleteRegions(regions_to_delete))
             {
                 error!(
-                    "schedule deletet range failed";
+                    "ime schedule deletet range failed";
                     "err" => ?e,
                 );
                 assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
@@ -697,7 +697,7 @@ impl BackgroundRunnerCore {
         let mut regions_to_remove = Vec::with_capacity(256);
         range_stats_manager.collect_changed_ranges(&mut regions_to_add, &mut regions_to_remove);
         let mut regions_to_delete = Vec::with_capacity(regions_to_remove.len());
-        info!("load_evict"; "ranges_to_add" => ?&regions_to_add, "may_evict" => ?&regions_to_remove);
+        info!("ime load_evict"; "ranges_to_add" => ?&regions_to_add, "may_evict" => ?&regions_to_remove);
         for evict_region in regions_to_remove {
             if self.memory_controller.reached_soft_limit() {
                 let mut core = self.engine.write();
@@ -705,7 +705,7 @@ impl BackgroundRunnerCore {
                     .mut_range_manager()
                     .evict_region(&evict_region, EvictReason::AutoEvict);
                 info!(
-                    "load_evict: soft limit reached";
+                    "ime load_evict: soft limit reached";
                     "region_to_evict" => ?&evict_region,
                     "evicted_regions" => ?&deleteable_regions,
                 );
@@ -718,7 +718,7 @@ impl BackgroundRunnerCore {
                 .schedule_force(BackgroundTask::DeleteRegions(regions_to_delete))
             {
                 error!(
-                    "schedule deletet range failed";
+                    "ime schedule deletet range failed";
                     "err" => ?e,
                 );
                 assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
@@ -727,11 +727,11 @@ impl BackgroundRunnerCore {
         for region in regions_to_add {
             let mut core = self.engine.write();
             if let Err(e) = core.mut_range_manager().load_region(region.clone()) {
-                error!("error loading range"; "cache_range" => ?region, "err" => ?e);
+                error!("ime error loading range"; "cache_range" => ?region, "err" => ?e);
             }
         }
         range_stats_manager.set_checking_top_regions(false);
-        info!("load_evict complete");
+        info!("ime load_evict complete");
     }
 }
 
@@ -891,7 +891,7 @@ impl Runnable for BackgroundRunner {
                 };
 
                 info!(
-                    "start a new round of gc for range cache engine";
+                    "ime start a new round of gc for range cache engine";
                     "safe_point" => t.safe_point,
                     "oldest_sequence" => seqno,
                 );
@@ -919,24 +919,20 @@ impl Runnable for BackgroundRunner {
                 let pd_client = self.pd_client.clone();
                 let gc_interval = self.gc_interval;
                 let f = async move {
+                    fail::fail_point!("before_start_loading_region");
                     fail::fail_point!("on_start_loading_region");
                     let mut is_canceled = false;
                     let region_range = CacheRange::from_region(&region);
                     let skiplist_engine = {
-                        let mut engine = core.engine.write();
-                        let region_meta = engine
-                            .mut_range_manager()
-                            .mut_region_meta(region.id)
-                            .unwrap();
+                        let engine = core.engine.read();
+                        let region_meta = engine.range_manager().region_meta(region.id).unwrap();
                         // if loading is canceled, we skip the batch load.
                         // NOTE: here we don't check the region epoch version change,
                         // We will handle possible region split and partial cancelation
                         // in `on_snapshot_load_canceled` and `on_snapshot_load_finished`.
-                        if region_meta.get_state() != RegionState::ReadyToLoad {
+                        if region_meta.get_state() != RegionState::Loading {
                             assert_eq!(region_meta.get_state(), RegionState::LoadingCanceled);
                             is_canceled = true;
-                        } else {
-                            region_meta.set_state(RegionState::Loading);
                         }
 
                         engine.engine.clone()
@@ -949,14 +945,14 @@ impl Runnable for BackgroundRunner {
 
                     if is_canceled {
                         info!(
-                            "snapshot load canceled";
+                            "ime snapshot load canceled";
                             "region" => ?region,
                         );
                         core.on_snapshot_load_failed(&region, &delete_range_scheduler, false);
                         return;
                     }
 
-                    info!("Loading region"; "region" => ?&region);
+                    info!("ime Loading region"; "region" => ?&region);
                     let start = Instant::now();
                     let iter_opt = IterOptions::new(
                         Some(KeyBuilder::from_slice(&region_range.start, 0, 0)),
@@ -992,7 +988,7 @@ impl Runnable for BackgroundRunner {
                                             core.memory_controller.acquire(mem_size)
                                         {
                                             warn!(
-                                                "stop loading snapshot due to memory reaching hard limit";
+                                                "ime stop loading snapshot due to memory reaching hard limit";
                                                 "region" => ?region,
                                                 "memory_usage(MB)" => ReadableSize(n as u64).as_mb_f64(),
                                             );
@@ -1007,7 +1003,7 @@ impl Runnable for BackgroundRunner {
                                     }
                                 }
                                 Err(e) => {
-                                    error!("creating rocksdb iterator failed"; "cf" => cf, "err" => %e);
+                                    error!("ime creating rocksdb iterator failed"; "cf" => cf, "err" => %e);
                                     break 'load_snapshot None;
                                 }
                             }
@@ -1018,7 +1014,7 @@ impl Runnable for BackgroundRunner {
                             Ok(Ok(ts)) => ts,
                             err => {
                                 error!(
-                                    "get timestamp failed, skip gc loaded range";
+                                    "ime get timestamp failed, skip gc loaded range";
                                     "timeout_duration" => ?tso_timeout,
                                     "error" => ?err,
                                 );
@@ -1058,16 +1054,16 @@ impl Runnable for BackgroundRunner {
                             let duration = start.saturating_elapsed();
                             RANGE_LOAD_TIME_HISTOGRAM.observe(duration.as_secs_f64());
                             info!(
-                                "Loading region finished";
+                                "ime Loading region finished";
                                 "region" => ?region,
                                 "duration(sec)" => ?duration,
                             );
                         } else {
-                            info!("Loading region canceled";"region" => ?region);
+                            info!("ime Loading region canceled";"region" => ?region);
                         }
                     } else {
                         info!(
-                            "snapshot load failed";
+                            "ime snapshot load failed";
                             "region" => ?region,
                         );
                         core.on_snapshot_load_failed(&region, &delete_range_scheduler, true);
@@ -1078,7 +1074,7 @@ impl Runnable for BackgroundRunner {
             BackgroundTask::MemoryCheckAndEvict => {
                 let mem_usage = self.core.memory_controller.mem_usage();
                 info!(
-                    "start memory usage check and evict";
+                    "ime start memory usage check and evict";
                     "mem_usage(MB)" => ReadableSize(mem_usage as u64).as_mb()
                 );
                 if mem_usage > self.core.memory_controller.soft_limit_threshold() {
@@ -1111,7 +1107,7 @@ impl Runnable for BackgroundRunner {
 
                 let f = async move {
                     info!(
-                        "begin to cleanup tombstones in lock cf";
+                        "ime begin to cleanup tombstones in lock cf";
                         "seqno" => snapshot_seqno,
                     );
 
@@ -1167,7 +1163,7 @@ impl Runnable for BackgroundRunner {
                     }
 
                     info!(
-                        "cleanup tombstones in lock cf";
+                        "ime cleanup tombstones in lock cf";
                         "seqno" => snapshot_seqno,
                         "total" => total,
                         "removed" => removed,
@@ -1394,7 +1390,7 @@ impl Filter {
             let v = iter.value();
             if let Err(e) = self.filter_key(k.as_bytes(), v.as_bytes()) {
                 warn!(
-                    "Something Wrong in memory engine GC";
+                    "ime Something Wrong in memory engine GC";
                     "error" => ?e,
                 );
             }
@@ -2843,7 +2839,7 @@ pub mod tests {
                 .range_manager()
                 .regions()
                 .values()
-                .any(|m| matches!(m.get_state(), Pending | ReadyToLoad | Loading))
+                .any(|m| matches!(m.get_state(), Pending | Loading))
         });
 
         let verify = |region: &Region, exist, expect_count| {
@@ -2950,7 +2946,7 @@ pub mod tests {
                 .range_manager()
                 .regions()
                 .values()
-                .any(|m| matches!(m.get_state(), Pending | ReadyToLoad | Loading))
+                .any(|m| matches!(m.get_state(), Pending | Loading))
         });
 
         let verify = |r: &Region, exist, expect_count| {

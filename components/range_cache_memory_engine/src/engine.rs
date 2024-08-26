@@ -259,7 +259,7 @@ impl RangeCacheMemoryEngine {
         range_cache_engine_context: RangeCacheEngineContext,
         region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
     ) -> Self {
-        info!("init range cache memory engine";);
+        info!("ime init range cache memory engine");
         let core = Arc::new(RwLock::new(RangeCacheMemoryEngineCore::new()));
         let skiplist_engine = { core.read().engine().clone() };
 
@@ -321,7 +321,7 @@ impl RangeCacheMemoryEngine {
                 .schedule_task(BackgroundTask::DeleteRegions(deleteable_regions))
             {
                 error!(
-                    "schedule delete region failed";
+                    "ime schedule delete region failed";
                     "err" => ?e,
                 );
                 assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
@@ -345,20 +345,17 @@ impl RangeCacheMemoryEngine {
 
         let schedule_load = region_state == RegionState::Pending;
         if schedule_load {
-            range_manager.update_region_state(region.id, RegionState::ReadyToLoad);
+            range_manager.update_region_state(region.id, RegionState::Loading);
             info!(
-                "range to load";
+                "ime range to load";
                 "region" => ?region,
                 "cached" => range_manager.regions().len(),
             );
-            region_state = RegionState::ReadyToLoad;
+            region_state = RegionState::Loading;
         }
 
         let mut result = RangeCacheStatus::NotInCache;
-        if region_state == RegionState::ReadyToLoad
-            || region_state == RegionState::Loading
-            || region_state == RegionState::Active
-        {
+        if region_state == RegionState::Loading || region_state == RegionState::Active {
             range_manager.record_in_region_being_written(write_batch_id, range);
             if region_state == RegionState::Active {
                 result = RangeCacheStatus::Cached;
@@ -377,7 +374,7 @@ impl RangeCacheMemoryEngine {
                 .schedule_task(BackgroundTask::LoadRegion(region.clone(), rocks_snap))
             {
                 error!(
-                    "schedule region load failed";
+                    "ime schedule region load failed";
                     "err" => ?e,
                     "region" => ?region,
                 );
@@ -447,7 +444,7 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
             .schedule_task(BackgroundTask::SetRocksEngine(disk_engine))
         {
             error!(
-                "schedule set rocks_engine failed";
+                "ime schedule set rocks_engine failed";
                 "err" => ?e,
             );
             assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
@@ -543,7 +540,7 @@ pub mod tests {
         engine.prepare_for_apply(1, CacheRange::from_region(&region2), &region2);
         assert_eq!(
             count_region(engine.core.read().range_manager(), |m| {
-                matches!(m.get_state(), Pending | ReadyToLoad | Loading)
+                matches!(m.get_state(), Pending | Loading)
             }),
             0
         );
@@ -556,7 +553,7 @@ pub mod tests {
         engine.prepare_for_apply(1, CacheRange::from_region(&region2), &region2);
         assert_eq!(
             count_region(engine.core.read().range_manager(), |m| {
-                matches!(m.get_state(), Pending | ReadyToLoad | Loading)
+                matches!(m.get_state(), Pending | Loading)
             }),
             0
         );
