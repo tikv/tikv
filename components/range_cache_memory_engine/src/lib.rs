@@ -59,7 +59,8 @@ pub struct RangeCacheEngineConfig {
     pub soft_limit_threshold: Option<ReadableSize>,
     pub hard_limit_threshold: Option<ReadableSize>,
     pub expected_region_size: Option<ReadableSize>,
-    // used in getting top regions to filter those with less mvcc amplification
+    // used in getting top regions to filter those with less mvcc amplification. Here, we define
+    // mvcc amplification to be '(next + prev) / processed_keys'.
     pub mvcc_amplification_threshold: usize,
 }
 

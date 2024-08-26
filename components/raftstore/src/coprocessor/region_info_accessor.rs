@@ -886,6 +886,11 @@ impl RegionInfoAccessor {
             .unwrap();
         rx.recv().unwrap()
     }
+
+    #[cfg(any(test, feature = "testexport"))]
+    pub fn scheduler(&self) -> &Scheduler<RegionInfoQuery> {
+        &self.scheduler
+    }
 }
 
 /// Top regions result: region and its approximate size.

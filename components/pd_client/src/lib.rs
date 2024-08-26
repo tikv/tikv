@@ -43,10 +43,14 @@ pub use self::{
 pub type Key = Vec<u8>;
 pub type PdFuture<T> = BoxFuture<'static, Result<T>>;
 
+// Record the coprocessor details for region level.
 #[derive(Clone, Debug, Default)]
 pub struct RegionWriteCfCopDetail {
+    // How many times the `next` is called when handling cop request
     pub next: usize,
+    // How many times the `prev` is called when handling cop request
     pub prev: usize,
+    // How many keys that's visible to user
     pub processed_keys: usize,
 }
 

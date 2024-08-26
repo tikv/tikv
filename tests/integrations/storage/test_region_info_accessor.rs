@@ -12,7 +12,11 @@ use collections::HashMap;
 use engine_rocks::RocksEngine;
 use kvproto::metapb::Region;
 use more_asserts::{assert_gt, assert_le};
-use raftstore::coprocessor::{RegionInfoAccessor, RegionInfoProvider};
+use pd_client::{RegionStat, RegionWriteCfCopDetail};
+use raftstore::coprocessor::{
+    region_info_accessor::{RaftStoreEvent, RegionActivity, RegionInfoQuery},
+    RegionInfoAccessor, RegionInfoProvider,
+};
 use test_raftstore::*;
 use tikv_util::HandyRwLock;
 
@@ -203,11 +207,21 @@ fn test_region_collection_get_top_regions() {
     let region_info_providers: HashMap<_, _> = rx.try_iter().collect();
     assert_eq!(region_info_providers.len(), 3);
     let regions = prepare_cluster(&mut cluster);
-    let mut regions = regions.into_iter().map(|r| r.get_id()).collect::<Vec<_>>();
-    regions.sort();
+    let mut region_ids = regions.iter().map(|r| r.get_id()).collect::<Vec<_>>();
+    region_ids.sort();
     let mut all_results = BTreeSet::<u64>::new();
     for node_id in cluster.get_node_ids() {
         let engine = &region_info_providers[&node_id];
+        for r in &regions {
+            let mut region_stat = RegionStat::default();
+            region_stat.cop_detail = RegionWriteCfCopDetail::new(10, 10, 10);
+            let _ = engine.scheduler().schedule(RegionInfoQuery::RaftStoreEvent(
+                RaftStoreEvent::UpdateRegionActivity {
+                    region: r.clone(),
+                    activity: RegionActivity { region_stat },
+                },
+            ));
+        }
 
         let result = engine
             .get_top_regions(NonZeroUsize::new(10))
@@ -217,7 +231,7 @@ fn test_region_collection_get_top_regions() {
             .collect::<Vec<_>>();
 
         for region_id in &result {
-            assert!(regions.contains(region_id));
+            assert!(region_ids.contains(region_id));
         }
         let len = result.len();
         if engine.region_leaders().read().unwrap().contains(&node_id) {
@@ -234,7 +248,7 @@ fn test_region_collection_get_top_regions() {
             .collect::<Vec<_>>();
         all_results.extend(result.iter());
     }
-    assert_eq!(all_results.into_iter().collect::<Vec<_>>(), regions);
+    assert_eq!(all_results.into_iter().collect::<Vec<_>>(), region_ids);
 
     for (_, p) in region_info_providers {
         p.stop();
