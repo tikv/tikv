@@ -43,41 +43,6 @@ pub use self::{
 pub type Key = Vec<u8>;
 pub type PdFuture<T> = BoxFuture<'static, Result<T>>;
 
-// Record the coprocessor details for region level.
-#[derive(Clone, Debug, Default)]
-pub struct RegionWriteCfCopDetail {
-    // How many times the `next` is called when handling cop request
-    pub next: usize,
-    // How many times the `prev` is called when handling cop request
-    pub prev: usize,
-    // How many keys that's visible to user
-    pub processed_keys: usize,
-}
-
-impl RegionWriteCfCopDetail {
-    pub fn new(next: usize, prev: usize, processed_keys: usize) -> Self {
-        Self {
-            next,
-            prev,
-            processed_keys,
-        }
-    }
-
-    pub fn add(&mut self, other: &RegionWriteCfCopDetail) {
-        self.next += other.next;
-        self.prev += other.prev;
-        self.processed_keys += other.processed_keys;
-    }
-
-    pub fn sub(&self, other: &RegionWriteCfCopDetail) -> Self {
-        Self::new(
-            self.next - other.next,
-            self.prev - other.prev,
-            self.processed_keys - other.processed_keys,
-        )
-    }
-}
-
 #[derive(Default, Clone, Debug)]
 pub struct RegionStat {
     pub down_peers: Vec<pdpb::PeerStats>,
@@ -87,6 +52,8 @@ pub struct RegionStat {
     pub read_bytes: u64,
     pub read_keys: u64,
     pub query_stats: QueryStats,
+    // Now, this info is not sent to PD (maybe in the future). It is needed here to make it
+    // collected by region collector.
     pub cop_detail: RegionWriteCfCopDetail,
     pub approximate_size: u64,
     pub approximate_keys: u64,
@@ -599,4 +566,39 @@ fn check_update_service_safe_point_resp(
         });
     }
     Ok(())
+}
+
+// Record the coprocessor details for region level.
+#[derive(Clone, Debug, Default)]
+pub struct RegionWriteCfCopDetail {
+    // How many times the `next` is called when handling cop request
+    pub next: usize,
+    // How many times the `prev` is called when handling cop request
+    pub prev: usize,
+    // How many keys that's visible to user
+    pub processed_keys: usize,
+}
+
+impl RegionWriteCfCopDetail {
+    pub fn new(next: usize, prev: usize, processed_keys: usize) -> Self {
+        Self {
+            next,
+            prev,
+            processed_keys,
+        }
+    }
+
+    pub fn add(&mut self, other: &RegionWriteCfCopDetail) {
+        self.next += other.next;
+        self.prev += other.prev;
+        self.processed_keys += other.processed_keys;
+    }
+
+    pub fn sub(&self, other: &RegionWriteCfCopDetail) -> Self {
+        Self::new(
+            self.next - other.next,
+            self.prev - other.prev,
+            self.processed_keys - other.processed_keys,
+        )
+    }
 }
