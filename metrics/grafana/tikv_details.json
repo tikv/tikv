@@ -52051,7 +52051,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum((\n    tikv_lock_manager_detector_send_channel_queued_counter\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
+              "expr": "sum(rate(\n    tikv_lock_manager_detector_send_channel_queued_counter\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance) ",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -52059,14 +52059,14 @@
               "intervalFactor": 1,
               "legendFormat": "queued",
               "metric": "",
-              "query": "sum((\n    tikv_lock_manager_detector_send_channel_queued_counter\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
+              "query": "sum(rate(\n    tikv_lock_manager_detector_send_channel_queued_counter\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance) ",
               "refId": "",
               "step": 10,
               "target": ""
             },
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum((\n    tikv_lock_manager_detector_send_channel_queued_counter\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
+              "expr": "sum(rate(\n    tikv_lock_manager_detector_send_channel_sent_counter\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance) ",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -52074,7 +52074,7 @@
               "intervalFactor": 1,
               "legendFormat": "sent",
               "metric": "",
-              "query": "sum((\n    tikv_lock_manager_detector_send_channel_queued_counter\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
+              "query": "sum(rate(\n    tikv_lock_manager_detector_send_channel_sent_counter\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -52102,7 +52102,7 @@
           "yaxes": [
             {
               "decimals": null,
-              "format": "none",
+              "format": "ops",
               "label": null,
               "logBase": 1,
               "max": null,

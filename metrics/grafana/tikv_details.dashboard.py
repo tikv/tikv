@@ -7406,16 +7406,17 @@ def PessimisticLocking() -> RowPanel:
             graph_panel(
                 title="Deadlock detector channel",
                 description="The counter of the deadlock detector rpc channel",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
                 targets=[
                     target(
-                        expr=expr_sum(
+                        expr=expr_sum_rate(
                             "tikv_lock_manager_detector_send_channel_queued_counter"
                         ),
                         legend_format="queued",
                     ),
                     target(
-                        expr=expr_sum(
-                            "tikv_lock_manager_detector_send_channel_queued_counter"
+                        expr=expr_sum_rate(
+                            "tikv_lock_manager_detector_send_channel_sent_counter"
                         ),
                         legend_format="sent",
                     ),
