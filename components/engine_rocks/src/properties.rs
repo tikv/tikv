@@ -567,6 +567,7 @@ pub fn get_range_stats(
         num_entries,
         num_versions: props.num_versions,
         num_rows: props.num_rows,
+        num_deletes: props.num_deletes,
     })
 }
 
