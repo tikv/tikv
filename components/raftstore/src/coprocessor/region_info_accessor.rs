@@ -659,7 +659,7 @@ impl RegionCollector {
                 .collect_vec();
 
             info!(
-                "get top k regions before filter";
+                "ime get top k regions before filter";
                 "count" => count,
                 "max_qps" => max_qps,
                 "regions" => ?debug,
@@ -689,7 +689,7 @@ impl RegionCollector {
                 .collect_vec();
 
             info!(
-                "get top k regions after filter";
+                "ime get top k regions after filter";
                 "count" => count,
                 "read_count" => debug.len(),
                 "max_qps" => max_qps,
