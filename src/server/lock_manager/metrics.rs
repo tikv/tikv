@@ -66,9 +66,14 @@ lazy_static! {
         "Heartbeat of the leader of the deadlock detector"
     )
     .unwrap();
-    pub static ref DETECTOR_SEND_CHANNEL_SIZE_GAUGE: IntGauge = register_int_gauge!(
-        "tikv_lock_manager_detector_send_buffer_size",
-        "Size of the send buffer of the deadlock detector"
+    pub static ref DETECTOR_SEND_CHANNEL_QUEUED_COUNTER: IntCounter = register_int_counter!(
+        "tikv_lock_manager_detector_send_channel_queued_counter",
+        "Counter of the msgs sent to the rpc channel of the deadlock detector"
+    )
+    .unwrap();
+    pub static ref DETECTOR_SEND_CHANNEL_SENT_COUNTER: IntCounter = register_int_counter!(
+        "tikv_lock_manager_detector_send_channel_sent_counter",
+        "Counter of the msgs sent from the rpc channel of the deadlock detector"
     )
     .unwrap();
     pub static ref WAITER_WAIT_TABLE_ESTIMATED_MEM: IntGauge = register_int_gauge!(

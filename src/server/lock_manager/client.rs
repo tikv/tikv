@@ -62,7 +62,7 @@ impl Client {
 
             sink.send_all(&mut rx.map(|r| {
                 // update metrics
-                DETECTOR_SEND_CHANNEL_SIZE_GAUGE.dec();
+                DETECTOR_SEND_CHANNEL_SENT_COUNTER.inc();
                 Ok((r, WriteFlags::default()))
             }))
             .await
@@ -82,14 +82,11 @@ impl Client {
     }
 
     pub fn detect(&self, req: DeadlockRequest) -> Result<()> {
-        DETECTOR_SEND_CHANNEL_SIZE_GAUGE.inc();
         self.sender
             .as_ref()
             .unwrap()
             .unbounded_send(req)
-            .map_err(|e| {
-                DETECTOR_SEND_CHANNEL_SIZE_GAUGE.dec();
-                Error::Other(box_err!(e))
-            })
+            .map(|_| DETECTOR_SEND_CHANNEL_QUEUED_COUNTER.inc())
+            .map_err(|e| Error::Other(box_err!(e)))
     }
 }

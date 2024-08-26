@@ -7385,10 +7385,6 @@ def PessimisticLocking() -> RowPanel:
                         expr=expr_sum("tikv_lock_manager_detector_total_keys"),
                         legend_format="keys",
                     ),
-                    target(
-                        expr=expr_sum("tikv_lock_manager_detector_send_channel_size"),
-                        legend_format="send_channel",
-                    ),
                 ],
             ),
             graph_panel(
@@ -7404,6 +7400,28 @@ def PessimisticLocking() -> RowPanel:
                 ],
             ),
         ],
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Deadlock detector channel",
+                description="The counter of the deadlock detector rpc channel",
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_lock_manager_detector_send_channel_queued_counter"
+                        ),
+                        legend_format="queued",
+                    ),
+                    target(
+                        expr=expr_sum(
+                            "tikv_lock_manager_detector_send_channel_queued_counter"
+                        ),
+                        legend_format="sent",
+                    ),
+                ],
+            )
+        ]
     )
     return layout.row_panel
 
