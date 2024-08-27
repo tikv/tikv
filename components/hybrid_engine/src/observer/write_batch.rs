@@ -1,7 +1,6 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{is_data_cf, KvEngine, Mutable, WriteBatch as _, WriteOptions};
-use kvproto::metapb::Region;
+use engine_traits::{is_data_cf, CacheRegion, KvEngine, Mutable, WriteBatch as _, WriteOptions};
 use raftstore::coprocessor::{
     dispatcher::BoxWriteBatchObserver, Coprocessor, CoprocessorHost, ObservableWriteBatch,
     WriteBatchObserver,
@@ -74,7 +73,7 @@ impl ObservableWriteBatch for HybridObservableWriteBatch {
     fn post_write_opt(&mut self) {
         self.cache_write_batch.maybe_compact_lock_cf();
     }
-    fn prepare_for_region(&mut self, region: &Region) {
+    fn prepare_for_region(&mut self, region: CacheRegion) {
         self.cache_write_batch.prepare_for_region(region);
     }
 }

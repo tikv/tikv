@@ -18,9 +18,9 @@ use encryption_export::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
-    CacheRange, CompactExt, Engines, Iterable, ManualCompactionOptions, MiscExt, Mutable, Peekable,
-    RaftEngineReadOnly, SnapshotContext, SyncMutable, WriteBatch, WriteBatchExt, CF_DEFAULT,
-    CF_RAFT,
+    CacheRegion, CompactExt, Engines, Iterable, ManualCompactionOptions, MiscExt, Mutable,
+    Peekable, RaftEngineReadOnly, SnapshotContext, SyncMutable, WriteBatch, WriteBatchExt,
+    CF_DEFAULT, CF_RAFT,
 };
 use file_system::IoRateLimiter;
 use futures::{self, channel::oneshot, executor::block_on, future::BoxFuture, StreamExt};
@@ -1010,12 +1010,7 @@ impl<T: Simulator> Cluster<T> {
         } else {
             let ctx = SnapshotContext {
                 read_ts: u64::MAX,
-                range: Some(CacheRange::new(
-                    DATA_MIN_KEY.to_vec(),
-                    DATA_MAX_KEY.to_vec(),
-                )),
-                region_id: 0,
-                epoch_version: 0,
+                region: Some(CacheRegion::new(0, 0, DATA_MIN_KEY, DATA_MAX_KEY)),
             };
             self.get_cf_with_snap_ctx(CF_DEFAULT, key, true, ctx)
         }
@@ -1027,12 +1022,7 @@ impl<T: Simulator> Cluster<T> {
         } else {
             let ctx = SnapshotContext {
                 read_ts: u64::MAX,
-                range: Some(CacheRange::new(
-                    DATA_MIN_KEY.to_vec(),
-                    DATA_MAX_KEY.to_vec(),
-                )),
-                region_id: 0,
-                epoch_version: 0,
+                region: Some(CacheRegion::new(0, 0, DATA_MIN_KEY, DATA_MAX_KEY)),
             };
             self.get_cf_with_snap_ctx(cf, key, true, ctx)
         }
@@ -1044,12 +1034,7 @@ impl<T: Simulator> Cluster<T> {
         } else {
             let ctx = SnapshotContext {
                 read_ts: u64::MAX,
-                range: Some(CacheRange::new(
-                    DATA_MIN_KEY.to_vec(),
-                    DATA_MAX_KEY.to_vec(),
-                )),
-                region_id: 0,
-                epoch_version: 0,
+                region: Some(CacheRegion::new(0, 0, DATA_MIN_KEY, DATA_MAX_KEY)),
             };
             self.get_cf_with_snap_ctx(CF_DEFAULT, key, true, ctx)
         }

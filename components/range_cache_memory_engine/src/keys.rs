@@ -8,7 +8,7 @@ use std::{
 };
 
 use bytes::{BufMut, Bytes};
-use engine_traits::CacheRange;
+use engine_traits::CacheRegion;
 use txn_types::{Key, TimeStamp};
 
 use crate::{memory_controller::MemoryController, write_batch::MEM_CONTROLLER_OVERHEAD};
@@ -232,7 +232,7 @@ pub fn encode_seek_for_prev_key(key: &[u8], seq: u64) -> InternalBytes {
 
 // range keys deos not contain mvcc version and sequence number
 #[inline]
-pub fn encode_key_for_boundary_with_mvcc(range: &CacheRange) -> (InternalBytes, InternalBytes) {
+pub fn encode_key_for_boundary_with_mvcc(range: &CacheRegion) -> (InternalBytes, InternalBytes) {
     // Both encoded_start and encoded_end should be the smallest key in the
     // respective of user key (with mvcc version), so that the iterations cover all
     // versions of the range start and covers nothing of range end.
@@ -252,7 +252,7 @@ pub fn encode_key_for_boundary_with_mvcc(range: &CacheRange) -> (InternalBytes, 
 }
 
 #[inline]
-pub fn encode_key_for_boundary_without_mvcc(range: &CacheRange) -> (InternalBytes, InternalBytes) {
+pub fn encode_key_for_boundary_without_mvcc(range: &CacheRegion) -> (InternalBytes, InternalBytes) {
     // Both encoded_start and encoded_end should be the smallest key in the
     // respective of user key (without mvcc version), so that the iterations cover
     // all versions of the range start and covers nothing of range end.

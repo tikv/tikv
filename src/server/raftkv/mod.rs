@@ -624,10 +624,8 @@ where
             // When range cache engine is enabled, we need snapshot context to determine
             // whether we should use range cache engine snapshot for this request.
             ctx.start_ts.map(|ts| SnapshotContext {
-                region_id: 0,
-                epoch_version: 0,
+                region: None,
                 read_ts: ts.into_inner(),
-                range: None,
             })
         } else {
             None
