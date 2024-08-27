@@ -1885,7 +1885,7 @@ mod tests {
 
         let sp_provider = MockSafePointProvider(200);
         let mut host = CoprocessorHost::<RocksEngine>::default();
-        let ri_provider = RegionInfoAccessor::new(&mut host, Arc::new(|| false));
+        let ri_provider = RegionInfoAccessor::new(&mut host, Arc::new(|| false), 0);
 
         let mut gc_config = GcConfig::default();
         gc_config.num_threads = 2;
@@ -2000,7 +2000,7 @@ mod tests {
         r1.mut_peers()[0].set_store_id(store_id);
 
         let mut host = CoprocessorHost::<RocksEngine>::default();
-        let ri_provider = RegionInfoAccessor::new(&mut host, Arc::new(|| false));
+        let ri_provider = RegionInfoAccessor::new(&mut host, Arc::new(|| false), 0);
         host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
 
         let db = engine.kv_engine().unwrap().as_inner().clone();
@@ -2064,7 +2064,7 @@ mod tests {
         r1.mut_peers()[0].set_store_id(store_id);
 
         let mut host = CoprocessorHost::<RocksEngine>::default();
-        let ri_provider = Arc::new(RegionInfoAccessor::new(&mut host, Arc::new(|| false)));
+        let ri_provider = Arc::new(RegionInfoAccessor::new(&mut host, Arc::new(|| false), 0));
         host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
         // Init env end...
 
@@ -2165,7 +2165,7 @@ mod tests {
         r1.mut_peers()[0].set_store_id(1);
 
         let mut host = CoprocessorHost::<RocksEngine>::default();
-        let ri_provider = Arc::new(RegionInfoAccessor::new(&mut host, Arc::new(|| false)));
+        let ri_provider = Arc::new(RegionInfoAccessor::new(&mut host, Arc::new(|| false), 0));
         host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
 
         let db = engine.kv_engine().unwrap().as_inner().clone();

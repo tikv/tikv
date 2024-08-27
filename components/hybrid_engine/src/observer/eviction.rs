@@ -6,9 +6,9 @@ use engine_traits::{CacheRange, EvictReason, KvEngine, RangeCacheEngineExt, Regi
 use kvproto::{metapb::Region, raft_cmdpb::AdminCmdType, raft_serverpb::RaftApplyState};
 use raft::StateRole;
 use raftstore::coprocessor::{
-    AdminObserver, ApplyCtxInfo, BoxAdminObserver, BoxCmdObserver, BoxQueryObserver,
-    BoxRoleObserver, Cmd, CmdBatch, CmdObserver, Coprocessor, CoprocessorHost, ObserveLevel,
-    ObserverContext, QueryObserver, RegionState, RoleObserver,
+    AdminObserver, ApplyCtxInfo, ApplySnapshotObserver, BoxAdminObserver, BoxApplySnapshotObserver,
+    BoxCmdObserver, BoxQueryObserver, BoxRoleObserver, Cmd, CmdBatch, CmdObserver, Coprocessor,
+    CoprocessorHost, ObserveLevel, ObserverContext, QueryObserver, RegionState, RoleObserver,
 };
 use tikv_util::info;
 
@@ -44,14 +44,17 @@ impl EvictionObserver {
         coprocessor_host
             .registry
             .register_admin_observer(priority, BoxAdminObserver::new(self.clone()));
+        // Evict cache when a peer applies snapshot.
+        // Applying snapshot changes the data in rocksdb but not IME,
+        // so we trigger region eviction to keep compatibility.
+        coprocessor_host.registry.register_apply_snapshot_observer(
+            priority,
+            BoxApplySnapshotObserver::new(self.clone()),
+        );
         // Evict cache when a leader steps down.
         coprocessor_host
             .registry
             .register_role_observer(priority, BoxRoleObserver::new(self.clone()));
-
-        // NB: We do not evict the cache when applying a snapshot because
-        // the peer must be in the follower role during this process.
-        // The cache is already evicted when the leader steps down.
     }
 
     fn post_exec_cmd(
@@ -122,11 +125,12 @@ impl EvictionObserver {
         }
     }
 
-    fn evict_range_on_leader_steps_down(&self, region: &Region) {
+    fn evict_region_range(&self, region: &Region, reason: EvictReason) {
         let range = CacheRange::from_region(region);
         info!(
-           "ime evict region due to leader step down";
+           "ime evict region";
            "region_id" => region.get_id(),
+           "reason" => ?reason,
            "epoch" => ?region.get_region_epoch(),
            "start_key" => ?log_wrappers::Value(&region.start_key),
            "end_key" => ?log_wrappers::Value(&region.end_key),
@@ -136,7 +140,7 @@ impl EvictionObserver {
             .unwrap()
             .push(RegionEvent::Eviction {
                 region: region.clone(),
-                reason: EvictReason::BecomeFollower,
+                reason,
             });
     }
 }
@@ -175,6 +179,21 @@ impl AdminObserver for EvictionObserver {
     }
 }
 
+impl ApplySnapshotObserver for EvictionObserver {
+    fn post_apply_snapshot(
+        &self,
+        ctx: &mut ObserverContext<'_>,
+        _: u64,
+        _: &raftstore::store::SnapKey,
+        _: Option<&raftstore::store::Snapshot>,
+    ) {
+        // While currently, we evict cached region after leader step down.
+        // A region can may still be loaded when it's leader. E.g, to pre-load
+        // some hot regions before transfering leader.
+        self.evict_region_range(ctx.region(), EvictReason::ApplySnapshot)
+    }
+}
+
 impl RoleObserver for EvictionObserver {
     fn on_role_change(
         &self,
@@ -184,7 +203,7 @@ impl RoleObserver for EvictionObserver {
         if let StateRole::Follower = change.state
             && change.initialized
         {
-            self.evict_range_on_leader_steps_down(ctx.region())
+            self.evict_region_range(ctx.region(), EvictReason::BecomeFollower)
         }
     }
 }

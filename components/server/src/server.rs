@@ -412,6 +412,7 @@ where
         let region_info_accessor = RegionInfoAccessor::new(
             coprocessor_host.as_mut().unwrap(),
             region_stats_manager_enabled_cb,
+            config.range_cache_engine.mvcc_amplification_threshold,
         );
 
         // Initialize concurrency manager
