@@ -1,8 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use kvproto::metapb::Region;
-
-use crate::{errors::Result, options::WriteOptions};
+use crate::{errors::Result, options::WriteOptions, CacheRegion};
 
 /// Engines that can create write batches
 pub trait WriteBatchExt: Sized {
@@ -128,5 +126,5 @@ pub trait WriteBatch: Mutable {
 
     /// It declares that the following consecutive write will be within this
     /// region.
-    fn prepare_for_region(&mut self, _: &Region) {}
+    fn prepare_for_region(&mut self, _: CacheRegion) {}
 }

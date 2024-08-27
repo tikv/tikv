@@ -7,11 +7,11 @@ use std::{
 
 use engine_rocks::RocksSstWriterBuilder;
 use engine_traits::{
-    CacheRange, EvictReason, RangeCacheEngine, SnapshotContext, SstWriter, SstWriterBuilder,
+    CacheRegion, EvictReason, RangeCacheEngine, SnapshotContext, SstWriter, SstWriterBuilder,
     CF_DEFAULT, CF_WRITE,
 };
 use file_system::calc_crc32_bytes;
-use keys::data_key;
+use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};
 use kvproto::{
     import_sstpb::SstMeta,
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request},
@@ -37,16 +37,15 @@ fn test_basic_put_get() {
         let region = cluster.get_region(b"k");
         let rid = region.id;
         let mut core = range_cache_engine.core().write();
-        core.mut_range_manager().new_region(region);
+        core.mut_range_manager()
+            .new_region(CacheRegion::from_region(&region));
         core.mut_range_manager().set_safe_point(rid, 1000);
     }
 
     cluster.put(b"k05", b"val").unwrap();
     let snap_ctx = SnapshotContext {
-        region_id: 0,
-        epoch_version: 0,
         read_ts: 1001,
-        range: None,
+        region: None,
     };
     let (tx, rx) = sync_channel(1);
     fail::cfg_callback("on_range_cache_get_value", move || {
@@ -95,9 +94,15 @@ fn test_load() {
         let r2 = cluster.get_region(&split_key2);
         let range_cache_engine = cluster.get_range_cache_engine(1);
         let mut core = range_cache_engine.core().write();
-        core.mut_range_manager().load_region(r).unwrap();
-        core.mut_range_manager().load_region(r1).unwrap();
-        core.mut_range_manager().load_region(r2).unwrap();
+        core.mut_range_manager()
+            .load_region(CacheRegion::from_region(&r))
+            .unwrap();
+        core.mut_range_manager()
+            .load_region(CacheRegion::from_region(&r1))
+            .unwrap();
+        core.mut_range_manager()
+            .load_region(CacheRegion::from_region(&r2))
+            .unwrap();
     }
 
     // put key to trigger load task
@@ -131,10 +136,8 @@ fn test_load() {
     .unwrap();
 
     let snap_ctx = SnapshotContext {
-        region_id: 0,
-        epoch_version: 0,
         read_ts: 20,
-        range: None,
+        region: None,
     };
 
     for i in 0..30 {
@@ -192,7 +195,9 @@ fn test_load_with_split() {
         // Load the whole range as if it is not splitted. Loading process should handle
         // it correctly.
         let cache_range = new_region(1, "", "");
-        core.mut_range_manager().load_region(cache_range).unwrap();
+        core.mut_range_manager()
+            .load_region(CacheRegion::from_region(&cache_range))
+            .unwrap();
     }
 
     rx.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -226,10 +231,8 @@ fn test_load_with_split() {
     .unwrap();
 
     let snap_ctx = SnapshotContext {
-        region_id: 0,
-        epoch_version: 0,
         read_ts: 20,
-        range: None,
+        region: None,
     };
 
     for i in 0..30 {
@@ -291,7 +294,7 @@ fn test_load_with_split2() {
         // try to load a region with old epoch and bigger range,
         // it should be updated to the real region range.
         core.mut_range_manager()
-            .load_region(new_region(r_split.id, "", ""))
+            .load_region(CacheRegion::new(r_split.id, 0, DATA_MIN_KEY, DATA_MAX_KEY))
             .unwrap();
     }
 
@@ -314,8 +317,8 @@ fn test_load_with_split2() {
         let range_cache_engine = cluster.get_range_cache_engine(1);
         let core = range_cache_engine.core().read();
         let meta = core.range_manager().region_meta(r_split.id).unwrap();
-        let split_range = CacheRange::from_region(&r_split);
-        assert_eq!(&split_range, meta.get_range());
+        let split_range = CacheRegion::from_region(&r_split);
+        assert_eq!(&split_range, meta.get_region());
     }
 
     fail::remove("on_handle_put");
@@ -327,10 +330,8 @@ fn test_load_with_split2() {
     })
     .unwrap();
     let snap_ctx = SnapshotContext {
-        region_id: 0,
-        epoch_version: 0,
         read_ts: 20,
-        range: None,
+        region: None,
     };
 
     let _ = cluster
@@ -375,7 +376,7 @@ fn test_load_with_eviction() {
         let mut core = range_cache_engine.core().write();
         // Load the whole range as if it is not splitted. Loading process should handle
         // it correctly.
-        let cache_range = new_region(1, "", "");
+        let cache_range = CacheRegion::new(1, 0, DATA_MIN_KEY, DATA_MAX_KEY);
         core.mut_range_manager().load_region(cache_range).unwrap();
     }
 
@@ -403,7 +404,7 @@ fn test_load_with_eviction() {
         let range_cache_engine = cluster.get_range_cache_engine(1);
         let mut tried_count = 0;
         while range_cache_engine
-            .snapshot(1, 0, CacheRange::from_region(&r), u64::MAX, u64::MAX)
+            .snapshot(CacheRegion::from_region(&r), u64::MAX, u64::MAX)
             .is_err()
             && tried_count < 5
         {
@@ -412,7 +413,7 @@ fn test_load_with_eviction() {
         }
         // Now, the range ["", "") should be cached
         let region = new_region(1, b"k10", "");
-        range_cache_engine.evict_region(&region, EvictReason::AutoEvict);
+        range_cache_engine.evict_region(&CacheRegion::from_region(&region), EvictReason::AutoEvict);
     }
 
     fail::remove("on_write_impl");
@@ -426,10 +427,8 @@ fn test_load_with_eviction() {
     .unwrap();
 
     let snap_ctx = SnapshotContext {
-        region_id: 0,
-        epoch_version: 0,
         read_ts: u64::MAX,
-        range: None,
+        region: None,
     };
     let val = cluster
         .get_cf_with_snap_ctx(CF_DEFAULT, b"k01", false, snap_ctx.clone())
@@ -452,7 +451,7 @@ fn test_evictions_after_transfer_leader() {
     let r = cluster.get_region(b"");
     cluster.must_transfer_leader(r.id, new_peer(1, 1));
 
-    let cache_region = new_region(1, "", "");
+    let cache_region = CacheRegion::new(1, 0, DATA_MIN_KEY, DATA_MAX_KEY);
     let range_cache_engine = {
         let range_cache_engine = cluster.get_range_cache_engine(1);
         let mut core = range_cache_engine.core().write();
@@ -462,24 +461,12 @@ fn test_evictions_after_transfer_leader() {
     };
 
     range_cache_engine
-        .snapshot(
-            cache_region.id,
-            0,
-            CacheRange::from_region(&cache_region),
-            100,
-            100,
-        )
+        .snapshot(cache_region.clone(), 100, 100)
         .unwrap();
 
     cluster.must_transfer_leader(r.id, new_peer(2, 2));
     range_cache_engine
-        .snapshot(
-            cache_region.id,
-            0,
-            CacheRange::from_region(&cache_region),
-            100,
-            100,
-        )
+        .snapshot(cache_region, 100, 100)
         .unwrap_err();
 }
 
@@ -491,41 +478,31 @@ fn test_eviction_after_merge() {
     cluster.must_split(&r, b"key1");
 
     let r = cluster.get_region(b"");
-    let range1 = CacheRange::from_region(&r);
+    let range1 = CacheRegion::from_region(&r);
     let r2 = cluster.get_region(b"key1");
-    let range2 = CacheRange::from_region(&r2);
+    let range2 = CacheRegion::from_region(&r2);
 
     let range_cache_engine = {
         let range_cache_engine = cluster.get_range_cache_engine(1);
         let mut core = range_cache_engine.core().write();
-        core.mut_range_manager().new_region(r.clone());
-        core.mut_range_manager().new_region(r2.clone());
+        core.mut_range_manager().new_region(range1.clone());
+        core.mut_range_manager().new_region(range2.clone());
         drop(core);
         range_cache_engine
     };
 
     range_cache_engine
-        .snapshot(r.id, r.get_region_epoch().version, range1.clone(), 100, 100)
+        .snapshot(range1.clone(), 100, 100)
         .unwrap();
     range_cache_engine
-        .snapshot(
-            r2.id,
-            r2.get_region_epoch().version,
-            range2.clone(),
-            100,
-            100,
-        )
+        .snapshot(range2.clone(), 100, 100)
         .unwrap();
 
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.must_merge(r.get_id(), r2.get_id());
 
-    range_cache_engine
-        .snapshot(r.id, r.get_region_epoch().version, range1, 100, 100)
-        .unwrap_err();
-    range_cache_engine
-        .snapshot(r2.id, r2.get_region_epoch().version, range2, 100, 100)
-        .unwrap_err();
+    range_cache_engine.snapshot(range1, 100, 100).unwrap_err();
+    range_cache_engine.snapshot(range2, 100, 100).unwrap_err();
 }
 
 #[test]
@@ -544,23 +521,17 @@ fn test_eviction_after_ingest_sst() {
 
     // Add region r to cache.
     let region = cluster.get_region(b"");
-    let range = CacheRange::from_region(&region);
+    let cache_region = CacheRegion::from_region(&region);
     let range_cache_engine = {
         let range_cache_engine = cluster.get_range_cache_engine(1);
         let mut core = range_cache_engine.core().write();
-        core.mut_range_manager().new_region(region.clone());
+        core.mut_range_manager().new_region(cache_region.clone());
         drop(core);
         range_cache_engine
     };
 
     range_cache_engine
-        .snapshot(
-            region.id,
-            region.get_region_epoch().version,
-            range.clone(),
-            100,
-            100,
-        )
+        .snapshot(cache_region.clone(), 100, 100)
         .unwrap();
 
     // Ingest the sst file.
@@ -601,12 +572,6 @@ fn test_eviction_after_ingest_sst() {
     assert!(!resp.get_header().has_error(), "{:?}", resp);
 
     range_cache_engine
-        .snapshot(
-            region.id,
-            region.get_region_epoch().version,
-            range,
-            100,
-            100,
-        )
+        .snapshot(cache_region, 100, 100)
         .unwrap_err();
 }

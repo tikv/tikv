@@ -12,7 +12,7 @@ use std::{
 };
 
 use crossbeam::{atomic::AtomicCell, channel::TrySendError};
-use engine_traits::{CacheRange, KvEngine, Peekable, RaftEngine, SnapshotContext};
+use engine_traits::{CacheRegion, KvEngine, Peekable, RaftEngine, SnapshotContext};
 use fail::fail_point;
 use kvproto::{
     errorpb,
@@ -1071,9 +1071,7 @@ where
         match self.pre_propose_raft_command(&req) {
             Ok(Some((mut delegate, policy))) => {
                 if let Some(ref mut ctx) = snap_ctx {
-                    ctx.region_id = delegate.region.id;
-                    ctx.epoch_version = delegate.region.get_region_epoch().version;
-                    ctx.set_range(CacheRange::from_region(&delegate.region))
+                    ctx.set_region(CacheRegion::from_region(&delegate.region))
                 }
 
                 let mut snap_updated = false;
@@ -2602,10 +2600,8 @@ mod tests {
         }
 
         let snap_ctx = SnapshotContext {
-            region_id: 0,
-            epoch_version: 0,
             read_ts: 15,
-            range: None,
+            region: None,
         };
 
         let s = get_snapshot(Some(snap_ctx.clone()), &mut reader, cmd.clone(), &rx);
@@ -2685,9 +2681,7 @@ mod tests {
         reader.release_snapshot_cache();
         let snap_ctx = SnapshotContext {
             read_ts: 15,
-            range: None,
-            region_id: 0,
-            epoch_version: 0,
+            region: None,
         };
         reader.propose_raft_command(Some(snap_ctx), read_id, task.request, task.callback);
         assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);
