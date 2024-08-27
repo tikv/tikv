@@ -695,7 +695,12 @@ impl BackgroundRunnerCore {
 
         let mut regions_to_add = Vec::with_capacity(256);
         let mut regions_to_remove = Vec::with_capacity(256);
-        range_stats_manager.collect_changed_ranges(&mut regions_to_add, &mut regions_to_remove);
+        range_stats_manager.collect_regions_to_load(&mut regions_to_add);
+
+        let cached_regions = self.engine.read().range_manager().cached_regions();
+        let regions_to_remove =
+            range_stats_manager.collect_regions_to_evict(cached_regions, &self.memory_controller, self.);
+
         let mut regions_to_delete = Vec::with_capacity(regions_to_remove.len());
         info!("ime load_evict"; "ranges_to_add" => ?&regions_to_add, "may_evict" => ?&regions_to_remove);
         for evict_region in regions_to_remove {

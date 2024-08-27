@@ -319,6 +319,13 @@ impl RegionManager {
         self.regions.get_mut(&id)
     }
 
+    pub fn cached_regions(&self) -> Vec<u64> {
+        self.regions
+            .iter()
+            .filter(|(id, meta)| meta.state == RegionState::Active)
+            .collect::<Vec<_>>()
+    }
+
     pub fn iter_overlapped_regions(
         &self,
         range: &CacheRange,

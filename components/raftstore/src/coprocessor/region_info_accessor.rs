@@ -167,6 +167,10 @@ pub enum RegionInfoQuery {
         count: usize,
         callback: Callback<TopRegions>,
     },
+    GetRegionsActivity {
+        region_ids: Vec<u64>,
+        callback: Callback<Vec<RegionActivity>>,
+    },
     /// Gets all contents from the collection. Only used for testing.
     DebugDump(mpsc::Sender<(RegionsMap, RegionRangesMap)>),
 }
@@ -191,6 +195,9 @@ impl Display for RegionInfoQuery {
             ),
             RegionInfoQuery::GetTopRegions { count, .. } => {
                 write!(f, "GetTopRegions(count: {})", count)
+            }
+            RegionInfoQuery::GetRegionsActivity { region_ids, .. } => {
+                write!(f, "GetRegionsActivity(region_ids: {})", region_ids)
             }
             RegionInfoQuery::DebugDump(_) => write!(f, "DebugDump"),
         }
@@ -582,7 +589,7 @@ impl RegionCollector {
     /// region_activity. This is acceptable, as region_activity is populated
     /// by heartbeats for this node's region, so N cannot be greater than
     /// approximately `300_000``.
-    pub fn handle_get_top_regions(&mut self, count: usize, callback: Callback<TopRegions>) {
+    pub fn handle_get_top_regions(&self, count: usize, callback: Callback<TopRegions>) {
         let compare_fn = |a: &RegionActivity, b: &RegionActivity| {
             let a = a.region_stat.cop_detail.next + a.region_stat.cop_detail.prev;
             let b = b.region_stat.cop_detail.next + b.region_stat.cop_detail.prev;
@@ -705,6 +712,19 @@ impl RegionCollector {
         )
     }
 
+    fn handle_get_regions_activity(
+        &self,
+        region_ids: Vec<u64>,
+        callback: Callback<Vec<RegionActivity>>,
+    ) {
+        callback(
+            region_ids
+                .into_iter()
+                .filter_map(|id| self.region_activity.get(&id).cloned())
+                .collect_vec(),
+        )
+    }
+
     fn handle_raftstore_event(&mut self, event: RaftStoreEvent) {
         {
             let region = event.get_region();
@@ -784,6 +804,12 @@ impl Runnable for RegionCollector {
             }
             RegionInfoQuery::GetTopRegions { count, callback } => {
                 self.handle_get_top_regions(count, callback);
+            }
+            RegionInfoQuery::GetRegionsActivity {
+                region_ids,
+                callback,
+            } => {
+                self.handle_get_regions_activity(region_ids, callback);
             }
             RegionInfoQuery::DebugDump(tx) => {
                 tx.send((self.regions.clone(), self.region_ranges.clone()))
@@ -918,7 +944,12 @@ pub trait RegionInfoProvider: Send + Sync {
     fn get_regions_in_range(&self, _start_key: &[u8], _end_key: &[u8]) -> Result<Vec<Region>> {
         unimplemented!()
     }
+
     fn get_top_regions(&self, _count: Option<NonZeroUsize>) -> Result<TopRegions> {
+        unimplemented!()
+    }
+
+    fn get_regions_activity(&self, region_ids: Vec<u64>) -> Result<Vec<RegionActivity>> {
         unimplemented!()
     }
 }
@@ -1010,6 +1041,32 @@ impl RegionInfoProvider for RegionInfoAccessor {
                 rx.recv().map_err(|e| {
                     box_err!(
                         "failed to receive get_top_regions result from region_collector: {:?}",
+                        e
+                    )
+                })
+            })
+    }
+
+    fn get_regions_activity(&self, region_ids: Vec<u64>) -> Result<Vec<RegionActivity>> {
+        let (tx, rx) = mpsc::channel();
+        let msg = RegionInfoQuery::GetRegionsActivity {
+            region_ids,
+            callback: Box::new(move |regions_activity| {
+                if let Err(e) = tx.send(regions_activity) {
+                    warn!("failed to send get_regions_activity result: {:?}", e);
+                }
+            }),
+        };
+        self.scheduler
+            .schedule(msg)
+            .map_err(box_err!(
+                "failed to send request to region collector: {:?}",
+                e
+            ))
+            .and_then(|_| {
+                rx.recv().map_err(|e| {
+                    box_err!(
+                        "failed to receive get_regions_activity result from region_collector: {:?}",
                         e
                     )
                 })

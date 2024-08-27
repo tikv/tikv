@@ -16,6 +16,8 @@ use parking_lot::Mutex;
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::info;
 
+use crate::memory_controller::MemoryController;
+
 #[derive(Clone)]
 pub(crate) struct RangeStatsManager {
     num_regions: Arc<AtomicUsize>,
@@ -194,11 +196,7 @@ impl RangeStatsManager {
     ///     unchanged but the activity order changed.
     ///   - Removed regions - regions included in previous results - but not the
     ///     current ones are stored in `ranges_removed_out`.
-    pub fn collect_changed_ranges(
-        &self,
-        regions_added_out: &mut Vec<Region>,
-        regions_removed_out: &mut Vec<Region>,
-    ) {
+    pub fn collect_regions_to_load(&self, regions_added_out: &mut Vec<Region>) {
         info!("ime collect_changed_ranges"; "num_regions" => self.max_num_regions());
         let curr_top_regions = self
             .info_provider
@@ -227,26 +225,30 @@ impl RangeStatsManager {
             .iter()
             .filter(|(id, _)| !prev_top_regions.contains_key(id))
             .map(|(_, region)| region.clone());
-        let regions_loaded = self.region_loaded_at.read().unwrap();
-        let removed_ranges = prev_top_regions.iter().filter_map(|(&id, region)| {
-            if !curr_top_regions.contains_key(&id) {
-                match regions_loaded.get(&id) {
-                    // Do not evict ranges that were loaded less than `EVICT_MIN_DURATION` ago.
-                    Some(&time_loaded)
-                        if Instant::now() - time_loaded < self.evict_min_duration =>
-                    {
-                        let mut mut_prev_top_regions = self.prev_top_regions.lock();
-                        let _ = mut_prev_top_regions.insert(id, region.clone());
-                        None
-                    }
-                    _ => Some(region.clone()),
-                }
-            } else {
-                None
-            }
-        });
         regions_added_out.extend(added_ranges);
-        regions_removed_out.extend(removed_ranges);
+    }
+
+    pub fn collect_regions_to_evict(
+        &self,
+        cached_region_ids: Vec<u64>,
+        memory_controller: &MemoryController,
+    ) -> Vec<u64> {
+        let mut regions_activity = self
+            .info_provider
+            .get_regions_activity(cached_region_ids)
+            .unwrap();
+
+        if !memory_controller.reached_stop_load_limit() {
+            regions_activity.iter().filter(|r| r.region_stat.cop_detail.mvcc_amplification() <= 2.0).collect()
+        } else if !memory_controller.reached_soft_limit() {
+            // limit the count
+            regions_activity.iter().filter(|r| r.region_stat.cop_detail.mvcc_amplification() <= 5.0).collect()
+        } else {
+            // better one by one
+            regions_activity.sort_by(|a, b| {
+                a.region_stat.
+            })
+        }
     }
 }
 
@@ -312,14 +314,14 @@ pub mod tests {
         );
         let mut added = Vec::new();
         let mut removed = Vec::new();
-        rsm.collect_changed_ranges(&mut added, &mut removed);
+        rsm.collect_regions_to_load(&mut added, &mut removed);
         assert_eq!(&added, &[region_1.clone()]);
         assert!(removed.is_empty());
         let top_regions = vec![(region_1.clone(), 42), (region_2.clone(), 7)];
         sim.set_top_regions(&top_regions);
         added.clear();
         removed.clear();
-        rsm.collect_changed_ranges(&mut added, &mut removed);
+        rsm.collect_regions_to_load(&mut added, &mut removed);
         assert_eq!(&added, &[region_2.clone()]);
         assert!(removed.is_empty());
         let region_3 = new_region(3, b"k5", b"k6");
@@ -336,14 +338,14 @@ pub mod tests {
         sim.set_top_regions(&top_regions);
         added.clear();
         removed.clear();
-        rsm.collect_changed_ranges(&mut added, &mut removed);
+        rsm.collect_regions_to_load(&mut added, &mut removed);
         assert_eq!(&added, &[region_3, region_4, region_5, region_6]);
         // `region_1` is no longer in the top regions list, but since it was loaded less
         // than 10 ms ago, it should not be included in the removed ranges.
         assert!(removed.is_empty());
         std::thread::sleep(Duration::from_millis(100));
         // After 100 ms passed, check again, and verify `region_1` is evictable.
-        rsm.collect_changed_ranges(&mut added, &mut removed);
+        rsm.collect_regions_to_load(&mut added, &mut removed);
         assert_eq!(&removed, &[region_1.clone()]);
     }
 
@@ -380,7 +382,7 @@ pub mod tests {
         };
         let mut _added = Vec::new();
         let mut _removed = Vec::new();
-        rsm.collect_changed_ranges(&mut _added, &mut _removed);
+        rsm.collect_regions_to_load(&mut _added, &mut _removed);
         let mut candidates_for_eviction = Vec::new();
         rsm.collect_candidates_for_eviction(&mut candidates_for_eviction, &check_is_cached);
         assert!(candidates_for_eviction.is_empty());

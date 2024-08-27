@@ -86,6 +86,11 @@ impl MemoryController {
     }
 
     #[inline]
+    pub(crate) fn reached_stop_load_limit(&self) -> bool {
+        self.mem_usage() >= self.config.value().soft_limit_threshold()
+    }
+
+    #[inline]
     pub(crate) fn reached_soft_limit(&self) -> bool {
         self.mem_usage() >= self.config.value().soft_limit_threshold()
     }
