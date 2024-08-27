@@ -1518,6 +1518,10 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
         let region_info_accessor = RegionInfoAccessor::new(
             &mut coprocessor_host,
             Arc::new(|| false), // Not applicable to v2.
+            self.core
+                .config
+                .range_cache_engine
+                .mvcc_amplification_threshold,
         );
 
         let cdc_worker = Box::new(LazyWorker::new("cdc"));

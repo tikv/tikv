@@ -188,7 +188,7 @@ fn test_node_cluster_region_info_accessor() {
         .wl()
         .post_create_coprocessor_host(Box::new(move |id, host| {
             if id == 1 {
-                let c = RegionInfoAccessor::new(host, Arc::new(|| false));
+                let c = RegionInfoAccessor::new(host, Arc::new(|| false), 0);
                 tx.send(c).unwrap();
             }
         }));
