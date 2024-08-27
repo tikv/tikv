@@ -34,7 +34,6 @@ pub const REGION_SPLIT_SIZE: u64 = 30000;
 
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
-#[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_server_base_split_region() {
     let test_base_split_region = |right_derive| {
         let count = 5;
@@ -107,7 +106,6 @@ fn test_server_base_split_region() {
 
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
-#[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_server_split_region_twice() {
     let count = 5;
     let mut cluster = new_cluster(0, count);
@@ -159,7 +157,6 @@ fn test_server_split_region_twice() {
 #[test_case(test_raftstore::new_incompatible_node_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
-#[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_auto_split_region() {
     let count = 5;
     let mut cluster = new_cluster(0, count);
@@ -295,7 +292,6 @@ macro_rules! check_cluster {
 /// sure broadcast commit is disabled when split.
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
-#[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_delay_split_region() {
     let mut cluster = new_cluster(0, 3);
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(500);
@@ -352,7 +348,6 @@ fn test_delay_split_region() {
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
-#[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_node_split_overlap_snapshot() {
     let mut cluster = new_cluster(0, 3);
     // We use three nodes([1, 2, 3]) for this test.
@@ -409,7 +404,6 @@ fn test_node_split_overlap_snapshot() {
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
-#[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_apply_new_version_snapshot() {
     let mut cluster = new_cluster(0, 3);
     // truncate the log quickly so that we can force sending snapshot.
@@ -466,7 +460,6 @@ fn test_apply_new_version_snapshot() {
 
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
-#[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_server_split_with_stale_peer() {
     let mut cluster = new_cluster(0, 3);
     // disable raft log gc.
@@ -540,7 +533,6 @@ fn test_server_split_with_stale_peer() {
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
-#[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_split_region_diff_check() {
     let count = 1;
     let mut cluster = new_cluster(0, count);
@@ -594,7 +586,6 @@ fn test_split_region_diff_check() {
 // verify the region is splitted.
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
-#[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_node_split_region_after_reboot_with_config_change() {
     let count = 1;
     let mut cluster = new_cluster(0, count);
@@ -736,7 +727,6 @@ fn test_node_split_epoch_not_match_right_derive() {
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
-#[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_node_quick_election_after_split() {
     let mut cluster = new_cluster(0, 3);
 
@@ -775,7 +765,6 @@ fn test_node_quick_election_after_split() {
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
-#[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_node_split_region() {
     let count = 5;
     let mut cluster = new_cluster(0, count);
@@ -816,7 +805,6 @@ fn test_node_split_region() {
 
 #[test_case(test_raftstore::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
-#[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_node_split_update_region_right_derive() {
     let mut cluster = new_cluster(0, 3);
     // Election timeout and max leader lease is 1s.
@@ -872,7 +860,6 @@ fn test_node_split_update_region_right_derive() {
 
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
-#[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_split_with_epoch_not_match() {
     let mut cluster = new_cluster(0, 3);
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -908,7 +895,6 @@ fn test_split_with_epoch_not_match() {
 
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
-#[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_split_with_in_memory_pessimistic_locks() {
     let mut cluster = new_cluster(0, 3);
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -1250,7 +1236,6 @@ fn test_gen_split_check_bucket_ranges() {
 
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
-#[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_catch_up_peers_after_split() {
     let mut cluster = new_cluster(0, 3);
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -1321,7 +1306,6 @@ fn test_split_region_keep_records() {
 
 #[test_case(test_raftstore::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
-#[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_node_slow_split_does_not_cause_snapshot() {
     // We use three nodes([1, 2, 3]) for this test.
     let mut cluster = new_cluster(0, 3);

@@ -935,17 +935,6 @@ pub fn new_server_cluster(id: u64, count: usize) -> Cluster<ServerCluster> {
     Cluster::new(id, count, sim, pd_client, ApiVersion::V1)
 }
 
-// the hybrid engine with disk engine "RocksEngine" and region cache engine
-// "RangeCacheMemoryEngine" is used in the server cluster.
-pub fn new_server_cluster_with_hybrid_engine(id: u64, count: usize) -> Cluster<ServerCluster> {
-    let pd_client = Arc::new(TestPdClient::new(id, false));
-    let sim = Arc::new(RwLock::new(ServerCluster::new(Arc::clone(&pd_client))));
-    let mut cluster = Cluster::new(id, count, sim, pd_client, ApiVersion::V1);
-    cluster.range_cache_engine_enabled_with_whole_range(true);
-    cluster.cfg.tikv.range_cache_engine = RangeCacheEngineConfig::config_for_test();
-    cluster
-}
-
 pub fn new_server_cluster_with_hybrid_engine_with_no_range_cache(
     id: u64,
     count: usize,
