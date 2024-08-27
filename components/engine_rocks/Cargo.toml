@@ -59,7 +59,7 @@ txn_types = { workspace = true }
 
 [dependencies.rocksdb]
 git = "https://github.com/hbisheng/rust-rocksdb.git"
-branch = "8.10.tikv-optimize"
+branch = "8.10.tikv-haswell"
 package = "rocksdb"
 features = ["encryption"]
 
