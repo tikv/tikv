@@ -5,7 +5,7 @@ use std::{
     result,
 };
 
-use keys::{enc_end_key, enc_start_key, DATA_MAX_KEY, DATA_MIN_KEY};
+use keys::{enc_end_key, enc_start_key};
 use kvproto::metapb::Region;
 
 use crate::{Iterable, KvEngine, Snapshot, WriteBatchExt};
