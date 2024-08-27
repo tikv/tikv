@@ -11,7 +11,7 @@ use engine_traits::{
     CacheRegion, EvictReason, Mutable, RangeCacheEngine, RegionEvent, WriteBatch, WriteBatchExt,
     CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
-use keys::data_key;
+use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};
 use kvproto::metapb::Region;
 use range_cache_memory_engine::{
     decode_key, encode_key_for_boundary_without_mvcc, encoding_for_filter,
@@ -65,7 +65,7 @@ fn test_gc_worker() {
     let (write, default) = {
         let mut core = engine.core().write();
         core.mut_range_manager()
-            .new_region(CacheRegion::new(1, 0, b"", b"z"));
+            .new_region(CacheRegion::new(1, 0, DATA_MIN_KEY, DATA_MAX_KEY));
         let engine = core.engine();
         (engine.cf_handle(CF_WRITE), engine.cf_handle(CF_DEFAULT))
     };

@@ -5,7 +5,7 @@ use std::{
     result,
 };
 
-use keys::{enc_end_key, enc_start_key};
+use keys::{enc_end_key, enc_start_key, DATA_MAX_KEY, DATA_MIN_KEY};
 use kvproto::metapb::Region;
 
 use crate::{Iterable, KvEngine, Snapshot, WriteBatchExt};
@@ -153,7 +153,6 @@ impl CacheRegion {
 }
 
 impl CacheRegion {
-    // todo: need to consider ""?
     pub fn contains_range(&self, other: &CacheRegion) -> bool {
         self.start <= other.start && self.end >= other.end
     }
