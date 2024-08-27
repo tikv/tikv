@@ -1,10 +1,14 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::io::{self, Error, ErrorKind};
+use std::{
+    io::{self, Error, ErrorKind},
+    time::Duration,
+};
 
 use async_trait::async_trait;
 use cloud::metrics;
 use futures::{future::TryFutureExt, Future};
+use hyper::{client::HttpConnector, Body, Client as HyperClient, Request};
 use rusoto_core::{
     region::Region,
     request::{HttpClient, HttpConfig},
@@ -22,6 +26,11 @@ use tikv_util::{
 const READ_BUF_SIZE: usize = 1024 * 1024 * 2;
 
 const AWS_WEB_IDENTITY_TOKEN_FILE: &str = "AWS_WEB_IDENTITY_TOKEN_FILE";
+
+const AWS_CREDENTIALS_PROVIDER_IP: &str = "169.254.169.254";
+const AWS_CREDENTIALS_PROVIDER_PATH: &str = "latest/meta-data/iam/security-credentials";
+const AWS_EC2_METADATA_TOKEN_HEADER: &str = "X-aws-ec2-metadata-token";
+
 struct CredentialsErrorWrapper(CredentialsError);
 
 impl From<CredentialsErrorWrapper> for CredentialsError {
@@ -122,6 +131,9 @@ pub struct DefaultCredentialsProvider {
     default_provider: ChainProvider,
     // Provider IAM support in Kubernetes.
     web_identity_provider: WebIdentityProvider,
+    // imdsV2 provider for EC2 instance.
+    // rusoto does not support imdsV2 yet, so we need to implement it ourselves.
+    imdsv2_provider: InstanceMetadataProviderV2,
 }
 
 impl Default for DefaultCredentialsProvider {
@@ -129,6 +141,7 @@ impl Default for DefaultCredentialsProvider {
         DefaultCredentialsProvider {
             default_provider: ChainProvider::new(),
             web_identity_provider: WebIdentityProvider::from_k8s_env(),
+            imdsv2_provider: InstanceMetadataProviderV2::new(),
         }
     }
 }
@@ -180,12 +193,151 @@ impl ProvideAwsCredentials for DefaultCredentialsProvider {
             .map_err(|e| e.0)
         };
 
-        cred.map_err(|e| {
-            CredentialsError::new(format_args!(
-                "Couldn't find AWS credentials in sources ({}).",
-                e.message
-            ))
-        })
+        if cred.is_err() {
+            // try best effort to get credentials from imdsv2
+            retry_and_count(
+                || {
+                    self.imdsv2_provider
+                        .credentials()
+                        .map_err(|e| CredentialsErrorWrapper(e))
+                },
+                "get_cred_imdsv2",
+            )
+            .await
+            .map_err(|e| e.0)
+        } else {
+            Err(CredentialsError {
+                message: format!("Couldn't find AWS credentials in sources"),
+            })
+        }
+    }
+}
+
+pub struct InstanceMetadataProviderV2 {
+    client: HyperClient<HttpConnector>,
+    timeout: Duration,
+}
+
+impl InstanceMetadataProviderV2 {
+    /// Create a new provider with the given handle.
+    pub fn new() -> Self {
+        InstanceMetadataProviderV2 {
+            client: HyperClient::new(),
+            timeout: Duration::from_secs(30),
+        }
+    }
+}
+
+impl Default for InstanceMetadataProviderV2 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl ProvideAwsCredentials for InstanceMetadataProviderV2 {
+    async fn credentials(&self) -> Result<AwsCredentials, CredentialsError> {
+        let req = Request::put(
+            &format!(
+                "http://{}/latest/api/token",
+                AWS_CREDENTIALS_PROVIDER_IP)
+            )
+            .header("X-aws-ec2-metadata-token-ttl-seconds", "600")// 10 minute TTL
+            .body(Body::empty())
+            .map_err(|e| {
+                CredentialsError {
+                    message: format!("Failed to create IMDSv2 token request: {}", e),
+                }
+            })?;
+
+        let ec2_metadata_token = {
+            let ec2_metadata_token_future =
+                tokio::time::timeout(self.timeout, self.client.request(req))
+                    .await
+                    .map_err(|_| CredentialsError {
+                        message: "Timeout while requesting IMDSv2 token".to_owned(),
+                    })?;
+
+            let response = ec2_metadata_token_future.map_err(|e| CredentialsError {
+                message: format!("Error during request IMDSv2 token: {}", e),
+            })?;
+
+            String::from_utf8(hyper::body::to_bytes(response.into_body()).await?.to_vec()).map_err(
+                |e| CredentialsError {
+                    message: format!("Failed to parse IMDSv2 token as UTF-8: {}", e),
+                },
+            )?
+        };
+
+        // Taken from: https://docs.rs/rusoto_credential/0.46.0/src/rusoto_credential/instance_metadata.rs.html#44-48
+        let role_name_uri = format!(
+            "http://{}/{}/",
+            AWS_CREDENTIALS_PROVIDER_IP, AWS_CREDENTIALS_PROVIDER_PATH
+        );
+        let role_name = get_from_imdsv2(
+            &self.client,
+            self.timeout,
+            role_name_uri,
+            &ec2_metadata_token,
+        )
+        .await
+        .map_err(|err| CredentialsError {
+            message: format!("Could not get role name: {}", err.to_string()),
+        })?;
+
+        let role_uri = format!(
+            "http://{}/{}/{}",
+            AWS_CREDENTIALS_PROVIDER_IP, AWS_CREDENTIALS_PROVIDER_PATH, role_name
+        );
+
+        let cred_str = get_from_imdsv2(&self.client, self.timeout, role_uri, &ec2_metadata_token)
+            .await
+            .map_err(|err| CredentialsError {
+                message: format!(
+                    "Could not get credentials with role name: {}",
+                    err.to_string()
+                ),
+            })?;
+
+        let creds = serde_json::from_str::<AwsCredentials>(&cred_str)?;
+        Ok(creds)
+    }
+}
+
+/// Gets the role name/cred from imdsv2 according to uri.
+async fn get_from_imdsv2(
+    client: &HyperClient<HttpConnector>,
+    timeout: Duration,
+    uri: String,
+    ec2_metadata_token: &str,
+) -> Result<String, CredentialsError> {
+    let req = Request::get(uri)
+        .header(AWS_EC2_METADATA_TOKEN_HEADER, ec2_metadata_token)
+        .body(Body::empty())
+        .map_err(|e| CredentialsError {
+            message: format!("Failed to create IMDSv2 role request: {}", e),
+        })?;
+
+    match tokio::time::timeout(timeout, client.request(req)).await {
+        Ok(resp) => {
+            let resp = resp.map_err(|e| CredentialsError {
+                message: format!("Error during request IMDSv2 role: {}", e),
+            })?;
+            let body =
+                hyper::body::to_bytes(resp.into_body())
+                    .await
+                    .map_err(|e| CredentialsError {
+                        message: format!("Failed to parse IMDSv2 role as UTF-8: {}", e),
+                    })?;
+            String::from_utf8(body.to_vec()).map_err(|e| CredentialsError {
+                message: format!("Failed to parse IMDSv2 role as UTF-8: {}", e),
+            })
+        }
+        Err(_e) => {
+            return Err(CredentialsError {
+                message: "Timeout while requesting IMDSv2 role".to_owned(),
+            });
+        }
     }
 }
 
