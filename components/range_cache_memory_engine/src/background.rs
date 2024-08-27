@@ -407,8 +407,7 @@ impl BackgroundRunnerCore {
                 .get_history_regions_min_ts(region)
                 .unwrap_or(u64::MAX);
 
-            let Some(region_meta) = core.mut_range_manager().mut_region_meta(region.region_id)
-            else {
+            let Some(region_meta) = core.mut_range_manager().mut_region_meta(region.id) else {
                 return FilterMetrics::default();
             };
 
@@ -503,10 +502,7 @@ impl BackgroundRunnerCore {
         // Consume the cached write batch after the snapshot is acquired.
         let mut core = self.engine.write();
         // We still need to check whether the snapshot is canceled during the load
-        let region_meta = core
-            .mut_range_manager()
-            .mut_region_meta(region.region_id)
-            .unwrap();
+        let region_meta = core.mut_range_manager().mut_region_meta(region.id).unwrap();
         let mut remove_regions = vec![];
         let mut on_region_meta = |meta: &mut CacheRegionMeta| {
             assert!(
@@ -530,7 +526,7 @@ impl BackgroundRunnerCore {
         } else {
             // epoch version changed, should use scan to find all overlapped regions
             core.range_manager
-                .iter_overlapped_regions_mut(&region, |meta| {
+                .iter_overlapped_regions_mut(region, |meta| {
                     assert!(region.contains_range(meta.get_region()));
                     on_region_meta(meta);
                 });
@@ -564,10 +560,7 @@ impl BackgroundRunnerCore {
         started: bool,
     ) {
         let mut core = self.engine.write();
-        let region_meta = core
-            .range_manager
-            .mut_region_meta(region.region_id)
-            .unwrap();
+        let region_meta = core.range_manager.mut_region_meta(region.id).unwrap();
         let mut remove_regions = vec![];
 
         let mut mark_region_evicted = |meta: &mut CacheRegionMeta| {
@@ -931,10 +924,7 @@ impl Runnable for BackgroundRunner {
                     let mut is_canceled = false;
                     let skiplist_engine = {
                         let engine = core.engine.read();
-                        let region_meta = engine
-                            .range_manager()
-                            .region_meta(region.region_id)
-                            .unwrap();
+                        let region_meta = engine.range_manager().region_meta(region.id).unwrap();
                         // if loading is canceled, we skip the batch load.
                         // NOTE: here we don't check the region epoch version change,
                         // We will handle possible region split and partial cancelation
@@ -1257,7 +1247,7 @@ impl Runnable for DeleteRangeRunner {
                     let mut regions_to_delay = vec![];
                     let mut regions_to_delete = vec![];
                     for r in regions {
-                        let region_meta = core.range_manager.region_meta(r.region_id).unwrap();
+                        let region_meta = core.range_manager.region_meta(r.id).unwrap();
                         assert_eq!(region_meta.get_region().epoch_version, r.epoch_version);
                         assert_eq!(region_meta.get_state(), RegionState::Evicting);
                         // If the range is overlapped with ranges in `ranges_being_written`, the
@@ -1555,6 +1545,7 @@ pub mod tests {
     };
     use futures::future::ready;
     use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};
+    use kvproto::metapb::Region;
     use online_config::{ConfigChange, ConfigManager, ConfigValue};
     use pd_client::PdClient;
     use tempfile::Builder;
@@ -1826,7 +1817,7 @@ pub mod tests {
         )));
         let memory_controller = engine.memory_controller();
         let region = new_region(1, b"", b"z");
-        let range = CacheRegion::from_region(&region);
+        let cache_region = CacheRegion::from_region(&region);
         engine.new_region(region.clone());
 
         let (write, default) = {
@@ -1896,11 +1887,11 @@ pub mod tests {
         delete_data(b"key2", 40, 18, &write, memory_controller.clone());
 
         let snap = engine
-            .snapshot(1, 0, range.clone(), u64::MAX, u64::MAX)
+            .snapshot(cache_region.clone(), u64::MAX, u64::MAX)
             .unwrap();
         let mut iter_opts = IterOptions::default();
-        iter_opts.set_lower_bound(&range.start, 0);
-        iter_opts.set_upper_bound(&range.end, 0);
+        iter_opts.set_lower_bound(&cache_region.start, 0);
+        iter_opts.set_upper_bound(&cache_region.end, 0);
 
         let (worker, _) = BackgroundRunner::new(
             engine.core.clone(),
@@ -1910,7 +1901,7 @@ pub mod tests {
             Duration::from_secs(100),
             Arc::new(MockPdClient {}),
         );
-        worker.core.gc_region(&region, 40, 100);
+        worker.core.gc_region(&cache_region, 40, 100);
 
         let mut iter = snap.iterator_opt("write", iter_opts).unwrap();
         iter.seek_to_first().unwrap();
@@ -1988,23 +1979,24 @@ pub mod tests {
             Arc::new(MockPdClient {}),
         );
 
+        let cache_region = CacheRegion::from_region(&region);
         // gc should not hanlde keys with larger seqno than oldest seqno
-        worker.core.gc_region(&region, 13, 10);
+        worker.core.gc_region(&cache_region, 13, 10);
         assert_eq!(3, element_count(&default));
         assert_eq!(3, element_count(&write));
 
         // gc will not remove the latest mvcc put below safe point
-        worker.core.gc_region(&region, 14, 100);
+        worker.core.gc_region(&cache_region, 14, 100);
         assert_eq!(2, element_count(&default));
         assert_eq!(2, element_count(&write));
 
-        worker.core.gc_region(&region, 16, 100);
+        worker.core.gc_region(&cache_region, 16, 100);
         assert_eq!(1, element_count(&default));
         assert_eq!(1, element_count(&write));
 
         // rollback will not make the first older version be filtered
         rollback_data(b"key1", 17, 16, &write, memory_controller.clone());
-        worker.core.gc_region(&region, 17, 100);
+        worker.core.gc_region(&cache_region, 17, 100);
         assert_eq!(1, element_count(&default));
         assert_eq!(1, element_count(&write));
         let key = encode_key(b"key1", TimeStamp::new(15));
@@ -2016,7 +2008,7 @@ pub mod tests {
         // unlike in WriteCompactionFilter, the latest mvcc delete below safe point will
         // be filtered
         delete_data(b"key1", 19, 18, &write, memory_controller.clone());
-        worker.core.gc_region(&region, 19, 100);
+        worker.core.gc_region(&cache_region, 19, 100);
         assert_eq!(0, element_count(&write));
         assert_eq!(0, element_count(&default));
     }
@@ -2032,10 +2024,10 @@ pub mod tests {
         let (write, default, region1, region2) = {
             let mut core = engine.core().write();
 
-            let region1 = new_region(1, b"k00", b"k10");
+            let region1 = CacheRegion::new(1, 0, b"zk00", b"zk10");
             core.mut_range_manager().new_region(region1.clone());
 
-            let region2 = new_region(2, b"k30", b"k40");
+            let region2 = CacheRegion::new(2, 0, b"zk30", b"zk40");
             core.mut_range_manager().new_region(region2.clone());
 
             let engine = core.engine();
@@ -2216,7 +2208,9 @@ pub mod tests {
             Arc::new(MockPdClient {}),
         );
 
-        let filter = worker.core.gc_region(&region, 20, 200);
+        let filter = worker
+            .core
+            .gc_region(&CacheRegion::from_region(&region), 20, 200);
         assert_eq!(1, filter.filtered);
         assert_eq!(1, element_count(&default));
         assert_eq!(1, element_count(&write));
@@ -2315,31 +2309,31 @@ pub mod tests {
             Duration::from_secs(100),
             Arc::new(MockPdClient {}),
         );
-        let range = CacheRegion::from_region(&region);
-        let s1 = engine.snapshot(1, 0, range.clone(), 10, u64::MAX);
-        let s2 = engine.snapshot(1, 0, range.clone(), 11, u64::MAX);
-        let s3 = engine.snapshot(1, 0, range.clone(), 20, u64::MAX);
+        let cache_region = CacheRegion::from_region(&region);
+        let s1 = engine.snapshot(cache_region.clone(), 10, u64::MAX);
+        let s2 = engine.snapshot(cache_region.clone(), 11, u64::MAX);
+        let s3 = engine.snapshot(cache_region.clone(), 20, u64::MAX);
 
         // nothing will be removed due to snapshot 5
-        let filter = worker.core.gc_region(&region, 30, 100);
+        let filter = worker.core.gc_region(&cache_region, 30, 100);
         assert_eq!(0, filter.filtered);
         assert_eq!(6, element_count(&default));
         assert_eq!(6, element_count(&write));
 
         drop(s1);
-        let filter = worker.core.gc_region(&region, 30, 100);
+        let filter = worker.core.gc_region(&cache_region, 30, 100);
         assert_eq!(1, filter.filtered);
         assert_eq!(5, element_count(&default));
         assert_eq!(5, element_count(&write));
 
         drop(s2);
-        let filter = worker.core.gc_region(&region, 30, 100);
+        let filter = worker.core.gc_region(&cache_region, 30, 100);
         assert_eq!(1, filter.filtered);
         assert_eq!(4, element_count(&default));
         assert_eq!(4, element_count(&write));
 
         drop(s3);
-        let filter = worker.core.gc_region(&region, 30, 100);
+        let filter = worker.core.gc_region(&cache_region, 30, 100);
         assert_eq!(1, filter.filtered);
         assert_eq!(3, element_count(&default));
         assert_eq!(3, element_count(&write));
@@ -2429,22 +2423,19 @@ pub mod tests {
             memory_controller.clone(),
         );
 
-        let range = CacheRegion::from_region(&region);
-        let snap1 = engine.snapshot(1, 0, range.clone(), 20, 1000).unwrap();
-        let snap2 = engine.snapshot(1, 0, range.clone(), 22, 1000).unwrap();
-        let _snap3 = engine.snapshot(1, 0, range.clone(), 60, 1000).unwrap();
+        let cache_region = CacheRegion::from_region(&region);
+        let snap1 = engine.snapshot(cache_region.clone(), 20, 1000).unwrap();
+        let snap2 = engine.snapshot(cache_region.clone(), 22, 1000).unwrap();
+        let _snap3 = engine.snapshot(cache_region.clone(), 60, 1000).unwrap();
 
-        let mut new_regions = vec![
-            new_region(1, "", "key5"),
-            new_region(2, "key5", "key8"),
-            new_region(3, "key8", "z"),
+        let new_regions = vec![
+            CacheRegion::new(1, 1, "z", "zkey5"),
+            CacheRegion::new(2, 1, "zkey5", "zkey8"),
+            CacheRegion::new(3, 1, "zkey8", cache_region.end.clone()),
         ];
-        for r in &mut new_regions {
-            r.mut_region_epoch().version = 1;
-        }
         let region2 = new_regions[1].clone();
         engine.on_region_event(RegionEvent::Split {
-            source: region.clone(),
+            source: cache_region.clone(),
             new_regions,
         });
         assert_eq!(engine.core.read().range_manager().regions().len(), 3);
@@ -2470,7 +2461,7 @@ pub mod tests {
             .values()
             .filter_map(|m| {
                 if m.get_state() == RegionState::Active {
-                    Some(m.region().clone())
+                    Some(m.get_region().clone())
                 } else {
                     None
                 }
@@ -2527,8 +2518,8 @@ pub mod tests {
         }
 
         let k = format!("zk{:08}", 15).into_bytes();
-        let region1 = new_region(1, DATA_MIN_KEY, k.clone());
-        let region2 = new_region(2, k, DATA_MAX_KEY);
+        let region1 = CacheRegion::new(1, 0, DATA_MIN_KEY, k.clone());
+        let region2 = CacheRegion::new(2, 0, k, DATA_MAX_KEY);
         {
             let mut core = engine.core.write();
             core.mut_range_manager()
@@ -2538,8 +2529,8 @@ pub mod tests {
                 .load_region(region2.clone())
                 .unwrap();
         }
-        engine.prepare_for_apply(1, CacheRegion::from_region(&region1), &region1);
-        engine.prepare_for_apply(1, CacheRegion::from_region(&region2), &region2);
+        engine.prepare_for_apply(1, &region1);
+        engine.prepare_for_apply(1, &region2);
 
         // concurrent write to rocksdb, but the key will not be loaded in the memory
         // engine
@@ -2566,22 +2557,10 @@ pub mod tests {
         std::thread::sleep(Duration::from_secs(1));
 
         let _ = engine
-            .snapshot(
-                region1.id,
-                0,
-                CacheRegion::from_region(&region1),
-                u64::MAX,
-                u64::MAX,
-            )
+            .snapshot(region1.clone(), u64::MAX, u64::MAX)
             .unwrap();
         let _ = engine
-            .snapshot(
-                region2.id,
-                0,
-                CacheRegion::from_region(&region2),
-                u64::MAX,
-                u64::MAX,
-            )
+            .snapshot(region2.clone(), u64::MAX, u64::MAX)
             .unwrap();
 
         let guard = &epoch::pin();
@@ -2722,7 +2701,8 @@ pub mod tests {
             Duration::from_millis(200),
             || !engine.core.read().range_manager().regions().is_empty(),
         );
-        engine.prepare_for_apply(1, CacheRegion::from_region(&region), &region);
+        let cache_region = CacheRegion::from_region(&region);
+        engine.prepare_for_apply(1, &cache_region);
 
         // Wait for the range to be loaded.
         test_util::eventually(
@@ -2733,15 +2713,7 @@ pub mod tests {
                 core.range_manager().region_meta(1).unwrap().get_state() == RegionState::Active
             },
         );
-        let _ = engine
-            .snapshot(
-                region.id,
-                0,
-                CacheRegion::from_region(&region),
-                u64::MAX,
-                u64::MAX,
-            )
-            .unwrap();
+        let _ = engine.snapshot(cache_region, u64::MAX, u64::MAX).unwrap();
 
         let (write, default) = {
             let core = engine.core().write();
@@ -2833,7 +2805,7 @@ pub mod tests {
 
         for r in [&region1, &region2, &region3] {
             engine.load_region(r.clone()).unwrap();
-            engine.prepare_for_apply(1, CacheRegion::from_region(r), r);
+            engine.prepare_for_apply(1, &CacheRegion::from_region(r));
         }
 
         // ensure all ranges are finshed
@@ -2851,13 +2823,7 @@ pub mod tests {
             if exist {
                 let read_ts = TimeStamp::compose(TimeStamp::physical_now(), 0).into_inner();
                 let snap = engine
-                    .snapshot(
-                        region.id,
-                        0,
-                        CacheRegion::from_region(region),
-                        read_ts,
-                        u64::MAX,
-                    )
+                    .snapshot(CacheRegion::from_region(region), read_ts, u64::MAX)
                     .unwrap();
                 let mut count = 0;
                 let range = CacheRegion::from_region(region);
@@ -2875,7 +2841,7 @@ pub mod tests {
                 assert_eq!(count, expect_count);
             } else {
                 engine
-                    .snapshot(region.id, 0, CacheRegion::from_region(region), 10, 10)
+                    .snapshot(CacheRegion::from_region(region), 10, 10)
                     .unwrap_err();
             }
         };
@@ -2916,7 +2882,7 @@ pub mod tests {
         rocks_engine.put_cf(CF_WRITE, &key, b"val").unwrap();
         // After loading range1, the memory usage should be 140*6=840
         engine.load_region(region1.clone()).unwrap();
-        engine.prepare_for_apply(1, CacheRegion::from_region(&region1), &region1);
+        engine.prepare_for_apply(1, &CacheRegion::from_region(&region1));
 
         let region2 = new_region(2, construct_region_key(3), construct_region_key(5));
         let key = construct_key(3, 10);
@@ -2941,7 +2907,7 @@ pub mod tests {
         assert_eq!(config.value().hard_limit_threshold(), 2000);
 
         engine.load_region(region2.clone()).unwrap();
-        engine.prepare_for_apply(1, CacheRegion::from_region(&region2), &region2);
+        engine.prepare_for_apply(1, &CacheRegion::from_region(&region2));
 
         // ensure all ranges are finshed
         test_util::eventually(Duration::from_millis(100), Duration::from_secs(2), || {
@@ -2958,7 +2924,7 @@ pub mod tests {
             if exist {
                 let read_ts = TimeStamp::compose(TimeStamp::physical_now(), 0).into_inner();
                 let snap = engine
-                    .snapshot(r.id, 0, CacheRegion::from_region(r), read_ts, u64::MAX)
+                    .snapshot(CacheRegion::from_region(r), read_ts, u64::MAX)
                     .unwrap();
                 let mut count = 0;
                 let range = CacheRegion::from_region(r);
@@ -2976,7 +2942,7 @@ pub mod tests {
                 assert_eq!(count, expect_count);
             } else {
                 engine
-                    .snapshot(r.id, 0, CacheRegion::from_region(r), 10, 10)
+                    .snapshot(CacheRegion::from_region(r), 10, 10)
                     .unwrap_err();
             }
         };

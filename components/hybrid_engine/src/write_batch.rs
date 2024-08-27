@@ -179,8 +179,9 @@ mod tests {
             },
         )
         .unwrap();
+        let cache_region = CacheRegion::from_region(&region);
         let mut write_batch = hybrid_engine.write_batch();
-        write_batch.prepare_for_region(&region);
+        write_batch.prepare_for_region(cache_region.clone());
         write_batch
             .cache_write_batch
             .set_range_cache_status(RangeCacheStatus::Cached);
@@ -190,9 +191,7 @@ mod tests {
         let actual: &[u8] = &hybrid_engine.get_value(b"zhello").unwrap().unwrap();
         assert_eq!(b"world", &actual);
         let ctx = SnapshotContext {
-            region_id: 1,
-            epoch_version: 0,
-            region: Some(CacheRegion::from_region(&region)),
+            region: Some(cache_region.clone()),
             read_ts: 10,
         };
         let snap = hybrid_engine.snapshot(Some(ctx));
@@ -242,6 +241,8 @@ mod tests {
     fn test_delete_range() {
         let region1 = new_region(1, b"k00", b"k10");
         let region2 = new_region(2, b"k20", b"k30");
+        let cache_region1 = CacheRegion::from_region(&region1);
+        let cache_region2 = CacheRegion::from_region(&region2);
 
         let region1_clone = region1.clone();
         let region2_clone = region2.clone();
@@ -256,33 +257,21 @@ mod tests {
         .unwrap();
 
         let mut wb = hybrid_engine.write_batch();
-        wb.prepare_for_region(&region1);
+        wb.prepare_for_region(cache_region1.clone());
         wb.put(b"zk05", b"val").unwrap();
         wb.put(b"zk08", b"val2").unwrap();
-        wb.prepare_for_region(&region2);
+        wb.prepare_for_region(cache_region1.clone());
         wb.put(b"zk25", b"val3").unwrap();
         wb.put(b"zk27", b"val4").unwrap();
         wb.write().unwrap();
 
         hybrid_engine
             .range_cache_engine()
-            .snapshot(
-                region1.id,
-                0,
-                CacheRegion::from_region(&region1),
-                1000,
-                1000,
-            )
+            .snapshot(cache_region1.clone(), 1000, 1000)
             .unwrap();
         hybrid_engine
             .range_cache_engine()
-            .snapshot(
-                region2.id,
-                0,
-                CacheRegion::from_region(&region2),
-                1000,
-                1000,
-            )
+            .snapshot(cache_region2.clone(), 1000, 1000)
             .unwrap();
         assert_eq!(
             4,
@@ -297,31 +286,19 @@ mod tests {
 
         let mut wb = hybrid_engine.write_batch();
         // all ranges overlapped with it will be evicted
-        wb.prepare_for_region(&region1);
+        wb.prepare_for_region(cache_region1.clone());
         wb.delete_range(b"zk05", b"zk08").unwrap();
-        wb.prepare_for_region(&region2);
+        wb.prepare_for_region(cache_region2.clone());
         wb.delete_range(b"zk20", b"zk21").unwrap();
         wb.write().unwrap();
 
         hybrid_engine
             .range_cache_engine()
-            .snapshot(
-                region1.id,
-                0,
-                CacheRegion::from_region(&region1),
-                1000,
-                1000,
-            )
+            .snapshot(cache_region1.clone(), 1000, 1000)
             .unwrap_err();
         hybrid_engine
             .range_cache_engine()
-            .snapshot(
-                region2.id,
-                0,
-                CacheRegion::from_region(&region2),
-                1000,
-                1000,
-            )
+            .snapshot(cache_region2.clone(), 1000, 1000)
             .unwrap_err();
         let m_engine = hybrid_engine.range_cache_engine();
 

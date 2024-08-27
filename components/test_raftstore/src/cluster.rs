@@ -1025,12 +1025,7 @@ where
         } else {
             let ctx = SnapshotContext {
                 read_ts: u64::MAX,
-                region: Some(CacheRegion::new(
-                    DATA_MIN_KEY.to_vec(),
-                    DATA_MAX_KEY.to_vec(),
-                )),
-                region_id: 0,
-                epoch_version: 0,
+                region: Some(CacheRegion::new(0, 0, DATA_MIN_KEY, DATA_MAX_KEY)),
             };
             self.get_cf_with_snap_ctx(CF_DEFAULT, key, true, ctx)
         }
@@ -1042,12 +1037,7 @@ where
         } else {
             let ctx = SnapshotContext {
                 read_ts: u64::MAX,
-                region: Some(CacheRegion::new(
-                    DATA_MIN_KEY.to_vec(),
-                    DATA_MAX_KEY.to_vec(),
-                )),
-                region_id: 0,
-                epoch_version: 0,
+                region: Some(CacheRegion::new(0, 0, DATA_MIN_KEY, DATA_MAX_KEY)),
             };
             self.get_cf_with_snap_ctx(cf, key, true, ctx)
         }
@@ -1059,12 +1049,7 @@ where
         } else {
             let ctx = SnapshotContext {
                 read_ts: u64::MAX,
-                region: Some(CacheRegion::new(
-                    DATA_MIN_KEY.to_vec(),
-                    DATA_MAX_KEY.to_vec(),
-                )),
-                region_id: 0,
-                epoch_version: 0,
+                region: Some(CacheRegion::new(0, 0, DATA_MIN_KEY, DATA_MAX_KEY)),
             };
             self.get_cf_with_snap_ctx(CF_DEFAULT, key, true, ctx)
         }

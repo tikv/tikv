@@ -343,13 +343,13 @@ impl RangeCacheMemoryEngine {
     ) -> RangeCacheStatus {
         let mut core = self.core.write();
         let range_manager = core.mut_range_manager();
-        let Some(mut region_state) = range_manager.check_region_state(&region) else {
+        let Some(mut region_state) = range_manager.check_region_state(region) else {
             return RangeCacheStatus::NotInCache;
         };
 
         let schedule_load = region_state == RegionState::Pending;
         if schedule_load {
-            range_manager.update_region_state(region.region_id, RegionState::Loading);
+            range_manager.update_region_state(region.id, RegionState::Loading);
             info!(
                 "ime region to load";
                 "region" => ?region,
@@ -532,7 +532,7 @@ pub mod tests {
 
         let mut region2 = new_region(1, b"k1", b"k5");
         region2.mut_region_epoch().version = 2;
-        engine.prepare_for_apply(1, CacheRegion::from_region(&region2), &region2);
+        engine.prepare_for_apply(1, &CacheRegion::from_region(&region2));
         assert_eq!(
             count_region(engine.core.read().range_manager(), |m| {
                 matches!(m.get_state(), Pending | Loading)
@@ -545,7 +545,7 @@ pub mod tests {
 
         let mut region2 = new_region(1, b"k2", b"k5");
         region2.mut_region_epoch().version = 2;
-        engine.prepare_for_apply(1, CacheRegion::from_region(&region2), &region2);
+        engine.prepare_for_apply(1, &CacheRegion::from_region(&region2));
         assert_eq!(
             count_region(engine.core.read().range_manager(), |m| {
                 matches!(m.get_state(), Pending | Loading)
@@ -591,7 +591,7 @@ pub mod tests {
 
             let start = construct_user_key(1);
             let end = construct_user_key(10);
-            let range = CacheRegion::new(start, end);
+            let range = CacheRegion::new(1, 0, start, end);
             skiplist.delete_range(&range);
 
             let mut iter = handle.iterator();
@@ -643,7 +643,7 @@ pub mod tests {
         insert_kv(b"k3", b"val3", 103);
         insert_kv(b"k4", b"val4", 104);
 
-        let range = CacheRegion::new(b"k1".to_vec(), b"k4".to_vec());
+        let range = CacheRegion::new(1, 0, b"k1".to_vec(), b"k4".to_vec());
         skiplist.delete_range(&range);
 
         let mut iter = lock_handle.iterator();

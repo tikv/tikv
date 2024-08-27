@@ -190,11 +190,11 @@ fn test_rocksdb_skiplist_basic_operations(cf: CfName, operations: Vec<Operation>
             Operation::DeleteRange(k1, k2) => {
                 if k1 <= k2 {
                     db_rocks.delete_range_cf(cf, &k1, &k2).unwrap();
-                    let range = CacheRegion::new(k1.clone(), k2.clone());
+                    let range = CacheRegion::new(1, 0, k1.clone(), k2.clone());
                     skiplist.delete_range_cf(cf, &range);
                 } else {
                     db_rocks.delete_range_cf(cf, &k2, &k1).unwrap();
-                    let range = CacheRegion::new(k2.clone(), k1.clone());
+                    let range = CacheRegion::new(1, 0, k2.clone(), k1.clone());
                     skiplist.delete_range_cf(cf, &range);
                 }
             }

@@ -180,14 +180,19 @@ pub mod tests {
             },
         )
         .unwrap();
+
+        let cache_r1 = CacheRegion::from_region(&r1);
+        let cache_r2 = CacheRegion::from_region(&r2);
+        let cache_r3 = CacheRegion::from_region(&r3);
+
         let mut write_batch = hybrid_engine.write_batch();
-        write_batch.prepare_for_region(&r1);
+        write_batch.prepare_for_region(cache_r1.clone());
         write_batch.put(b"zk02", b"val").unwrap();
         write_batch.put(b"zk03", b"val").unwrap();
-        write_batch.prepare_for_region(&r2);
+        write_batch.prepare_for_region(cache_r2.clone());
         write_batch.put(b"zk22", b"val").unwrap();
         write_batch.put(b"zk23", b"val").unwrap();
-        write_batch.prepare_for_region(&r3);
+        write_batch.prepare_for_region(cache_r3.clone());
         write_batch.put(b"zk42", b"val").unwrap();
         write_batch.put(b"zk42", b"val").unwrap();
         write_batch.write().unwrap();
@@ -203,15 +208,15 @@ pub mod tests {
 
         hybrid_engine
             .range_cache_engine()
-            .snapshot(r1.id, 0, CacheRegion::from_region(&r1), 1000, 1000)
+            .snapshot(cache_r1.clone(), 1000, 1000)
             .unwrap_err();
         hybrid_engine
             .range_cache_engine()
-            .snapshot(r2.id, 0, CacheRegion::from_region(&r2), 1000, 1000)
+            .snapshot(cache_r2.clone(), 1000, 1000)
             .unwrap_err();
         hybrid_engine
             .range_cache_engine()
-            .snapshot(r3.id, 0, CacheRegion::from_region(&r3), 1000, 1000)
+            .snapshot(cache_r3.clone(), 1000, 1000)
             .unwrap();
     }
 }

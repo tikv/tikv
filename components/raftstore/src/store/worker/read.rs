@@ -2600,8 +2600,6 @@ mod tests {
         }
 
         let snap_ctx = SnapshotContext {
-            region_id: 0,
-            epoch_version: 0,
             read_ts: 15,
             region: None,
         };
@@ -2684,8 +2682,6 @@ mod tests {
         let snap_ctx = SnapshotContext {
             read_ts: 15,
             region: None,
-            region_id: 0,
-            epoch_version: 0,
         };
         reader.propose_raft_command(Some(snap_ctx), read_id, task.request, task.callback);
         assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);

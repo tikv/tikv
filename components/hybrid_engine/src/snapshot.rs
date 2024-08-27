@@ -144,10 +144,10 @@ mod tests {
     #[test]
     fn test_iterator() {
         let region = new_region(1, b"", b"z");
-        let range = CacheRegion::from_region(&region);
+        let cache_region = CacheRegion::from_region(&region);
         let mut iter_opt = IterOptions::default();
-        iter_opt.set_upper_bound(&range.end, 0);
-        iter_opt.set_lower_bound(&range.start, 0);
+        iter_opt.set_upper_bound(&cache_region.end, 0);
+        iter_opt.set_lower_bound(&cache_region.start, 0);
 
         let region_clone = region.clone();
         let (_path, hybrid_engine) = hybrid_engine_for_tests(
@@ -168,7 +168,7 @@ mod tests {
             assert!(!iter.seek_to_first().unwrap());
         }
         let mut write_batch = hybrid_engine.write_batch();
-        write_batch.prepare_for_region(&region);
+        write_batch.prepare_for_region(cache_region.clone());
         write_batch
             .cache_write_batch
             .set_range_cache_status(RangeCacheStatus::Cached);
@@ -176,9 +176,7 @@ mod tests {
         let seq = write_batch.write().unwrap();
         assert!(seq > 0);
         let ctx = SnapshotContext {
-            region_id: 1,
-            epoch_version: 0,
-            region: Some(CacheRegion::from_region(&region)),
+            region: Some(cache_region.clone()),
             read_ts: 10,
         };
         let snap = hybrid_engine.snapshot(Some(ctx));
