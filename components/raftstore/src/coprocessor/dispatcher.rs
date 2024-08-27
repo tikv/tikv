@@ -924,7 +924,6 @@ impl<E: KvEngine> CoprocessorHost<E> {
         ctx: Option<SnapshotContext>,
         seqno: u64,
     ) -> Option<Box<dyn ObservedSnapshot>> {
-        assert!(self.registry.snapshot_observer.is_some());
         self.registry
             .snapshot_observer
             .as_ref()
