@@ -252,30 +252,32 @@ impl RangeStatsManager {
                 })
                 .collect();
             info!(
-                "ime collect regions to evict";
+                "ime collect regions activities";
                 "regions" => ?debug,
             );
         }
 
         if !memory_controller.reached_soft_limit() {
             let reach_stop_load = memory_controller.reached_stop_load_limit();
-            let regions_loaded = self.region_loaded_at.read().unwrap();
+            let mut regions_loaded = self.region_loaded_at.write().unwrap();
             let region_to_evict: Vec<_> = regions_activity
                 .into_iter()
                 .filter(|(_, r)| {
                     r.region_stat.cop_detail.mvcc_amplification()
                         <= if reach_stop_load { 5.0 } else { 2.0 }
                 })
-                .filter_map(|(r, s)| match regions_loaded.get(&r.id) {
-                    // Do not evict regions that were loaded less than `EVICT_MIN_DURATION` ago.
-                    Some(&time_loaded)
-                        if Instant::now() - time_loaded < self.evict_min_duration =>
-                    {
+                .filter_map(|(r, s)| {
+                    // Do not evict regions that were loaded less than `EVICT_MIN_DURATION` ago. If
+                    // it has no time recorded, it should be loaded be pre-load or something, record
+                    // the time and does not evict it this time.
+                    let time_loaded = regions_loaded.entry(r.id).or_insert(Instant::now());
+                    if Instant::now() - *time_loaded < self.evict_min_duration {
                         let mut mut_prev_top_regions = self.prev_top_regions.lock();
                         let _ = mut_prev_top_regions.insert(r.id, r);
                         None
+                    } else {
+                        Some((r, s))
                     }
-                    _ => Some((r, s)),
                 })
                 .collect();
             let debug: Vec<_> = region_to_evict
