@@ -27,6 +27,7 @@ use tokio::sync::{Mutex, MutexGuard};
 pub use self::test_utils::TEST_PROFILE_MUTEX;
 #[cfg(test)]
 use self::test_utils::{activate_prof, deactivate_prof, dump_prof};
+use super::vendored_utils::has_activate_prof;
 #[cfg(not(test))]
 use super::vendored_utils::{activate_prof, deactivate_prof, dump_prof};
 
@@ -108,10 +109,14 @@ pub async fn start_one_heap_profile<F>(
 where
     F: Future<Output = Result<(), String>> + Send + 'static,
 {
+    let has_active = has_activate_prof();
     let on_start = || activate_prof().map_err(|e| format!("activate_prof: {}", e));
 
     let on_end = move |_| {
-        deactivate_prof().map_err(|e| format!("deactivate_prof: {}", e))?;
+        if !has_active {
+            info!("disable prof.active after one heap profiling");
+            deactivate_prof().map_err(|e| format!("deactivate_prof: {}", e))?;
+        }
         let f = NamedTempFile::new().map_err(|e| format!("create tmp file fail: {}", e))?;
         let path = f.path().to_str().unwrap();
         dump_prof(path).map_err(|e| format!("dump_prof: {}", e))?;
@@ -125,6 +130,19 @@ where
     };
 
     ProfileGuard::new(on_start, on_end, end.boxed())?.await
+}
+
+pub fn set_prof_active(val: bool) -> Result<(), String> {
+    let activate = has_activate_prof();
+    if activate == val {
+        return Ok(());
+    }
+    if val {
+        activate_prof().map_err(|e| format!("activate_prof: {}", e))?;
+    } else {
+        deactivate_prof().map_err(|e| format!("deactivate_prof: {}", e))?;
+    }
+    Ok(())
 }
 
 /// Activate heap profile and call `callback` if successfully.
@@ -146,25 +164,33 @@ where
         .map_err(|e| format!("create temp directory: {}", e))?;
     let dir_path = dir.path().to_str().unwrap().to_owned();
 
+    let has_active = has_activate_prof();
+
     let on_start = move || {
         let mut activate = PROFILE_ACTIVE.lock().unwrap();
         assert!(activate.is_none());
         activate_prof().map_err(|e| format!("activate_prof: {}", e))?;
         *activate = Some((tx, dir));
         callback();
-        info!("periodical heap profiling is started");
+        info!("periodical heap profiling is started"; "has_active" => has_active);
         Ok(())
     };
 
-    let on_end = |_| {
+    let on_end = move |_| {
         deactivate_heap_profile();
-        deactivate_prof().map_err(|e| format!("deactivate_prof: {}", e))
+        if !has_active {
+            info!("disable prof.active after periodical heap profiling");
+            // If profiling is already activated before, do not disable then.
+            deactivate_prof().map_err(|e| format!("deactivate_prof: {}", e))
+        } else {
+            Ok(())
+        }
     };
 
     let end = async move {
         select! {
             _ = rx.fuse() => {
-                info!("periodical heap profiling is canceled");
+                info!("periodical heap profiling is canceled"; "active" => has_activate_prof());
                 Ok(())
             },
             res = dump_heap_profile_periodically(dump_period, dir_path).fuse() => {

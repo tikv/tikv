@@ -64,6 +64,8 @@ use tokio::{
 };
 use tokio_openssl::SslStream;
 
+use crate::status_server::profile::set_prof_active;
+
 static TIMER_CANCELED: &str = "tokio timer canceled";
 
 #[cfg(feature = "failpoints")]
@@ -232,6 +234,13 @@ where
             "no heap profile is running"
         };
         Ok(make_response(StatusCode::OK, body))
+    }
+
+    fn set_profile_active(_req: Request<Body>, val: bool) -> hyper::Result<Response<Body>> {
+        match set_prof_active(val) {
+            Ok(()) => Ok(make_response(StatusCode::OK, "set prof.active succeed")),
+            Err(err) => Ok(make_response(StatusCode::BAD_REQUEST, err.to_string())),
+        }
     }
 
     #[allow(dead_code)]
@@ -771,6 +780,12 @@ where
                                 dump(cfg_controller.get_current().server.simplify_metrics).into(),
                             )),
                             (Method::GET, "/status") => Ok(Response::default()),
+                            (Method::GET, "/debug/pprof/set_prof_active") => {
+                                Self::set_profile_active(req, true)
+                            }
+                            (Method::GET, "/debug/pprof/set_prof_inactive") => {
+                                Self::set_profile_active(req, false)
+                            }
                             (Method::GET, "/debug/pprof/heap_list") => Self::list_heap_prof(req),
                             (Method::GET, "/debug/pprof/heap_activate") => {
                                 Self::activate_heap_prof(req, store_path).await
