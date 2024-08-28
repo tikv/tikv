@@ -322,7 +322,13 @@ impl RegionManager {
     pub fn cached_regions(&self) -> Vec<u64> {
         self.regions
             .iter()
-            .filter(|(id, meta)| meta.state == RegionState::Active)
+            .filter_map(|(id, meta)| {
+                if meta.state == RegionState::Active {
+                    Some(*id)
+                } else {
+                    None
+                }
+            })
             .collect::<Vec<_>>()
     }
 

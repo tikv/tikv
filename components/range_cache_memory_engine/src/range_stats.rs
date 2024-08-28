@@ -232,22 +232,83 @@ impl RangeStatsManager {
         &self,
         cached_region_ids: Vec<u64>,
         memory_controller: &MemoryController,
-    ) -> Vec<u64> {
+    ) -> Vec<Region> {
         let mut regions_activity = self
             .info_provider
             .get_regions_activity(cached_region_ids)
             .unwrap();
 
         if !memory_controller.reached_stop_load_limit() {
-            regions_activity.iter().filter(|r| r.region_stat.cop_detail.mvcc_amplification() <= 2.0).collect()
+            let region_to_evict: Vec<_> = regions_activity
+                .into_iter()
+                .filter(|(_, r)| r.region_stat.cop_detail.mvcc_amplification() <= 2.0)
+                .collect();
+            let debug: Vec<_> = region_to_evict
+                .iter()
+                .map(|(r, s)| {
+                    format!(
+                        "region_id={}, read_keys={}, cop={}, cop_detail={:?}",
+                        r.id,
+                        s.region_stat.read_keys,
+                        s.region_stat.query_stats.coprocessor,
+                        s.region_stat.cop_detail,
+                    )
+                })
+                .collect();
+            info!(
+                "ime collect regions to evict, unreach stop load";
+                "regions" => ?debug,
+            );
+            region_to_evict.into_iter().map(|(r, _)| r).collect()
         } else if !memory_controller.reached_soft_limit() {
             // limit the count
-            regions_activity.iter().filter(|r| r.region_stat.cop_detail.mvcc_amplification() <= 5.0).collect()
+            let region_to_evict: Vec<_> = regions_activity
+                .into_iter()
+                .filter(|(_, r)| r.region_stat.cop_detail.mvcc_amplification() <= 5.0)
+                .collect();
+            let debug: Vec<_> = region_to_evict
+                .iter()
+                .map(|(r, s)| {
+                    format!(
+                        "region_id={}, read_keys={}, cop={}, cop_detail={:?}",
+                        r.id,
+                        s.region_stat.read_keys,
+                        s.region_stat.query_stats.coprocessor,
+                        s.region_stat.cop_detail,
+                    )
+                })
+                .collect();
+            info!(
+                "ime collect regions to evict, reach stop load";
+                "regions" => ?debug,
+            );
+            region_to_evict.into_iter().map(|(r, _)| r).collect()
         } else {
             // better one by one
-            regions_activity.sort_by(|a, b| {
-                a.region_stat.
-            })
+            regions_activity.sort_by(|(_, a), (_, b)| {
+                a.region_stat
+                    .cop_detail
+                    .mvcc_amplification()
+                    .total_cmp(&b.region_stat.cop_detail.mvcc_amplification())
+            });
+            let region_to_evict: Vec<_> = regions_activity.into_iter().rev().take(5).collect();
+            let debug: Vec<_> = region_to_evict
+                .iter()
+                .map(|(r, s)| {
+                    format!(
+                        "region_id={}, read_keys={}, cop={}, cop_detail={:?}",
+                        r.id,
+                        s.region_stat.read_keys,
+                        s.region_stat.query_stats.coprocessor,
+                        s.region_stat.cop_detail,
+                    )
+                })
+                .collect();
+            info!(
+                "ime collect regions to evict, reach soft limit";
+                "regions" => ?debug,
+            );
+            region_to_evict.into_iter().map(|(r, _)| r).collect()
         }
     }
 }

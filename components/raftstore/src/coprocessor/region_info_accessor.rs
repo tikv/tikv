@@ -169,7 +169,7 @@ pub enum RegionInfoQuery {
     },
     GetRegionsActivity {
         region_ids: Vec<u64>,
-        callback: Callback<Vec<RegionActivity>>,
+        callback: Callback<Vec<(Region, RegionActivity)>>,
     },
     /// Gets all contents from the collection. Only used for testing.
     DebugDump(mpsc::Sender<(RegionsMap, RegionRangesMap)>),
@@ -197,7 +197,7 @@ impl Display for RegionInfoQuery {
                 write!(f, "GetTopRegions(count: {})", count)
             }
             RegionInfoQuery::GetRegionsActivity { region_ids, .. } => {
-                write!(f, "GetRegionsActivity(region_ids: {})", region_ids)
+                write!(f, "GetRegionsActivity(region_ids: {:?})", region_ids)
             }
             RegionInfoQuery::DebugDump(_) => write!(f, "DebugDump"),
         }
@@ -715,12 +715,16 @@ impl RegionCollector {
     fn handle_get_regions_activity(
         &self,
         region_ids: Vec<u64>,
-        callback: Callback<Vec<RegionActivity>>,
+        callback: Callback<Vec<(Region, RegionActivity)>>,
     ) {
         callback(
             region_ids
                 .into_iter()
-                .filter_map(|id| self.region_activity.get(&id).cloned())
+                .filter_map(|id| {
+                    self.region_activity
+                        .get(&id)
+                        .map(|r| (self.regions.get(&id).unwrap().region.clone(), r.clone()))
+                })
                 .collect_vec(),
         )
     }
@@ -949,7 +953,7 @@ pub trait RegionInfoProvider: Send + Sync {
         unimplemented!()
     }
 
-    fn get_regions_activity(&self, region_ids: Vec<u64>) -> Result<Vec<RegionActivity>> {
+    fn get_regions_activity(&self, _: Vec<u64>) -> Result<Vec<(Region, RegionActivity)>> {
         unimplemented!()
     }
 }
@@ -1047,7 +1051,7 @@ impl RegionInfoProvider for RegionInfoAccessor {
             })
     }
 
-    fn get_regions_activity(&self, region_ids: Vec<u64>) -> Result<Vec<RegionActivity>> {
+    fn get_regions_activity(&self, region_ids: Vec<u64>) -> Result<Vec<(Region, RegionActivity)>> {
         let (tx, rx) = mpsc::channel();
         let msg = RegionInfoQuery::GetRegionsActivity {
             region_ids,
@@ -1059,10 +1063,7 @@ impl RegionInfoProvider for RegionInfoAccessor {
         };
         self.scheduler
             .schedule(msg)
-            .map_err(box_err!(
-                "failed to send request to region collector: {:?}",
-                e
-            ))
+            .map_err(|e| box_err!("failed to send request to region collector: {:?}", e))
             .and_then(|_| {
                 rx.recv().map_err(|e| {
                     box_err!(
