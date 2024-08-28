@@ -30,7 +30,7 @@ pub(crate) struct RangeStatsManager {
 }
 
 /// Do not evict a region if has been cached for less than this duration.
-pub const DEFAULT_EVICT_MIN_DURATION: Duration = Duration::from_secs(60 * 3);
+pub const DEFAULT_EVICT_MIN_DURATION: Duration = Duration::from_secs(60 * 5);
 
 impl RangeStatsManager {
     /// Creates a new RangeStatsManager that retrieves state from
@@ -257,10 +257,14 @@ impl RangeStatsManager {
             );
         }
 
-        if !memory_controller.reached_stop_load_limit() {
+        if !memory_controller.reached_soft_limit() {
+            let reach_stop_load = memory_controller.reached_stop_load_limit();
             let region_to_evict: Vec<_> = regions_activity
                 .into_iter()
-                .filter(|(_, r)| r.region_stat.cop_detail.mvcc_amplification() <= 2.0)
+                .filter(|(_, r)| {
+                    r.region_stat.cop_detail.mvcc_amplification()
+                        <= if reach_stop_load { 5.0 } else { 2.0 }
+                })
                 .collect();
             let debug: Vec<_> = region_to_evict
                 .iter()
@@ -275,33 +279,25 @@ impl RangeStatsManager {
                 })
                 .collect();
             info!(
-                "ime collect regions to evict, unreach stop load";
+                "ime collect regions to evict";
+                "reached_stop_limit" => reach_stop_load,
                 "regions" => ?debug,
             );
-            region_to_evict.into_iter().map(|(r, _)| r).collect()
-        } else if !memory_controller.reached_soft_limit() {
-            // limit the count
-            let region_to_evict: Vec<_> = regions_activity
+            let regions_loaded = self.region_loaded_at.read().unwrap();
+            region_to_evict
                 .into_iter()
-                .filter(|(_, r)| r.region_stat.cop_detail.mvcc_amplification() <= 5.0)
-                .collect();
-            let debug: Vec<_> = region_to_evict
-                .iter()
-                .map(|(r, s)| {
-                    format!(
-                        "region_id={}, read_keys={}, cop={}, cop_detail={:?}",
-                        r.id,
-                        s.region_stat.read_keys,
-                        s.region_stat.query_stats.coprocessor,
-                        s.region_stat.cop_detail,
-                    )
+                .filter_map(|(r, _)| match regions_loaded.get(&r.id) {
+                    // Do not evict regions that were loaded less than `EVICT_MIN_DURATION` ago.
+                    Some(&time_loaded)
+                        if Instant::now() - time_loaded < self.evict_min_duration =>
+                    {
+                        let mut mut_prev_top_regions = self.prev_top_regions.lock();
+                        let _ = mut_prev_top_regions.insert(r.id, r);
+                        None
+                    }
+                    _ => Some(r),
                 })
-                .collect();
-            info!(
-                "ime collect regions to evict, reach stop load";
-                "regions" => ?debug,
-            );
-            region_to_evict.into_iter().map(|(r, _)| r).collect()
+                .collect()
         } else {
             // better one by one
             regions_activity.sort_by(|(_, a), (_, b)| {
@@ -349,6 +345,7 @@ pub mod tests {
             *self.regions.lock() = top_regions.clone()
         }
     }
+
     impl RegionInfoProvider for RegionInfoSimulator {
         fn find_region_by_key(&self, key: &[u8]) -> coprocessor::Result<Region> {
             self.regions
