@@ -238,6 +238,25 @@ impl RangeStatsManager {
             .get_regions_activity(cached_region_ids)
             .unwrap();
 
+        {
+            let debug: Vec<_> = regions_activity
+                .iter()
+                .map(|(r, s)| {
+                    format!(
+                        "region_id={}, read_keys={}, cop={}, cop_detail={:?}",
+                        r.id,
+                        s.region_stat.read_keys,
+                        s.region_stat.query_stats.coprocessor,
+                        s.region_stat.cop_detail,
+                    )
+                })
+                .collect();
+            info!(
+                "ime collect regions to evict";
+                "regions" => ?debug,
+            );
+        }
+
         if !memory_controller.reached_stop_load_limit() {
             let region_to_evict: Vec<_> = regions_activity
                 .into_iter()
