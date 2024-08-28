@@ -26,9 +26,21 @@ failpoints = [
   "tikv_util/failpoints",
   "engine_rocks/failpoints",
 ]
+<<<<<<< HEAD
 cloud-aws = [
   "encryption_export/cloud-aws",
   "sst_importer/cloud-aws",
+=======
+testexport = [
+  "raftstore/testexport",
+  "api_version/testexport",
+  "causal_ts/testexport",
+  "engine_traits/testexport",
+  "engine_rocks/testexport",
+  "engine_panic/testexport",
+  "hybrid_engine/testexport",
+  "encryption/testexport",
+>>>>>>> 222e0a4321 (encryption: add test for temporary KMS service unavailable (#17445))
 ]
 cloud-gcp = [
   "encryption_export/cloud-gcp",
@@ -81,6 +93,7 @@ crc32fast = "1.2"
 crc64fast = "0.1"
 crossbeam = "0.8"
 dashmap = "5"
+encryption = { workspace = true }
 encryption_export = { workspace = true }
 engine_panic = { workspace = true }
 engine_rocks = { workspace = true }
