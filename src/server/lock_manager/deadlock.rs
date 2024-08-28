@@ -80,7 +80,7 @@ impl Locks {
         }
     }
 
-    fn lock_matches(lhs_hash: u64, lhs_key: &[u8], rhs_hash: u64, rhs_key: &[u8]) -> bool {
+    fn key_matches(lhs_hash: u64, lhs_key: &[u8], rhs_hash: u64, rhs_key: &[u8]) -> bool {
         if lhs_hash != rhs_hash {
             return false;
         }
@@ -102,7 +102,7 @@ impl Locks {
         if !self
             .keys
             .iter()
-            .any(|(hash, k)| Self::lock_matches(*hash, k, lock_hash, &key))
+            .any(|(hash, k)| Self::key_matches(*hash, k, lock_hash, &key))
         {
             self.keys.push((lock_hash, key));
             true
@@ -116,11 +116,18 @@ impl Locks {
     /// Returns the removed lock_hash and key if an entry is successfully
     /// removed. The return value is useful when sometimes the `key` is
     /// missing due to remote TiKV nodes in out-of-date versions.
+    ///
+    /// In case `key` is not given and `lock_hash` matches more than one
+    /// keys, either of them will be removed. It's possible that the incorrect
+    /// one is removed, and possibly cause false positive or false negative.
+    /// But considering that it's not likely that any user rolling upgrades
+    /// a cluster from <5.1, during which deadlocks and hash collision is
+    /// encountered, we just give up handling this case.
     fn remove(&mut self, lock_hash: u64, key: &[u8]) -> Option<(u64, Vec<u8>)> {
         if let Some(idx) = self
             .keys
             .iter()
-            .position(|(hash, k)| Self::lock_matches(*hash, k, lock_hash, &key))
+            .position(|(hash, k)| Self::key_matches(*hash, k, lock_hash, &key))
         {
             return Some(self.keys.swap_remove(idx));
         }
@@ -202,7 +209,27 @@ impl DetectTable {
     /// the returned wait chain. This is intended to reduce RPC message size
     /// since the information about current detecting txn is included in a
     /// separated field.
+    #[inline]
     pub fn detect(
+        &mut self,
+        txn_ts: TimeStamp,
+        lock_ts: TimeStamp,
+        lock_hash: u64,
+        lock_key: &[u8],
+        resource_group_tag: &[u8],
+    ) -> Option<(u64, Vec<u8>, Vec<WaitForEntry>)> {
+        let result = self.detect_without_consistency_check(
+            txn_ts,
+            lock_ts,
+            lock_hash,
+            lock_key,
+            resource_group_tag,
+        );
+        self.check_key_reverse_index_consistency();
+        return result;
+    }
+
+    pub fn detect_without_consistency_check(
         &mut self,
         txn_ts: TimeStamp,
         lock_ts: TimeStamp,
@@ -410,6 +437,7 @@ impl DetectTable {
                 }
             }
         }
+        self.check_key_reverse_index_consistency();
         TASK_COUNTER_METRICS.clean_up_wait_for.inc();
     }
 
@@ -428,6 +456,10 @@ impl DetectTable {
         new_lock_ts: TimeStamp,
     ) -> Vec<(TimeStamp, u64, Vec<u8>, Vec<WaitForEntry>, Vec<u8>)> {
         if old_lock_ts == new_lock_ts {
+            return vec![];
+        }
+        if key.is_empty() {
+            // Cannot find in the key_reverse_map if the key is missing. Ignore the case.
             return vec![];
         }
 
@@ -455,18 +487,14 @@ impl DetectTable {
                 blockers.remove(&old_lock_ts);
             }
 
-            // let new_locks = blockers
-            //     .entry(new_lock_ts)
-            //     .and_modify(|locks| {
-            //         // It's possible that the new lock-waiting info already exists.
-            // Ignore it in         // this case.
-            //         locks.push(lock_hash, key.clone(), now);
-            //     })
-            //     .or_insert_with(|| Locks::new(new_lock_ts, lock_hash, key.clone(),
-            // vec![], now)); new_locks.resource_group_tag = resource_group_tag;
-
-            if let Some((deadlock_key_hash, deadlock_key, wait_chain)) =
-                self.detect(*txn_ts, new_lock_ts, lock_hash, &key, &resource_group_tag)
+            if let Some((deadlock_key_hash, deadlock_key, wait_chain)) = self
+                .detect_without_consistency_check(
+                    *txn_ts,
+                    new_lock_ts,
+                    lock_hash,
+                    &key,
+                    &resource_group_tag,
+                )
             {
                 result.push((
                     *txn_ts,
@@ -477,17 +505,8 @@ impl DetectTable {
                 ));
             }
         }
-        // // Insert the waiting_txn back to `key_reverse_map`, but waiting for
-        // // `new_lock_ts` instead. If the `new_lock_ts` entry already exists for
-        // // the key, merge the two set.
-        // match locks_and_waiters_of_key.entry(new_lock_ts) {
-        //     Entry::Occupied(mut e) => {
-        //         e.get_mut().extend(waiting_txn);
-        //     }
-        //     Entry::Vacant(e) => {
-        //         e.insert(waiting_txn);
-        //     }
-        // }
+
+        self.check_key_reverse_index_consistency();
         return result;
     }
 
@@ -602,6 +621,72 @@ impl DetectTable {
             self.wait_for_map.retain(|_, wait_for| !wait_for.is_empty());
             self.last_active_expire = self.now;
         }
+    }
+
+    #[cfg(test)]
+    fn check_wait_graph(&self, edges: Vec<(TimeStamp, TimeStamp, u64, &[u8])>) {
+        self.check_key_reverse_index_consistency();
+
+        let wait_for_map_entries = self
+            .wait_for_map
+            .iter()
+            .flat_map(|(txn_ts, wait_for_map)| {
+                wait_for_map
+                    .iter()
+                    .map(move |(lock_ts, locks)| (*txn_ts, *lock_ts, locks))
+            })
+            .flat_map(|(txn_ts, lock_ts, locks)| {
+                locks
+                    .keys
+                    .iter()
+                    .map(move |(hash, key)| (txn_ts, lock_ts, *hash, key.as_slice()))
+            })
+            .sorted()
+            .collect_vec();
+        let expected_edges = edges.into_iter().sorted().collect_vec();
+        assert_eq!(wait_for_map_entries, expected_edges);
+    }
+
+    #[cfg(not(test))]
+    fn check_key_reverse_index_consistency(&self) {}
+
+    /// Check the consistency between `wait_for_map` and `key_reverse_map`. The
+    /// code is only executed under tests.
+    #[cfg(test)]
+    fn check_key_reverse_index_consistency(&self) {
+        let wait_for_map_entries = self
+            .wait_for_map
+            .iter()
+            .flat_map(|(txn_ts, wait_for_map)| {
+                wait_for_map
+                    .iter()
+                    .map(move |(lock_ts, locks)| (*txn_ts, *lock_ts, locks))
+            })
+            .flat_map(|(txn_ts, lock_ts, locks)| {
+                locks
+                    .keys
+                    .iter()
+                    .map(move |(_hash, key)| (txn_ts, lock_ts, key.as_slice()))
+            })
+            .filter(|(_, _, key)| !key.is_empty())
+            .sorted()
+            .collect_vec();
+
+        let reverse_index_entries = self
+            .key_reverse_map
+            .iter()
+            .flat_map(|(key, locks_of_key)| {
+                locks_of_key
+                    .iter()
+                    .map(move |(lock_ts, txn_ts)| (txn_ts, *lock_ts, key.as_slice()))
+            })
+            .flat_map(|(txn_ts, lock_ts, key)| {
+                txn_ts.iter().map(move |txn_ts| (*txn_ts, lock_ts, key))
+            })
+            .sorted()
+            .collect_vec();
+
+        assert_eq!(wait_for_map_entries, reverse_index_entries);
     }
 }
 
@@ -1536,6 +1621,67 @@ pub mod tests {
     use crate::server::resolve;
 
     #[test]
+    fn test_key_matches() {
+        assert!(!Locks::key_matches(1, &[], 2, &[]));
+        assert!(Locks::key_matches(1, &[], 1, &[]));
+        assert!(!Locks::key_matches(1, b"k1", 2, b"k2"));
+        assert!(!Locks::key_matches(1, b"k1", 1, b"k2"));
+        assert!(Locks::key_matches(1, b"k1", 1, b"k1"));
+        assert!(Locks::key_matches(1, b"k1", 1, &[]));
+        assert!(Locks::key_matches(1, &[], 1, b"k2"));
+        assert!(!Locks::key_matches(1, b"k1", 2, &[]));
+        assert!(!Locks::key_matches(1, &[], 2, b"k2"));
+    }
+
+    #[test]
+    fn test_locks_push_pop() {
+        let assert_keys_equal = |locks: &Locks, expected_keys: &[(u64, &[u8])]| {
+            assert_eq!(
+                locks.keys.len(),
+                expected_keys.len(),
+                "keys length not match, actual: {:?}, expected: {:?}",
+                locks.keys,
+                expected_keys
+            );
+
+            let left = locks
+                .keys
+                .iter()
+                .map(|(hash, key)| (*hash, key.as_slice()))
+                .sorted();
+            let right = expected_keys.iter().cloned().sorted();
+            itertools::assert_equal(left, right);
+        };
+
+        let now = Instant::now_coarse();
+
+        let mut locks = Locks::new(10.into(), 10, b"k1".to_vec(), vec![], now);
+        assert_keys_equal(&locks, &[(10, b"k1")]);
+        assert!(locks.push(11, b"k2".to_vec(), now));
+        assert_keys_equal(&locks, &[(10, b"k1"), (11, b"k2")]);
+        assert!(!locks.push(10, b"k1".to_vec(), now));
+        assert_keys_equal(&locks, &[(10, b"k1"), (11, b"k2")]);
+        assert!(locks.push(10, b"k3".to_vec(), now));
+        assert_keys_equal(&locks, &[(10, b"k1"), (11, b"k2"), (10, b"k3")]);
+        assert!(!locks.push(11, vec![], now));
+        assert_keys_equal(&locks, &[(10, b"k1"), (11, b"k2"), (10, b"k3")]);
+        assert!(locks.push(12, vec![], now));
+        assert_keys_equal(&locks, &[(10, b"k1"), (11, b"k2"), (10, b"k3"), (12, b"")]);
+
+        assert!(locks.remove(11, b"k4").is_none());
+        assert_keys_equal(&locks, &[(10, b"k1"), (11, b"k2"), (10, b"k3"), (12, b"")]);
+        assert_eq!(locks.remove(12, b"k5").unwrap(), (12, vec![]));
+        assert_keys_equal(&locks, &[(10, b"k1"), (11, b"k2"), (10, b"k3")]);
+        assert_eq!(locks.remove(11, b"k2").unwrap(), (11, b"k2".to_vec()));
+        assert_keys_equal(&locks, &[(10, b"k1"), (10, b"k3")]);
+        // Removes either k1 or k3. As k1 is the first one, k1 will be removed fist.
+        assert_eq!(locks.remove(10, b"").unwrap(), (10, b"k1".to_vec()));
+        assert_keys_equal(&locks, &[(10, b"k3")]);
+        assert_eq!(locks.remove(10, b"").unwrap(), (10, b"k3".to_vec()));
+        assert_keys_equal(&locks, &[]);
+    }
+
+    #[test]
     fn test_detect_table() {
         let mut detect_table = DetectTable::new(Duration::from_secs(10));
 
@@ -2001,5 +2147,229 @@ pub mod tests {
         }
 
         worker.stop();
+    }
+
+    fn check_replace_lock_by_key_result(
+        mut result: Vec<(TimeStamp, u64, Vec<u8>, Vec<WaitForEntry>, Vec<u8>)>,
+        // expected: [(txn_ts, hash, key, wait_chain)]
+        // wait_chain: [(txn_ts, lock_ts, hash, key)]
+        mut expected: Vec<(TimeStamp, u64, &[u8], &[(TimeStamp, TimeStamp, u64, &[u8])])>,
+    ) {
+        result.sort_by(|lhs, rhs| {
+            // Sort by (txn_ts, hash, key)
+            (lhs.0, lhs.1, &lhs.2).cmp(&(rhs.0, rhs.1, &rhs.2))
+        });
+        expected.sort_by(|lhs, rhs| {
+            // Sort by (txn_ts, hash, key)
+            (lhs.0, lhs.1, lhs.2).cmp(&(rhs.0, rhs.1, rhs.2))
+        });
+
+        assert_eq!(
+            result.len(),
+            expected.len(),
+            "replace_lock_by_key result mismatch; actual: {:?}, expected: {:?}",
+            result,
+            expected
+        );
+
+        // Assert (txn_ts, hash, key) perfectly matches
+        assert!(
+            result
+                .iter()
+                .zip(expected.iter())
+                .all(|(result, expected)| {
+                    (result.0, result.1, result.2.as_slice())
+                        == (expected.0, expected.1, expected.2)
+                }),
+            "replace_lock_by_key result mismatch; actual: {:?}, expected: {:?}",
+            result,
+            expected
+        );
+
+        // Check wait chains
+        for (i, ((_, _, _, wait_chain, _), (_, _, _, expected_wait_chain))) in
+            result.iter().zip(expected.iter()).enumerate()
+        {
+            assert_eq!(
+                result.len(),
+                expected.len(),
+                "replace_lock_by_key result has {}-th wait chain mismatch; actual: {:?}, expected: {:?}",
+                i,
+                result,
+                expected
+            );
+            assert!(
+                wait_chain.iter().zip(expected_wait_chain.iter()).all(
+                    |(actual_item, expected_item)| {
+                        actual_item.txn == expected_item.0.into_inner()
+                            && actual_item.wait_for_txn == expected_item.1.into_inner()
+                            && actual_item.key_hash == expected_item.2
+                            && actual_item.key.as_slice() == expected_item.3
+                    }
+                ),
+                "replace_lock_by_key result has {}-th wait chain mismatch; actual: {:?}, expected: {:?}",
+                i,
+                result,
+                expected
+            );
+        }
+    }
+    #[test]
+    fn test_replace_lock_by_key() {
+        let mut detect_table = DetectTable::new(Duration::from_secs(10));
+
+        let check_result = check_replace_lock_by_key_result;
+
+        // 1 -> 2
+        assert_eq!(detect_table.detect(1.into(), 2.into(), 1, b"k1", &[]), None);
+        detect_table.check_wait_graph(vec![(1.into(), 2.into(), 1, b"k1")]);
+
+        // Nothing happens if replacing with the same ts.
+        assert_eq!(
+            detect_table.replace_lock_by_key(1, b"k1".to_vec(), 2.into(), 2.into()),
+            vec![]
+        );
+        detect_table.check_wait_graph(vec![(1.into(), 2.into(), 1, b"k1")]);
+
+        // Nothing happens if key is not provided.
+        assert_eq!(
+            detect_table.replace_lock_by_key(1, b"".to_vec(), 2.into(), 3.into()),
+            vec![]
+        );
+        detect_table.check_wait_graph(vec![(1.into(), 2.into(), 1, b"k1")]);
+
+        // Replace 2 with 3 (2 releases the lock and 3 acquires the lock)
+        // Current state: 1 -> 3
+        assert_eq!(
+            detect_table.replace_lock_by_key(1, b"k1".to_vec(), 2.into(), 3.into()),
+            vec![]
+        );
+        detect_table.check_wait_graph(vec![(1.into(), 3.into(), 1, b"k1")]);
+
+        // Let 3 wait for 2
+        // Current state: 1 -> 3, 3 -> 2
+        assert_eq!(detect_table.detect(3.into(), 2.into(), 2, b"k2", &[]), None);
+        detect_table.check_wait_graph(vec![
+            (1.into(), 3.into(), 1, b"k1"),
+            (3.into(), 2.into(), 2, b"k2"),
+        ]);
+
+        // Replace 2 to 1, which forms a deadlock and reports it to txn 3.
+        // Current state: 1 -> 3
+        check_result(
+            detect_table.replace_lock_by_key(2, b"k2".to_vec(), 2.into(), 1.into()),
+            vec![(3.into(), 1, b"k1", &[(1.into(), 3.into(), 1, b"k1")])],
+        );
+        detect_table.check_wait_graph(vec![(1.into(), 3.into(), 1, b"k1")]);
+
+        // Test waiting on multiple keys, and multiple locks on same key (which may
+        // exist when there is some stale information).
+        // Current state: 1->3(k1), 1->3(k2), 2->4(k1), 1->5(k1), 2->3(k1)
+        assert_eq!(detect_table.detect(1.into(), 3.into(), 2, b"k2", &[]), None);
+        assert_eq!(detect_table.detect(2.into(), 4.into(), 1, b"k1", &[]), None);
+        assert_eq!(detect_table.detect(1.into(), 5.into(), 1, b"k1", &[]), None);
+        assert_eq!(detect_table.detect(2.into(), 3.into(), 1, b"k1", &[]), None);
+        detect_table.check_wait_graph(vec![
+            (1.into(), 3.into(), 1, b"k1"),
+            (1.into(), 3.into(), 2, b"k2"),
+            (1.into(), 5.into(), 1, b"k1"),
+            (2.into(), 3.into(), 1, b"k1"),
+            (2.into(), 4.into(), 1, b"k1"),
+        ]);
+
+        // Replace 3 to 6 on k1.
+        // Current state: 1->6(k1), 1->3(k2), 2->4(k1), 1->5(k1), 2->6(k1)
+        assert_eq!(
+            detect_table.replace_lock_by_key(1, b"k1".to_vec(), 3.into(), 6.into()),
+            vec![]
+        );
+        detect_table.check_wait_graph(vec![
+            (1.into(), 6.into(), 1, b"k1"),
+            (1.into(), 3.into(), 2, b"k2"),
+            (1.into(), 5.into(), 1, b"k1"),
+            (2.into(), 6.into(), 1, b"k1"),
+            (2.into(), 4.into(), 1, b"k1"),
+        ]);
+
+        detect_table.clear();
+        detect_table.check_wait_graph(vec![]);
+
+        // Test edge with missing key (ignored).
+        assert_eq!(detect_table.detect(1.into(), 2.into(), 1, b"", &[]), None);
+        detect_table.check_wait_graph(vec![(1.into(), 2.into(), 1, b"")]);
+
+        // Nothing happens as the edge is not indexed.
+        assert_eq!(
+            detect_table.replace_lock_by_key(1, b"k1".to_vec(), 2.into(), 3.into()),
+            vec![]
+        );
+        detect_table.check_wait_graph(vec![(1.into(), 2.into(), 1, b"")]);
+        assert_eq!(
+            detect_table.replace_lock_by_key(1, b"".to_vec(), 2.into(), 3.into()),
+            vec![]
+        );
+        detect_table.check_wait_graph(vec![(1.into(), 2.into(), 1, b"")]);
+
+        detect_table.clear();
+        detect_table.check_wait_graph(vec![]);
+
+        // Test multiple deadlocks formed while replacing.
+        assert_eq!(detect_table.detect(1.into(), 2.into(), 1, b"k1", &[]), None);
+        assert_eq!(detect_table.detect(1.into(), 3.into(), 2, b"k2", &[]), None);
+        assert_eq!(detect_table.detect(1.into(), 4.into(), 3, b"k3", &[]), None);
+        assert_eq!(
+            detect_table.detect(2.into(), 10.into(), 4, b"k4", &[]),
+            None
+        );
+        assert_eq!(detect_table.detect(3.into(), 5.into(), 5, b"k5", &[]), None);
+        assert_eq!(
+            detect_table.detect(5.into(), 10.into(), 4, b"k4", &[]),
+            None
+        );
+        assert_eq!(detect_table.detect(4.into(), 6.into(), 6, b"k6", &[]), None);
+        assert_eq!(detect_table.detect(6.into(), 7.into(), 7, b"k7", &[]), None);
+        assert_eq!(
+            detect_table.detect(7.into(), 10.into(), 4, b"k4", &[]),
+            None
+        );
+        detect_table.check_wait_graph(vec![
+            (1.into(), 2.into(), 1, b"k1"),
+            (1.into(), 3.into(), 2, b"k2"),
+            (1.into(), 4.into(), 3, b"k3"),
+            (2.into(), 10.into(), 4, b"k4"),
+            (3.into(), 5.into(), 5, b"k5"),
+            (5.into(), 10.into(), 4, b"k4"),
+            (4.into(), 6.into(), 6, b"k6"),
+            (6.into(), 7.into(), 7, b"k7"),
+            (7.into(), 10.into(), 4, b"k4"),
+        ]);
+        check_result(
+            detect_table.replace_lock_by_key(4, b"k4".to_vec(), 10.into(), 1.into()),
+            vec![
+                // 1->2->1, txn 2 aborts, txn 2 blocks txn 1 on key k1
+                (2.into(), 1, b"k1", &[(1.into(), 2.into(), 1, b"k1")]),
+                // 1->3->5->1, txn 5 aborts, txn 5 blocks txn 3 on key k5
+                (
+                    5.into(),
+                    5,
+                    b"k5",
+                    &[
+                        (1.into(), 3.into(), 2, b"k2"),
+                        (3.into(), 5.into(), 5, b"k5"),
+                    ],
+                ),
+                // 1->4->6->7->1, txn 7 aborts, txn 7 blocks txn 6 on key k7
+                (
+                    7.into(),
+                    7,
+                    b"k7",
+                    &[
+                        (1.into(), 4.into(), 3, b"k3"),
+                        (4.into(), 6.into(), 6, b"k6"),
+                        (6.into(), 7.into(), 7, b"k7"),
+                    ],
+                ),
+            ],
+        );
     }
 }

@@ -170,7 +170,11 @@ impl Display for Task {
                 write!(
                     f,
                     "txn:{} waiting for {}:{}, key:{}, token {:?}",
-                    start_ts, wait_info.lock_digest.ts, wait_info.lock_digest.hash, wait_info.key, token
+                    start_ts,
+                    wait_info.lock_digest.ts,
+                    wait_info.lock_digest.hash,
+                    wait_info.key,
+                    token
                 )
             }
             Task::RemoveLockWait { token } => {
