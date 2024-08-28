@@ -28,7 +28,13 @@ mod metadata;
 use self::metadata::*;
 
 mod kms;
+<<<<<<< HEAD
 pub use self::kms::{DataKeyPair, EncryptedKey, KmsBackend, KmsProvider};
+=======
+#[cfg(any(test, feature = "testexport"))]
+pub use self::kms::fake;
+pub use self::kms::KmsBackend;
+>>>>>>> 222e0a4321 (encryption: add test for temporary KMS service unavailable (#17445))
 
 #[derive(Default, Debug, Clone)]
 pub struct PlaintextBackend {}

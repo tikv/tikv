@@ -6300,6 +6300,7 @@ dependencies = [
  "crc64fast",
  "crossbeam",
  "dashmap",
+ "encryption",
  "encryption_export",
  "engine_panic",
  "engine_rocks",
