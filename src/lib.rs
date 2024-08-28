@@ -46,7 +46,6 @@ extern crate more_asserts;
 #[macro_use]
 extern crate tikv_util;
 
-extern crate core;
 #[cfg(test)]
 extern crate test;
 

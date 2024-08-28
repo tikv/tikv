@@ -845,11 +845,15 @@ pub mod tests {
         (waiter, info, f)
     }
 
-    pub(crate) fn expect_key_is_locked(error: StorageError, lock_info: LockInfo) {
+    pub(crate) fn expect_key_is_locked(error: StorageError, mut lock_info: LockInfo) {
         match error {
             StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
                 MvccError(box MvccErrorInner::KeyIsLocked(res)),
-            )))) => assert_eq!(res, lock_info),
+            )))) => {
+                // Ignore difference on `duration_to_last_update_ms`
+                lock_info.duration_to_last_update_ms = res.duration_to_last_update_ms;
+                assert_eq!(res, lock_info)
+            },
             e => panic!("unexpected error: {:?}", e),
         }
     }
