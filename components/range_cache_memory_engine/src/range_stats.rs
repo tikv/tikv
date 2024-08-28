@@ -259,11 +259,23 @@ impl RangeStatsManager {
 
         if !memory_controller.reached_soft_limit() {
             let reach_stop_load = memory_controller.reached_stop_load_limit();
+            let regions_loaded = self.region_loaded_at.read().unwrap();
             let region_to_evict: Vec<_> = regions_activity
                 .into_iter()
                 .filter(|(_, r)| {
                     r.region_stat.cop_detail.mvcc_amplification()
                         <= if reach_stop_load { 5.0 } else { 2.0 }
+                })
+                .filter_map(|(r, s)| match regions_loaded.get(&r.id) {
+                    // Do not evict regions that were loaded less than `EVICT_MIN_DURATION` ago.
+                    Some(&time_loaded)
+                        if Instant::now() - time_loaded < self.evict_min_duration =>
+                    {
+                        let mut mut_prev_top_regions = self.prev_top_regions.lock();
+                        let _ = mut_prev_top_regions.insert(r.id, r);
+                        None
+                    }
+                    _ => Some((r, s)),
                 })
                 .collect();
             let debug: Vec<_> = region_to_evict
@@ -283,21 +295,7 @@ impl RangeStatsManager {
                 "reached_stop_limit" => reach_stop_load,
                 "regions" => ?debug,
             );
-            let regions_loaded = self.region_loaded_at.read().unwrap();
-            region_to_evict
-                .into_iter()
-                .filter_map(|(r, _)| match regions_loaded.get(&r.id) {
-                    // Do not evict regions that were loaded less than `EVICT_MIN_DURATION` ago.
-                    Some(&time_loaded)
-                        if Instant::now() - time_loaded < self.evict_min_duration =>
-                    {
-                        let mut mut_prev_top_regions = self.prev_top_regions.lock();
-                        let _ = mut_prev_top_regions.insert(r.id, r);
-                        None
-                    }
-                    _ => Some(r),
-                })
-                .collect()
+            region_to_evict.into_iter().map(|(r, _)| r).collect()
         } else {
             // better one by one
             regions_activity.sort_by(|(_, a), (_, b)| {
