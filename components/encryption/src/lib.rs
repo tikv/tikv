@@ -10,6 +10,8 @@ mod file_dict_file;
 mod io;
 mod manager;
 mod master_key;
+#[cfg(any(test, feature = "testexport"))]
+pub use master_key::fake;
 mod metrics;
 
 use std::{io::ErrorKind, path::Path};
