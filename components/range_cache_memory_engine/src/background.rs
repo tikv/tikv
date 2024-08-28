@@ -703,18 +703,16 @@ impl BackgroundRunnerCore {
         let mut regions_to_delete = Vec::with_capacity(regions_to_remove.len());
         info!("ime load_evict"; "ranges_to_add" => ?&regions_to_add, "may_evict" => ?&regions_to_remove);
         for evict_region in regions_to_remove {
-            if self.memory_controller.reached_soft_limit() {
-                let mut core = self.engine.write();
-                let deleteable_regions = core
-                    .mut_range_manager()
-                    .evict_region(&evict_region, EvictReason::AutoEvict);
-                info!(
-                    "ime load_evict: soft limit reached";
-                    "region_to_evict" => ?&evict_region,
-                    "evicted_regions" => ?&deleteable_regions,
-                );
-                regions_to_delete.extend(deleteable_regions);
-            }
+            let mut core = self.engine.write();
+            let deleteable_regions = core
+                .mut_range_manager()
+                .evict_region(&evict_region, EvictReason::AutoEvict);
+            info!(
+                "ime load_evict: soft limit reached";
+                "region_to_evict" => ?&evict_region,
+                "evicted_regions" => ?&deleteable_regions,
+            );
+            regions_to_delete.extend(deleteable_regions);
         }
 
         if !regions_to_delete.is_empty() {
