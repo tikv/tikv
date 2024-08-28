@@ -853,7 +853,7 @@ pub mod tests {
                 // Ignore difference on `duration_to_last_update_ms`
                 lock_info.duration_to_last_update_ms = res.duration_to_last_update_ms;
                 assert_eq!(res, lock_info)
-            },
+            }
             e => panic!("unexpected error: {:?}", e),
         }
     }

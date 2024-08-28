@@ -311,15 +311,26 @@ fn test_detect_deadlock_when_merge_region() {
     }
 }
 
-#[test]
-fn test_detect_deadlock_when_updating_wait_info() {
+fn test_detect_deadlock_when_updating_wait_info_impl(detect_on_leader: bool) {
     use kvproto::kvrpcpb::PessimisticLockKeyResultType::*;
     let mut cluster = new_cluster_for_deadlock_test(3);
+
+    must_split_region(&mut cluster, b"", b"b");
+    must_transfer_leader(&mut cluster, b"", 1);
+
+    must_transfer_leader(&mut cluster, b"key1", if detect_on_leader { 1 } else { 2 });
+
+    deadlock_detector_leader_must_be(&mut cluster, 1);
 
     let key1 = b"key1";
     let key2 = b"key2";
     let (client, ctx) = build_leader_client(&mut cluster, key1);
     let client = Arc::new(client);
+
+    assert_eq!(
+        ctx.peer.as_ref().unwrap().store_id,
+        if detect_on_leader { 1 } else { 2 }
+    );
 
     fn async_pessimistic_lock(
         client: Arc<TikvClient>,
@@ -412,4 +423,14 @@ fn test_detect_deadlock_when_updating_wait_info() {
     assert!(resp.errors.is_empty());
     assert_eq!(resp.results[0].get_type(), LockResultNormal);
     must_kv_pessimistic_rollback(&client, ctx, key2.to_vec(), 11, 11);
+}
+
+#[test]
+fn test_detect_deadlock_when_updating_wait_info_on_leader() {
+    test_detect_deadlock_when_updating_wait_info_impl(true);
+}
+
+#[test]
+fn test_detect_deadlock_when_updating_wait_info_on_follower() {
+    test_detect_deadlock_when_updating_wait_info_impl(false);
 }
