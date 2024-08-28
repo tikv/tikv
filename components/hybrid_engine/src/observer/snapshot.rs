@@ -34,12 +34,8 @@ impl HybridSnapshotObserver {
 }
 
 impl SnapshotObserver for HybridSnapshotObserver {
-    fn on_snapshot(
-        &self,
-        ctx: Option<SnapshotContext>,
-        sequence_number: u64,
-    ) -> Box<dyn ObservedSnapshot> {
-        let snap = new_in_memory_snapshot(&self.cache_engine, sequence_number, ctx);
+    fn on_snapshot(&self, ctx: SnapshotContext, sequence_number: u64) -> Box<dyn ObservedSnapshot> {
+        let snap = new_in_memory_snapshot(&self.cache_engine, ctx, sequence_number);
         Box::new(RangeCacheSnapshotPin { snap })
     }
 }

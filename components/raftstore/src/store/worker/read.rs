@@ -142,15 +142,14 @@ pub trait ReadExecutor {
                     }
                 }
                 CmdType::Snap => {
-                    let snap = self.get_snapshot(snap_ctx.clone(), &local_read_ctx);
-                    let seqno = snap.sequence_number();
                     let mut snapshot = RegionSnapshot::from_snapshot(
                         self.get_snapshot(snap_ctx.clone(), &local_read_ctx),
                         region.clone(),
                     );
-                    if snap_ctx.is_some() {
-                        if let Some(snap_pin) = host.on_snapshot(snap_ctx.clone(), seqno) {
-                            snapshot.pin_snapshot(snap_pin);
+                    if let Some(snap_ctx) = snap_ctx.as_ref() {
+                        let seqno = snapshot.get_snapshot().sequence_number();
+                        if let Some(observed_snap) = host.on_snapshot(snap_ctx.clone(), seqno) {
+                            snapshot.set_observed_snapshot(observed_snap);
                         }
                     }
                     response.snapshot = Some(snapshot);

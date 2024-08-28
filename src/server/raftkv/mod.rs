@@ -632,7 +632,7 @@ where
         };
         async_snapshot(&mut self.router, ctx, snap_ctx.clone()).map_ok(|region_snap| {
             region_snap.replace_snapshot(move |disk_snap, pinned| {
-                HybridEngineSnapshot::from_snapshot_pin(disk_snap, pinned)
+                HybridEngineSnapshot::from_observed_snapshot(disk_snap, pinned)
             })
         })
     }

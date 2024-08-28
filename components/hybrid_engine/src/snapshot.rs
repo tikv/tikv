@@ -56,7 +56,7 @@ impl<EK> HybridEngineSnapshot<EK, RangeCacheMemoryEngine>
 where
     EK: KvEngine,
 {
-    pub fn from_snapshot_pin(
+    pub fn from_observed_snapshot(
         disk_snap: EK::Snapshot,
         snap_pin: Option<Box<dyn ObservedSnapshot>>,
     ) -> Self {

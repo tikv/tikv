@@ -921,7 +921,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
 
     pub fn on_snapshot(
         &self,
-        ctx: Option<SnapshotContext>,
+        ctx: SnapshotContext,
         seqno: u64,
     ) -> Option<Box<dyn ObservedSnapshot>> {
         self.registry
