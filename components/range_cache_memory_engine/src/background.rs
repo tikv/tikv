@@ -690,7 +690,7 @@ impl BackgroundRunnerCore {
         }
 
         let curr_memory_usage = self.memory_controller.mem_usage();
-        let threshold = self.memory_controller.soft_limit_threshold();
+        let threshold = self.memory_controller.stop_load_limit_threshold();
         range_stats_manager.adjust_max_num_regions(curr_memory_usage, threshold);
 
         let mut regions_to_add = Vec::with_capacity(256);
@@ -943,7 +943,7 @@ impl Runnable for BackgroundRunner {
                         engine.engine.clone()
                     };
 
-                    if core.memory_controller.reached_soft_limit() {
+                    if core.memory_controller.reached_stop_load_limit() {
                         // We are running out of memory, so cancel the load.
                         is_canceled = true;
                     }
@@ -2777,9 +2777,107 @@ pub mod tests {
         pd_server.stop();
     }
 
+    fn verify_load(
+        region: &Region,
+        engine: &RangeCacheMemoryEngine,
+        exist: bool,
+        expect_count: usize,
+    ) {
+        if exist {
+            let read_ts = TimeStamp::compose(TimeStamp::physical_now(), 0).into_inner();
+            let snap = engine
+                .snapshot(
+                    region.id,
+                    0,
+                    CacheRange::from_region(region),
+                    read_ts,
+                    u64::MAX,
+                )
+                .unwrap();
+            let mut count = 0;
+            let range = CacheRange::from_region(region);
+            for cf in DATA_CFS {
+                let mut iter = IterOptions::default();
+                iter.set_lower_bound(&range.start, 0);
+                iter.set_upper_bound(&range.end, 0);
+                let mut iter = snap.iterator_opt(cf, iter).unwrap();
+                let _ = iter.seek_to_first();
+                while iter.valid().unwrap() {
+                    let _ = iter.next();
+                    count += 1;
+                }
+            }
+            assert_eq!(count, expect_count);
+        } else {
+            engine
+                .snapshot(region.id, 0, CacheRange::from_region(region), 10, 10)
+                .unwrap_err();
+        }
+    }
+
     #[test]
-    fn test_snapshot_load_reaching_limit() {
+    fn test_snapshot_load_reaching_stop_limit() {
         let mut config = RangeCacheEngineConfig::config_for_test();
+        config.stop_load_limit_threshold = Some(ReadableSize(500));
+        config.soft_limit_threshold = Some(ReadableSize(1000));
+        config.hard_limit_threshold = Some(ReadableSize(1500));
+        let config = Arc::new(VersionTrack::new(config));
+        let mut engine =
+            RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(config));
+        let path = Builder::new()
+            .prefix("test_snapshot_load_reaching_limit")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+        let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
+        engine.set_disk_engine(rocks_engine.clone());
+        let mem_controller = engine.memory_controller();
+
+        let region1 = new_region(1, construct_region_key(1), construct_region_key(3));
+        // Memory for one put is 17(key) + 3(val) + 8(Seqno) + 16(Memory controller in
+        // key and val) + 96(Node overhead) = 140
+        let key = construct_key(1, 10);
+        rocks_engine.put_cf(CF_DEFAULT, &key, b"val").unwrap();
+        rocks_engine.put_cf(CF_LOCK, &key, b"val").unwrap();
+        rocks_engine.put_cf(CF_WRITE, &key, b"val").unwrap();
+
+        let key = construct_key(2, 10);
+        rocks_engine.put_cf(CF_DEFAULT, &key, b"val").unwrap();
+        rocks_engine.put_cf(CF_LOCK, &key, b"val").unwrap();
+        rocks_engine.put_cf(CF_WRITE, &key, b"val").unwrap();
+        // After loading range1, the memory usage should be 140*6=840
+
+        let region2 = new_region(2, construct_region_key(3), construct_region_key(5));
+        let key = construct_key(3, 10);
+        rocks_engine.put_cf(CF_DEFAULT, &key, b"val").unwrap();
+        rocks_engine.put_cf(CF_LOCK, &key, b"val").unwrap();
+        rocks_engine.put_cf(CF_WRITE, &key, b"val").unwrap();
+
+        for r in [&region1, &region2] {
+            engine.load_region(r.clone()).unwrap();
+            engine.prepare_for_apply(1, CacheRange::from_region(r), r);
+        }
+
+        // ensure all ranges are finshed
+        test_util::eventually(Duration::from_millis(100), Duration::from_secs(2), || {
+            !engine
+                .core
+                .read()
+                .range_manager()
+                .regions()
+                .values()
+                .any(|m| matches!(m.get_state(), Pending | Loading))
+        });
+
+        verify_load(&region1, &engine, true, 6);
+        verify_load(&region2, &engine, false, 0);
+        assert_eq!(mem_controller.mem_usage(), 846);
+    }
+
+    #[test]
+    fn test_snapshot_load_reaching_hard_limit() {
+        let mut config = RangeCacheEngineConfig::config_for_test();
+        config.stop_load_limit_threshold = Some(ReadableSize(1000));
         config.soft_limit_threshold = Some(ReadableSize(1000));
         config.hard_limit_threshold = Some(ReadableSize(1500));
         let config = Arc::new(VersionTrack::new(config));
@@ -2847,41 +2945,9 @@ pub mod tests {
                 .any(|m| matches!(m.get_state(), Pending | Loading))
         });
 
-        let verify = |region: &Region, exist, expect_count| {
-            if exist {
-                let read_ts = TimeStamp::compose(TimeStamp::physical_now(), 0).into_inner();
-                let snap = engine
-                    .snapshot(
-                        region.id,
-                        0,
-                        CacheRange::from_region(region),
-                        read_ts,
-                        u64::MAX,
-                    )
-                    .unwrap();
-                let mut count = 0;
-                let range = CacheRange::from_region(region);
-                for cf in DATA_CFS {
-                    let mut iter = IterOptions::default();
-                    iter.set_lower_bound(&range.start, 0);
-                    iter.set_upper_bound(&range.end, 0);
-                    let mut iter = snap.iterator_opt(cf, iter).unwrap();
-                    let _ = iter.seek_to_first();
-                    while iter.valid().unwrap() {
-                        let _ = iter.next();
-                        count += 1;
-                    }
-                }
-                assert_eq!(count, expect_count);
-            } else {
-                engine
-                    .snapshot(region.id, 0, CacheRange::from_region(region), 10, 10)
-                    .unwrap_err();
-            }
-        };
-        verify(&region1, true, 6);
-        verify(&region2, false, 0);
-        verify(&region3, false, 3);
+        verify_load(&region1, &engine, true, 6);
+        verify_load(&region2, &engine, false, 0);
+        verify_load(&region3, &engine, false, 3);
         assert_eq!(mem_controller.mem_usage(), 1551);
     }
 

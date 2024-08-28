@@ -87,12 +87,17 @@ impl MemoryController {
 
     #[inline]
     pub(crate) fn reached_stop_load_limit(&self) -> bool {
-        self.mem_usage() >= self.config.value().soft_limit_threshold()
+        self.mem_usage() >= self.config.value().stop_load_limit_threshold()
     }
 
     #[inline]
     pub(crate) fn reached_soft_limit(&self) -> bool {
         self.mem_usage() >= self.config.value().soft_limit_threshold()
+    }
+
+    #[inline]
+    pub(crate) fn stop_load_limit_threshold(&self) -> usize {
+        self.config.value().stop_load_limit_threshold()
     }
 
     #[inline]
@@ -133,6 +138,7 @@ mod tests {
             enabled: true,
             gc_interval: Default::default(),
             load_evict_interval: Default::default(),
+            stop_load_limit_threshold: Some(ReadableSize(300)),
             soft_limit_threshold: Some(ReadableSize(300)),
             hard_limit_threshold: Some(ReadableSize(500)),
             expected_region_size: Default::default(),
