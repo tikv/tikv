@@ -159,58 +159,10 @@ pub struct StoreMeta {
     pub region_read_progress: RegionReadProgressRegistry,
     /// record sst_file_name -> (sst_smallest_key, sst_largest_key)
     pub damaged_ranges: HashMap<String, (Vec<u8>, Vec<u8>)>,
-<<<<<<< HEAD
-=======
     /// Record regions are damaged on some corner cases, the relative peer must
     /// be safely removed from the store, such as applying snapshot or
     /// compacting raft logs.
     pub damaged_regions: HashSet<u64>,
-    /// Record peers are busy with applying logs
-    /// (applied_index <= last_idx - leader_transfer_max_log_lag).
-    /// `busy_apply_peers` and `completed_apply_peers_count` are used
-    /// to record the accurate count of busy apply peers and peers complete
-    /// applying logs
-    pub busy_apply_peers: HashSet<u64>,
-    /// Record the number of peers done for applying logs.
-    /// Without `completed_apply_peers_count`, it's hard to know whether all
-    /// peers are ready for applying logs.
-    /// If None, it means the store is start from empty, no need to check and
-    /// update it anymore.
-    pub completed_apply_peers_count: Option<u64>,
-}
-
-impl StoreRegionMeta for StoreMeta {
-    #[inline]
-    fn store_id(&self) -> u64 {
-        self.store_id.unwrap()
-    }
-
-    #[inline]
-    fn search_region(&self, start_key: &[u8], end_key: &[u8], mut visitor: impl FnMut(&Region)) {
-        let start_key = data_key(start_key);
-        for (_, id) in self
-            .region_ranges
-            .range((Excluded(start_key), Unbounded::<Vec<u8>>))
-        {
-            let region = &self.regions[id];
-            if end_key.is_empty() || end_key > region.get_start_key() {
-                visitor(region);
-            } else {
-                break;
-            }
-        }
-    }
-
-    #[inline]
-    fn region_read_progress(&self) -> &RegionReadProgressRegistry {
-        &self.region_read_progress
-    }
-
-    #[inline]
-    fn reader(&self, region_id: u64) -> Option<&ReadDelegate> {
-        self.readers.get(&region_id)
-    }
->>>>>>> dd37a4703d (raftstore: gc abnormal snapshots and destroy peer if failed to apply snapshots. (#16992))
 }
 
 impl StoreMeta {
@@ -228,12 +180,7 @@ impl StoreMeta {
             destroyed_region_for_snap: HashMap::default(),
             region_read_progress: RegionReadProgressRegistry::new(),
             damaged_ranges: HashMap::default(),
-<<<<<<< HEAD
-=======
             damaged_regions: HashSet::default(),
-            busy_apply_peers: HashSet::default(),
-            completed_apply_peers_count: Some(0),
->>>>>>> dd37a4703d (raftstore: gc abnormal snapshots and destroy peer if failed to apply snapshots. (#16992))
         }
     }
 
@@ -2501,8 +2448,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 let damaged_regions_id = meta.get_all_damaged_region_ids().into_iter().collect();
                 stats.set_damaged_regions_id(damaged_regions_id);
             }
-<<<<<<< HEAD
-=======
             if !meta.damaged_regions.is_empty() {
                 // Note: no need to filter overlapped regions, since the regions in
                 // `damaged_ranges` are already non-overlapping.
@@ -2510,9 +2455,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                     .mut_damaged_regions_id()
                     .extend(meta.damaged_regions.iter());
             }
-            completed_apply_peers_count = meta.completed_apply_peers_count;
-            busy_apply_peers_count = meta.busy_apply_peers.len() as u64;
->>>>>>> dd37a4703d (raftstore: gc abnormal snapshots and destroy peer if failed to apply snapshots. (#16992))
         }
 
         let snap_stats = self.ctx.snap_mgr.stats();
