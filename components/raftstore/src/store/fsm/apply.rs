@@ -3741,9 +3741,7 @@ impl GenSnapTask {
         );
         // If the size or the count of keys of cf is relatively small, it's recommended
         // to use plain file for mitigating performance issue when ingesting snapshot.
-        // TODO:
-        // (1) should make the check more accurate and configurable.
-        // (2) should consider the size of each column family rather than the total
+        // TODO: should consider the size of each column family rather than the total
         // size.
         self.use_plain_file = region_approximate_size.unwrap_or(u64::MAX)
             <= snap_min_approximate_size.0
