@@ -530,8 +530,6 @@ where
             }
             Err(e) => {
                 warn!("failed to apply snap!!!"; "region_id" => region_id, "err" => %e);
-                self.coprocessor_host
-                    .cancel_apply_snapshot(region_id, peer_id);
                 status.swap(JOB_STATUS_FAILED, Ordering::SeqCst);
                 SNAP_COUNTER.apply.fail.inc();
                 // As the snapshot failed, the related peer should be marked tombstone.
