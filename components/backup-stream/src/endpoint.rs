@@ -697,7 +697,7 @@ where
         self.pool.spawn(
             self.pd_client
                 .update_service_safe_point(
-                    self.pause_guard_id_for_task(task.info.get_name()),
+                    self.pause_guard_id_for_task(task_name),
                     TimeStamp::zero(),
                     Duration::new(0, 0),
                 )
