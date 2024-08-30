@@ -2313,8 +2313,7 @@ mod tests {
         assert_eq!(sst_file_metadata.len(), meta.get_length());
 
         // verifies the SST content is correct.
-        let sst_reader: engine_rocks::RocksSstReader =
-            new_sst_reader(sst_file_path.to_str().unwrap(), None);
+        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
         sst_reader.verify_checksum().unwrap();
         let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
         iter.seek_to_first().unwrap();
