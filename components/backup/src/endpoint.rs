@@ -1325,10 +1325,12 @@ pub mod tests {
 
     use api_version::{api_v2::RAW_KEY_PREFIX, dispatch_api_version, KvFormat, RawValue};
     use collections::HashSet;
-    use engine_traits::MiscExt;
+    use engine_rocks::RocksSstReader;
+    use engine_traits::{IterOptions, Iterator, MiscExt, RefIterable, SstReader};
     use external_storage::{make_local_backend, make_noop_backend};
     use file_system::{IoOp, IoRateLimiter, IoType};
     use futures::{executor::block_on, stream::StreamExt};
+    use keys::data_key;
     use kvproto::{kvrpcpb::Context, metapb};
     use raftstore::coprocessor::{RegionCollector, Result as CopResult, SeekRegionCallback};
     use rand::Rng;
@@ -1341,7 +1343,7 @@ pub mod tests {
             RocksEngine, TestEngineBuilder,
         },
     };
-    use tikv_util::{config::ReadableSize, store::new_peer};
+    use tikv_util::{config::ReadableSize, info, store::new_peer};
     use tokio::time;
     use txn_types::SHORT_VALUE_MAX_LEN;
 
@@ -2047,19 +2049,19 @@ pub mod tests {
 
     #[test]
     fn test_handle_backup_task_bypass_locks() {
-        let (tmp, endpoint) = new_endpoint_with_limiter(None, ApiVersion::V1, false, None);
-        let mut engine = endpoint.engine.clone();
-
-        endpoint
-            .region_info
-            .set_regions(vec![(b"".to_vec(), b"10".to_vec(), 1)]);
-
-        let mut ts = TimeStamp::new(1);
-        let mut alloc_ts = || *ts.incr();
-        let mut prewrite_keys = vec![];
-
-        // Multi-versions for key 0..9.
+        // test write & default cf
         for len in &[SHORT_VALUE_MAX_LEN - 1, SHORT_VALUE_MAX_LEN * 2] {
+            let (tmp, endpoint) = new_endpoint();
+            let mut engine = endpoint.engine.clone();
+            endpoint
+                .region_info
+                .set_regions(vec![(b"".to_vec(), b"".to_vec(), 1)]);
+
+            let mut ts = TimeStamp::new(1);
+            let mut alloc_ts = || *ts.incr();
+            let mut prewrite_keys = vec![];
+            let lock_key = 9;
+
             for i in 0..10u8 {
                 let start = alloc_ts();
                 let commit = alloc_ts();
@@ -2071,50 +2073,64 @@ pub mod tests {
                     key.as_bytes(),
                     start,
                 );
-                if i > 5 {
-                    // key 6..9 are locked.
-                    // ts 13..21/33..41 locked.
+                if i == lock_key {
+                    // key 9 is locked.
+                    // start ts 20 locked.
                     prewrite_keys.push((key.clone(), start, commit));
                 } else {
                     must_commit(&mut engine, key.as_bytes(), start, commit);
                 }
             }
-        }
 
-        // Flush to disk so that read requests can be traced by TiKV limiter.
-        engine
-            .get_rocksdb()
-            .flush_cf(engine_traits::CF_DEFAULT, true)
-            .unwrap();
-        engine
-            .get_rocksdb()
-            .flush_cf(engine_traits::CF_WRITE, true)
-            .unwrap();
+            // Test cases with different scenarios
+            let test_cases = vec![
+                (
+                    "No bypass locks",
+                    TimeStamp::new(3),
+                    vec![],
+                    "0".as_bytes().to_vec(),
+                    false,
+                ),
+                (
+                    "With bypass locks, and lock ts > backup ts",
+                    TimeStamp::new(12),
+                    prewrite_keys.clone(),
+                    "4".as_bytes().to_vec(),
+                    // expect no error
+                    false,
+                ),
+                (
+                    "No bypass locks, and lock ts > backup ts",
+                    TimeStamp::new(12),
+                    vec![],
+                    "4".as_bytes().to_vec(),
+                    // expect no error
+                    false,
+                ),
+                (
+                    "No bypass locks, and lock ts < backup ts",
+                    TimeStamp::new(22),
+                    vec![],
+                    vec![],
+                    // expect meet lock error
+                    true,
+                ),
+                (
+                    "With bypass locks, and lock ts < backup ts",
+                    TimeStamp::new(22),
+                    prewrite_keys.clone(),
+                    // the key 9 is locked, so the end key should be (8)
+                    (lock_key-1).to_string().as_bytes().to_vec(),
+                    // expect no error, because the locks can be ignore
+                    // the future commit must large than backup ts.
+                    false,
+                ),
+            ];
 
-        // Test cases with different scenarios
-        let test_cases = vec![
-            ("No bypass locks", TimeStamp::new(3), vec![], false),
-            // expect no error
-            (
-                "With bypass locks after backup ts",
-                TimeStamp::new(12),
-                prewrite_keys.clone(),
-                false,
-            ),
-            // expect meet lock error
-            (
-                "With bypass locks before backup ts",
-                TimeStamp::new(22),
-                prewrite_keys.clone(),
-                true,
-            ),
-        ];
-
-        for (case_name, backup_ts, bypass_locks, has_error) in test_cases {
-            for len in &[SHORT_VALUE_MAX_LEN - 1, SHORT_VALUE_MAX_LEN * 2] {
+            for (case_name, backup_ts, bypass_locks, expect_end_key, has_error) in test_cases {
                 let mut req = BackupRequest::default();
                 req.set_start_key(vec![]);
-                req.set_end_key(vec![b'5']);
+                req.set_end_key(vec![]);
                 req.set_start_version(0);
                 req.set_end_version(backup_ts.into_inner());
 
@@ -2133,7 +2149,7 @@ pub mod tests {
                 let (task, _) = Task::new(req, tx).unwrap();
                 endpoint.handle_backup_task(task);
 
-                let (resp, rx) = block_on(rx.into_future());
+                let (resp, _rx) = block_on(rx.into_future());
                 let resp = resp.unwrap();
                 if has_error {
                     assert!(resp.has_error(), "{:?}", resp);
@@ -2152,16 +2168,15 @@ pub mod tests {
                         resp
                     );
 
-                    // Verify file contents if needed
-                    // TODO: Add file content verification
-
-                    let (none, _rx) = block_on(rx.into_future());
-                    assert!(
-                        none.is_none(),
-                        "Case '{}' failed: Expected None, got {:?}",
-                        case_name,
-                        none
-                    );
+                    for file in files {
+                        let sst_reader =
+                            RocksSstReader::open_with_env(tmp1.join(&file.name).as_os_str().to_str().unwrap(), None).unwrap();
+                        sst_reader.verify_checksum().unwrap();
+                        let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
+                        iter.seek_to_last().unwrap();
+                        let end_key = Key::truncate_ts_for(iter.key()).unwrap();
+                        assert_eq!(end_key, data_key(Key::from_raw(&expect_end_key).as_encoded()));
+                    }
                 }
             }
         }
