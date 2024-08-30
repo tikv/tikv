@@ -161,8 +161,8 @@ fn test_rocksdb_skiplist_basic_operations(cf: CfName, operations: Vec<Operation>
         (handle, key, value, guard)
     };
 
-    // Use data_key prefix here to avoid the special consider of  edge case(empty
-    // string).
+    // Delete range in SkiplistEngine considers MVCC suffix for CF_DEFAULT and
+    // CF_WRITE, so we append the suffix for them.
     for op in operations {
         match op {
             Operation::Put(mut k, v) => {
