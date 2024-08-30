@@ -23,7 +23,6 @@ encoding_rs = { git = "https://github.com/tikv/encoding_rs.git", rev = "68e0bc5a
 error_code = { workspace = true }
 hex = "0.4"
 kvproto = { workspace = true }
-lazy_static = "1.3"
 log_wrappers = { workspace = true }
 match-template = "0.0.1"
 nom = { version = "7.1.0", default-features = false, features = ["std"] }

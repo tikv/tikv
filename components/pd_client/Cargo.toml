@@ -17,7 +17,6 @@ futures = "0.3"
 grpcio = { workspace = true }
 kvproto = { workspace = true }
 lazy_static = "1.3"
-log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 log_wrappers = { workspace = true }
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"

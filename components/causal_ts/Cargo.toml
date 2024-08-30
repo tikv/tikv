@@ -9,22 +9,15 @@ license = "Apache-2.0"
 testexport = []
 
 [dependencies]
-api_version = { workspace = true }
 async-trait = { version = "0.1" }
-engine_rocks = { workspace = true }
-engine_traits = { workspace = true }
 enum_dispatch = "0.3.8"
 error_code = { workspace = true }
-fail = "0.5"
 futures = { version = "0.3" }
-kvproto = { workspace = true }
 lazy_static = "1.3"
-log_wrappers = { workspace = true }
 parking_lot = "0.12"
 pd_client = { workspace = true }
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
-raft = { workspace = true }
 serde = "1.0"
 serde_derive = "1.0"
 slog = { workspace = true }
@@ -33,7 +26,6 @@ slog-global = { workspace = true }
 # TODO: move it to `dev-dependencies` after we have a better way to handle it.
 test_pd_client = { workspace = true }
 thiserror = "1.0"
-tikv_alloc = { workspace = true }
 tikv_util = { workspace = true }
 tokio = { version = "1", features = ["sync"] }
 txn_types = { workspace = true }

@@ -12,7 +12,6 @@ aws = { workspace = true }
 azure = { workspace = true }
 cloud = { workspace = true }
 encryption = { workspace = true }
-engine_traits = { workspace = true }
 file_system = { workspace = true }
 futures = "0.3"
 futures-io = "0.3"
@@ -33,7 +32,6 @@ tokio-util = { version = "0.7", features = ["compat"] }
 url = "2.0"
 
 [dev-dependencies]
-matches = "0.1.8"
 rust-ini = "0.14.0"
 structopt = "0.3"
 tempfile = "3.1"

@@ -18,7 +18,6 @@ chrono = { workspace = true }
 codec = { workspace = true }
 collections = { workspace = true }
 cpu-time = "1.0.0"
-crc32fast = "1.2"
 crossbeam = { workspace = true }
 crossbeam-skiplist = { workspace = true }
 derive_more = "0.99.3"
@@ -42,7 +41,6 @@ nix = "0.24"
 num-traits = "0.2"
 num_cpus = "1"
 online_config = { workspace = true }
-openssl = { workspace = true }
 parking_lot_core = "0.9.1"
 pin-project = "1.0"
 prometheus = { version = "0.13", features = ["nightly"] }
@@ -81,7 +79,6 @@ protobuf = "2"
 regex = "1.0"
 tempfile = "3.0"
 toml = "0.5"
-utime = "0.2"
 
 [[bench]]
 name = "channel"
