@@ -3,7 +3,7 @@
 use std::{sync::Arc, time::Duration};
 
 use dashmap::DashMap;
-use engine_traits::CacheRange;
+use engine_traits::CacheRegion;
 use futures::{
     compat::Future01CompatExt,
     stream::{self, StreamExt},
@@ -50,13 +50,13 @@ pub struct KeyRangeRule {
     pub end_key: String,
 }
 
-impl TryFrom<&KeyRangeRule> for CacheRange {
+impl TryFrom<&KeyRangeRule> for CacheRegion {
     type Error = Box<dyn std::error::Error>;
 
     fn try_from(key_range: &KeyRangeRule) -> Result<Self, Self::Error> {
         let start_key = data_key(&hex::decode(&key_range.start_key)?);
         let end_key = data_end_key(&hex::decode(&key_range.end_key)?);
-        Ok(CacheRange::new(start_key, end_key))
+        Ok(CacheRegion::new(0, 0, start_key, end_key))
     }
 }
 pub type RegionLabelAddedCb = Arc<dyn Fn(&LabelRule) + Send + Sync>;
@@ -76,7 +76,8 @@ impl RegionLabelRulesManager {
             match old_value.as_ref() {
                 // If a watch fires twice on an identical label rule, ignore the second invocation.
                 Some(old_value) if old_value == label_rule => {
-                    info!("Identical region label rule added twice; ignoring."; "rule_id" => &label_rule.id)
+                    info!("ime identical region label rule added twice; ignoring.";
+                        "rule_id" => &label_rule.id)
                 }
                 _ => cb(label_rule),
             }
@@ -205,7 +206,8 @@ impl RegionLabelService {
                         .with_prev_kv(),
                 ),
             );
-            info!("pd meta client creating watch stream"; "path" => region_label_path, "rev" => %self.revision);
+            info!("ime pd meta client creating watch stream";
+                "path" => region_label_path, "rev" => %self.revision);
             while let Some(grpc_response) = stream.next().await {
                 match grpc_response {
                     Ok(resp) => {
@@ -217,7 +219,7 @@ impl RegionLabelService {
                                     event.get_kv().get_value(),
                                 ) {
                                     Ok(label_rule) => self.on_label_rule(&label_rule),
-                                    Err(e) => error!("parse put region label event failed"; "name" => ?event.get_kv().get_key(), "err" => ?e),
+                                    Err(e) => error!("ime parse put region label event failed"; "name" => ?event.get_kv().get_key(), "err" => ?e),
                                 }
                             }
                             EventEventType::Delete => {
@@ -225,19 +227,19 @@ impl RegionLabelService {
                                     event.get_prev_kv().get_value()
                                 ) {
                                     Ok(label_rule) => self.manager.remove_region_label(&label_rule.id),
-                                    Err(e) => error!("parse delete region label event failed"; "name" => ?event.get_kv().get_key(), "err" => ?e),
+                                    Err(e) => error!("ime parse delete region label event failed"; "name" => ?event.get_kv().get_key(), "err" => ?e),
                                 }
                             }
                         });
                     }
                     Err(PdError::DataCompacted(msg)) => {
-                        error!("required revision has been compacted"; "err" => ?msg);
+                        error!("ime required revision has been compacted"; "err" => ?msg);
                         self.reload_all_region_labels().await;
                         cancel.abort();
                         continue 'outer;
                     }
                     Err(err) => {
-                        error!("failed to watch region labels"; "err" => ?err);
+                        error!("ime failed to watch region labels"; "err" => ?err);
                         let _ = GLOBAL_TIMER_HANDLE
                             .delay(std::time::Instant::now() + RETRY_INTERVAL)
                             .compat()
@@ -264,14 +266,14 @@ impl RegionLabelService {
                             Ok(label_rule) => self.on_label_rule(&label_rule),
 
                             Err(e) => {
-                                error!("parse label rule failed"; "name" => ?g.get_key(), "err" => ?e);
+                                error!("ime parse label rule failed"; "name" => ?g.get_key(), "err" => ?e);
                             }
                         }
                     }
                     return;
                 }
                 Err(err) => {
-                    error!("failed to get meta storage's region label rules"; "err" => ?err);
+                    error!("ime failed to get meta storage's region label rules"; "err" => ?err);
                     let _ = GLOBAL_TIMER_HANDLE
                         .delay(std::time::Instant::now() + RETRY_INTERVAL)
                         .compat()
