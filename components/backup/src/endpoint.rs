@@ -2049,8 +2049,8 @@ pub mod tests {
 
     #[test]
     fn test_handle_backup_task_bypass_locks() {
-        // test write & default cf
-        for len in &[SHORT_VALUE_MAX_LEN - 1, SHORT_VALUE_MAX_LEN * 2] {
+        // consider both short and long value
+        for &len in &[SHORT_VALUE_MAX_LEN - 1, SHORT_VALUE_MAX_LEN * 2] {
             let (tmp, endpoint) = new_endpoint();
             let mut engine = endpoint.engine.clone();
             endpoint
@@ -2059,75 +2059,72 @@ pub mod tests {
 
             let mut ts = TimeStamp::new(1);
             let mut alloc_ts = || *ts.incr();
-            let mut prewrite_keys = vec![];
             let lock_key = 9;
 
-            for i in 0..10u8 {
-                let start = alloc_ts();
-                let commit = alloc_ts();
-                let key = format!("{}", i);
-                must_prewrite_put(
-                    &mut engine,
-                    key.as_bytes(),
-                    &vec![i; *len],
-                    key.as_bytes(),
-                    start,
-                );
-                if i == lock_key {
-                    // key 9 is locked.
-                    // start ts 20 locked.
-                    prewrite_keys.push((key.clone(), start, commit));
-                } else {
-                    must_commit(&mut engine, key.as_bytes(), start, commit);
-                }
-            }
+            // Prepare data: 10 keys, with key 9 locked
+            let prewrite_keys: Vec<_> = (0..10u8)
+                .map(|i| {
+                    let start = alloc_ts();
+                    let commit = alloc_ts();
+                    let key = i.to_string();
+                    must_prewrite_put(
+                        &mut engine,
+                        key.as_bytes(),
+                        &vec![i; len],
+                        key.as_bytes(),
+                        start,
+                    );
+                    if i == lock_key {
+                        (key, start, commit)
+                    } else {
+                        must_commit(&mut engine, key.as_bytes(), start, commit);
+                        (key, start, commit)
+                    }
+                })
+                .collect();
 
-            // Test cases with different scenarios
             let test_cases = vec![
                 (
                     "No bypass locks",
                     TimeStamp::new(3),
                     vec![],
-                    "0".as_bytes().to_vec(),
+                    b"0".to_vec(),
                     false,
                 ),
                 (
-                    "With bypass locks, and lock ts > backup ts",
+                    "With bypass locks, lock ts > backup ts",
                     TimeStamp::new(12),
                     prewrite_keys.clone(),
-                    "4".as_bytes().to_vec(),
-                    // expect no error
+                    b"4".to_vec(),
                     false,
                 ),
                 (
-                    "No bypass locks, and lock ts > backup ts",
+                    "No bypass locks, lock ts > backup ts",
                     TimeStamp::new(12),
                     vec![],
-                    "4".as_bytes().to_vec(),
-                    // expect no error
+                    b"4".to_vec(),
                     false,
                 ),
                 (
-                    "No bypass locks, and lock ts < backup ts",
+                    "No bypass locks, lock ts < backup ts",
                     TimeStamp::new(22),
                     vec![],
                     vec![],
-                    // expect meet lock error
                     true,
                 ),
                 (
-                    "With bypass locks, and lock ts < backup ts",
+                    "With bypass locks, lock ts < backup ts",
                     TimeStamp::new(22),
                     prewrite_keys.clone(),
-                    // the key 9 is locked, so the end key should be (8)
-                    (lock_key-1).to_string().as_bytes().to_vec(),
-                    // expect no error, because the locks can be ignore
-                    // the future commit must large than backup ts.
+                    // lock key is 9, so the key (8) should be included
+                    (lock_key - 1).to_string().into_bytes(),
+                    // the error can be ignored. because the lock key should commit after backup
+                    // ts.
                     false,
                 ),
             ];
 
-            for (case_name, backup_ts, bypass_locks, expect_end_key, has_error) in test_cases {
+            for (case_name, backup_ts, bypass_locks, expect_end_key, expect_error) in test_cases {
                 let mut req = BackupRequest::default();
                 req.set_start_key(vec![]);
                 req.set_end_key(vec![]);
@@ -2144,18 +2141,29 @@ pub mod tests {
                 req.set_context(context);
 
                 let (tx, rx) = unbounded();
-                let tmp1 = make_unique_dir(tmp.path());
-                req.set_storage_backend(make_local_backend(&tmp1));
+                let tmp_dir = make_unique_dir(tmp.path());
+                req.set_storage_backend(make_local_backend(&tmp_dir));
                 let (task, _) = Task::new(req, tx).unwrap();
                 endpoint.handle_backup_task(task);
 
-                let (resp, _rx) = block_on(rx.into_future());
+                let (resp, _) = block_on(rx.into_future());
                 let resp = resp.unwrap();
-                if has_error {
-                    assert!(resp.has_error(), "{:?}", resp);
+
+                if expect_error {
+                    assert!(
+                        resp.has_error(),
+                        "Case '{}' should have an error",
+                        case_name
+                    );
                 } else {
-                    assert!(!resp.has_error(), "{:?}", resp);
-                    let expected_file_count = if *len <= SHORT_VALUE_MAX_LEN { 1 } else { 2 };
+                    assert!(
+                        !resp.has_error(),
+                        "Case '{}' should not have an error: {:?}",
+                        case_name,
+                        resp
+                    );
+
+                    let expected_file_count = if len <= SHORT_VALUE_MAX_LEN { 1 } else { 2 };
                     let files = resp.get_files();
 
                     assert_eq!(
@@ -2169,13 +2177,22 @@ pub mod tests {
                     );
 
                     for file in files {
-                        let sst_reader =
-                            RocksSstReader::open_with_env(tmp1.join(&file.name).as_os_str().to_str().unwrap(), None).unwrap();
+                        let sst_path = tmp_dir.join(&file.name);
+                        let sst_reader = RocksSstReader::open_with_env(
+                            sst_path.as_os_str().to_str().unwrap(),
+                            None,
+                        )
+                        .unwrap();
                         sst_reader.verify_checksum().unwrap();
                         let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
                         iter.seek_to_last().unwrap();
                         let end_key = Key::truncate_ts_for(iter.key()).unwrap();
-                        assert_eq!(end_key, data_key(Key::from_raw(&expect_end_key).as_encoded()));
+                        assert_eq!(
+                            end_key,
+                            data_key(Key::from_raw(&expect_end_key).as_encoded()),
+                            "Case '{}' failed: unexpected end key",
+                            case_name
+                        );
                     }
                 }
             }
