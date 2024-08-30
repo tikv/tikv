@@ -159,6 +159,9 @@ impl KmsBackend {
         }
     }
 
+    // Used to clear the cached state to ensure that the next
+    // backend.decrypt_content() invocation bypasses the cache and invokes the
+    // KmsProvider::decrypt_data_key() function.
     #[cfg(any(test, feature = "testexport"))]
     pub fn clear_state(&mut self) {
         let mut opt_state = self.state.lock().unwrap();
@@ -353,11 +356,8 @@ mod tests {
         let mut backend = prepare_kms_backend(plainkey, true);
 
         let encrypted_content = backend.encrypt_content(&pt, iv).unwrap();
-        // Clear the cached state to ensure that the subsequent
-        // backend.decrypt_content() invocation bypasses the cache and triggers the
-        // mocked FakeKMS::decrypt_data_key() function.
-        backend.clear_state();
 
+        backend.clear_state();
         let err = backend.decrypt_content(&encrypted_content).unwrap_err();
         assert_matches!(err, Error::WrongMasterKey(_));
     }
