@@ -648,18 +648,7 @@ where
         );
 
         let task_name = task.info.get_name().to_owned();
-        // clean the safepoint created at pause(if there is)
-        self.pool.spawn(
-            self.pd_client
-                .update_service_safe_point(
-                    self.pause_guard_id_for_task(task.info.get_name()),
-                    TimeStamp::zero(),
-                    Duration::new(0, 0),
-                )
-                .map(|r| {
-                    r.map_err(|err| Error::from(err).report("removing safe point for pausing"))
-                }),
-        );
+        self.clean_pause_guard_id_for_task(&task_name);
         self.pool.block_on(async move {
             let task_clone = task.clone();
             let run = async move {
@@ -703,6 +692,21 @@ where
         metrics::update_task_status(TaskStatus::Running, &task_name);
     }
 
+    // clean the safepoint created at pause(if there is)
+    fn clean_pause_guard_id_for_task(&self, task_name: &str) {
+        self.pool.spawn(
+            self.pd_client
+                .update_service_safe_point(
+                    self.pause_guard_id_for_task(task_name),
+                    TimeStamp::zero(),
+                    Duration::new(0, 0),
+                )
+                .map(|r| {
+                    r.map_err(|err| Error::from(err).report("removing safe point for pausing"))
+                }),
+        );
+    }
+
     fn pause_guard_id_for_task(&self, task: &str) -> String {
         format!("{}-{}-pause-guard", task, self.store_id)
     }
@@ -737,9 +741,10 @@ where
         }
     }
 
-    pub fn on_unregister(&self, task: &str) -> Option<StreamBackupTaskInfo> {
-        let info = self.unload_task(task);
-        self.remove_metrics_after_unregister(task);
+    pub fn on_unregister(&self, task_name: &str) -> Option<StreamBackupTaskInfo> {
+        let info = self.unload_task(task_name);
+        self.clean_pause_guard_id_for_task(task_name);
+        self.remove_metrics_after_unregister(task_name);
         info
     }
 
