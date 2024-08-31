@@ -1,5 +1,4 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
-#![feature(slice_group_by)]
 #![feature(result_flattening)]
 #![feature(assert_matches)]
 #![feature(test)]
