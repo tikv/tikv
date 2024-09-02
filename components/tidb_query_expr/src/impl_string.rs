@@ -1132,7 +1132,7 @@ mod tests {
 
     use tidb_query_datatype::{
         builder::FieldTypeBuilder,
-        codec::mysql::charset::{CHARSET_GBK, CHARSET_UTF8MB4},
+        codec::mysql::charset::{CHARSET_GB18030, CHARSET_GBK, CHARSET_UTF8MB4},
     };
     use tipb::ScalarFuncSig;
 
@@ -2884,6 +2884,44 @@ mod tests {
 
     #[test]
     fn test_upper() {
+        // Test non-binary string case
+        let cases = vec![
+            (Some(b"hello".to_vec()), Some(b"HELLO".to_vec())),
+            (Some(b"123".to_vec()), Some(b"123".to_vec())),
+            (
+                Some("café".as_bytes().to_vec()),
+                Some("CAFÉ".as_bytes().to_vec()),
+            ),
+            (
+                Some("数据库".as_bytes().to_vec()),
+                Some("数据库".as_bytes().to_vec()),
+            ),
+            (
+                Some("ночь на окраине москвы".as_bytes().to_vec()),
+                Some("НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec()),
+            ),
+            (
+                Some("قاعدة البيانات".as_bytes().to_vec()),
+                Some("قاعدة البيانات".as_bytes().to_vec()),
+            ),
+            (None, None),
+        ];
+
+        for (arg, exp) in cases {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param_with_field_type(
+                    arg.clone(),
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::VarString)
+                        .charset(CHARSET_UTF8MB4)
+                        .build(),
+                )
+                .evaluate(ScalarFuncSig::Upper)
+                .unwrap();
+            assert_eq!(output, exp);
+        }
+
+        // Test binary string case
         let cases = vec![
             (Some(b"hello".to_vec()), Some(b"hello".to_vec())),
             (Some(b"123".to_vec()), Some(b"123".to_vec())),
@@ -2958,6 +2996,70 @@ mod tests {
                 .evaluate(s)
                 .unwrap();
             assert_eq!(result, Some(output),);
+        }
+    }
+
+    #[test]
+    fn test_gb18030_lower_upper() {
+        // Test GB18030 string case
+        let raw_upper_lower: Vec<(&str, &str, &str)> = vec![
+            ("µ", "µ", "μ"),       // "B5" "B5" "3BC"
+            ("ǅǈǋ", "ǅǈǋ", "ǆǉǌ"), // "1C5" "1C8" "1CB"
+            ("ǄǇǊ", "ǄǇǊ", "ǆǉǌ"), // "1C4" "1C7" "1CA"
+            ("ǆǉǌ", "ǄǇǊ", "ǆǉǌ"), // "1C6" "1C9" "1CC"
+            (
+                "ɥɪჾᏸᏻᏽᵽꮕàáèéêìíòóùúüāēěīńňōūǎǐǒǔǖǘǚǜⅪⅫ",
+                "ɥɪჾᏸᏻᏽᵽꮕÀÁÈÉÊÌÍÒÓÙÚÜĀĒĚĪŃŇŌŪǍǏǑǓǕǗǙǛⅪⅫ",
+                "ɥɪჾᏸᏻᏽᵽꮕàáèéêìíòóùúüāēěīńňōūǎǐǒǔǖǘǚǜⅺⅻ",
+            ),
+            ("ǲɜɡ", "ǲɜɡ", "ǳɜɡ"), // "1F2" "25C" "261"
+            (
+                "𐒰𐓘𐲀𐳀𑢠𖹀𞤀", // "104B0 104D8 10C80 10CC0 118A0 16E40 1E900"
+                "𐒰𐓘𐲀𐳀𑢠𖹀𞤀",
+                "𐒰𐓘𐲀𐳀𑢠𖹀𞤀",
+            ),
+            (
+                "ẛι", // 1E9B 1FBE
+                "ẛι", "ṡι",
+            ),
+        ];
+
+        for (i, test_case) in raw_upper_lower.iter().enumerate() {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param_with_field_type(
+                    Some((test_case.0).as_bytes().to_vec()).clone(),
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::VarString)
+                        .charset(CHARSET_GB18030)
+                        .build(),
+                )
+                .evaluate(ScalarFuncSig::Upper)
+                .unwrap();
+            assert_eq!(
+                output,
+                Some((test_case.1).as_bytes().to_vec()),
+                "error in upper cases #{} ({})",
+                i + 1,
+                (test_case.0)
+            );
+
+            let output = RpnFnScalarEvaluator::new()
+                .push_param_with_field_type(
+                    Some((test_case.0).as_bytes().to_vec()).clone(),
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::VarString)
+                        .charset(CHARSET_GB18030)
+                        .build(),
+                )
+                .evaluate(ScalarFuncSig::Lower)
+                .unwrap();
+            assert_eq!(
+                output,
+                Some((test_case.2).as_bytes().to_vec()),
+                "error in lower cases #{} ({})",
+                i + 1,
+                (test_case.0)
+            );
         }
     }
 
