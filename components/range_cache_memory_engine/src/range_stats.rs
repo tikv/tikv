@@ -27,6 +27,7 @@ pub(crate) struct RangeStatsManager {
     region_loaded_at: Arc<ShardedLock<BTreeMap<u64, Instant>>>,
     evict_min_duration: Duration,
     expected_region_size: usize,
+    mvcc_amplification_threshold: usize,
 }
 
 /// Do not evict a region if has been cached for less than this duration.
@@ -44,6 +45,7 @@ impl RangeStatsManager {
         num_regions: usize,
         evict_min_duration: Duration,
         expected_region_size: usize,
+        mvcc_amplification_threshold: usize,
         info_provider: Arc<dyn RegionInfoProvider>,
     ) -> Self {
         RangeStatsManager {
@@ -54,6 +56,7 @@ impl RangeStatsManager {
             region_loaded_at: Arc::new(ShardedLock::new(BTreeMap::new())),
             evict_min_duration,
             expected_region_size,
+            mvcc_amplification_threshold,
         }
     }
 
@@ -265,7 +268,11 @@ impl RangeStatsManager {
                 .into_iter()
                 .filter(|(_, r)| {
                     r.region_stat.cop_detail.mvcc_amplification()
-                        <= if reach_stop_load { 5.0 } else { 2.0 }
+                        <= if reach_stop_load {
+                            self.mvcc_amplification_threshold as f64 / 4.0
+                        } else {
+                            self.mvcc_amplification_threshold as f64 / 20.0
+                        }
                 })
                 .filter_map(|(r, s)| {
                     // Do not evict regions that were loaded less than `EVICT_MIN_DURATION` ago. If

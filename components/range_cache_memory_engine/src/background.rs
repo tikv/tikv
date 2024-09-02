@@ -222,6 +222,7 @@ impl BgWorkManager {
         gc_interval: Duration,
         load_evict_interval: Duration,
         expected_region_size: usize,
+        mvcc_amplification_threshold: usize,
         memory_controller: Arc<MemoryController>,
         region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
     ) -> Self {
@@ -231,6 +232,7 @@ impl BgWorkManager {
             memory_controller,
             region_info_provider.clone(),
             expected_region_size,
+            mvcc_amplification_threshold,
             gc_interval,
             pd_client.clone(),
         );
@@ -799,6 +801,7 @@ impl BackgroundRunner {
         memory_controller: Arc<MemoryController>,
         region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
         expected_region_size: usize,
+        mvcc_amplification_threshold: usize,
         gc_interval: Duration,
         pd_client: Arc<dyn PdClient>,
     ) -> (Self, Scheduler<BackgroundTask>) {
@@ -832,6 +835,7 @@ impl BackgroundRunner {
                 num_regions_to_cache,
                 DEFAULT_EVICT_MIN_DURATION,
                 expected_region_size,
+                mvcc_amplification_threshold,
                 region_info_provider,
             )
         });

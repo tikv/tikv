@@ -79,7 +79,7 @@ impl Default for RangeCacheEngineConfig {
             soft_limit_threshold: None,
             hard_limit_threshold: None,
             expected_region_size: None,
-            mvcc_amplification_threshold: 10,
+            mvcc_amplification_threshold: 100,
         }
     }
 }
