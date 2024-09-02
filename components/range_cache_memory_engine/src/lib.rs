@@ -1,5 +1,6 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
+#![feature(assert_matches)]
 #![feature(let_chains)]
 #![allow(internal_features)]
 #![feature(core_intrinsics)]
@@ -39,7 +40,7 @@ pub use keys::{
     InternalKey, ValueType,
 };
 pub use metrics::flush_range_cache_engine_statistics;
-pub use range_manager::RangeCacheStatus;
+pub use range_manager::{RangeCacheStatus, RegionState};
 pub use statistics::Statistics as RangeCacheMemoryEngineStatistics;
 use txn_types::TimeStamp;
 pub use write_batch::RangeCacheWriteBatch;
@@ -59,6 +60,9 @@ pub struct RangeCacheEngineConfig {
     pub soft_limit_threshold: Option<ReadableSize>,
     pub hard_limit_threshold: Option<ReadableSize>,
     pub expected_region_size: Option<ReadableSize>,
+    // used in getting top regions to filter those with less mvcc amplification. Here, we define
+    // mvcc amplification to be '(next + prev) / processed_keys'.
+    pub mvcc_amplification_threshold: usize,
     // Cross check is only for test usage and should not be turned on in production
     // environment. Interval 0 means it is turned off, which is the default value.
     pub cross_check_interval: ReadableDuration,
@@ -69,13 +73,12 @@ impl Default for RangeCacheEngineConfig {
         Self {
             enabled: false,
             gc_interval: ReadableDuration(Duration::from_secs(180)),
-            load_evict_interval: ReadableDuration(Duration::from_secs(300)), /* Each load/evict
-                                                                              * operation should
-                                                                              * run within five
-                                                                              * minutes. */
+            // Each load/evict operation should run within five minutes.
+            load_evict_interval: ReadableDuration(Duration::from_secs(300)),
             soft_limit_threshold: None,
             hard_limit_threshold: None,
             expected_region_size: None,
+            mvcc_amplification_threshold: 10,
             cross_check_interval: ReadableDuration(Duration::from_secs(0)),
         }
     }
@@ -134,12 +137,12 @@ impl RangeCacheEngineConfig {
             soft_limit_threshold: Some(ReadableSize::gb(1)),
             hard_limit_threshold: Some(ReadableSize::gb(2)),
             expected_region_size: Some(ReadableSize::mb(20)),
+            mvcc_amplification_threshold: 10,
             cross_check_interval: ReadableDuration(Duration::from_secs(0)),
         }
     }
 }
 
-#[derive(Clone)]
 pub struct RangeCacheEngineContext {
     config: Arc<VersionTrack<RangeCacheEngineConfig>>,
     statistics: Arc<RangeCacheMemoryEngineStatistics>,

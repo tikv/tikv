@@ -29,7 +29,7 @@ use batch_system::{
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::{
-    util::SequenceNumber, CacheRange, DeleteStrategy, KvEngine, Mutable, PerfContext,
+    util::SequenceNumber, CacheRegion, DeleteStrategy, KvEngine, Mutable, PerfContext,
     PerfContextKind, RaftEngine, RaftEngineReadOnly, Range as EngineRange, Snapshot, SstMetaInfo,
     WriteBatch, WriteOptions, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
@@ -70,7 +70,7 @@ use tikv_util::{
     Either, MustConsumeVec,
 };
 use time::Timespec;
-use tracker::GLOBAL_TRACKERS;
+use tracker::{TrackerToken, TrackerTokenArray, GLOBAL_TRACKERS};
 use uuid::Builder as UuidBuilder;
 
 use self::memtrace::*;
@@ -542,8 +542,8 @@ where
     pub fn prepare_for(&mut self, delegate: &mut ApplyDelegate<EK>) {
         self.applied_batch
             .push_batch(&delegate.observe_info, delegate.region.get_id());
-        let range = CacheRange::from_region(&delegate.region);
-        self.kv_wb.prepare_for_range(range);
+        let cache_region = CacheRegion::from_region(&delegate.region);
+        self.kv_wb.prepare_for_region(cache_region);
     }
 
     /// Commits all changes have done for delegate. `persistent` indicates
@@ -644,6 +644,19 @@ where
         } = mem::replace(&mut self.applied_batch, ApplyCallbackBatch::new());
         // Call it before invoking callback for preventing Commit is executed before
         // Prewrite is observed.
+        debug!("raft log is applied to the kv db";
+            "req_info" => TrackerTokenArray::new(
+                &cb_batch.iter().fold(vec![], |mut acc: Vec<TrackerToken>, cb| {
+                    acc.extend(
+                        cb.0.write_trackers().into_iter().
+                        filter_map(|time_tracker| time_tracker.as_tracker_token())
+                        .collect::<Vec<_>>().as_slice()
+                    );
+                    acc
+                })
+            ),
+            "cmd_batch" => ?cmd_batch.len(),
+        );
         self.host
             .on_flush_applied_cmd_batch(batch_max_level, cmd_batch, &self.engine);
         // Invoke callbacks
@@ -930,7 +943,8 @@ where
     /// All of messages that need to continue to be handled after
     /// the source peer has applied its logs and pending entries
     /// are all handled.
-    pending_msgs: Vec<Msg<EK>>,
+    #[allow(clippy::vec_box)]
+    pending_msgs: Vec<Box<Msg<EK>>>,
 
     /// Cache heap size for itself.
     heap_size: Option<usize>,
@@ -1248,7 +1262,7 @@ where
                     // just return Yield
                     return ApplyResult::Yield;
                 }
-                let mut has_unflushed_data =
+                let has_unflushed_data =
                     self.last_flush_applied_index != self.apply_state.get_applied_index();
                 if (has_unflushed_data
                     && should_write_to_engine(!apply_ctx.kv_wb().is_empty(), &cmd)
@@ -1265,12 +1279,8 @@ where
                     {
                         return ApplyResult::Yield;
                     }
-                    has_unflushed_data = false;
                 }
                 if self.priority != apply_ctx.priority {
-                    if has_unflushed_data {
-                        apply_ctx.commit(self);
-                    }
                     return ApplyResult::Yield;
                 }
 
@@ -1510,17 +1520,19 @@ where
         self.apply_state.set_applied_index(index);
         self.applied_term = term;
 
-        let (modified_region, mut pending_handle_ssts) = match exec_result {
-            ApplyResult::Res(ref e) => match e {
-                ExecResult::SplitRegion { ref derived, .. } => (Some(derived.clone()), None),
-                ExecResult::PrepareMerge { ref region, .. } => (Some(region.clone()), None),
-                ExecResult::CommitMerge { ref region, .. } => (Some(region.clone()), None),
-                ExecResult::RollbackMerge { ref region, .. } => (Some(region.clone()), None),
-                ExecResult::IngestSst { ref ssts } => (None, Some(ssts.clone())),
-                ExecResult::Flashback { ref region } => (Some(region.clone()), None),
-                _ => (None, None),
+        let (modified_region, new_regions, mut pending_handle_ssts) = match &exec_result {
+            ApplyResult::Res(e) => match e {
+                ExecResult::SplitRegion { regions, .. } => {
+                    (Some(self.region.clone()), regions.clone(), None)
+                }
+                ExecResult::PrepareMerge { region, .. } => (Some(region.clone()), vec![], None),
+                ExecResult::CommitMerge { region, .. } => (Some(region.clone()), vec![], None),
+                ExecResult::RollbackMerge { region, .. } => (Some(region.clone()), vec![], None),
+                ExecResult::IngestSst { ssts } => (None, vec![], Some(ssts.clone())),
+                ExecResult::Flashback { region } => (Some(region.clone()), vec![], None),
+                _ => (None, vec![], None),
             },
-            _ => (None, None),
+            _ => (None, vec![], None),
         };
         let mut apply_ctx_info = ApplyCtxInfo {
             pending_handle_ssts: &mut pending_handle_ssts,
@@ -1535,9 +1547,11 @@ where
                 peer_id: self.id(),
                 pending_remove: self.pending_remove,
                 modified_region,
+                new_regions,
             },
             &mut apply_ctx_info,
         );
+
         match pending_handle_ssts {
             None => (),
             Some(mut v) => {
@@ -2880,11 +2894,11 @@ where
             fail_point!("before_handle_catch_up_logs_for_merge");
             // Sends message to the source peer fsm and pause `exec_commit_merge` process
             let logs_up_to_date = Arc::new(AtomicU64::new(0));
-            let msg = SignificantMsg::CatchUpLogs(CatchUpLogs {
+            let msg = Box::new(SignificantMsg::CatchUpLogs(CatchUpLogs {
                 target_region_id: self.region_id(),
                 merge: merge.to_owned(),
                 logs_up_to_date: logs_up_to_date.clone(),
-            });
+            }));
             ctx.notifier
                 .notify_one(source_region_id, PeerMsg::SignificantMsg(msg));
             return Ok((
@@ -3795,13 +3809,13 @@ where
     },
 }
 
-impl<EK: KvEngine> ResourceMetered for Msg<EK> {
+impl<EK: KvEngine> ResourceMetered for Box<Msg<EK>> {
     fn consume_resource(&self, resource_ctl: &Arc<ResourceController>) -> Option<String> {
         if !resource_ctl.is_customized() {
             return None;
         }
-        match self {
-            Msg::Apply { apply, .. } => {
+        match **self {
+            Msg::Apply { ref apply, .. } => {
                 let mut dominant_group = "".to_owned();
                 let mut max_write_bytes = 0;
                 for cached_entries in &apply.entries {
@@ -3945,7 +3959,7 @@ where
     EK: KvEngine,
 {
     delegate: ApplyDelegate<EK>,
-    receiver: Receiver<Msg<EK>>,
+    receiver: Receiver<Box<Msg<EK>>>,
     mailbox: Option<BasicMailbox<ApplyFsm<EK>>>,
 }
 
@@ -3955,12 +3969,14 @@ where
 {
     fn from_peer<ER: RaftEngine>(
         peer: &Peer<EK, ER>,
-    ) -> (LooseBoundedSender<Msg<EK>>, Box<ApplyFsm<EK>>) {
+    ) -> (LooseBoundedSender<Box<Msg<EK>>>, Box<ApplyFsm<EK>>) {
         let reg = Registration::new(peer);
         ApplyFsm::from_registration(reg)
     }
 
-    fn from_registration(reg: Registration) -> (LooseBoundedSender<Msg<EK>>, Box<ApplyFsm<EK>>) {
+    fn from_registration(
+        reg: Registration,
+    ) -> (LooseBoundedSender<Box<Msg<EK>>>, Box<ApplyFsm<EK>>) {
         let (tx, rx) = loose_bounded(usize::MAX);
         let delegate = ApplyDelegate::from_registration(reg);
         (
@@ -4131,13 +4147,11 @@ where
             self.destroy(ctx);
             ctx.notifier.notify_one(
                 self.delegate.region_id(),
-                PeerMsg::ApplyRes {
-                    res: TaskRes::Destroy {
-                        region_id: self.delegate.region_id(),
-                        peer_id: self.delegate.id(),
-                        merge_from_snapshot: d.merge_from_snapshot,
-                    },
-                },
+                PeerMsg::ApplyRes(Box::new(TaskRes::Destroy {
+                    region_id: self.delegate.region_id(),
+                    peer_id: self.delegate.id(),
+                    merge_from_snapshot: d.merge_from_snapshot,
+                })),
             );
         }
     }
@@ -4201,7 +4215,7 @@ where
             .store(region_id, Ordering::SeqCst);
         // To trigger the target apply fsm
         if let Some(mailbox) = ctx.router.mailbox(catch_up_logs.target_region_id) {
-            let _ = mailbox.force_send(Msg::Noop);
+            let _ = mailbox.force_send(Box::new(Msg::Noop));
         } else {
             error!(
                 "failed to get mailbox, are we shutting down?";
@@ -4412,7 +4426,8 @@ where
         ctx.finish_for(&mut self.delegate, result);
     }
 
-    fn handle_tasks(&mut self, apply_ctx: &mut ApplyContext<EK>, msgs: &mut Vec<Msg<EK>>) {
+    #[allow(clippy::vec_box)]
+    fn handle_tasks(&mut self, apply_ctx: &mut ApplyContext<EK>, msgs: &mut Vec<Box<Msg<EK>>>) {
         let mut drainer = msgs.drain(..);
         let mut batch_apply = None;
         loop {
@@ -4427,7 +4442,7 @@ where
             };
 
             if batch_apply.is_some() {
-                match &msg {
+                match *msg {
                     Msg::Apply { .. } => (),
                     _ => {
                         self.handle_apply(apply_ctx, batch_apply.take().unwrap());
@@ -4440,7 +4455,7 @@ where
                 }
             }
 
-            match msg {
+            match *msg {
                 Msg::Apply { start, mut apply } => {
                     let apply_wait = start.saturating_elapsed();
                     apply_ctx.apply_wait.observe(apply_wait.as_secs_f64());
@@ -4461,7 +4476,9 @@ where
                         } else {
                             self.handle_apply(apply_ctx, batch_apply.take().unwrap());
                             if let Some(ref mut state) = self.delegate.yield_state {
-                                state.pending_msgs.push(Msg::Apply { start, apply });
+                                state
+                                    .pending_msgs
+                                    .push(Box::new(Msg::Apply { start, apply }));
                                 state.pending_msgs.extend(drainer);
                                 break;
                             }
@@ -4514,7 +4531,7 @@ impl<EK> Fsm for ApplyFsm<EK>
 where
     EK: KvEngine,
 {
-    type Message = Msg<EK>;
+    type Message = Box<Msg<EK>>;
 
     #[inline]
     fn is_stopped(&self) -> bool {
@@ -4621,7 +4638,8 @@ pub struct ApplyPoller<EK>
 where
     EK: KvEngine,
 {
-    msg_buf: Vec<Msg<EK>>,
+    #[allow(clippy::vec_box)]
+    msg_buf: Vec<Box<Msg<EK>>>,
     apply_ctx: ApplyContext<EK>,
     messages_per_tick: usize,
     cfg_tracker: Tracker<Config>,
@@ -4853,9 +4871,9 @@ where
     EK: KvEngine,
 {
     pub fn schedule_task(&self, region_id: u64, msg: Msg<EK>) {
-        let reg = match self.try_send(region_id, msg) {
+        let reg = match self.try_send(region_id, Box::new(msg)) {
             Either::Left(Ok(())) => return,
-            Either::Left(Err(TrySendError::Disconnected(msg))) | Either::Right(msg) => match msg {
+            Either::Left(Err(TrySendError::Disconnected(msg))) | Either::Right(msg) => match *msg {
                 Msg::Registration(reg) => reg,
                 Msg::Apply { mut apply, .. } => {
                     info!(
@@ -5193,8 +5211,8 @@ mod tests {
     impl<EK: KvEngine> Notifier<EK> for TestNotifier<EK> {
         fn notify(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>) {
             for r in apply_res {
-                let res = TaskRes::Apply(r);
-                let _ = self.tx.send(PeerMsg::ApplyRes { res });
+                let res = Box::new(TaskRes::Apply(r));
+                let _ = self.tx.send(PeerMsg::ApplyRes(res));
             }
         }
         fn notify_one(&self, _: u64, msg: PeerMsg<EK>) {
@@ -5401,10 +5419,7 @@ mod tests {
         E: KvEngine,
     {
         match receiver.recv_timeout(Duration::from_secs(3)) {
-            Ok(PeerMsg::ApplyRes {
-                res: TaskRes::Apply(res),
-                ..
-            }) => res,
+            Ok(PeerMsg::ApplyRes(box TaskRes::Apply(res))) => res,
             e => panic!("unexpected res {:?}", e),
         }
     }
@@ -5552,10 +5567,7 @@ mod tests {
             ],
         );
         let apply_res = match rx.recv_timeout(Duration::from_secs(3)) {
-            Ok(PeerMsg::ApplyRes {
-                res: TaskRes::Apply(res),
-                ..
-            }) => res,
+            Ok(PeerMsg::ApplyRes(box TaskRes::Apply(res))) => res,
             e => panic!("unexpected apply result: {:?}", e),
         };
         let apply_state_key = keys::apply_state_key(2);
@@ -5586,12 +5598,9 @@ mod tests {
 
         router.schedule_task(2, Msg::destroy(2, false));
         let (region_id, peer_id) = match rx.recv_timeout(Duration::from_secs(3)) {
-            Ok(PeerMsg::ApplyRes {
-                res: TaskRes::Destroy {
-                    region_id, peer_id, ..
-                },
-                ..
-            }) => (region_id, peer_id),
+            Ok(PeerMsg::ApplyRes(box TaskRes::Destroy {
+                region_id, peer_id, ..
+            })) => (region_id, peer_id),
             e => panic!("expected destroy result, but got {:?}", e),
         };
         assert_eq!(peer_id, 1);
@@ -7424,7 +7433,7 @@ mod tests {
         let cmd_batch = cmdbatch_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert_eq!(2, cmd_batch.len());
 
-        // Stop observer regoin 1.
+        // Stop observer region 1.
         observe_handle.stop_observing();
 
         let observe_handle = ObserveHandle::new();
@@ -7854,9 +7863,9 @@ mod tests {
             .unwrap();
         assert_ne!(initial_state.get_applied_index(), 0);
         match apply_res_rx.recv_timeout(Duration::from_secs(3)) {
-            Ok(PeerMsg::ApplyRes {
-                res: TaskRes::Apply(apply_res),
-            }) => assert_eq!(apply_res.apply_state, initial_state),
+            Ok(PeerMsg::ApplyRes(box TaskRes::Apply(apply_res))) => {
+                assert_eq!(apply_res.apply_state, initial_state)
+            }
             e => panic!("unexpected result: {:?}", e),
         }
         index_id += 1;
@@ -7888,9 +7897,9 @@ mod tests {
             .unwrap()
             .unwrap();
         match apply_res_rx.recv_timeout(Duration::from_secs(3)) {
-            Ok(PeerMsg::ApplyRes {
-                res: TaskRes::Apply(apply_res),
-            }) => assert_eq!(apply_res.apply_state, apply_state),
+            Ok(PeerMsg::ApplyRes(box TaskRes::Apply(apply_res))) => {
+                assert_eq!(apply_res.apply_state, apply_state)
+            }
             e => panic!("unexpected result: {:?}", e),
         }
         assert!(

@@ -96,8 +96,9 @@ impl MemoryController {
     }
 
     #[inline]
-    pub(crate) fn set_memory_checking(&self, v: bool) {
-        self.memory_checking.store(v, Ordering::Relaxed);
+    // return the previous status.
+    pub(crate) fn set_memory_checking(&self, v: bool) -> bool {
+        self.memory_checking.swap(v, Ordering::Relaxed)
     }
 
     #[inline]
@@ -131,6 +132,7 @@ mod tests {
             hard_limit_threshold: Some(ReadableSize(500)),
             expected_region_size: Default::default(),
             cross_check_interval: Default::default(),
+            mvcc_amplification_threshold: 10,
         }));
         let mc = MemoryController::new(config, skiplist_engine.clone());
         assert_eq!(mc.acquire(100), MemoryUsage::NormalUsage(100));

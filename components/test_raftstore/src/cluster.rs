@@ -19,7 +19,7 @@ use encryption_export::DataKeyManager;
 use engine_rocks::{RocksCompactedEvent, RocksEngine, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
-    CacheRange, Engines, Iterable, KvEngine, ManualCompactionOptions, Mutable, Peekable,
+    CacheRegion, Engines, Iterable, KvEngine, ManualCompactionOptions, Mutable, Peekable,
     RaftEngineReadOnly, SnapshotContext, SyncMutable, WriteBatch, CF_DEFAULT, CF_RAFT,
 };
 use file_system::IoRateLimiter;
@@ -369,9 +369,15 @@ where
         self.bootstrap_region().unwrap();
         self.start().unwrap();
         if self.range_cache_engine_enabled_with_whole_range {
+            let pd_regions = self.pd_client.scan_regions(&[], &[], i32::MAX).unwrap();
+            let regions: Vec<_> = pd_regions
+                .into_iter()
+                .map(|mut r| r.take_region())
+                .collect();
+
             self.engines
                 .iter()
-                .for_each(|(_, engines)| engines.kv.cache_all());
+                .for_each(|(_, engines)| engines.kv.cache_regions(&regions));
         }
     }
 
@@ -1019,10 +1025,7 @@ where
         } else {
             let ctx = SnapshotContext {
                 read_ts: u64::MAX,
-                range: Some(CacheRange::new(
-                    DATA_MIN_KEY.to_vec(),
-                    DATA_MAX_KEY.to_vec(),
-                )),
+                region: Some(CacheRegion::new(0, 0, DATA_MIN_KEY, DATA_MAX_KEY)),
             };
             self.get_cf_with_snap_ctx(CF_DEFAULT, key, true, ctx)
         }
@@ -1034,10 +1037,7 @@ where
         } else {
             let ctx = SnapshotContext {
                 read_ts: u64::MAX,
-                range: Some(CacheRange::new(
-                    DATA_MIN_KEY.to_vec(),
-                    DATA_MAX_KEY.to_vec(),
-                )),
+                region: Some(CacheRegion::new(0, 0, DATA_MIN_KEY, DATA_MAX_KEY)),
             };
             self.get_cf_with_snap_ctx(cf, key, true, ctx)
         }
@@ -1049,10 +1049,7 @@ where
         } else {
             let ctx = SnapshotContext {
                 read_ts: u64::MAX,
-                range: Some(CacheRange::new(
-                    DATA_MIN_KEY.to_vec(),
-                    DATA_MAX_KEY.to_vec(),
-                )),
+                region: Some(CacheRegion::new(0, 0, DATA_MIN_KEY, DATA_MAX_KEY)),
             };
             self.get_cf_with_snap_ctx(CF_DEFAULT, key, true, ctx)
         }

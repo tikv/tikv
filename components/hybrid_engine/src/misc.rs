@@ -1,6 +1,9 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{CacheRange, KvEngine, MiscExt, RangeCacheEngine, Result, WriteBatchExt};
+use engine_traits::{
+    CacheRegion, EvictReason, KvEngine, MiscExt, RangeCacheEngine, RegionEvent, Result,
+    WriteBatchExt,
+};
 
 use crate::{engine::HybridEngine, hybrid_metrics::HybridEngineStatisticsReporter};
 
@@ -37,7 +40,10 @@ where
     ) -> Result<bool> {
         for r in ranges {
             self.range_cache_engine()
-                .evict_range(&CacheRange::new(r.start_key.to_vec(), r.end_key.to_vec()));
+                .on_region_event(RegionEvent::EvictByRange {
+                    range: CacheRegion::new(0, 0, r.start_key.to_vec(), r.end_key.to_vec()),
+                    reason: EvictReason::DeleteRange,
+                });
         }
         self.disk_engine()
             .delete_ranges_cf(wopts, cf, strategy, ranges)
@@ -147,43 +153,48 @@ where
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use engine_traits::{
-        CacheRange, DeleteStrategy, MiscExt, Mutable, Range, RangeCacheEngine, WriteBatch,
+        CacheRegion, DeleteStrategy, MiscExt, Mutable, Range, RangeCacheEngine, WriteBatch,
         WriteBatchExt, WriteOptions, CF_DEFAULT,
     };
-    use range_cache_memory_engine::RangeCacheEngineConfig;
+    use range_cache_memory_engine::{test_util::new_region, RangeCacheEngineConfig};
 
     use crate::util::hybrid_engine_for_tests;
 
     #[test]
     fn test_delete_range() {
-        let range1 = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
-        let range2 = CacheRange::new(b"k20".to_vec(), b"k30".to_vec());
-        let range3 = CacheRange::new(b"k40".to_vec(), b"k50".to_vec());
-        let range1_clone = range1.clone();
-        let range2_clone = range2.clone();
-        let range3_clone = range3.clone();
+        let r1 = new_region(1, b"k00", b"k10");
+        let r2 = new_region(2, b"k20", b"k30");
+        let r3 = new_region(3, b"k40", b"k50");
+        let r1_clone = r1.clone();
+        let r2_clone = r2.clone();
+        let r3_clone = r3.clone();
         let (_path, hybrid_engine) = hybrid_engine_for_tests(
             "temp",
             RangeCacheEngineConfig::config_for_test(),
             move |memory_engine| {
-                memory_engine.new_range(range1_clone);
-                memory_engine.new_range(range2_clone);
-                memory_engine.new_range(range3_clone);
+                memory_engine.new_region(r1_clone);
+                memory_engine.new_region(r2_clone);
+                memory_engine.new_region(r3_clone);
             },
         )
         .unwrap();
+
+        let cache_r1 = CacheRegion::from_region(&r1);
+        let cache_r2 = CacheRegion::from_region(&r2);
+        let cache_r3 = CacheRegion::from_region(&r3);
+
         let mut write_batch = hybrid_engine.write_batch();
-        write_batch.prepare_for_range(range1.clone());
-        write_batch.put(b"k02", b"val").unwrap();
-        write_batch.put(b"k03", b"val").unwrap();
-        write_batch.prepare_for_range(range2.clone());
-        write_batch.put(b"k22", b"val").unwrap();
-        write_batch.put(b"k23", b"val").unwrap();
-        write_batch.prepare_for_range(range3.clone());
-        write_batch.put(b"k42", b"val").unwrap();
-        write_batch.put(b"k42", b"val").unwrap();
+        write_batch.prepare_for_region(cache_r1.clone());
+        write_batch.put(b"zk02", b"val").unwrap();
+        write_batch.put(b"zk03", b"val").unwrap();
+        write_batch.prepare_for_region(cache_r2.clone());
+        write_batch.put(b"zk22", b"val").unwrap();
+        write_batch.put(b"zk23", b"val").unwrap();
+        write_batch.prepare_for_region(cache_r3.clone());
+        write_batch.put(b"zk42", b"val").unwrap();
+        write_batch.put(b"zk42", b"val").unwrap();
         write_batch.write().unwrap();
 
         hybrid_engine
@@ -191,21 +202,21 @@ mod tests {
                 &WriteOptions::default(),
                 CF_DEFAULT,
                 DeleteStrategy::DeleteByRange,
-                &[Range::new(b"k00", b"k15"), Range::new(b"k22", b"k27")],
+                &[Range::new(b"zk00", b"zk15"), Range::new(b"zk22", b"zk27")],
             )
             .unwrap();
 
         hybrid_engine
             .range_cache_engine()
-            .snapshot(range1.clone(), 1000, 1000)
+            .snapshot(cache_r1.clone(), 1000, 1000)
             .unwrap_err();
         hybrid_engine
             .range_cache_engine()
-            .snapshot(range2.clone(), 1000, 1000)
+            .snapshot(cache_r2.clone(), 1000, 1000)
             .unwrap_err();
         hybrid_engine
             .range_cache_engine()
-            .snapshot(range3.clone(), 1000, 1000)
+            .snapshot(cache_r3.clone(), 1000, 1000)
             .unwrap();
     }
 }

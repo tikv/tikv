@@ -2,25 +2,30 @@
 
 use std::sync::{Arc, Mutex};
 
-use engine_traits::{CacheRange, KvEngine, RangeCacheEngineExt};
+use engine_traits::{CacheRegion, EvictReason, KvEngine, RangeCacheEngineExt, RegionEvent};
 use kvproto::{metapb::Region, raft_cmdpb::AdminCmdType, raft_serverpb::RaftApplyState};
 use raft::StateRole;
 use raftstore::coprocessor::{
-    AdminObserver, ApplyCtxInfo, BoxAdminObserver, BoxCmdObserver, BoxQueryObserver,
-    BoxRoleObserver, Cmd, CmdBatch, CmdObserver, Coprocessor, CoprocessorHost, ObserveLevel,
-    ObserverContext, QueryObserver, RegionState, RoleObserver,
+    AdminObserver, ApplyCtxInfo, ApplySnapshotObserver, BoxAdminObserver, BoxApplySnapshotObserver,
+    BoxCmdObserver, BoxQueryObserver, BoxRoleObserver, Cmd, CmdBatch, CmdObserver, Coprocessor,
+    CoprocessorHost, ObserveLevel, ObserverContext, QueryObserver, RegionState, RoleObserver,
 };
+use tikv_util::info;
 
 #[derive(Clone)]
 pub struct Observer {
-    pending_evict: Arc<Mutex<Vec<CacheRange>>>,
+    // observer is per thread so there is no need to use mutex here,
+    // but current inteface only provides `&self` but not `&mut self`,
+    // so we use mutex to workaround this restriction.
+    // TODO: change Observer's interface to `&mut self`.
+    pending_events: Arc<Mutex<Vec<RegionEvent>>>,
     cache_engine: Arc<dyn RangeCacheEngineExt + Send + Sync>,
 }
 
 impl Observer {
     pub fn new(cache_engine: Arc<dyn RangeCacheEngineExt + Send + Sync>) -> Self {
         Observer {
-            pending_evict: Arc::default(),
+            pending_events: Arc::default(),
             cache_engine,
         }
     }
@@ -39,14 +44,17 @@ impl Observer {
         coprocessor_host
             .registry
             .register_admin_observer(priority, BoxAdminObserver::new(self.clone()));
+        // Evict cache when a peer applies snapshot.
+        // Applying snapshot changes the data in rocksdb but not IME,
+        // so we trigger region eviction to keep compatibility.
+        coprocessor_host.registry.register_apply_snapshot_observer(
+            priority,
+            BoxApplySnapshotObserver::new(self.clone()),
+        );
         // Evict cache when a leader steps down.
         coprocessor_host
             .registry
             .register_role_observer(priority, BoxRoleObserver::new(self.clone()));
-
-        // NB: We do not evict the cache when applying a snapshot because
-        // the peer must be in the follower role during this process.
-        // The cache is already evicted when the leader steps down.
     }
 
     fn post_exec_cmd(
@@ -74,15 +82,44 @@ impl Observer {
                     AdminCmdType::PrepareMerge | AdminCmdType::CommitMerge
                 ))
         {
-            let range = CacheRange::from_region(ctx.region());
-            tikv_util::info!(
-                "evict range due to apply commands";
-                "region_id" => ctx.region().get_id(),
+            let cache_region = CacheRegion::from_region(ctx.region());
+            info!(
+                "ime evict range due to apply commands";
+                "region" => ?cache_region,
                 "is_ingest_sst" => apply.pending_handle_ssts.is_some(),
                 "admin_command" => ?cmd.request.get_admin_request().get_cmd_type(),
-                "range" => ?range,
             );
-            self.pending_evict.lock().unwrap().push(range);
+            self.pending_events
+                .lock()
+                .unwrap()
+                .push(RegionEvent::Eviction {
+                    region: cache_region,
+                    reason: EvictReason::Merge,
+                });
+        }
+        // there are new_regions, this must be a split event.
+        if !state.new_regions.is_empty() {
+            let cmd_type = cmd.request.get_admin_request().get_cmd_type();
+            assert!(cmd_type == AdminCmdType::BatchSplit || cmd_type == AdminCmdType::Split);
+            info!(
+                "ime handle region split";
+                "region_id" => ctx.region().get_id(),
+                "admin_command" => ?cmd.request.get_admin_request().get_cmd_type(),
+                "region" => ?state.modified_region.as_ref().unwrap(),
+                "new_regions" => ?state.new_regions,
+            );
+
+            self.pending_events
+                .lock()
+                .unwrap()
+                .push(RegionEvent::Split {
+                    source: CacheRegion::from_region(ctx.region()),
+                    new_regions: state
+                        .new_regions
+                        .iter()
+                        .map(CacheRegion::from_region)
+                        .collect(),
+                });
         }
     }
 
@@ -91,27 +128,31 @@ impl Observer {
             return;
         }
 
-        let ranges = {
-            let mut ranges = self.pending_evict.lock().unwrap();
-            std::mem::take(&mut *ranges)
-        };
-        for range in ranges {
-            self.cache_engine.evict_range(&range);
+        let events = std::mem::take(&mut *self.pending_events.lock().unwrap());
+        for e in events {
+            self.cache_engine.on_region_event(e);
         }
     }
 
-    fn evict_range_on_leader_steps_down(&self, region: &Region) {
+    fn evict_region_range(&self, region: &Region, reason: EvictReason) {
         if !self.cache_engine.range_cache_engine_enabled() {
             return;
         }
 
-        let range = CacheRange::from_region(region);
-        tikv_util::info!(
-            "evict range due to leader step down";
-            "region_id" => region.get_id(),
-            "range" => ?range,
+        let cache_region = CacheRegion::from_region(region);
+        info!(
+           "ime evict region";
+           "region" => ?cache_region,
+           "reason" => ?reason,
+           "epoch" => ?region.get_region_epoch(),
         );
-        self.pending_evict.lock().unwrap().push(range);
+        self.pending_events
+            .lock()
+            .unwrap()
+            .push(RegionEvent::Eviction {
+                region: cache_region,
+                reason,
+            });
     }
 }
 
@@ -149,6 +190,21 @@ impl AdminObserver for Observer {
     }
 }
 
+impl ApplySnapshotObserver for Observer {
+    fn post_apply_snapshot(
+        &self,
+        ctx: &mut ObserverContext<'_>,
+        _: u64,
+        _: &raftstore::store::SnapKey,
+        _: Option<&raftstore::store::Snapshot>,
+    ) {
+        // While currently, we evict cached region after leader step down.
+        // A region can may still be loaded when it's leader. E.g, to pre-load
+        // some hot regions before transfering leader.
+        self.evict_region_range(ctx.region(), EvictReason::ApplySnapshot)
+    }
+}
+
 impl RoleObserver for Observer {
     fn on_role_change(
         &self,
@@ -158,7 +214,7 @@ impl RoleObserver for Observer {
         if let StateRole::Follower = change.state
             && change.initialized
         {
-            self.evict_range_on_leader_steps_down(ctx.region())
+            self.evict_region_range(ctx.region(), EvictReason::BecomeFollower)
         }
     }
 }
@@ -179,7 +235,7 @@ impl<E> CmdObserver<E> for Observer {
 mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    use engine_traits::SstMetaInfo;
+    use engine_traits::{RegionEvent, SstMetaInfo};
     use kvproto::{
         import_sstpb::SstMeta,
         metapb::Peer,
@@ -191,14 +247,14 @@ mod tests {
     #[derive(Default)]
     struct MockRangeCacheEngine {
         enabled: AtomicBool,
-        evicted_ranges: Arc<Mutex<Vec<CacheRange>>>,
+        region_events: Arc<Mutex<Vec<RegionEvent>>>,
     }
     impl RangeCacheEngineExt for MockRangeCacheEngine {
         fn range_cache_engine_enabled(&self) -> bool {
             self.enabled.load(Ordering::Relaxed)
         }
-        fn evict_range(&self, range: &CacheRange) {
-            self.evicted_ranges.lock().unwrap().push(range.clone());
+        fn on_region_event(&self, event: RegionEvent) {
+            self.region_events.lock().unwrap().push(event);
         }
     }
 
@@ -239,8 +295,8 @@ mod tests {
         cache_engine.enabled.store(true, Ordering::Relaxed);
         observer.post_exec_cmd(&mut ctx, &cmd, &RegionState::default(), &mut apply);
         observer.on_flush_cmd();
-        let expected = CacheRange::from_region(&region);
-        assert!(&cache_engine.evicted_ranges.lock().unwrap().is_empty());
+        let expected = CacheRegion::from_region(&region);
+        assert!(&cache_engine.region_events.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -276,13 +332,17 @@ mod tests {
         // Must not evict range when range cache engine is disabled.
         observer.post_exec_cmd(&mut ctx, &cmd, &RegionState::default(), &mut apply);
         observer.on_flush_cmd();
-        assert!(cache_engine.evicted_ranges.lock().unwrap().is_empty());
+        assert!(cache_engine.region_events.lock().unwrap().is_empty());
 
         // Enable range cache engine.
         cache_engine.enabled.store(true, Ordering::Relaxed);
         observer.post_exec_cmd(&mut ctx, &cmd, &RegionState::default(), &mut apply);
         observer.on_flush_cmd();
-        let expected = CacheRange::from_region(&region);
-        assert_eq!(&cache_engine.evicted_ranges.lock().unwrap()[0], &expected);
+        let cached_region = CacheRegion::from_region(&region);
+        let expected = RegionEvent::Eviction {
+            region: cached_region,
+            reason: EvictReason::Merge,
+        };
+        assert_eq!(&cache_engine.region_events.lock().unwrap()[0], &expected);
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "8.2.0-alpha"
+version = "8.4.0-alpha"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -36,6 +36,7 @@ testexport = [
   "engine_rocks/testexport",
   "engine_panic/testexport",
   "hybrid_engine/testexport",
+  "encryption/testexport",
 ]
 test-engine-kv-rocksdb = ["engine_test/test-engine-kv-rocksdb"]
 test-engine-raft-raft-engine = ["engine_test/test-engine-raft-raft-engine"]
@@ -80,6 +81,7 @@ crc64fast = "0.1"
 crossbeam = { workspace = true }
 crypto = { workspace = true }
 dashmap = "5"
+encryption = { workspace = true }
 encryption_export = { workspace = true }
 engine_panic = { workspace = true }
 engine_rocks = { workspace = true }

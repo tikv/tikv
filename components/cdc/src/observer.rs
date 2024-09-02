@@ -56,7 +56,7 @@ impl CdcObserver {
             .register_region_change_observer(100, BoxRegionChangeObserver::new(self.clone()));
     }
 
-    /// Subscribe an region, the observer will sink events of the region into
+    /// Subscribe a region, the observer will sink events of the region into
     /// its scheduler.
     ///
     /// Return previous ObserveId if there is one.
@@ -119,8 +119,6 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
         let mut region = Region::default();
         region.mut_peers().push(Peer::default());
         // Create a snapshot here for preventing the old value was GC-ed.
-        // TODO: only need it after enabling old value, may add a flag to indicate
-        // whether to get it.
         let snapshot =
             RegionSnapshot::from_snapshot(Arc::new(engine.snapshot(None)), Arc::new(region));
         let get_old_value = move |key,

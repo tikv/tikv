@@ -48,6 +48,9 @@ where
     EK: KvEngine,
     EC: RangeCacheEngine,
 {
+    fn range_cache_engine_hit(&self) -> bool {
+        self.range_cache_snap.is_some()
+    }
 }
 
 impl<EK, EC> Debug for HybridEngineSnapshot<EK, EC>
@@ -129,29 +132,32 @@ where
 mod tests {
 
     use engine_traits::{
-        CacheRange, IterOptions, Iterable, Iterator, KvEngine, Mutable, SnapshotContext,
+        CacheRegion, IterOptions, Iterable, Iterator, KvEngine, Mutable, SnapshotContext,
         WriteBatch, WriteBatchExt, CF_DEFAULT,
     };
-    use range_cache_memory_engine::{RangeCacheEngineConfig, RangeCacheStatus};
+    use range_cache_memory_engine::{
+        test_util::new_region, RangeCacheEngineConfig, RangeCacheStatus,
+    };
 
     use crate::util::hybrid_engine_for_tests;
 
     #[test]
     fn test_iterator() {
-        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
+        let region = new_region(1, b"", b"z");
+        let cache_region = CacheRegion::from_region(&region);
         let mut iter_opt = IterOptions::default();
-        iter_opt.set_upper_bound(&range.end, 0);
-        iter_opt.set_lower_bound(&range.start, 0);
+        iter_opt.set_upper_bound(&cache_region.end, 0);
+        iter_opt.set_lower_bound(&cache_region.start, 0);
 
-        let range_clone = range.clone();
+        let region_clone = region.clone();
         let (_path, hybrid_engine) = hybrid_engine_for_tests(
             "temp",
             RangeCacheEngineConfig::config_for_test(),
             move |memory_engine| {
-                memory_engine.new_range(range_clone.clone());
+                memory_engine.new_region(region_clone);
                 {
                     let mut core = memory_engine.core().write();
-                    core.mut_range_manager().set_safe_point(&range_clone, 5);
+                    core.mut_range_manager().set_safe_point(1, 5);
                 }
             },
         )
@@ -162,15 +168,15 @@ mod tests {
             assert!(!iter.seek_to_first().unwrap());
         }
         let mut write_batch = hybrid_engine.write_batch();
-        write_batch.prepare_for_range(range.clone());
+        write_batch.prepare_for_region(cache_region.clone());
         write_batch
             .cache_write_batch
             .set_range_cache_status(RangeCacheStatus::Cached);
-        write_batch.put(b"hello", b"world").unwrap();
+        write_batch.put(b"zhello", b"world").unwrap();
         let seq = write_batch.write().unwrap();
         assert!(seq > 0);
         let ctx = SnapshotContext {
-            range: Some(range.clone()),
+            region: Some(cache_region.clone()),
             read_ts: 10,
         };
         let snap = hybrid_engine.snapshot(Some(ctx));
@@ -179,7 +185,7 @@ mod tests {
             assert!(iter.seek_to_first().unwrap());
             let actual_key = iter.key();
             let actual_value = iter.value();
-            assert_eq!(actual_key, b"hello");
+            assert_eq!(actual_key, b"zhello");
             assert_eq!(actual_value, b"world");
         }
     }

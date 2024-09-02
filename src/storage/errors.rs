@@ -385,7 +385,7 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
             key_error.set_retryable(format!("{:?}", err));
         }
         Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-            box MvccErrorInner::AlreadyExist { key },
+            box MvccErrorInner::AlreadyExist { key, .. },
         ))))) => {
             let mut exist = kvrpcpb::AlreadyExist::default();
             exist.set_key(key.clone());
