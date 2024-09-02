@@ -604,7 +604,11 @@ pub enum CasualMessage<EK: KvEngine> {
     RenewLease,
 
     // Snapshot is applied
-    SnapshotApplied,
+    SnapshotApplied {
+        peer_id: u64,
+        /// Whether the peer is destroyed after applying the snapshot
+        tombstone: bool,
+    },
 
     // Trigger raft to campaign which is used after exiting force leader
     Campaign,
@@ -665,7 +669,11 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
             }
             CasualMessage::RefreshRegionBuckets { .. } => write!(fmt, "RefreshRegionBuckets"),
             CasualMessage::RenewLease => write!(fmt, "RenewLease"),
-            CasualMessage::SnapshotApplied => write!(fmt, "SnapshotApplied"),
+            CasualMessage::SnapshotApplied { peer_id, tombstone } => write!(
+                fmt,
+                "SnapshotApplied, peer_id={}, tombstone={}",
+                peer_id, tombstone
+            ),
             CasualMessage::Campaign => write!(fmt, "Campaign"),
         }
     }
