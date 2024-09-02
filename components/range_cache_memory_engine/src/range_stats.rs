@@ -243,11 +243,12 @@ impl RangeStatsManager {
                 .iter()
                 .map(|(r, s)| {
                     format!(
-                        "region_id={}, read_keys={}, cop={}, cop_detail={:?}",
+                        "region_id={}, read_keys={}, cop={}, cop_detail={:?}, mvcc_amplification={}",
                         r.id,
                         s.region_stat.read_keys,
                         s.region_stat.query_stats.coprocessor,
                         s.region_stat.cop_detail,
+                        s.region_stat.cop_detail.mvcc_amplification(),
                     )
                 })
                 .collect();
@@ -284,11 +285,12 @@ impl RangeStatsManager {
                 .iter()
                 .map(|(r, s)| {
                     format!(
-                        "region_id={}, read_keys={}, cop={}, cop_detail={:?}",
+                        "region_id={}, read_keys={}, cop={}, cop_detail={:?}, mvcc_amplification={}",
                         r.id,
                         s.region_stat.read_keys,
                         s.region_stat.query_stats.coprocessor,
                         s.region_stat.cop_detail,
+                        s.region_stat.cop_detail.mvcc_amplification(),
                     )
                 })
                 .collect();
@@ -311,11 +313,12 @@ impl RangeStatsManager {
                 .iter()
                 .map(|(r, s)| {
                     format!(
-                        "region_id={}, read_keys={}, cop={}, cop_detail={:?}",
+                        "region_id={}, read_keys={}, cop={}, cop_detail={:?}, mvcc_amplification={}",
                         r.id,
                         s.region_stat.read_keys,
                         s.region_stat.query_stats.coprocessor,
                         s.region_stat.cop_detail,
+                        s.region_stat.cop_detail.mvcc_amplification(),
                     )
                 })
                 .collect();

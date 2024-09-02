@@ -656,11 +656,12 @@ impl RegionCollector {
                 .iter()
                 .map(|(r, s)| {
                     format!(
-                        "region_id={}, read_keys={}, cop={}, cop_detail={:?}",
+                        "region_id={}, read_keys={}, cop={}, cop_detail={:?}, mvcc_amplification={}",
                         r.get_id(),
                         s.read_keys,
                         s.query_stats.coprocessor,
                         s.cop_detail,
+                        s.cop_detail.mvcc_amplification(),
                     )
                 })
                 .collect_vec();
@@ -686,11 +687,12 @@ impl RegionCollector {
                 .iter()
                 .map(|(r, s)| {
                     format!(
-                        "region_id={}, read_keys={}, cop={}, cop_detail={:?}",
+                        "region_id={}, read_keys={}, cop={}, cop_detail={:?}, mvcc_amplification={}",
                         r.get_id(),
                         s.read_keys,
                         s.query_stats.coprocessor,
                         s.cop_detail,
+                        s.cop_detail.mvcc_amplification(),
                     )
                 })
                 .collect_vec();
