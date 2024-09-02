@@ -60,7 +60,7 @@ impl RangeCacheSnapshotMeta {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct RangeCacheSnapshot {
     snapshot_meta: RangeCacheSnapshotMeta,
     skiplist_engine: SkiplistEngine,

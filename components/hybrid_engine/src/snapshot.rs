@@ -17,7 +17,6 @@ use crate::{
     observer::RangeCacheSnapshotPin,
 };
 
-#[derive(Clone)]
 pub struct HybridEngineSnapshot<EK, EC>
 where
     EK: KvEngine,

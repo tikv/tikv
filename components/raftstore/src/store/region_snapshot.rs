@@ -99,6 +99,12 @@ where
         self.observed_snap = Some(Arc::new(Mutex::new(Some(observed_snap))));
     }
 
+    /// Replace underlying snapshot with its observed snapshot.
+    ///
+    /// # Panics
+    ///
+    /// It panics, if it has been cloned before this calling `replace_snapshot`
+    /// or if `snap_fn` panics, the panic is propagated to the caller.
     pub fn replace_snapshot<Sp, F>(mut self, snap_fn: F) -> RegionSnapshot<Sp>
     where
         Sp: Snapshot,
@@ -108,8 +114,9 @@ where
         if let Some(observed_snap) = self.observed_snap.take() {
             observed = observed_snap.lock().unwrap().take();
         }
+        let inner = Arc::into_inner(self.snap).unwrap();
         RegionSnapshot {
-            snap: Arc::new(snap_fn(Arc::unwrap_or_clone(self.snap), observed)),
+            snap: Arc::new(snap_fn(inner, observed)),
             region: self.region,
             apply_index: self.apply_index,
             from_v2: self.from_v2,

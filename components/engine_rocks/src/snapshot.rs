@@ -16,19 +16,20 @@ use crate::{
     RocksEngineIterator,
 };
 
-#[derive(Clone)]
 pub struct RocksSnapshot {
-    inner: Arc<RocksUnsafeSnapshot>,
+    db: Arc<DB>,
+    snap: UnsafeSnap,
 }
+
+unsafe impl Send for RocksSnapshot {}
+unsafe impl Sync for RocksSnapshot {}
 
 impl RocksSnapshot {
     pub fn new(db: Arc<DB>) -> Self {
         unsafe {
             RocksSnapshot {
-                inner: Arc::new(RocksUnsafeSnapshot {
-                    snap: db.unsafe_snap(),
-                    db,
-                }),
+                snap: db.unsafe_snap(),
+                db,
             }
         }
     }
@@ -42,15 +43,7 @@ impl Debug for RocksSnapshot {
     }
 }
 
-struct RocksUnsafeSnapshot {
-    db: Arc<DB>,
-    snap: UnsafeSnap,
-}
-
-unsafe impl Send for RocksUnsafeSnapshot {}
-unsafe impl Sync for RocksUnsafeSnapshot {}
-
-impl Drop for RocksUnsafeSnapshot {
+impl Drop for RocksSnapshot {
     fn drop(&mut self) {
         unsafe {
             self.db.release_snap(&self.snap);
@@ -65,11 +58,11 @@ impl Iterable for RocksSnapshot {
         let opt: RocksReadOptions = opts.into();
         let mut opt = opt.into_raw();
         unsafe {
-            opt.set_snapshot(&self.inner.snap);
+            opt.set_snapshot(&self.snap);
         }
-        let handle = get_cf_handle(self.inner.db.as_ref(), cf)?;
+        let handle = get_cf_handle(self.db.as_ref(), cf)?;
         Ok(RocksEngineIterator::from_raw(DBIterator::new_cf(
-            self.inner.db.clone(),
+            self.db.clone(),
             handle,
             opt,
         )))
@@ -83,9 +76,9 @@ impl Peekable for RocksSnapshot {
         let opt: RocksReadOptions = opts.into();
         let mut opt = opt.into_raw();
         unsafe {
-            opt.set_snapshot(&self.inner.snap);
+            opt.set_snapshot(&self.snap);
         }
-        let v = self.inner.db.get_opt(key, &opt).map_err(r2e)?;
+        let v = self.db.get_opt(key, &opt).map_err(r2e)?;
         Ok(v.map(RocksDbVector::from_raw))
     }
 
@@ -98,22 +91,22 @@ impl Peekable for RocksSnapshot {
         let opt: RocksReadOptions = opts.into();
         let mut opt = opt.into_raw();
         unsafe {
-            opt.set_snapshot(&self.inner.snap);
+            opt.set_snapshot(&self.snap);
         }
-        let handle = get_cf_handle(self.inner.db.as_ref(), cf)?;
-        let v = self.inner.db.get_cf_opt(handle, key, &opt).map_err(r2e)?;
+        let handle = get_cf_handle(self.db.as_ref(), cf)?;
+        let v = self.db.get_cf_opt(handle, key, &opt).map_err(r2e)?;
         Ok(v.map(RocksDbVector::from_raw))
     }
 }
 
 impl CfNamesExt for RocksSnapshot {
     fn cf_names(&self) -> Vec<&str> {
-        self.inner.db.cf_names()
+        self.db.cf_names()
     }
 }
 
 impl SnapshotMiscExt for RocksSnapshot {
     fn sequence_number(&self) -> u64 {
-        unsafe { self.inner.snap.get_sequence_number() }
+        unsafe { self.snap.get_sequence_number() }
     }
 }
