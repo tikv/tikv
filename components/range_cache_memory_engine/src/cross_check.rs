@@ -310,6 +310,7 @@ impl CrossChecker {
     // After each call of disk_iter, we will check whether the key missed in the
     // in-memory engine will not make it compromise data consistency.
     // `next_fisrt` denotes whether disk_iter should call next before comparison.
+    #[allow(clippy::collapsible_if)]
     fn check_with_key_in_disk_iter(
         cf: &str,
         mem_iter: &RangeCacheIterator,

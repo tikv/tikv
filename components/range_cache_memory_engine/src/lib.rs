@@ -143,6 +143,7 @@ impl RangeCacheEngineConfig {
     }
 }
 
+#[derive(Clone)]
 pub struct RangeCacheEngineContext {
     config: Arc<VersionTrack<RangeCacheEngineConfig>>,
     statistics: Arc<RangeCacheMemoryEngineStatistics>,
