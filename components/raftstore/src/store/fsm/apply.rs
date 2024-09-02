@@ -3739,7 +3739,7 @@ impl GenSnapTask {
             10000,
             (snap_min_approximate_size.as_mb_f64() * 10000.0) as u64,
         );
-        // If the size or the count of keys of cf is relatively small, it's recommended
+        // If the size and the count of keys of cf are relatively small, it's recommended
         // to use plain file for mitigating performance issue when ingesting snapshot.
         // TODO: should consider the size of each column family rather than the total
         // size.
