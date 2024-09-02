@@ -17,6 +17,7 @@ use crate::{
     InternalBytes, RangeCacheEngineConfig,
 };
 
+// This fixed mvcc suffix is used for CF_WRITE and CF_DEFAULT in prop test.
 const MVCC_SUFFIX: u64 = 10;
 
 #[derive(Clone)]
