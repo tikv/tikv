@@ -60,8 +60,16 @@ struct Locks {
     last_detect_time: Instant,
 }
 
+// Memory usage sampling strategy:
+// - Calculating full detect table memory usage is expensive
+// - Update memory usage every SAMPLE_THRESHOLD modifications
+// - Skip the update if time since last update < MIN_SAMPLE_INTERVAL
+// - Trigger update if time since last update > MAX_SAMPLE_INTERVAL
+//
+// This balances accuracy and performance for memory usage tracking.
 const MAX_SAMPLE_INTERVAL: Duration = Duration::from_secs(15);
 const MIN_SAMPLE_INTERVAL: Duration = Duration::from_secs(5);
+const SAMPLE_THRESHOLD: u64 = 1000;
 
 impl Locks {
     /// Creates a new `Locks`.
@@ -379,7 +387,7 @@ impl DetectTable {
         self.modification_count += 1;
         let now = Instant::now_coarse();
         let elapsed = now.duration_since(self.last_sample_time);
-        if (self.modification_count >= 1000 && elapsed > MIN_SAMPLE_INTERVAL)
+        if (self.modification_count >= SAMPLE_THRESHOLD && elapsed > MIN_SAMPLE_INTERVAL)
             || elapsed >= MAX_SAMPLE_INTERVAL
         {
             self.sample_memory_usage();
