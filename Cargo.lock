@@ -2845,7 +2845,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/MyonKeminta/kvproto?branch=m/deadlock-replace-lock-by-key#90cb7b0e175ceac64862e0815d47f2f05bd7de14"
+source = "git+https://github.com/pingcap/kvproto.git#767001c94b1871e0a6467bbb6e177d676b1bf3cb"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
