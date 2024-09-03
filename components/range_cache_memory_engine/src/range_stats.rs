@@ -268,8 +268,8 @@ impl RangeStatsManager {
             regions_activity.iter().for_each(|(r, a)| {
                 if let Some(&amplification) = record.get(&r.id) {
                     if a.region_stat.cop_detail.mvcc_amplification() != 0.0 {
-                        cur_mvcc_amplification = cur_mvcc_amplification * 9.0
-                            + amplification as f64 / a.region_stat.cop_detail.mvcc_amplification();
+                        cur_mvcc_amplification =
+                            (cur_mvcc_amplification * 9.0 + amplification as f64) / 10;
                     }
                 }
             });
