@@ -9,12 +9,16 @@ use engine_traits::{
 };
 use proptest::prelude::*;
 use tikv_util::config::{ReadableSize, VersionTrack};
+use txn_types::{Key, TimeStamp};
 
 use super::engine::SkiplistHandle;
 use crate::{
     decode_key, engine::SkiplistEngine, keys::encode_key, memory_controller::MemoryController,
     InternalBytes, RangeCacheEngineConfig,
 };
+
+// This fixed mvcc suffix is used for CF_WRITE and CF_DEFAULT in prop test.
+const MVCC_SUFFIX: u64 = 10;
 
 #[derive(Clone)]
 enum Operation {
@@ -158,15 +162,27 @@ fn test_rocksdb_skiplist_basic_operations(cf: CfName, operations: Vec<Operation>
         (handle, key, value, guard)
     };
 
+    // Delete range in SkiplistEngine considers MVCC suffix for CF_DEFAULT and
+    // CF_WRITE, so we append the suffix for them.
     for op in operations {
         match op {
-            Operation::Put(k, v) => {
+            Operation::Put(mut k, v) => {
+                if cf != CF_LOCK {
+                    k = Key::from_raw(&k)
+                        .append_ts(TimeStamp::new(MVCC_SUFFIX))
+                        .into_encoded();
+                }
                 db_rocks.put_cf(cf, &k, &v).unwrap();
 
                 let (handle, key, value, guard) = skiplist_args(k, Some(v));
                 handle.insert(key, value.unwrap(), &guard)
             }
-            Operation::Get(k) => {
+            Operation::Get(mut k) => {
+                if cf != CF_LOCK {
+                    k = Key::from_raw(&k)
+                        .append_ts(TimeStamp::new(MVCC_SUFFIX))
+                        .into_encoded();
+                }
                 let res_rocks = db_rocks.get_value_cf(cf, &k).unwrap();
                 let (handle, key, _value, guard) = skiplist_args(k, None);
                 let res_skiplist = handle.get(&key, &guard);
@@ -175,28 +191,45 @@ fn test_rocksdb_skiplist_basic_operations(cf: CfName, operations: Vec<Operation>
                     res_skiplist.map(|e| e.value().as_slice())
                 );
             }
-            Operation::Delete(k) => {
+            Operation::Delete(mut k) => {
+                if cf != CF_LOCK {
+                    k = Key::from_raw(&k)
+                        .append_ts(TimeStamp::new(MVCC_SUFFIX))
+                        .into_encoded();
+                }
                 db_rocks.delete_cf(cf, &k).unwrap();
 
                 let (handle, key, _value, guard) = skiplist_args(k, None);
                 handle.remove(&key, &guard)
             }
-            Operation::Scan(k, limit) => {
+            Operation::Scan(mut k, limit) => {
+                if cf != CF_LOCK {
+                    k = Key::from_raw(&k)
+                        .append_ts(TimeStamp::new(MVCC_SUFFIX))
+                        .into_encoded();
+                }
                 let res_rocks = scan_rocksdb(&db_rocks, cf, &k, limit);
                 let (handle, key, _value, _guard) = skiplist_args(k, None);
                 let res_titan = scan_skiplist(handle, &key, limit);
                 assert_eq!(res_rocks, res_titan);
             }
-            Operation::DeleteRange(k1, k2) => {
-                if k1 <= k2 {
-                    db_rocks.delete_range_cf(cf, &k1, &k2).unwrap();
-                    let range = CacheRegion::new(1, 0, k1.clone(), k2.clone());
-                    skiplist.delete_range_cf(cf, &range);
-                } else {
-                    db_rocks.delete_range_cf(cf, &k2, &k1).unwrap();
-                    let range = CacheRegion::new(1, 0, k2.clone(), k1.clone());
-                    skiplist.delete_range_cf(cf, &range);
+            Operation::DeleteRange(mut k1, mut k2) => {
+                if k1 > k2 {
+                    (k1, k2) = (k2, k1);
                 }
+
+                let range = CacheRegion::new(1, 0, k1.clone(), k2.clone());
+                skiplist.delete_range_cf(cf, &range);
+
+                if cf != CF_LOCK {
+                    k1 = Key::from_raw(&k1)
+                        .append_ts(TimeStamp::new(MVCC_SUFFIX))
+                        .into_encoded();
+                    k2 = Key::from_raw(&k2)
+                        .append_ts(TimeStamp::new(MVCC_SUFFIX))
+                        .into_encoded();
+                }
+                db_rocks.delete_range_cf(cf, &k1, &k2).unwrap();
             }
         }
     }
@@ -208,4 +241,16 @@ proptest! {
     fn test_rocksdb_skiplist_basic_ops((cf, operations) in gen_operations(1000)) {
         test_rocksdb_skiplist_basic_operations(cf, operations);
     }
+}
+
+#[test]
+fn test_case1() {
+    let de = |data| hex::decode(data).unwrap();
+    let cf = CF_WRITE;
+    let operations = [
+        Operation::Put(de("E2"), de("38CC98E09D9CB1D1")),
+        Operation::DeleteRange(de(""), de("E2")),
+        Operation::Scan(de("2C0F698A"), 3),
+    ];
+    test_rocksdb_skiplist_basic_operations(cf, operations.to_vec());
 }
