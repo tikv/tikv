@@ -269,7 +269,7 @@ impl RangeStatsManager {
                 if let Some(&amplification) = record.get(&r.id) {
                     if a.region_stat.cop_detail.mvcc_amplification() != 0.0 {
                         cur_mvcc_amplification =
-                            (cur_mvcc_amplification * 9.0 + amplification as f64) / 10;
+                            (cur_mvcc_amplification * 9.0 + amplification as f64) / 10.0;
                     }
                 }
             });
@@ -412,7 +412,7 @@ impl RangeStatsManager {
                     .mvcc_amplification()
                     .total_cmp(&b.region_stat.cop_detail.mvcc_amplification())
             });
-            let region_to_evict: Vec<_> = regions_activity.into_iter().rev().take(5).collect();
+            let region_to_evict: Vec<_> = regions_activity.into_iter().rev().take(3).collect();
             let debug: Vec<_> = region_to_evict
                 .iter()
                 .map(|(r, s)| {
