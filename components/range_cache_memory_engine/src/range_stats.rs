@@ -1,7 +1,7 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{
     cmp,
-    collections::BTreeMap,
+    collections::{BTreeMap, BinaryHeap},
     num::NonZeroUsize,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -10,6 +10,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use atomic_float::AtomicF64;
+use collections::HashMap;
 use crossbeam::sync::ShardedLock;
 use kvproto::metapb::Region;
 use parking_lot::Mutex;
@@ -27,7 +29,10 @@ pub(crate) struct RangeStatsManager {
     region_loaded_at: Arc<ShardedLock<BTreeMap<u64, Instant>>>,
     evict_min_duration: Duration,
     expected_region_size: usize,
+    cur_mvcc_amplification_reduction: Arc<AtomicF64>,
     mvcc_amplification_threshold: usize,
+
+    mvcc_amplification_record: Arc<Mutex<HashMap<u64, f64>>>,
 }
 
 /// Do not evict a region if has been cached for less than this duration.
@@ -54,6 +59,8 @@ impl RangeStatsManager {
             prev_top_regions: Arc::new(Mutex::new(BTreeMap::new())),
             checking_top_regions: Arc::new(AtomicBool::new(false)),
             region_loaded_at: Arc::new(ShardedLock::new(BTreeMap::new())),
+            cur_mvcc_amplification_reduction: Arc::default(),
+            mvcc_amplification_record: Arc::default(),
             evict_min_duration,
             expected_region_size,
             mvcc_amplification_threshold,
@@ -114,7 +121,7 @@ impl RangeStatsManager {
                                 Some(_) | None =>
                                 // None indicates range loaded from a hint, not by this manager.
                                 {
-                                    Some((region.clone(), *approx_size))
+                                    Some((region.clone(), approx_size.approximate_size))
                                 }
                             }
                         })
@@ -206,7 +213,7 @@ impl RangeStatsManager {
             .get_top_regions(Some(NonZeroUsize::try_from(self.max_num_regions()).unwrap()))
             .unwrap() // TODO (afeinberg): Potentially custom error handling here.
             .iter()
-            .map(|(r, _)| (r.id, r.clone()))
+            .map(|(r, region_stats)| (r.id, (r.clone(), region_stats.clone())))
             .collect::<BTreeMap<_, _>>();
         {
             let mut region_loaded_map = self.region_loaded_at.write().unwrap();
@@ -217,22 +224,34 @@ impl RangeStatsManager {
         let prev_top_regions = {
             let mut mut_prev_top_regions = self.prev_top_regions.lock();
             let ret = mut_prev_top_regions.clone();
-            *mut_prev_top_regions = curr_top_regions.clone();
+            *mut_prev_top_regions = curr_top_regions
+                .iter()
+                .map(|(&id, (r, _))| (id, r.clone()))
+                .collect();
             ret
         };
         if prev_top_regions.is_empty() {
-            regions_added_out.extend(curr_top_regions.values().cloned());
+            regions_added_out.extend(curr_top_regions.values().map(|(r, _)| r).cloned());
             return;
         }
+
+        let mut record = self.mvcc_amplification_record.lock();
         let added_ranges = curr_top_regions
             .iter()
-            .filter(|(id, _)| !prev_top_regions.contains_key(id))
-            .map(|(_, region)| region.clone());
+            .filter_map(|(id, (r, region_stats))| {
+                if !prev_top_regions.contains_key(id) {
+                    record.insert(*id, region_stats.cop_detail.mvcc_amplification());
+                    Some(r.clone())
+                } else {
+                    None
+                }
+            });
         regions_added_out.extend(added_ranges);
     }
 
-    pub fn collect_regions_to_evict(
+    pub fn collect_regions_to_load_and_evict(
         &self,
+        regions_added_out: &mut Vec<Region>,
         cached_region_ids: Vec<u64>,
         memory_controller: &MemoryController,
     ) -> Vec<Region> {
@@ -240,6 +259,84 @@ impl RangeStatsManager {
             .info_provider
             .get_regions_activity(cached_region_ids)
             .unwrap();
+
+        {
+            let mut cur_mvcc_amplification = self
+                .cur_mvcc_amplification_reduction
+                .load(Ordering::Relaxed);
+            let mut record = self.mvcc_amplification_record.lock();
+            regions_activity.iter().for_each(|(r, a)| {
+                if let Some(&amplification) = record.get(&r.id) {
+                    if a.region_stat.cop_detail.mvcc_amplification() != 0.0 {
+                        cur_mvcc_amplification = cur_mvcc_amplification * 9.0
+                            + amplification as f64 / a.region_stat.cop_detail.mvcc_amplification();
+                    }
+                }
+            });
+            record.clear();
+            self.cur_mvcc_amplification_reduction
+                .store(cur_mvcc_amplification, Ordering::Relaxed);
+
+            info!(
+                "IME mvcc amplification reduction update";
+                "cur_mvcc_amplification_reduction" => cur_mvcc_amplification,
+            );
+        }
+
+        info!("ime collect_changed_ranges"; "num_regions" => self.max_num_regions());
+        let curr_top_regions = self
+            .info_provider
+            .get_top_regions(Some(NonZeroUsize::try_from(self.max_num_regions()).unwrap()))
+            .unwrap() // TODO (afeinberg): Potentially custom error handling here.
+            .iter()
+            .map(|(r, region_stats)| (r.id, (r.clone(), region_stats.clone())))
+            .collect::<BTreeMap<_, _>>();
+        {
+            let mut region_loaded_map = self.region_loaded_at.write().unwrap();
+            for &region_id in curr_top_regions.keys() {
+                let _ = region_loaded_map.insert(region_id, Instant::now());
+            }
+        }
+        let prev_top_regions = {
+            let mut mut_prev_top_regions = self.prev_top_regions.lock();
+            let ret = mut_prev_top_regions.clone();
+            *mut_prev_top_regions = curr_top_regions
+                .iter()
+                .map(|(&id, (r, _))| (id, r.clone()))
+                .collect();
+            ret
+        };
+        if prev_top_regions.is_empty() {
+            regions_added_out.extend(curr_top_regions.values().map(|(r, _)| r).cloned());
+        }
+
+        let mvcc_amplification_to_filter = {
+            let cur_mvcc_amplification_reduction = self
+                .cur_mvcc_amplification_reduction
+                .load(Ordering::Relaxed);
+            let mut heap = BinaryHeap::new();
+            let mut record = self.mvcc_amplification_record.lock();
+            let added_ranges = curr_top_regions
+                .iter()
+                .filter_map(|(id, (r, region_stats))| {
+                    if !prev_top_regions.contains_key(id) {
+                        heap.push(region_stats.cop_detail.mvcc_amplification() as u64);
+                        record.insert(*id, region_stats.cop_detail.mvcc_amplification());
+                        Some(r.clone())
+                    } else {
+                        None
+                    }
+                });
+            regions_added_out.extend(added_ranges);
+            // ignore the largest
+            heap.pop();
+            heap.pop().unwrap_or(0) as f64 / cur_mvcc_amplification_reduction
+        };
+
+        info!(
+            "IME mvcc amplification reduction filter";
+            "mvcc_amplification_to_filter" => mvcc_amplification_to_filter,
+        );
 
         {
             let debug: Vec<_> = regions_activity
@@ -269,9 +366,9 @@ impl RangeStatsManager {
                 .filter(|(_, r)| {
                     r.region_stat.cop_detail.mvcc_amplification()
                         <= if reach_stop_load {
-                            self.mvcc_amplification_threshold as f64 / 4.0
+                            mvcc_amplification_to_filter
                         } else {
-                            self.mvcc_amplification_threshold as f64 / 20.0
+                            self.mvcc_amplification_threshold as f64 / 10.0
                         }
                 })
                 .filter_map(|(r, s)| {

@@ -709,7 +709,7 @@ impl RegionCollector {
         callback(
             top_regions
                 .into_iter()
-                .map(|(r, stat)| (r, stat.approximate_size))
+                .map(|(r, stat)| (r, stat.clone()))
                 .collect_vec(),
         )
     }
@@ -926,7 +926,7 @@ impl RegionInfoAccessor {
 }
 
 /// Top regions result: region and its approximate size.
-pub type TopRegions = Vec<(Region, u64)>;
+pub type TopRegions = Vec<(Region, RegionStat)>;
 
 pub trait RegionInfoProvider: Send + Sync {
     /// Get a iterator of regions that contains `from` or have keys larger than
@@ -1162,7 +1162,8 @@ impl RegionInfoProvider for MockRegionInfoProvider {
             b"",
             Box::new(move |iter| {
                 for region_info in iter {
-                    tx.send((region_info.region.clone(), 0)).unwrap();
+                    tx.send((region_info.region.clone(), RegionStat::default()))
+                        .unwrap();
                 }
             }),
         )?;
