@@ -1213,9 +1213,18 @@ where
         if let Some(leader_client) = &self.leader_client {
             let mut replace_locks_by_keys_req = ReplaceLocksByKeysRequest::default();
             replace_locks_by_keys_req.set_items(items.into());
+
             let mut req = DeadlockRequest::default();
-            req.set_tp(DeadlockRequestType::ReplaceLockByKey);
             req.set_replace_locks_by_keys(replace_locks_by_keys_req);
+
+            // For old versions that does not support `replace_locks_by_keys`,
+            // it will recognize `tp` and `entry`. We let it tries to delete
+            // an entry that must not exist, so that it's a noop.
+            req.set_tp(DeadlockRequestType::CleanUpWaitFor);
+            let mut dummy_entry = WaitForEntry::default();
+            dummy_entry.set_txn(1);
+            dummy_entry.set_wait_for_txn(1);
+            req.set_entry(dummy_entry);
 
             match leader_client.send(req) {
                 Ok(()) => return Ok(()),
@@ -1412,8 +1421,8 @@ where
                     ..
                 } = req.get_entry();
                 let detect_table = &mut inner.detect_table;
-                let res: Option<Pin<Box<dyn futures::Stream<Item = _>>>> = match req.get_tp() {
-                    DeadlockRequestType::Detect => {
+                let res = match (req.get_tp(), req.has_replace_locks_by_keys()) {
+                    (DeadlockRequestType::Detect, false) => {
                         if let Some((deadlock_key_hash, deadlock_key, wait_chain)) = detect_table
                             .detect(
                                 txn.into(),
@@ -1428,15 +1437,15 @@ where
                             resp.set_deadlock_key_hash(deadlock_key_hash);
                             resp.set_deadlock_key(deadlock_key);
                             resp.set_wait_chain(wait_chain.into());
-                            Some(Box::pin(stream::once(future::ok((
-                                resp,
-                                WriteFlags::default(),
-                            )))))
+                            Some(
+                                Box::pin(stream::once(future::ok((resp, WriteFlags::default()))))
+                                    as Pin<Box<dyn futures::Stream<Item = _>>>,
+                            )
                         } else {
                             None
                         }
                     }
-                    DeadlockRequestType::CleanUpWaitFor => {
+                    (DeadlockRequestType::CleanUpWaitFor, false) => {
                         detect_table.clean_up_wait_for(
                             txn.into(),
                             LockDigest {
@@ -1447,11 +1456,11 @@ where
                         );
                         None
                     }
-                    DeadlockRequestType::CleanUp => {
+                    (DeadlockRequestType::CleanUp, false) => {
                         detect_table.clean_up(txn.into());
                         None
                     }
-                    DeadlockRequestType::ReplaceLockByKey => {
+                    (_, true) => {
                         let items = req.take_replace_locks_by_keys().take_items();
                         let result = items.into_iter().flat_map(move |item| {
                             detect_table
@@ -1488,7 +1497,8 @@ where
                             })
                             // Needs to drain the iterator to remove the reference to `inner`.
                             .collect_vec();
-                        Some(Box::pin(stream::iter(result)))
+                        Some(Box::pin(stream::iter(result))
+                            as Pin<Box<dyn futures::Stream<Item = _>>>)
                     }
                 };
                 future::ok(res)

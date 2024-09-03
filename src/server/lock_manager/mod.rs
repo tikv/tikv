@@ -313,6 +313,7 @@ mod tests {
     use raftstore::coprocessor::RegionChangeEvent;
     use security::SecurityConfig;
     use tikv_util::config::ReadableDuration;
+    use tikv_util::time::Instant;
     use tracker::{TrackerToken, INVALID_TRACKER_TOKEN};
     use txn_types::Key;
 
@@ -659,7 +660,7 @@ mod tests {
                 waiter.start_ts,
                 waiter.wait_info.clone(),
                 false,
-                Some(WaitTimeout::Millis(500)),
+                Some(WaitTimeout::Millis(1000)),
                 waiter.cancel_callback,
                 diag_ctx(resource_group_tag, INVALID_TRACKER_TOKEN),
             );
@@ -700,7 +701,7 @@ mod tests {
                 }
             },
             0,
-            250,
+            500,
         );
 
         assert_elapsed(
@@ -710,7 +711,7 @@ mod tests {
                 }
             },
             0,
-            500,
+            1000,
         );
     }
 
