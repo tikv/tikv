@@ -2,6 +2,7 @@
 
 mod ascii;
 mod gb18030;
+mod gb18030_data;
 mod gbk;
 mod unicode_letter;
 mod utf8;

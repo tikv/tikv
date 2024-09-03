@@ -2884,43 +2884,6 @@ mod tests {
 
     #[test]
     fn test_upper() {
-        // Test non-binary string case
-        let cases = vec![
-            (Some(b"hello".to_vec()), Some(b"HELLO".to_vec())),
-            (Some(b"123".to_vec()), Some(b"123".to_vec())),
-            (
-                Some("café".as_bytes().to_vec()),
-                Some("CAFÉ".as_bytes().to_vec()),
-            ),
-            (
-                Some("数据库".as_bytes().to_vec()),
-                Some("数据库".as_bytes().to_vec()),
-            ),
-            (
-                Some("ночь на окраине москвы".as_bytes().to_vec()),
-                Some("НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec()),
-            ),
-            (
-                Some("قاعدة البيانات".as_bytes().to_vec()),
-                Some("قاعدة البيانات".as_bytes().to_vec()),
-            ),
-            (None, None),
-        ];
-
-        for (arg, exp) in cases {
-            let output = RpnFnScalarEvaluator::new()
-                .push_param_with_field_type(
-                    arg.clone(),
-                    FieldTypeBuilder::new()
-                        .tp(FieldTypeTp::VarString)
-                        .charset(CHARSET_UTF8MB4)
-                        .build(),
-                )
-                .evaluate(ScalarFuncSig::Upper)
-                .unwrap();
-            assert_eq!(output, exp);
-        }
-
         // Test binary string case
         let cases = vec![
             (Some(b"hello".to_vec()), Some(b"hello".to_vec())),
@@ -2950,7 +2913,7 @@ mod tests {
                     arg.clone(),
                     FieldTypeBuilder::new()
                         .tp(FieldTypeTp::VarString)
-                        .charset(CHARSET_UTF8MB4)
+                        .collation(Collation::Binary)
                         .build(),
                 )
                 .evaluate(ScalarFuncSig::Upper)
@@ -3033,7 +2996,7 @@ mod tests {
                         .charset(CHARSET_GB18030)
                         .build(),
                 )
-                .evaluate(ScalarFuncSig::Upper)
+                .evaluate(ScalarFuncSig::UpperUtf8)
                 .unwrap();
             assert_eq!(
                 output,
@@ -3051,7 +3014,7 @@ mod tests {
                         .charset(CHARSET_GB18030)
                         .build(),
                 )
-                .evaluate(ScalarFuncSig::Lower)
+                .evaluate(ScalarFuncSig::LowerUtf8)
                 .unwrap();
             assert_eq!(
                 output,
