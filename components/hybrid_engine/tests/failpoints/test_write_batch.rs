@@ -63,12 +63,7 @@ fn test_sequence_number_unique() {
     rx.recv().unwrap();
     wb.write().unwrap();
 
-    let mut iter = engine
-        .core()
-        .read()
-        .engine()
-        .cf_handle("default")
-        .iterator();
+    let mut iter = engine.core().engine().cf_handle("default").iterator();
     let guard = &epoch::pin();
 
     let mut first = true;

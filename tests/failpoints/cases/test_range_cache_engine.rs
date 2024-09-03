@@ -36,10 +36,14 @@ fn test_basic_put_get() {
     {
         let region = cluster.get_region(b"k");
         let rid = region.id;
-        let mut core = range_cache_engine.core().write();
-        core.mut_range_manager()
+        range_cache_engine
+            .core()
+            .region_manager()
             .new_region(CacheRegion::from_region(&region));
-        core.mut_range_manager().set_safe_point(rid, 1000);
+        range_cache_engine
+            .core()
+            .region_manager()
+            .set_safe_point(rid, 1000);
     }
 
     cluster.put(b"k05", b"val").unwrap();
@@ -93,14 +97,19 @@ fn test_load() {
         let r1 = cluster.get_region(&split_key1);
         let r2 = cluster.get_region(&split_key2);
         let range_cache_engine = cluster.get_range_cache_engine(1);
-        let mut core = range_cache_engine.core().write();
-        core.mut_range_manager()
+        range_cache_engine
+            .core()
+            .region_manager()
             .load_region(CacheRegion::from_region(&r))
             .unwrap();
-        core.mut_range_manager()
+        range_cache_engine
+            .core()
+            .region_manager()
             .load_region(CacheRegion::from_region(&r1))
             .unwrap();
-        core.mut_range_manager()
+        range_cache_engine
+            .core()
+            .region_manager()
             .load_region(CacheRegion::from_region(&r2))
             .unwrap();
     }
@@ -191,11 +200,12 @@ fn test_load_with_split() {
     // load range
     {
         let range_cache_engine = cluster.get_range_cache_engine(1);
-        let mut core = range_cache_engine.core().write();
         // Load the whole range as if it is not splitted. Loading process should handle
         // it correctly.
         let cache_range = new_region(1, "", "");
-        core.mut_range_manager()
+        range_cache_engine
+            .core()
+            .region_manager()
             .load_region(CacheRegion::from_region(&cache_range))
             .unwrap();
     }
@@ -290,10 +300,11 @@ fn test_load_with_split2() {
     std::thread::sleep(Duration::from_secs(1));
     {
         let range_cache_engine = cluster.get_range_cache_engine(1);
-        let mut core = range_cache_engine.core().write();
         // try to load a region with old epoch and bigger range,
         // it should be updated to the real region range.
-        core.mut_range_manager()
+        range_cache_engine
+            .core()
+            .region_manager()
             .load_region(CacheRegion::new(r_split.id, 0, DATA_MIN_KEY, DATA_MAX_KEY))
             .unwrap();
     }
@@ -315,8 +326,12 @@ fn test_load_with_split2() {
 
     {
         let range_cache_engine = cluster.get_range_cache_engine(1);
-        let core = range_cache_engine.core().read();
-        let meta = core.range_manager().region_meta(r_split.id).unwrap();
+        let regions_map = range_cache_engine
+            .core()
+            .region_manager()
+            .regions_map()
+            .read();
+        let meta = regions_map.region_meta(r_split.id).unwrap();
         let split_range = CacheRegion::from_region(&r_split);
         assert_eq!(&split_range, meta.get_region());
     }
@@ -373,11 +388,14 @@ fn test_load_with_eviction() {
     // load range
     {
         let range_cache_engine = cluster.get_range_cache_engine(1);
-        let mut core = range_cache_engine.core().write();
         // Load the whole range as if it is not splitted. Loading process should handle
         // it correctly.
         let cache_range = CacheRegion::new(1, 0, DATA_MIN_KEY, DATA_MAX_KEY);
-        core.mut_range_manager().load_region(cache_range).unwrap();
+        range_cache_engine
+            .core()
+            .region_manager()
+            .load_region(cache_range)
+            .unwrap();
     }
 
     let r = cluster.get_region(b"");
@@ -454,9 +472,10 @@ fn test_evictions_after_transfer_leader() {
     let cache_region = CacheRegion::new(1, 0, DATA_MIN_KEY, DATA_MAX_KEY);
     let range_cache_engine = {
         let range_cache_engine = cluster.get_range_cache_engine(1);
-        let mut core = range_cache_engine.core().write();
-        core.mut_range_manager().new_region(cache_region.clone());
-        drop(core);
+        range_cache_engine
+            .core()
+            .region_manager()
+            .new_region(cache_region.clone());
         range_cache_engine
     };
 
@@ -484,10 +503,14 @@ fn test_eviction_after_merge() {
 
     let range_cache_engine = {
         let range_cache_engine = cluster.get_range_cache_engine(1);
-        let mut core = range_cache_engine.core().write();
-        core.mut_range_manager().new_region(range1.clone());
-        core.mut_range_manager().new_region(range2.clone());
-        drop(core);
+        range_cache_engine
+            .core()
+            .region_manager()
+            .new_region(range1.clone());
+        range_cache_engine
+            .core()
+            .region_manager()
+            .new_region(range2.clone());
         range_cache_engine
     };
 
@@ -524,9 +547,10 @@ fn test_eviction_after_ingest_sst() {
     let cache_region = CacheRegion::from_region(&region);
     let range_cache_engine = {
         let range_cache_engine = cluster.get_range_cache_engine(1);
-        let mut core = range_cache_engine.core().write();
-        core.mut_range_manager().new_region(cache_region.clone());
-        drop(core);
+        range_cache_engine
+            .core()
+            .region_manager()
+            .new_region(cache_region.clone());
         range_cache_engine
     };
 
