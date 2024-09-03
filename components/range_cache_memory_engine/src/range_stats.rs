@@ -366,7 +366,7 @@ impl RangeStatsManager {
                 .filter(|(_, r)| {
                     r.region_stat.cop_detail.mvcc_amplification()
                         <= if reach_stop_load {
-                            mvcc_amplification_to_filter
+                            mvcc_amplification_to_filter / 2.0
                         } else {
                             self.mvcc_amplification_threshold as f64 / 10.0
                         }
