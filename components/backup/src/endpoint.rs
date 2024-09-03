@@ -739,9 +739,13 @@ impl<R: RegionInfoProvider> Progress<R> {
     /// Forward the progress by `ranges` BackupRanges
     ///
     /// The size of the returned BackupRanges should <= `ranges`
-    fn forward(&mut self, limit: usize) -> Vec<BackupRange> {
+    ///
+    /// Notice: Returning an empty BackupRanges means that no leader region
+    /// corresponding to the current range is sought. The caller should
+    /// call `forward` again to seek regions for the next range.
+    fn forward(&mut self, limit: usize) -> Option<Vec<BackupRange>> {
         if self.finished {
-            return Vec::new();
+            return None;
         }
         let store_id = self.store_id;
         let (tx, rx) = mpsc::channel();
@@ -815,7 +819,7 @@ impl<R: RegionInfoProvider> Progress<R> {
         } else {
             self.try_next();
         }
-        branges
+        Some(branges)
     }
 }
 
@@ -913,11 +917,10 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                     // (See https://tokio.rs/tokio/tutorial/shared-state)
                     // Use &mut and mark the type for making rust-analyzer happy.
                     let progress: &mut Progress<_> = &mut prs.lock().unwrap();
-                    let batch = progress.forward(batch_size);
-                    if batch.is_empty() {
-                        return;
+                    match progress.forward(batch_size) {
+                        Some(batch) => (batch, progress.codec.is_raw_kv, progress.cf),
+                        None => return,
                     }
-                    (batch, progress.codec.is_raw_kv, progress.cf)
                 };
 
                 for brange in batch {
@@ -1469,7 +1472,7 @@ pub mod tests {
                 let mut ranges = Vec::with_capacity(expect.len());
                 while ranges.len() != expect.len() {
                     let n = (rand::random::<usize>() % 3) + 1;
-                    let mut r = prs.forward(n);
+                    let mut r = prs.forward(n).unwrap();
                     // The returned backup ranges should <= n
                     assert!(r.len() <= n);
 
@@ -1605,23 +1608,18 @@ pub mod tests {
                 );
 
                 let mut ranges = Vec::with_capacity(expect.len());
-                while ranges.len() != expect.len() {
+                loop {
                     let n = (rand::random::<usize>() % 3) + 1;
-                    let mut r = prs.forward(n);
+                    let mut r = match prs.forward(n) {
+                        None => break,
+                        Some(r) => r,
+                    };
                     // The returned backup ranges should <= n
                     assert!(r.len() <= n);
 
-                    if r.is_empty() {
-                        // if return a empty vec then the progress is finished
-                        assert_eq!(
-                            ranges.len(),
-                            expect.len(),
-                            "got {:?}, expect {:?}",
-                            ranges,
-                            expect
-                        );
+                    if !r.is_empty() {
+                        ranges.append(&mut r);
                     }
-                    ranges.append(&mut r);
                 }
 
                 for (a, b) in ranges.into_iter().zip(expect) {
@@ -1756,6 +1754,73 @@ pub mod tests {
         for (ranges, expect_ranges) in case {
             test_seek_backup_ranges(ranges.clone(), expect_ranges.clone());
             test_handle_backup_task_ranges(ranges, expect_ranges);
+        }
+    }
+
+    fn fake_empty_marker() -> Vec<super::BackupRange> {
+        vec![super::BackupRange {
+            start_key: None,
+            end_key: None,
+            region: Region::new(),
+            leader: Peer::new(),
+            codec: KeyValueCodec::new(false, ApiVersion::V1, ApiVersion::V1),
+            cf: "",
+        }]
+    }
+
+    #[test]
+    fn test_seek_ranges_2() {
+        let (_tmp, endpoint) = new_endpoint();
+
+        endpoint.region_info.set_regions(vec![
+            (b"2".to_vec(), b"4".to_vec(), 1),
+            (b"6".to_vec(), b"8".to_vec(), 2),
+        ]);
+        let sub_ranges: Vec<(&[u8], &[u8])> = vec![(b"1", b"11"), (b"3", b"7"), (b"8", b"9")];
+        let expect: Vec<(&[u8], &[u8])> = vec![(b"", b""), (b"3", b"4"), (b"6", b"7"), (b"", b"")];
+
+        let mut ranges = Vec::with_capacity(sub_ranges.len());
+        for &(start_key, end_key) in &sub_ranges {
+            let start_key = (!start_key.is_empty()).then_some(Key::from_raw(start_key));
+            let end_key = (!end_key.is_empty()).then_some(Key::from_raw(end_key));
+            ranges.push((start_key, end_key));
+        }
+        let mut prs = Progress::new_with_ranges(
+            endpoint.store_id,
+            ranges,
+            endpoint.region_info,
+            KeyValueCodec::new(false, ApiVersion::V1, ApiVersion::V1),
+            engine_traits::CF_DEFAULT,
+        );
+
+        let mut ranges = Vec::with_capacity(expect.len());
+        loop {
+            let n = (rand::random::<usize>() % 2) + 1;
+            let mut r = match prs.forward(n) {
+                None => break,
+                Some(r) => r,
+            };
+            // The returned backup ranges should <= n
+            assert!(r.len() <= n);
+
+            if !r.is_empty() {
+                ranges.append(&mut r);
+            } else {
+                // append the empty marker
+                ranges.append(&mut fake_empty_marker());
+            }
+        }
+
+        assert!(ranges.len() == expect.len());
+        for (a, b) in ranges.into_iter().zip(expect) {
+            assert_eq!(
+                a.start_key.map_or_else(Vec::new, |k| k.into_raw().unwrap()),
+                b.0
+            );
+            assert_eq!(
+                a.end_key.map_or_else(Vec::new, |k| k.into_raw().unwrap()),
+                b.1
+            );
         }
     }
 

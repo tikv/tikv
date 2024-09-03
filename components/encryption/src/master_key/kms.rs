@@ -161,12 +161,14 @@ impl KmsBackend {
             }
             {
                 let runtime = self.runtime.lock().unwrap();
-                let plaintext = runtime.block_on(retry(|| {
-                    with_timeout(
-                        self.timeout_duration,
-                        self.kms_provider.decrypt_data_key(&ciphertext_key),
-                    )
-                }))?;
+                let plaintext = runtime
+                    .block_on(retry(|| {
+                        with_timeout(
+                            self.timeout_duration,
+                            self.kms_provider.decrypt_data_key(&ciphertext_key),
+                        )
+                    }))
+                    .map_err(|e| Error::WrongMasterKey(box_err!(e.to_string())))?;
                 let data_key = DataKeyPair {
                     encrypted: ciphertext_key,
                     plaintext: PlainKey::new(plaintext)?,
