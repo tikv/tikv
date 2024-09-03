@@ -318,7 +318,7 @@ impl CrossChecker {
         next_fisrt: bool,
         safe_point: &mut u64,
         engine: &RangeCacheMemoryEngine,
-        range: &CacheRegion,
+        cached_region: &CacheRegion,
         prev_key_info: &mut KeyCheckingInfo,
         cur_key_info: &mut KeyCheckingInfo,
         last_disk_user_key_delete: &mut bool,
@@ -329,9 +329,8 @@ impl CrossChecker {
         if next_fisrt && !disk_iter.next().unwrap() {
             panic!(
                 "cross check fail(key should not exist): disk iterator next failed;
-                    lower={:?}, upper={:?}; cache_key={:?}; sequence_numer={}; cf={:?}",
-                log_wrappers::Value(&mem_iter.lower_bound),
-                log_wrappers::Value(&mem_iter.upper_bound),
+                    cache_region={:?}; cache_key={:?}; sequence_numer={}; cf={:?}",
+                cached_region,
                 log_wrappers::Value(mem_key),
                 mem_iter.sequence_number,
                 cf,
@@ -345,9 +344,8 @@ impl CrossChecker {
                 if disk_key != mem_key {
                     panic!(
                         "cross check fail(key not equal): lock cf not match; 
-                        lower={:?}, upper={:?}; cache_key={:?}, disk_key={:?}; sequence_numer={};",
-                        log_wrappers::Value(&mem_iter.lower_bound),
-                        log_wrappers::Value(&mem_iter.upper_bound),
+                        cache_region={:?}; cache_key={:?}, disk_key={:?}; sequence_numer={};",
+                        cached_region,
                         log_wrappers::Value(mem_key),
                         log_wrappers::Value(disk_key),
                         mem_iter.sequence_number,
@@ -356,9 +354,8 @@ impl CrossChecker {
                 if mem_iter.value() != disk_iter.value() {
                     panic!(
                         "cross check fail(value not equal): lock cf not match; 
-                        lower={:?}, upper={:?}; key={:?}, mem_value={:?} disk_key={:?};",
-                        log_wrappers::Value(&mem_iter.lower_bound),
-                        log_wrappers::Value(&mem_iter.upper_bound),
+                        cache_region={:?}; key={:?}, mem_value={:?} disk_key={:?};",
+                        cached_region,
                         log_wrappers::Value(mem_key),
                         log_wrappers::Value(mem_iter.value()),
                         log_wrappers::Value(disk_iter.value()),
@@ -371,9 +368,8 @@ impl CrossChecker {
                 if mem_iter.value() != disk_iter.value() {
                     panic!(
                         "cross check fail(value not equal): write cf not match; 
-                        lower={:?}, upper={:?}; key={:?}, mem_value={:?} disk_key={:?};",
-                        log_wrappers::Value(&mem_iter.lower_bound),
-                        log_wrappers::Value(&mem_iter.upper_bound),
+                        cache_region={:?}; key={:?}, mem_value={:?} disk_key={:?};",
+                        cached_region,
                         log_wrappers::Value(mem_key),
                         log_wrappers::Value(mem_iter.value()),
                         log_wrappers::Value(disk_iter.value()),
@@ -390,9 +386,8 @@ impl CrossChecker {
                 Err(e) => {
                     panic!(
                         "cross check fail(parse error); 
-                        lower={:?}, upper={:?}; cache_key={:?}, cache_val={:?}; sequence_numer={}; Error={:?}",
-                        log_wrappers::Value(&mem_iter.lower_bound),
-                        log_wrappers::Value(&mem_iter.upper_bound),
+                        cache_region={:?}; cache_key={:?}, cache_val={:?}; sequence_numer={}; Error={:?}",
+                        cached_region,
                         log_wrappers::Value(mem_iter.key()),
                         log_wrappers::Value(mem_iter.value()),
                         mem_iter.sequence_number,
@@ -410,8 +405,7 @@ impl CrossChecker {
                             "cross check: meet gced rollback or lock";
                             "cache_key" => log_wrappers::Value(mem_key),
                             "disk_key" => log_wrappers::Value(disk_key),
-                            "lower" => log_wrappers::Value(&mem_iter.lower_bound),
-                            "upper" => log_wrappers::Value(&mem_iter.upper_bound),
+                            "cache_region" => ?cached_region,
                             "seqno" => mem_iter.sequence_number,
                             "cf" => ?cf,
                         );
@@ -431,10 +425,12 @@ impl CrossChecker {
                                 // get safe point again as it may be updated
                                 *safe_point = {
                                     let core = engine.core().read();
-                                    let Some(meta) = core.range_manager().region_meta(range.id)
-                                    else {
+                                    let meta =
+                                        core.range_manager().region_meta(cached_region.id).unwrap();
+                                    // region may have been splited
+                                    if meta.get_region() != cached_region {
                                         return false;
-                                    };
+                                    }
                                     assert!(meta.safe_point() >= *safe_point);
                                     meta.safe_point()
                                 };
@@ -444,9 +440,8 @@ impl CrossChecker {
                                 if write.write_type == WriteType::Put || disk_mvcc > *safe_point {
                                     panic!(
                                         "cross check fail(key should exist): miss valid mvcc version(larger than safe point);
-                                        lower={:?}, upper={:?}; cache_key={:?}, disk_key={:?}; sequence_numer={}; read_ts={}, safe_point={}; cur_key_info={:?}",
-                                        log_wrappers::Value(&mem_iter.lower_bound),
-                                        log_wrappers::Value(&mem_iter.upper_bound),
+                                        cache_region={:?}; cache_key={:?}, disk_key={:?}; sequence_numer={}; read_ts={}, safe_point={}; cur_key_info={:?}",
+                                        cached_region,
                                         log_wrappers::Value(mem_key),
                                         log_wrappers::Value(disk_key),
                                         mem_iter.sequence_number,
@@ -474,9 +469,8 @@ impl CrossChecker {
                         {
                             panic!(
                                 "cross check fail(key should exist): miss valid mvcc version(less than safe point);
-                                lower={:?}, upper={:?}; cache_key={:?}, disk_key={:?}; sequence_numer={}; read_ts={}, safe_point={}; cur_key_info={:?}",
-                                log_wrappers::Value(&mem_iter.lower_bound),
-                                log_wrappers::Value(&mem_iter.upper_bound),
+                                cache_region={:?}; cache_key={:?}, disk_key={:?}; sequence_numer={}; read_ts={}, safe_point={}; cur_key_info={:?}",
+                                cached_region,
                                 log_wrappers::Value(mem_key),
                                 log_wrappers::Value(disk_key),
                                 mem_iter.sequence_number,
@@ -491,18 +485,19 @@ impl CrossChecker {
                 if disk_mvcc > *safe_point {
                     *safe_point = {
                         let core = engine.core().read();
-                        let Some(meta) = core.range_manager().region_meta(range.id) else {
+                        let meta = core.range_manager().region_meta(cached_region.id).unwrap();
+                        // region may have been splited
+                        if meta.get_region() != cached_region {
                             return false;
-                        };
+                        }
                         assert!(meta.safe_point() >= *safe_point);
                         meta.safe_point()
                     };
                     if disk_mvcc > *safe_point {
                         panic!(
                             "cross check fail(key should exist): keys newer than safe_point have been gced;
-                            lower={:?}, upper={:?}; disk_key={:?}; sequence_numer={}; read_ts={}, safe_point={}",
-                            log_wrappers::Value(&mem_iter.lower_bound),
-                            log_wrappers::Value(&mem_iter.upper_bound),
+                            cache_region={:?}; disk_key={:?}; sequence_numer={}; read_ts={}, safe_point={}",
+                            cached_region,
                             log_wrappers::Value(disk_key),
                             mem_iter.sequence_number,
                             read_ts,
@@ -513,7 +508,7 @@ impl CrossChecker {
 
                 if !CrossChecker::check_duplicated_mvcc_version_for_last_user_key(
                     cf,
-                    range,
+                    cached_region,
                     mem_iter,
                     &write,
                     safe_point,
@@ -532,9 +527,8 @@ impl CrossChecker {
             if disk_key > mem_key {
                 panic!(
                     "cross check fail(key should not exist): write cf not match;
-                    lower={:?}, upper={:?}; cache_key={:?}, disk_key={:?}; sequence_numer={}; read_ts={}, safe_point={}",
-                    log_wrappers::Value(&mem_iter.lower_bound),
-                    log_wrappers::Value(&mem_iter.upper_bound),
+                    cache_region={:?}; cache_key={:?}, disk_key={:?}; sequence_numer={}; read_ts={}, safe_point={}",
+                    cached_region,
                     log_wrappers::Value(mem_key),
                     log_wrappers::Value(disk_key),
                     mem_iter.sequence_number,
@@ -555,7 +549,7 @@ impl CrossChecker {
     // check.
     fn check_remain_disk_key(
         cf: &&str,
-        range: &CacheRegion,
+        cached_region: &CacheRegion,
         safe_point: &mut u64,
         mem_iter: &RangeCacheIterator,
         disk_iter: &mut RocksEngineIterator,
@@ -569,9 +563,8 @@ impl CrossChecker {
             if *cf == CF_LOCK {
                 panic!(
                     "cross check fail(key should exist): lock cf not match; 
-                    lower={:?}, upper={:?}; disk_key={:?}; sequence_numer={};",
-                    log_wrappers::Value(&mem_iter.lower_bound),
-                    log_wrappers::Value(&mem_iter.upper_bound),
+                    cache_region={:?}; disk_key={:?}; sequence_numer={};",
+                    cached_region,
                     log_wrappers::Value(disk_iter.key()),
                     mem_iter.sequence_number,
                 );
@@ -585,18 +578,19 @@ impl CrossChecker {
             if disk_mvcc > *safe_point {
                 *safe_point = {
                     let core = engine.core().read();
-                    let Some(meta) = core.range_manager().region_meta(range.id) else {
+                    let meta = core.range_manager().region_meta(cached_region.id).unwrap();
+                    // region may have been splited
+                    if meta.get_region() != cached_region {
                         return false;
-                    };
+                    }
                     assert!(meta.safe_point() >= *safe_point);
                     meta.safe_point()
                 };
                 if disk_mvcc > *safe_point {
                     panic!(
                         "cross check fail(key should exist): write cf not match;
-                        lower={:?}, upper={:?}; disk_key={:?}, disk_mvcc={}; sequence_numer={}; prev_key_info={:?}",
-                        log_wrappers::Value(&mem_iter.lower_bound),
-                        log_wrappers::Value(&mem_iter.upper_bound),
+                        cache_region={:?}; disk_key={:?}, disk_mvcc={}; sequence_numer={}; prev_key_info={:?}",
+                        cached_region,
                         log_wrappers::Value(disk_iter.key()),
                         disk_mvcc,
                         mem_iter.sequence_number,
@@ -609,9 +603,8 @@ impl CrossChecker {
                 Err(e) => {
                     panic!(
                         "cross check fail(parse error); 
-                        lower={:?}, upper={:?}; cache_key={:?}, cache_val={:?}; sequence_numer={}; Error={:?}",
-                        log_wrappers::Value(&mem_iter.lower_bound),
-                        log_wrappers::Value(&mem_iter.upper_bound),
+                        cache_region={:?}; cache_key={:?}, cache_val={:?}; sequence_numer={}; Error={:?}",
+                        cached_region,
                         log_wrappers::Value(mem_iter.key()),
                         log_wrappers::Value(mem_iter.value()),
                         mem_iter.sequence_number,
@@ -622,7 +615,7 @@ impl CrossChecker {
 
             if !CrossChecker::check_duplicated_mvcc_version_for_last_user_key(
                 cf,
-                range,
+                cached_region,
                 mem_iter,
                 &write,
                 safe_point,
@@ -648,7 +641,7 @@ impl CrossChecker {
     #[allow(clippy::collapsible_else_if)]
     fn check_duplicated_mvcc_version_for_last_user_key(
         cf: &str,
-        range: &CacheRegion,
+        cached_region: &CacheRegion,
         mem_iter: &RangeCacheIterator,
         write: &WriteRef<'_>,
         safe_point: &mut u64,
@@ -664,8 +657,7 @@ impl CrossChecker {
             info!(
                 "meet gced rollback or lock";
                 "disk_key" => log_wrappers::Value(disk_key),
-                "lower" => log_wrappers::Value(&mem_iter.lower_bound),
-                "upper" => log_wrappers::Value(&mem_iter.upper_bound),
+                "cache_region" => ?cached_region,
                 "seqno" => mem_iter.sequence_number,
                 "cf" => ?cf,
             );
@@ -685,10 +677,12 @@ impl CrossChecker {
             // legally.
             if prev_key_info.last_mvcc_version_before_safe_point == 0 {
                 *safe_point = {
-                    let core = engine.core.read();
-                    let Some(meta) = core.range_manager().region_meta(range.id) else {
+                    let core = engine.core().read();
+                    let meta = core.range_manager().region_meta(cached_region.id).unwrap();
+                    // region may have been splited
+                    if meta.get_region() != cached_region {
                         return false;
-                    };
+                    }
                     assert!(meta.safe_point() >= *safe_point);
                     meta.safe_point()
                 };
@@ -705,9 +699,8 @@ impl CrossChecker {
                     } else {
                         panic!(
                             "cross check fail(key should exist): miss valid mvcc version;
-                            lower={:?}, upper={:?}; disk_key={:?}; sequence_numer={}; read_ts={}, safe_point={}; prev_key_info={:?}",
-                            log_wrappers::Value(&mem_iter.lower_bound),
-                            log_wrappers::Value(&mem_iter.upper_bound),
+                            cache_region={:?}; disk_key={:?}; sequence_numer={}; read_ts={}, safe_point={}; prev_key_info={:?}",
+                            cached_region,
                             log_wrappers::Value(disk_key),
                             mem_iter.sequence_number,
                             mem_iter.snapshot_read_ts,
@@ -724,17 +717,15 @@ impl CrossChecker {
                         info!(
                             "meet gced rollback or lock";
                             "disk_key" => log_wrappers::Value(disk_key),
-                            "lower" => log_wrappers::Value(&mem_iter.lower_bound),
-                            "upper" => log_wrappers::Value(&mem_iter.upper_bound),
+                            "cache_region" => ?cached_region,
                             "seqno" => mem_iter.sequence_number,
                             "cf" => ?cf,
                         );
                     } else {
                         panic!(
                             "cross check fail(key should exist): miss valid mvcc version;
-                            lower={:?}, upper={:?}; disk_key={:?}; sequence_numer={}; read_ts={}, safe_point={}",
-                            log_wrappers::Value(&mem_iter.lower_bound),
-                            log_wrappers::Value(&mem_iter.upper_bound),
+                            cache_region={:?}; disk_key={:?}; sequence_numer={}; read_ts={}, safe_point={}",
+                            cached_region,
                             log_wrappers::Value(disk_key),
                             mem_iter.sequence_number,
                             mem_iter.snapshot_read_ts,
@@ -762,9 +753,8 @@ impl CrossChecker {
                 } else {
                     panic!(
                         "cross check fail(key should exist): miss valid mvcc version;
-                        lower={:?}, upper={:?}; disk_key={:?}; sequence_numer={}; read_ts={}, safe_point={}",
-                        log_wrappers::Value(&mem_iter.lower_bound),
-                        log_wrappers::Value(&mem_iter.upper_bound),
+                        cache_region={:?}; disk_key={:?}; sequence_numer={}; read_ts={}, safe_point={}",
+                        cached_region,
                         log_wrappers::Value(disk_key),
                         mem_iter.sequence_number,
                         mem_iter.snapshot_read_ts,
