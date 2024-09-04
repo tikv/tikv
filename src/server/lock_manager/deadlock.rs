@@ -127,7 +127,7 @@ impl Locks {
         if let Some(idx) = self
             .keys
             .iter()
-            .position(|(hash, k)| Self::key_matches(*hash, k, lock_hash, &key))
+            .position(|(hash, k)| Self::key_matches(*hash, k, lock_hash, key))
         {
             return Some(self.keys.swap_remove(idx));
         }
@@ -226,7 +226,7 @@ impl DetectTable {
             resource_group_tag,
         );
         self.check_key_reverse_index_consistency();
-        return result;
+        result
     }
 
     pub fn detect_without_consistency_check(
@@ -253,7 +253,7 @@ impl DetectTable {
             ERROR_COUNTER_METRICS.deadlock.inc();
             return Some((deadlock_key_hash, deadlock_key, wait_chain));
         }
-        self.register(txn_ts, lock_ts, lock_hash, &lock_key, resource_group_tag);
+        self.register(txn_ts, lock_ts, lock_hash, lock_key, resource_group_tag);
         None
     }
 
@@ -505,7 +505,7 @@ impl DetectTable {
         }
 
         self.check_key_reverse_index_consistency();
-        return result;
+        result
     }
 
     /// Insert an entry to te `key_reverse_map`, but skip if the `key` is
