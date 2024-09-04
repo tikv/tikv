@@ -19,7 +19,7 @@ use bytes::Bytes;
 use collections::{HashMap, HashSet};
 use crossbeam::{atomic::AtomicCell, channel::TrySendError};
 use engine_traits::{
-    CacheRange, Engines, KvEngine, PerfContext, RaftEngine, Snapshot, SnapshotContext, WriteBatch,
+    CacheRegion, Engines, KvEngine, PerfContext, RaftEngine, Snapshot, SnapshotContext, WriteBatch,
     WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use error_code::ErrorCodeExt;
@@ -5031,9 +5031,7 @@ where
 
         let snap_ctx = if let Ok(read_ts) = decode_u64(&mut req.get_header().get_flag_data()) {
             Some(SnapshotContext {
-                range: Some(CacheRange::from_region(&region)),
-                region_id: region.id,
-                epoch_version: region.get_region_epoch().version,
+                region: Some(CacheRegion::from_region(&region)),
                 read_ts,
             })
         } else {

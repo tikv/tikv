@@ -6475,6 +6475,7 @@ dependencies = [
  "crossbeam",
  "crypto",
  "dashmap",
+ "encryption",
  "encryption_export",
  "engine_panic",
  "engine_rocks",
