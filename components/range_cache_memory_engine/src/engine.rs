@@ -341,7 +341,6 @@ impl RangeCacheMemoryEngine {
         write_batch_id: u64,
         region: &CacheRegion,
     ) -> RangeCacheStatus {
-        let rocks_snap = Arc::new(self.rocks_engine.as_ref().unwrap().snapshot(None));
         let mut core = self.core.write();
         let range_manager = core.mut_range_manager();
         if range_manager.overlap_with_preferred_range(&region) {
@@ -381,8 +380,7 @@ impl RangeCacheMemoryEngine {
         // get snapshot and schedule loading task at last to avoid locking IME for too
         // long.
         if schedule_load {
-            // let rocks_snap =
-            // Arc::new(self.rocks_engine.as_ref().unwrap().snapshot(None));
+            let rocks_snap = Arc::new(self.rocks_engine.as_ref().unwrap().snapshot(None));
             if let Err(e) = self
                 .bg_work_manager
                 .schedule_task(BackgroundTask::LoadRegion(region.clone(), rocks_snap))
