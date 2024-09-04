@@ -7390,6 +7390,7 @@ def PessimisticLocking() -> RowPanel:
             graph_panel(
                 title="WaitTable memory",
                 description="Estimated memory usage of the wait table",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
                 targets=[
                     target(
                         expr=expr_sum(
@@ -7404,7 +7405,7 @@ def PessimisticLocking() -> RowPanel:
     layout.row(
         [
             graph_panel(
-                title="Deadlock detector channel",
+                title="Deadlock detector channel ops",
                 description="The counter of the deadlock detector rpc channel",
                 yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
                 targets=[
@@ -7412,13 +7413,13 @@ def PessimisticLocking() -> RowPanel:
                         expr=expr_sum_rate(
                             "tikv_lock_manager_detector_send_channel_queued_counter"
                         ),
-                        legend_format="queued",
+                        legend_format="enqueue",
                     ),
                     target(
                         expr=expr_sum_rate(
                             "tikv_lock_manager_detector_send_channel_sent_counter"
                         ),
-                        legend_format="sent",
+                        legend_format="dequeue",
                     ),
                 ],
             )

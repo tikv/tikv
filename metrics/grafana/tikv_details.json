@@ -51954,7 +51954,7 @@
           "yaxes": [
             {
               "decimals": null,
-              "format": "none",
+              "format": "bytes",
               "label": null,
               "logBase": 1,
               "max": null,
@@ -52057,7 +52057,7 @@
               "instant": false,
               "interval": "",
               "intervalFactor": 1,
-              "legendFormat": "queued",
+              "legendFormat": "enqueue",
               "metric": "",
               "query": "sum(rate(\n    tikv_lock_manager_detector_send_channel_queued_counter\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance) ",
               "refId": "",
@@ -52072,7 +52072,7 @@
               "instant": false,
               "interval": "",
               "intervalFactor": 1,
-              "legendFormat": "sent",
+              "legendFormat": "dequeue",
               "metric": "",
               "query": "sum(rate(\n    tikv_lock_manager_detector_send_channel_sent_counter\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance) ",
               "refId": "",
@@ -52083,7 +52083,7 @@
           "thresholds": [],
           "timeFrom": null,
           "timeShift": null,
-          "title": "Deadlock detector channel",
+          "title": "Deadlock detector channel ops",
           "tooltip": {
             "msResolution": true,
             "shared": true,
