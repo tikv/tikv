@@ -171,13 +171,13 @@ pub struct DetectTable {
     ///
     /// Theoretically, keys occurring in `wait_for_map` should be unique.
     /// However, considering that in some rare cases, it's possible that the
-    /// leader leader of some region is transferring between nodes; with
-    /// uncertain network latency, different lock-waiting relationship on a
-    /// same key can be received at the same time, while the detector leader has
-    /// no way to determine which one is the latest. Considering this, if
+    /// leader of some region is transferring between nodes; with uncertain
+    /// network latency, different lock-waiting relationship on a same key can
+    /// be received at the same time, while the detector leader has no way to
+    /// determine which one is the latest. Considering this, if
     /// `key_reverse_map` is fully synced with `wait_for_map`, then a key is
-    /// possible to map to multiple existing locks, each of which has its
-    /// own set of waiting transactions.
+    /// possible to map to multiple existing locks, each of which has its own
+    /// set of waiting transactions.
     // key => (lock_ts => {waiting_txn_ts})
     // TODO: Use the pre-calculated lock hash instead to reduce the overhead of hash calculation.
     key_reverse_map: KeyReverseMap,
@@ -244,7 +244,7 @@ impl DetectTable {
         self.active_expire();
 
         // If `txn_ts` is waiting for `lock_ts`, it won't cause deadlock.
-        if self.register_if_existed(txn_ts, lock_ts, lock_hash, &lock_key, resource_group_tag) {
+        if self.register_if_existed(txn_ts, lock_ts, lock_hash, lock_key, resource_group_tag) {
             return None;
         }
 
@@ -374,10 +374,8 @@ impl DetectTable {
     ) -> bool {
         if let Some(wait_for) = self.wait_for_map.get_mut(&txn_ts) {
             if let Some(locks) = wait_for.get_mut(&lock_ts) {
-                let pushed = locks.push(lock_hash, key.to_vec(), self.now);
                 locks.resource_group_tag = resource_group_tag.to_vec();
-
-                if pushed {
+                if locks.push(lock_hash, key.to_vec(), self.now) {
                     Self::insert_key_reverse_index(&mut self.key_reverse_map, key, lock_ts, txn_ts);
                 }
 
@@ -518,7 +516,7 @@ impl DetectTable {
         key_reverse_map: &mut KeyReverseMap,
         key: &[u8],
         lock_ts: TimeStamp,
-        txn_ts: TimeStamp,
+        waiting_txn_ts: TimeStamp,
     ) {
         if key.is_empty() {
             return;
@@ -528,7 +526,7 @@ impl DetectTable {
             .or_default()
             .entry(lock_ts)
             .or_default();
-        assert!(waiting_txns_on_key.insert(txn_ts));
+        assert!(waiting_txns_on_key.insert(waiting_txn_ts));
     }
 
     /// Remove an entry from the `key_reverse_map`, but skip if the `key` is
@@ -537,7 +535,7 @@ impl DetectTable {
         key_reverse_map: &mut KeyReverseMap,
         key: &[u8],
         lock_ts: TimeStamp,
-        txn_ts: TimeStamp,
+        waiting_txn_ts: TimeStamp,
     ) {
         if key.is_empty() {
             return;
@@ -545,7 +543,7 @@ impl DetectTable {
 
         if let Some(locks_on_key) = key_reverse_map.get_mut(key) {
             if let Some(waiting_txn_set) = locks_on_key.get_mut(&lock_ts) {
-                waiting_txn_set.remove(&txn_ts);
+                waiting_txn_set.remove(&waiting_txn_ts);
                 if waiting_txn_set.is_empty() {
                     locks_on_key.remove(&lock_ts);
                     if locks_on_key.is_empty() {
@@ -1291,6 +1289,8 @@ where
         }
     }
 
+    const RPC_RETRY_LIMIT: usize = 2;
+
     /// Handles detect requests of itself.
     fn handle_detect(
         &mut self,
@@ -1302,7 +1302,7 @@ where
         if self.is_leader() {
             self.handle_detect_locally(tp, txn_ts, wait_info, diag_ctx);
         } else {
-            for _ in 0..2 {
+            for _ in 0..Self::RPC_RETRY_LIMIT {
                 // TODO: If the leader hasn't been elected, it requests Pd for
                 // each detect request. Maybe need flow control here.
                 //
@@ -1367,7 +1367,7 @@ where
         if self.is_leader() {
             self.handle_replace_locks_by_keys_locally(items);
         } else {
-            for _ in 0..2 {
+            for _ in 0..Self::RPC_RETRY_LIMIT {
                 // TODO: If the leader hasn't been elected, it requests Pd for
                 // each detect request. Maybe need flow control here.
                 //

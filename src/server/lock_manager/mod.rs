@@ -312,8 +312,7 @@ mod tests {
     use raft::StateRole;
     use raftstore::coprocessor::RegionChangeEvent;
     use security::SecurityConfig;
-    use tikv_util::config::ReadableDuration;
-    use tikv_util::time::Instant;
+    use tikv_util::{config::ReadableDuration, time::Instant};
     use tracker::{TrackerToken, INVALID_TRACKER_TOKEN};
     use txn_types::Key;
 
