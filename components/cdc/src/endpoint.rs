@@ -927,12 +927,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
 
     fn on_region_ready(&mut self, observe_id: ObserveId, resolver: Resolver, region: Region) {
         let region_id = region.get_id();
-<<<<<<< HEAD
-        let mut deregisters = Vec::new();
-        if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
-            if delegate.handle.id == observe_id {
-                match delegate.on_region_ready(resolver, region) {
-=======
         match self.capture_regions.get_mut(&region_id) {
             None => {
                 debug!("cdc region not found on region ready (finish scan locks)";
@@ -947,7 +941,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                     return;
                 }
                 match delegate.finish_scan_locks(region, locks) {
->>>>>>> 9734214510 (cdc: print log to indicate memory free, and adjust finish_scan_lock method (#17357))
                     Ok(fails) => {
                         let mut deregisters = Vec::new();
                         for (downstream, e) in fails {
@@ -971,17 +964,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                     }),
                 }
             }
-<<<<<<< HEAD
-        } else {
-            debug!("cdc region not found on region ready (finish building resolver)";
-                "region_id" => region.get_id());
-        }
-
-        // Deregister downstreams if there is any downstream fails to subscribe.
-        for deregister in deregisters {
-            self.on_deregister(deregister);
-=======
->>>>>>> 9734214510 (cdc: print log to indicate memory free, and adjust finish_scan_lock method (#17357))
         }
     }
 
