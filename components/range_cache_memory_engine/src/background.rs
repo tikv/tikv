@@ -2788,15 +2788,16 @@ pub mod tests {
 
         for r in [&region1, &region2] {
             engine.load_region(r.clone()).unwrap();
-            engine.prepare_for_apply(1, &CacheRegion::from_region(r));
+            engine.prepare_for_apply(&CacheRegion::from_region(r));
         }
 
         // ensure all ranges are finshed
         test_util::eventually(Duration::from_millis(100), Duration::from_secs(2), || {
             !engine
                 .core
+                .region_manager()
+                .regions_map()
                 .read()
-                .range_manager()
                 .regions()
                 .values()
                 .any(|m| matches!(m.get_state(), Pending | Loading))
