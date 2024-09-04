@@ -901,7 +901,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         let region_id = region.get_id();
         match self.capture_regions.get_mut(&region_id) {
             None => {
-                debug!("cdc region not found on region ready (finish scan locks)";
+                debug!("cdc region not found on region ready (finish building resolver)";
                     "region_id" => region.get_id());
             }
             Some(delegate) => {
@@ -912,7 +912,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                         "current_id" => ?delegate.handle.id);
                     return;
                 }
-                match delegate.finish_scan_locks(region, locks) {
+                match delegate.on_region_ready(resolver, region) {
                     Ok(fails) => {
                         let mut deregisters = Vec::new();
                         for (downstream, e) in fails {
@@ -2395,9 +2395,9 @@ mod tests {
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
         for region_ids in vec![vec![1, 2], vec![3]] {
             let conn_id = ConnId::default();
-            let (tx, rx) = channel::channel(ConnId, 1, quota.clone());
+            let (tx, rx) = channel::channel(conn_id, 1, quota.clone());
             conn_rxs.push(rx);
-            let conn = Conn::new(ConnId, tx, String::new());
+            let conn = Conn::new(conn_id, tx, String::new());
             suite.run(Task::OpenConn { conn });
             let version = FeatureGate::batch_resolved_ts();
             suite.run(set_conn_verion_task(conn_id, version));
