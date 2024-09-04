@@ -334,20 +334,6 @@ impl Service {
         request: ChangeDataRequest,
         conn_id: ConnId,
     ) -> Result<(), String> {
-<<<<<<< HEAD
-        let observed_range =
-            match ObservedRange::new(request.start_key.clone(), request.end_key.clone()) {
-                Ok(observed_range) => observed_range,
-                Err(e) => {
-                    warn!(
-                        "cdc invalid observed start key or end key version";
-                        "downstream" => ?peer, "region_id" => request.region_id,
-                        "error" => ?e,
-                    );
-                    ObservedRange::default()
-                }
-            };
-=======
         let observed_range = ObservedRange::new(request.start_key.clone(), request.end_key.clone())
             .unwrap_or_else(|e| {
                 warn!(
@@ -361,7 +347,6 @@ impl Service {
                 );
                 ObservedRange::default()
             });
->>>>>>> 9734214510 (cdc: print log to indicate memory free, and adjust finish_scan_lock method (#17357))
         let downstream = Downstream::new(
             peer.to_owned(),
             request.get_region_epoch().clone(),

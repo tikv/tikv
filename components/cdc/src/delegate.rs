@@ -1253,11 +1253,7 @@ mod tests {
         let region_epoch = region.get_region_epoch().clone();
 
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
-<<<<<<< HEAD
-        let (sink, mut drain) = crate::channel::channel(1, quota);
-=======
         let (sink, mut drain) = channel(ConnId::default(), 1, quota.clone());
->>>>>>> 9734214510 (cdc: print log to indicate memory free, and adjust finish_scan_lock method (#17357))
         let rx = drain.drain();
         let request_id = 123;
         let mut downstream = Downstream::new(
@@ -1559,12 +1555,12 @@ mod tests {
         }
         assert_eq!(map.len(), 5);
 
-<<<<<<< HEAD
-        let (sink, mut drain) = channel(1, Arc::new(MemoryQuota::new(1024)));
+        let conn_id = ConnId::default();
+        let (sink, mut drain) = channel(conn_id, 1, Arc::new(MemoryQuota::new(1024)));
         let downstream = Downstream {
             id: DownstreamId::new(),
             req_id: 1,
-            conn_id: ConnId::new(),
+            conn_id,
             peer: String::new(),
             region_epoch: RegionEpoch::default(),
             sink: Some(sink),
@@ -1572,16 +1568,6 @@ mod tests {
             scan_truncated: Arc::new(Default::default()),
             kv_api: ChangeDataRequestKvApi::TiDb,
             filter_loop: false,
-=======
-        let (sink, mut drain) = channel(ConnId::default(), 1, Arc::new(MemoryQuota::new(1024)));
-        let mut downstream = Downstream::new(
-            "peer".to_owned(),
-            RegionEpoch::default(),
-            RequestId(1),
-            ConnId::new(),
-            ChangeDataRequestKvApi::TiDb,
-            false,
->>>>>>> 9734214510 (cdc: print log to indicate memory free, and adjust finish_scan_lock method (#17357))
             observed_range,
         };
         delegate.add_downstream(downstream);
@@ -1645,27 +1631,18 @@ mod tests {
         }
         assert_eq!(map.len(), 5);
 
-<<<<<<< HEAD
-        let (sink, mut drain) = channel(1, Arc::new(MemoryQuota::new(1024)));
+        let conn_id = ConnId::default();
+        let (sink, mut drain) = channel(conn_id, 1, Arc::new(MemoryQuota::new(1024)));
         let downstream = Downstream {
             id: DownstreamId::new(),
             req_id: 1,
-            conn_id: ConnId::new(),
+            conn_id,
             peer: String::new(),
             region_epoch: RegionEpoch::default(),
             sink: Some(sink),
             state: Arc::new(AtomicCell::new(DownstreamState::Normal)),
             scan_truncated: Arc::new(Default::default()),
             kv_api: ChangeDataRequestKvApi::TiDb,
-=======
-        let (sink, mut drain) = channel(ConnId::default(), 1, Arc::new(MemoryQuota::new(1024)));
-        let mut downstream = Downstream::new(
-            "peer".to_owned(),
-            RegionEpoch::default(),
-            RequestId(1),
-            ConnId::new(),
-            ChangeDataRequestKvApi::TiDb,
->>>>>>> 9734214510 (cdc: print log to indicate memory free, and adjust finish_scan_lock method (#17357))
             filter_loop,
             observed_range,
         };

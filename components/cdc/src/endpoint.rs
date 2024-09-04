@@ -899,12 +899,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
 
     fn on_region_ready(&mut self, observe_id: ObserveId, resolver: Resolver, region: Region) {
         let region_id = region.get_id();
-<<<<<<< HEAD
-        let mut deregisters = Vec::new();
-        if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
-            if delegate.handle.id == observe_id {
-                match delegate.on_region_ready(resolver, region) {
-=======
         match self.capture_regions.get_mut(&region_id) {
             None => {
                 debug!("cdc region not found on region ready (finish scan locks)";
@@ -919,7 +913,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                     return;
                 }
                 match delegate.finish_scan_locks(region, locks) {
->>>>>>> 9734214510 (cdc: print log to indicate memory free, and adjust finish_scan_lock method (#17357))
                     Ok(fails) => {
                         let mut deregisters = Vec::new();
                         for (downstream, e) in fails {
@@ -943,17 +936,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                     }),
                 }
             }
-<<<<<<< HEAD
-        } else {
-            debug!("cdc region not found on region ready (finish building resolver)";
-                "region_id" => region.get_id());
-        }
-
-        // Deregister downstreams if there is any downstream fails to subscribe.
-        for deregister in deregisters {
-            self.on_deregister(deregister);
-=======
->>>>>>> 9734214510 (cdc: print log to indicate memory free, and adjust finish_scan_lock method (#17357))
         }
     }
 
@@ -2060,98 +2042,6 @@ mod tests {
     }
 
     #[test]
-<<<<<<< HEAD
-=======
-    fn test_too_many_scan_tasks() {
-        let cfg = CdcConfig {
-            min_ts_interval: ReadableDuration(Duration::from_secs(60)),
-            incremental_scan_concurrency: 1,
-            incremental_scan_concurrency_limit: 1,
-            ..Default::default()
-        };
-        let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
-
-        // Pause scan task runtime.
-        suite.endpoint.workers = Builder::new_multi_thread()
-            .worker_threads(1)
-            .build()
-            .unwrap();
-        let (pause_tx, pause_rx) = std::sync::mpsc::channel::<()>();
-        suite.endpoint.workers.spawn(async move {
-            let _ = pause_rx.recv();
-        });
-
-        suite.add_region(1, 100);
-        let quota = Arc::new(MemoryQuota::new(usize::MAX));
-        let (tx, mut rx) = channel::channel(ConnId::default(), 1, quota);
-        let mut rx = rx.drain();
-
-        let conn = Conn::new(ConnId::default(), tx, String::new());
-        let conn_id = conn.get_id();
-        suite.run(Task::OpenConn { conn });
-
-        // Enable batch resolved ts in the test.
-        let version = FeatureGate::batch_resolved_ts();
-        suite.run(set_conn_version_task(conn_id, version));
-
-        let mut req_header = Header::default();
-        req_header.set_cluster_id(0);
-        let mut req = ChangeDataRequest::default();
-        req.set_region_id(1);
-        req.set_request_id(1);
-        let region_epoch = req.get_region_epoch().clone();
-        let downstream = Downstream::new(
-            "".to_string(),
-            region_epoch.clone(),
-            RequestId(1),
-            conn_id,
-            ChangeDataRequestKvApi::TiDb,
-            false,
-            ObservedRange::default(),
-        );
-        suite.run(Task::Register {
-            request: req.clone(),
-            downstream,
-        });
-        assert_eq!(suite.endpoint.capture_regions.len(), 1);
-
-        // Test too many scan tasks error.
-        req.set_request_id(2);
-        let downstream = Downstream::new(
-            "".to_string(),
-            region_epoch,
-            RequestId(2),
-            conn_id,
-            ChangeDataRequestKvApi::TiDb,
-            false,
-            ObservedRange::default(),
-        );
-        suite.run(Task::Register {
-            request: req.clone(),
-            downstream,
-        });
-        let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
-            .unwrap()
-            .unwrap();
-        if let CdcEvent::Event(mut e) = cdc_event.0 {
-            assert_eq!(e.region_id, 1);
-            assert_eq!(e.request_id, 2);
-            let event = e.event.take().unwrap();
-            match event {
-                Event_oneof_event::Error(err) => {
-                    assert!(err.has_server_is_busy());
-                }
-                other => panic!("unknown event {:?}", other),
-            }
-        } else {
-            panic!("unknown cdc event {:?}", cdc_event);
-        }
-
-        drop(pause_tx);
-    }
-
-    #[test]
->>>>>>> 9734214510 (cdc: print log to indicate memory free, and adjust finish_scan_lock method (#17357))
     fn test_raw_causal_min_ts() {
         let sleep_interval = Duration::from_secs(1);
         let cfg = CdcConfig {
@@ -2503,16 +2393,11 @@ mod tests {
         // region 3 to conn b.
         let mut conn_rxs = vec![];
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
-<<<<<<< HEAD
         for region_ids in vec![vec![1, 2], vec![3]] {
-            let (tx, rx) = channel::channel(1, quota.clone());
-=======
-        for region_ids in [vec![1, 2], vec![3]] {
-            let (tx, rx) = channel::channel(ConnId::default(), 1, quota.clone());
->>>>>>> 9734214510 (cdc: print log to indicate memory free, and adjust finish_scan_lock method (#17357))
+            let conn_id = ConnId::default();
+            let (tx, rx) = channel::channel(ConnId, 1, quota.clone());
             conn_rxs.push(rx);
-            let conn = Conn::new(ConnId::default(), tx, String::new());
-            let conn_id = conn.get_id();
+            let conn = Conn::new(ConnId, tx, String::new());
             suite.run(Task::OpenConn { conn });
             let version = FeatureGate::batch_resolved_ts();
             suite.run(set_conn_verion_task(conn_id, version));
