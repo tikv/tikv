@@ -695,7 +695,7 @@ impl<T: fmt::Display + Send + 'static> Stop for LazyWorker<T> {
     }
 }
 
-pub fn build_in_memory_engine(
+pub fn build_hybrid_engine(
     range_cache_engine_context: RangeCacheEngineContext,
     disk_engine: RocksEngine,
     pd_client: Option<Arc<RpcClient>>,

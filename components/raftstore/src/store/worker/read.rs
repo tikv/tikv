@@ -147,6 +147,11 @@ pub trait ReadExecutor {
                         region.clone(),
                     );
                     if let Some(snap_ctx) = snap_ctx.as_ref() {
+                        // We only observe snapshot when it has snapshot context.
+                        //
+                        // Currently, the snapshot context is set when caller
+                        // wants an in-memory engine snapshot which requires
+                        // the snapshot and some metadata in the context.
                         let seqno = snapshot.get_snapshot().sequence_number();
                         if let Some(observed_snap) = host.on_snapshot(snap_ctx.clone(), seqno) {
                             snapshot.set_observed_snapshot(observed_snap);

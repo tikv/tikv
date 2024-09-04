@@ -35,6 +35,9 @@ impl HybridSnapshotObserver {
 
 impl SnapshotObserver for HybridSnapshotObserver {
     fn on_snapshot(&self, ctx: SnapshotContext, sequence_number: u64) -> Box<dyn ObservedSnapshot> {
+        // Taking a snapshot to pin data in the cache engine which prevents the
+        // data from being evicted or deleted from the cache.
+        // The data should be released when the snapshot is dropped.
         let snap = new_in_memory_snapshot(&self.cache_engine, ctx, sequence_number);
         Box::new(RangeCacheSnapshotPin { snap })
     }

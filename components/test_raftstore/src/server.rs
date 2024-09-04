@@ -8,7 +8,7 @@ use std::{
     usize,
 };
 
-use ::server::common::build_in_memory_engine;
+use ::server::common::build_hybrid_engine;
 use api_version::{dispatch_api_version, KvFormat};
 use causal_ts::CausalTsProviderImpl;
 use collections::{HashMap, HashSet};
@@ -333,7 +333,7 @@ impl ServerCluster {
         let range_cache_engine_context =
             RangeCacheEngineContext::new(range_cache_engine_config.clone(), self.pd_client.clone());
         let in_memory_engine = if cfg.range_cache_engine.enabled {
-            let in_memory_engine = build_in_memory_engine(
+            let in_memory_engine = build_hybrid_engine(
                 range_cache_engine_context,
                 engines.kv.clone(),
                 None,

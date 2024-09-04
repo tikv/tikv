@@ -138,7 +138,7 @@ use tokio::runtime::Builder;
 
 use crate::{
     common::{
-        build_in_memory_engine, ConfiguredRaftEngine, DiskUsageChecker, EngineMetricsManager,
+        build_hybrid_engine, ConfiguredRaftEngine, DiskUsageChecker, EngineMetricsManager,
         EnginesResourceInfo, TikvServerCore,
     },
     memory::*,
@@ -1645,7 +1645,7 @@ where
             RangeCacheEngineContext::new(range_cache_engine_config.clone(), self.pd_client.clone());
         let range_cache_engine_statistics = range_cache_engine_context.statistics();
         let in_memory_engine = if self.core.config.range_cache_engine.enabled {
-            let in_memory_engine = build_in_memory_engine(
+            let in_memory_engine = build_hybrid_engine(
                 range_cache_engine_context,
                 kv_engine.clone(),
                 Some(self.pd_client.clone()),
