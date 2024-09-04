@@ -180,6 +180,18 @@ impl KmsBackend {
             }
         }
     }
+<<<<<<< HEAD
+=======
+
+    // Used to clear the cached state to ensure that the next
+    // backend.decrypt_content() invocation bypasses the cache and invokes the
+    // KmsProvider::decrypt_data_key() function.
+    #[cfg(any(test, feature = "testexport"))]
+    pub fn clear_state(&mut self) {
+        let mut opt_state = self.state.lock().unwrap();
+        *opt_state = None;
+    }
+>>>>>>> 6e3e9aea0a (encryption: remove duplicate comments (#17462))
 }
 
 impl Backend for KmsBackend {
@@ -315,4 +327,19 @@ mod tests {
             Error::Other(_)
         );
     }
+<<<<<<< HEAD
+=======
+
+    #[test]
+    fn test_kms_backend_wrong_key() {
+        let (iv, pt, plainkey, ..) = prepare_data_for_encrypt();
+        let mut backend = prepare_kms_backend(plainkey, true);
+
+        let encrypted_content = backend.encrypt_content(&pt, iv).unwrap();
+
+        backend.clear_state();
+        let err = backend.decrypt_content(&encrypted_content).unwrap_err();
+        assert_matches!(err, Error::WrongMasterKey(_));
+    }
+>>>>>>> 6e3e9aea0a (encryption: remove duplicate comments (#17462))
 }
