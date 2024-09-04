@@ -20,6 +20,8 @@ use tikv_util::info;
 
 use crate::memory_controller::MemoryController;
 
+const MOVING_AVG_WINDOW: f64 = 10.0;
+
 #[derive(Clone)]
 pub(crate) struct RangeStatsManager {
     num_regions: Arc<AtomicUsize>,
@@ -29,7 +31,7 @@ pub(crate) struct RangeStatsManager {
     region_loaded_at: Arc<ShardedLock<BTreeMap<u64, Instant>>>,
     evict_min_duration: Duration,
     expected_region_size: usize,
-    cur_mvcc_amplification_reduction: Arc<AtomicF64>,
+    ma_mvcc_amplification_reduction: Arc<AtomicF64>,
     mvcc_amplification_threshold: usize,
 
     mvcc_amplification_record: Arc<Mutex<HashMap<u64, f64>>>,
@@ -59,7 +61,7 @@ impl RangeStatsManager {
             prev_top_regions: Arc::new(Mutex::new(BTreeMap::new())),
             checking_top_regions: Arc::new(AtomicBool::new(false)),
             region_loaded_at: Arc::new(ShardedLock::new(BTreeMap::new())),
-            cur_mvcc_amplification_reduction: Arc::default(),
+            ma_mvcc_amplification_reduction: Arc::default(),
             mvcc_amplification_record: Arc::default(),
             evict_min_duration,
             expected_region_size,
@@ -259,28 +261,40 @@ impl RangeStatsManager {
             .info_provider
             .get_regions_activity(cached_region_ids)
             .unwrap();
+        regions_activity.sort_by(|a, b| b.1.region_stat.read_keys.cmp(&a.1.region_stat.read_keys));
 
         {
-            let mut cur_mvcc_amplification = self
-                .cur_mvcc_amplification_reduction
-                .load(Ordering::Relaxed);
+            let mut ma_mvcc_amplification_reduction =
+                self.ma_mvcc_amplification_reduction.load(Ordering::Relaxed);
             let mut record = self.mvcc_amplification_record.lock();
+            // update the moving average of the mvcc amplification reduction(the reduced
+            // multiple before and after the cache).
             regions_activity.iter().for_each(|(r, a)| {
                 if let Some(&amplification) = record.get(&r.id) {
                     if a.region_stat.cop_detail.mvcc_amplification() != 0.0 {
-                        cur_mvcc_amplification = (cur_mvcc_amplification * 9.0
-                            + amplification as f64 / a.region_stat.cop_detail.mvcc_amplification())
-                            / 10.0;
+                        // At very begin, cur_mvcc_amplification_reduction is 0. Make it directly be
+                        // the first mvcc amplification reduction.
+                        if ma_mvcc_amplification_reduction <= 1.0 {
+                            ma_mvcc_amplification_reduction =
+                                amplification as f64 / a.region_stat.cop_detail.mvcc_amplification()
+                        } else {
+                            ma_mvcc_amplification_reduction = (ma_mvcc_amplification_reduction
+                                * (MOVING_AVG_WINDOW - 1.0)
+                                + amplification as f64
+                                    / a.region_stat.cop_detail.mvcc_amplification())
+                                / MOVING_AVG_WINDOW;
+                        }
                     }
                 }
             });
             record.clear();
-            self.cur_mvcc_amplification_reduction
-                .store(cur_mvcc_amplification, Ordering::Relaxed);
+            ma_mvcc_amplification_reduction = ma_mvcc_amplification_reduction.max(1.0);
+            self.ma_mvcc_amplification_reduction
+                .store(ma_mvcc_amplification_reduction, Ordering::Relaxed);
 
             info!(
-                "IME mvcc amplification reduction update";
-                "cur_mvcc_amplification_reduction" => cur_mvcc_amplification,
+                "IME moving average mvcc amplification reduction update";
+                "ma_mvcc_amplification_reduction" => ma_mvcc_amplification_reduction,
             );
         }
 
@@ -308,13 +322,17 @@ impl RangeStatsManager {
             ret
         };
         if prev_top_regions.is_empty() {
+            let mut record = self.mvcc_amplification_record.lock();
+            curr_top_regions.iter().for_each(|(id, (r, region_stats))| {
+                record.insert(*id, region_stats.cop_detail.mvcc_amplification());
+            });
             regions_added_out.extend(curr_top_regions.values().map(|(r, _)| r).cloned());
+            return vec![];
         }
 
         let mvcc_amplification_to_filter = {
-            let cur_mvcc_amplification_reduction = self
-                .cur_mvcc_amplification_reduction
-                .load(Ordering::Relaxed);
+            let cur_mvcc_amplification_reduction =
+                self.ma_mvcc_amplification_reduction.load(Ordering::Relaxed);
             let mut heap = BinaryHeap::new();
             let mut record = self.mvcc_amplification_record.lock();
             let added_ranges = curr_top_regions
@@ -329,9 +347,10 @@ impl RangeStatsManager {
                     }
                 });
             regions_added_out.extend(added_ranges);
-            // ignore the largest
-            heap.pop();
-            heap.pop().unwrap_or(0) as f64 / cur_mvcc_amplification_reduction
+            // `heap.pop().unwrap_or(0) as f64 / cur_mvcc_amplification_reduction` is the
+            // expected mvcc amplification factor after cache. Make the half of it to filter
+            // the cached regions.
+            heap.pop().unwrap_or(0) as f64 / f64::max(1.0, cur_mvcc_amplification_reduction / 2.0)
         };
 
         info!(
@@ -362,49 +381,65 @@ impl RangeStatsManager {
         if !memory_controller.reached_soft_limit() {
             let reach_stop_load = memory_controller.reached_stop_load_limit();
             let mut regions_loaded = self.region_loaded_at.write().unwrap();
-            let region_to_evict: Vec<_> = regions_activity
-                .into_iter()
-                .filter(|(_, r)| {
-                    r.region_stat.cop_detail.mvcc_amplification()
-                        <= if reach_stop_load {
-                            mvcc_amplification_to_filter / 2.0
+            let max_count_to_evict = usize::max(1, regions_activity.len() / 10);
+            if regions_activity.len() > 3 {
+                let avg_top3_read_keys = regions_activity
+                    .iter()
+                    .map(|r| r.1.region_stat.read_keys)
+                    .take(3)
+                    .sum::<u64>()
+                    / 3;
+                let region_to_evict: Vec<_> = regions_activity
+                    .into_iter()
+                    .filter(|(_, r)| {
+                        if reach_stop_load {
+                            r.region_stat.cop_detail.mvcc_amplification()
+                                < mvcc_amplification_to_filter
                         } else {
-                            self.mvcc_amplification_threshold as f64 / 10.0
+                            r.region_stat.cop_detail.mvcc_amplification()
+                                <= self.mvcc_amplification_threshold as f64 / 10.0
+                                || r.region_stat.read_keys < avg_top3_read_keys / 100
                         }
-                })
-                .filter_map(|(r, s)| {
-                    // Do not evict regions that were loaded less than `EVICT_MIN_DURATION` ago. If
-                    // it has no time recorded, it should be loaded be pre-load or something, record
-                    // the time and does not evict it this time.
-                    let time_loaded = regions_loaded.entry(r.id).or_insert(Instant::now());
-                    if Instant::now() - *time_loaded < self.evict_min_duration {
-                        let mut mut_prev_top_regions = self.prev_top_regions.lock();
-                        let _ = mut_prev_top_regions.insert(r.id, r);
-                        None
-                    } else {
-                        Some((r, s))
-                    }
-                })
-                .collect();
-            let debug: Vec<_> = region_to_evict
-                .iter()
-                .map(|(r, s)| {
-                    format!(
-                        "region_id={}, read_keys={}, cop={}, cop_detail={:?}, mvcc_amplification={}",
-                        r.id,
-                        s.region_stat.read_keys,
-                        s.region_stat.query_stats.coprocessor,
-                        s.region_stat.cop_detail,
-                        s.region_stat.cop_detail.mvcc_amplification(),
-                    )
-                })
-                .collect();
-            info!(
-                "ime collect regions to evict";
-                "reached_stop_limit" => reach_stop_load,
-                "regions" => ?debug,
-            );
-            region_to_evict.into_iter().map(|(r, _)| r).collect()
+                    })
+                    .filter_map(|(r, s)| {
+                        // Do not evict regions that were loaded less than `EVICT_MIN_DURATION` ago.
+                        // If it has no time recorded, it should be loaded
+                        // be pre-load or something, record the time and
+                        // does not evict it this time.
+                        let time_loaded = regions_loaded.entry(r.id).or_insert(Instant::now());
+                        if Instant::now() - *time_loaded < self.evict_min_duration {
+                            let mut mut_prev_top_regions = self.prev_top_regions.lock();
+                            let _ = mut_prev_top_regions.insert(r.id, r);
+                            None
+                        } else {
+                            Some((r, s))
+                        }
+                    })
+                    .rev() // evict the regions with least read_keys
+                    .take(max_count_to_evict)
+                    .collect();
+                let debug: Vec<_> = region_to_evict
+                    .iter()
+                    .map(|(r, s)| {
+                        format!(
+                            "region_id={}, read_keys={}, cop={}, cop_detail={:?}, mvcc_amplification={}",
+                            r.id,
+                            s.region_stat.read_keys,
+                            s.region_stat.query_stats.coprocessor,
+                            s.region_stat.cop_detail,
+                            s.region_stat.cop_detail.mvcc_amplification(),
+                        )
+                    })
+                    .collect();
+                info!(
+                    "ime collect regions to evict";
+                    "reached_stop_limit" => reach_stop_load,
+                    "regions" => ?debug,
+                );
+                region_to_evict.into_iter().map(|(r, _)| r).collect()
+            } else {
+                vec![]
+            }
         } else {
             // better one by one
             regions_activity.sort_by(|(_, a), (_, b)| {
@@ -413,7 +448,12 @@ impl RangeStatsManager {
                     .mvcc_amplification()
                     .total_cmp(&b.region_stat.cop_detail.mvcc_amplification())
             });
-            let region_to_evict: Vec<_> = regions_activity.into_iter().rev().take(3).collect();
+            let max_count_to_evict = usize::max(1, regions_activity.len() / 10);
+            let region_to_evict: Vec<_> = regions_activity
+                .into_iter()
+                .rev()
+                .take(max_count_to_evict)
+                .collect();
             let debug: Vec<_> = region_to_evict
                 .iter()
                 .map(|(r, s)| {
