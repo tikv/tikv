@@ -385,7 +385,7 @@ impl RegionManager {
             }
 
             info!("ime remove outdated pending region";
-                "pending_region" => ?cached_meta.region,
+                "pending_region" => ?meta.region,
                 "new_region" => ?region);
             return None;
         }

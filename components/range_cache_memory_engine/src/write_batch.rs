@@ -979,7 +979,7 @@ mod tests {
             .unwrap();
 
         // load a region with a newer epoch and small range, should trigger replace.
-        let r_new = CacheRegion::new(1, 0, b"k00", b"k05");
+        let r_new = CacheRegion::new(1, 1, b"k00", b"k05");
         let mut wb = RangeCacheWriteBatch::from(&engine);
         wb.prepare_for_region(r_new.clone());
 
