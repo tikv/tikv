@@ -455,7 +455,7 @@ impl TxnStatusCache {
                 let mut normal_cache = self.normal_cache[slot_index].lock();
                 previous_size = normal_cache.size();
                 previous_allocated = normal_cache.internal_allocated_capacity();
-                normal_cache.insert_if_not_exist(start_ts, entry);
+                normal_cache.insert(start_ts, entry);
                 after_size = normal_cache.size();
                 after_allocated = normal_cache.internal_allocated_capacity();
 
