@@ -189,11 +189,11 @@ impl RangeStatsManager {
         };
     }
 
-    /// Collects regions to load and evict based on region activity, mvcc
-    /// amplification, and memory constraints.
-    /// New top regions will be collected in `regions_added_out` to be loaded.
+    /// Collects regions to load and evict based on region stat, mvcc
+    /// amplification, and memory constraints. New top regions will be
+    /// collected in `regions_added_out` to be loaded.
     ///
-    /// If memory usage is below the stop load limit, regions with low activity
+    /// If memory usage is below the stop load limit, regions with low read flow
     /// or low mvcc amplification are considered for eviction.
     ///
     /// If memory usage reaches stop load limit, whether to evict region is
@@ -217,8 +217,8 @@ impl RangeStatsManager {
         cached_region_ids: Vec<u64>,
         memory_controller: &MemoryController,
     ) -> Vec<Region> {
-        // Get regions' activity of the cached region and sort them by next + prev in
-        // descending order
+        // Get regions' stat of the cached region and sort them by next + prev in
+        // descending order.
         let mut regions_activity = self
             .info_provider
             .get_regions_activity(cached_region_ids.clone())
@@ -410,7 +410,7 @@ pub mod tests {
             *self.regions.lock() = top_regions.clone()
         }
 
-        fn set_region_activities(&self, region_activities: &Vec<(Region, RegionStat)>) {
+        fn set_region_activities(&self, region_activities: &[(Region, RegionStat)]) {
             *self.region_activities.lock() = region_activities
                 .iter()
                 .map(|(r, s)| (r.id, (r.clone(), s.clone())))
