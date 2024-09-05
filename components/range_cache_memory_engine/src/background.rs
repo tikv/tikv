@@ -694,7 +694,7 @@ impl BackgroundRunnerCore {
         range_stats_manager.adjust_max_num_regions(curr_memory_usage, threshold);
 
         let cached_regions = self.engine.read().range_manager().cached_regions();
-        let (regions_to_evict, regions_to_load) = range_stats_manager
+        let (regions_to_load, regions_to_evict) = range_stats_manager
             .collect_regions_to_load_and_evict(cached_regions, &self.memory_controller);
 
         let mut regions_to_delete = Vec::with_capacity(regions_to_evict.len());
