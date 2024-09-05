@@ -125,7 +125,12 @@ impl CacheRegionMeta {
     // check whether we can replace the current outdated pending region with the new
     // one.
     fn can_be_updated_to(&self, region: &CacheRegion) -> bool {
-        assert!(self.region.id == region.id && self.region.epoch_version < region.epoch_version);
+        assert!(
+            self.region.id == region.id && self.region.epoch_version < region.epoch_version,
+            "current: {:?}, new: {:?}",
+            &self.region,
+            region
+        );
         // if the new region's range is contained by the current region, we can directly
         // update to the new one.
         self.region.contains_range(region)
@@ -273,6 +278,13 @@ pub struct RegionManager {
 impl RegionManager {
     pub(crate) fn regions(&self) -> &HashMap<u64, CacheRegionMeta> {
         &self.regions
+    }
+
+    #[cfg(test)]
+    pub(crate) fn region_meta_by_end_key(&self, key: &[u8]) -> Option<&CacheRegionMeta> {
+        self.regions_by_range
+            .get(key)
+            .and_then(|id| self.regions.get(id))
     }
 
     // load a new region directly in the active state.

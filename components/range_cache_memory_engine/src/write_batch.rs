@@ -983,14 +983,15 @@ mod tests {
         let mut wb = RangeCacheWriteBatch::from(&engine);
         wb.prepare_for_region(r_new.clone());
 
-        let cache_region = engine
-            .core()
-            .read()
-            .range_manager()
-            .region_meta(r_new.id)
-            .unwrap()
-            .get_region()
-            .clone();
-        assert_eq!(&cache_region, &r_new);
+        {
+            let core = engine.core().read();
+            let cache_meta = core.range_manager.region_meta(1).unwrap();
+            assert_eq!(cache_meta.get_region(), &r_new);
+            let meta_by_range = core
+                .range_manager
+                .region_meta_by_end_key(&r_new.end)
+                .unwrap();
+            assert_eq!(meta_by_range.get_region(), &r_new);
+        }
     }
 }
