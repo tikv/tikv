@@ -606,7 +606,7 @@ impl RegionWriteCfCopDetail {
         if self.processed_keys == 0 {
             0f64
         } else {
-            (self.next + self.prev) as  f64 / self.processed_keys as f64
+            (self.next + self.prev) as f64 / self.processed_keys as f64
         }
     }
 }

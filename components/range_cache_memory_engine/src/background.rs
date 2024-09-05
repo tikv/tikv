@@ -1905,6 +1905,7 @@ pub mod tests {
             memory_controller.clone(),
             None,
             engine.expected_region_size(),
+            0,
             Duration::from_secs(100),
             Arc::new(MockPdClient {}),
         );
@@ -1982,6 +1983,7 @@ pub mod tests {
             memory_controller.clone(),
             None,
             engine.expected_region_size(),
+            0,
             Duration::from_secs(100),
             Arc::new(MockPdClient {}),
         );
@@ -2144,6 +2146,7 @@ pub mod tests {
             memory_controller.clone(),
             None,
             engine.expected_region_size(),
+            0,
             Duration::from_secs(100),
             Arc::new(MockPdClient {}),
         );
@@ -2161,6 +2164,7 @@ pub mod tests {
             memory_controller.clone(),
             None,
             engine.expected_region_size(),
+            0,
             Duration::from_secs(100),
             Arc::new(MockPdClient {}),
         );
@@ -2211,6 +2215,7 @@ pub mod tests {
             memory_controller.clone(),
             None,
             engine.expected_region_size(),
+            0,
             Duration::from_secs(100),
             Arc::new(MockPdClient {}),
         );
@@ -2313,6 +2318,7 @@ pub mod tests {
             memory_controller,
             None,
             engine.expected_region_size(),
+            0,
             Duration::from_secs(100),
             Arc::new(MockPdClient {}),
         );
@@ -2456,6 +2462,7 @@ pub mod tests {
             memory_controller,
             None,
             engine.expected_region_size(),
+            0,
             Duration::from_secs(100),
             Arc::new(MockPdClient {}),
         );
@@ -2607,6 +2614,7 @@ pub mod tests {
             memory_controller,
             None,
             engine.expected_region_size(),
+            0,
             Duration::from_secs(100),
             Arc::new(MockPdClient {}),
         );

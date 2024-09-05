@@ -85,10 +85,6 @@ pub trait RangeCacheEngine:
     }
 
     fn on_region_event(&self, event: RegionEvent);
-
-    fn region_cached(&self, range: &Region) -> bool;
-
-    fn load_region(&self, range: Region);
 }
 
 pub trait RangeCacheEngineExt {
@@ -97,10 +93,6 @@ pub trait RangeCacheEngineExt {
     // TODO(SpadeA): try to find a better way to reduce coupling degree of range
     // cache engine and kv engine
     fn on_region_event(&self, event: RegionEvent);
-
-    fn region_cached(&self, range: &Region) -> bool;
-
-    fn load_region(&self, range: Region);
 }
 
 /// A service that should run in the background to retrieve and apply cache

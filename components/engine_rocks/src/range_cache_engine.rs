@@ -11,12 +11,4 @@ impl RangeCacheEngineExt for RocksEngine {
 
     #[inline]
     fn on_region_event(&self, _: RegionEvent) {}
-
-    #[inline]
-    fn region_cached(&self, _: &kvproto::metapb::Region) -> bool {
-        false
-    }
-
-    #[inline]
-    fn load_region(&self, _: kvproto::metapb::Region) {}
 }

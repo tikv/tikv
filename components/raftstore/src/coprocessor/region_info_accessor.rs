@@ -169,7 +169,7 @@ pub enum RegionInfoQuery {
     },
     GetRegionsActivity {
         region_ids: Vec<u64>,
-        callback: Callback<Vec<(Region, RegionActivity)>>,
+        callback: Callback<Vec<(Region, RegionStat)>>,
     },
     /// Gets all contents from the collection. Only used for testing.
     DebugDump(mpsc::Sender<(RegionsMap, RegionRangesMap)>),
@@ -641,7 +641,11 @@ impl RegionCollector {
                     );
                     self.regions
                         .get(id)
-                        .filter(|ri| ri.role == StateRole::Leader)
+                        .filter(|ri| {
+                            ri.role == StateRole::Leader
+                                && ac.region_stat.cop_detail.prev + ac.region_stat.cop_detail.next
+                                    != 0
+                        })
                         .map(|ri| (ri, ac))
                 })
                 .sorted_by(|(_, activity_0), (_, activity_1)| compare_fn(activity_0, activity_1))
@@ -675,9 +679,11 @@ impl RegionCollector {
         }
 
         top_regions.retain(|(_, s)| {
+            // TODO(SpadeA): this hard coded 100 may be adjusted by observing more
+            // workloads.
             s.cop_detail.next + s.cop_detail.prev >= max_next_prev / 100
-                && s.cop_detail.processed_keys != 0
-                && (s.cop_detail.next + s.cop_detail.prev) / s.cop_detail.processed_keys
+                // plus processed_keys by 1 to make it not 0
+                && (s.cop_detail.next + s.cop_detail.prev) / (s.cop_detail.processed_keys + 1)
                     >= self.mvcc_amplification_threshold
         });
 
@@ -717,15 +723,18 @@ impl RegionCollector {
     fn handle_get_regions_activity(
         &self,
         region_ids: Vec<u64>,
-        callback: Callback<Vec<(Region, RegionActivity)>>,
+        callback: Callback<Vec<(Region, RegionStat)>>,
     ) {
         callback(
             region_ids
                 .into_iter()
                 .filter_map(|id| {
-                    self.region_activity
-                        .get(&id)
-                        .map(|r| (self.regions.get(&id).unwrap().region.clone(), r.clone()))
+                    self.region_activity.get(&id).map(|r| {
+                        (
+                            self.regions.get(&id).unwrap().region.clone(),
+                            r.region_stat.clone(),
+                        )
+                    })
                 })
                 .collect_vec(),
         )
@@ -955,7 +964,7 @@ pub trait RegionInfoProvider: Send + Sync {
         unimplemented!()
     }
 
-    fn get_regions_activity(&self, _: Vec<u64>) -> Result<Vec<(Region, RegionActivity)>> {
+    fn get_regions_activity(&self, _: Vec<u64>) -> Result<Vec<(Region, RegionStat)>> {
         unimplemented!()
     }
 }
@@ -1053,7 +1062,7 @@ impl RegionInfoProvider for RegionInfoAccessor {
             })
     }
 
-    fn get_regions_activity(&self, region_ids: Vec<u64>) -> Result<Vec<(Region, RegionActivity)>> {
+    fn get_regions_activity(&self, region_ids: Vec<u64>) -> Result<Vec<(Region, RegionStat)>> {
         let (tx, rx) = mpsc::channel();
         let msg = RegionInfoQuery::GetRegionsActivity {
             region_ids,
