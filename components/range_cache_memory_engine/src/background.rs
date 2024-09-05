@@ -693,17 +693,13 @@ impl BackgroundRunnerCore {
         let threshold = self.memory_controller.stop_load_limit_threshold();
         range_stats_manager.adjust_max_num_regions(curr_memory_usage, threshold);
 
-        let mut regions_to_add = Vec::with_capacity(256);
         let cached_regions = self.engine.read().range_manager().cached_regions();
-        let regions_to_remove = range_stats_manager.collect_regions_to_load_and_evict(
-            &mut regions_to_add,
-            cached_regions,
-            &self.memory_controller,
-        );
+        let (regions_to_evict, regions_to_load) = range_stats_manager
+            .collect_regions_to_load_and_evict(cached_regions, &self.memory_controller);
 
-        let mut regions_to_delete = Vec::with_capacity(regions_to_remove.len());
-        info!("ime load_evict"; "ranges_to_add" => ?&regions_to_add, "may_evict" => ?&regions_to_remove);
-        for evict_region in regions_to_remove {
+        let mut regions_to_delete = Vec::with_capacity(regions_to_evict.len());
+        info!("ime load_evict"; "regions_to_load" => ?&regions_to_load, "regions_to_evict" => ?&regions_to_evict);
+        for evict_region in regions_to_evict {
             let cache_region = CacheRegion::from_region(&evict_region);
             let mut core = self.engine.write();
             let deleteable_regions = core
@@ -728,7 +724,7 @@ impl BackgroundRunnerCore {
                 assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
             }
         }
-        for region in regions_to_add {
+        for region in regions_to_load {
             let cache_region = CacheRegion::from_region(&region);
             let mut core = self.engine.write();
             if let Err(e) = core.mut_range_manager().load_region(cache_region) {

@@ -203,23 +203,13 @@ impl RangeStatsManager {
     /// determined by comparison between the new top regions' activity and the
     /// current cached regions.
     ///
-    /// # Parameters
-    ///
-    /// - `regions_added_out`: A mutable vector that will be populated with
-    ///   regions that are loaded into memory.
-    /// - `cached_region_ids`: A vector of region IDs that are currently cached.
-    /// - `memory_controller`: A reference to the memory controller to determine
-    ///   memory usage and constraints.
-    ///
     /// # Returns
-    ///
-    /// A vector of regions that should be evicted from memory.
+    /// (Regions to load, Regions to evict)
     pub fn collect_regions_to_load_and_evict(
         &self,
-        regions_added_out: &mut Vec<Region>,
         cached_region_ids: Vec<u64>,
         memory_controller: &MemoryController,
-    ) -> Vec<Region> {
+    ) -> (Vec<Region>, Vec<Region>) {
         // Get regions' stat of the cached region and sort them by next + prev in
         // descending order.
         let mut regions_activity = self
@@ -271,10 +261,10 @@ impl RangeStatsManager {
         }
 
         let cached_region_ids = cached_region_ids.into_iter().collect::<HashSet<u64>>();
-        let mvcc_amplification_to_filter = {
+        let (mvcc_amplification_to_filter, regions_to_load) = {
             let mut max_mvcc_amplification: f64 = 0.0;
             let mut record = self.mvcc_amplification_record.lock();
-            let added_ranges = curr_top_regions
+            let regions_to_load = curr_top_regions
                 .iter()
                 .filter_map(|(id, (r, region_stats))| {
                     if !cached_region_ids.contains(id) {
@@ -285,12 +275,15 @@ impl RangeStatsManager {
                     } else {
                         None
                     }
-                });
-            regions_added_out.extend(added_ranges);
+                })
+                .collect();
             // `max_mvcc_amplification / ma_mvcc_amplification_reduction` is the
             // expected mvcc amplification factor after cache. Make the half of it to filter
             // the cached regions.
-            max_mvcc_amplification / f64::max(1.0, ma_mvcc_amplification_reduction / 2.0)
+            (
+                max_mvcc_amplification / f64::max(1.0, ma_mvcc_amplification_reduction / 2.0),
+                regions_to_load,
+            )
         };
 
         info!(
@@ -325,7 +318,7 @@ impl RangeStatsManager {
         // Use top MIN_REGION_COUNT_TO_EVICT regions next and prev to filter regions
         // with very few next and prev. If there's less than or equal to
         // MIN_REGION_COUNT_TO_EVICT regions, do not evict any one.
-        if regions_activity.len() > MIN_REGION_COUNT_TO_EVICT {
+        let regions_to_evict = if regions_activity.len() > MIN_REGION_COUNT_TO_EVICT {
             let avg_top_next_prev = if reach_stop_load {
                 regions_activity
                     .iter()
@@ -386,7 +379,8 @@ impl RangeStatsManager {
             region_to_evict.into_iter().map(|(r, _)| r).collect()
         } else {
             vec![]
-        }
+        };
+        (regions_to_load, regions_to_evict)
     }
 }
 
@@ -487,16 +481,14 @@ pub mod tests {
             10,
             sim.clone(),
         );
-        let mut added = Vec::new();
-        let removed = rsm.collect_regions_to_load_and_evict(&mut added, vec![], &mc);
+        let (added, removed) = rsm.collect_regions_to_load_and_evict(vec![], &mc);
         assert_eq!(&added, &[region_1.clone()]);
         assert!(removed.is_empty());
         let top_regions = vec![(region_2.clone(), new_region_stat(1000, 8))];
         let region_activities = vec![(region_1.clone(), new_region_stat(20, 10))];
         sim.set_top_regions(&top_regions);
         sim.set_region_activities(&region_activities);
-        added.clear();
-        let removed = rsm.collect_regions_to_load_and_evict(&mut added, vec![1], &mc);
+        let (added, removed) = rsm.collect_regions_to_load_and_evict(vec![1], &mc);
         assert_eq!(&added, &[region_2.clone()]);
         assert!(removed.is_empty());
         let region_3 = new_region(3, b"k05", b"k06");
@@ -518,8 +510,7 @@ pub mod tests {
         ];
         sim.set_top_regions(&top_regions);
         sim.set_region_activities(&region_activities);
-        added.clear();
-        let removed = rsm.collect_regions_to_load_and_evict(&mut added, vec![1, 2], &mc);
+        let (added, removed) = rsm.collect_regions_to_load_and_evict(vec![1, 2], &mc);
         assert!(removed.is_empty());
         assert_eq!(
             &added,
@@ -543,8 +534,7 @@ pub mod tests {
         ];
         sim.set_top_regions(&vec![]);
         sim.set_region_activities(&region_activities);
-        let removed =
-            rsm.collect_regions_to_load_and_evict(&mut added, vec![1, 2, 3, 4, 5, 6, 7], &mc);
+        let (_, removed) = rsm.collect_regions_to_load_and_evict(vec![1, 2, 3, 4, 5, 6, 7], &mc);
         // `region_1` is no longer needed to cached, but since it was loaded less
         // than 10 ms ago, it should not be included in the removed ranges.
         assert!(removed.is_empty());
@@ -553,20 +543,18 @@ pub mod tests {
 
         sim.set_top_regions(&vec![]);
         sim.set_region_activities(&region_activities);
-        let removed =
-            rsm.collect_regions_to_load_and_evict(&mut added, vec![1, 2, 3, 4, 5, 6, 7], &mc);
+        let (_, removed) = rsm.collect_regions_to_load_and_evict(vec![1, 2, 3, 4, 5, 6, 7], &mc);
         assert_eq!(&removed, &[region_1.clone()]);
 
         let top_regions = vec![(region_8.clone(), new_region_stat(4000, 10))];
         sim.set_top_regions(&top_regions);
         sim.set_region_activities(&region_activities);
         mc.acquire(2000);
-        let removed =
-            rsm.collect_regions_to_load_and_evict(&mut added, vec![2, 3, 4, 5, 6, 7], &mc);
+        let (_, removed) = rsm.collect_regions_to_load_and_evict(vec![2, 3, 4, 5, 6, 7], &mc);
         assert_eq!(&removed, &[region_3.clone()]);
     }
 
-    // todo(SpadeA): fix this PR in the next PR (optimize eviction when soft
+    // todo(SpadeA): fix this in the next PR (optimize eviction when soft
     // limit reached)
     // #[test]
     // fn test_collect_candidates_for_eviction() {
