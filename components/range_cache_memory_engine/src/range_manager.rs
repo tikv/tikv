@@ -122,18 +122,13 @@ impl CacheRegionMeta {
         &self.region
     }
 
-    // update region info due to epoch version changes. This can only
-    // happen for pending region because otherwise we will always update
-    // the region epoch with ApplyObserver(for loading/active regions) or
-    // no need to update the epoch for evicting regions.
-    fn amend_pending_region(&mut self, region: &CacheRegion) -> bool {
+    // check whether we can replace the current outdated pending region with the new
+    // one.
+    fn can_be_updated_to(&self, region: &CacheRegion) -> bool {
         assert!(self.region.id == region.id && self.region.epoch_version < region.epoch_version);
-        if !self.region.contains_range(region) {
-            return false;
-        }
-
-        self.region = region.clone();
-        true
+        // if the new region's range is contained by the current region, we can directly
+        // update to the new one.
+        self.region.contains_range(region)
     }
 
     pub(crate) fn safe_point(&self) -> u64 {
@@ -375,14 +370,23 @@ impl RegionManager {
         let Some(cached_meta) = self.regions.get_mut(&region.id) else {
             return None;
         };
-        if cached_meta.state == Pending
-            && cached_meta.region.epoch_version != region.epoch_version
-            && !cached_meta.amend_pending_region(region)
+        if cached_meta.state == Pending && cached_meta.region.epoch_version != region.epoch_version
         {
+            let meta = self.remove_region(region.id);
+            if meta.can_be_updated_to(region) {
+                info!("ime update outdated pending region";
+                    "current_meta" => ?meta,
+                    "new_region" => ?region);
+                // the new region's range is smaller than removed region, so it is impossible to
+                // be overlapped with other existing regions.
+                self.load_region(region.clone()).unwrap();
+
+                return Some(RegionState::Pending);
+            }
+
             info!("ime remove outdated pending region";
                 "pending_region" => ?cached_meta.region,
                 "new_region" => ?region);
-            self.remove_region(region.id);
             return None;
         }
         Some(cached_meta.state)
@@ -697,7 +701,7 @@ impl RegionManager {
 
     fn remove_region(&mut self, id: u64) -> CacheRegionMeta {
         let meta = self.regions.remove(&id).unwrap();
-        self.regions_by_range.remove(&meta.region.end);
+        self.regions_by_range.remove(&meta.region.end).unwrap();
         meta
     }
 
@@ -822,6 +826,17 @@ impl RegionManager {
                 ),
                 region_meta,
             );
+        }
+    }
+}
+
+#[cfg(test)]
+impl Drop for RegionManager {
+    fn drop(&mut self) {
+        // check regions and regions by range matches with each other.
+        for (key, id) in &self.regions_by_range {
+            let meta = self.regions.get(id).unwrap();
+            assert_eq!(key, &meta.region.end);
         }
     }
 }
