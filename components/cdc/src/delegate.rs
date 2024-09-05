@@ -1253,7 +1253,7 @@ mod tests {
         let region_epoch = region.get_region_epoch().clone();
 
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
-        let (sink, mut drain) = channel(ConnId::default(), 1, quota.clone());
+        let (sink, mut drain) = channel(ConnId::default(), 1, quota);
         let rx = drain.drain();
         let request_id = 123;
         let mut downstream = Downstream::new(
