@@ -129,18 +129,18 @@ impl CacheRegionMeta {
         &self.region
     }
 
-    // update region info due to epoch version changes. This can only
-    // happen for pending region because otherwise we will always update
-    // the region epoch with ApplyObserver(for loading/active regions) or
-    // no need to update the epoch for evicting regions.
-    pub(crate) fn amend_pending_region(&mut self, region: &CacheRegion) -> bool {
-        assert!(self.region.id == region.id && self.region.epoch_version < region.epoch_version);
-        if !self.region.contains_range(region) {
-            return false;
-        }
-
-        self.region = region.clone();
-        true
+    // check whether we can replace the current outdated pending region with the new
+    // one.
+    pub(crate) fn can_be_updated_to(&self, region: &CacheRegion) -> bool {
+        assert!(
+            self.region.id == region.id && self.region.epoch_version < region.epoch_version,
+            "current: {:?}, new: {:?}",
+            &self.region,
+            region
+        );
+        // if the new region's range is contained by the current region, we can directly
+        // update to the new one.
+        self.region.contains_range(region)
     }
 
     pub(crate) fn safe_point(&self) -> u64 {
@@ -289,6 +289,13 @@ impl RegionMetaMap {
         meta
     }
 
+    #[cfg(test)]
+    pub(crate) fn region_meta_by_end_key(&self, key: &[u8]) -> Option<&CacheRegionMeta> {
+        self.regions_by_range
+            .get(key)
+            .and_then(|id| self.regions.get(id))
+    }
+
     fn overlaps_with(&self, region: &CacheRegion) -> bool {
         let entry = self
             .regions_by_range
@@ -397,6 +404,18 @@ impl RegionMetaMap {
 
     pub(crate) fn regions(&self) -> &HashMap<u64, CacheRegionMeta> {
         &self.regions
+    }
+}
+
+#[cfg(test)]
+impl Drop for RegionMetaMap {
+    fn drop(&mut self) {
+        assert_eq!(self.regions.len(), self.regions_by_range.len());
+        // check regions and regions by range matches with each other.
+        for (key, id) in &self.regions_by_range {
+            let meta = self.regions.get(id).unwrap();
+            assert_eq!(key, &meta.region.end);
+        }
     }
 }
 

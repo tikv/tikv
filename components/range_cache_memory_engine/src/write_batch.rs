@@ -958,4 +958,36 @@ mod tests {
             .unwrap();
         assert_eq!(snap2.get_value(b"zkk11").unwrap().unwrap(), &val1);
     }
+
+    #[test]
+    fn test_write_batch_update_outdated_pending_region() {
+        let path = Builder::new()
+            .prefix("test_write_batch_update_outdated_pending_region")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+        let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
+
+        let mut engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(
+            Arc::new(VersionTrack::new(RangeCacheEngineConfig::config_for_test())),
+        ));
+        engine.set_disk_engine(rocks_engine.clone());
+
+        let r1 = CacheRegion::new(1, 0, b"k00", b"k10");
+
+        engine.core().region_manager().load_region(r1).unwrap();
+
+        // load a region with a newer epoch and small range, should trigger replace.
+        let r_new = CacheRegion::new(1, 1, b"k00", b"k05");
+        let mut wb = RangeCacheWriteBatch::from(&engine);
+        wb.prepare_for_region(r_new.clone());
+
+        {
+            let regions_map = engine.core.region_manager.regions_map().read();
+            let cache_meta = regions_map.region_meta(1).unwrap();
+            assert_eq!(cache_meta.get_region(), &r_new);
+            let meta_by_range = regions_map.region_meta_by_end_key(&r_new.end).unwrap();
+            assert_eq!(meta_by_range.get_region(), &r_new);
+        }
+    }
 }

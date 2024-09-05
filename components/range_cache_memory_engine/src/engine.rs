@@ -344,16 +344,26 @@ impl RangeCacheMemoryEngine {
         // slow path, handle pending region
         let mut regions_map = manager.regions_map.write();
         let cached_count = regions_map.regions().len();
-        let Some(region_meta) = regions_map.mut_region_meta(region.id) else {
+        let Some(mut region_meta) = regions_map.mut_region_meta(region.id) else {
             return RangeCacheStatus::NotInCache;
         };
 
         if region_meta.get_region().epoch_version < region.epoch_version {
-            assert_eq!(region_meta.get_state(), RegionState::Pending);
+            let meta = regions_map.remove_region(region.id);
+            assert_eq!(meta.get_state(), RegionState::Pending);
             // try update outdated region.
-            if !region_meta.amend_pending_region(region) {
-                // region is outdated, should remove.
-                regions_map.remove_region(region.id);
+            if meta.can_be_updated_to(region) {
+                info!("ime update outdated pending region";
+                    "current_meta" => ?meta,
+                    "new_region" => ?region);
+                // the new region's range is smaller than removed region, so it is impossible to
+                // be overlapped with other existing regions.
+                regions_map.load_region(region.clone()).unwrap();
+                region_meta = regions_map.mut_region_meta(region.id).unwrap();
+            } else {
+                info!("ime remove outdated pending region";
+                    "pending_region" => ?meta.get_region(),
+                    "new_region" => ?region);
                 return RangeCacheStatus::NotInCache;
             }
         }
