@@ -1259,6 +1259,8 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
 
     /// Evict entries from the cache.
     pub fn evict_entry_cache(&mut self, half: bool) {
+        fail_point!("mock_evict_entry_cache", |_| {});
+
         if !self.is_entry_cache_empty() {
             let cache = &mut self.cache;
             let cache_len = cache.cache.len();
