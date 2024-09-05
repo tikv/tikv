@@ -20,6 +20,13 @@ use tikv_util::info;
 
 use crate::memory_controller::MemoryController;
 
+/// Do not evict a region if has been cached for less than this duration.
+pub const DEFAULT_EVICT_MIN_DURATION: Duration = Duration::from_secs(60 * 5);
+const MIN_REGION_COUNT_TO_EVICT: usize = 5;
+// TODO(SpadeA): this 10 and 20 may be adjusted by observing more workloads.
+const MVCC_AMPLIFICATION_FILTER_FACTOR: f64 = 10.0;
+const ITERATED_COUNT_FILTER_FACTOR: usize = 20;
+
 #[derive(Clone)]
 pub(crate) struct RangeStatsManager {
     num_regions: Arc<AtomicUsize>,
@@ -37,10 +44,6 @@ pub(crate) struct RangeStatsManager {
 
     mvcc_amplification_record: Arc<Mutex<HashMap<u64, f64>>>,
 }
-
-/// Do not evict a region if has been cached for less than this duration.
-pub const DEFAULT_EVICT_MIN_DURATION: Duration = Duration::from_secs(60 * 5);
-pub const MIN_REGION_COUNT_TO_EVICT: usize = 5;
 
 impl RangeStatsManager {
     /// Creates a new RangeStatsManager that retrieves state from
@@ -342,9 +345,8 @@ impl RangeStatsManager {
                         } else {
                             // In this case, memory usage is relarively low, we only evict those that should not be cached apparently.
                             r.cop_detail.mvcc_amplification()
-                                // TODO(SpadeA): this hard coded 10 and 20 may be adjusted by observing more workloads.
-                                <= self.mvcc_amplification_threshold as f64 / 10.0
-                                || r.cop_detail.iterated_count()  < avg_top_next_prev / 20
+                                <= self.mvcc_amplification_threshold as f64 / MVCC_AMPLIFICATION_FILTER_FACTOR
+                                || r.cop_detail.iterated_count()  < avg_top_next_prev / ITERATED_COUNT_FILTER_FACTOR
                         }
                     })
                     .filter_map(|(r, s)| {

@@ -29,6 +29,9 @@ use super::{
     RegionHeartbeatObserver, Result, RoleChange, RoleObserver,
 };
 
+// TODO(SpadeA): this 100 may be adjusted by observing more workloads.
+const ITERATED_COUNT_FILTER_FACTOR: usize = 100;
+
 /// `RegionInfoAccessor` is used to collect all regions' information on this
 /// TiKV into a collection so that other parts of TiKV can get region
 /// information from it. It registers a observer to raftstore, which is named
@@ -668,10 +671,9 @@ impl RegionCollector {
             );
         }
 
-        // Get the average iterated count of the first top 10 regions and use the 1/100
-        // of it to filter regions with less read flows
-        // TODO(SpadeA): this hard coded 100 may be adjusted by observing more
-        // workloads.
+        // Get the average iterated count of the first top 10 regions and use the
+        // 1/ITERATED_COUNT_FILTER_FACTOR of it to filter regions with less read
+        // flows
         let top_regions_iterated_count: Vec<_> = top_regions
             .iter()
             .map(|(_, r)| r.cop_detail.iterated_count())
@@ -679,7 +681,7 @@ impl RegionCollector {
             .collect();
         let iterated_count_to_filter: usize = top_regions_iterated_count.iter().sum::<usize>()
             / top_regions_iterated_count.len()
-            / 100;
+            / ITERATED_COUNT_FILTER_FACTOR;
         top_regions.retain(|(_, s)| {
             s.cop_detail.iterated_count() >= iterated_count_to_filter
                 // plus processed_keys by 1 to make it not 0
