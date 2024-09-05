@@ -551,12 +551,34 @@ impl<E: CfNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
                 if !enabled {
                     return;
                 }
+                if self.wait_for_destroy_range_finish {
+                    // Concurrent unsafe destroy range, ignore the second one
+                    info!("concurrent unsafe destroy range, ignore");
+                    return;
+                }
                 self.wait_for_destroy_range_finish = true;
+<<<<<<< HEAD
                 let soft = (self.soft_pending_compaction_bytes_limit as f64).log2();
                 for cf_checker in self.cf_checkers.values_mut() {
                     let v = cf_checker.long_term_pending_bytes.get_avg();
                     if v <= soft {
                         cf_checker.pending_bytes_before_unsafe_destroy_range = Some(v);
+=======
+                let soft = (current_cfg.soft_pending_compaction_bytes_limit.0 as f64).log2();
+                for (cf, cf_checker) in &mut self.cf_checkers {
+                    if let Some(long_term_pending_bytes) =
+                        cf_checker.long_term_pending_bytes.as_ref()
+                    {
+                        let v = long_term_pending_bytes.get_avg();
+                        if v <= soft {
+                            info!(
+                                "before unsafe destroy range";
+                                "cf" => cf,
+                                "pending_bytes" => v
+                            );
+                            cf_checker.pending_bytes_before_unsafe_destroy_range = Some(v);
+                        }
+>>>>>>> 3ca2046724 (storage: Fix unexpected flow control after unsafe destroy range (#17458))
                     }
                 }
             }
@@ -581,9 +603,13 @@ impl<E: CfNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
                             SCHED_THROTTLE_ACTION_COUNTER
                                 .with_label_values(&[cf, "pending_bytes_jump"])
                                 .inc();
-                        } else {
-                            cf_checker.pending_bytes_before_unsafe_destroy_range = None;
                         }
+                        info!(
+                            "after unsafe destroy range";
+                            "cf" => cf,
+                            "before" => before,
+                            "after" => after
+                        );
                     }
                 }
             }
@@ -707,12 +733,50 @@ impl<E: CfNamesExt + FlowControlFactorsExt + Send + 'static> FlowChecker<E> {
             .with_label_values(&[&cf])
             .set((checker.long_term_pending_bytes.get_avg() * RATIO_SCALE_FACTOR as f64) as i64);
 
+<<<<<<< HEAD
         // do special check on start, see the comment of the variable definition for
         // detail.
         if checker.on_start_pending_bytes {
             if num < soft || checker.long_term_pending_bytes.trend() == Trend::Increasing {
                 // the write is accumulating, still need to throttle
                 checker.on_start_pending_bytes = false;
+=======
+        // only be called by v1
+        if let Some(long_term_pending_bytes) = checker.long_term_pending_bytes.as_mut() {
+            long_term_pending_bytes.observe(num);
+            SCHED_PENDING_COMPACTION_BYTES_GAUGE
+                .with_label_values(&[&cf])
+                .set((long_term_pending_bytes.get_avg() * RATIO_SCALE_FACTOR as f64) as i64);
+
+            // do special check on start, see the comment of the variable definition for
+            // detail.
+            if checker.on_start_pending_bytes {
+                if num < soft || long_term_pending_bytes.trend() == Trend::Increasing {
+                    // the write is accumulating, still need to throttle
+                    checker.on_start_pending_bytes = false;
+                } else {
+                    // still on start, should not throttle now
+                    return;
+                }
+            }
+
+            let pending_compaction_bytes = long_term_pending_bytes.get_avg();
+            let ignore = if let Some(before) = checker.pending_bytes_before_unsafe_destroy_range {
+                // It assumes that the long term average will eventually come down below the
+                // soft limit. If the general traffic flow increases during destroy, the long
+                // term average may never come down and the flow control will be turned off for
+                // a long time, which would be a rather rare case, so just ignore it.
+                if pending_compaction_bytes <= before && !self.wait_for_destroy_range_finish {
+                    info!(
+                        "pending compaction bytes is back to normal";
+                        "cf" => &cf,
+                        "pending_compaction_bytes" => pending_compaction_bytes,
+                        "before" => before
+                    );
+                    checker.pending_bytes_before_unsafe_destroy_range = None;
+                }
+                true
+>>>>>>> 3ca2046724 (storage: Fix unexpected flow control after unsafe destroy range (#17458))
             } else {
                 // still on start, should not throttle now
                 return;
@@ -1260,12 +1324,25 @@ pub(super) mod tests {
         stub.0
             .pending_compaction_bytes
             .store(10000000 * 1024 * 1024 * 1024, Ordering::Relaxed);
+<<<<<<< HEAD
         tx.send(FlowInfo::Compaction(
             "default".to_string(),
             region_id,
             tablet_suffix,
         ))
         .unwrap();
+=======
+        send_flow_info(tx, region_id);
+        assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
+
+        // after unsafe destroy range, pending compaction bytes may jump back to a lower
+        // value
+        stub.0
+            .pending_compaction_bytes
+            .store(100 * 1024 * 1024 * 1024, Ordering::Relaxed);
+        tx.send(FlowInfo::Compaction("default".to_string(), region_id))
+            .unwrap();
+>>>>>>> 3ca2046724 (storage: Fix unexpected flow control after unsafe destroy range (#17458))
         tx.send(FlowInfo::AfterUnsafeDestroyRange(region_id))
             .unwrap();
         tx.send(FlowInfo::L0Intra(
@@ -1281,13 +1358,23 @@ pub(super) mod tests {
             flow_controller.discard_ratio(region_id)
         );
 
-        // unfreeze the control
+        // the long term average pending compaction bytes is still high, shouldn't
+        // unfreeze the jump control
+        stub.0
+            .pending_compaction_bytes
+            .store(100 * 1024 * 1024 * 1024, Ordering::Relaxed);
+        send_flow_info(tx, region_id);
+        assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
+
+        // the long term average pending compaction bytes falls below the threshold,
+        // should unfreeze the jump control
         stub.0
             .pending_compaction_bytes
             .store(1024 * 1024, Ordering::Relaxed);
         send_flow_info(tx, region_id, tablet_suffix);
         assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
 
+        // exceeds the threshold, should perform throttle
         stub.0
             .pending_compaction_bytes
             .store(1000000000 * 1024 * 1024 * 1024, Ordering::Relaxed);
