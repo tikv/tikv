@@ -679,9 +679,13 @@ impl RegionCollector {
             .map(|(_, r)| r.cop_detail.iterated_count())
             .take(10)
             .collect();
-        let iterated_count_to_filter: usize = top_regions_iterated_count.iter().sum::<usize>()
-            / top_regions_iterated_count.len()
-            / ITERATED_COUNT_FILTER_FACTOR;
+        let iterated_count_to_filter: usize = if !top_regions_iterated_count.is_empty() {
+            top_regions_iterated_count.iter().sum::<usize>()
+                / top_regions_iterated_count.len()
+                / ITERATED_COUNT_FILTER_FACTOR
+        } else {
+            0
+        };
         top_regions.retain(|(_, s)| {
             s.cop_detail.iterated_count() >= iterated_count_to_filter
                 // plus processed_keys by 1 to make it not 0
