@@ -602,6 +602,10 @@ impl RegionWriteCfCopDetail {
         )
     }
 
+    pub fn iterated_count(&self) -> usize {
+        self.next + self.prev
+    }
+
     pub fn mvcc_amplification(&self) -> f64 {
         if self.processed_keys == 0 {
             0f64

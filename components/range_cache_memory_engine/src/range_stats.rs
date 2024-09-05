@@ -224,8 +224,8 @@ impl RangeStatsManager {
             .get_regions_activity(cached_region_ids.clone())
             .unwrap();
         regions_activity.sort_by(|a, b| {
-            let next_prev_a = a.1.cop_detail.next + a.1.cop_detail.prev;
-            let next_prev_b = b.1.cop_detail.next + b.1.cop_detail.prev;
+            let next_prev_a = a.1.cop_detail.iterated_count();
+            let next_prev_b = b.1.cop_detail.iterated_count();
             next_prev_b.cmp(&next_prev_a)
         });
 
@@ -326,7 +326,7 @@ impl RangeStatsManager {
             let avg_top_next_prev = if reach_stop_load {
                 regions_activity
                     .iter()
-                    .map(|r| r.1.cop_detail.next + r.1.cop_detail.prev)
+                    .map(|r| r.1.cop_detail.iterated_count())
                     .take(MIN_REGION_COUNT_TO_EVICT)
                     .sum::<usize>()
                     / MIN_REGION_COUNT_TO_EVICT
@@ -344,7 +344,7 @@ impl RangeStatsManager {
                             r.cop_detail.mvcc_amplification()
                                 // TODO(SpadeA): this hard coded 10 and 20 may be adjusted by observing more workloads.
                                 <= self.mvcc_amplification_threshold as f64 / 10.0
-                                || (r.cop_detail.next + r.cop_detail.prev)  < avg_top_next_prev / 20
+                                || r.cop_detail.iterated_count()  < avg_top_next_prev / 20
                         }
                     })
                     .filter_map(|(r, s)| {

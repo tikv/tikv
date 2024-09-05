@@ -591,14 +591,13 @@ impl RegionCollector {
     /// approximately `300_000``.
     pub fn handle_get_top_regions(&self, count: usize, callback: Callback<TopRegions>) {
         let compare_fn = |a: &RegionActivity, b: &RegionActivity| {
-            let a = a.region_stat.cop_detail.next + a.region_stat.cop_detail.prev;
-            let b = b.region_stat.cop_detail.next + b.region_stat.cop_detail.prev;
+            let a = a.region_stat.cop_detail.iterated_count();
+            let b = b.region_stat.cop_detail.iterated_count();
             b.cmp(&a)
         };
 
         // Only used to log.
         let mut max_qps = 0;
-        let mut max_next_prev = 0;
         let mut top_regions = if count == 0 {
             self.regions
                 .values()
@@ -619,10 +618,6 @@ impl RegionCollector {
                         r,
                         ra.map(|ra| {
                             max_qps = u64::max(ra.region_stat.query_stats.coprocessor, max_qps);
-                            max_next_prev = usize::max(
-                                ra.region_stat.cop_detail.prev + ra.region_stat.cop_detail.next,
-                                max_next_prev,
-                            );
                             ra.region_stat.clone()
                         })
                         .unwrap_or_default(),
@@ -635,16 +630,11 @@ impl RegionCollector {
                 .iter()
                 .filter_map(|(id, ac)| {
                     max_qps = u64::max(ac.region_stat.query_stats.coprocessor, max_qps);
-                    max_next_prev = usize::max(
-                        ac.region_stat.cop_detail.prev + ac.region_stat.cop_detail.next,
-                        max_next_prev,
-                    );
                     self.regions
                         .get(id)
                         .filter(|ri| {
                             ri.role == StateRole::Leader
-                                && ac.region_stat.cop_detail.prev + ac.region_stat.cop_detail.next
-                                    != 0
+                                && ac.region_stat.cop_detail.iterated_count() != 0
                         })
                         .map(|ri| (ri, ac))
                 })
@@ -678,12 +668,22 @@ impl RegionCollector {
             );
         }
 
+        // Get the average iterated count of the first top 10 regions and use the 1/100
+        // of it to filter regions with less read flows
+        // TODO(SpadeA): this hard coded 100 may be adjusted by observing more
+        // workloads.
+        let top_regions_iterated_count: Vec<_> = top_regions
+            .iter()
+            .map(|(_, r)| r.cop_detail.iterated_count())
+            .take(10)
+            .collect();
+        let iterated_count_to_filter: usize = top_regions_iterated_count.iter().sum::<usize>()
+            / top_regions_iterated_count.len()
+            / 100;
         top_regions.retain(|(_, s)| {
-            // TODO(SpadeA): this hard coded 100 may be adjusted by observing more
-            // workloads.
-            s.cop_detail.next + s.cop_detail.prev >= max_next_prev / 100
+            s.cop_detail.iterated_count() >= iterated_count_to_filter
                 // plus processed_keys by 1 to make it not 0
-                && (s.cop_detail.next + s.cop_detail.prev) / (s.cop_detail.processed_keys + 1)
+                && (s.cop_detail.iterated_count()) / (s.cop_detail.processed_keys + 1)
                     >= self.mvcc_amplification_threshold
         });
 
