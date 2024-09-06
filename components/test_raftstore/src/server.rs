@@ -76,7 +76,10 @@ use tikv::{
     storage::{
         self,
         kv::{FakeExtension, LocalTablets, SnapContext},
-        txn::flow_controller::{EngineFlowController, FlowController},
+        txn::{
+            flow_controller::{EngineFlowController, FlowController},
+            txn_status_cache::TxnStatusCache,
+        },
         Engine, Storage,
     },
 };
@@ -477,6 +480,7 @@ impl ServerCluster {
                 .as_ref()
                 .map(|m| m.derive_controller("scheduler-worker-pool".to_owned(), true)),
             resource_manager.clone(),
+            Arc::new(TxnStatusCache::new(1 << 20)),
         )?;
         self.storages.insert(node_id, raft_kv.clone());
 

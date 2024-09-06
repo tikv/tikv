@@ -104,6 +104,7 @@ use tracker::{
 };
 use txn_types::{Key, KvPair, Lock, LockType, TimeStamp, TsSet, Value};
 
+use self::kv::SnapContext;
 pub use self::{
     errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},
     kv::{
@@ -118,7 +119,6 @@ pub use self::{
         StorageCallback, TxnStatus,
     },
 };
-use self::{kv::SnapContext, test_util::latest_feature_gate};
 use crate::{
     read_pool::{ReadPool, ReadPoolHandle},
     server::{lock_manager::waiter_manager, metrics::ResourcePriority},
@@ -128,10 +128,12 @@ use crate::{
         lock_manager::{LockManager, MockLockManager},
         metrics::{CommandKind, *},
         mvcc::{metrics::ScanLockReadTimeSource::resolve_lock, MvccReader, PointGetterBuilder},
+        test_util::latest_feature_gate,
         txn::{
             commands::{RawAtomicStore, RawCompareAndSwap, TypedCommand},
             flow_controller::{EngineFlowController, FlowController},
             scheduler::TxnScheduler,
+            txn_status_cache::TxnStatusCache,
             Command, Error as TxnError, ErrorInner as TxnErrorInner,
         },
         types::StorageCallbackType,
@@ -219,7 +221,7 @@ pub struct Storage<E: Engine, L: LockManager, F: KvFormat> {
 impl<E: Engine, L: LockManager, F: KvFormat> Clone for Storage<E, L, F> {
     #[inline]
     fn clone(&self) -> Self {
-        let refs = self.refs.fetch_add(1, atomic::Ordering::SeqCst);
+        let refs = self.refs.fetch_add(1, Ordering::SeqCst);
 
         trace!(
             "Storage referenced"; "original_ref" => refs
@@ -245,7 +247,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Clone for Storage<E, L, F> {
 impl<E: Engine, L: LockManager, F: KvFormat> Drop for Storage<E, L, F> {
     #[inline]
     fn drop(&mut self) {
-        let refs = self.refs.fetch_sub(1, atomic::Ordering::SeqCst);
+        let refs = self.refs.fetch_sub(1, Ordering::SeqCst);
 
         trace!(
             "Storage de-referenced"; "original_ref" => refs
@@ -276,6 +278,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
         resource_ctl: Option<Arc<ResourceController>>,
         resource_manager: Option<Arc<ResourceGroupManager>>,
+        txn_status_cache: Arc<TxnStatusCache>,
     ) -> Result<Self> {
         assert_eq!(config.api_version(), F::TAG, "Api version not match");
 
@@ -293,6 +296,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             feature_gate,
             resource_ctl,
             resource_manager.clone(),
+            txn_status_cache,
         );
 
         info!("Storage started.");
@@ -3546,7 +3550,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
 
     pub fn pipelined_pessimistic_lock(self, enabled: bool) -> Self {
         self.pipelined_pessimistic_lock
-            .store(enabled, atomic::Ordering::Relaxed);
+            .store(enabled, Ordering::Relaxed);
         self
     }
 
@@ -3557,7 +3561,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
 
     pub fn in_memory_pessimistic_lock(self, enabled: bool) -> Self {
         self.in_memory_pessimistic_lock
-            .store(enabled, atomic::Ordering::Relaxed);
+            .store(enabled, Ordering::Relaxed);
         self
     }
 
@@ -3613,6 +3617,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             ts_provider,
             Some(resource_ctl),
             Some(manager),
+            Arc::new(TxnStatusCache::new_for_test()),
         )
     }
 
@@ -3648,6 +3653,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             None,
             Some(resource_ctl),
             Some(manager),
+            Arc::new(TxnStatusCache::new_for_test()),
         )
     }
 
@@ -3686,6 +3692,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             None,
             Some(resource_controller),
             Some(resource_manager),
+            Arc::new(TxnStatusCache::new_for_test()),
         )
     }
 }
@@ -4255,7 +4262,7 @@ mod tests {
                     statistics: &mut Statistics::default(),
                     async_apply_prewrite: false,
                     raw_ext: None,
-                    txn_status_cache: &TxnStatusCache::new_for_test(),
+                    txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
                 },
             )
             .unwrap();
