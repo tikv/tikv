@@ -10,6 +10,8 @@ use crate::new_in_memory_snapshot;
 
 /// RangeCacheSnapshotPin pins data of a RangeCacheMemoryEngine during taking
 /// snapshot. It prevents the data from being evicted or deleted from the cache.
+// TODO: Remove it, theoretically it can be remove if we don't need an
+// in-memory engine snapshot when a region is removed or splitted.
 pub struct RangeCacheSnapshotPin {
     pub snap: Option<RangeCacheSnapshot>,
 }

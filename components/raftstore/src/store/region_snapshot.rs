@@ -101,6 +101,9 @@ where
 
     /// Replace underlying snapshot with its observed snapshot.
     ///
+    /// One use case is to allow callers to build a `RegionSnapshot` with an
+    /// optimized snapshot. See RaftKv::async_in_memory_snapshot for an example.
+    ///
     /// # Panics
     ///
     /// It panics, if it has been cloned before this calling `replace_snapshot`

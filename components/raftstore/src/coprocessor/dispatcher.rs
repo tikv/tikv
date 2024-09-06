@@ -326,6 +326,9 @@ where
     update_safe_ts_observers: Vec<Entry<BoxUpdateSafeTsObserver>>,
     message_observers: Vec<Entry<BoxMessageObserver>>,
     region_heartbeat_observers: Vec<Entry<BoxRegionHeartbeatObserver>>,
+    // For now, `write_batch_observer` and `snapshot_observer` can only have one
+    // observer solely because of simplicity. However, it is possible to have
+    // multiple observers in the future if needed.
     write_batch_observer: Option<BoxWriteBatchObserver>,
     snapshot_observer: Option<BoxSnapshotObserver>,
     // TODO: add endpoint

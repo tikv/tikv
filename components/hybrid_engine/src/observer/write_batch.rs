@@ -8,13 +8,13 @@ use raftstore::coprocessor::{
 use range_cache_memory_engine::{RangeCacheMemoryEngine, RangeCacheWriteBatch};
 
 #[derive(Clone)]
-pub struct HybridWriteBatchObserver {
+pub struct RegionCacheWriteBatchObserver {
     cache_engine: RangeCacheMemoryEngine,
 }
 
-impl HybridWriteBatchObserver {
+impl RegionCacheWriteBatchObserver {
     pub fn new(cache_engine: RangeCacheMemoryEngine) -> Self {
-        HybridWriteBatchObserver { cache_engine }
+        RegionCacheWriteBatchObserver { cache_engine }
     }
 
     pub fn register_to(&self, coprocessor_host: &mut CoprocessorHost<impl KvEngine>) {
@@ -24,9 +24,9 @@ impl HybridWriteBatchObserver {
     }
 }
 
-impl Coprocessor for HybridWriteBatchObserver {}
+impl Coprocessor for RegionCacheWriteBatchObserver {}
 
-impl WriteBatchObserver for HybridWriteBatchObserver {
+impl WriteBatchObserver for RegionCacheWriteBatchObserver {
     fn create_observable_write_batch(&self) -> Box<dyn ObservableWriteBatch> {
         Box::new(HybridObservableWriteBatch {
             cache_write_batch: RangeCacheWriteBatch::from(&self.cache_engine),

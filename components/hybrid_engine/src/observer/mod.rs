@@ -6,4 +6,4 @@ mod write_batch;
 
 pub use eviction::EvictionObserver;
 pub use snapshot::{HybridSnapshotObserver, RangeCacheSnapshotPin};
-pub use write_batch::HybridWriteBatchObserver;
+pub use write_batch::RegionCacheWriteBatchObserver;

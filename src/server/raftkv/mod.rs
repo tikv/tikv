@@ -631,6 +631,11 @@ where
             None
         };
         async_snapshot(&mut self.router, ctx, snap_ctx.clone()).map_ok(|region_snap| {
+            // TODO: Remove replace_snapshot. Taking a snapshot and replacing it
+            // with a new one is a bit confusing.
+            // A better way to build an in-memory snapshot is to return
+            // `HybridEngineSnapshot<RegionSnapshot<E>, RangeCacheMemoryEngine>>;`
+            // so the `replace_snapshot` can be removed.
             region_snap.replace_snapshot(move |disk_snap, pinned| {
                 HybridEngineSnapshot::from_observed_snapshot(disk_snap, pinned)
             })

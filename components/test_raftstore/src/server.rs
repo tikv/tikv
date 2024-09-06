@@ -20,7 +20,9 @@ use engine_traits::{Engines, MiscExt, SnapshotContext};
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
 use health_controller::HealthController;
-use hybrid_engine::observer::{EvictionObserver, HybridSnapshotObserver, HybridWriteBatchObserver};
+use hybrid_engine::observer::{
+    EvictionObserver, HybridSnapshotObserver, RegionCacheWriteBatchObserver,
+};
 use kvproto::{
     deadlock::create_deadlock,
     debugpb::{create_debug, DebugClient},
@@ -344,7 +346,7 @@ impl ServerCluster {
             observer.register_to(&mut coprocessor_host);
             // Write batch observer
             let write_batch_observer =
-                HybridWriteBatchObserver::new(in_memory_engine.range_cache_engine().clone());
+                RegionCacheWriteBatchObserver::new(in_memory_engine.range_cache_engine().clone());
             write_batch_observer.register_to(&mut coprocessor_host);
             // Snapshot observer
             let snapshot_observer =
