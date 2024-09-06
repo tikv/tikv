@@ -59,6 +59,10 @@ fn test_update_config() {
     let mut range_cache_config_change = HashMap::new();
     range_cache_config_change.insert("range_cache_engine.enabled".to_owned(), "true".to_owned());
     range_cache_config_change.insert(
+        "range_cache_engine.stop-load-limit-threshold".to_owned(),
+        "8GB".to_owned(),
+    );
+    range_cache_config_change.insert(
         "range_cache_engine.soft-limit-threshold".to_owned(),
         "10GB".to_owned(),
     );
@@ -68,6 +72,7 @@ fn test_update_config() {
     );
     cfg_controller.update(range_cache_config_change).unwrap();
     cfg.range_cache_engine.enabled = true;
+    cfg.range_cache_engine.stop_load_limit_threshold = Some(ReadableSize::gb(8));
     cfg.range_cache_engine.soft_limit_threshold = Some(ReadableSize::gb(10));
     cfg.range_cache_engine.hard_limit_threshold = Some(ReadableSize::gb(15));
     assert_eq!(cfg_controller.get_current(), cfg);

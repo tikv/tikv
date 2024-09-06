@@ -13,7 +13,7 @@ use raftstore::coprocessor::{
 use tikv_util::info;
 
 #[derive(Clone)]
-pub struct Observer {
+pub struct EvictionObserver {
     // observer is per thread so there is no need to use mutex here,
     // but current inteface only provides `&self` but not `&mut self`,
     // so we use mutex to workaround this restriction.
@@ -22,9 +22,9 @@ pub struct Observer {
     cache_engine: Arc<dyn RangeCacheEngineExt + Send + Sync>,
 }
 
-impl Observer {
+impl EvictionObserver {
     pub fn new(cache_engine: Arc<dyn RangeCacheEngineExt + Send + Sync>) -> Self {
-        Observer {
+        EvictionObserver {
             pending_events: Arc::default(),
             cache_engine,
         }
@@ -64,9 +64,6 @@ impl Observer {
         state: &RegionState,
         apply: &mut ApplyCtxInfo<'_>,
     ) {
-        if !self.cache_engine.range_cache_engine_enabled() {
-            return;
-        }
         // Evict caches for successfully executed ingest commands and admin
         // commands that change region range.
         //
@@ -124,10 +121,6 @@ impl Observer {
     }
 
     fn on_flush_cmd(&self) {
-        if !self.cache_engine.range_cache_engine_enabled() {
-            return;
-        }
-
         let events = std::mem::take(&mut *self.pending_events.lock().unwrap());
         for e in events {
             self.cache_engine.on_region_event(e);
@@ -135,10 +128,6 @@ impl Observer {
     }
 
     fn evict_region_range(&self, region: &Region, reason: EvictReason) {
-        if !self.cache_engine.range_cache_engine_enabled() {
-            return;
-        }
-
         let cache_region = CacheRegion::from_region(region);
         info!(
            "ime evict region";
@@ -156,9 +145,9 @@ impl Observer {
     }
 }
 
-impl Coprocessor for Observer {}
+impl Coprocessor for EvictionObserver {}
 
-impl QueryObserver for Observer {
+impl QueryObserver for EvictionObserver {
     fn post_exec_query(
         &self,
         ctx: &mut ObserverContext<'_>,
@@ -174,7 +163,7 @@ impl QueryObserver for Observer {
     }
 }
 
-impl AdminObserver for Observer {
+impl AdminObserver for EvictionObserver {
     fn post_exec_admin(
         &self,
         ctx: &mut ObserverContext<'_>,
@@ -190,7 +179,7 @@ impl AdminObserver for Observer {
     }
 }
 
-impl ApplySnapshotObserver for Observer {
+impl ApplySnapshotObserver for EvictionObserver {
     fn post_apply_snapshot(
         &self,
         ctx: &mut ObserverContext<'_>,
@@ -205,7 +194,7 @@ impl ApplySnapshotObserver for Observer {
     }
 }
 
-impl RoleObserver for Observer {
+impl RoleObserver for EvictionObserver {
     fn on_role_change(
         &self,
         ctx: &mut ObserverContext<'_>,
@@ -219,7 +208,7 @@ impl RoleObserver for Observer {
     }
 }
 
-impl<E> CmdObserver<E> for Observer {
+impl<E> CmdObserver<E> for EvictionObserver {
     fn on_flush_applied_cmd_batch(
         &self,
         _max_level: ObserveLevel,
@@ -233,8 +222,6 @@ impl<E> CmdObserver<E> for Observer {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, Ordering};
-
     use engine_traits::{RegionEvent, SstMetaInfo};
     use kvproto::{
         import_sstpb::SstMeta,
@@ -246,13 +233,9 @@ mod tests {
 
     #[derive(Default)]
     struct MockRangeCacheEngine {
-        enabled: AtomicBool,
         region_events: Arc<Mutex<Vec<RegionEvent>>>,
     }
     impl RangeCacheEngineExt for MockRangeCacheEngine {
-        fn range_cache_engine_enabled(&self) -> bool {
-            self.enabled.load(Ordering::Relaxed)
-        }
         fn on_region_event(&self, event: RegionEvent) {
             self.region_events.lock().unwrap().push(event);
         }
@@ -269,7 +252,7 @@ mod tests {
     #[test]
     fn test_do_not_evict_range_region_split() {
         let cache_engine = Arc::new(MockRangeCacheEngine::default());
-        let observer = Observer::new(cache_engine.clone());
+        let observer = EvictionObserver::new(cache_engine.clone());
 
         let mut region = Region::default();
         region.set_id(1);
@@ -290,9 +273,6 @@ mod tests {
         let cmd = Cmd::new(0, 0, request, response);
 
         // Must not evict range for region split.
-        //
-        // Enable range cache engine.
-        cache_engine.enabled.store(true, Ordering::Relaxed);
         observer.post_exec_cmd(&mut ctx, &cmd, &RegionState::default(), &mut apply);
         observer.on_flush_cmd();
         let expected = CacheRegion::from_region(&region);
@@ -302,7 +282,7 @@ mod tests {
     #[test]
     fn test_evict_range_ingest_sst() {
         let cache_engine = Arc::new(MockRangeCacheEngine::default());
-        let observer = Observer::new(cache_engine.clone());
+        let observer = EvictionObserver::new(cache_engine.clone());
 
         let mut region = Region::default();
         region.set_id(1);
@@ -329,13 +309,6 @@ mod tests {
         let response = RaftCmdResponse::default();
         let cmd = Cmd::new(0, 0, request, response);
 
-        // Must not evict range when range cache engine is disabled.
-        observer.post_exec_cmd(&mut ctx, &cmd, &RegionState::default(), &mut apply);
-        observer.on_flush_cmd();
-        assert!(cache_engine.region_events.lock().unwrap().is_empty());
-
-        // Enable range cache engine.
-        cache_engine.enabled.store(true, Ordering::Relaxed);
         observer.post_exec_cmd(&mut ctx, &cmd, &RegionState::default(), &mut apply);
         observer.on_flush_cmd();
         let cached_region = CacheRegion::from_region(&region);
