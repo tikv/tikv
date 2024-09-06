@@ -2959,6 +2959,8 @@ where
                     region_id: self.region_id(),
                     voter_replicated_index,
                     voter_replicated_term,
+                    applied_index: None,
+                    from_underlying_engine: false,
                 },
             )
         }
@@ -4297,8 +4299,10 @@ where
         let total_cnt = self.fsm.peer.last_applying_idx - first_index;
         // the size of current CompactLog command can be ignored.
         let remain_cnt = self.fsm.peer.last_applying_idx - state.get_index() - 1;
-        self.fsm.peer.raft_log_size_hint =
-            self.fsm.peer.raft_log_size_hint * remain_cnt / total_cnt;
+        if total_cnt != 0 {
+            self.fsm.peer.raft_log_size_hint =
+                self.fsm.peer.raft_log_size_hint * remain_cnt / total_cnt;
+        }
         let compact_to = state.get_index() + 1;
         self.fsm.peer.schedule_raftlog_gc(self.ctx, compact_to);
         self.fsm.peer.last_compacted_idx = compact_to;

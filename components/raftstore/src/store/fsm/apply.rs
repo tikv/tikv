@@ -1025,6 +1025,13 @@ where
     /// The counter of pending request snapshots. See more in `Peer`.
     pending_request_snapshot_count: Arc<AtomicUsize>,
 
+    /// Keep track of the max compact index from leader.
+    /// This index may not be exactly accurate, since a restart may have these
+    /// values set to 0. However, it can always be advanced, since
+    /// `CompactLog` will try to update it.
+    max_compact_index: u64,
+    max_compact_term: u64,
+
     /// Indicates the peer is in merging, if that compact log won't be
     /// performed.
     is_merging: bool,
@@ -1094,6 +1101,8 @@ where
             ready_source_region_id: 0,
             yield_state: None,
             wait_merge_state: None,
+            max_compact_index: 0,
+            max_compact_term: 0,
             is_merging: reg.is_merging,
             pending_cmds: PendingCmdQueue::new(),
             metrics: Default::default(),
@@ -1209,6 +1218,24 @@ where
             CF_RAFT,
             &keys::apply_state_key(self.region.get_id()),
             &self.apply_state,
+        )
+        .unwrap_or_else(|e| {
+            panic!(
+                "{} failed to save apply state to write batch, error: {:?}",
+                self.tag, e
+            );
+        });
+    }
+
+    fn write_apply_state_by_underlying_engine(
+        &self,
+        wb: &mut EK::WriteBatch,
+        apply_state: &RaftApplyState,
+    ) {
+        wb.put_msg_cf(
+            CF_RAFT,
+            &keys::apply_state_key(self.region.get_id()),
+            apply_state,
         )
         .unwrap_or_else(|e| {
             panic!(
@@ -1458,59 +1485,78 @@ where
         // E.g. `RaftApplyState` must not be changed.
 
         let mut origin_epoch = None;
-        let (resp, exec_result) = if ctx.host.pre_exec(&self.region, &req, index, term) {
-            // One of the observers want to filter execution of the command.
-            let mut resp = RaftCmdResponse::default();
-            if !req.get_header().get_uuid().is_empty() {
-                let uuid = req.get_header().get_uuid().to_vec();
-                resp.mut_header().set_uuid(uuid);
-            }
-            (resp, ApplyResult::None)
-        } else {
-            ctx.exec_log_index = index;
-            ctx.exec_log_term = term;
-            ctx.kv_wb_mut().set_save_point();
-            let (resp, exec_result) = match self.exec_raft_cmd(ctx, &req) {
-                Ok(a) => {
-                    ctx.kv_wb_mut().pop_save_point().unwrap();
-                    if req.has_admin_request() {
-                        origin_epoch = Some(self.region.get_region_epoch().clone());
-                    }
-                    a
+        let (resp, exec_result) =
+            if ctx
+                .host
+                .pre_exec(&self.region, &req, index, term, &self.apply_state)
+            {
+                // One of the observers want to filter execution of the command.
+                let mut resp = RaftCmdResponse::default();
+                if !req.get_header().get_uuid().is_empty() {
+                    let uuid = req.get_header().get_uuid().to_vec();
+                    resp.mut_header().set_uuid(uuid);
                 }
-                Err(e) => {
-                    // clear dirty values.
-                    ctx.kv_wb_mut().rollback_to_save_point().unwrap();
-                    match e {
-                        Error::EpochNotMatch(..) => debug!(
-                            "epoch not match";
-                            "region_id" => self.region_id(),
-                            "peer_id" => self.id(),
-                            "err" => ?e
-                        ),
-                        Error::FlashbackInProgress(..) => debug!(
-                            "flashback is in process";
-                            "region_id" => self.region_id(),
-                            "peer_id" => self.id(),
-                            "err" => ?e
-                        ),
-                        Error::FlashbackNotPrepared(..) => debug!(
-                            "flashback is not prepared";
-                            "region_id" => self.region_id(),
-                            "peer_id" => self.id(),
-                            "err" => ?e
-                        ),
-                        _ => error!(?e;
-                            "execute raft command";
-                            "region_id" => self.region_id(),
-                            "peer_id" => self.id(),
-                        ),
+                if req.has_admin_request() {
+                    let request = req.get_admin_request();
+                    // Filtering a CompactLog cmd means the underlying engine has not persisted to
+                    // `compact_index` yet.
+                    // We will keep track of the index so later we can try to compact to a index not
+                    // greater than `max_compact_index`.
+                    if request.get_cmd_type() == AdminCmdType::CompactLog {
+                        let compact_index = request.get_compact_log().get_compact_index();
+                        let compact_term = request.get_compact_log().get_compact_term();
+                        if compact_index > self.max_compact_index {
+                            self.max_compact_index = compact_index;
+                            self.max_compact_term = compact_term;
+                        }
                     }
-                    (cmd_resp::new_error(e), ApplyResult::None)
                 }
+                (resp, ApplyResult::None)
+            } else {
+                ctx.exec_log_index = index;
+                ctx.exec_log_term = term;
+                ctx.kv_wb_mut().set_save_point();
+                let (resp, exec_result) = match self.exec_raft_cmd(ctx, &req) {
+                    Ok(a) => {
+                        ctx.kv_wb_mut().pop_save_point().unwrap();
+                        if req.has_admin_request() {
+                            origin_epoch = Some(self.region.get_region_epoch().clone());
+                        }
+                        a
+                    }
+                    Err(e) => {
+                        // clear dirty values.
+                        ctx.kv_wb_mut().rollback_to_save_point().unwrap();
+                        match e {
+                            Error::EpochNotMatch(..) => debug!(
+                                "epoch not match";
+                                "region_id" => self.region_id(),
+                                "peer_id" => self.id(),
+                                "err" => ?e
+                            ),
+                            Error::FlashbackInProgress(..) => debug!(
+                                "flashback is in process";
+                                "region_id" => self.region_id(),
+                                "peer_id" => self.id(),
+                                "err" => ?e
+                            ),
+                            Error::FlashbackNotPrepared(..) => debug!(
+                                "flashback is not prepared";
+                                "region_id" => self.region_id(),
+                                "peer_id" => self.id(),
+                                "err" => ?e
+                            ),
+                            _ => error!(?e;
+                                "execute raft command";
+                                "region_id" => self.region_id(),
+                                "peer_id" => self.id(),
+                            ),
+                        }
+                        (cmd_resp::new_error(e), ApplyResult::None)
+                    }
+                };
+                (resp, exec_result)
             };
-            (resp, exec_result)
-        };
 
         let cmd = Cmd::new(index, term, req, resp);
         if let ApplyResult::WaitMergeSource(_) = exec_result {
@@ -3082,6 +3128,7 @@ where
         &mut self,
         voter_replicated_index: u64,
         voter_replicated_term: u64,
+        from_underlying_engine: bool,
     ) -> Result<(bool, Option<ExecResult<EK::Snapshot>>)> {
         PEER_ADMIN_CMD_COUNTER.compact.all.inc();
         let first_index = entry_storage::first_index(&self.apply_state);
@@ -3094,6 +3141,43 @@ where
                 "voter_replicated_index" => voter_replicated_index,
             );
             return Ok((false, None));
+        }
+
+        if from_underlying_engine {
+            let mut compact_index = voter_replicated_index;
+            // `compact_index` is reported by underlying engine, it may be greater than the
+            // recorded `max_compact_index`. We will use the smaller one of this
+            // two.
+            let mut compact_term = voter_replicated_term;
+            if compact_index > self.max_compact_index {
+                compact_index = self.max_compact_index;
+                compact_term = self.max_compact_term;
+            }
+            if compact_index < first_index {
+                debug!(
+                    "compact_index < first index, no need to compact";
+                    "region_id" => self.region_id(),
+                    "peer_id" => self.id(),
+                    "compact_index" => compact_index,
+                    "first_index" => first_index,
+                );
+                return Ok((false, Some(ExecResult::HasPendingCompactCmd(false))));
+            }
+            compact_raft_log(
+                &self.tag,
+                &mut self.apply_state,
+                compact_index,
+                compact_term,
+            )?;
+            PEER_ADMIN_CMD_COUNTER.compact.success.inc();
+            return Ok((
+                true,
+                Some(ExecResult::CompactLog {
+                    state: self.apply_state.get_truncated_state().clone(),
+                    first_index,
+                    has_pending: false,
+                }),
+            ));
         }
 
         // When the witness restarted, the pending compact cmd has been lost, so use
@@ -3227,6 +3311,25 @@ where
                     cmd.cb.take().unwrap();
                 }
             }
+        }
+
+        // Safety: compact index is monotonicly increased guarded by `compact_raft_log`
+        // and `entry_storage::first_index`.
+        if compact_index > self.max_compact_index {
+            self.max_compact_index = compact_index;
+            self.max_compact_term = compact_term;
+        }
+
+        if compact_index < first_index {
+            debug!(
+                "compact index < first index, no need to compact";
+                "region_id" => self.region_id(),
+                "peer_id" => self.id(),
+                "compact_index" => compact_index,
+                "first_index" => first_index,
+                "leader compact index" => req.get_compact_log().get_compact_index(),
+            );
+            return Ok((resp, ApplyResult::None));
         }
         // compact failure is safe to be omitted, no need to assert.
         compact_raft_log(
@@ -3801,6 +3904,8 @@ where
         region_id: u64,
         voter_replicated_index: u64,
         voter_replicated_term: u64,
+        applied_index: Option<u64>,
+        from_underlying_engine: bool,
     },
     UnsafeForceCompact {
         region_id: u64,
@@ -3890,11 +3995,17 @@ where
                 region_id,
                 voter_replicated_index,
                 voter_replicated_term,
+                applied_index,
+                from_underlying_engine,
             } => {
                 write!(
                     f,
-                    "[region {}] check compact, voter_replicated_index: {}, voter_replicated_term: {}",
-                    region_id, voter_replicated_index, voter_replicated_term
+                    "[region {}] check compact, voter_replicated_index: {}, voter_replicated_term: {}, applied_index: {:?}, from_underlying_engine {}",
+                    region_id,
+                    voter_replicated_index,
+                    voter_replicated_term,
+                    applied_index,
+                    from_underlying_engine
                 )
             }
             Msg::UnsafeForceCompact {
@@ -4368,14 +4479,18 @@ where
         ctx: &mut ApplyContext<EK>,
         voter_replicated_index: u64,
         voter_replicated_term: u64,
+        maybe_applied_index: Option<u64>,
+        from_underlying_engine: bool,
     ) {
         if self.delegate.pending_remove || self.delegate.stopped {
             return;
         }
 
-        let res = self
-            .delegate
-            .try_compact_log(voter_replicated_index, voter_replicated_term);
+        let res = self.delegate.try_compact_log(
+            voter_replicated_index,
+            voter_replicated_term,
+            from_underlying_engine,
+        );
         match res {
             Ok((should_write, res)) => {
                 if let Some(res) = res {
@@ -4386,8 +4501,25 @@ where
                     let mut result = VecDeque::new();
                     // If modified `truncated_state` in `try_compact_log`, the apply state should be
                     // persisted.
+                    ctx.host.post_compact_log_from_underlying_engine(
+                        self.delegate.region.get_id(),
+                        should_write,
+                        voter_replicated_index,
+                        voter_replicated_term,
+                        self.delegate.max_compact_index,
+                        self.delegate.max_compact_term,
+                        maybe_applied_index.unwrap_or(0),
+                        self.delegate.apply_state.get_applied_index(),
+                    );
                     if should_write {
-                        self.delegate.write_apply_state(ctx.kv_wb_mut());
+                        if let Some(underlying_engine_applied) = maybe_applied_index.as_ref() {
+                            let mut state = self.delegate.apply_state.clone();
+                            state.set_applied_index(*underlying_engine_applied);
+                            self.delegate
+                                .write_apply_state_by_underlying_engine(ctx.kv_wb_mut(), &state);
+                        } else {
+                            self.delegate.write_apply_state(ctx.kv_wb_mut());
+                        };
                         ctx.commit_opt(&mut self.delegate, true);
                     }
                     result.push_back(res);
@@ -4507,12 +4639,16 @@ where
                 Msg::CheckCompact {
                     voter_replicated_index,
                     voter_replicated_term,
+                    applied_index,
+                    from_underlying_engine,
                     ..
                 } => {
                     self.check_pending_compact_log(
                         apply_ctx,
                         voter_replicated_index,
                         voter_replicated_term,
+                        applied_index,
+                        from_underlying_engine,
                     );
                 }
                 Msg::UnsafeForceCompact {
@@ -5979,6 +6115,7 @@ mod tests {
             req: &AdminRequest,
             _: u64,
             _: u64,
+            _: &RaftApplyState,
         ) -> bool {
             let cmd_type = req.get_cmd_type();
             if cmd_type == AdminCmdType::CompactLog

@@ -118,6 +118,7 @@ pub trait AdminObserver: Coprocessor {
         _: &AdminRequest,
         _: u64,
         _: u64,
+        _: &RaftApplyState,
     ) -> bool {
         false
     }
@@ -166,7 +167,14 @@ pub trait QueryObserver: Coprocessor {
 
     /// Hook before exec write request, returns whether we should skip this
     /// write.
-    fn pre_exec_query(&self, _: &mut ObserverContext<'_>, _: &[Request], _: u64, _: u64) -> bool {
+    fn pre_exec_query(
+        &self,
+        _: &mut ObserverContext<'_>,
+        _: &[Request],
+        _: u64,
+        _: u64,
+        _: &RaftApplyState,
+    ) -> bool {
         false
     }
 
@@ -351,6 +359,19 @@ pub trait RegionChangeObserver: Coprocessor {
     /// this write.
     fn pre_write_apply_state(&self, _: &mut ObserverContext<'_>) -> bool {
         true
+    }
+
+    fn post_compact_log_from_underlying_engine(
+        &self,
+        _region_id: u64,
+        _do_write: bool,
+        _compact_index: u64,
+        _compact_term: u64,
+        _max_compact_index: u64,
+        _max_compact_term: u64,
+        _request_applied_index: u64,
+        _raftstore_applied_index: u64,
+    ) {
     }
 }
 pub trait RegionHeartbeatObserver: Coprocessor {
