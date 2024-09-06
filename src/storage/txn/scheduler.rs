@@ -284,7 +284,7 @@ struct TxnSchedulerInner<L: LockManager> {
     resource_manager: Option<Arc<ResourceGroupManager>>,
     feature_gate: FeatureGate,
 
-    txn_status_cache: TxnStatusCache,
+    txn_status_cache: Arc<TxnStatusCache>,
 
     memory_quota: Arc<MemoryQuota>,
 }
@@ -442,6 +442,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         feature_gate: FeatureGate,
         resource_ctl: Option<Arc<ResourceController>>,
         resource_manager: Option<Arc<ResourceGroupManager>>,
+        txn_status_cache: Arc<TxnStatusCache>,
     ) -> Self {
         let t = Instant::now_coarse();
         let mut task_slots = Vec::with_capacity(TASKS_SLOTS_NUM);
@@ -479,7 +480,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             quota_limiter,
             resource_manager,
             feature_gate,
-            txn_status_cache: TxnStatusCache::new(config.txn_status_cache_capacity),
+            txn_status_cache,
             memory_quota: Arc::new(MemoryQuota::new(config.memory_quota.0 as _)),
         });
 
@@ -1302,7 +1303,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 statistics: &mut sched_details.stat,
                 async_apply_prewrite: txn_scheduler.inner.enable_async_apply_prewrite,
                 raw_ext,
-                txn_status_cache: &txn_scheduler.inner.txn_status_cache,
+                txn_status_cache: txn_scheduler.inner.txn_status_cache.clone(),
             };
             let begin_instant = Instant::now();
             let res = unsafe {
@@ -2242,6 +2243,7 @@ mod tests {
                 latest_feature_gate(),
                 Some(controller),
                 Some(resource_manager),
+                Arc::new(TxnStatusCache::new_for_test()),
             ),
             engine,
         )
@@ -2592,6 +2594,7 @@ mod tests {
             feature_gate.clone(),
             Some(controller),
             Some(resource_manager),
+            Arc::new(TxnStatusCache::new_for_test()),
         );
         // Use sync mode if pipelined_pessimistic_lock is false.
         assert_eq!(scheduler.pessimistic_lock_mode(), PessimisticLockMode::Sync);

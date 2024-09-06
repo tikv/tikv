@@ -346,7 +346,7 @@ impl TxnStatusCache {
         )
     }
 
-    #[cfg(test)]
+    // Not #[cfg(test)]: needed for integration tests in separate files
     pub fn new_for_test() -> Self {
         // 1M capacity should be enough for tests.
         Self::with_slots_and_time_limit(

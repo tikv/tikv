@@ -217,7 +217,7 @@ impl Flush {
 
 #[cfg(test)]
 mod tests {
-    use std::assert_matches::assert_matches;
+    use std::{assert_matches::assert_matches, sync::Arc};
 
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::{Assertion, AssertionLevel, Context, ExtraOp};
@@ -300,7 +300,7 @@ mod tests {
             statistics: &mut statistics,
             async_apply_prewrite: false,
             raw_ext: None,
-            txn_status_cache: &TxnStatusCache::new_for_test(),
+            txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
         };
         let snapshot = engine.snapshot(Default::default()).unwrap();
         cmd.cmd.process_write(snapshot.clone(), context)

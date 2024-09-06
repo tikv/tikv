@@ -1395,6 +1395,13 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     let resp = std::future::ready(Ok(GetHealthFeedbackResponse::default()).map(oneof!(batch_commands_response::response::Cmd::GetHealthFeedback)));
                     response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::get_health_feedback, source, ResourcePriority::unknown);
                 },
+                Some(batch_commands_request::request::Cmd::BroadcastTxnStatus(req)) => {
+                    handle_cluster_id_mismatch!(cluster_id, req);
+                    let begin_instant = Instant::now();
+                    let source = req.get_context().get_request_source().to_owned();
+
+                    todo!("update cache and respond")
+                }
                 Some(batch_commands_request::request::Cmd::Empty(req)) => {
                     let begin_instant = Instant::now();
                     let resp = future_handle_empty(req)
