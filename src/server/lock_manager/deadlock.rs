@@ -454,6 +454,10 @@ impl DetectTable {
         new_lock_ts: TimeStamp,
     ) -> Vec<(TimeStamp, u64, Vec<u8>, Vec<WaitForEntry>, Vec<u8>)> {
         if old_lock_ts == new_lock_ts {
+            // It's theoretically possible that a transaction releases a lock and then
+            // acquires it again, e.g., a pessimistic transaction performs a
+            // statement retry. From a waiter's perspective, the lock-holding transaction
+            // didn't change, so nothing to do.
             return vec![];
         }
         if key.is_empty() {
