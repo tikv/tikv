@@ -715,9 +715,9 @@ checksum = "7f30e7476521f6f8af1a1c4c0b8cc94f0bee37d91763d0ca2665f299b6cd8aec"
 
 [[package]]
 name = "bytemuck"
-version = "1.17.1"
+version = "1.16.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "773d90827bc3feecfb67fab12e24de0749aad83c74b9504ecde46237b5cd24e2"
+checksum = "102087e286b4677862ea56cf8fc58bb2cdfa8725c40ffb80fe3a008eb7f2fc83"
 
 [[package]]
 name = "byteorder"
@@ -2916,7 +2916,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#224bed6ffa29ba3bbe9a91ef6bda7186200c59a8"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c92c467a3ab0b60484a0db83fcf89366791716cd"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -2935,7 +2935,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#224bed6ffa29ba3bbe9a91ef6bda7186200c59a8"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c92c467a3ab0b60484a0db83fcf89366791716cd"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4818,7 +4818,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#224bed6ffa29ba3bbe9a91ef6bda7186200c59a8"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c92c467a3ab0b60484a0db83fcf89366791716cd"
 dependencies = [
  "libc 0.2.151",
  "librocksdb_sys",
@@ -4827,7 +4827,7 @@ dependencies = [
 [[package]]
 name = "rusoto_core"
 version = "0.46.0"
-source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#cc733208600bdb15a13940d6930c1fbd4ab604f2"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#2b142c1792062a7a3a8317610d78dd141ab4223d"
 dependencies = [
  "async-trait",
  "base64 0.13.0",
@@ -4851,7 +4851,7 @@ dependencies = [
 [[package]]
 name = "rusoto_credential"
 version = "0.46.0"
-source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#cc733208600bdb15a13940d6930c1fbd4ab604f2"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#2b142c1792062a7a3a8317610d78dd141ab4223d"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4868,7 +4868,7 @@ dependencies = [
 [[package]]
 name = "rusoto_kms"
 version = "0.46.0"
-source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#cc733208600bdb15a13940d6930c1fbd4ab604f2"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#2b142c1792062a7a3a8317610d78dd141ab4223d"
 dependencies = [
  "async-trait",
  "bytes",
@@ -4881,7 +4881,7 @@ dependencies = [
 [[package]]
 name = "rusoto_mock"
 version = "0.46.0"
-source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#cc733208600bdb15a13940d6930c1fbd4ab604f2"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#2b142c1792062a7a3a8317610d78dd141ab4223d"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4895,7 +4895,7 @@ dependencies = [
 [[package]]
 name = "rusoto_s3"
 version = "0.46.0"
-source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#cc733208600bdb15a13940d6930c1fbd4ab604f2"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#2b142c1792062a7a3a8317610d78dd141ab4223d"
 dependencies = [
  "async-trait",
  "bytes",
@@ -4909,7 +4909,7 @@ dependencies = [
 [[package]]
 name = "rusoto_signature"
 version = "0.46.0"
-source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#cc733208600bdb15a13940d6930c1fbd4ab604f2"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#2b142c1792062a7a3a8317610d78dd141ab4223d"
 dependencies = [
  "base64 0.13.0",
  "bytes",
@@ -4931,7 +4931,7 @@ dependencies = [
 [[package]]
 name = "rusoto_sts"
 version = "0.46.0"
-source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#cc733208600bdb15a13940d6930c1fbd4ab604f2"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#2b142c1792062a7a3a8317610d78dd141ab4223d"
 dependencies = [
  "async-trait",
  "bytes",
