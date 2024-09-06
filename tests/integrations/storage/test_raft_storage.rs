@@ -8,7 +8,6 @@ use std::{
 
 use api_version::{ApiV1, KvFormat};
 use collections::HashMap;
-use engine_rocks::RocksEngine;
 use error_code::{raftstore::STALE_COMMAND, ErrorCodeExt};
 use kvproto::kvrpcpb::Context;
 use test_raftstore::*;
@@ -26,8 +25,8 @@ use tikv_util::HandyRwLock;
 use txn_types::{Key, Mutation, TimeStamp};
 
 fn new_raft_storage() -> (
-    Cluster<RocksEngine, ServerCluster<RocksEngine>>,
-    SyncTestStorageApiV1<SimulateEngine<RocksEngine>>,
+    Cluster<ServerCluster>,
+    SyncTestStorageApiV1<SimulateEngine>,
     Context,
 ) {
     new_raft_storage_with_store_count::<ApiV1>(1, "")
@@ -235,7 +234,7 @@ fn write_test_data<E: Engine, F: KvFormat>(
 }
 
 fn check_data<E: Engine, F: KvFormat>(
-    cluster: &mut Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    cluster: &mut Cluster<ServerCluster>,
     storages: &HashMap<u64, SyncTestStorage<E, F>>,
     test_data: &[(Vec<u8>, Vec<u8>)],
     ts: impl Into<TimeStamp>,

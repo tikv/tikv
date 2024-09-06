@@ -50,6 +50,40 @@ where
     }
 }
 
+pub fn new_in_memory_snapshot<EC: RangeCacheEngine>(
+    range_cache_engine: &EC,
+    ctx: SnapshotContext,
+    sequence_number: u64,
+) -> Option<EC::Snapshot> {
+    match range_cache_engine.snapshot(ctx.region.unwrap(), ctx.read_ts, sequence_number) {
+        Ok(snap) => {
+            SNAPSHOT_TYPE_COUNT_STATIC.range_cache_engine.inc();
+            Some(snap)
+        }
+        Err(FailedReason::TooOldRead) => {
+            RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
+                .too_old_read
+                .inc();
+            SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
+            None
+        }
+        Err(FailedReason::NotCached) => {
+            RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
+                .not_cached
+                .inc();
+            SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
+            None
+        }
+        Err(FailedReason::EpochNotMatch) => {
+            RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
+                .epoch_not_match
+                .inc();
+            SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
+            None
+        }
+    }
+}
+
 impl<EK, EC> HybridEngine<EK, EC>
 where
     EK: KvEngine,
@@ -97,43 +131,14 @@ where
         let range_cache_snap = if !self.range_cache_engine.enabled() {
             None
         } else if let Some(ctx) = ctx {
-            match self.range_cache_engine.snapshot(
-                ctx.region.unwrap(),
-                ctx.read_ts,
-                disk_snap.sequence_number(),
-            ) {
-                Ok(snap) => {
-                    SNAPSHOT_TYPE_COUNT_STATIC.range_cache_engine.inc();
-                    Some(snap)
-                }
-                Err(FailedReason::TooOldRead) => {
-                    RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
-                        .too_old_read
-                        .inc();
-                    None
-                }
-                Err(FailedReason::NotCached) => {
-                    RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
-                        .not_cached
-                        .inc();
-                    None
-                }
-                Err(FailedReason::EpochNotMatch) => {
-                    RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
-                        .epoch_not_match
-                        .inc();
-                    None
-                }
-            }
+            new_in_memory_snapshot(&self.range_cache_engine, ctx, disk_snap.sequence_number())
         } else {
             RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
                 .no_read_ts
                 .inc();
+            SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
             None
         };
-        if range_cache_snap.is_none() {
-            SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
-        }
         HybridEngineSnapshot::new(disk_snap, range_cache_snap)
     }
 

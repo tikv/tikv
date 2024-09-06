@@ -2,10 +2,11 @@
 
 // #[PerformanceCriticalPath]
 use std::{
+    fmt,
     num::NonZeroU64,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc,
+        Arc, Mutex,
     },
 };
 
@@ -23,6 +24,7 @@ use tikv_util::{
 };
 
 use crate::{
+    coprocessor::ObservedSnapshot,
     store::{util, PeerStorage, TxnExt},
     Error, Result,
 };
@@ -30,7 +32,6 @@ use crate::{
 /// Snapshot of a region.
 ///
 /// Only data within a region can be accessed.
-#[derive(Debug)]
 pub struct RegionSnapshot<S: Snapshot> {
     snap: Arc<S>,
     region: Arc<Region>,
@@ -41,6 +42,22 @@ pub struct RegionSnapshot<S: Snapshot> {
     // `None` means the snapshot does not provide peer related transaction extensions.
     pub txn_ext: Option<Arc<TxnExt>>,
     pub bucket_meta: Option<Arc<BucketMeta>>,
+
+    observed_snap: Option<Arc<Mutex<Option<Box<dyn ObservedSnapshot>>>>>,
+}
+
+impl<S: Snapshot> fmt::Debug for RegionSnapshot<S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RegionSnapshot")
+            .field("region", &self.region)
+            .field("apply_index", &self.apply_index)
+            .field("from_v2", &self.from_v2)
+            .field("term", &self.term)
+            .field("txn_extra_op", &self.txn_extra_op)
+            .field("txn_ext", &self.txn_ext)
+            .field("bucket_meta", &self.bucket_meta)
+            .finish()
+    }
 }
 
 impl<S> RegionSnapshot<S>
@@ -74,6 +91,43 @@ where
             txn_extra_op: TxnExtraOp::Noop,
             txn_ext: None,
             bucket_meta: None,
+            observed_snap: None,
+        }
+    }
+
+    pub fn set_observed_snapshot(&mut self, observed_snap: Box<dyn ObservedSnapshot>) {
+        self.observed_snap = Some(Arc::new(Mutex::new(Some(observed_snap))));
+    }
+
+    /// Replace underlying snapshot with its observed snapshot.
+    ///
+    /// One use case is to allow callers to build a `RegionSnapshot` with an
+    /// optimized snapshot. See RaftKv::async_in_memory_snapshot for an example.
+    ///
+    /// # Panics
+    ///
+    /// It panics, if it has been cloned before this calling `replace_snapshot`
+    /// or if `snap_fn` panics, the panic is propagated to the caller.
+    pub fn replace_snapshot<Sp, F>(mut self, snap_fn: F) -> RegionSnapshot<Sp>
+    where
+        Sp: Snapshot,
+        F: FnOnce(S, Option<Box<dyn ObservedSnapshot>>) -> Sp,
+    {
+        let mut observed = None;
+        if let Some(observed_snap) = self.observed_snap.take() {
+            observed = observed_snap.lock().unwrap().take();
+        }
+        let inner = Arc::into_inner(self.snap).unwrap();
+        RegionSnapshot {
+            snap: Arc::new(snap_fn(inner, observed)),
+            region: self.region,
+            apply_index: self.apply_index,
+            from_v2: self.from_v2,
+            term: self.term,
+            txn_extra_op: self.txn_extra_op,
+            txn_ext: self.txn_ext,
+            bucket_meta: self.bucket_meta,
+            observed_snap: None,
         }
     }
 
@@ -196,6 +250,7 @@ where
             txn_extra_op: self.txn_extra_op,
             txn_ext: self.txn_ext.clone(),
             bucket_meta: self.bucket_meta.clone(),
+            observed_snap: self.observed_snap.clone(),
         }
     }
 }

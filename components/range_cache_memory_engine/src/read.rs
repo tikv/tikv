@@ -524,6 +524,7 @@ impl Iterator for RangeCacheIterator {
     }
 
     fn seek(&mut self, key: &[u8]) -> Result<bool> {
+        fail::fail_point!("on_range_cache_iterator_seek");
         let begin = Instant::now();
         self.direction = Direction::Forward;
         if let Some(ref mut extractor) = self.prefix_extractor {
