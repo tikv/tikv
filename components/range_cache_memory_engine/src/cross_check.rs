@@ -89,7 +89,7 @@ impl CrossChecker {
             let mem_valid = mem_iter.seek_to_first().unwrap();
             let disk_valid = disk_iter.seek_to_first().unwrap();
             if !mem_valid {
-                // There's no key in IME, we should check whehter the rocks engine has no key
+                // There's no key in IME, we should check whether the rocks engine has no key
                 // visible to user with read_ts `safe_point`.
                 let mut last_disk_user_key = vec![];
                 let mut last_disk_user_key_delete = false;
@@ -166,7 +166,7 @@ impl CrossChecker {
                 // Safe point: 6
                 // IME:   k1-7, k1-5,       k1-2
                 // Rocks: k1-7, k1-5, k1-3, k1-2
-                // where k1-3 is gced but k1-2 is not. It's safe becase safe point is 6 and we
+                // where k1-3 is GCed but k1-2 is not. It's safe because safe point is 6 and we
                 // have k1-5 so both k1-3 and k1-2 are not visible.
                 // So we record last_mvcc_before_safe_point_of_cur_user_key = 5 and we reject
                 // any version of this user key with mvcc between 5 and safe point 6.
@@ -305,11 +305,11 @@ impl CrossChecker {
         );
     }
 
-    // In-memory engine may have gced some versions, so we should call next of
+    // In-memory engine may have GCed some versions, so we should call next of
     // disk_iter for some times to get aligned with mem_iter.
     // After each call of disk_iter, we will check whether the key missed in the
     // in-memory engine will not make it compromise data consistency.
-    // `next_fisrt` denotes whether disk_iter should call next before comparison.
+    // `next_first` denotes whether disk_iter should call next before comparison.
     #[allow(clippy::collapsible_if)]
     fn check_with_key_in_disk_iter(
         cf: &str,
@@ -427,7 +427,7 @@ impl CrossChecker {
                                     let core = engine.core().read();
                                     let meta =
                                         core.range_manager().region_meta(cached_region.id).unwrap();
-                                    // region may have been splited
+                                    // region might have split
                                     if meta.get_region() != cached_region {
                                         return false;
                                     }
@@ -461,7 +461,7 @@ impl CrossChecker {
                         // If we see [k1-10, k1-8, k1-4, k1-3] in the in-memory engine, and we
                         // record the last_mvcc_version_before_safe_point be 4. When we see k1-5
                         // in rocksdb, we have this version 5 which is between 6 and 4 which
-                        // denotes we have gced a version that should not be gced.
+                        // denotes we have GCed a version that should not be GCed.
                         if disk_mvcc < *safe_point
                             && disk_mvcc > cur_key_info.last_mvcc_version_before_safe_point
                             && (write.write_type != WriteType::Rollback
@@ -486,7 +486,7 @@ impl CrossChecker {
                     *safe_point = {
                         let core = engine.core().read();
                         let meta = core.range_manager().region_meta(cached_region.id).unwrap();
-                        // region may have been splited
+                        // region might have split
                         if meta.get_region() != cached_region {
                             return false;
                         }
@@ -579,7 +579,7 @@ impl CrossChecker {
                 *safe_point = {
                     let core = engine.core().read();
                     let meta = core.range_manager().region_meta(cached_region.id).unwrap();
-                    // region may have been splited
+                    // region might have split
                     if meta.get_region() != cached_region {
                         return false;
                     }
@@ -671,7 +671,7 @@ impl CrossChecker {
             // IME:  k1-9,              [k2-9]
             // Rocks:k1-9, k1-5, [k1-3], k2-9
             // Safe point: 6
-            // In thias case, k1-5 must be MVCC delete.
+            // In this case, k1-5 must be MVCC delete.
             // So when disk points to k1-5 we set last_disk_user_key_delete be
             // true so that when we check k1-3 we can know it is deleted
             // legally.
@@ -679,7 +679,7 @@ impl CrossChecker {
                 *safe_point = {
                     let core = engine.core().read();
                     let meta = core.range_manager().region_meta(cached_region.id).unwrap();
-                    // region may have been splited
+                    // region might have split
                     if meta.get_region() != cached_region {
                         return false;
                     }
