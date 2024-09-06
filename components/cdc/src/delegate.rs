@@ -605,7 +605,7 @@ impl Delegate {
                     }
                     decode_default(default.1, &mut row, &mut _has_value);
                     row.old_value = old_value.finalized().unwrap_or_default();
-                    row_size = row.key.len() + row.value.len();
+                    row_size = row.key.len() + row.value.len() + row.old_value.len();
                 }
                 Some(KvEntry::TxnEntry(TxnEntry::Commit {
                     default,
@@ -633,7 +633,7 @@ impl Delegate {
                     }
                     set_event_row_type(&mut row, EventLogType::Committed);
                     row.old_value = old_value.finalized().unwrap_or_default();
-                    row_size = row.key.len() + row.value.len();
+                    row_size = row.key.len() + row.value.len() + row.old_value.len();
                 }
                 None => {
                     // This type means scan has finished.
@@ -1253,7 +1253,7 @@ mod tests {
         let region_epoch = region.get_region_epoch().clone();
 
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
-        let (sink, mut drain) = crate::channel::channel(1, quota);
+        let (sink, mut drain) = channel(ConnId::default(), 1, quota);
         let rx = drain.drain();
         let request_id = 123;
         let mut downstream = Downstream::new(
@@ -1555,11 +1555,12 @@ mod tests {
         }
         assert_eq!(map.len(), 5);
 
-        let (sink, mut drain) = channel(1, Arc::new(MemoryQuota::new(1024)));
+        let conn_id = ConnId::default();
+        let (sink, mut drain) = channel(conn_id, 1, Arc::new(MemoryQuota::new(1024)));
         let downstream = Downstream {
             id: DownstreamId::new(),
             req_id: 1,
-            conn_id: ConnId::new(),
+            conn_id,
             peer: String::new(),
             region_epoch: RegionEpoch::default(),
             sink: Some(sink),
@@ -1630,11 +1631,12 @@ mod tests {
         }
         assert_eq!(map.len(), 5);
 
-        let (sink, mut drain) = channel(1, Arc::new(MemoryQuota::new(1024)));
+        let conn_id = ConnId::default();
+        let (sink, mut drain) = channel(conn_id, 1, Arc::new(MemoryQuota::new(1024)));
         let downstream = Downstream {
             id: DownstreamId::new(),
             req_id: 1,
-            conn_id: ConnId::new(),
+            conn_id,
             peer: String::new(),
             region_epoch: RegionEpoch::default(),
             sink: Some(sink),
