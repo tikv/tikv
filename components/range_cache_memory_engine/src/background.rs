@@ -41,7 +41,8 @@ use crate::{
     range_manager::{AsyncFnOnce, CacheRegionMeta, RegionState},
     range_stats::{RangeStatsManager, DEFAULT_EVICT_MIN_DURATION},
     region_label::{
-        LabelRule, RegionLabelChangedCallback, RegionLabelRulesManager, RegionLabelServiceBuilder,
+        KeyRangeRule, LabelRule, RegionLabelChangedCallback, RegionLabelRulesManager,
+        RegionLabelServiceBuilder,
     },
     write_batch::RangeCacheWriteBatchEntry,
 };
@@ -149,6 +150,7 @@ impl From<Arc<RpcClient>> for PdRangeHintService {
 
 const CACHE_LABEL_RULE_KEY: &str = "cache";
 const CACHE_LABEL_RULE_ALWAYS: &str = "always";
+const CACHE_LABEL_RULE_INDEX: &str = "index";
 
 /// This implementation starts a background task using to pull down region label
 /// rules from PD.
@@ -165,29 +167,19 @@ impl PdRangeHintService {
         F: Fn(&CacheRegion, bool) + Send + Sync + 'static,
     {
         let pd_client = self.0.clone();
-        let region_label_changed_cb: RegionLabelChangedCallback = Arc::new(
-            move |label_rule: &LabelRule, is_add: bool| {
-                if !label_rule
-                    .labels
-                    .iter()
-                    .any(|e| e.key == CACHE_LABEL_RULE_KEY && e.value == CACHE_LABEL_RULE_ALWAYS)
-                {
-                    // not related to caching, skip.
+        let region_label_changed_cb: RegionLabelChangedCallback =
+            Arc::new(move |label_rule: &LabelRule, is_add: bool| {
+                let Some(ranges) = Self::parse_label_rule(label_rule) else {
                     return;
+                };
+                for r in ranges {
+                    info!("ime requested to manual load range";
+                        "is_add" => is_add,
+                        "range" => ?r);
+                    range_manager_load_cb(&r, is_add);
                 }
-                for key_range in &label_rule.data {
-                    match CacheRegion::try_from(key_range) {
-                        Ok(cache_range) => {
-                            info!("ime requested to cache range"; "range" => ?&cache_range);
-                            range_manager_load_cb(&cache_range, is_add);
-                        }
-                        Err(e) => {
-                            error!("ime unable to convert key_range rule to cache range"; "error" => ?e);
-                        }
-                    }
-                }
-            },
-        );
+            });
+
         let mut region_label_svc = RegionLabelServiceBuilder::new(
             Arc::new(RegionLabelRulesManager {
                 region_label_change_cb: Some(region_label_changed_cb),
@@ -205,6 +197,55 @@ impl PdRangeHintService {
         .build()
         .unwrap();
         remote.spawn(async move { region_label_svc.watch_region_labels().await })
+    }
+
+    fn parse_label_rule(label_rule: &LabelRule) -> Option<Vec<CacheRegion>> {
+        if label_rule
+            .labels
+            .iter()
+            .any(|e| e.key == CACHE_LABEL_RULE_KEY && e.value == CACHE_LABEL_RULE_ALWAYS)
+        {
+            for key_range in &label_rule.data {
+                if let Ok(cache_range) = CacheRegion::try_from(key_range) {
+                    return Some(vec![cache_range]);
+                }
+            }
+        }
+
+        // TODO: Before GA, either remove this or pass index ranges directly
+        // from TiDB.
+        // The current syntax is awkward and arbitrary, as it constructs index
+        // ranges using the table ID from label rule data and the index ID from
+        // the label value. Ideally, index ranges should be passed directly from
+        // TiDB to simplify the process.
+        let label = label_rule.labels.iter().find(|e| {
+            e.key == CACHE_LABEL_RULE_KEY && e.value.starts_with(CACHE_LABEL_RULE_INDEX)
+        })?;
+
+        let key_range = label_rule.data.first()?;
+        let table_id = key_range.decode_table_id()?;
+
+        // Parse label value, eg. "cache=index:1:2:3"
+        if label.value == CACHE_LABEL_RULE_INDEX {
+            return Some(vec![
+                CacheRegion::try_from(&KeyRangeRule::encode_table_index_prefix(table_id)).ok()?,
+            ]);
+        }
+
+        // Skip "index:"
+        let mut ranges = vec![];
+        for idx in label.value[CACHE_LABEL_RULE_INDEX.len() + 1..]
+            .split(':')
+            .filter_map(|s| s.parse::<i64>().ok())
+        {
+            let key_range = KeyRangeRule::encode_table_index_range(table_id, idx);
+            ranges.push(CacheRegion::try_from(&key_range).ok()?);
+        }
+        if ranges.is_empty() {
+            None
+        } else {
+            Some(ranges)
+        }
     }
 }
 
@@ -1521,6 +1562,8 @@ pub mod tests {
         time::Duration,
     };
 
+    use bytes::Buf;
+    use codec::number::NumberDecoder;
     use crossbeam::epoch;
     use engine_rocks::util::new_engine;
     use engine_traits::{
@@ -1553,6 +1596,7 @@ pub mod tests {
         region_label::{
             region_label_meta_client,
             tests::{add_region_label_rule, new_region_label_rule, new_test_server_and_client},
+            RegionLabel,
         },
         test_util::{new_region, put_data, put_data_with_overwrite},
         write_batch::RangeCacheWriteBatchEntry,
@@ -3034,5 +3078,95 @@ pub mod tests {
 
         stop.send(true).unwrap();
         ticker.stop();
+    }
+
+    #[test]
+    fn test_parse_label_rule() {
+        struct Case {
+            label_key: &'static str,
+            label_value: &'static str,
+            expected: Option<(i64, Option<Vec<i64>>)>,
+        }
+
+        let cases = [
+            Case {
+                label_key: CACHE_LABEL_RULE_KEY,
+                label_value: CACHE_LABEL_RULE_ALWAYS,
+                expected: Some((1, None)),
+            },
+            Case {
+                label_key: CACHE_LABEL_RULE_KEY,
+                label_value: "index",
+                expected: Some((1, Some(vec![]))),
+            },
+            Case {
+                label_key: CACHE_LABEL_RULE_KEY,
+                label_value: "index:1:2",
+                expected: Some((1, Some(vec![1, 2]))),
+            },
+            Case {
+                label_key: CACHE_LABEL_RULE_KEY,
+                label_value: "index-",
+                expected: None,
+            },
+            Case {
+                label_key: CACHE_LABEL_RULE_KEY,
+                label_value: "invalid",
+                expected: None,
+            },
+            Case {
+                label_key: "invalid",
+                label_value: "always",
+                expected: None,
+            },
+        ];
+
+        for c in cases {
+            let label_rule = LabelRule {
+                id: "".to_owned(),
+                labels: vec![RegionLabel {
+                    key: c.label_key.to_owned(),
+                    value: c.label_value.to_owned(),
+                    ttl: None,
+                    start_at: None,
+                }],
+                rule_type: "".to_owned(),
+                data: vec![KeyRangeRule {
+                    start_key: "7480000000000000ff0100000000000000f8".to_owned(),
+                    end_key: "7480000000000000ff0200000000000000f8".to_owned(),
+                }],
+            };
+
+            let rules = PdRangeHintService::parse_label_rule(&label_rule);
+            assert_eq!(
+                rules.is_some(),
+                c.expected.is_some(),
+                "{:?}",
+                (&rules, &c.expected)
+            );
+            if let Some(rules) = rules {
+                let expected = c.expected.unwrap();
+                for (i, rule) in rules.iter().enumerate() {
+                    let start_key = Key::from_encoded_slice(origin_key(rule.start.as_slice()))
+                        .to_raw()
+                        .unwrap();
+                    let mut reader = std::io::Cursor::new(start_key);
+                    reader.advance(1); // skip the prefix "t"
+                    let table_id = reader.read_i64().unwrap();
+                    assert_eq!(table_id, expected.0, "{:?}", (rules, &expected));
+
+                    if let Some(ref expected) = expected.1 {
+                        reader.advance(2); // skip the prefix "_i"
+                        let index_id = reader.read_i64().ok();
+                        assert_eq!(
+                            index_id,
+                            expected.get(i).copied(),
+                            "{:?}",
+                            (&rules, &expected)
+                        );
+                    }
+                }
+            }
+        }
     }
 }

@@ -48,7 +48,7 @@ pub const EXTRA_PARTITION_ID_COL_ID: i64 = -2;
 pub const EXTRA_PHYSICAL_TABLE_ID_COL_ID: i64 = -3;
 
 /// `TableEncoder` encodes the table record/index prefix.
-trait TableEncoder: NumberEncoder {
+pub trait TableEncoder: NumberEncoder {
     fn append_table_record_prefix(&mut self, table_id: i64) -> Result<()> {
         self.write_bytes(TABLE_PREFIX)?;
         self.write_i64(table_id)?;
