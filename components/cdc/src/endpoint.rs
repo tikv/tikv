@@ -940,7 +940,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                         "current_id" => ?delegate.handle.id);
                     return;
                 }
-                match delegate.finish_scan_locks(region, locks) {
+                match delegate.on_region_ready(resolver, region) {
                     Ok(fails) => {
                         let mut deregisters = Vec::new();
                         for (downstream, e) in fails {

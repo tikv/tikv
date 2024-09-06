@@ -1254,7 +1254,7 @@ mod tests {
 
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
         let conn_id = ConnId::default();
-        let (sink, mut drain) = channel(conn_id, 1, quota.clone());
+        let (sink, mut drain) = channel(conn_id, 1, quota);
         let rx = drain.drain();
         let request_id = 123;
         let mut downstream = Downstream::new(
