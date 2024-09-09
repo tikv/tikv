@@ -110,7 +110,6 @@ struct EvictInfo {
 impl Debug for EvictInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("EvictInfo")
-            .field("start", &self.start)
             .field("reason", &self.reason)
             .finish()
     }
@@ -620,7 +619,7 @@ impl RegionManager {
     // changed, evict the regions overlapped with the range of `evict_region`.
     // `cb` is called when the eviction of the region with id equaling to the id of
     // `evict_region` has done.
-    // Note: `cb` should not do something heavy.
+    // Note: `cb` should not do anything heavy.
     pub(crate) fn evict_region(
         &mut self,
         evict_region: &CacheRegion,
