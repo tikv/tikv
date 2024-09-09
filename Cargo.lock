@@ -4515,7 +4515,6 @@ dependencies = [
  "serde",
  "serde_derive",
  "serde_json",
- "simple_moving_average",
  "slog",
  "slog-global",
  "tempfile",
@@ -5406,15 +5405,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e51e73328dc4ac0c7ccbda3a494dfa03df1de2f46018127f60c693f2648455b0"
 dependencies = [
  "libc 0.2.151",
-]
-
-[[package]]
-name = "simple_moving_average"
-version = "1.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a4b144ad185430cd033299e2c93e465d5a7e65fbb858593dc57181fa13cd310"
-dependencies = [
- "num-traits",
 ]
 
 [[package]]

@@ -15,8 +15,7 @@ use crossbeam::sync::ShardedLock;
 use kvproto::metapb::Region;
 use parking_lot::Mutex;
 use raftstore::coprocessor::RegionInfoProvider;
-use simple_moving_average::{SumTreeSMA, SMA};
-use tikv_util::info;
+use tikv_util::{info, smoother::Smoother};
 
 use crate::memory_controller::MemoryController;
 
@@ -39,7 +38,7 @@ pub(crate) struct RangeStatsManager {
     // multiple before and after the cache. When a new top region (of course, not cached) comes in,
     // this moving average number is used to estimate the mvcc amplification after cache so we can
     // use it to determine whether to evict some regions if memory usage is relative high.
-    ma_mvcc_amplification_reduction: Arc<Mutex<SumTreeSMA<f64, f64, 10>>>,
+    ma_mvcc_amplification_reduction: Arc<Mutex<Smoother<f64, 10, 0, 0>>>,
     mvcc_amplification_threshold: usize,
 
     mvcc_amplification_record: Arc<Mutex<HashMap<u64, f64>>>,
@@ -65,7 +64,7 @@ impl RangeStatsManager {
             info_provider,
             checking_top_regions: Arc::new(AtomicBool::new(false)),
             region_loaded_at: Arc::new(ShardedLock::new(BTreeMap::new())),
-            ma_mvcc_amplification_reduction: Arc::new(Mutex::new(SumTreeSMA::new())),
+            ma_mvcc_amplification_reduction: Arc::new(Mutex::new(Smoother::default())),
             mvcc_amplification_record: Arc::default(),
             evict_min_duration,
             expected_region_size,
@@ -232,13 +231,13 @@ impl RangeStatsManager {
                     let amp_after_cache = a.cop_detail.mvcc_amplification();
                     if amp_after_cache != 0.0 && amp_after_cache != amplification {
                         ma_mvcc_amplification_reduction
-                            .add_sample(amplification / a.cop_detail.mvcc_amplification());
+                            .observe(amplification / a.cop_detail.mvcc_amplification());
                     }
                 }
             });
             record.clear();
             // this reduction should not be less than 1
-            ma_mvcc_amplification_reduction.get_average()
+            ma_mvcc_amplification_reduction.get_avg()
         };
         info!(
             "IME moving average mvcc amplification reduction update";

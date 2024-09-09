@@ -47,7 +47,6 @@ thiserror = "1.0"
 online_config = { workspace = true }
 libc = "0.2"
 rand = "0.8"
-simple_moving_average = "1"
 
 [dev-dependencies]
 tempfile = "3.0"
