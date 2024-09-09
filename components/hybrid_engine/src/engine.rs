@@ -50,6 +50,40 @@ where
     }
 }
 
+pub fn new_in_memory_snapshot<EC: RangeCacheEngine>(
+    range_cache_engine: &EC,
+    ctx: SnapshotContext,
+    sequence_number: u64,
+) -> Option<EC::Snapshot> {
+    match range_cache_engine.snapshot(ctx.region.unwrap(), ctx.read_ts, sequence_number) {
+        Ok(snap) => {
+            SNAPSHOT_TYPE_COUNT_STATIC.range_cache_engine.inc();
+            Some(snap)
+        }
+        Err(FailedReason::TooOldRead) => {
+            RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
+                .too_old_read
+                .inc();
+            SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
+            None
+        }
+        Err(FailedReason::NotCached) => {
+            RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
+                .not_cached
+                .inc();
+            SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
+            None
+        }
+        Err(FailedReason::EpochNotMatch) => {
+            RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
+                .epoch_not_match
+                .inc();
+            SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
+            None
+        }
+    }
+}
+
 impl<EK, EC> HybridEngine<EK, EC>
 where
     EK: KvEngine,
@@ -60,6 +94,26 @@ where
             disk_engine,
             range_cache_engine,
         }
+    }
+}
+
+impl<EK, EC> HybridEngine<EK, EC>
+where
+    EK: KvEngine,
+    EC: RangeCacheEngine,
+    HybridEngine<EK, EC>: WriteBatchExt,
+{
+    fn sync_write<F>(&self, key: &[u8], f: F) -> Result<()>
+    where
+        F: FnOnce(&mut <Self as WriteBatchExt>::WriteBatch) -> Result<()>,
+    {
+        let mut batch = self.write_batch();
+        if let Some(region) = self.range_cache_engine.get_region_for_key(key) {
+            batch.prepare_for_region(region);
+        }
+        f(&mut batch)?;
+        let _ = batch.write()?;
+        Ok(())
     }
 }
 
@@ -77,37 +131,14 @@ where
         let range_cache_snap = if !self.range_cache_engine.enabled() {
             None
         } else if let Some(ctx) = ctx {
-            match self.range_cache_engine.snapshot(
-                ctx.range.unwrap(),
-                ctx.read_ts,
-                disk_snap.sequence_number(),
-            ) {
-                Ok(snap) => {
-                    SNAPSHOT_TYPE_COUNT_STATIC.range_cache_engine.inc();
-                    Some(snap)
-                }
-                Err(FailedReason::TooOldRead) => {
-                    RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
-                        .too_old_read
-                        .inc();
-                    None
-                }
-                Err(FailedReason::NotCached) => {
-                    RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
-                        .not_cached
-                        .inc();
-                    None
-                }
-            }
+            new_in_memory_snapshot(&self.range_cache_engine, ctx, disk_snap.sequence_number())
         } else {
             RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
                 .no_read_ts
                 .inc();
+            SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
             None
         };
-        if range_cache_snap.is_none() {
-            SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
-        }
         HybridEngineSnapshot::new(disk_snap, range_cache_snap)
     }
 
@@ -155,63 +186,27 @@ where
     HybridEngine<EK, EC>: WriteBatchExt,
 {
     fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
-        let mut batch = self.write_batch();
-        if let Some(range) = self.range_cache_engine.get_range_for_key(key) {
-            batch.prepare_for_range(range);
-        }
-        batch.put(key, value)?;
-        let _ = batch.write()?;
-        Ok(())
+        self.sync_write(key, |b| b.put(key, value))
     }
 
     fn put_cf(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
-        let mut batch = self.write_batch();
-        if let Some(range) = self.range_cache_engine.get_range_for_key(key) {
-            batch.prepare_for_range(range);
-        }
-        batch.put_cf(cf, key, value)?;
-        let _ = batch.write()?;
-        Ok(())
+        self.sync_write(key, |b| b.put_cf(cf, key, value))
     }
 
     fn delete(&self, key: &[u8]) -> Result<()> {
-        let mut batch = self.write_batch();
-        if let Some(range) = self.range_cache_engine.get_range_for_key(key) {
-            batch.prepare_for_range(range);
-        }
-        batch.delete(key)?;
-        let _ = batch.write()?;
-        Ok(())
+        self.sync_write(key, |b| b.delete(key))
     }
 
     fn delete_cf(&self, cf: &str, key: &[u8]) -> Result<()> {
-        let mut batch = self.write_batch();
-        if let Some(range) = self.range_cache_engine.get_range_for_key(key) {
-            batch.prepare_for_range(range);
-        }
-        batch.delete_cf(cf, key)?;
-        let _ = batch.write()?;
-        Ok(())
+        self.sync_write(key, |b| b.delete_cf(cf, key))
     }
 
     fn delete_range(&self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
-        let mut batch = self.write_batch();
-        if let Some(range) = self.range_cache_engine.get_range_for_key(begin_key) {
-            batch.prepare_for_range(range);
-        }
-        batch.delete_range(begin_key, end_key)?;
-        let _ = batch.write()?;
-        Ok(())
+        self.sync_write(begin_key, |b| b.delete_range(begin_key, end_key))
     }
 
     fn delete_range_cf(&self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
-        let mut batch = self.write_batch();
-        if let Some(range) = self.range_cache_engine.get_range_for_key(begin_key) {
-            batch.prepare_for_range(range);
-        }
-        batch.delete_range_cf(cf, begin_key, end_key)?;
-        let _ = batch.write()?;
-        Ok(())
+        self.sync_write(begin_key, |b| b.delete_range_cf(cf, begin_key, end_key))
     }
 }
 
@@ -221,11 +216,11 @@ mod tests {
     use std::sync::Arc;
 
     use engine_rocks::util::new_engine;
-    use engine_traits::{CacheRange, KvEngine, SnapshotContext, CF_DEFAULT, CF_LOCK, CF_WRITE};
+    use engine_traits::{CacheRegion, KvEngine, SnapshotContext, CF_DEFAULT, CF_LOCK, CF_WRITE};
     use online_config::{ConfigChange, ConfigManager, ConfigValue};
     use range_cache_memory_engine::{
-        config::RangeCacheConfigManager, RangeCacheEngineConfig, RangeCacheEngineContext,
-        RangeCacheMemoryEngine,
+        config::RangeCacheConfigManager, test_util::new_region, RangeCacheEngineConfig,
+        RangeCacheEngineContext, RangeCacheMemoryEngine,
     };
     use tempfile::Builder;
     use tikv_util::config::VersionTrack;
@@ -244,11 +239,12 @@ mod tests {
         let memory_engine =
             RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(config.clone()));
 
-        let range = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
-        memory_engine.new_range(range.clone());
+        let region = new_region(1, b"k00", b"k10");
+        let range = CacheRegion::from_region(&region);
+        memory_engine.new_region(region.clone());
         {
             let mut core = memory_engine.core().write();
-            core.mut_range_manager().set_safe_point(&range, 10);
+            core.mut_range_manager().set_safe_point(region.id, 10);
         }
 
         let hybrid_engine = HybridEngine::new(disk_engine, memory_engine.clone());
@@ -257,7 +253,7 @@ mod tests {
 
         let mut snap_ctx = SnapshotContext {
             read_ts: 15,
-            range: Some(range.clone()),
+            region: Some(range.clone()),
         };
         let s = hybrid_engine.snapshot(Some(snap_ctx.clone()));
         assert!(s.range_cache_snapshot_available());

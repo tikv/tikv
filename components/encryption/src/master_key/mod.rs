@@ -28,6 +28,8 @@ mod metadata;
 use self::metadata::*;
 
 mod kms;
+#[cfg(any(test, feature = "testexport"))]
+pub use self::kms::fake;
 pub use self::kms::KmsBackend;
 
 #[derive(Default, Debug, Clone)]

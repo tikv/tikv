@@ -2195,7 +2195,7 @@ def RaftProcess() -> RowPanel:
     layout.row(
         [
             graph_panel(
-                title="Enable apply unpersisted log regoin count",
+                title="Enable apply unpersisted log region count",
                 description="The number of regions that enable apply unpersisted raft log",
                 yaxes=yaxes(left_format=UNITS.SHORT),
                 targets=[

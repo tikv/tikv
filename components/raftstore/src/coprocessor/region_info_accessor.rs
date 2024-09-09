@@ -297,15 +297,21 @@ pub struct RegionCollector {
     // together in a struct exposing add, delete, and get_top_regions methods.
     region_activity: RegionActivityMap,
     region_leaders: Arc<RwLock<HashSet<u64>>>,
+    // It is calculated as '(next + prev) / processed_keys'
+    mvcc_amplification_threshold: usize,
 }
 
 impl RegionCollector {
-    pub fn new(region_leaders: Arc<RwLock<HashSet<u64>>>) -> Self {
+    pub fn new(
+        region_leaders: Arc<RwLock<HashSet<u64>>>,
+        mvcc_amplification_threshold: usize,
+    ) -> Self {
         Self {
             region_leaders,
             regions: HashMap::default(),
             region_activity: HashMap::default(),
             region_ranges: BTreeMap::default(),
+            mvcc_amplification_threshold,
         }
     }
 
@@ -569,7 +575,7 @@ impl RegionCollector {
     ///
     /// Otherwise, return the top `count` regions for which this node is the
     /// leader from `self.region_activity`. Top regions are determined by
-    /// comparing `read_keys` in each region's most recent
+    /// comparing `next + prev` in each region's most recent
     /// region stat.
     ///
     /// Note: this function is `O(N log(N))` with respect to size of
@@ -578,11 +584,15 @@ impl RegionCollector {
     /// approximately `300_000``.
     pub fn handle_get_top_regions(&mut self, count: usize, callback: Callback<TopRegions>) {
         let compare_fn = |a: &RegionActivity, b: &RegionActivity| {
-            let a = a.region_stat.read_keys;
-            let b = b.region_stat.read_keys;
+            let a = a.region_stat.cop_detail.next + a.region_stat.cop_detail.prev;
+            let b = b.region_stat.cop_detail.next + b.region_stat.cop_detail.prev;
             b.cmp(&a)
         };
-        let top_regions = if count == 0 {
+
+        // Only used to log.
+        let mut max_qps = 0;
+        let mut max_next_prev = 0;
+        let mut top_regions = if count == 0 {
             self.regions
                 .values()
                 .map(|ri| {
@@ -600,8 +610,15 @@ impl RegionCollector {
                 .map(|(r, ra)| {
                     (
                         r,
-                        ra.map(|ra| ra.region_stat.approximate_size)
-                            .unwrap_or_default(),
+                        ra.map(|ra| {
+                            max_qps = u64::max(ra.region_stat.query_stats.coprocessor, max_qps);
+                            max_next_prev = usize::max(
+                                ra.region_stat.cop_detail.prev + ra.region_stat.cop_detail.next,
+                                max_next_prev,
+                            );
+                            ra.region_stat.clone()
+                        })
+                        .unwrap_or_default(),
                     )
                 })
                 .collect::<Vec<_>>()
@@ -610,6 +627,11 @@ impl RegionCollector {
             self.region_activity
                 .iter()
                 .filter_map(|(id, ac)| {
+                    max_qps = u64::max(ac.region_stat.query_stats.coprocessor, max_qps);
+                    max_next_prev = usize::max(
+                        ac.region_stat.cop_detail.prev + ac.region_stat.cop_detail.next,
+                        max_next_prev,
+                    );
                     self.regions
                         .get(id)
                         .filter(|ri| ri.role == StateRole::Leader)
@@ -617,10 +639,70 @@ impl RegionCollector {
                 })
                 .sorted_by(|(_, activity_0), (_, activity_1)| compare_fn(activity_0, activity_1))
                 .take(count)
-                .map(|(ri, ac)| (ri.region.clone(), ac.region_stat.approximate_size))
+                .map(|(ri, ac)| (ri.region.clone(), ac.region_stat.clone()))
                 .collect::<Vec<_>>()
         };
-        callback(top_regions)
+
+        // TODO(SpadeA): remove it when auto load/evict is stable
+        {
+            let debug: Vec<_> = top_regions
+                .iter()
+                .map(|(r, s)| {
+                    format!(
+                        "region_id={}, read_keys={}, cop={}, cop_detail={:?}",
+                        r.get_id(),
+                        s.read_keys,
+                        s.query_stats.coprocessor,
+                        s.cop_detail,
+                    )
+                })
+                .collect_vec();
+
+            info!(
+                "ime get top k regions before filter";
+                "count" => count,
+                "max_qps" => max_qps,
+                "regions" => ?debug,
+            );
+        }
+
+        top_regions.retain(|(_, s)| {
+            s.cop_detail.next + s.cop_detail.prev >= max_next_prev / 10
+                && s.cop_detail.processed_keys != 0
+                && (s.cop_detail.next + s.cop_detail.prev) / s.cop_detail.processed_keys
+                    >= self.mvcc_amplification_threshold
+        });
+
+        // TODO(SpadeA): remove it when auto load/evict is stable
+        {
+            let debug: Vec<_> = top_regions
+                .iter()
+                .map(|(r, s)| {
+                    format!(
+                        "region_id={}, read_keys={}, cop={}, cop_detail={:?}",
+                        r.get_id(),
+                        s.read_keys,
+                        s.query_stats.coprocessor,
+                        s.cop_detail,
+                    )
+                })
+                .collect_vec();
+
+            info!(
+                "ime get top k regions after filter";
+                "count" => count,
+                "read_count" => debug.len(),
+                "max_qps" => max_qps,
+                "regions" => ?debug,
+            );
+        }
+
+        callback(
+            top_regions
+                .into_iter()
+                .map(|(r, stat)| (r, stat.approximate_size))
+                .collect_vec(),
+        )
     }
 
     fn handle_raftstore_event(&mut self, event: RaftStoreEvent) {
@@ -768,12 +850,13 @@ impl RegionInfoAccessor {
     pub fn new(
         host: &mut CoprocessorHost<impl KvEngine>,
         region_stats_manager_enabled_cb: RegionStatsManagerEnabledCb,
+        mvcc_amplification_threshold: usize,
     ) -> Self {
         let region_leaders = Arc::new(RwLock::new(HashSet::default()));
         let worker = WorkerBuilder::new("region-collector-worker").create();
         let scheduler = worker.start_with_timer(
             "region-collector-worker",
-            RegionCollector::new(region_leaders.clone()),
+            RegionCollector::new(region_leaders.clone(), mvcc_amplification_threshold),
         );
         register_region_event_listener(host, scheduler.clone(), region_stats_manager_enabled_cb);
 
@@ -803,6 +886,11 @@ impl RegionInfoAccessor {
             .unwrap();
         rx.recv().unwrap()
     }
+
+    #[cfg(any(test, feature = "testexport"))]
+    pub fn scheduler(&self) -> &Scheduler<RegionInfoQuery> {
+        &self.scheduler
+    }
 }
 
 /// Top regions result: region and its approximate size.
@@ -817,7 +905,7 @@ pub trait RegionInfoProvider: Send + Sync {
 
     fn find_region_by_id(
         &self,
-        _reigon_id: u64,
+        _region_id: u64,
         _callback: Callback<Option<RegionInfo>>,
     ) -> Result<()> {
         unimplemented!()
@@ -1033,7 +1121,7 @@ mod tests {
     use super::*;
 
     fn new_region_collector() -> RegionCollector {
-        RegionCollector::new(Arc::new(RwLock::new(HashSet::default())))
+        RegionCollector::new(Arc::new(RwLock::new(HashSet::default())), 0)
     }
 
     fn new_region(id: u64, start_key: &[u8], end_key: &[u8], version: u64) -> Region {

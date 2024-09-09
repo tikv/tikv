@@ -19,7 +19,7 @@ use bytes::Bytes;
 use collections::{HashMap, HashSet};
 use crossbeam::{atomic::AtomicCell, channel::TrySendError};
 use engine_traits::{
-    CacheRange, Engines, KvEngine, PerfContext, RaftEngine, Snapshot, SnapshotContext, WriteBatch,
+    CacheRegion, Engines, KvEngine, PerfContext, RaftEngine, Snapshot, SnapshotContext, WriteBatch,
     WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use error_code::ErrorCodeExt;
@@ -66,7 +66,7 @@ use tikv_util::{
     Either,
 };
 use time::{Duration as TimeDuration, Timespec};
-use tracker::GLOBAL_TRACKERS;
+use tracker::{TrackerTokenArray, GLOBAL_TRACKERS};
 use txn_types::{TimeStamp, WriteBatchFlags};
 use uuid::Uuid;
 
@@ -3085,6 +3085,13 @@ where
                             // In this case the apply can be guaranteed to be successful. Invoke the
                             // on_committed callback if necessary.
                             p.cb.invoke_committed();
+
+                            debug!("raft log is committed";
+                                "req_info" => TrackerTokenArray::new(p.cb.write_trackers()
+                                    .into_iter()
+                                    .filter_map(|time_tracker| time_tracker.as_tracker_token())
+                                    .collect::<Vec<_>>().as_slice())
+                            );
                         }
                         p
                     })
@@ -4956,9 +4963,9 @@ where
         Ok(propose_index)
     }
 
-    fn handle_read<E: ReadExecutor<Tablet = EK>>(
+    fn handle_read<T>(
         &self,
-        reader: &mut E,
+        ctx: &mut PollContext<EK, ER, T>,
         req: RaftCmdRequest,
         check_epoch: bool,
         read_index: Option<u64>,
@@ -5008,14 +5015,24 @@ where
 
         let snap_ctx = if let Ok(read_ts) = decode_u64(&mut req.get_header().get_flag_data()) {
             Some(SnapshotContext {
-                range: Some(CacheRange::from_region(&region)),
+                region: Some(CacheRegion::from_region(&region)),
                 read_ts,
             })
         } else {
             None
         };
 
-        let mut resp = reader.execute(&req, &Arc::new(region), read_index, snap_ctx, None);
+        let mut reader = PollContextReader {
+            engines: &ctx.engines,
+        };
+        let mut resp = reader.execute(
+            &req,
+            &Arc::new(region),
+            read_index,
+            snap_ctx,
+            None,
+            &ctx.coprocessor_host,
+        );
         if let Some(snap) = resp.snapshot.as_mut() {
             snap.txn_ext = Some(self.txn_ext.clone());
             snap.bucket_meta = self
@@ -6000,7 +6017,11 @@ where
     }
 }
 
-impl<EK, ER, T> ReadExecutor for PollContext<EK, ER, T>
+struct PollContextReader<'a, EK, ER> {
+    engines: &'a Engines<EK, ER>,
+}
+
+impl<'a, EK, ER> ReadExecutor for PollContextReader<'a, EK, ER>
 where
     EK: KvEngine,
     ER: RaftEngine,

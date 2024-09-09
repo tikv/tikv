@@ -86,8 +86,18 @@ impl MemoryController {
     }
 
     #[inline]
+    pub(crate) fn reached_stop_load_limit(&self) -> bool {
+        self.mem_usage() >= self.config.value().stop_load_limit_threshold()
+    }
+
+    #[inline]
     pub(crate) fn reached_soft_limit(&self) -> bool {
         self.mem_usage() >= self.config.value().soft_limit_threshold()
+    }
+
+    #[inline]
+    pub(crate) fn stop_load_limit_threshold(&self) -> usize {
+        self.config.value().stop_load_limit_threshold()
     }
 
     #[inline]
@@ -96,8 +106,9 @@ impl MemoryController {
     }
 
     #[inline]
-    pub(crate) fn set_memory_checking(&self, v: bool) {
-        self.memory_checking.store(v, Ordering::Relaxed);
+    // return the previous status.
+    pub(crate) fn set_memory_checking(&self, v: bool) -> bool {
+        self.memory_checking.swap(v, Ordering::Relaxed)
     }
 
     #[inline]
@@ -127,9 +138,11 @@ mod tests {
             enabled: true,
             gc_interval: Default::default(),
             load_evict_interval: Default::default(),
+            stop_load_limit_threshold: Some(ReadableSize(300)),
             soft_limit_threshold: Some(ReadableSize(300)),
             hard_limit_threshold: Some(ReadableSize(500)),
             expected_region_size: Default::default(),
+            mvcc_amplification_threshold: 10,
         }));
         let mc = MemoryController::new(config, skiplist_engine.clone());
         assert_eq!(mc.acquire(100), MemoryUsage::NormalUsage(100));
