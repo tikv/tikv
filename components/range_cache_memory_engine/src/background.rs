@@ -224,7 +224,7 @@ impl BgWorkManager {
         memory_controller: Arc<MemoryController>,
         region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
     ) -> Self {
-        let worker = Worker::new("range-cache-background-worker");
+        let worker = Worker::new("ime-bg");
         let (runner, delete_range_scheduler) = BackgroundRunner::new(
             core.clone(),
             memory_controller,
@@ -233,7 +233,7 @@ impl BgWorkManager {
             gc_interval,
             pd_client.clone(),
         );
-        let scheduler = worker.start_with_timer("range-cache-engine-background", runner);
+        let scheduler = worker.start_with_timer("ime-bg", runner);
 
         let (h, tx) = BgWorkManager::start_tick(
             scheduler.clone(),
@@ -309,7 +309,7 @@ impl BgWorkManager {
         let (tx, rx) = bounded(0);
         // TODO: Instead of spawning a new thread, we should run this task
         //       in a shared background thread.
-        let h = std::thread::spawn(move || {
+        let h = std::thread::Builder::new().name("ime-ticker".to_owned()).spawn(move || {
             let gc_ticker = tick(gc_interval);
             let load_evict_ticker = tick(load_evict_interval); // TODO (afeinberg): Use a real value.
             let tso_timeout = std::cmp::min(gc_interval, TIMTOUT_FOR_TSO);
@@ -355,7 +355,7 @@ impl BgWorkManager {
                     },
                 }
             }
-        });
+        }).unwrap();
         (h, tx)
     }
 }
@@ -800,28 +800,28 @@ impl BackgroundRunner {
         gc_interval: Duration,
         pd_client: Arc<dyn PdClient>,
     ) -> (Self, Scheduler<BackgroundTask>) {
-        let range_load_worker = Builder::new("background-range-load-worker")
+        let range_load_worker = Builder::new("ime-load")
             // Range load now is implemented sequentially, so we must use exactly one thread to handle it.
             // todo(SpadeA): if the load speed is a bottleneck, we may consider to use multiple threads to load ranges.
             .thread_count(1)
             .create();
         let range_load_remote = range_load_worker.remote();
 
-        let delete_range_worker = Worker::new("background-delete-range-worker");
+        let delete_range_worker = Worker::new("ime-delete");
         let delete_range_runner = DeleteRangeRunner::new(engine.clone());
         let delete_range_scheduler =
-            delete_range_worker.start_with_timer("delete-range-runner", delete_range_runner);
+            delete_range_worker.start_with_timer("ime-delete-runner", delete_range_runner);
 
-        let lock_cleanup_worker = Worker::new("lock-cleanup-worker");
+        let lock_cleanup_worker = Worker::new("ime-lock-cleanup");
         let lock_cleanup_remote = lock_cleanup_worker.remote();
 
-        let gc_range_worker = Builder::new("background-range-load-worker")
+        let gc_range_worker = Builder::new("ime-gc")
             // Gc must also use exactly one thread to handle it.
             .thread_count(1)
             .create();
         let gc_range_remote = gc_range_worker.remote();
 
-        let load_evict_worker = Worker::new("background-region-load-evict-worker");
+        let load_evict_worker = Worker::new("ime-evict");
         let load_evict_remote = load_evict_worker.remote();
 
         let num_regions_to_cache = memory_controller.soft_limit_threshold() / expected_region_size;
