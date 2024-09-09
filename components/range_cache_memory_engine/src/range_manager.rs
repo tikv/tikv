@@ -6,6 +6,7 @@ use std::{
         BTreeMap,
         Bound::{self, Excluded, Unbounded},
     },
+    fmt::Debug,
     result,
     sync::atomic::{AtomicBool, Ordering},
 };
@@ -95,14 +96,23 @@ pub struct CacheRegionMeta {
     state: RegionState,
     // whether a gc task is running with this region.
     in_gc: bool,
-    // region eviction triggers info, used for logging.
+    // region eviction triggers info and callback when eviction finishes.
     evict_info: Option<EvictInfo>,
 }
 
-#[derive(Debug, Clone, Copy)]
 struct EvictInfo {
     start: Instant,
     reason: EvictReason,
+    // called when eviction finishes
+    cb: Option<Box<dyn FnOnce() + Send + Sync>>,
+}
+
+impl Debug for EvictInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EvictInfo")
+            .field("reason", &self.reason)
+            .finish()
+    }
 }
 
 impl CacheRegionMeta {
@@ -122,18 +132,18 @@ impl CacheRegionMeta {
         &self.region
     }
 
-    // update region info due to epoch version changes. This can only
-    // happen for pending region because otherwise we will always update
-    // the region epoch with ApplyObserver(for loading/active regions) or
-    // no need to update the epoch for evicting regions.
-    fn amend_pending_region(&mut self, region: &CacheRegion) -> bool {
-        assert!(self.region.id == region.id && self.region.epoch_version < region.epoch_version);
-        if !self.region.contains_range(region) {
-            return false;
-        }
-
-        self.region = region.clone();
-        true
+    // check whether we can replace the current outdated pending region with the new
+    // one.
+    fn can_be_updated_to(&self, region: &CacheRegion) -> bool {
+        assert!(
+            self.region.id == region.id && self.region.epoch_version < region.epoch_version,
+            "current: {:?}, new: {:?}",
+            &self.region,
+            region
+        );
+        // if the new region's range is contained by the current region, we can directly
+        // update to the new one.
+        self.region.contains_range(region)
     }
 
     pub(crate) fn safe_point(&self) -> u64 {
@@ -174,7 +184,12 @@ impl CacheRegionMeta {
         self.state = new_state;
     }
 
-    pub(crate) fn mark_evict(&mut self, state: RegionState, reason: EvictReason) {
+    pub(crate) fn mark_evict(
+        &mut self,
+        state: RegionState,
+        reason: EvictReason,
+        cb: Option<Box<dyn FnOnce() + Send + Sync>>,
+    ) {
         use RegionState::*;
         assert_matches!(self.state, Loading | Active | LoadingCanceled);
         assert_matches!(state, PendingEvict | Evicting);
@@ -182,6 +197,7 @@ impl CacheRegionMeta {
         self.evict_info = Some(EvictInfo {
             start: Instant::now_coarse(),
             reason,
+            cb,
         });
     }
 
@@ -205,7 +221,7 @@ impl CacheRegionMeta {
             safe_point: source_meta.safe_point,
             state: source_meta.state,
             in_gc: source_meta.in_gc,
-            evict_info: source_meta.evict_info,
+            evict_info: None,
         }
     }
 
@@ -278,6 +294,13 @@ pub struct RegionManager {
 impl RegionManager {
     pub(crate) fn regions(&self) -> &HashMap<u64, CacheRegionMeta> {
         &self.regions
+    }
+
+    #[cfg(test)]
+    pub(crate) fn region_meta_by_end_key(&self, key: &[u8]) -> Option<&CacheRegionMeta> {
+        self.regions_by_range
+            .get(key)
+            .and_then(|id| self.regions.get(id))
     }
 
     // load a new region directly in the active state.
@@ -388,14 +411,23 @@ impl RegionManager {
         let Some(cached_meta) = self.regions.get_mut(&region.id) else {
             return None;
         };
-        if cached_meta.state == Pending
-            && cached_meta.region.epoch_version != region.epoch_version
-            && !cached_meta.amend_pending_region(region)
+        if cached_meta.state == Pending && cached_meta.region.epoch_version != region.epoch_version
         {
+            let meta = self.remove_region(region.id);
+            if meta.can_be_updated_to(region) {
+                info!("ime update outdated pending region";
+                    "current_meta" => ?meta,
+                    "new_region" => ?region);
+                // the new region's range is smaller than removed region, so it is impossible to
+                // be overlapped with other existing regions.
+                self.load_region(region.clone()).unwrap();
+
+                return Some(RegionState::Pending);
+            }
+
             info!("ime remove outdated pending region";
-                "pending_region" => ?cached_meta.region,
+                "pending_region" => ?meta.region,
                 "new_region" => ?region);
-            self.remove_region(region.id);
             return None;
         }
         Some(cached_meta.state)
@@ -596,23 +628,16 @@ impl RegionManager {
     }
 
     /// Return ranges that can be deleted now (no ongoing snapshot).
-    // There are two cases based on the relationship between `evict_range` and
-    // cached ranges:
-    // 1. `evict_range` is contained(including equals) by a cached range (at most
-    //    one due to non-overlapping in cached ranges)
-    // 2. `evict_range` is overlapped with (including contains but not be contained)
-    //    one or more cached ranges
-    //
-    // For 1, if the `evict_range` is a proper subset of the cached_range, we will
-    // split the cached_range so that only the `evict_range` part will be evicted
-    // and deleted.
-    //
-    // For 2, this is caused by some special operations such as merge and delete
-    // range. So, conservatively, we evict all ranges overlap with it.
+    // If the region epoch has changed which means the region range may have
+    // changed, evict the regions overlapped with the range of `evict_region`.
+    // `cb` is called when the eviction of the region with id equaling to the id of
+    // `evict_region` has done.
+    // Note: `cb` should not do anything heavy.
     pub(crate) fn evict_region(
         &mut self,
         evict_region: &CacheRegion,
         evict_reason: EvictReason,
+        mut cb: Option<Box<dyn FnOnce() + Send + Sync>>,
     ) -> Vec<CacheRegion> {
         info!(
             "ime try to evict region";
@@ -624,9 +649,11 @@ impl RegionManager {
             // if epoch not changed, no need to do range scan.
             if meta.region.epoch_version == evict_region.epoch_version {
                 if let Some(region) =
-                    self.do_evict_region(evict_region.id, evict_region, evict_reason)
+                    self.do_evict_region(evict_region.id, evict_region, evict_reason, cb)
                 {
                     return vec![region];
+                } else {
+                    return vec![];
                 }
             }
         }
@@ -646,7 +673,16 @@ impl RegionManager {
                 "region" => ?evict_region);
         }
         for rid in evict_ids {
-            if let Some(region) = self.do_evict_region(rid, evict_region, evict_reason) {
+            if let Some(region) = self.do_evict_region(
+                rid,
+                evict_region,
+                evict_reason,
+                if rid == evict_region.id {
+                    cb.take()
+                } else {
+                    None
+                },
+            ) {
                 deleteable_regions.push(region);
             }
         }
@@ -659,6 +695,7 @@ impl RegionManager {
         id: u64,
         evict_region: &CacheRegion,
         evict_reason: EvictReason,
+        cb: Option<Box<dyn FnOnce() + Send + Sync>>,
     ) -> Option<CacheRegion> {
         let meta = self.regions.get_mut(&id).unwrap();
         let prev_state = meta.state;
@@ -685,7 +722,7 @@ impl RegionManager {
         }
 
         if prev_state == RegionState::Active {
-            meta.mark_evict(RegionState::PendingEvict, evict_reason);
+            meta.mark_evict(RegionState::PendingEvict, evict_reason, cb);
         } else {
             meta.set_state(RegionState::LoadingCanceled)
         };
@@ -710,11 +747,12 @@ impl RegionManager {
 
     fn remove_region(&mut self, id: u64) -> CacheRegionMeta {
         let meta = self.regions.remove(&id).unwrap();
-        self.regions_by_range.remove(&meta.region.end);
+        self.regions_by_range.remove(&meta.region.end).unwrap();
         meta
     }
 
     pub fn on_delete_regions(&mut self, regions: &[CacheRegion]) {
+        fail::fail_point!("in_memory_engine_on_delete_regions");
         for r in regions {
             let meta = self.remove_region(r.id);
             assert_eq!(meta.region.epoch_version, r.epoch_version);
@@ -724,6 +762,10 @@ impl RegionManager {
                 evict_info.start.saturating_elapsed_secs(),
                 evict_info.reason,
             );
+            if let Some(cb) = evict_info.cb {
+                cb();
+            }
+
             info!(
                 "ime range eviction done";
                 "region" => ?r,
@@ -839,6 +881,17 @@ impl RegionManager {
     }
 }
 
+#[cfg(test)]
+impl Drop for RegionManager {
+    fn drop(&mut self) {
+        // check regions and regions by range matches with each other.
+        for (key, id) in &self.regions_by_range {
+            let meta = self.regions.get(id).unwrap();
+            assert_eq!(key, &meta.region.end);
+        }
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub enum LoadFailedReason {
     Overlapped,
@@ -884,7 +937,7 @@ mod tests {
         let r_left = CacheRegion::new(1, 2, b"k00", b"k03");
         let r_right = CacheRegion::new(3, 2, b"k06", b"k10");
         range_mgr.split_region(&r1, vec![r_left.clone(), r_evict.clone(), r_right.clone()]);
-        range_mgr.evict_region(&r_evict, EvictReason::AutoEvict);
+        range_mgr.evict_region(&r_evict, EvictReason::AutoEvict, None);
         let meta1 = range_mgr
             .historical_regions
             .get(&KeyAndVersion(r1.end.clone(), 0))
@@ -904,7 +957,7 @@ mod tests {
         // evict a range with accurate match
         range_mgr.region_snapshot(r_left.id, 2, 10).unwrap();
         let snapshot3 = RangeCacheSnapshotMeta::new(r_left.clone(), 10, 3);
-        range_mgr.evict_region(&r_left, EvictReason::AutoEvict);
+        range_mgr.evict_region(&r_left, EvictReason::AutoEvict, None);
         assert_eq!(
             range_mgr.regions.get(&r_left.id).unwrap().state,
             RegionState::PendingEvict,
@@ -937,7 +990,7 @@ mod tests {
         range_mgr.new_region(r1.clone());
         range_mgr.load_region(r2.clone()).unwrap();
         range_mgr.new_region(r3.clone());
-        range_mgr.evict_region(&r1, EvictReason::AutoEvict);
+        range_mgr.evict_region(&r1, EvictReason::AutoEvict, None);
 
         assert_eq!(
             range_mgr.load_region(r1).unwrap_err(),
@@ -963,7 +1016,7 @@ mod tests {
         let r1 = CacheRegion::new(1, 0, b"k00", b"k10");
         let r3 = CacheRegion::new(3, 0, b"k40", b"k50");
         range_mgr.new_region(r1.clone());
-        range_mgr.evict_region(&r1, EvictReason::AutoEvict);
+        range_mgr.evict_region(&r1, EvictReason::AutoEvict, None);
 
         range_mgr.load_region(r3).unwrap();
 
@@ -1006,7 +1059,7 @@ mod tests {
 
             let r4 = CacheRegion::new(4, 2, b"k00", b"k05");
             assert_eq!(
-                range_mgr.evict_region(&r4, EvictReason::AutoEvict),
+                range_mgr.evict_region(&r4, EvictReason::AutoEvict, None),
                 vec![r1]
             );
         }
@@ -1025,7 +1078,7 @@ mod tests {
 
             let r4 = CacheRegion::new(4, 0, b"k", b"k51");
             assert_eq!(
-                range_mgr.evict_region(&r4, EvictReason::AutoEvict),
+                range_mgr.evict_region(&r4, EvictReason::AutoEvict, None),
                 vec![r1, r2, r3]
             );
             assert!(
@@ -1047,7 +1100,7 @@ mod tests {
 
             let r4 = CacheRegion::new(4, 0, b"k25", b"k55");
             assert_eq!(
-                range_mgr.evict_region(&r4, EvictReason::AutoEvict),
+                range_mgr.evict_region(&r4, EvictReason::AutoEvict, None),
                 vec![r2, r3]
             );
             assert_eq!(
@@ -1071,7 +1124,7 @@ mod tests {
 
             let r4 = CacheRegion::new(4, 0, b"k25", b"k75");
             assert_eq!(
-                range_mgr.evict_region(&r4, EvictReason::AutoEvict),
+                range_mgr.evict_region(&r4, EvictReason::AutoEvict, None),
                 vec![r2, r3]
             );
             assert_eq!(

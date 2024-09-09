@@ -3439,6 +3439,12 @@ impl<E: Engine> Engine for TxnTestEngine<E> {
         }
     }
 
+    type IMSnap = Self::Snap;
+    type IMSnapshotRes = Self::SnapshotRes;
+    fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes {
+        self.async_snapshot(ctx)
+    }
+
     type WriteRes = E::WriteRes;
     fn async_write(
         &self,
