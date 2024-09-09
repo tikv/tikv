@@ -170,7 +170,7 @@ pub enum RegionInfoQuery {
         count: usize,
         callback: Callback<TopRegions>,
     },
-    GetRegionsActivity {
+    GetRegionsStat {
         region_ids: Vec<u64>,
         callback: Callback<Vec<(Region, RegionStat)>>,
     },
@@ -199,7 +199,7 @@ impl Display for RegionInfoQuery {
             RegionInfoQuery::GetTopRegions { count, .. } => {
                 write!(f, "GetTopRegions(count: {})", count)
             }
-            RegionInfoQuery::GetRegionsActivity { region_ids, .. } => {
+            RegionInfoQuery::GetRegionsStat { region_ids, .. } => {
                 write!(f, "GetRegionsActivity(region_ids: {:?})", region_ids)
             }
             RegionInfoQuery::DebugDump(_) => write!(f, "DebugDump"),
@@ -726,7 +726,7 @@ impl RegionCollector {
         )
     }
 
-    fn handle_get_regions_activity(
+    fn handle_get_regions_stat(
         &self,
         region_ids: Vec<u64>,
         callback: Callback<Vec<(Region, RegionStat)>>,
@@ -826,11 +826,11 @@ impl Runnable for RegionCollector {
             RegionInfoQuery::GetTopRegions { count, callback } => {
                 self.handle_get_top_regions(count, callback);
             }
-            RegionInfoQuery::GetRegionsActivity {
+            RegionInfoQuery::GetRegionsStat {
                 region_ids,
                 callback,
             } => {
-                self.handle_get_regions_activity(region_ids, callback);
+                self.handle_get_regions_stat(region_ids, callback);
             }
             RegionInfoQuery::DebugDump(tx) => {
                 tx.send((self.regions.clone(), self.region_ranges.clone()))
@@ -970,7 +970,7 @@ pub trait RegionInfoProvider: Send + Sync {
         unimplemented!()
     }
 
-    fn get_regions_activity(&self, _: Vec<u64>) -> Result<Vec<(Region, RegionStat)>> {
+    fn get_regions_stat(&self, _: Vec<u64>) -> Result<Vec<(Region, RegionStat)>> {
         unimplemented!()
     }
 }
@@ -1068,9 +1068,9 @@ impl RegionInfoProvider for RegionInfoAccessor {
             })
     }
 
-    fn get_regions_activity(&self, region_ids: Vec<u64>) -> Result<Vec<(Region, RegionStat)>> {
+    fn get_regions_stat(&self, region_ids: Vec<u64>) -> Result<Vec<(Region, RegionStat)>> {
         let (tx, rx) = mpsc::channel();
-        let msg = RegionInfoQuery::GetRegionsActivity {
+        let msg = RegionInfoQuery::GetRegionsStat {
             region_ids,
             callback: Box::new(move |regions_activity| {
                 if let Err(e) = tx.send(regions_activity) {

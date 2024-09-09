@@ -211,11 +211,11 @@ impl RangeStatsManager {
     ) -> (Vec<Region>, Vec<Region>) {
         // Get regions' stat of the cached region and sort them by next + prev in
         // descending order.
-        let mut regions_activity = self
+        let mut regions_stat = self
             .info_provider
-            .get_regions_activity(cached_region_ids.clone())
+            .get_regions_stat(cached_region_ids.clone())
             .unwrap();
-        regions_activity.sort_by(|a, b| {
+        regions_stat.sort_by(|a, b| {
             let next_prev_a = a.1.cop_detail.iterated_count();
             let next_prev_b = b.1.cop_detail.iterated_count();
             next_prev_b.cmp(&next_prev_a)
@@ -226,7 +226,7 @@ impl RangeStatsManager {
             let mut record = self.mvcc_amplification_record.lock();
             // update the moving average of the mvcc amplification reduction(the reduced
             // multiple before and after the cache).
-            regions_activity.iter().for_each(|(r, a)| {
+            regions_stat.iter().for_each(|(r, a)| {
                 if let Some(&amplification) = record.get(&r.id) {
                     let amp_after_cache = a.cop_detail.mvcc_amplification();
                     if amp_after_cache != 0.0 && amp_after_cache != amplification {
@@ -292,7 +292,7 @@ impl RangeStatsManager {
 
         {
             // TODO(SpadeA): remove it after it's stable
-            let debug: Vec<_> = regions_activity
+            let debug: Vec<_> = regions_stat
                 .iter()
                 .map(|(r, s)| {
                     format!(
@@ -313,13 +313,13 @@ impl RangeStatsManager {
         let reach_stop_load = memory_controller.reached_stop_load_limit();
         let mut regions_loaded = self.region_loaded_at.write().unwrap();
         // Evict at most 1/10 of the regions.
-        let max_count_to_evict = usize::max(1, regions_activity.len() / 10);
+        let max_count_to_evict = usize::max(1, regions_stat.len() / 10);
         // Use top MIN_REGION_COUNT_TO_EVICT regions next and prev to filter regions
         // with very few next and prev. If there's less than or equal to
         // MIN_REGION_COUNT_TO_EVICT regions, do not evict any one.
-        let regions_to_evict = if regions_activity.len() > MIN_REGION_COUNT_TO_EVICT {
+        let regions_to_evict = if regions_stat.len() > MIN_REGION_COUNT_TO_EVICT {
             let avg_top_next_prev = if reach_stop_load {
-                regions_activity
+                regions_stat
                     .iter()
                     .map(|r| r.1.cop_detail.iterated_count())
                     .take(MIN_REGION_COUNT_TO_EVICT)
@@ -328,7 +328,7 @@ impl RangeStatsManager {
             } else {
                 0
             };
-            let region_to_evict: Vec<_> = regions_activity
+            let region_to_evict: Vec<_> = regions_stat
                     .into_iter()
                     .filter(|(_, r)| {
                         if reach_stop_load {
@@ -397,7 +397,7 @@ pub mod tests {
 
     struct RegionInfoSimulator {
         regions: Mutex<TopRegions>,
-        region_activities: Mutex<HashMap<u64, (Region, RegionStat)>>,
+        region_stats: Mutex<HashMap<u64, (Region, RegionStat)>>,
     }
 
     impl RegionInfoSimulator {
@@ -405,8 +405,8 @@ pub mod tests {
             *self.regions.lock() = top_regions.clone()
         }
 
-        fn set_region_activities(&self, region_activities: &[(Region, RegionStat)]) {
-            *self.region_activities.lock() = region_activities
+        fn set_region_stats(&self, region_stats: &[(Region, RegionStat)]) {
+            *self.region_stats.lock() = region_stats
                 .iter()
                 .map(|(r, s)| (r.id, (r.clone(), s.clone())))
                 .collect::<HashMap<u64, (Region, RegionStat)>>();
@@ -440,11 +440,11 @@ pub mod tests {
             ))
         }
 
-        fn get_regions_activity(
+        fn get_regions_stat(
             &self,
             ids: Vec<u64>,
         ) -> coprocessor::Result<Vec<(Region, RegionStat)>> {
-            let g = self.region_activities.lock().clone();
+            let g = self.region_stats.lock().clone();
             Ok(ids
                 .into_iter()
                 .filter_map(|id| g.get(&id).cloned())
@@ -470,7 +470,7 @@ pub mod tests {
         let region_2 = new_region(2, b"k03", b"k04");
         let sim = Arc::new(RegionInfoSimulator {
             regions: Mutex::new(vec![(region_1.clone(), new_region_stat(1000, 10))]),
-            region_activities: Mutex::default(),
+            region_stats: Mutex::default(),
         });
         // 10 ms min duration eviction for testing purposes.
         let rsm = RangeStatsManager::new(
@@ -484,9 +484,9 @@ pub mod tests {
         assert_eq!(&added, &[region_1.clone()]);
         assert!(removed.is_empty());
         let top_regions = vec![(region_2.clone(), new_region_stat(1000, 8))];
-        let region_activities = vec![(region_1.clone(), new_region_stat(20, 10))];
+        let region_stats = vec![(region_1.clone(), new_region_stat(20, 10))];
         sim.set_top_regions(&top_regions);
-        sim.set_region_activities(&region_activities);
+        sim.set_region_stats(&region_stats);
         let (added, removed) = rsm.collect_regions_to_load_and_evict(vec![1], &mc);
         assert_eq!(&added, &[region_2.clone()]);
         assert!(removed.is_empty());
@@ -503,12 +503,12 @@ pub mod tests {
             (region_5.clone(), new_region_stat(1000, 10)),
             (region_7.clone(), new_region_stat(2000, 10)),
         ];
-        let region_activities = vec![
+        let region_stats = vec![
             (region_1.clone(), new_region_stat(20, 10)),
             (region_2.clone(), new_region_stat(20, 8)),
         ];
         sim.set_top_regions(&top_regions);
-        sim.set_region_activities(&region_activities);
+        sim.set_region_stats(&region_stats);
         let (added, removed) = rsm.collect_regions_to_load_and_evict(vec![1, 2], &mc);
         assert!(removed.is_empty());
         assert_eq!(
@@ -522,7 +522,7 @@ pub mod tests {
             ]
         );
 
-        let region_activities = vec![
+        let region_stats = vec![
             (region_1.clone(), new_region_stat(2, 10)),
             (region_6.clone(), new_region_stat(30, 10)),
             (region_2.clone(), new_region_stat(20, 8)),
@@ -532,7 +532,7 @@ pub mod tests {
             (region_7.clone(), new_region_stat(40, 10)),
         ];
         sim.set_top_regions(&vec![]);
-        sim.set_region_activities(&region_activities);
+        sim.set_region_stats(&region_stats);
         let (_, removed) = rsm.collect_regions_to_load_and_evict(vec![1, 2, 3, 4, 5, 6, 7], &mc);
         // `region_1` is no longer needed to cached, but since it was loaded less
         // than 10 ms ago, it should not be included in the removed ranges.
@@ -541,13 +541,13 @@ pub mod tests {
         // After 100 ms passed, check again, and verify `region_1` is evictable.
 
         sim.set_top_regions(&vec![]);
-        sim.set_region_activities(&region_activities);
+        sim.set_region_stats(&region_stats);
         let (_, removed) = rsm.collect_regions_to_load_and_evict(vec![1, 2, 3, 4, 5, 6, 7], &mc);
         assert_eq!(&removed, &[region_1.clone()]);
 
         let top_regions = vec![(region_8.clone(), new_region_stat(4000, 10))];
         sim.set_top_regions(&top_regions);
-        sim.set_region_activities(&region_activities);
+        sim.set_region_stats(&region_stats);
         mc.acquire(2000);
         let (_, removed) = rsm.collect_regions_to_load_and_evict(vec![2, 3, 4, 5, 6, 7], &mc);
         assert_eq!(&removed, &[region_3.clone()]);
@@ -582,7 +582,7 @@ pub mod tests {
 
     //     let sim = Arc::new(RegionInfoSimulator {
     //         regions: Mutex::new(all_regions.clone()),
-    //         region_activities: Mutex::default(),
+    //         region_stats: Mutex::default(),
     //     });
     //     // 10 ms min duration eviction for testing purposes.
     //     let rsm = RangeStatsManager::new(
