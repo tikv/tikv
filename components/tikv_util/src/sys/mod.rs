@@ -218,8 +218,6 @@ mod tests {
         let result = path_in_diff_mount_point(normal_path1, normal_path2);
         assert_eq!(result, false);
     }
-<<<<<<< HEAD
-=======
 
     #[cfg(target_os = "linux")]
     #[test]
@@ -276,5 +274,4 @@ mqueue /dev/mqueue mqueue rw,relatime 0 0
 
         disk::get_disk_space_stats("/non-exist-path").unwrap_err();
     }
->>>>>>> 0e3806935c (*: fix compatibility to `raft-engine.spill-dir` (#17358))
 }

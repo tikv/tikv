@@ -124,14 +124,10 @@ use tikv_util::{
 use tokio::runtime::Builder;
 
 use crate::{
-<<<<<<< HEAD
-    common::{ConfiguredRaftEngine, EngineMetricsManager, EnginesResourceInfo, TikvServerCore},
-=======
     common::{
         ConfiguredRaftEngine, DiskUsageChecker, EngineMetricsManager, EnginesResourceInfo,
-        KvEngineBuilder, TikvServerCore,
+        TikvServerCore,
     },
->>>>>>> 0e3806935c (*: fix compatibility to `raft-engine.spill-dir` (#17358))
     memory::*,
     setup::*,
     signal_handler,
