@@ -1333,7 +1333,7 @@ where
         // checked. Otherwise, it's not needed to be checked. And as the configuration
         // is static, it's safe to check it only once.
         let raft_auxiliay_path = if self.core.config.raft_engine.enable {
-            self.core.config.raft_engine.config().spill_dir.clone()
+            self.core.config.raft_engine.config().spill_dir
         } else {
             None
         };
