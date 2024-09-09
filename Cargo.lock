@@ -5408,6 +5408,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "simsimd"
+version = "5.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73d5c0b8f7f0bbff808d735101a8929d1529ecc9ca9346c9aa9c038e21c5417d"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "siphasher"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6371,6 +6380,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "simsimd",
  "slog",
  "slog-global",
  "static_assertions",

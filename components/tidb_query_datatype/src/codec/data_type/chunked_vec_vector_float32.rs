@@ -3,10 +3,7 @@
 use super::{
     bit_vec::BitVec, ChunkRef, ChunkedVec, UnsafeRefInto, VectorFloat32, VectorFloat32Ref,
 };
-use crate::{
-    codec::mysql::{VectorFloat32Decoder, VectorFloat32Encoder},
-    impl_chunked_vec_common,
-};
+use crate::impl_chunked_vec_common;
 
 /// A vector storing `Option<VectorFloat32>` with a compact layout.
 ///
@@ -18,7 +15,7 @@ use crate::{
 /// each element.
 #[derive(Debug, PartialEq, Clone)]
 pub struct ChunkedVecVectorFloat32 {
-    data: Vec<u8>,
+    data: Vec<f32>, // Only contains the data part, without any length prefix
     bitmap: BitVec,
     length: usize,
     var_offset: Vec<usize>,
@@ -29,12 +26,8 @@ impl ChunkedVecVectorFloat32 {
     pub fn get(&self, idx: usize) -> Option<VectorFloat32Ref<'_>> {
         assert!(idx < self.len());
         if self.bitmap.get(idx) {
-            let mut sliced_data = &self.data[self.var_offset[idx]..self.var_offset[idx + 1]];
-            let v: VectorFloat32Ref<'_> = sliced_data.read_vector_float32_ref().unwrap();
-            unsafe {
-                let v_with_static_lifetime = v.unsafe_into();
-                Some(v_with_static_lifetime)
-            }
+            let sliced_data = &self.data[self.var_offset[idx]..self.var_offset[idx + 1]];
+            Some(VectorFloat32Ref::from_f32(sliced_data))
         } else {
             None
         }
@@ -56,7 +49,7 @@ impl ChunkedVec<VectorFloat32> for ChunkedVecVectorFloat32 {
     #[inline]
     fn push_data(&mut self, value: VectorFloat32) {
         self.bitmap.push(true);
-        self.data.write_vector_float32(value.as_ref()).unwrap();
+        self.data.extend_from_slice(value.as_ref().data());
         self.var_offset.push(self.data.len());
         self.length += 1;
     }
