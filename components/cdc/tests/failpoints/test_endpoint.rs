@@ -657,6 +657,12 @@ fn test_delegate_fail_during_incremental_scan() {
     recv.replace(Some(recver));
 }
 
+// The case shows it's possible that unordered Prewrite events on one same key
+// can be sent to TiCDC clients. Generally it only happens when a region changes
+// during a Pipelined-DML transaction.
+//
+// To ensure TiCDC can handle the situation, `generation` should be carried in
+// Prewrite events.
 #[test]
 fn test_cdc_pipeline_dml() {
     let mut cluster = new_server_cluster(0, 1);
