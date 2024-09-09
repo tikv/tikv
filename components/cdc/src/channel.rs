@@ -18,7 +18,11 @@ use futures::{
     stream, SinkExt, Stream, StreamExt,
 };
 use grpcio::WriteFlags;
-use kvproto::cdcpb::{ChangeDataEvent, Event, ResolvedTs};
+use kvproto::cdcpb::{
+    ChangeDataEvent, Event, ResolvedTs,
+    Congested as ErrCongested,
+};
+
 use protobuf::Message;
 use tikv_util::{
     future::block_on_timeout,
@@ -214,8 +218,11 @@ pub fn channel(conn_id: ConnId, buffer: usize, memory_quota: Arc<MemoryQuota>) -
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum SendError {
+    // Full is returned by the sender if the channel is full, this should only happen to the bounded sender.
     Full,
+    // Disconnected is returned by the sender if the channel is disconnected.
     Disconnected,
+    // Congested is returned if memory quota exceeded.
     Congested,
 }
 
