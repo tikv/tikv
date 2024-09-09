@@ -1,5 +1,4 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
-
 #[cfg(target_arch = "aarch64")]
 use core::arch::aarch64::*;
 #[cfg(target_arch = "x86_64")]
@@ -175,7 +174,7 @@ impl<'a> VectorFloat32Ref<'a> {
                 let mut i = 0;
                 while i + 4 <= self.len() {
                     // load 4 float-elements to simd register.
-                    let a_vec = _mm512_loadu_ps(self.data().as_ptr().add(i));
+                    let a_vec = _mm_loadu_ps(self.data().as_ptr().add(i));
                     let b_vec = _mm_loadu_ps(b.data().as_ptr().add(i));
 
                     let ab_vec = _mm_mul_ps(a_vec, b_vec);
@@ -411,106 +410,107 @@ pub trait VectorFloat32Encoder: NumberEncoder {
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
+#[cfg(test)]
+mod tests {
 
-//     #[test]
-//     fn test_to_string() {
-//         let v = VectorFloat32::from_f32(&[1.0, 2.0]);
-//         assert_eq!("[1,2]", v.to_string());
+    use super::*;
 
-//         let v = VectorFloat32::from_f32(&[1.1, 2.2]);
-//         assert_eq!("[1.1,2.2]", v.to_string());
+    #[test]
+    fn test_to_string() {
+        let v = VectorFloat32::copy_from_f32(&[1.0, 2.0]);
+        assert_eq!("[1,2]", v.to_string());
 
-//         let v = VectorFloat32::from_f32(&[]);
-//         assert_eq!("[]", v.to_string());
-//     }
+        let v = VectorFloat32::copy_from_f32(&[1.1, 2.2]);
+        assert_eq!("[1.1,2.2]", v.to_string());
 
-//     #[test]
-//     fn test_input_length() {
-//         let buf: Vec<u8> = vec![
-//             0xcd, 0xcc, 0x8c, 0x3f, // Element 1 = 0x3f8ccccd
-//             0xcd, 0xcc, 0x0c, 0x40, // Element 2 = 0x400ccccd
-//             0xcd, 0xcc, 0x0c,
-//         ];
-//         let v = VectorFloat32Ref::new(&buf[..]);
-//         v.unwrap_err();
+        let v = VectorFloat32::copy_from_f32(&[]);
+        assert_eq!("[]", v.to_string());
+    }
 
-//         let buf: Vec<u8> = vec![
-//             0xcd, 0xcc, 0x8c, 0x3f, // Element 1 = 0x3f8ccccd
-//             0xcd, 0xcc, 0x0c, 0x40, // Element 2 = 0x400ccccd
-//             0xcd, 0xcc, 0x0c, 0x40,
-//         ];
-//         let v = VectorFloat32Ref::new(&buf[..]);
-//         v.unwrap();
-//     }
+    // #[test]
+    // fn test_input_length() {
+    //     let buf: Vec<u8> = vec![
+    //         0xcd, 0xcc, 0x8c, 0x3f, // Element 1 = 0x3f8ccccd
+    //         0xcd, 0xcc, 0x0c, 0x40, // Element 2 = 0x400ccccd
+    //         0xcd, 0xcc, 0x0c,
+    //     ];
+    //     let v = VectorFloat32Ref::copy_from_f32(&buf[..]);
+    //     v.unwrap_err();
 
-//     #[test]
-//     fn test_compare() {
-//         let v1 = VectorFloat32::from_f32(&[1.0, 2.0]);
-//         let v2 = VectorFloat32::from_f32(&[1.1, 2.2]);
-//         assert!(v1 < v2);
+    //     let buf: Vec<u8> = vec![
+    //         0xcd, 0xcc, 0x8c, 0x3f, // Element 1 = 0x3f8ccccd
+    //         0xcd, 0xcc, 0x0c, 0x40, // Element 2 = 0x400ccccd
+    //         0xcd, 0xcc, 0x0c, 0x40,
+    //     ];
+    //     let v = VectorFloat32Ref::copy_from_f32(&buf[..]);
+    //     v.unwrap();
+    // }
 
-//         let v3 = VectorFloat32::from_f32(&[1.0, 2.0]);
-//         assert!(v1 == v3);
+    #[test]
+    fn test_compare() {
+        let v1 = VectorFloat32::copy_from_f32(&[1.0, 2.0]);
+        let v2 = VectorFloat32::copy_from_f32(&[1.1, 2.2]);
+        assert!(v1 < v2);
 
-//         let v4 = VectorFloat32::from_f32(&[0.3, 0.4]);
-//         assert!(v1 > v4);
+        let v3 = VectorFloat32::copy_from_f32(&[1.0, 2.0]);
+        assert!(v1 == v3);
 
-//         let v4 = VectorFloat32::from_f32(&[1.0]);
-//         assert!(v1 > v4);
+        let v4 = VectorFloat32::copy_from_f32(&[0.3, 0.4]);
+        assert!(v1 > v4);
 
-//         let v5 = VectorFloat32::from_f32(&[1.0, 2.0, 0.5]);
-//         assert!(v1 < v5);
-//     }
+        let v4 = VectorFloat32::copy_from_f32(&[1.0]);
+        assert!(v1 > v4);
 
-//     #[test]
-//     fn test_encode() {
-//         let v = VectorFloat32::from_f32(&[1.1, 2.2]);
-//         let mut encoded = Vec::new();
+        let v5 = VectorFloat32::copy_from_f32(&[1.0, 2.0, 0.5]);
+        assert!(v1 < v5);
+    }
 
-//         encoded.write_vector_float32(v.as_ref()).unwrap();
-//         assert_eq!(
-//             encoded,
-//             vec![
-//                 0x02, 0x00, 0x00, 0x00, // Length = 0x02
-//                 0xcd, 0xcc, 0x8c, 0x3f, // Element 1 = 0x3f8ccccd
-//                 0xcd, 0xcc, 0x0c, 0x40, // Element 2 = 0x400ccccd
-//             ]
-//         );
-//         assert_eq!(v.as_ref().encoded_len(), 12);
-//     }
+    #[test]
+    fn test_encode() {
+        let v = VectorFloat32::copy_from_f32(&[1.1, 2.2]);
+        let mut encoded = Vec::new();
 
-//     #[test]
-//     fn test_decode() {
-//         let buf: Vec<u8> = vec![
-//             0x02, 0x00, 0x00, 0x00, // Length = 0x02
-//             0xcd, 0xcc, 0x8c, 0x3f, // Element 1 = 0x3f8ccccd
-//             0xcd, 0xcc, 0x0c, 0x40, // Element 2 = 0x400ccccd
-//             0xff, // Remaining dummy data
-//         ];
+        encoded.write_vector_float32(v.as_ref()).unwrap();
+        assert_eq!(
+            encoded,
+            vec![
+                0x02, 0x00, 0x00, 0x00, // Length = 0x02
+                0xcd, 0xcc, 0x8c, 0x3f, // Element 1 = 0x3f8ccccd
+                0xcd, 0xcc, 0x0c, 0x40, // Element 2 = 0x400ccccd
+            ]
+        );
+        assert_eq!(v.as_ref().encoded_len(), 12);
+    }
 
-//         let mut buf_slice = &buf[..];
+    #[test]
+    fn test_decode() {
+        let buf: Vec<u8> = vec![
+            0x02, 0x00, 0x00, 0x00, // Length = 0x02
+            0xcd, 0xcc, 0x8c, 0x3f, // Element 1 = 0x3f8ccccd
+            0xcd, 0xcc, 0x0c, 0x40, // Element 2 = 0x400ccccd
+            0xff, // Remaining dummy data
+        ];
 
-//         let v = buf_slice.read_vector_float32_ref().unwrap();
+        let mut buf_slice = &buf[..];
 
-//         assert_eq!(v.len(), 2);
-//         assert_eq!(v.to_string(), "[1.1,2.2]");
+        let v = buf_slice.read_vector_float32_ref().unwrap();
 
-//         assert_eq!(buf_slice.len(), 1);
-//         assert_eq!(buf_slice, &[0xff]);
+        assert_eq!(v.len(), 2);
+        assert_eq!(v.to_owned().as_ref().to_string(), "[1.1,2.2]");
 
-//         buf_slice.read_vector_float32_ref().unwrap_err();
-//         assert_eq!(buf_slice.len(), 1);
-//         assert_eq!(buf_slice, &[0xff]);
+        assert_eq!(buf_slice.len(), 1);
+        assert_eq!(buf_slice, &[0xff]);
 
-//         buf_slice = &[];
-//         let v = buf_slice.read_vector_float32_ref().unwrap();
-//         assert_eq!(v.len(), 0);
-//         assert_eq!(v.to_string(), "[]");
-//         let mut encode_buf = Vec::new();
-//         encode_buf.write_vector_float32(v).unwrap();
-//         assert_eq!(encode_buf, vec![0x00, 0x00, 0x00, 0x00]);
-//     }
-// }
+        let _ = buf_slice.read_vector_float32_ref();
+        assert_eq!(buf_slice.len(), 1);
+        assert_eq!(buf_slice, &[0xff]);
+
+        buf_slice = &[];
+        let v = buf_slice.read_vector_float32_ref().unwrap();
+        assert_eq!(v.len(), 0);
+        assert_eq!(v.to_owned().as_ref().to_string(), "[]");
+        let mut encode_buf = Vec::new();
+        encode_buf.write_vector_float32(v.to_owned().as_ref()).unwrap();
+        assert_eq!(encode_buf, vec![0x00, 0x00, 0x00, 0x00]);
+    }
+}
