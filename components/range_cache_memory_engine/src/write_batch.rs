@@ -173,7 +173,7 @@ impl RangeCacheWriteBatch {
         // record last region before flush.
         self.record_last_written_region();
 
-        fail::fail_point!("on_write_impl");
+        fail::fail_point!("on_range_cache_write_batch_write_impl");
         let guard = &epoch::pin();
         let start = Instant::now();
         let mut lock_modification: u64 = 0;

@@ -12,7 +12,9 @@ use std::{
 };
 
 use crossbeam::{atomic::AtomicCell, channel::TrySendError};
-use engine_traits::{CacheRegion, KvEngine, Peekable, RaftEngine, SnapshotContext};
+use engine_traits::{
+    CacheRegion, KvEngine, Peekable, RaftEngine, SnapshotContext, SnapshotMiscExt,
+};
 use fail::fail_point;
 use kvproto::{
     errorpb,
@@ -34,6 +36,7 @@ use txn_types::{TimeStamp, WriteBatchFlags};
 
 use super::metrics::*;
 use crate::{
+    coprocessor::CoprocessorHost,
     errors::RAFTSTORE_IS_BUSY,
     store::{
         cmd_resp,
@@ -113,6 +116,7 @@ pub trait ReadExecutor {
         read_index: Option<u64>,
         snap_ctx: Option<SnapshotContext>,
         local_read_ctx: Option<LocalReadContext<'_, Self::Tablet>>,
+        host: &CoprocessorHost<Self::Tablet>,
     ) -> ReadResponse<<Self::Tablet as KvEngine>::Snapshot> {
         let requests = msg.get_requests();
         let mut response = ReadResponse {
@@ -138,10 +142,21 @@ pub trait ReadExecutor {
                     }
                 }
                 CmdType::Snap => {
-                    let snapshot = RegionSnapshot::from_snapshot(
+                    let mut snapshot = RegionSnapshot::from_snapshot(
                         self.get_snapshot(snap_ctx.clone(), &local_read_ctx),
                         region.clone(),
                     );
+                    if let Some(snap_ctx) = snap_ctx.as_ref() {
+                        // We only observe snapshot when it has snapshot context.
+                        //
+                        // Currently, the snapshot context is set when caller
+                        // wants an in-memory engine snapshot which requires
+                        // the snapshot and some metadata in the context.
+                        let seqno = snapshot.get_snapshot().sequence_number();
+                        if let Some(observed_snap) = host.on_snapshot(snap_ctx.clone(), seqno) {
+                            snapshot.set_observed_snapshot(observed_snap);
+                        }
+                    }
                     response.snapshot = Some(snapshot);
                     Response::default()
                 }
@@ -921,6 +936,7 @@ where
     snap_cache: SnapCache<E>,
     // A channel to raftstore.
     router: C,
+    host: CoprocessorHost<E>,
 }
 
 impl<E, C> LocalReader<E, C>
@@ -928,12 +944,18 @@ where
     E: KvEngine,
     C: ProposalRouter<E::Snapshot> + CasualRouter<E>,
 {
-    pub fn new(kv_engine: E, store_meta: StoreMetaDelegate<E>, router: C) -> Self {
+    pub fn new(
+        kv_engine: E,
+        store_meta: StoreMetaDelegate<E>,
+        router: C,
+        host: CoprocessorHost<E>,
+    ) -> Self {
         Self {
             local_reader: LocalReaderCore::new(store_meta),
             kv_engine,
             snap_cache: SnapCache::new(),
             router,
+            host,
         }
     }
 
@@ -1020,7 +1042,14 @@ where
         }
 
         let region = Arc::clone(&delegate.region);
-        let mut response = delegate.execute(req, &region, None, snap_ctx, Some(local_read_ctx));
+        let mut response = delegate.execute(
+            req,
+            &region,
+            None,
+            snap_ctx,
+            Some(local_read_ctx),
+            &self.host,
+        );
         if let Some(snap) = response.snapshot.as_mut() {
             snap.bucket_meta = delegate.bucket_meta.clone();
         }
@@ -1049,7 +1078,8 @@ where
 
         let region = Arc::clone(&delegate.region);
         // Getting the snapshot
-        let mut response = delegate.execute(req, &region, None, None, Some(local_read_ctx));
+        let mut response =
+            delegate.execute(req, &region, None, None, Some(local_read_ctx), &self.host);
         if let Some(snap) = response.snapshot.as_mut() {
             snap.bucket_meta = delegate.bucket_meta.clone();
         }
@@ -1233,6 +1263,7 @@ where
             kv_engine: self.kv_engine.clone(),
             snap_cache: self.snap_cache.clone(),
             router: self.router.clone(),
+            host: self.host.clone(),
         }
     }
 }
@@ -1366,7 +1397,9 @@ mod tests {
         let path = Builder::new().prefix(path).tempdir().unwrap();
         let db = engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
         let (ch, rx, _) = MockRouter::new();
-        let mut reader = LocalReader::new(db.clone(), StoreMetaDelegate::new(store_meta, db), ch);
+        let host = CoprocessorHost::default();
+        let mut reader =
+            LocalReader::new(db.clone(), StoreMetaDelegate::new(store_meta, db), ch, host);
         reader.local_reader.store_id = Cell::new(Some(store_id));
         (path, reader, rx)
     }
@@ -2497,6 +2530,7 @@ mod tests {
             engine.clone(),
             StoreMetaDelegate::new(store_meta, engine),
             ch,
+            CoprocessorHost::default(),
         );
         reader.local_reader.store_id = Cell::new(Some(store_id));
         (path, reader, rx, memory_engine)
