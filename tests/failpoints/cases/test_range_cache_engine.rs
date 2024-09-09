@@ -412,7 +412,11 @@ fn test_load_with_eviction() {
         }
         // Now, the range ["", "") should be cached
         let region = new_region(1, split_key, "");
-        range_cache_engine.evict_region(&CacheRegion::from_region(&region), EvictReason::AutoEvict);
+        range_cache_engine.evict_region(
+            &CacheRegion::from_region(&region),
+            EvictReason::AutoEvict,
+            None,
+        );
     }
 
     fail::remove("on_range_cache_write_batch_write_impl");

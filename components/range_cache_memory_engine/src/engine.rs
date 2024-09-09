@@ -313,12 +313,17 @@ impl RangeCacheMemoryEngine {
     /// Evict a region from the in-memory engine. After this call, the region
     /// will not be readable, but the data of the region may not be deleted
     /// immediately due to some ongoing snapshots.
-    pub fn evict_region(&self, region: &CacheRegion, evict_reason: EvictReason) {
-        let deleteable_regions = self
-            .core
-            .write()
-            .range_manager
-            .evict_region(region, evict_reason);
+    pub fn evict_region(
+        &self,
+        region: &CacheRegion,
+        evict_reason: EvictReason,
+        cb: Option<Box<dyn FnOnce() + Send + Sync>>,
+    ) {
+        let deleteable_regions =
+            self.core
+                .write()
+                .range_manager
+                .evict_region(region, evict_reason, cb);
         if !deleteable_regions.is_empty() {
             // The range can be deleted directly.
             if let Err(e) = self
@@ -471,7 +476,7 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
     fn on_region_event(&self, event: RegionEvent) {
         match event {
             RegionEvent::Eviction { region, reason } => {
-                self.evict_region(&region, reason);
+                self.evict_region(&region, reason, None);
             }
             RegionEvent::Split {
                 source,
@@ -493,7 +498,7 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
                         true
                     });
                 for r in regions {
-                    self.evict_region(&r, reason);
+                    self.evict_region(&r, reason, None);
                 }
             }
         }
@@ -511,11 +516,17 @@ impl Iterable for RangeCacheMemoryEngine {
 
 #[cfg(test)]
 pub mod tests {
-    use std::sync::Arc;
+    use std::{
+        sync::{mpsc::sync_channel, Arc},
+        time::Duration,
+    };
 
     use crossbeam::epoch;
-    use engine_traits::{CacheRegion, CF_DEFAULT, CF_LOCK, CF_WRITE};
-    use tikv_util::config::{ReadableSize, VersionTrack};
+    use engine_traits::{
+        CacheRegion, EvictReason, Mutable, RangeCacheEngine, WriteBatch, WriteBatchExt, CF_DEFAULT,
+        CF_LOCK, CF_WRITE,
+    };
+    use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
 
     use super::SkiplistEngine;
     use crate::{
@@ -667,5 +678,46 @@ pub mod tests {
 
         iter.next(guard);
         assert!(!iter.valid());
+    }
+
+    #[test]
+    fn test_cb_on_eviction_with_on_going_snapshot() {
+        let mut config = RangeCacheEngineConfig::config_for_test();
+        config.gc_interval = ReadableDuration(Duration::from_secs(1));
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(config),
+        )));
+
+        let region = new_region(1, b"", b"z");
+        let cache_region = CacheRegion::from_region(&region);
+        engine.new_region(region.clone());
+
+        let mut wb = engine.write_batch();
+        wb.prepare_for_region(cache_region.clone());
+        wb.set_sequence_number(10).unwrap();
+        wb.put(b"a", b"val1").unwrap();
+        wb.put(b"b", b"val2").unwrap();
+        wb.put(b"c", b"val3").unwrap();
+        wb.write().unwrap();
+
+        let snap = engine.snapshot(cache_region.clone(), 100, 100).unwrap();
+
+        let (tx, rx) = sync_channel(0);
+        engine.evict_region(
+            &cache_region,
+            EvictReason::BecomeFollower,
+            Some(Box::new(move || {
+                let _ = tx.send(true);
+            })),
+        );
+
+        rx.recv_timeout(Duration::from_secs(1)).unwrap_err();
+        drop(snap);
+        let _ = rx.recv();
+
+        {
+            let core = engine.core().read();
+            assert!(core.range_manager().region_meta(1).is_none());
+        }
     }
 }
