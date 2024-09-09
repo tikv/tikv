@@ -1737,7 +1737,7 @@ mod tests {
         });
 
         let evict_region = new_regions[1].clone();
-        engine.evict_region(&evict_region, EvictReason::AutoEvict);
+        engine.evict_region(&evict_region, EvictReason::AutoEvict, None);
         assert_eq!(
             engine.snapshot(range.clone(), 10, 200).unwrap_err(),
             FailedReason::EpochNotMatch
@@ -1813,7 +1813,7 @@ mod tests {
         });
 
         let evict_region = new_regions[1].clone();
-        engine.evict_region(&evict_region, EvictReason::AutoEvict);
+        engine.evict_region(&evict_region, EvictReason::AutoEvict, None);
 
         let r_left = new_regions[0].clone();
         let s3 = engine.snapshot(r_left.clone(), 20, 20).unwrap();
@@ -1821,7 +1821,7 @@ mod tests {
         let s4 = engine.snapshot(r_right, 20, 20).unwrap();
 
         drop(s3);
-        engine.evict_region(&r_left, EvictReason::AutoEvict);
+        engine.evict_region(&r_left, EvictReason::AutoEvict, None);
 
         // todo(SpadeA): memory limiter
         {

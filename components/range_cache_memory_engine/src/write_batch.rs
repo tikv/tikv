@@ -220,7 +220,7 @@ impl RangeCacheWriteBatch {
             return;
         }
         self.engine
-            .evict_region(self.current_region.as_ref().unwrap(), reason);
+            .evict_region(self.current_region.as_ref().unwrap(), reason, None);
         // cleanup cached entries belong to this region as there is no need
         // to write them.
         assert!(self.save_points.is_empty());
@@ -886,6 +886,7 @@ mod tests {
         engine.evict_region(
             &CacheRegion::from_region(&regions[0]),
             EvictReason::AutoEvict,
+            None,
         );
         wait_evict_done(&engine);
         flush_epoch();

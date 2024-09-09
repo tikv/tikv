@@ -508,7 +508,7 @@ impl BackgroundRunnerCore {
                 meta.set_safe_point(safe_point);
             } else {
                 assert_eq!(meta.get_state(), RegionState::LoadingCanceled);
-                meta.mark_evict(RegionState::Evicting, EvictReason::LoadFailed);
+                meta.mark_evict(RegionState::Evicting, EvictReason::LoadFailed, None);
                 remove_regions.push(meta.get_region().clone());
             }
         };
@@ -563,7 +563,7 @@ impl BackgroundRunnerCore {
             } else {
                 EvictReason::LoadFailedWithoutStart
             };
-            meta.mark_evict(RegionState::Evicting, reason);
+            meta.mark_evict(RegionState::Evicting, reason, None);
             remove_regions.push(meta.get_region().clone());
         };
 
@@ -624,10 +624,11 @@ impl BackgroundRunnerCore {
                 break;
             }
             let cache_region = CacheRegion::from_region(&region);
-            let deleteable_regions = self
-                .engine
-                .region_manager()
-                .evict_region(&cache_region, EvictReason::MemoryLimitReached);
+            let deleteable_regions = self.engine.region_manager().evict_region(
+                &cache_region,
+                EvictReason::MemoryLimitReached,
+                None,
+            );
             if !deleteable_regions.is_empty() {
                 info!(
                     "ime evict on soft limit reached";
@@ -685,10 +686,11 @@ impl BackgroundRunnerCore {
         for evict_region in regions_to_remove {
             if self.memory_controller.reached_soft_limit() {
                 let cache_region = CacheRegion::from_region(&evict_region);
-                let deleteable_regions = self
-                    .engine
-                    .region_manager()
-                    .evict_region(&cache_region, EvictReason::AutoEvict);
+                let deleteable_regions = self.engine.region_manager().evict_region(
+                    &cache_region,
+                    EvictReason::AutoEvict,
+                    None,
+                );
                 info!(
                     "ime load_evict: soft limit reached";
                     "region_to_evict" => ?&cache_region,
@@ -2407,7 +2409,7 @@ pub mod tests {
             3
         );
 
-        engine.evict_region(&region2, EvictReason::AutoEvict);
+        engine.evict_region(&region2, EvictReason::AutoEvict, None);
         assert_eq!(6, element_count(&default));
         assert_eq!(6, element_count(&write));
 
