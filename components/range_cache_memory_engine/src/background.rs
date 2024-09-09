@@ -233,7 +233,7 @@ impl BgWorkManager {
             gc_interval,
             pd_client.clone(),
         );
-        let scheduler = worker.start_with_timer("ime-bg", runner);
+        let scheduler = worker.start_with_timer("ime-bg-runner", runner);
 
         let (h, tx) = BgWorkManager::start_tick(
             scheduler.clone(),
