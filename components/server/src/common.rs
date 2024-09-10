@@ -695,72 +695,48 @@ impl<T: fmt::Display + Send + 'static> Stop for LazyWorker<T> {
     }
 }
 
-pub trait KvEngineBuilder: KvEngine {
-    fn build(
-        range_cache_engine_context: RangeCacheEngineContext,
-        disk_engine: RocksEngine,
-        pd_client: Option<Arc<RpcClient>>,
-        region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
-    ) -> Self;
-}
-
-impl KvEngineBuilder for RocksEngine {
-    fn build(
-        _: RangeCacheEngineContext,
-        disk_engine: RocksEngine,
-        _pd_client: Option<Arc<RpcClient>>,
-        _region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
-    ) -> Self {
-        disk_engine
+pub fn build_hybrid_engine(
+    range_cache_engine_context: RangeCacheEngineContext,
+    disk_engine: RocksEngine,
+    pd_client: Option<Arc<RpcClient>>,
+    region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
+) -> HybridEngine<RocksEngine, RangeCacheMemoryEngine> {
+    // todo(SpadeA): add config for it
+    let mut memory_engine = RangeCacheMemoryEngine::with_region_info_provider(
+        range_cache_engine_context.clone(),
+        region_info_provider,
+    );
+    memory_engine.set_disk_engine(disk_engine.clone());
+    if let Some(pd_client) = pd_client.as_ref() {
+        memory_engine.start_hint_service(
+            <RangeCacheMemoryEngine as RangeCacheEngine>::RangeHintService::from(pd_client.clone()),
+        )
     }
-}
 
-impl KvEngineBuilder for HybridEngine<RocksEngine, RangeCacheMemoryEngine> {
-    fn build(
-        range_cache_engine_context: RangeCacheEngineContext,
-        disk_engine: RocksEngine,
-        pd_client: Option<Arc<RpcClient>>,
-        region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
-    ) -> Self {
-        // todo(SpadeA): add config for it
-        let mut memory_engine = RangeCacheMemoryEngine::with_region_info_provider(
-            range_cache_engine_context.clone(),
-            region_info_provider,
-        );
-        memory_engine.set_disk_engine(disk_engine.clone());
-        if let Some(pd_client) = pd_client.as_ref() {
-            memory_engine.start_hint_service(
-                <RangeCacheMemoryEngine as RangeCacheEngine>::RangeHintService::from(
-                    pd_client.clone(),
-                ),
-            )
+    let cross_check_interval = range_cache_engine_context
+        .config()
+        .value()
+        .cross_check_interval;
+    if !cross_check_interval.is_zero() {
+        if let Err(e) =
+            memory_engine
+                .bg_worker_manager()
+                .schedule_task(BackgroundTask::TurnOnCrossCheck((
+                    memory_engine.clone(),
+                    disk_engine.clone(),
+                    range_cache_engine_context.pd_client(),
+                    cross_check_interval.0,
+                )))
+        {
+            error!(
+                "schedule TurnOnCrossCheck failed";
+                "err" => ?e,
+            );
+            assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
         }
-
-        let cross_check_interval = range_cache_engine_context
-            .config()
-            .value()
-            .cross_check_interval;
-        if !cross_check_interval.is_zero() {
-            if let Err(e) =
-                memory_engine
-                    .bg_worker_manager()
-                    .schedule_task(BackgroundTask::TurnOnCrossCheck((
-                        memory_engine.clone(),
-                        disk_engine.clone(),
-                        range_cache_engine_context.pd_client(),
-                        cross_check_interval.0,
-                    )))
-            {
-                error!(
-                    "schedule TurnOnCrossCheck failed";
-                    "err" => ?e,
-                );
-                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
-            }
-        }
-
-        HybridEngine::new(disk_engine, memory_engine)
     }
+
+    HybridEngine::new(disk_engine, memory_engine)
 }
 
 pub trait ConfiguredRaftEngine: RaftEngine {
