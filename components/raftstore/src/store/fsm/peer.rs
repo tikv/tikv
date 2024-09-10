@@ -3081,9 +3081,6 @@ where
                     }
                 }
             }
-            ExtraMessageType::MsgPreLoadRange => {
-                self.ctx.engines.kv.load_region(self.region().clone());
-            }
         }
     }
 

@@ -3,7 +3,7 @@
 use std::{sync::Arc, time::Duration};
 
 use dashmap::DashMap;
-use engine_traits::CacheRange;
+use engine_traits::CacheRegion;
 use futures::{
     compat::Future01CompatExt,
     stream::{self, StreamExt},
@@ -50,13 +50,13 @@ pub struct KeyRangeRule {
     pub end_key: String,
 }
 
-impl TryFrom<&KeyRangeRule> for CacheRange {
+impl TryFrom<&KeyRangeRule> for CacheRegion {
     type Error = Box<dyn std::error::Error>;
 
     fn try_from(key_range: &KeyRangeRule) -> Result<Self, Self::Error> {
         let start_key = data_key(&hex::decode(&key_range.start_key)?);
         let end_key = data_end_key(&hex::decode(&key_range.end_key)?);
-        Ok(CacheRange::new(start_key, end_key))
+        Ok(CacheRegion::new(0, 0, start_key, end_key))
     }
 }
 pub type RegionLabelAddedCb = Arc<dyn Fn(&LabelRule) + Send + Sync>;
@@ -424,7 +424,7 @@ pub mod tests {
             );
         };
 
-        let background_worker = Builder::new("background").thread_count(1).create();
+        let background_worker = Builder::new("ime-test").thread_count(1).create();
         let mut s_clone = s.clone();
         background_worker.spawn_async_task(async move {
             s_clone.watch_region_labels().await;

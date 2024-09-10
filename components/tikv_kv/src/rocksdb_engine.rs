@@ -311,6 +311,12 @@ impl<RE: RaftExtension + 'static> Engine for RocksEngine<RE> {
 
         async move { Ok(res?.await.unwrap()) }
     }
+
+    type IMSnap = Self::Snap;
+    type IMSnapshotRes = Self::SnapshotRes;
+    fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes {
+        self.async_snapshot(ctx)
+    }
 }
 
 impl Snapshot for Arc<RocksSnapshot> {

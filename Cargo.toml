@@ -36,6 +36,7 @@ testexport = [
   "engine_rocks/testexport",
   "engine_panic/testexport",
   "hybrid_engine/testexport",
+  "encryption/testexport",
 ]
 test-engine-kv-rocksdb = ["engine_test/test-engine-kv-rocksdb"]
 test-engine-raft-raft-engine = ["engine_test/test-engine-raft-raft-engine"]
@@ -80,6 +81,7 @@ crc64fast = "0.1"
 crossbeam = { workspace = true }
 crypto = { workspace = true }
 dashmap = "5"
+encryption = { workspace = true }
 encryption_export = { workspace = true }
 engine_panic = { workspace = true }
 engine_rocks = { workspace = true }
@@ -243,8 +245,6 @@ procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "7693954bd1dd86e
 # After the PR to rust-rocksdb is merged, remember to comment this out and run `cargo update -p rocksdb`.
 # [patch.'https://github.com/tikv/rust-rocksdb']
 # rocksdb = { git = "https://github.com/your_github_id/rust-rocksdb", branch = "your_branch" }
-[patch.'https://github.com/pingcap/kvproto']
-kvproto = { git = "https://github.com/SpadeA-Tang/kvproto", branch = "add-pre-load" }
 
 [workspace]
 # See https://github.com/rust-lang/rfcs/blob/master/text/2957-cargo-features2.md

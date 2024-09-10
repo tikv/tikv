@@ -174,7 +174,7 @@ pub fn new_region<T1: Into<Vec<u8>>, T2: Into<Vec<u8>>>(id: u64, start: T1, end:
     region.id = id;
     region.start_key = start.into();
     region.end_key = end.into();
-    // push a dummy peer to avoid CacheRange::from_region panic.
+    // push a dummy peer to avoid CacheRegion::from_region panic.
     region.mut_peers().push(Peer::default());
     region
 }

@@ -19,7 +19,7 @@ use bytes::Bytes;
 use collections::{HashMap, HashSet};
 use crossbeam::{atomic::AtomicCell, channel::TrySendError};
 use engine_traits::{
-    CacheRange, Engines, KvEngine, PerfContext, RaftEngine, Snapshot, SnapshotContext, WriteBatch,
+    CacheRegion, Engines, KvEngine, PerfContext, RaftEngine, Snapshot, SnapshotContext, WriteBatch,
     WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use error_code::ErrorCodeExt;
@@ -3895,11 +3895,7 @@ where
         self.should_wake_up = true;
     }
 
-    fn pre_transfer_leader<T: Transport>(
-        &mut self,
-        peer: &metapb::Peer,
-        ctx: &mut PollContext<EK, ER, T>,
-    ) -> bool {
+    fn pre_transfer_leader(&mut self, peer: &metapb::Peer) -> bool {
         // Checks if safe to transfer leader.
         if self.raft_group.raft.has_pending_conf() {
             info!(
@@ -3925,18 +3921,6 @@ where
         // forbids setting it for MsgTransferLeader messages.
         msg.set_log_term(self.term());
         self.raft_group.raft.msgs.push(msg);
-
-        if ctx.engines.kv.region_cached(&self.region()) {
-            let mut msg = RaftMessage::default();
-            msg.set_region_id(self.region_id);
-            msg.set_from_peer(self.peer.clone());
-            msg.set_to_peer(peer.clone());
-            msg.set_region_epoch(self.region().get_region_epoch().clone());
-            let extra_msg = msg.mut_extra_msg();
-            extra_msg.set_type(ExtraMessageType::MsgPreLoadRange);
-            self.send_raft_messages(ctx, vec![msg]);
-        }
-
         true
     }
 
@@ -4790,7 +4774,7 @@ where
     ///    to do the remaining work.
     ///
     /// See also: tikv/rfcs#37.
-    fn propose_transfer_leader<T: Transport>(
+    fn propose_transfer_leader<T>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
         req: RaftCmdRequest,
@@ -4842,7 +4826,7 @@ where
         let transferred = if peer.id == self.peer.id {
             false
         } else {
-            self.pre_transfer_leader(peer, ctx)
+            self.pre_transfer_leader(peer)
         };
 
         // transfer leader command doesn't need to replicate log and apply, so we
@@ -4979,9 +4963,9 @@ where
         Ok(propose_index)
     }
 
-    fn handle_read<E: ReadExecutor<Tablet = EK>>(
+    fn handle_read<T>(
         &self,
-        reader: &mut E,
+        ctx: &mut PollContext<EK, ER, T>,
         req: RaftCmdRequest,
         check_epoch: bool,
         read_index: Option<u64>,
@@ -5031,16 +5015,24 @@ where
 
         let snap_ctx = if let Ok(read_ts) = decode_u64(&mut req.get_header().get_flag_data()) {
             Some(SnapshotContext {
-                range: Some(CacheRange::from_region(&region)),
-                region_id: region.id,
-                epoch_version: region.get_region_epoch().version,
+                region: Some(CacheRegion::from_region(&region)),
                 read_ts,
             })
         } else {
             None
         };
 
-        let mut resp = reader.execute(&req, &Arc::new(region), read_index, snap_ctx, None);
+        let mut reader = PollContextReader {
+            engines: &ctx.engines,
+        };
+        let mut resp = reader.execute(
+            &req,
+            &Arc::new(region),
+            read_index,
+            snap_ctx,
+            None,
+            &ctx.coprocessor_host,
+        );
         if let Some(snap) = resp.snapshot.as_mut() {
             snap.txn_ext = Some(self.txn_ext.clone());
             snap.bucket_meta = self
@@ -5227,7 +5219,7 @@ where
 
     // Check disk usages for the peer itself and other peers in the raft group.
     // The return value indicates whether the proposal is allowed or not.
-    fn check_normal_proposal_with_disk_full_opt<T: Transport>(
+    fn check_normal_proposal_with_disk_full_opt<T>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
         disk_full_opt: DiskFullOpt,
@@ -5263,7 +5255,7 @@ where
                         "peer_id" => self.peer.get_id(),
                         "target_peer_id" => p.get_id(),
                     );
-                    self.pre_transfer_leader(&p, ctx);
+                    self.pre_transfer_leader(&p);
                 }
             }
         } else {
@@ -6025,7 +6017,11 @@ where
     }
 }
 
-impl<EK, ER, T> ReadExecutor for PollContext<EK, ER, T>
+struct PollContextReader<'a, EK, ER> {
+    engines: &'a Engines<EK, ER>,
+}
+
+impl<'a, EK, ER> ReadExecutor for PollContextReader<'a, EK, ER>
 where
     EK: KvEngine,
     ER: RaftEngine,
