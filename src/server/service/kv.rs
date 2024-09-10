@@ -7,7 +7,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc,
     },
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 use api_version::KvFormat;
@@ -63,6 +63,7 @@ use crate::{
         },
         kv::Engine,
         lock_manager::LockManager,
+        txn::txn_status_cache::TxnState,
         SecondaryLocksStatus, Storage, TxnStatus,
     },
 };
@@ -81,7 +82,7 @@ pub struct Service<E: Engine, L: LockManager, F: KvFormat> {
     storage: Storage<E, L, F>,
     // For handling coprocessor requests.
     copr: Endpoint<E>,
-    // For handling corprocessor v2 requests.
+    // For handling coprocessor v2 requests.
     copr_v2: coprocessor_v2::Endpoint,
     // For handling snapshot.
     snap_scheduler: Scheduler<SnapTask>,
@@ -455,6 +456,13 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         future_buffer_batch_get,
         BufferBatchGetRequest,
         BufferBatchGetResponse
+    );
+
+    handle_request!(
+        broadcast_txn_status,
+        future_broadcast_txn_status,
+        BroadcastTxnStatusRequest,
+        BroadcastTxnStatusResponse
     );
 
     fn kv_import(&mut self, _: RpcContext<'_>, _: ImportRequest, _: UnarySink<ImportResponse>) {
@@ -1395,13 +1403,6 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     let resp = std::future::ready(Ok(GetHealthFeedbackResponse::default()).map(oneof!(batch_commands_response::response::Cmd::GetHealthFeedback)));
                     response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::get_health_feedback, source, ResourcePriority::unknown);
                 },
-                Some(batch_commands_request::request::Cmd::BroadcastTxnStatus(req)) => {
-                    handle_cluster_id_mismatch!(cluster_id, req);
-                    let begin_instant = Instant::now();
-                    let source = req.get_context().get_request_source().to_owned();
-
-                    todo!("update cache and respond")
-                }
                 Some(batch_commands_request::request::Cmd::Empty(req)) => {
                     let begin_instant = Instant::now();
                     let resp = future_handle_empty(req)
@@ -1472,6 +1473,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
         RawCoprocessor, future_raw_coprocessor(copr_v2, storage), coprocessor;
         PessimisticLock, future_acquire_pessimistic_lock(storage), kv_pessimistic_lock;
         PessimisticRollback, future_pessimistic_rollback(storage), kv_pessimistic_rollback;
+        BroadcastTxnStatus, future_broadcast_txn_status(storage), broadcast_txn_status;
     }
 
     Ok(())
@@ -2270,6 +2272,26 @@ fn future_raw_coprocessor<E: Engine, L: LockManager, F: KvFormat>(
 ) -> impl Future<Output = ServerResult<RawCoprocessorResponse>> {
     let ret = copr_v2.handle_request(storage, req);
     async move { Ok(ret.await) }
+}
+
+fn future_broadcast_txn_status<E: Engine, L: LockManager, F: KvFormat>(
+    storage: &Storage<E, L, F>,
+    req: BroadcastTxnStatusRequest,
+) -> impl Future<Output = ServerResult<BroadcastTxnStatusResponse>> {
+    let cache = storage.get_scheduler().get_txn_status_cache();
+    async move {
+        let now = SystemTime::now();
+        for txn_status in req.txn_status.iter() {
+            let txn_state = TxnState::from_ts(
+                txn_status.start_ts.into(),
+                txn_status.min_commit_ts.into(),
+                txn_status.commit_ts.into(),
+                txn_status.rolled_back,
+            );
+            cache.upsert(txn_status.start_ts.into(), txn_state, now);
+        }
+        Ok(BroadcastTxnStatusResponse::default())
+    }
 }
 
 macro_rules! txn_command_future {

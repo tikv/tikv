@@ -2084,9 +2084,8 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         }
     }
 
-    #[cfg(test)]
-    pub fn get_txn_status_cache(&self) -> &TxnStatusCache {
-        &self.inner.txn_status_cache
+    pub fn get_txn_status_cache(&self) -> Arc<TxnStatusCache> {
+        self.inner.txn_status_cache.clone()
     }
 }
 

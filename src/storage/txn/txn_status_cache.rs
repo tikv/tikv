@@ -131,6 +131,7 @@
 //! large transactions, preventing either type from dominating the cache and
 //! evicting information about transactions of the other type.
 use std::{
+    cmp::max,
     sync::{atomic::AtomicU64, Arc},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -176,6 +177,23 @@ pub enum TxnState {
     Ongoing { min_commit_ts: TimeStamp },
     Committed { commit_ts: TimeStamp },
     RolledBack,
+}
+
+impl TxnState {
+    pub fn from_ts(
+        start_ts: TimeStamp,
+        min_commit_ts: TimeStamp,
+        commit_ts: TimeStamp,
+        rolled_back: bool,
+    ) -> Self {
+        if rolled_back {
+            TxnState::RolledBack
+        } else if commit_ts.is_zero() {
+            TxnState::Ongoing(max(start_ts, min_commit_ts))
+        } else {
+            TxnState::Committed(commit_ts)
+        }
+    }
 }
 
 /// Defines the policy to evict expired entries from the cache.
