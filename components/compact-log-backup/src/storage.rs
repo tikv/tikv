@@ -34,7 +34,7 @@ use super::{
     errors::{Error, Result},
     statistic::LoadMetaStatistic,
 };
-use crate::{errors::ErrorKind, util};
+use crate::{compaction::EpochHint, errors::ErrorKind, util};
 
 pub const METADATA_PREFIX: &str = "v1/backupmeta";
 pub const COMPACTION_OUT_PREFIX: &str = "compaction_out";
@@ -101,7 +101,7 @@ pub struct PhysicalLogFile {
 }
 
 /// An [`RegionEpoch`] without protocol buffer fields and comparable.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Epoch {
     pub version: u64,
     pub conf_ver: u64,
@@ -154,6 +154,20 @@ impl LogFile {
     pub fn hacky_key_value_size(&self) -> u64 {
         const HEADER_SIZE_PER_ENTRY: u64 = std::mem::size_of::<u32>() as u64 * 2;
         self.file_real_size - HEADER_SIZE_PER_ENTRY * self.number_of_entries as u64
+    }
+
+    pub fn epoch_hints(&self) -> impl Iterator<Item = EpochHint> + '_ {
+        self.region_epoches.iter().flat_map(|epoches| {
+            self.region_start_key.iter().flat_map(|sk| {
+                self.region_end_key.iter().flat_map(|ek| {
+                    epoches.iter().map(|v| EpochHint {
+                        region_epoch: *v,
+                        start_key: Arc::clone(sk),
+                        end_key: Arc::clone(ek),
+                    })
+                })
+            })
+        })
     }
 }
 

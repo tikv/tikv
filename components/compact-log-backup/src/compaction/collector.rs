@@ -169,8 +169,9 @@ mod test {
 
     use super::{CollectSubcompaction, CollectSubcompactionConfig, SubcompactionCollectKey};
     use crate::{
+        compaction::EpochHint,
         errors::{Error, ErrorKind, Result},
-        storage::{LogFile, LogFileId},
+        storage::{Epoch, LogFile, LogFileId},
     };
 
     fn log_file(name: &str, len: u64, key: SubcompactionCollectKey) -> LogFile {
@@ -395,17 +396,27 @@ mod test {
     #[tokio::test]
     async fn test_region_boundary() {
         let r = SubcompactionCollectKey::of_region;
-        let rr = |mut l: LogFile, start: &[u8], end: &[u8]| {
+        let e = |v, cv| Epoch {
+            conf_ver: cv,
+            version: v,
+        };
+        let es = |es: Vec<Epoch>| Arc::from(es.into_boxed_slice());
+        let eh = |start: &[u8], end: &[u8], ver: u64| EpochHint {
+            start_key: start.to_vec().into_boxed_slice().into(),
+            end_key: end.to_vec().into_boxed_slice().into(),
+            region_epoch: e(ver, 42),
+        };
+        let rr = |mut l: LogFile, start: &[u8], end: &[u8], ver: u64| {
             l.region_start_key = Some(start.to_vec().into_boxed_slice().into());
             l.region_end_key = Some(end.to_vec().into_boxed_slice().into());
+            l.region_epoches = Some(es(vec![e(ver, 42)]));
             l
         };
 
         struct Input<'a> {
             files: &'a [LogFile],
             total_size: u64,
-            start_key: Option<&'a [u8]>,
-            end_key: Option<&'a [u8]>,
+            require_epoches: &'a [EpochHint],
         }
 
         async fn run(input: Input<'_>) {
@@ -418,8 +429,8 @@ mod test {
                 },
             );
 
-            let res = collector
-                .map_ok(|v| (v.size, v.region_id, v.region_start_key, v.region_end_key))
+            let mut res = collector
+                .map_ok(|v| (v.size, v.region_id, v.epoch_hints))
                 .try_collect::<Vec<_>>()
                 .await
                 .unwrap();
@@ -427,44 +438,46 @@ mod test {
             assert_eq!(res.len(), 1);
             assert_eq!(res[0].0, input.total_size);
             assert_eq!(res[0].1, 1);
-            assert_eq!(res[0].2.as_deref(), input.start_key);
-            assert_eq!(res[0].3.as_deref(), input.end_key);
+            res[0].2.sort_by_key(|v| v.region_epoch.version);
+            assert_eq!(res[0].2, input.require_epoches);
         }
 
         let cases = [
             Input {
                 files: &[
                     log_file("z", 0, r(1)),
-                    rr(log_file("a", 1, r(1)), b"001", b"010"),
-                    rr(log_file("b", 2, r(1)), b"000", b"012"),
-                    rr(log_file("c", 3, r(1)), b"003", b""),
-                    rr(log_file("d", 4, r(1)), b"004", b"020"),
+                    rr(log_file("a", 1, r(1)), b"001", b"010", 42),
+                    rr(log_file("b", 2, r(1)), b"001", b"005", 43),
                 ],
-                total_size: 10,
-                start_key: None,
-                end_key: None,
+                total_size: 3,
+                require_epoches: &[eh(b"001", b"010", 42), eh(b"001", b"005", 43)],
             },
             Input {
                 files: &[
-                    rr(log_file("a", 1, r(1)), b"001", b"010"),
-                    rr(log_file("b", 2, r(1)), b"004", b"012"),
-                    rr(log_file("c", 3, r(1)), b"003", b""),
-                    rr(log_file("d", 4, r(1)), b"002", b"020"),
+                    log_file("z", 0, r(1)),
+                    rr(log_file("a", 1, r(1)), b"001", b"010", 42),
                 ],
-                total_size: 10,
-                start_key: Some(b"001"),
-                end_key: Some(b""),
+                total_size: 1,
+                require_epoches: &[eh(b"001", b"010", 42)],
             },
             Input {
                 files: &[
-                    rr(log_file("a", 1, r(1)), b"006", b"010"),
-                    rr(log_file("b", 2, r(1)), b"004", b"012"),
-                    rr(log_file("c", 3, r(1)), b"003", b"024"),
-                    rr(log_file("d", 4, r(1)), b"002", b"020"),
+                    log_file("z", 0, r(1)),
+                    rr(log_file("a", 1, r(1)), b"001", b"010", 42),
+                    rr(log_file("b", 2, r(1)), b"001", b"005", 43),
+                    rr(log_file("c", 3, r(1)), b"001", b"015", 192),
                 ],
-                total_size: 10,
-                start_key: Some(b"002"),
-                end_key: Some(b"024"),
+                total_size: 6,
+                require_epoches: &[
+                    eh(b"001", b"010", 42),
+                    eh(b"001", b"005", 43),
+                    eh(b"001", b"015", 192),
+                ],
+            },
+            Input {
+                files: &[log_file("z", 9, r(1))],
+                total_size: 9,
+                require_epoches: &[],
             },
         ];
 

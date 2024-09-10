@@ -17,7 +17,7 @@ use tikv_util::{
     codec::bytes::decode_bytes_in_place, retry_expr, stream::JustRetry, time::Instant,
 };
 
-use super::{Subcompaction, SubcompactionResult};
+use super::{EpochHint, Subcompaction, SubcompactionResult};
 use crate::{
     compaction::SST_OUT_REL,
     errors::{OtherErrExt, Result, TraceResultExt},
@@ -104,6 +104,7 @@ impl SubcompactionExec<RocksEngine> {
 struct WrittenSst<S> {
     content: S,
     meta: kvproto::brpb::File,
+    epoch_hints: Vec<EpochHint>,
     physical_size: u64,
 }
 
@@ -234,28 +235,16 @@ where
         let mut w = wb.build(name)?;
         let mut meta = kvproto::brpb::File::default();
 
-        let (start_key, end_key) = match (&c.region_start_key, &c.region_end_key) {
-            (Some(start), Some(end)) => {
-                let mut res = (start.to_vec(), end.to_vec());
-                decode_bytes_in_place(&mut res.0, false).adapt_err()?;
-                decode_bytes_in_place(&mut res.1, false).adapt_err()?;
-                res
-            }
-            // For legacy backup contents: no region boundaries recorded.
-            _ => {
-                let mut start_key = sorted_items[0].key.clone();
-                // `File::{start,end}_key` should be raw key.
-                decode_bytes_in_place(&mut start_key, false).adapt_err()?;
-                let mut end_key = sorted_items.last().unwrap().key.clone();
-                decode_bytes_in_place(&mut end_key, false).adapt_err()?;
-                // `File::end_key` should be exclusive. (!)
-                // Also we cannot just call next_key, or the table ID of the end key may be
-                // different, some versions of BR panics in that scenario.
-                end_key.push(0u8);
+        let mut start_key = sorted_items[0].key.clone();
+        // `File::{start,end}_key` should be raw key.
+        decode_bytes_in_place(&mut start_key, false).adapt_err()?;
+        let mut end_key = sorted_items.last().unwrap().key.clone();
+        decode_bytes_in_place(&mut end_key, false).adapt_err()?;
+        // `File::end_key` should be exclusive. (!)
+        // Also we cannot just call next_key, or the table ID of the end key may be
+        // different, some versions of BR panics in that scenario.
+        end_key.push(0u8);
 
-                (start_key, end_key)
-            }
-        };
         meta.set_start_key(start_key);
         meta.set_end_key(end_key);
         meta.set_cf(cf.to_owned());
@@ -293,6 +282,7 @@ where
         let result = WrittenSst {
             content: out,
             meta,
+            epoch_hints: c.epoch_hints.clone(),
             physical_size: info.file_size(),
         };
 
@@ -318,6 +308,7 @@ where
         sst.meta.sha256 = hasher.lock().unwrap().finish().adapt_err()?.to_vec();
         let mut meta = brpb::LogFileSubcompaction::new();
         meta.set_meta(c.to_pb_meta());
+        meta.set_region_meta_hints(sst.epoch_hints.iter().map(|v| v.to_pb()).collect());
         meta.set_sst_outputs(vec![sst.meta.clone()].into());
         Ok(meta)
     }
@@ -402,8 +393,7 @@ mod test {
         compaction::Subcompaction,
         storage::{Epoch, MetaFile},
         test_util::{
-            gen_step, save_many_log_files, sow, CompactInMem, KeySeed, KvGen, LogFileBuilder,
-            TmpStorage,
+            gen_step, save_many_log_files, CompactInMem, KvGen, LogFileBuilder, TmpStorage,
         },
     };
 

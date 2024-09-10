@@ -9,7 +9,7 @@ use futures::stream::TryStreamExt;
 use kvproto::brpb::{self, DeleteSpansOfFile};
 
 use super::{
-    collector::CollectSubcompactionConfig, Subcompaction, SubcompactionCollectKey,
+    collector::CollectSubcompactionConfig, EpochHint, Subcompaction, SubcompactionCollectKey,
     SubcompactionResult, UnformedSubcompaction,
 };
 use crate::{
@@ -321,6 +321,16 @@ impl CompactionRunInfoBuilder {
             result.destruct_self = true;
         }
         result
+    }
+}
+
+impl EpochHint {
+    pub fn to_pb(&self) -> brpb::RegionMetaHint {
+        let mut out = brpb::RegionMetaHint::default();
+        out.set_start_key(self.start_key.to_vec());
+        out.set_end_key(self.end_key.to_vec());
+        out.set_region_epoch(self.region_epoch.into());
+        out
     }
 }
 

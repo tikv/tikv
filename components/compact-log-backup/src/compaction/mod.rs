@@ -1,5 +1,5 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
-use std::{cmp::Reverse, ops::Deref, sync::Arc};
+use std::{collections::HashSet, ops::Deref, sync::Arc};
 
 use derive_more::Display;
 use kvproto::brpb::{self, FileType};
@@ -7,8 +7,8 @@ use kvproto::brpb::{self, FileType};
 use self::collector::CollectSubcompactionConfig;
 use crate::{
     statistic::{LoadStatistic, SubcompactStatistic},
-    storage::{LogFile, LogFileId},
-    util::{self, EndKey},
+    storage::{Epoch, LogFile, LogFileId},
+    util,
 };
 
 pub const SST_OUT_REL: &str = "outputs";
@@ -55,8 +55,14 @@ pub struct Subcompaction {
     pub compact_to_ts: u64,
     pub min_key: Arc<[u8]>,
     pub max_key: Arc<[u8]>,
-    pub region_start_key: Option<Arc<[u8]>>,
-    pub region_end_key: Option<Arc<[u8]>>,
+    pub epoch_hints: Vec<EpochHint>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct EpochHint {
+    pub start_key: Arc<[u8]>,
+    pub end_key: Arc<[u8]>,
+    pub region_epoch: Epoch,
 }
 
 // "Embed" the subcompaction collect key field here.
@@ -108,13 +114,13 @@ struct UnformedSubcompaction {
     max_ts: u64,
     min_key: Arc<[u8]>,
     max_key: Arc<[u8]>,
-    region_start_key: Option<Arc<[u8]>>,
-    region_end_key: Option<Arc<[u8]>>,
+    epoch_hints: HashSet<EpochHint>,
 }
 
 impl UnformedSubcompaction {
     /// create the initial state by a singleton file.
     fn by_file(file: &LogFile) -> Self {
+        let epoch_hints = file.epoch_hints().collect();
         UnformedSubcompaction {
             size: file.file_real_size,
             inputs: vec![to_input(file)],
@@ -122,8 +128,7 @@ impl UnformedSubcompaction {
             max_ts: file.max_ts,
             min_key: file.min_key.clone(),
             max_key: file.max_key.clone(),
-            region_start_key: file.region_start_key.clone(),
-            region_end_key: file.region_end_key.clone(),
+            epoch_hints,
         }
     }
 
@@ -143,13 +148,14 @@ impl UnformedSubcompaction {
             compact_from_ts: cfg.compact_from_ts,
             compact_to_ts: cfg.compact_to_ts,
             subc_key: *key,
-            region_start_key: self.region_start_key.clone(),
-            region_end_key: self.region_end_key.clone(),
+            epoch_hints: self.epoch_hints.into_iter().collect(),
         }
     }
 
     /// add a new file to the state.
     fn add_file(&mut self, file: LogFile) {
+        self.epoch_hints.extend(file.epoch_hints());
+
         self.inputs.push(to_input(&file));
         self.size += file.file_real_size;
         self.min_ts = self.min_ts.min(file.min_ts);
@@ -159,23 +165,6 @@ impl UnformedSubcompaction {
         }
         if self.min_key > file.min_key {
             self.min_key = file.min_key;
-        }
-        // Even from the same region ID, the region boundary varies due to split or
-        // merge. We choose the largest boundary here.
-        //
-        // Here we are going to keep the smaller key. We should keep any `None` we
-        // encountered, as `None` actually means "unknown".
-        if self.region_start_key.as_deref() > file.region_start_key.as_deref() {
-            self.region_start_key = file.region_start_key;
-        }
-        // Choose the largest key. We choose the largest key by comparing the reversed
-        // order, then choose the smaller. This can help us keep the `None`s we have
-        // encountered. As `None < Some(Revserve(any))`, we can properly choose `None`
-        // in this scenario.
-        if self.region_end_key.as_deref().map(EndKey).map(Reverse)
-            > file.region_end_key.as_deref().map(EndKey).map(Reverse)
-        {
-            self.region_end_key = file.region_end_key;
         }
     }
 }
