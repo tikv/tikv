@@ -100,7 +100,7 @@ impl ActiveSubscription {
     }
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Clone)]
 pub enum CheckpointType {
     MinTs,
     StartTsOfInitialScan,
@@ -120,6 +120,7 @@ impl std::fmt::Debug for CheckpointType {
     }
 }
 
+#[derive(Clone)]
 pub struct ResolveResult {
     pub region: Region,
     pub checkpoint: TimeStamp,

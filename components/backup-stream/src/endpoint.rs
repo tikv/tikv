@@ -60,7 +60,7 @@ use crate::{
     metadata::{store::MetaStore, MetadataClient, MetadataEvent, StreamTask},
     metrics::{self, TaskStatus},
     observer::BackupStreamObserver,
-    router::{self, ApplyEvents, Router, TaskSelector},
+    router::{self, ApplyEvents, FlushContext, Router, TaskSelector},
     subscription_manager::{RegionSubscriptionManager, ResolvedRegions},
     subscription_track::{Ref, RefMut, ResolveResult, SubscriptionTracer},
     try_send,
@@ -822,19 +822,25 @@ where
         }
     }
 
-    fn do_flush(&self, task: String, mut resolved: ResolvedRegions) -> future![Result<()>] {
+    fn do_flush(&self, task: String, resolved: ResolvedRegions) -> future![Result<()>] {
         let router = self.range_router.clone();
         let store_id = self.store_id;
         let mut flush_ob = self.flush_observer();
         async move {
             let mut new_rts = resolved.global_checkpoint();
             fail::fail_point!("delay_on_flush");
-            flush_ob.before(resolved.take_resolve_result()).await;
+            flush_ob.before(resolved.resolve_results().to_vec()).await;
             if let Some(rewritten_rts) = flush_ob.rewrite_resolved_ts(&task).await {
                 info!("rewriting resolved ts"; "old" => %new_rts, "new" => %rewritten_rts);
                 new_rts = rewritten_rts.min(new_rts);
             }
-            if let Some(rts) = router.do_flush(&task, store_id, new_rts).await {
+            let cx = FlushContext {
+                task_name: &task,
+                store_id,
+                resolved_regions: &resolved,
+                resolved_ts: new_rts,
+            };
+            if let Some(rts) = router.do_flush(cx).await {
                 info!("flushing and refreshing checkpoint ts.";
                     "checkpoint_ts" => %rts,
                     "task" => %task,

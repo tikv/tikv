@@ -459,7 +459,7 @@ impl<R> StatusServer<R>
 where
     R: 'static + Send + RaftExtension + Clone,
 {
-    fn dump_async_trace() -> hyper::Result<Response<Body>> {
+    pub fn dump_async_trace() -> hyper::Result<Response<Body>> {
         Ok(make_response(
             StatusCode::OK,
             tracing_active_tree::layer::global().fmt_bytes_with(|t, buf| {

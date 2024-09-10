@@ -4,8 +4,8 @@ use std::{path::PathBuf, sync::Arc};
 
 use ::encryption::DataKeyManager;
 use engine_traits::{
-    Error, ExternalSstFileInfo, IterOptions, Iterator, RefIterable, Result, SstCompressionType,
-    SstExt, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT,
+    Error, ExternalSstFileInfo, ExternalSstFileReader, IterOptions, Iterator, RefIterable, Result,
+    SstCompressionType, SstExt, SstReader, SstWriter, SstWriterBuilder, CF_DEFAULT,
 };
 use fail::fail_point;
 use file_system::get_io_rate_limiter;
@@ -243,9 +243,31 @@ pub struct RocksSstWriter {
     env: Option<Arc<Env>>,
 }
 
+pub struct ResettableSequentualFile {
+    env: Arc<Env>,
+    path: String,
+    state: SequentialFile,
+}
+
+impl std::io::Read for ResettableSequentualFile {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.state.read(buf)
+    }
+}
+
+impl ExternalSstFileReader for ResettableSequentualFile {
+    fn reset(&mut self) -> Result<()> {
+        self.state = self
+            .env
+            .new_sequential_file(&self.path, EnvOptions::new())
+            .map_err(r2e)?;
+        Ok(())
+    }
+}
+
 impl SstWriter for RocksSstWriter {
     type ExternalSstFileInfo = RocksExternalSstFileInfo;
-    type ExternalSstFileReader = SequentialFile;
+    type ExternalSstFileReader = ResettableSequentualFile;
 
     fn put(&mut self, key: &[u8], val: &[u8]) -> Result<()> {
         self.writer.put(key, val).map_err(r2e)
@@ -279,7 +301,12 @@ impl SstWriter for RocksSstWriter {
         let seq_file = env
             .new_sequential_file(path, EnvOptions::new())
             .map_err(r2e)?;
-        Ok((RocksExternalSstFileInfo(sst_info), seq_file))
+        let reset_file = ResettableSequentualFile {
+            env,
+            path: path.to_owned(),
+            state: seq_file,
+        };
+        Ok((RocksExternalSstFileInfo(sst_info), reset_file))
     }
 }
 
@@ -401,5 +428,10 @@ mod tests {
         assert_eq!(buf.len() as u64, sst_file.file_size());
         // There must not be a file in disk.
         std::fs::metadata(p).unwrap_err();
+
+        let mut buf2 = vec![];
+        reader.reset().unwrap();
+        reader.read_to_end(&mut buf2).unwrap();
+        assert_eq!(buf, buf2);
     }
 }

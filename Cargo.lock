@@ -482,6 +482,7 @@ dependencies = [
  "bytes",
  "chrono",
  "concurrency_manager",
+ "crc64fast",
  "crossbeam",
  "crossbeam-channel",
  "dashmap",
@@ -506,6 +507,7 @@ dependencies = [
  "openssl",
  "pd_client",
  "pin-project",
+ "pprof",
  "prometheus",
  "prometheus-static-metric",
  "protobuf",
@@ -988,6 +990,7 @@ dependencies = [
  "derive_more",
  "error_code",
  "fail",
+ "futures 0.3.15",
  "futures-io",
  "kvproto",
  "lazy_static",
@@ -998,6 +1001,7 @@ dependencies = [
  "thiserror",
  "tikv_util",
  "url",
+ "uuid 0.8.2",
 ]
 
 [[package]]
@@ -1042,6 +1046,50 @@ version = "0.1.0"
 dependencies = [
  "fxhash",
  "tikv_alloc",
+]
+
+[[package]]
+name = "compact-log-backup"
+version = "0.1.0"
+dependencies = [
+ "async-compression",
+ "bytes",
+ "chrono",
+ "codec",
+ "crc64fast",
+ "dashmap",
+ "derive_more",
+ "encryption",
+ "engine_rocks",
+ "engine_traits",
+ "external_storage",
+ "fail",
+ "file_system",
+ "futures 0.3.15",
+ "futures-io",
+ "hex 0.4.2",
+ "keys",
+ "kvproto",
+ "pin-project",
+ "pprof",
+ "prometheus",
+ "protobuf",
+ "serde",
+ "serde_json",
+ "slog",
+ "slog-global",
+ "tempdir",
+ "test_util",
+ "thiserror",
+ "tidb_query_datatype",
+ "tikv_util",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tracing",
+ "tracing-active-tree",
+ "txn_types",
+ "zstd",
 ]
 
 [[package]]
@@ -1776,6 +1824,7 @@ dependencies = [
  "async-trait",
  "aws",
  "azure",
+ "chrono",
  "cloud",
  "encryption",
  "engine_traits",
@@ -1791,6 +1840,8 @@ dependencies = [
  "prometheus",
  "rand 0.8.5",
  "rust-ini",
+ "serde",
+ "serde_json",
  "slog",
  "slog-global",
  "structopt",
@@ -1800,6 +1851,8 @@ dependencies = [
  "tokio",
  "tokio-util",
  "url",
+ "uuid 0.8.2",
+ "walkdir",
 ]
 
 [[package]]
@@ -2845,7 +2898,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#0ad602a429126e39bd4a87c687be64f9ae173c02"
+source = "git+https://github.com/pingcap/kvproto.git#c203a27de26d1138decbbd91065a45e8a641a20e"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -6589,10 +6642,12 @@ version = "0.0.1"
 dependencies = [
  "api_version",
  "backup",
+ "base64 0.13.0",
  "cc",
  "cdc",
  "clap 2.33.0",
  "collections",
+ "compact-log-backup",
  "concurrency_manager",
  "crossbeam",
  "crypto",
