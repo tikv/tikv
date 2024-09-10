@@ -37,7 +37,9 @@ use protobuf::Message;
 use raft::eraftpb::Snapshot as RaftSnapshot;
 use thiserror::Error;
 use tikv_util::{
-    box_err, box_try, debug, error, info,
+    box_err, box_try,
+    config::ReadableSize,
+    debug, error, info,
     time::{duration_to_sec, Instant, Limiter, UnixSecs},
     warn, HandyRwLock,
 };
@@ -844,7 +846,6 @@ impl Snapshot {
         engine: &EK,
         kv_snap: &EK::Snapshot,
         region: &Region,
-        use_plain_file: bool,
         allow_multi_files_snapshot: bool,
         for_balance: bool,
     ) -> RaftStoreResult<()>
@@ -879,7 +880,7 @@ impl Snapshot {
         for (cf_enum, cf) in SNAPSHOT_CFS_ENUM_PAIR {
             self.switch_to_cf_file(cf)?;
             let cf_file = &mut self.cf_files[self.cf_index];
-            let cf_stat = if plain_file_used(cf_file.cf) || use_plain_file {
+            let cf_stat = if plain_file_used(cf_file.cf) {
                 snap_io::build_plain_cf_file::<EK>(
                     cf_file,
                     self.mgr.encryption_key_manager.as_ref(),
@@ -931,14 +932,11 @@ impl Snapshot {
                 "cf" => cf,
                 "key_count" => cf_stat.key_count,
                 "size" => cf_stat.total_size,
-                "use_plain_file" => use_plain_file,
             );
         }
 
         // save snapshot meta to meta file
-        let mut snapshot_meta = gen_snapshot_meta(&self.cf_files[..], for_balance)?;
-        snapshot_meta.set_use_plain_file(use_plain_file);
-        self.meta_file.meta = Some(snapshot_meta);
+        self.meta_file.meta = Some(gen_snapshot_meta(&self.cf_files[..], for_balance)?);
         self.save_meta_file()?;
         Ok(())
     }
@@ -1072,7 +1070,6 @@ impl Snapshot {
         engine: &EK,
         kv_snap: &EK::Snapshot,
         region: &Region,
-        use_plain_file: bool,
         allow_multi_files_snapshot: bool,
         for_balance: bool,
         start: UnixSecs,
@@ -1085,7 +1082,6 @@ impl Snapshot {
             engine,
             kv_snap,
             region,
-            use_plain_file,
             allow_multi_files_snapshot,
             for_balance,
         )?;
@@ -1116,9 +1112,11 @@ impl Snapshot {
     }
 
     pub fn apply<EK: KvEngine>(&mut self, options: ApplyOptions<EK>) -> Result<()> {
-        let use_plain_file = self.meta_file.meta.as_ref().unwrap().get_use_plain_file();
+        let apply_without_ingest = self
+            .mgr
+            .can_apply_cf_without_ingest(self.total_size(), self.total_count());
         let post_check = |cf_file: &CfFile, offset: usize| {
-            if !plain_file_used(cf_file.cf) && !use_plain_file {
+            if !plain_file_used(cf_file.cf) {
                 let file_paths = cf_file.file_paths();
                 let clone_file_paths = cf_file.clone_file_paths();
                 if options.ingest_copy_symlink && is_symlink(&file_paths[offset])? {
@@ -1143,27 +1141,27 @@ impl Snapshot {
         let abort_checker = ApplyAbortChecker(options.abort);
         let coprocessor_host = options.coprocessor_host;
         let region = options.region;
-        let key_mgr = self.mgr.encryption_key_manager.as_ref();
+        let key_mgr = self.mgr.encryption_key_manager.clone();
+        let batch_size = options.write_batch_size;
         for cf_file in &mut self.cf_files {
             if cf_file.size.is_empty() {
                 // Skip empty cf file.
                 continue;
             }
             let cf = cf_file.cf;
-            if plain_file_used(cf_file.cf) || use_plain_file {
+            let mut cb = |kv: &[(Vec<u8>, Vec<u8>)]| {
+                coprocessor_host.post_apply_plain_kvs_from_snapshot(&region, cf, kv)
+            };
+            if plain_file_used(cf_file.cf) {
                 let path = &cf_file.file_paths()[0];
-                let batch_size = options.write_batch_size;
-                let cb = |kv: &[(Vec<u8>, Vec<u8>)]| {
-                    coprocessor_host.post_apply_plain_kvs_from_snapshot(&region, cf, kv)
-                };
                 snap_io::apply_plain_cf_file(
                     path,
-                    key_mgr,
+                    key_mgr.as_ref(),
                     &abort_checker,
                     &options.db,
                     cf,
                     batch_size,
-                    cb,
+                    &mut cb,
                 )?;
             } else {
                 let path = cf_file.path.to_str().unwrap(); // path is not used at all
@@ -1172,8 +1170,22 @@ impl Snapshot {
                     .iter()
                     .map(|s| s.as_str())
                     .collect::<Vec<&str>>();
-                snap_io::apply_sst_cf_file(clone_files.as_slice(), &options.db, cf)?;
-                coprocessor_host.post_apply_sst_from_snapshot(&region, cf, path);
+                if apply_without_ingest {
+                    // Apply the snapshot without ingest, to accelerate the applying process.
+                    snap_io::apply_sst_cf_files_without_ingest(
+                        clone_files.as_slice(),
+                        &options.db,
+                        cf,
+                        key_mgr.clone(),
+                        &abort_checker,
+                        batch_size,
+                        &mut cb,
+                    )?;
+                } else {
+                    // Apply the snapshot by ingest.
+                    snap_io::apply_sst_cf_files_by_ingest(clone_files.as_slice(), &options.db, cf)?;
+                    coprocessor_host.post_apply_sst_from_snapshot(&region, cf, path);
+                }
             }
         }
         Ok(())
@@ -1447,6 +1459,9 @@ struct SnapManagerCore {
     max_per_file_size: Arc<AtomicU64>,
     enable_multi_snapshot_files: Arc<AtomicBool>,
     stats: Arc<Mutex<Vec<SnapshotStat>>>,
+    // Minimal column family size & kv counts for applying by ingest.
+    min_ingest_cf_size: u64,
+    min_ingest_cf_kvs: u64,
 }
 
 /// `SnapManagerCore` trace all current processing snapshots.
@@ -1780,6 +1795,11 @@ impl SnapManager {
         self.core.recv_concurrency_limiter.set_limit(limit);
     }
 
+    pub fn set_min_ingest_cf_limit(&mut self, bytes: ReadableSize) {
+        self.core.min_ingest_cf_size = bytes.0;
+        self.core.min_ingest_cf_kvs = std::cmp::max(10000, (bytes.as_mb_f64() * 10000.0) as u64);
+    }
+
     pub fn collect_stat(&self, snap: SnapshotStat) {
         debug!(
             "collect snapshot stat";
@@ -2002,6 +2022,17 @@ impl SnapManagerCore {
         }
         u64::MAX
     }
+
+    pub fn can_apply_cf_without_ingest(&self, cf_size: u64, cf_kvs: u64) -> bool {
+        fail_point!("on_apply_cf_without_ingest", |_| { true });
+        if self.min_ingest_cf_size == 0 {
+            return false;
+        }
+        // If the size and the count of keys of cf are relatively small, it's
+        // recommended to directly write it into kvdb rather than ingest,
+        // for mitigating performance issue when ingesting snapshot.
+        cf_size <= self.min_ingest_cf_size && cf_kvs <= self.min_ingest_cf_kvs
+    }
 }
 
 /// `SnapRecvConcurrencyLimiter` enforces a limit on the number of simultaneous
@@ -2107,6 +2138,8 @@ pub struct SnapManagerBuilder {
     enable_receive_tablet_snapshot: bool,
     key_manager: Option<Arc<DataKeyManager>>,
     concurrent_recv_snap_limit: usize,
+    min_ingest_snapshot_size: u64,
+    min_ingest_snapshot_kvs: u64,
 }
 
 impl SnapManagerBuilder {
@@ -2137,6 +2170,11 @@ impl SnapManagerBuilder {
     }
     pub fn enable_receive_tablet_snapshot(mut self, enabled: bool) -> SnapManagerBuilder {
         self.enable_receive_tablet_snapshot = enabled;
+        self
+    }
+    pub fn min_ingest_snapshot_limit(mut self, bytes: ReadableSize) -> SnapManagerBuilder {
+        self.min_ingest_snapshot_size = bytes.0;
+        self.min_ingest_snapshot_kvs = std::cmp::max(10000, (bytes.as_mb_f64() * 10000.0) as u64);
         self
     }
     #[must_use]
@@ -2181,6 +2219,8 @@ impl SnapManagerBuilder {
                     self.enable_multi_snapshot_files,
                 )),
                 stats: Default::default(),
+                min_ingest_cf_size: self.min_ingest_snapshot_size,
+                min_ingest_cf_kvs: self.min_ingest_snapshot_kvs,
             },
             max_total_size: Arc::new(AtomicU64::new(max_total_size)),
             tablet_snap_manager,
@@ -2489,9 +2529,6 @@ pub mod tests {
     use tikv_util::time::Limiter;
 
     use super::*;
-    // ApplyOptions, SnapEntry, SnapKey, SnapManager, SnapManagerBuilder, SnapManagerCore,
-    // Snapshot, SnapshotStatistics, META_FILE_SUFFIX, SNAPSHOT_CFS, SNAP_GEN_PREFIX,
-    // };
     use crate::{
         coprocessor::CoprocessorHost,
         store::{peer_storage::JOB_STATUS_RUNNING, INIT_EPOCH_CONF_VER, INIT_EPOCH_VER},
@@ -2671,6 +2708,8 @@ pub mod tests {
             max_per_file_size: Arc::new(AtomicU64::new(max_per_file_size)),
             enable_multi_snapshot_files: Arc::new(AtomicBool::new(true)),
             stats: Default::default(),
+            min_ingest_cf_size: 0,
+            min_ingest_cf_kvs: 0,
         }
     }
 
@@ -2808,7 +2847,7 @@ pub mod tests {
         assert_eq!(mgr_core.get_total_snap_size().unwrap(), 0);
 
         let mut snap_data = s1
-            .build(&db, &snapshot, &region, false, true, false, UnixSecs::now())
+            .build(&db, &snapshot, &region, true, false, UnixSecs::now())
             .unwrap();
 
         // Ensure that this snapshot file does exist after being built.
@@ -2911,7 +2950,7 @@ pub mod tests {
         assert!(!s1.exists());
 
         let _ = s1
-            .build(&db, &snapshot, &region, false, true, false, UnixSecs::now())
+            .build(&db, &snapshot, &region, true, false, UnixSecs::now())
             .unwrap();
         assert!(s1.exists());
 
@@ -2919,7 +2958,7 @@ pub mod tests {
         assert!(s2.exists());
 
         let _ = s2
-            .build(&db, &snapshot, &region, false, true, false, UnixSecs::now())
+            .build(&db, &snapshot, &region, true, false, UnixSecs::now())
             .unwrap();
         assert!(s2.exists());
     }
@@ -3044,7 +3083,7 @@ pub mod tests {
         assert!(!s1.exists());
 
         let snap_data = s1
-            .build(&db, &snapshot, &region, false, true, false, UnixSecs::now())
+            .build(&db, &snapshot, &region, true, false, UnixSecs::now())
             .unwrap();
         assert!(s1.exists());
 
@@ -3103,7 +3142,7 @@ pub mod tests {
         assert!(!s1.exists());
 
         let _ = s1
-            .build(&db, &snapshot, &region, false, true, false, UnixSecs::now())
+            .build(&db, &snapshot, &region, true, false, UnixSecs::now())
             .unwrap();
         assert!(s1.exists());
 
@@ -3114,7 +3153,7 @@ pub mod tests {
         let mut s2 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s2.exists());
         let mut snap_data = s2
-            .build(&db, &snapshot, &region, false, true, false, UnixSecs::now())
+            .build(&db, &snapshot, &region, true, false, UnixSecs::now())
             .unwrap();
         assert!(s2.exists());
 
@@ -3178,7 +3217,7 @@ pub mod tests {
         let mut s1 = Snapshot::new_for_building(&path, &key1, &mgr_core).unwrap();
         let mut region = gen_test_region(1, 1, 1);
         let mut snap_data = s1
-            .build(&db, &snapshot, &region, false, true, false, UnixSecs::now())
+            .build(&db, &snapshot, &region, true, false, UnixSecs::now())
             .unwrap();
         let mut s = Snapshot::new_for_sending(&path, &key1, &mgr_core).unwrap();
         let expected_size = s.total_size();
@@ -3252,7 +3291,7 @@ pub mod tests {
         src_mgr.register(key.clone(), SnapEntry::Generating);
         let mut s1 = src_mgr.get_snapshot_for_building(&key).unwrap();
         let mut snap_data = s1
-            .build(&db, &snapshot, &region, false, true, false, UnixSecs::now())
+            .build(&db, &snapshot, &region, true, false, UnixSecs::now())
             .unwrap();
 
         check_registry_around_deregister(&src_mgr, &key, &SnapEntry::Generating);
@@ -3335,7 +3374,6 @@ pub mod tests {
                 &engine.kv,
                 &snapshot,
                 &gen_test_region(100, 1, 1),
-                false,
                 true,
                 false,
                 UnixSecs::now(),
@@ -3362,15 +3400,7 @@ pub mod tests {
             let region = gen_test_region(region_id, 1, 1);
             let mut s = snap_mgr.get_snapshot_for_building(&key).unwrap();
             let _ = s
-                .build(
-                    &engine.kv,
-                    &snapshot,
-                    &region,
-                    false,
-                    true,
-                    false,
-                    UnixSecs::now(),
-                )
+                .build(&engine.kv, &snapshot, &region, true, false, UnixSecs::now())
                 .unwrap();
 
             // The first snap_size is for region 100.
@@ -3468,7 +3498,7 @@ pub mod tests {
         for _ in 0..2 {
             let mut s1 = snap_mgr.get_snapshot_for_building(&key).unwrap();
             let _ = s1
-                .build(&db, &snapshot, &region, false, true, false, UnixSecs::now())
+                .build(&db, &snapshot, &region, true, false, UnixSecs::now())
                 .unwrap();
             assert!(snap_mgr.delete_snapshot(&key, &s1, false));
         }

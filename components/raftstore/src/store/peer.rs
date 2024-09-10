@@ -2708,12 +2708,7 @@ where
                     self.send_snap_gen_precheck_request(ctx, &to_peer);
                 }
             } else {
-                let mut gen_task = self.mut_store().take_gen_snap_task().unwrap();
-                gen_task.set_use_plain_file(
-                    ctx.cfg.snap_min_approximate_size,
-                    self.approximate_size(),
-                    self.approximate_keys(),
-                );
+                let gen_task = self.mut_store().take_gen_snap_task().unwrap();
                 self.pending_request_snapshot_count
                     .fetch_add(1, Ordering::SeqCst);
                 ctx.apply_router

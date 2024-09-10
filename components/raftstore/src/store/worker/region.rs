@@ -61,7 +61,6 @@ const ENGINE: &str = "engine";
 pub enum Task<S> {
     Gen {
         region_id: u64,
-        use_plain_file: bool,
         last_applied_term: u64,
         last_applied_state: RaftApplyState,
         kv_snap: S,
@@ -256,7 +255,6 @@ where
     fn generate_snap(
         &self,
         region_id: u64,
-        use_plain_file: bool,
         last_applied_term: u64,
         last_applied_state: RaftApplyState,
         kv_snap: EK::Snapshot,
@@ -270,7 +268,6 @@ where
             &self.engine,
             kv_snap,
             region_id,
-            use_plain_file,
             last_applied_term,
             last_applied_state,
             for_balance,
@@ -300,7 +297,6 @@ where
     fn handle_gen(
         &self,
         region_id: u64,
-        use_plain_file: bool,
         last_applied_term: u64,
         last_applied_state: RaftApplyState,
         kv_snap: EK::Snapshot,
@@ -326,7 +322,6 @@ where
 
         if let Err(e) = self.generate_snap(
             region_id,
-            use_plain_file,
             last_applied_term,
             last_applied_state,
             kv_snap,
@@ -859,7 +854,6 @@ where
         match task {
             Task::Gen {
                 region_id,
-                use_plain_file,
                 last_applied_term,
                 last_applied_state,
                 kv_snap,
@@ -903,7 +897,6 @@ where
 
                     ctx.handle_gen(
                         region_id,
-                        use_plain_file,
                         last_applied_term,
                         last_applied_state,
                         kv_snap,
@@ -1248,7 +1241,6 @@ pub(crate) mod tests {
             sched
                 .schedule(Task::Gen {
                     region_id: id,
-                    use_plain_file: false,
                     kv_snap: engine.kv.snapshot(None),
                     last_applied_term: entry.get_term(),
                     last_applied_state: apply_state,

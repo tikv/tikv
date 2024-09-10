@@ -625,7 +625,6 @@ fn test_gen_during_heavy_recv() {
         &engine,
         engine.snapshot(None),
         r2,
-        false,
         snap_term,
         snap_apply_state,
         true,

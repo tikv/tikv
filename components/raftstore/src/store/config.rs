@@ -435,11 +435,6 @@ pub struct Config {
     /// `default` column family
     #[doc(hidden)]
     pub skip_manual_compaction_in_clean_up_worker: bool,
-
-    /// Minimal size of snapshot for generatng and applying with ingestion.
-    /// If the size of snapshot is smaller than this value, it will be generated
-    /// and applied without ingestion, just using plain write.
-    pub snap_min_approximate_size: ReadableSize,
 }
 
 impl Default for Config {
@@ -582,7 +577,6 @@ impl Default for Config {
             unsafe_disable_check_quorum: false,
             min_pending_apply_region_count: 10,
             skip_manual_compaction_in_clean_up_worker: false,
-            snap_min_approximate_size: ReadableSize::mb(2),
         }
     }
 }
@@ -998,11 +992,6 @@ impl Config {
             return Err(box_err!(
                 "min_pending_apply_region_count must be greater than 0"
             ));
-        }
-
-        if self.snap_min_approximate_size > region_split_size {
-            self.snap_min_approximate_size = region_split_size;
-            warn!("snap_min_approximate_size is too large, set to region_split_size");
         }
 
         Ok(())

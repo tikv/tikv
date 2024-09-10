@@ -3070,13 +3070,7 @@ where
                     "ignored" => !self.fsm.peer.get_store().has_gen_snap_task(),
                 );
                 if passed {
-                    if let Some(mut gen_task) = self.fsm.peer.mut_store().take_gen_snap_task() {
-                        // Get the approximate size of the region and set it to the task.
-                        gen_task.set_use_plain_file(
-                            self.ctx.cfg.snap_min_approximate_size,
-                            self.fsm.peer.approximate_size(),
-                            self.fsm.peer.approximate_keys(),
-                        );
+                    if let Some(gen_task) = self.fsm.peer.mut_store().take_gen_snap_task() {
                         self.fsm
                             .peer
                             .pending_request_snapshot_count
