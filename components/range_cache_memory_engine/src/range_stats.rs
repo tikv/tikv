@@ -386,7 +386,7 @@ impl RangeStatsManager {
 
             evict_candidates.into_iter().map(|(r, _)| r).collect()
         };
-        // evict two regions each time to reduce the probability that an un-dropped
+        // Evict two regions each time to reduce the probability that an un-dropped
         // ongoing snapshot blocks the process
         for regions in evict_candidates.chunks(2) {
             let mut rxs = vec![];
@@ -396,6 +396,8 @@ impl RangeStatsManager {
                 deleteable_regions.extend(evict_region(
                     &CacheRegion::from_region(r),
                     EvictReason::MemoryLimitReached,
+                    // This callback will be executed when eviction finishes at `on_delete_regions`
+                    // and when the reletive rx.recv() returns, we know some memory are freed.
                     Some(Box::new(move || {
                         let _ = tx.send(true);
                     })),
