@@ -42,6 +42,9 @@ pub(crate) struct RangeStatsManager {
     mvcc_amplification_threshold: usize,
 
     mvcc_amplification_record: Arc<Mutex<HashMap<u64, f64>>>,
+
+    load_evict_interval: Duration,
+    last_load_evict_time: Arc<Mutex<Instant>>,
 }
 
 impl RangeStatsManager {
@@ -57,6 +60,7 @@ impl RangeStatsManager {
         evict_min_duration: Duration,
         expected_region_size: usize,
         mvcc_amplification_threshold: usize,
+        load_evict_interval: Duration,
         info_provider: Arc<dyn RegionInfoProvider>,
     ) -> Self {
         RangeStatsManager {
@@ -69,12 +73,32 @@ impl RangeStatsManager {
             evict_min_duration,
             expected_region_size,
             mvcc_amplification_threshold,
+            load_evict_interval,
+            last_load_evict_time: Arc::new(Mutex::new(Instant::now())),
         }
+    }
+
+    /// If false is returned, it is not ready to check.
+    pub fn ready_for_auto_load_and_evict(&self) -> bool {
+        // The auto load and evict process can block for some time (mainly waiting for
+        // eviction). To avoid too check after check immediately, we check the elapsed
+        // time after the last check.
+        // Region stats update duration is one minute by default, to avoid two checks
+        // using the same region stats as much as possible, we set a min check interval
+        // of 1.5 minutes(considers there are not just one region for stat collection).
+        self.last_load_evict_time.lock().elapsed()
+            <= (self.load_evict_interval / 2, Duration::from_secs(90))
+            && self.set_checking_top_regions(true)
+    }
+
+    pub fn complete_auto_load_and_evict(&self) {
+        *self.last_load_evict_time.lock() = Instant::now();
+        self.set_checking_top_regions(true);
     }
 
     /// Prevents two instances of this from running concurrently.
     /// Return the previous checking status.
-    pub fn set_checking_top_regions(&self, v: bool) -> bool {
+    fn set_checking_top_regions(&self, v: bool) -> bool {
         self.checking_top_regions.swap(v, Ordering::Relaxed)
     }
 
