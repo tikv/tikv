@@ -221,6 +221,7 @@ impl BgWorkManager {
         gc_interval: Duration,
         load_evict_interval: Duration,
         expected_region_size: usize,
+        mvcc_amplification_threshold: usize,
         memory_controller: Arc<MemoryController>,
         region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
     ) -> Self {
@@ -230,6 +231,7 @@ impl BgWorkManager {
             memory_controller,
             region_info_provider.clone(),
             expected_region_size,
+            mvcc_amplification_threshold,
             gc_interval,
             pd_client.clone(),
         );
@@ -699,27 +701,24 @@ impl BackgroundRunnerCore {
         let threshold = self.memory_controller.stop_load_limit_threshold();
         range_stats_manager.adjust_max_num_regions(curr_memory_usage, threshold);
 
-        let mut regions_to_add = Vec::with_capacity(256);
-        let mut regions_to_remove = Vec::with_capacity(256);
-        range_stats_manager.collect_changed_ranges(&mut regions_to_add, &mut regions_to_remove);
-        let mut regions_to_delete = Vec::with_capacity(regions_to_remove.len());
-        info!("ime load_evict"; "ranges_to_add" => ?&regions_to_add, "may_evict" => ?&regions_to_remove);
-        for evict_region in regions_to_remove {
-            if self.memory_controller.reached_soft_limit() {
-                let cache_region = CacheRegion::from_region(&evict_region);
-                let mut core = self.engine.write();
-                let deleteable_regions = core.mut_range_manager().evict_region(
-                    &cache_region,
-                    EvictReason::AutoEvict,
-                    None,
-                );
-                info!(
-                    "ime load_evict: soft limit reached";
-                    "region_to_evict" => ?&cache_region,
-                    "evicted_regions" => ?&deleteable_regions,
-                );
-                regions_to_delete.extend(deleteable_regions);
-            }
+        let cached_regions = self.engine.read().range_manager().cached_regions();
+        let (regions_to_load, regions_to_evict) = range_stats_manager
+            .collect_regions_to_load_and_evict(cached_regions, &self.memory_controller);
+
+        let mut regions_to_delete = Vec::with_capacity(regions_to_evict.len());
+        info!("ime load_evict"; "regions_to_load" => ?&regions_to_load, "regions_to_evict" => ?&regions_to_evict);
+        for evict_region in regions_to_evict {
+            let cache_region = CacheRegion::from_region(&evict_region);
+            let mut core = self.engine.write();
+            let deleteable_regions =
+                core.mut_range_manager()
+                    .evict_region(&cache_region, EvictReason::AutoEvict, None);
+            info!(
+                "ime load_evict: auto evict";
+                "region_to_evict" => ?&cache_region,
+                "evicted_regions" => ?&deleteable_regions,
+            );
+            regions_to_delete.extend(deleteable_regions);
         }
 
         if !regions_to_delete.is_empty() {
@@ -733,7 +732,7 @@ impl BackgroundRunnerCore {
                 assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
             }
         }
-        for region in regions_to_add {
+        for region in regions_to_load {
             let cache_region = CacheRegion::from_region(&region);
             let mut core = self.engine.write();
             if let Err(e) = core.mut_range_manager().load_region(cache_region) {
@@ -807,6 +806,7 @@ impl BackgroundRunner {
         memory_controller: Arc<MemoryController>,
         region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
         expected_region_size: usize,
+        mvcc_amplification_threshold: usize,
         gc_interval: Duration,
         pd_client: Arc<dyn PdClient>,
     ) -> (Self, Scheduler<BackgroundTask>) {
@@ -840,6 +840,7 @@ impl BackgroundRunner {
                 num_regions_to_cache,
                 DEFAULT_EVICT_MIN_DURATION,
                 expected_region_size,
+                mvcc_amplification_threshold,
                 region_info_provider,
             )
         });
@@ -1908,6 +1909,7 @@ pub mod tests {
             memory_controller.clone(),
             None,
             engine.expected_region_size(),
+            0,
             Duration::from_secs(100),
             Arc::new(MockPdClient {}),
         );
@@ -1985,6 +1987,7 @@ pub mod tests {
             memory_controller.clone(),
             None,
             engine.expected_region_size(),
+            0,
             Duration::from_secs(100),
             Arc::new(MockPdClient {}),
         );
@@ -2147,6 +2150,7 @@ pub mod tests {
             memory_controller.clone(),
             None,
             engine.expected_region_size(),
+            0,
             Duration::from_secs(100),
             Arc::new(MockPdClient {}),
         );
@@ -2164,6 +2168,7 @@ pub mod tests {
             memory_controller.clone(),
             None,
             engine.expected_region_size(),
+            0,
             Duration::from_secs(100),
             Arc::new(MockPdClient {}),
         );
@@ -2214,6 +2219,7 @@ pub mod tests {
             memory_controller.clone(),
             None,
             engine.expected_region_size(),
+            0,
             Duration::from_secs(100),
             Arc::new(MockPdClient {}),
         );
@@ -2316,6 +2322,7 @@ pub mod tests {
             memory_controller,
             None,
             engine.expected_region_size(),
+            0,
             Duration::from_secs(100),
             Arc::new(MockPdClient {}),
         );
@@ -2459,6 +2466,7 @@ pub mod tests {
             memory_controller,
             None,
             engine.expected_region_size(),
+            0,
             Duration::from_secs(100),
             Arc::new(MockPdClient {}),
         );
@@ -2610,6 +2618,7 @@ pub mod tests {
             memory_controller,
             None,
             engine.expected_region_size(),
+            0,
             Duration::from_secs(100),
             Arc::new(MockPdClient {}),
         );
