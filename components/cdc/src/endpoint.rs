@@ -927,11 +927,22 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
 
     fn on_region_ready(&mut self, observe_id: ObserveId, resolver: Resolver, region: Region) {
         let region_id = region.get_id();
-        let mut deregisters = Vec::new();
-        if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
-            if delegate.handle.id == observe_id {
+        match self.capture_regions.get_mut(&region_id) {
+            None => {
+                debug!("cdc region not found on region ready (finish scan locks)";
+                    "region_id" => region.get_id());
+            }
+            Some(delegate) => {
+                if delegate.handle.id != observe_id {
+                    debug!("cdc stale region ready";
+                        "region_id" => region.get_id(),
+                        "observe_id" => ?observe_id,
+                        "current_id" => ?delegate.handle.id);
+                    return;
+                }
                 match delegate.on_region_ready(resolver, region) {
                     Ok(fails) => {
+                        let mut deregisters = Vec::new();
                         for (downstream, e) in fails {
                             deregisters.push(Deregister::Downstream {
                                 conn_id: downstream.get_conn_id(),
@@ -941,27 +952,18 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                                 err: Some(e),
                             });
                         }
+                        // Deregister downstreams if there is any downstream fails to subscribe.
+                        for deregister in deregisters {
+                            self.on_deregister(deregister);
+                        }
                     }
-                    Err(e) => deregisters.push(Deregister::Delegate {
+                    Err(e) => self.on_deregister(Deregister::Delegate {
                         region_id,
                         observe_id,
                         err: e,
                     }),
                 }
-            } else {
-                debug!("cdc stale region ready";
-                    "region_id" => region.get_id(),
-                    "observe_id" => ?observe_id,
-                    "current_id" => ?delegate.handle.id);
             }
-        } else {
-            debug!("cdc region not found on region ready (finish building resolver)";
-                "region_id" => region.get_id());
-        }
-
-        // Deregister downstreams if there is any downstream fails to subscribe.
-        for deregister in deregisters {
-            self.on_deregister(deregister);
         }
     }
 
@@ -1205,7 +1207,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                         Ok(_) | Err(ScheduleError::Stopped(_)) => (),
                         // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not
                         // advance normally.
-                        Err(err) => panic!("failed to regiester min ts event, error: {:?}", err),
+                        Err(err) => panic!("failed to register min ts event, error: {:?}", err),
                     }
                 } else {
                     // During shutdown, tso runtime drops future immediately,
@@ -1586,10 +1588,10 @@ mod tests {
         let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
         suite.add_region(1, 100);
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
-        let (tx, mut rx) = channel::channel(1, quota);
+        let (tx, mut rx) = channel::channel(ConnId::default(), 1, quota);
         let mut rx = rx.drain();
 
-        let conn = Conn::new(tx, String::new());
+        let conn = Conn::new(ConnId::default(), tx, String::new());
         let conn_id = conn.get_id();
         suite.run(Task::OpenConn { conn });
         suite.run(set_conn_version_task(
@@ -1869,14 +1871,14 @@ mod tests {
     #[test]
     fn test_raftstore_is_busy() {
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
-        let (tx, _rx) = channel::channel(1, quota);
+        let (tx, _rx) = channel::channel(ConnId::default(), 1, quota);
         let mut suite = mock_endpoint(&CdcConfig::default(), None, ApiVersion::V1);
 
         // Fill the channel.
         suite.add_region(1 /* region id */, 1 /* cap */);
         suite.fill_raft_rx(1);
 
-        let conn = Conn::new(tx, String::new());
+        let conn = Conn::new(ConnId::default(), tx, String::new());
         let conn_id = conn.get_id();
         suite.run(Task::OpenConn { conn });
         suite.run(set_conn_version_task(
@@ -1925,10 +1927,10 @@ mod tests {
         let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
         suite.add_region(1, 100);
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
-        let (tx, mut rx) = channel::channel(1, quota);
+        let (tx, mut rx) = channel::channel(ConnId::default(), 1, quota);
         let mut rx = rx.drain();
 
-        let conn = Conn::new(tx, String::new());
+        let conn = Conn::new(ConnId::default(), tx, String::new());
         let conn_id = conn.get_id();
         suite.run(Task::OpenConn { conn });
 
@@ -2092,10 +2094,10 @@ mod tests {
 
         suite.add_region(1, 100);
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
-        let (tx, mut rx) = channel::channel(1, quota);
+        let (tx, mut rx) = channel::channel(ConnId::default(), 1, quota);
         let mut rx = rx.drain();
 
-        let conn = Conn::new(tx, String::new());
+        let conn = Conn::new(ConnId::default(), tx, String::new());
         let conn_id = conn.get_id();
         suite.run(Task::OpenConn { conn });
 
@@ -2197,11 +2199,11 @@ mod tests {
         suite.add_region(1, 100);
 
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
-        let (tx, mut rx) = channel::channel(1, quota);
+        let (tx, mut rx) = channel::channel(ConnId::default(), 1, quota);
         let mut rx = rx.drain();
         let mut region = Region::default();
         region.set_id(1);
-        let conn = Conn::new(tx, String::new());
+        let conn = Conn::new(ConnId::default(), tx, String::new());
         let conn_id = conn.get_id();
         suite.run(Task::OpenConn { conn });
 
@@ -2289,11 +2291,11 @@ mod tests {
 
         // Register region 3 to another conn which is not support batch resolved ts.
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
-        let (tx, mut rx2) = channel::channel(1, quota);
+        let (tx, mut rx2) = channel::channel(ConnId::default(), 1, quota);
         let mut rx2 = rx2.drain();
         let mut region = Region::default();
         region.set_id(3);
-        let conn = Conn::new(tx, String::new());
+        let conn = Conn::new(ConnId::default(), tx, String::new());
         let conn_id = conn.get_id();
         suite.run(Task::OpenConn { conn });
         suite.run(set_conn_version_task(
@@ -2364,10 +2366,10 @@ mod tests {
         let mut suite = mock_endpoint(&CdcConfig::default(), None, ApiVersion::V1);
         suite.add_region(1, 100);
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
-        let (tx, mut rx) = channel::channel(1, quota);
+        let (tx, mut rx) = channel::channel(ConnId::default(), 1, quota);
         let mut rx = rx.drain();
 
-        let conn = Conn::new(tx, String::new());
+        let conn = Conn::new(ConnId::default(), tx, String::new());
         let conn_id = conn.get_id();
         suite.run(Task::OpenConn { conn });
         suite.run(set_conn_version_task(
@@ -2520,9 +2522,9 @@ mod tests {
         let mut conn_rxs = vec![];
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
         for region_ids in [vec![1, 2], vec![3]] {
-            let (tx, rx) = channel::channel(1, quota.clone());
+            let (tx, rx) = channel::channel(ConnId::default(), 1, quota.clone());
             conn_rxs.push(rx);
-            let conn = Conn::new(tx, String::new());
+            let conn = Conn::new(ConnId::default(), tx, String::new());
             let conn_id = conn.get_id();
             suite.run(Task::OpenConn { conn });
             let version = FeatureGate::batch_resolved_ts();
@@ -2635,8 +2637,8 @@ mod tests {
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
 
         // Open conn a
-        let (tx1, _rx1) = channel::channel(1, quota.clone());
-        let conn_a = Conn::new(tx1, String::new());
+        let (tx1, _rx1) = channel::channel(ConnId::default(), 1, quota.clone());
+        let conn_a = Conn::new(ConnId::default(), tx1, String::new());
         let conn_id_a = conn_a.get_id();
         suite.run(Task::OpenConn { conn: conn_a });
         suite.run(set_conn_version_task(
@@ -2645,9 +2647,9 @@ mod tests {
         ));
 
         // Open conn b
-        let (tx2, mut rx2) = channel::channel(1, quota);
+        let (tx2, mut rx2) = channel::channel(ConnId::default(), 1, quota);
         let mut rx2 = rx2.drain();
-        let conn_b = Conn::new(tx2, String::new());
+        let conn_b = Conn::new(ConnId::default(), tx2, String::new());
         let conn_id_b = conn_b.get_id();
         suite.run(Task::OpenConn { conn: conn_b });
         suite.run(set_conn_version_task(
@@ -2799,10 +2801,10 @@ mod tests {
         };
         let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
-        let (tx, mut rx) = channel::channel(1, quota);
+        let (tx, mut rx) = channel::channel(ConnId::default(), 1, quota);
         let mut rx = rx.drain();
 
-        let conn = Conn::new(tx, String::new());
+        let conn = Conn::new(ConnId::default(), tx, String::new());
         let conn_id = conn.get_id();
         suite.run(Task::OpenConn { conn });
         // Enable batch resolved ts in the test.
@@ -2892,10 +2894,10 @@ mod tests {
         let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
         suite.add_region(1, 100);
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
-        let (tx, mut rx) = channel::channel(1, quota);
+        let (tx, mut rx) = channel::channel(ConnId::default(), 1, quota);
         let mut rx = rx.drain();
 
-        let conn = Conn::new(tx, String::new());
+        let conn = Conn::new(ConnId::default(), tx, String::new());
         let conn_id = conn.get_id();
         suite.run(Task::OpenConn { conn });
 
@@ -3152,9 +3154,9 @@ mod tests {
         let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
         suite.add_region(1, 100);
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
-        let (tx, _rx) = channel::channel(1, quota);
+        let (tx, _rx) = channel::channel(ConnId::default(), 1, quota);
 
-        let conn = Conn::new(tx, String::new());
+        let conn = Conn::new(ConnId::default(), tx, String::new());
         let conn_id = conn.get_id();
         suite.run(Task::OpenConn { conn });
 
