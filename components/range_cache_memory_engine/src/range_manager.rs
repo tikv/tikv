@@ -372,6 +372,19 @@ impl RegionMetaMap {
         });
     }
 
+    pub fn cached_regions(&self) -> Vec<u64> {
+        self.regions
+            .iter()
+            .filter_map(|(id, meta)| {
+                if meta.state == RegionState::Active {
+                    Some(*id)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
+    }
+
     pub fn iter_overlapped_regions(
         &self,
         region: &CacheRegion,
