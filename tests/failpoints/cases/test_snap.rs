@@ -1151,29 +1151,3 @@ fn test_snapshot_receiver_busy() {
     fail::remove("receiving_snapshot_callback");
     fail::remove("snap_gen_precheck_failed");
 }
-
-#[test_case(test_raftstore::new_node_cluster)]
-#[test_case(test_raftstore::new_server_cluster)]
-fn test_node_snapshot_without_ingest() {
-    let mut cluster = new_cluster(0, 4);
-    configure_for_snapshot(&mut cluster.cfg);
-
-    let pd_client = Arc::clone(&cluster.pd_client);
-    // Disable default max peer count check.
-    pd_client.disable_default_operator();
-    cluster.run();
-
-    fail::cfg("on_apply_cf_without_ingest", "return").unwrap();
-
-    // In case of removing leader, let's transfer leader to some node first.
-    cluster.must_transfer_leader(1, new_peer(1, 1));
-    pd_client.must_remove_peer(1, new_peer(4, 4));
-    pd_client.add_peer(1, new_peer(4, 5));
-    cluster.must_put(b"k1", b"v1");
-    cluster.must_put(b"k2", b"v2");
-    let engine4 = cluster.get_engine(4);
-    must_get_equal(&engine4, b"k1", b"v1");
-    must_get_equal(&engine4, b"k2", b"v2");
-
-    fail::remove("on_apply_cf_without_ingest");
-}

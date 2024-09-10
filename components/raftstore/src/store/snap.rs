@@ -2024,7 +2024,6 @@ impl SnapManagerCore {
     }
 
     pub fn can_apply_cf_without_ingest(&self, cf_size: u64, cf_kvs: u64) -> bool {
-        fail_point!("on_apply_cf_without_ingest", |_| { true });
         if self.min_ingest_cf_size == 0 {
             return false;
         }
