@@ -1,6 +1,6 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::HashMap, fmt::Display, sync::Arc, thread::JoinHandle, time::Duration};
+use std::{collections::HashMap, fmt::Display, sync::Arc, time::Duration};
 
 use bytes::Bytes;
 use crossbeam::{
@@ -124,16 +124,16 @@ pub struct BgWorkManager {
     worker: Worker,
     scheduler: Scheduler<BackgroundTask>,
     delete_region_scheduler: Scheduler<BackgroundTask>,
-    tick_stopper: Option<(JoinHandle<()>, Sender<bool>)>,
+    tick_stopper: Option<(Worker, Sender<bool>)>,
     core: Arc<RwLock<RangeCacheMemoryEngineCore>>,
     region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
 }
 
 impl Drop for BgWorkManager {
     fn drop(&mut self) {
-        let (h, tx) = self.tick_stopper.take().unwrap();
+        let (ticker, tx) = self.tick_stopper.take().unwrap();
         let _ = tx.send(true);
-        let _ = h.join();
+        ticker.stop();
         self.worker.stop();
     }
 }
@@ -225,7 +225,7 @@ impl BgWorkManager {
         memory_controller: Arc<MemoryController>,
         region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
     ) -> Self {
-        let worker = Worker::new("range-cache-background-worker");
+        let worker = Worker::new("ime-bg");
         let (runner, delete_range_scheduler) = BackgroundRunner::new(
             core.clone(),
             memory_controller,
@@ -235,9 +235,9 @@ impl BgWorkManager {
             gc_interval,
             pd_client.clone(),
         );
-        let scheduler = worker.start_with_timer("range-cache-engine-background", runner);
+        let scheduler = worker.start_with_timer("ime-bg-runner", runner);
 
-        let (h, tx) = BgWorkManager::start_tick(
+        let (ticker, tx) = BgWorkManager::start_tick(
             scheduler.clone(),
             pd_client,
             gc_interval,
@@ -248,7 +248,7 @@ impl BgWorkManager {
             worker,
             scheduler,
             delete_region_scheduler: delete_range_scheduler,
-            tick_stopper: Some((h, tx)),
+            tick_stopper: Some((ticker, tx)),
             core,
             region_info_provider,
         }
@@ -307,11 +307,17 @@ impl BgWorkManager {
         pd_client: Arc<dyn PdClient>,
         gc_interval: Duration,
         load_evict_interval: Duration,
-    ) -> (JoinHandle<()>, Sender<bool>) {
+    ) -> (Worker, Sender<bool>) {
         let (tx, rx) = bounded(0);
         // TODO: Instead of spawning a new thread, we should run this task
         //       in a shared background thread.
-        let h = std::thread::spawn(move || {
+        let ticker = Builder::new("ime-ticker").thread_count(1).create();
+        // The interval here is somewhat arbitrary, as long as it is less than
+        // intervals in the loop, it should be fine, because it spawns a
+        // blocking task.
+        // TODO: Spawn non-blocking tasks and make full use of the ticker.
+        let interval = Duration::from_millis(100);
+        ticker.spawn_interval_task(interval, move || {
             let gc_ticker = tick(gc_interval);
             let load_evict_ticker = tick(load_evict_interval); // TODO (afeinberg): Use a real value.
             let tso_timeout = std::cmp::min(gc_interval, TIMTOUT_FOR_TSO);
@@ -349,7 +355,7 @@ impl BgWorkManager {
                     recv(rx) -> r => {
                         if let Err(e) = r {
                             error!(
-                                "ime receive error in range cache engien gc ticker";
+                                "ime receive error in range cache engine gc ticker";
                                 "err" => ?e,
                             );
                         }
@@ -358,7 +364,7 @@ impl BgWorkManager {
                 }
             }
         });
-        (h, tx)
+        (ticker, tx)
     }
 }
 
@@ -804,28 +810,28 @@ impl BackgroundRunner {
         gc_interval: Duration,
         pd_client: Arc<dyn PdClient>,
     ) -> (Self, Scheduler<BackgroundTask>) {
-        let range_load_worker = Builder::new("background-range-load-worker")
+        let range_load_worker = Builder::new("ime-load")
             // Range load now is implemented sequentially, so we must use exactly one thread to handle it.
             // todo(SpadeA): if the load speed is a bottleneck, we may consider to use multiple threads to load ranges.
             .thread_count(1)
             .create();
         let range_load_remote = range_load_worker.remote();
 
-        let delete_range_worker = Worker::new("background-delete-range-worker");
+        let delete_range_worker = Worker::new("ime-delete");
         let delete_range_runner = DeleteRangeRunner::new(engine.clone());
         let delete_range_scheduler =
-            delete_range_worker.start_with_timer("delete-range-runner", delete_range_runner);
+            delete_range_worker.start_with_timer("ime-delete-runner", delete_range_runner);
 
-        let lock_cleanup_worker = Worker::new("lock-cleanup-worker");
+        let lock_cleanup_worker = Worker::new("ime-lock-cleanup");
         let lock_cleanup_remote = lock_cleanup_worker.remote();
 
-        let gc_range_worker = Builder::new("background-range-load-worker")
+        let gc_range_worker = Builder::new("ime-gc")
             // Gc must also use exactly one thread to handle it.
             .thread_count(1)
             .create();
         let gc_range_remote = gc_range_worker.remote();
 
-        let load_evict_worker = Worker::new("background-region-load-evict-worker");
+        let load_evict_worker = Worker::new("ime-evict");
         let load_evict_remote = load_evict_worker.remote();
 
         let num_regions_to_cache = memory_controller.soft_limit_threshold() / expected_region_size;
@@ -3048,7 +3054,7 @@ pub mod tests {
         let gc_interval = Duration::from_millis(100);
         let load_evict_interval = Duration::from_millis(200);
         let (scheduler, mut rx) = dummy_scheduler();
-        let (handle, stop) =
+        let (ticker, stop) =
             BgWorkManager::start_tick(scheduler, pd_client, gc_interval, load_evict_interval);
 
         let Some(BackgroundTask::Gc(GcTask { safe_point })) =
@@ -3065,6 +3071,6 @@ pub mod tests {
         pd_client_rx.try_recv().unwrap();
 
         stop.send(true).unwrap();
-        handle.join().unwrap();
+        ticker.stop();
     }
 }
