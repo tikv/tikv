@@ -218,18 +218,18 @@ impl DetectTable {
         lock_key: &[u8],
         resource_group_tag: &[u8],
     ) -> Option<(u64, Vec<u8>, Vec<WaitForEntry>)> {
-        let result = self.detect_without_consistency_check(
-            txn_ts,
-            lock_ts,
-            lock_hash,
-            lock_key,
-            resource_group_tag,
-        );
+        let _timer = DETECTOR_TASK_DURATION_HISTOGRAM_VEC
+            .detect
+            .start_coarse_timer();
+        let _timer = DETECT_DURATION_HISTOGRAM.start_coarse_timer();
+        TASK_COUNTER_METRICS.detect.inc();
+
+        let result = self.detect_impl(txn_ts, lock_ts, lock_hash, lock_key, resource_group_tag);
         self.check_key_reverse_index_consistency();
         result
     }
 
-    pub fn detect_without_consistency_check(
+    pub fn detect_impl(
         &mut self,
         txn_ts: TimeStamp,
         lock_ts: TimeStamp,
@@ -237,9 +237,6 @@ impl DetectTable {
         lock_key: &[u8],
         resource_group_tag: &[u8],
     ) -> Option<(u64, Vec<u8>, Vec<WaitForEntry>)> {
-        let _timer = DETECT_DURATION_HISTOGRAM.start_coarse_timer();
-        TASK_COUNTER_METRICS.detect.inc();
-
         self.now = Instant::now_coarse();
         self.active_expire();
 
@@ -411,6 +408,10 @@ impl DetectTable {
 
     /// Removes the corresponding wait_for_entry.
     fn clean_up_wait_for(&mut self, txn_ts: TimeStamp, lock_digest: LockDigest, key: &[u8]) {
+        let _timer = DETECTOR_TASK_DURATION_HISTOGRAM_VEC
+            .clean_up_wait_for
+            .start_coarse_timer();
+
         if let Some(wait_for) = self.wait_for_map.get_mut(&txn_ts) {
             if let Some(locks) = wait_for.get_mut(&lock_digest.ts) {
                 let removed_lock = locks.remove(lock_digest.hash, key);
@@ -453,6 +454,11 @@ impl DetectTable {
         old_lock_ts: TimeStamp,
         new_lock_ts: TimeStamp,
     ) -> Vec<(TimeStamp, u64, Vec<u8>, Vec<WaitForEntry>, Vec<u8>)> {
+        let _timer = DETECTOR_TASK_DURATION_HISTOGRAM_VEC
+            .replace_lock_by_key
+            .start_coarse_timer();
+        TASK_COUNTER_METRICS.replace_lock_by_key.inc();
+
         if old_lock_ts == new_lock_ts {
             // It's theoretically possible that a transaction releases a lock and then
             // acquires it again, e.g., a pessimistic transaction performs a
@@ -489,14 +495,8 @@ impl DetectTable {
                 blockers.remove(&old_lock_ts);
             }
 
-            if let Some((deadlock_key_hash, deadlock_key, wait_chain)) = self
-                .detect_without_consistency_check(
-                    *txn_ts,
-                    new_lock_ts,
-                    lock_hash,
-                    &key,
-                    &resource_group_tag,
-                )
+            if let Some((deadlock_key_hash, deadlock_key, wait_chain)) =
+                self.detect_impl(*txn_ts, new_lock_ts, lock_hash, &key, &resource_group_tag)
             {
                 result.push((
                     *txn_ts,
@@ -560,6 +560,10 @@ impl DetectTable {
 
     /// Removes the entries of the transaction.
     fn clean_up(&mut self, txn_ts: TimeStamp) {
+        let _timer = DETECTOR_TASK_DURATION_HISTOGRAM_VEC
+            .clean_up
+            .start_coarse_timer();
+
         if let Some(entry) = self.wait_for_map.remove(&txn_ts) {
             for (lock_ts, locks) in entry {
                 for (_, key) in locks.keys {
