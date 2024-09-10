@@ -2845,7 +2845,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/ekexium/kvproto?branch=feat-resolved-ts-for-large-txn#b4bbca7aeec20dd0dc3607e95c4cca2dfca65606"
+source = "git+https://github.com/ekexium/kvproto?branch=feat-resolved-ts-for-large-txn#683006c3a99b4b7555d1242f5a722a40a9ccac14"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
