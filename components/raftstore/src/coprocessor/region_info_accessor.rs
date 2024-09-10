@@ -29,6 +29,9 @@ use super::{
     RegionHeartbeatObserver, Result, RoleChange, RoleObserver,
 };
 
+// TODO(SpadeA): this 100 may be adjusted by observing more workloads.
+const ITERATED_COUNT_FILTER_FACTOR: usize = 100;
+
 /// `RegionInfoAccessor` is used to collect all regions' information on this
 /// TiKV into a collection so that other parts of TiKV can get region
 /// information from it. It registers a observer to raftstore, which is named
@@ -167,6 +170,10 @@ pub enum RegionInfoQuery {
         count: usize,
         callback: Callback<TopRegions>,
     },
+    GetRegionsStat {
+        region_ids: Vec<u64>,
+        callback: Callback<Vec<(Region, RegionStat)>>,
+    },
     /// Gets all contents from the collection. Only used for testing.
     DebugDump(mpsc::Sender<(RegionsMap, RegionRangesMap)>),
 }
@@ -191,6 +198,9 @@ impl Display for RegionInfoQuery {
             ),
             RegionInfoQuery::GetTopRegions { count, .. } => {
                 write!(f, "GetTopRegions(count: {})", count)
+            }
+            RegionInfoQuery::GetRegionsStat { region_ids, .. } => {
+                write!(f, "GetRegionsActivity(region_ids: {:?})", region_ids)
             }
             RegionInfoQuery::DebugDump(_) => write!(f, "DebugDump"),
         }
@@ -297,15 +307,21 @@ pub struct RegionCollector {
     // together in a struct exposing add, delete, and get_top_regions methods.
     region_activity: RegionActivityMap,
     region_leaders: Arc<RwLock<HashSet<u64>>>,
+    // It is calculated as '(next + prev) / processed_keys'
+    mvcc_amplification_threshold: usize,
 }
 
 impl RegionCollector {
-    pub fn new(region_leaders: Arc<RwLock<HashSet<u64>>>) -> Self {
+    pub fn new(
+        region_leaders: Arc<RwLock<HashSet<u64>>>,
+        mvcc_amplification_threshold: usize,
+    ) -> Self {
         Self {
             region_leaders,
             regions: HashMap::default(),
             region_activity: HashMap::default(),
             region_ranges: BTreeMap::default(),
+            mvcc_amplification_threshold,
         }
     }
 
@@ -569,20 +585,23 @@ impl RegionCollector {
     ///
     /// Otherwise, return the top `count` regions for which this node is the
     /// leader from `self.region_activity`. Top regions are determined by
-    /// comparing `read_keys` in each region's most recent
+    /// comparing `next + prev` in each region's most recent
     /// region stat.
     ///
     /// Note: this function is `O(N log(N))` with respect to size of
     /// region_activity. This is acceptable, as region_activity is populated
     /// by heartbeats for this node's region, so N cannot be greater than
     /// approximately `300_000``.
-    pub fn handle_get_top_regions(&mut self, count: usize, callback: Callback<TopRegions>) {
+    pub fn handle_get_top_regions(&self, count: usize, callback: Callback<TopRegions>) {
         let compare_fn = |a: &RegionActivity, b: &RegionActivity| {
-            let a = a.region_stat.read_keys;
-            let b = b.region_stat.read_keys;
+            let a = a.region_stat.cop_detail.iterated_count();
+            let b = b.region_stat.cop_detail.iterated_count();
             b.cmp(&a)
         };
-        let top_regions = if count == 0 {
+
+        // Only used to log.
+        let mut max_qps = 0;
+        let mut top_regions = if count == 0 {
             self.regions
                 .values()
                 .map(|ri| {
@@ -600,8 +619,11 @@ impl RegionCollector {
                 .map(|(r, ra)| {
                     (
                         r,
-                        ra.map(|ra| ra.region_stat.approximate_size)
-                            .unwrap_or_default(),
+                        ra.map(|ra| {
+                            max_qps = u64::max(ra.region_stat.query_stats.coprocessor, max_qps);
+                            ra.region_stat.clone()
+                        })
+                        .unwrap_or_default(),
                     )
                 })
                 .collect::<Vec<_>>()
@@ -610,17 +632,118 @@ impl RegionCollector {
             self.region_activity
                 .iter()
                 .filter_map(|(id, ac)| {
+                    max_qps = u64::max(ac.region_stat.query_stats.coprocessor, max_qps);
                     self.regions
                         .get(id)
-                        .filter(|ri| ri.role == StateRole::Leader)
+                        .filter(|ri| {
+                            ri.role == StateRole::Leader
+                                && ac.region_stat.cop_detail.iterated_count() != 0
+                        })
                         .map(|ri| (ri, ac))
                 })
                 .sorted_by(|(_, activity_0), (_, activity_1)| compare_fn(activity_0, activity_1))
                 .take(count)
-                .map(|(ri, ac)| (ri.region.clone(), ac.region_stat.approximate_size))
+                .map(|(ri, ac)| (ri.region.clone(), ac.region_stat.clone()))
                 .collect::<Vec<_>>()
         };
-        callback(top_regions)
+
+        // TODO(SpadeA): remove it when auto load/evict is stable
+        {
+            let debug: Vec<_> = top_regions
+                .iter()
+                .map(|(r, s)| {
+                    format!(
+                        "region_id={}, read_keys={}, cop={}, cop_detail={:?}, mvcc_amplification={}",
+                        r.get_id(),
+                        s.read_keys,
+                        s.query_stats.coprocessor,
+                        s.cop_detail,
+                        s.cop_detail.mvcc_amplification(),
+                    )
+                })
+                .collect_vec();
+
+            info!(
+                "ime get top k regions before filter";
+                "count" => count,
+                "max_qps" => max_qps,
+                "regions" => ?debug,
+            );
+        }
+
+        // Get the average iterated count of the first top 10 regions and use the
+        // 1/ITERATED_COUNT_FILTER_FACTOR of it to filter regions with less read
+        // flows
+        let top_regions_iterated_count: Vec<_> = top_regions
+            .iter()
+            .map(|(_, r)| r.cop_detail.iterated_count())
+            .take(10)
+            .collect();
+        let iterated_count_to_filter: usize = if !top_regions_iterated_count.is_empty() {
+            top_regions_iterated_count.iter().sum::<usize>()
+                / top_regions_iterated_count.len()
+                / ITERATED_COUNT_FILTER_FACTOR
+        } else {
+            0
+        };
+        top_regions.retain(|(_, s)| {
+            s.cop_detail.iterated_count() >= iterated_count_to_filter
+                // plus processed_keys by 1 to make it not 0
+                && (s.cop_detail.iterated_count()) / (s.cop_detail.processed_keys + 1)
+                    >= self.mvcc_amplification_threshold
+        });
+
+        // TODO(SpadeA): remove it when auto load/evict is stable
+        {
+            let debug: Vec<_> = top_regions
+                .iter()
+                .map(|(r, s)| {
+                    format!(
+                        "region_id={}, read_keys={}, cop={}, cop_detail={:?}, mvcc_amplification={}",
+                        r.get_id(),
+                        s.read_keys,
+                        s.query_stats.coprocessor,
+                        s.cop_detail,
+                        s.cop_detail.mvcc_amplification(),
+                    )
+                })
+                .collect_vec();
+
+            info!(
+                "ime get top k regions after filter";
+                "count" => count,
+                "read_count" => debug.len(),
+                "max_qps" => max_qps,
+                "regions" => ?debug,
+            );
+        }
+
+        callback(
+            top_regions
+                .into_iter()
+                .map(|(r, stat)| (r, stat.clone()))
+                .collect_vec(),
+        )
+    }
+
+    fn handle_get_regions_stat(
+        &self,
+        region_ids: Vec<u64>,
+        callback: Callback<Vec<(Region, RegionStat)>>,
+    ) {
+        callback(
+            region_ids
+                .into_iter()
+                .filter_map(|id| {
+                    self.region_activity.get(&id).map(|r| {
+                        (
+                            self.regions.get(&id).unwrap().region.clone(),
+                            r.region_stat.clone(),
+                        )
+                    })
+                })
+                .collect_vec(),
+        )
     }
 
     fn handle_raftstore_event(&mut self, event: RaftStoreEvent) {
@@ -703,6 +826,12 @@ impl Runnable for RegionCollector {
             RegionInfoQuery::GetTopRegions { count, callback } => {
                 self.handle_get_top_regions(count, callback);
             }
+            RegionInfoQuery::GetRegionsStat {
+                region_ids,
+                callback,
+            } => {
+                self.handle_get_regions_stat(region_ids, callback);
+            }
             RegionInfoQuery::DebugDump(tx) => {
                 tx.send((self.regions.clone(), self.region_ranges.clone()))
                     .unwrap();
@@ -768,12 +897,13 @@ impl RegionInfoAccessor {
     pub fn new(
         host: &mut CoprocessorHost<impl KvEngine>,
         region_stats_manager_enabled_cb: RegionStatsManagerEnabledCb,
+        mvcc_amplification_threshold: usize,
     ) -> Self {
         let region_leaders = Arc::new(RwLock::new(HashSet::default()));
         let worker = WorkerBuilder::new("region-collector-worker").create();
         let scheduler = worker.start_with_timer(
             "region-collector-worker",
-            RegionCollector::new(region_leaders.clone()),
+            RegionCollector::new(region_leaders.clone(), mvcc_amplification_threshold),
         );
         register_region_event_listener(host, scheduler.clone(), region_stats_manager_enabled_cb);
 
@@ -803,10 +933,15 @@ impl RegionInfoAccessor {
             .unwrap();
         rx.recv().unwrap()
     }
+
+    #[cfg(any(test, feature = "testexport"))]
+    pub fn scheduler(&self) -> &Scheduler<RegionInfoQuery> {
+        &self.scheduler
+    }
 }
 
 /// Top regions result: region and its approximate size.
-pub type TopRegions = Vec<(Region, u64)>;
+pub type TopRegions = Vec<(Region, RegionStat)>;
 
 pub trait RegionInfoProvider: Send + Sync {
     /// Get a iterator of regions that contains `from` or have keys larger than
@@ -830,7 +965,12 @@ pub trait RegionInfoProvider: Send + Sync {
     fn get_regions_in_range(&self, _start_key: &[u8], _end_key: &[u8]) -> Result<Vec<Region>> {
         unimplemented!()
     }
+
     fn get_top_regions(&self, _count: Option<NonZeroUsize>) -> Result<TopRegions> {
+        unimplemented!()
+    }
+
+    fn get_regions_stat(&self, _: Vec<u64>) -> Result<Vec<(Region, RegionStat)>> {
         unimplemented!()
     }
 }
@@ -927,6 +1067,29 @@ impl RegionInfoProvider for RegionInfoAccessor {
                 })
             })
     }
+
+    fn get_regions_stat(&self, region_ids: Vec<u64>) -> Result<Vec<(Region, RegionStat)>> {
+        let (tx, rx) = mpsc::channel();
+        let msg = RegionInfoQuery::GetRegionsStat {
+            region_ids,
+            callback: Box::new(move |regions_activity| {
+                if let Err(e) = tx.send(regions_activity) {
+                    warn!("failed to send get_regions_activity result: {:?}", e);
+                }
+            }),
+        };
+        self.scheduler
+            .schedule(msg)
+            .map_err(|e| box_err!("failed to send request to region collector: {:?}", e))
+            .and_then(|_| {
+                rx.recv().map_err(|e| {
+                    box_err!(
+                        "failed to receive get_regions_activity result from region_collector: {:?}",
+                        e
+                    )
+                })
+            })
+    }
 }
 
 // Use in tests only.
@@ -1014,7 +1177,8 @@ impl RegionInfoProvider for MockRegionInfoProvider {
             b"",
             Box::new(move |iter| {
                 for region_info in iter {
-                    tx.send((region_info.region.clone(), 0)).unwrap();
+                    tx.send((region_info.region.clone(), RegionStat::default()))
+                        .unwrap();
                 }
             }),
         )?;
@@ -1033,7 +1197,7 @@ mod tests {
     use super::*;
 
     fn new_region_collector() -> RegionCollector {
-        RegionCollector::new(Arc::new(RwLock::new(HashSet::default())))
+        RegionCollector::new(Arc::new(RwLock::new(HashSet::default())), 0)
     }
 
     fn new_region(id: u64, start_key: &[u8], end_key: &[u8], version: u64) -> Region {

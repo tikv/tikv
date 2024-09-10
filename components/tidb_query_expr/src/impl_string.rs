@@ -644,7 +644,7 @@ fn field_bytes<C: Collator>(args: &[Option<BytesRef>]) -> Result<Option<Int>> {
                 if arg.is_none() {
                     continue;
                 }
-                match C::sort_compare(val, arg.unwrap()) {
+                match C::sort_compare(val, arg.unwrap(), false) {
                     Ok(Ordering::Equal) => return Ok(Some(pos as i64)),
                     _ => continue,
                 }
@@ -781,7 +781,7 @@ pub fn substring_index(
 #[inline]
 pub fn strcmp<C: Collator>(left: BytesRef, right: BytesRef) -> Result<Option<i64>> {
     use std::cmp::Ordering::*;
-    Ok(Some(match C::sort_compare(left, right)? {
+    Ok(Some(match C::sort_compare(left, right, false)? {
         Less => -1,
         Equal => 0,
         Greater => 1,
@@ -818,7 +818,7 @@ pub fn find_in_set<C: Collator>(s: BytesRef, str_list: BytesRef) -> Result<Optio
     let result = str_list
         .split_str(",")
         .position(|str_in_set| {
-            C::sort_compare(str_in_set.as_bytes(), s)
+            C::sort_compare(str_in_set.as_bytes(), s, false)
                 .ok()
                 .filter(|o| *o == Ordering::Equal)
                 .is_some()

@@ -54,7 +54,7 @@ pub fn compare_bytes<C: Collator, F: CmpOp>(
         (None, None) => F::compare_null(),
         (None, _) | (_, None) => F::compare_partial_null(),
         (Some(lhs), Some(rhs)) => {
-            let ord = C::sort_compare(lhs, rhs)?;
+            let ord = C::sort_compare(lhs, rhs, false)?;
             Some(F::compare_order(ord) as i64)
         }
     })

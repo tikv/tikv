@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "8.3.0-alpha"
+version = "8.4.0-alpha"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -36,6 +36,7 @@ testexport = [
   "engine_rocks/testexport",
   "engine_panic/testexport",
   "hybrid_engine/testexport",
+  "encryption/testexport",
 ]
 test-engine-kv-rocksdb = ["engine_test/test-engine-kv-rocksdb"]
 test-engine-raft-raft-engine = ["engine_test/test-engine-raft-raft-engine"]
@@ -80,6 +81,7 @@ crc64fast = "0.1"
 crossbeam = { workspace = true }
 crypto = { workspace = true }
 dashmap = "5"
+encryption = { workspace = true }
 encryption_export = { workspace = true }
 engine_panic = { workspace = true }
 engine_rocks = { workspace = true }
@@ -237,7 +239,8 @@ procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "7693954bd1dd86e
 # When you modify TiKV cooperatively with kvproto, this will be useful to submit the PR to TiKV and the PR to
 # kvproto at the same time.
 # After the PR to kvproto is merged, remember to comment this out and run `cargo update -p kvproto`.
-#
+# [patch.'https://github.com/pingcap/kvproto']
+# kvproto = { git = "https://github.com/your_github_id/kvproto", branch = "your_branch" }
 # After the PR to rust-rocksdb is merged, remember to comment this out and run `cargo update -p rocksdb`.
 # [patch.'https://github.com/tikv/rust-rocksdb']
 # rocksdb = { git = "https://github.com/your_github_id/rust-rocksdb", branch = "your_branch" }

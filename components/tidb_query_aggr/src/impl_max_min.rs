@@ -184,7 +184,12 @@ where
             return Ok(());
         }
 
-        if C::sort_compare(self.extremum.as_ref().unwrap(), value.as_ref().unwrap())? == E::ORD {
+        if C::sort_compare(
+            self.extremum.as_ref().unwrap(),
+            value.as_ref().unwrap(),
+            false,
+        )? == E::ORD
+        {
             self.extremum = value.map(|x| x.into_owned_value());
         }
         Ok(())

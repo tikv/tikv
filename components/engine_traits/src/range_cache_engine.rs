@@ -25,17 +25,17 @@ pub enum FailedReason {
 #[derive(Debug, PartialEq)]
 pub enum RegionEvent {
     Split {
-        source: Region,
-        new_regions: Vec<Region>,
+        source: CacheRegion,
+        new_regions: Vec<CacheRegion>,
     },
     Eviction {
-        region: Region,
+        region: CacheRegion,
         reason: EvictReason,
     },
     // range eviction triggered by delete_range
     // we should evict all cache regions that overlaps with this range
     EvictByRange {
-        range: CacheRange,
+        range: CacheRegion,
         reason: EvictReason,
     },
 }
@@ -50,6 +50,7 @@ pub enum EvictReason {
     DeleteRange,
     Merge,
     Disabled,
+    ApplySnapshot,
 }
 
 /// RangeCacheEngine works as a range cache caching some ranges (in Memory or
@@ -65,9 +66,7 @@ pub trait RangeCacheEngine:
     // provide atomic write
     fn snapshot(
         &self,
-        region_id: u64,
-        region_epoch: u64,
-        range: CacheRange,
+        region: CacheRegion,
         read_ts: u64,
         seq_num: u64,
     ) -> result::Result<Self::Snapshot, FailedReason>;
@@ -76,7 +75,7 @@ pub trait RangeCacheEngine:
     fn set_disk_engine(&mut self, disk_engine: Self::DiskEngine);
 
     // return the region containing the key
-    fn get_region_for_key(&self, key: &[u8]) -> Option<Region>;
+    fn get_region_for_key(&self, key: &[u8]) -> Option<CacheRegion>;
 
     type RangeHintService: RangeHintService;
     fn start_hint_service(&self, range_hint_service: Self::RangeHintService);
@@ -89,8 +88,6 @@ pub trait RangeCacheEngine:
 }
 
 pub trait RangeCacheEngineExt {
-    fn range_cache_engine_enabled(&self) -> bool;
-
     // TODO(SpadeA): try to find a better way to reduce coupling degree of range
     // cache engine and kv engine
     fn on_region_event(&self, event: RegionEvent);
@@ -104,37 +101,57 @@ pub trait RangeCacheEngineExt {
 /// as it continues to evolve to handle eviction, using stats.
 pub trait RangeHintService: Send + Sync {}
 
-#[derive(Clone, Eq, PartialEq, PartialOrd, Ord)]
-pub struct CacheRange {
+#[derive(Clone, Eq, PartialEq)]
+pub struct CacheRegion {
+    // target region id
+    pub id: u64,
+    // the version of target region epoch. we only track version but not
+    // conf_version because conf_version does not change the applied data.
+    pub epoch_version: u64,
+    // data start key of the region range,  equals to data_key(region.start_key).
     pub start: Vec<u8>,
+    // data start key of the region range, equals to data_end_key(region.start_key).
     pub end: Vec<u8>,
 }
 
-impl Debug for CacheRange {
+impl Debug for CacheRegion {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CacheRange")
+        f.debug_struct("CacheRegion")
+            .field("id", &self.id)
+            .field("epoch", &self.epoch_version)
             .field("range_start", &log_wrappers::Value(&self.start))
             .field("range_end", &log_wrappers::Value(&self.end))
             .finish()
     }
 }
 
-impl CacheRange {
-    pub fn new(start: Vec<u8>, end: Vec<u8>) -> Self {
-        Self { start, end }
+impl CacheRegion {
+    pub fn new<T1: Into<Vec<u8>>, T2: Into<Vec<u8>>>(
+        id: u64,
+        epoch_version: u64,
+        start: T1,
+        end: T2,
+    ) -> Self {
+        Self {
+            id,
+            epoch_version,
+            start: start.into(),
+            end: end.into(),
+        }
     }
 
     pub fn from_region(region: &Region) -> Self {
         Self {
             start: enc_start_key(region),
             end: enc_end_key(region),
+            id: region.id,
+            epoch_version: region.get_region_epoch().version,
         }
     }
 }
 
-impl CacheRange {
-    // todo: need to consider ""?
-    pub fn contains_range(&self, other: &CacheRange) -> bool {
+impl CacheRegion {
+    pub fn contains_range(&self, other: &CacheRegion) -> bool {
         self.start <= other.start && self.end >= other.end
     }
 
@@ -143,49 +160,49 @@ impl CacheRange {
     }
 
     // Note: overlaps also includes "contains"
-    pub fn overlaps(&self, other: &CacheRange) -> bool {
+    pub fn overlaps(&self, other: &CacheRegion) -> bool {
         self.start < other.end && other.start < self.end
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::CacheRange;
+    use super::CacheRegion;
 
     #[test]
     fn test_overlap() {
-        let r1 = CacheRange::new(b"k1".to_vec(), b"k6".to_vec());
-        let r2 = CacheRange::new(b"k2".to_vec(), b"k4".to_vec());
+        let r1 = CacheRegion::new(1, 0, b"k1".to_vec(), b"k6".to_vec());
+        let r2 = CacheRegion::new(2, 0, b"k2".to_vec(), b"k4".to_vec());
         assert!(r1.overlaps(&r2));
         assert!(r2.overlaps(&r1));
 
-        let r1 = CacheRange::new(b"k1".to_vec(), b"k6".to_vec());
-        let r2 = CacheRange::new(b"k2".to_vec(), b"k7".to_vec());
+        let r1 = CacheRegion::new(1, 0, b"k1".to_vec(), b"k6".to_vec());
+        let r2 = CacheRegion::new(2, 0, b"k2".to_vec(), b"k7".to_vec());
         assert!(r1.overlaps(&r2));
         assert!(r2.overlaps(&r1));
 
-        let r1 = CacheRange::new(b"k1".to_vec(), b"k6".to_vec());
-        let r2 = CacheRange::new(b"k1".to_vec(), b"k4".to_vec());
+        let r1 = CacheRegion::new(1, 0, b"k1".to_vec(), b"k6".to_vec());
+        let r2 = CacheRegion::new(2, 0, b"k1".to_vec(), b"k4".to_vec());
         assert!(r1.overlaps(&r2));
         assert!(r2.overlaps(&r1));
 
-        let r1 = CacheRange::new(b"k1".to_vec(), b"k6".to_vec());
-        let r2 = CacheRange::new(b"k2".to_vec(), b"k6".to_vec());
+        let r1 = CacheRegion::new(1, 0, b"k1".to_vec(), b"k6".to_vec());
+        let r2 = CacheRegion::new(2, 0, b"k2".to_vec(), b"k6".to_vec());
         assert!(r1.overlaps(&r2));
         assert!(r2.overlaps(&r1));
 
-        let r1 = CacheRange::new(b"k1".to_vec(), b"k6".to_vec());
-        let r2 = CacheRange::new(b"k1".to_vec(), b"k6".to_vec());
+        let r1 = CacheRegion::new(1, 0, b"k1".to_vec(), b"k6".to_vec());
+        let r2 = CacheRegion::new(2, 0, b"k1".to_vec(), b"k6".to_vec());
         assert!(r1.overlaps(&r2));
         assert!(r2.overlaps(&r1));
 
-        let r1 = CacheRange::new(b"k1".to_vec(), b"k2".to_vec());
-        let r2 = CacheRange::new(b"k2".to_vec(), b"k3".to_vec());
+        let r1 = CacheRegion::new(1, 0, b"k1".to_vec(), b"k2".to_vec());
+        let r2 = CacheRegion::new(2, 0, b"k2".to_vec(), b"k3".to_vec());
         assert!(!r1.overlaps(&r2));
         assert!(!r2.overlaps(&r1));
 
-        let r1 = CacheRange::new(b"k1".to_vec(), b"k2".to_vec());
-        let r2 = CacheRange::new(b"k3".to_vec(), b"k4".to_vec());
+        let r1 = CacheRegion::new(1, 0, b"k1".to_vec(), b"k2".to_vec());
+        let r2 = CacheRegion::new(2, 0, b"k3".to_vec(), b"k4".to_vec());
         assert!(!r1.overlaps(&r2));
         assert!(!r2.overlaps(&r1));
     }
