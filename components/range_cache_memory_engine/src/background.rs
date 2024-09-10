@@ -1,6 +1,6 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::HashMap, fmt::Display, sync::Arc, thread::JoinHandle, time::Duration};
+use std::{collections::HashMap, fmt::Display, sync::Arc, time::Duration};
 
 use bytes::Bytes;
 use crossbeam::{
@@ -124,16 +124,16 @@ pub struct BgWorkManager {
     worker: Worker,
     scheduler: Scheduler<BackgroundTask>,
     delete_region_scheduler: Scheduler<BackgroundTask>,
-    tick_stopper: Option<(JoinHandle<()>, Sender<bool>)>,
+    tick_stopper: Option<(Worker, Sender<bool>)>,
     core: Arc<RwLock<RangeCacheMemoryEngineCore>>,
     region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
 }
 
 impl Drop for BgWorkManager {
     fn drop(&mut self) {
-        let (h, tx) = self.tick_stopper.take().unwrap();
+        let (ticker, tx) = self.tick_stopper.take().unwrap();
         let _ = tx.send(true);
-        let _ = h.join();
+        ticker.stop();
         self.worker.stop();
     }
 }
@@ -221,21 +221,23 @@ impl BgWorkManager {
         gc_interval: Duration,
         load_evict_interval: Duration,
         expected_region_size: usize,
+        mvcc_amplification_threshold: usize,
         memory_controller: Arc<MemoryController>,
         region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
     ) -> Self {
-        let worker = Worker::new("range-cache-background-worker");
+        let worker = Worker::new("ime-bg");
         let (runner, delete_range_scheduler) = BackgroundRunner::new(
             core.clone(),
             memory_controller,
             region_info_provider.clone(),
             expected_region_size,
+            mvcc_amplification_threshold,
             gc_interval,
             pd_client.clone(),
         );
-        let scheduler = worker.start_with_timer("range-cache-engine-background", runner);
+        let scheduler = worker.start_with_timer("ime-bg-runner", runner);
 
-        let (h, tx) = BgWorkManager::start_tick(
+        let (ticker, tx) = BgWorkManager::start_tick(
             scheduler.clone(),
             pd_client,
             gc_interval,
@@ -246,7 +248,7 @@ impl BgWorkManager {
             worker,
             scheduler,
             delete_region_scheduler: delete_range_scheduler,
-            tick_stopper: Some((h, tx)),
+            tick_stopper: Some((ticker, tx)),
             core,
             region_info_provider,
         }
@@ -305,11 +307,17 @@ impl BgWorkManager {
         pd_client: Arc<dyn PdClient>,
         gc_interval: Duration,
         load_evict_interval: Duration,
-    ) -> (JoinHandle<()>, Sender<bool>) {
+    ) -> (Worker, Sender<bool>) {
         let (tx, rx) = bounded(0);
         // TODO: Instead of spawning a new thread, we should run this task
         //       in a shared background thread.
-        let h = std::thread::spawn(move || {
+        let ticker = Builder::new("ime-ticker").thread_count(1).create();
+        // The interval here is somewhat arbitrary, as long as it is less than
+        // intervals in the loop, it should be fine, because it spawns a
+        // blocking task.
+        // TODO: Spawn non-blocking tasks and make full use of the ticker.
+        let interval = Duration::from_millis(100);
+        ticker.spawn_interval_task(interval, move || {
             let gc_ticker = tick(gc_interval);
             let load_evict_ticker = tick(load_evict_interval); // TODO (afeinberg): Use a real value.
             let tso_timeout = std::cmp::min(gc_interval, TIMTOUT_FOR_TSO);
@@ -347,7 +355,7 @@ impl BgWorkManager {
                     recv(rx) -> r => {
                         if let Err(e) = r {
                             error!(
-                                "ime receive error in range cache engien gc ticker";
+                                "ime receive error in range cache engine gc ticker";
                                 "err" => ?e,
                             );
                         }
@@ -356,7 +364,7 @@ impl BgWorkManager {
                 }
             }
         });
-        (h, tx)
+        (ticker, tx)
     }
 }
 
@@ -693,27 +701,24 @@ impl BackgroundRunnerCore {
         let threshold = self.memory_controller.stop_load_limit_threshold();
         range_stats_manager.adjust_max_num_regions(curr_memory_usage, threshold);
 
-        let mut regions_to_add = Vec::with_capacity(256);
-        let mut regions_to_remove = Vec::with_capacity(256);
-        range_stats_manager.collect_changed_ranges(&mut regions_to_add, &mut regions_to_remove);
-        let mut regions_to_delete = Vec::with_capacity(regions_to_remove.len());
-        info!("ime load_evict"; "ranges_to_add" => ?&regions_to_add, "may_evict" => ?&regions_to_remove);
-        for evict_region in regions_to_remove {
-            if self.memory_controller.reached_soft_limit() {
-                let cache_region = CacheRegion::from_region(&evict_region);
-                let mut core = self.engine.write();
-                let deleteable_regions = core.mut_range_manager().evict_region(
-                    &cache_region,
-                    EvictReason::AutoEvict,
-                    None,
-                );
-                info!(
-                    "ime load_evict: soft limit reached";
-                    "region_to_evict" => ?&cache_region,
-                    "evicted_regions" => ?&deleteable_regions,
-                );
-                regions_to_delete.extend(deleteable_regions);
-            }
+        let cached_regions = self.engine.read().range_manager().cached_regions();
+        let (regions_to_load, regions_to_evict) = range_stats_manager
+            .collect_regions_to_load_and_evict(cached_regions, &self.memory_controller);
+
+        let mut regions_to_delete = Vec::with_capacity(regions_to_evict.len());
+        info!("ime load_evict"; "regions_to_load" => ?&regions_to_load, "regions_to_evict" => ?&regions_to_evict);
+        for evict_region in regions_to_evict {
+            let cache_region = CacheRegion::from_region(&evict_region);
+            let mut core = self.engine.write();
+            let deleteable_regions =
+                core.mut_range_manager()
+                    .evict_region(&cache_region, EvictReason::AutoEvict, None);
+            info!(
+                "ime load_evict: auto evict";
+                "region_to_evict" => ?&cache_region,
+                "evicted_regions" => ?&deleteable_regions,
+            );
+            regions_to_delete.extend(deleteable_regions);
         }
 
         if !regions_to_delete.is_empty() {
@@ -727,7 +732,7 @@ impl BackgroundRunnerCore {
                 assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
             }
         }
-        for region in regions_to_add {
+        for region in regions_to_load {
             let cache_region = CacheRegion::from_region(&region);
             let mut core = self.engine.write();
             if let Err(e) = core.mut_range_manager().load_region(cache_region) {
@@ -801,31 +806,32 @@ impl BackgroundRunner {
         memory_controller: Arc<MemoryController>,
         region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
         expected_region_size: usize,
+        mvcc_amplification_threshold: usize,
         gc_interval: Duration,
         pd_client: Arc<dyn PdClient>,
     ) -> (Self, Scheduler<BackgroundTask>) {
-        let range_load_worker = Builder::new("background-range-load-worker")
+        let range_load_worker = Builder::new("ime-load")
             // Range load now is implemented sequentially, so we must use exactly one thread to handle it.
             // todo(SpadeA): if the load speed is a bottleneck, we may consider to use multiple threads to load ranges.
             .thread_count(1)
             .create();
         let range_load_remote = range_load_worker.remote();
 
-        let delete_range_worker = Worker::new("background-delete-range-worker");
+        let delete_range_worker = Worker::new("ime-delete");
         let delete_range_runner = DeleteRangeRunner::new(engine.clone());
         let delete_range_scheduler =
-            delete_range_worker.start_with_timer("delete-range-runner", delete_range_runner);
+            delete_range_worker.start_with_timer("ime-delete-runner", delete_range_runner);
 
-        let lock_cleanup_worker = Worker::new("lock-cleanup-worker");
+        let lock_cleanup_worker = Worker::new("ime-lock-cleanup");
         let lock_cleanup_remote = lock_cleanup_worker.remote();
 
-        let gc_range_worker = Builder::new("background-range-load-worker")
+        let gc_range_worker = Builder::new("ime-gc")
             // Gc must also use exactly one thread to handle it.
             .thread_count(1)
             .create();
         let gc_range_remote = gc_range_worker.remote();
 
-        let load_evict_worker = Worker::new("background-region-load-evict-worker");
+        let load_evict_worker = Worker::new("ime-evict");
         let load_evict_remote = load_evict_worker.remote();
 
         let num_regions_to_cache = memory_controller.soft_limit_threshold() / expected_region_size;
@@ -834,6 +840,7 @@ impl BackgroundRunner {
                 num_regions_to_cache,
                 DEFAULT_EVICT_MIN_DURATION,
                 expected_region_size,
+                mvcc_amplification_threshold,
                 region_info_provider,
             )
         });
@@ -1902,6 +1909,7 @@ pub mod tests {
             memory_controller.clone(),
             None,
             engine.expected_region_size(),
+            0,
             Duration::from_secs(100),
             Arc::new(MockPdClient {}),
         );
@@ -1979,6 +1987,7 @@ pub mod tests {
             memory_controller.clone(),
             None,
             engine.expected_region_size(),
+            0,
             Duration::from_secs(100),
             Arc::new(MockPdClient {}),
         );
@@ -2141,6 +2150,7 @@ pub mod tests {
             memory_controller.clone(),
             None,
             engine.expected_region_size(),
+            0,
             Duration::from_secs(100),
             Arc::new(MockPdClient {}),
         );
@@ -2158,6 +2168,7 @@ pub mod tests {
             memory_controller.clone(),
             None,
             engine.expected_region_size(),
+            0,
             Duration::from_secs(100),
             Arc::new(MockPdClient {}),
         );
@@ -2208,6 +2219,7 @@ pub mod tests {
             memory_controller.clone(),
             None,
             engine.expected_region_size(),
+            0,
             Duration::from_secs(100),
             Arc::new(MockPdClient {}),
         );
@@ -2310,6 +2322,7 @@ pub mod tests {
             memory_controller,
             None,
             engine.expected_region_size(),
+            0,
             Duration::from_secs(100),
             Arc::new(MockPdClient {}),
         );
@@ -2453,6 +2466,7 @@ pub mod tests {
             memory_controller,
             None,
             engine.expected_region_size(),
+            0,
             Duration::from_secs(100),
             Arc::new(MockPdClient {}),
         );
@@ -2604,6 +2618,7 @@ pub mod tests {
             memory_controller,
             None,
             engine.expected_region_size(),
+            0,
             Duration::from_secs(100),
             Arc::new(MockPdClient {}),
         );
@@ -3039,7 +3054,7 @@ pub mod tests {
         let gc_interval = Duration::from_millis(100);
         let load_evict_interval = Duration::from_millis(200);
         let (scheduler, mut rx) = dummy_scheduler();
-        let (handle, stop) =
+        let (ticker, stop) =
             BgWorkManager::start_tick(scheduler, pd_client, gc_interval, load_evict_interval);
 
         let Some(BackgroundTask::Gc(GcTask { safe_point })) =
@@ -3056,6 +3071,6 @@ pub mod tests {
         pd_client_rx.try_recv().unwrap();
 
         stop.send(true).unwrap();
-        handle.join().unwrap();
+        ticker.stop();
     }
 }

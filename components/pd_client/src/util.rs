@@ -952,6 +952,8 @@ pub fn check_resp_header(header: &ResponseHeader) -> Result<()> {
         ErrorType::Unknown => Err(box_err!(err.get_message())),
         ErrorType::InvalidValue => Err(box_err!(err.get_message())),
         ErrorType::GlobalConfigNotFound => panic!("unexpected error {:?}", err),
+        // It will not happen, because we don't call `batch_scan_regions` in TiKV.
+        ErrorType::RegionsNotContainAllKeyRange => Err(box_err!(err.get_message())),
     }
 }
 
