@@ -13,6 +13,7 @@ make_auto_flush_static_metric! {
             clean_up_wait_for,
             clean_up,
             update_wait_for,
+            replace_lock_by_key,
         },
     }
 
@@ -28,10 +29,12 @@ make_auto_flush_static_metric! {
 }
 
 make_static_metric! {
-    pub struct WaitTableStatusGauge: IntGauge {
+    pub struct LocakDetectorTaskDurationHistogram: Histogram {
         "type" => {
-            locks,
-            txns,
+            detect,
+            clean_up,
+            clean_up_wait_for,
+            replace_lock_by_key,
         },
     }
 }
@@ -61,6 +64,15 @@ lazy_static! {
         exponential_buckets(0.0001, 2.0, 20).unwrap() // 0.1ms ~ 104s
     )
     .unwrap();
+    pub static ref DETECTOR_TASK_DURATION_HISTOGRAM_VEC: LocakDetectorTaskDurationHistogram =
+        register_static_histogram_vec!(
+            LocakDetectorTaskDurationHistogram,
+            "tikv_lock_manager_detector_task_duration",
+            "Duration of handling detect different tasks in deadlock detector",
+            &["type"],
+            exponential_buckets(0.0001, 2.0, 20).unwrap() // 0.1ms ~ 104s
+        )
+        .unwrap();
     pub static ref DETECTOR_LEADER_GAUGE: IntGauge = register_int_gauge!(
         "tikv_lock_manager_detector_leader_heartbeat",
         "Heartbeat of the leader of the deadlock detector"
@@ -69,5 +81,5 @@ lazy_static! {
     pub static ref TASK_COUNTER_METRICS: LocalTaskCounter =
         auto_flush_from!(TASK_COUNTER_VEC, LocalTaskCounter);
     pub static ref ERROR_COUNTER_METRICS: LocalErrorCounter =
-        auto_flush_from!(ERROR_COUNTER_VEC,LocalErrorCounter);
+        auto_flush_from!(ERROR_COUNTER_VEC, LocalErrorCounter);
 }

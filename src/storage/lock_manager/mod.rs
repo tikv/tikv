@@ -37,8 +37,6 @@ pub struct LockDigest {
 /// DiagnosticContext is for diagnosing problems about locks
 #[derive(Clone, Default)]
 pub struct DiagnosticContext {
-    /// The key we care about
-    pub key: Vec<u8>,
     /// This tag is used for aggregate related kv requests (eg. generated from
     /// same statement) Currently it is the encoded SQL digest if the client
     /// is TiDB
@@ -50,7 +48,6 @@ pub struct DiagnosticContext {
 impl Debug for DiagnosticContext {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DiagnosticContext")
-            .field("key", &log_wrappers::Value::key(&self.key))
             // TODO: Perhaps the resource group tag don't need to be a secret
             .field("resource_group_tag", &log_wrappers::Value::key(&self.resource_group_tag))
             .finish()

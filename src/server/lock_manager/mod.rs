@@ -357,9 +357,8 @@ mod tests {
         lock_mgr
     }
 
-    fn diag_ctx(key: &[u8], resource_group_tag: &[u8], tracker: TrackerToken) -> DiagnosticContext {
+    fn diag_ctx(resource_group_tag: &[u8], tracker: TrackerToken) -> DiagnosticContext {
         DiagnosticContext {
-            key: key.to_owned(),
             resource_group_tag: resource_group_tag.to_owned(),
             tracker,
         }
@@ -441,7 +440,7 @@ mod tests {
             false,
             Some(WaitTimeout::Default),
             waiter1.cancel_callback,
-            diag_ctx(b"k1", b"tag1", INVALID_TRACKER_TOKEN),
+            diag_ctx(b"tag1", INVALID_TRACKER_TOKEN),
         );
         assert!(lock_mgr.has_waiter());
         let (waiter2, lock_info2, f2) = new_test_waiter_with_key(20.into(), 10.into(), b"k2");
@@ -455,7 +454,7 @@ mod tests {
             false,
             Some(WaitTimeout::Default),
             waiter2.cancel_callback,
-            diag_ctx(b"k2", b"tag2", INVALID_TRACKER_TOKEN),
+            diag_ctx(b"tag2", INVALID_TRACKER_TOKEN),
         );
         assert!(lock_mgr.has_waiter());
         assert_elapsed(
@@ -465,6 +464,7 @@ mod tests {
                     20.into(),
                     lock_info2,
                     Key::from_raw(b"k1").gen_hash(),
+                    b"k1",
                     &[(10, 20, b"k1", b"tag1"), (20, 10, b"k2", b"tag2")],
                 )
             },
@@ -500,7 +500,7 @@ mod tests {
             false,
             Some(WaitTimeout::Default),
             waiter1.cancel_callback,
-            diag_ctx(b"k1", b"tag1", INVALID_TRACKER_TOKEN),
+            diag_ctx(b"tag1", INVALID_TRACKER_TOKEN),
         );
         for is_first_lock in &[true, false] {
             let (waiter, lock_info2, f2) = new_test_waiter_with_key(30.into(), 40.into(), b"k2");
@@ -515,7 +515,7 @@ mod tests {
                 *is_first_lock,
                 Some(WaitTimeout::Default),
                 waiter.cancel_callback,
-                diag_ctx(b"k2", b"tag2", INVALID_TRACKER_TOKEN),
+                diag_ctx(b"tag2", INVALID_TRACKER_TOKEN),
             );
             assert!(lock_mgr.has_waiter());
             if *is_first_lock {
@@ -529,6 +529,7 @@ mod tests {
                             30.into(),
                             lock_info2,
                             Key::from_raw(b"k1").gen_hash(),
+                            b"k1",
                             &[(40, 30, b"k1", b"tag1"), (30, 40, b"k2", b"tag2")],
                         )
                     },
@@ -562,6 +563,155 @@ mod tests {
             500,
         );
         assert_eq!(TASK_COUNTER_METRICS.wait_for.get(), prev_wait_for,);
+    }
+
+    #[test]
+    fn test_update_wait_for_generates_deadlocks() {
+        let lock_mgr = start_lock_manager();
+
+        let mut tokens_to_cancel = vec![];
+        let mut update_events = vec![];
+        let mut handles = vec![];
+        let mut deadlock_handles = vec![];
+
+        struct DeadlockInfo {
+            waiter_ts: u64,
+            key: &'static [u8],
+            // (waiter_ts, lock_ts, key, resource_group_tag)
+            wait_chain: &'static [(u64, u64, &'static [u8], &'static [u8])],
+        }
+
+        for (waiter_ts, lock_ts, key, resource_group_tag, new_lock_ts, deadlock_info) in [
+            // 10->20->11, change 11 to 10 on k2
+            (10u64, 20u64, b"k1", b"tag1", None, None),
+            (
+                20,
+                11,
+                b"k2",
+                b"tag2",
+                Some(10u64),
+                Some(DeadlockInfo {
+                    waiter_ts: 20,
+                    key: b"k1",
+                    wait_chain: &[(10, 20, b"k1", b"tag1"), (20, 10, b"k2", b"tag2")],
+                }),
+            ),
+            // 10->21->22->11, change 11 to 10 on k2
+            (10, 21, b"k3", b"tag3", None, None),
+            (21, 22, b"k4", b"tag4", None, None),
+            (
+                22,
+                11,
+                b"k2",
+                b"tag5",
+                Some(10),
+                Some(DeadlockInfo {
+                    waiter_ts: 22,
+                    key: b"k4",
+                    wait_chain: &[
+                        (10, 21, b"k3", b"tag3"),
+                        (21, 22, b"k4", b"tag4"),
+                        (22, 10, b"k2", b"tag5"),
+                    ],
+                }),
+            ),
+            // 10->23->11, change 11 to 10 on k6 (affects multiple keys of same txn)
+            (10, 23, b"k5", b"tag6", None, None),
+            (
+                23,
+                11,
+                b"k6",
+                b"tag7",
+                Some(10),
+                Some(DeadlockInfo {
+                    waiter_ts: 23,
+                    key: b"k5",
+                    wait_chain: &[(10, 23, b"k5", b"tag6"), (23, 10, b"k6", b"tag7")],
+                }),
+            ),
+            // 13->24->14, change 14 to 13 on k8 (affects multiple keys of different txn)
+            (13, 24, b"k7", b"tag8", None, None),
+            (
+                24,
+                14,
+                b"k8",
+                b"tag9",
+                Some(13),
+                Some(DeadlockInfo {
+                    waiter_ts: 24,
+                    key: b"k7",
+                    wait_chain: &[(13, 24, b"k7", b"tag8"), (24, 13, b"k8", b"tag9")],
+                }),
+            ),
+            // 10->25, change 25 to 26 on k9, updates normally without forming any deadlock.
+            (10, 25, b"k9", b"tag9", Some(26), None),
+            // 27->11, change 11 to 10 on k2, updates normally without forming any deadlock.
+            (27, 11, b"k2", b"taga", Some(10), None),
+        ] {
+            let (waiter, mut lock_info, f) =
+                new_test_waiter_with_key(waiter_ts.into(), lock_ts.into(), key);
+            let token = lock_mgr.allocate_token();
+            lock_mgr.wait_for(
+                token,
+                1,
+                RegionEpoch::default(),
+                1,
+                waiter.start_ts,
+                waiter.wait_info.clone(),
+                false,
+                Some(WaitTimeout::Millis(1000)),
+                waiter.cancel_callback,
+                diag_ctx(resource_group_tag, INVALID_TRACKER_TOKEN),
+            );
+
+            if let Some(new_lock_ts) = new_lock_ts {
+                lock_info.lock_version = new_lock_ts;
+                let mut new_wait_info = waiter.wait_info;
+                new_wait_info.lock_digest.ts = new_lock_ts.into();
+                new_wait_info.lock_info = lock_info.clone();
+
+                update_events.push(UpdateWaitForEvent {
+                    token,
+                    start_ts: waiter_ts.into(),
+                    is_first_lock: false,
+                    wait_info: new_wait_info,
+                })
+            }
+            if let Some(deadlock_info) = deadlock_info {
+                deadlock_handles.push((deadlock_info, lock_info, f));
+            } else {
+                handles.push((lock_info, f));
+                tokens_to_cancel.push(token);
+            }
+        }
+
+        lock_mgr.update_wait_for(update_events);
+        assert_elapsed(
+            move || {
+                for (deadlock_info, lock_info, future) in deadlock_handles {
+                    expect_deadlock(
+                        block_on(future).unwrap(),
+                        deadlock_info.waiter_ts.into(),
+                        lock_info,
+                        Key::from_raw(deadlock_info.key).gen_hash(),
+                        deadlock_info.key,
+                        deadlock_info.wait_chain,
+                    );
+                }
+            },
+            0,
+            500,
+        );
+
+        assert_elapsed(
+            move || {
+                for (lock_info, future) in handles {
+                    expect_key_is_locked(block_on(future).unwrap(), lock_info);
+                }
+            },
+            0,
+            1000,
+        );
     }
 
     #[bench]

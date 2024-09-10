@@ -18,7 +18,10 @@ use futures::{
     future::Future,
     task::{Context, Poll},
 };
-use kvproto::{deadlock::WaitForEntry, metapb::RegionEpoch};
+use kvproto::{
+    deadlock::{ReplaceLockByKeyItem, WaitForEntry},
+    metapb::RegionEpoch,
+};
 use tikv_util::{
     config::ReadableDuration,
     time::{duration_to_sec, InstantExt},
@@ -131,9 +134,13 @@ pub enum Task {
     Deadlock {
         // Which txn causes deadlock
         start_ts: TimeStamp,
+        // The key that is currently being detected and finally formed the deadlock.
         key: Vec<u8>,
         lock: LockDigest,
+        // The key on which the current transaction has already acquired and is blocking another
+        // transaction that causes the deadlock.
         deadlock_key_hash: u64,
+        deadlock_key: Vec<u8>,
         wait_chain: Vec<WaitForEntry>,
     },
     ChangeConfig {
@@ -162,8 +169,12 @@ impl Display for Task {
             } => {
                 write!(
                     f,
-                    "txn:{} waiting for {}:{}, token {:?}",
-                    start_ts, wait_info.lock_digest.ts, wait_info.lock_digest.hash, token
+                    "txn:{} waiting for {}:{}, key:{}, token {:?}",
+                    start_ts,
+                    wait_info.lock_digest.ts,
+                    wait_info.lock_digest.hash,
+                    wait_info.key,
+                    token
                 )
             }
             Task::RemoveLockWait { token } => {
@@ -292,6 +303,7 @@ impl Waiter {
         lock_digest: LockDigest,
         key: Vec<u8>,
         deadlock_key_hash: u64,
+        deadlock_key: Vec<u8>,
         wait_chain: Vec<WaitForEntry>,
     ) -> KeyLockWaitInfo {
         let e = MvccError::from(MvccErrorInner::Deadlock {
@@ -299,6 +311,7 @@ impl Waiter {
             lock_ts: lock_digest.ts,
             lock_key: key,
             deadlock_key_hash,
+            deadlock_key,
             wait_chain,
         });
         self.cancel(Some(StorageError::from(TxnError::from(e))))
@@ -459,6 +472,7 @@ impl Scheduler {
         key: Vec<u8>,
         lock: LockDigest,
         deadlock_key_hash: u64,
+        deadlock_key: Vec<u8>,
         wait_chain: Vec<WaitForEntry>,
     ) {
         self.notify_scheduler(Task::Deadlock {
@@ -466,6 +480,7 @@ impl Scheduler {
             key,
             lock,
             deadlock_key_hash,
+            deadlock_key,
             wait_chain,
         });
     }
@@ -547,6 +562,10 @@ impl WaiterManager {
     fn handle_update_wait_for(&mut self, events: Vec<UpdateWaitForEvent>) {
         let mut wait_table = self.wait_table.borrow_mut();
         let now = Instant::now();
+
+        let mut replace_items = vec![];
+
+        let len = events.len();
         for event in events {
             let previous_wait_info = wait_table.update_waiter(&event, now);
 
@@ -554,13 +573,23 @@ impl WaiterManager {
                 continue;
             }
 
-            if let Some((previous_wait_info, diag_ctx)) = previous_wait_info {
-                self.detector_scheduler
-                    .clean_up_wait_for(event.start_ts, previous_wait_info);
-                self.detector_scheduler
-                    .detect(event.start_ts, event.wait_info, diag_ctx);
+            if let Some((previous_wait_info, _)) = previous_wait_info {
+                if replace_items.capacity() == 0 {
+                    replace_items.reserve(len)
+                }
+                let mut item = ReplaceLockByKeyItem::default();
+                item.set_key(event.wait_info.key.to_raw().unwrap());
+                item.set_key_hash(event.wait_info.lock_digest.hash);
+                item.set_old_lock_ts(previous_wait_info.lock_digest.ts.into_inner());
+                item.set_new_lock_ts(event.wait_info.lock_digest.ts.into_inner());
+                replace_items.push(item);
             }
         }
+
+        replace_items.sort_by(|lhs, rhs| lhs.key.cmp(&rhs.key));
+        replace_items.dedup_by(|lhs, rhs| lhs.key == rhs.key);
+
+        self.detector_scheduler.replace_locks_by_keys(replace_items);
     }
 
     fn handle_dump(&self, cb: Callback) {
@@ -573,6 +602,7 @@ impl WaiterManager {
         key: Vec<u8>,
         lock: LockDigest,
         deadlock_key_hash: u64,
+        deadlock_key: Vec<u8>,
         wait_chain: Vec<WaitForEntry>,
     ) {
         let waiter = self
@@ -580,7 +610,7 @@ impl WaiterManager {
             .borrow_mut()
             .take_waiter_by_lock_digest(lock, waiter_ts);
         if let Some(waiter) = waiter {
-            waiter.cancel_for_deadlock(lock, key, deadlock_key_hash, wait_chain);
+            waiter.cancel_for_deadlock(lock, key, deadlock_key_hash, deadlock_key, wait_chain);
         }
     }
 
@@ -641,9 +671,17 @@ impl FutureRunnable<Task> for WaiterManager {
                 key,
                 lock,
                 deadlock_key_hash,
+                deadlock_key,
                 wait_chain,
             } => {
-                self.handle_deadlock(start_ts, key, lock, deadlock_key_hash, wait_chain);
+                self.handle_deadlock(
+                    start_ts,
+                    key,
+                    lock,
+                    deadlock_key_hash,
+                    deadlock_key,
+                    wait_chain,
+                );
             }
             Task::ChangeConfig { timeout } => self.handle_config_change(timeout),
             #[cfg(any(test, feature = "testexport"))]
@@ -807,11 +845,15 @@ pub mod tests {
         (waiter, info, f)
     }
 
-    pub(crate) fn expect_key_is_locked(error: StorageError, lock_info: LockInfo) {
+    pub(crate) fn expect_key_is_locked(error: StorageError, mut lock_info: LockInfo) {
         match error {
             StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
                 MvccError(box MvccErrorInner::KeyIsLocked(res)),
-            )))) => assert_eq!(res, lock_info),
+            )))) => {
+                // Ignore difference on `duration_to_last_update_ms`
+                lock_info.duration_to_last_update_ms = res.duration_to_last_update_ms;
+                assert_eq!(res, lock_info)
+            }
             e => panic!("unexpected error: {:?}", e),
         }
     }
@@ -820,7 +862,8 @@ pub mod tests {
         error: StorageError,
         waiter_ts: TimeStamp,
         mut lock_info: LockInfo,
-        deadlock_hash: u64,
+        expected_deadlock_hash: u64,
+        expected_deadlock_key: &[u8],
         expect_wait_chain: &[(u64, u64, &[u8], &[u8])], /* (waiter_ts, wait_for_ts, key,
                                                          * resource_group_tag) */
     ) {
@@ -831,13 +874,15 @@ pub mod tests {
                     lock_ts,
                     lock_key,
                     deadlock_key_hash,
+                    deadlock_key,
                     wait_chain,
                 }),
             )))) => {
                 assert_eq!(start_ts, waiter_ts);
                 assert_eq!(lock_ts, lock_info.get_lock_version().into());
                 assert_eq!(lock_key, lock_info.take_key());
-                assert_eq!(deadlock_key_hash, deadlock_hash);
+                assert_eq!(deadlock_key_hash, expected_deadlock_hash);
+                assert_eq!(deadlock_key, expected_deadlock_key);
                 assert_eq!(
                     wait_chain.len(),
                     expect_wait_chain.len(),
@@ -893,9 +938,10 @@ pub mod tests {
             },
             b"foo".to_vec(),
             111,
+            b"bar".to_vec(),
             vec![],
         );
-        expect_deadlock(block_on(f).unwrap(), waiter_ts, lock_info, 111, &[]);
+        expect_deadlock(block_on(f).unwrap(), waiter_ts, lock_info, 111, b"bar", &[]);
     }
 
     #[test]
@@ -1143,9 +1189,16 @@ pub mod tests {
             waiter.cancel_callback,
             DiagnosticContext::default(),
         );
-        scheduler.deadlock(waiter_ts, b"foo".to_vec(), lock, 30, vec![]);
+        scheduler.deadlock(
+            waiter_ts,
+            b"foo".to_vec(),
+            lock,
+            30,
+            b"bar".to_vec(),
+            vec![],
+        );
         assert_elapsed(
-            || expect_deadlock(block_on(f).unwrap(), waiter_ts, lock_info, 30, &[]),
+            || expect_deadlock(block_on(f).unwrap(), waiter_ts, lock_info, 30, b"bar", &[]),
             0,
             200,
         );

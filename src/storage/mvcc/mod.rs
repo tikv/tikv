@@ -99,14 +99,15 @@ pub enum ErrorInner {
     },
 
     #[error(
-        "deadlock occurs between txn:{} and txn:{}, lock_key:{}, deadlock_key_hash:{}",
-        .start_ts, .lock_ts, log_wrappers::Value::key(.lock_key), .deadlock_key_hash
+        "deadlock occurs between txn:{} and txn:{}, lock_key:{}, deadlock_key_hash:{}, deadlock_key: {}",
+        .start_ts, .lock_ts, log_wrappers::Value::key(.lock_key), .deadlock_key_hash, log_wrappers::Value::key(.deadlock_key)
     )]
     Deadlock {
         start_ts: TimeStamp,
         lock_ts: TimeStamp,
         lock_key: Vec<u8>,
         deadlock_key_hash: u64,
+        deadlock_key: Vec<u8>,
         wait_chain: Vec<kvproto::deadlock::WaitForEntry>,
     },
 
@@ -235,12 +236,14 @@ impl ErrorInner {
                 lock_ts,
                 lock_key,
                 deadlock_key_hash,
+                deadlock_key,
                 wait_chain,
             } => Some(ErrorInner::Deadlock {
                 start_ts: *start_ts,
                 lock_ts: *lock_ts,
                 lock_key: lock_key.to_owned(),
                 deadlock_key_hash: *deadlock_key_hash,
+                deadlock_key: deadlock_key.clone(),
                 wait_chain: wait_chain.clone(),
             }),
             ErrorInner::AlreadyExist {
