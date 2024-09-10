@@ -686,7 +686,12 @@ impl BackgroundRunnerCore {
         let threshold = self.memory_controller.stop_load_limit_threshold();
         range_stats_manager.adjust_max_num_regions(curr_memory_usage, threshold);
 
-        let cached_regions = self.engine.region_manager().regions_map().read().cached_regions();
+        let cached_regions = self
+            .engine
+            .region_manager()
+            .regions_map()
+            .read()
+            .cached_regions();
         let (regions_to_load, regions_to_evict) = range_stats_manager
             .collect_regions_to_load_and_evict(cached_regions, &self.memory_controller);
 
@@ -694,8 +699,11 @@ impl BackgroundRunnerCore {
         info!("ime load_evict"; "regions_to_load" => ?&regions_to_load, "regions_to_evict" => ?&regions_to_evict);
         for evict_region in regions_to_evict {
             let cache_region = CacheRegion::from_region(&evict_region);
-            let deleteable_regions = self.engine.region_manager()
-                    .evict_region(&cache_region, EvictReason::AutoEvict, None);
+            let deleteable_regions = self.engine.region_manager().evict_region(
+                &cache_region,
+                EvictReason::AutoEvict,
+                None,
+            );
             info!(
                 "ime load_evict: auto evict";
                 "region_to_evict" => ?&cache_region,
