@@ -277,6 +277,7 @@ impl RangeCacheMemoryEngine {
             config.value().gc_interval.0,
             config.value().load_evict_interval.0,
             config.value().expected_region_size(),
+            config.value().mvcc_amplification_threshold,
             memory_controller.clone(),
             region_info_provider,
         ));

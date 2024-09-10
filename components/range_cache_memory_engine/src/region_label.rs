@@ -430,7 +430,7 @@ pub mod tests {
             );
         };
 
-        let background_worker = Builder::new("background").thread_count(1).create();
+        let background_worker = Builder::new("ime-test").thread_count(1).create();
         let mut s_clone = s.clone();
         background_worker.spawn_async_task(async move {
             s_clone.watch_region_labels().await;
