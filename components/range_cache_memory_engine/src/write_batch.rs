@@ -172,7 +172,7 @@ impl RangeCacheWriteBatch {
     // the RocksDB, which will be incremented automatically for each key, so
     // that all keys have unique sequence numbers.
     fn write_impl(&mut self, mut seq: u64) -> Result<()> {
-        fail::fail_point!("on_write_impl");
+        fail::fail_point!("on_range_cache_write_batch_write_impl");
         let guard = &epoch::pin();
         let start = Instant::now();
         let mut lock_modification: u64 = 0;
@@ -222,7 +222,7 @@ impl RangeCacheWriteBatch {
             return;
         }
         self.engine
-            .evict_region(self.current_region.as_ref().unwrap(), reason);
+            .evict_region(self.current_region.as_ref().unwrap(), reason, None);
         // cleanup cached entries belong to this region as there is no need
         // to write them.
         assert!(self.save_points.is_empty());
@@ -879,6 +879,7 @@ mod tests {
         engine.evict_region(
             &CacheRegion::from_region(&regions[0]),
             EvictReason::AutoEvict,
+            None,
         );
         wait_evict_done(&engine);
         flush_epoch();
