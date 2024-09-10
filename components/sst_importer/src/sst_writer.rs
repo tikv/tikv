@@ -1,10 +1,11 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
+use std::{sync::Arc, io::Write};
 
 use api_version::{dispatch_api_version, match_template_api_version, KeyMode, KvFormat, RawValue};
 use encryption::DataKeyManager;
 use engine_traits::{raw_ttl::ttl_to_expire_ts, KvEngine, SstWriter};
+use file_system::File;
 use kvproto::{import_sstpb::*, kvrpcpb::ApiVersion};
 use tikv_util::time::Instant;
 use txn_types::{is_short_value, Key, TimeStamp, Write as KvWrite, WriteType};
@@ -17,16 +18,78 @@ pub enum SstWriterType {
     Raw,
 }
 
+
+pub struct MockTxnSstWriter<E: KvEngine> {
+    is_leader: bool,
+    txn_sst_writer: TxnSstWriter<E>,
+    // used to file a common file.
+    common_writer: File,
+    // used for writing one pair into sst.
+    batch: Option<WriteBatch>,
+}
+
+impl<E: KvEngine> MockTxnSstWriter<E> {
+    pub fn new(
+        is_leader: bool,
+        txn_sst_writer: TxnSstWriter<E>,
+        common_writer: File,
+    ) -> Self {
+        MockTxnSstWriter {
+            is_leader, 
+            txn_sst_writer, 
+            common_writer,
+            batch: None,
+        }
+    }
+
+    pub fn write(&mut self, batch: WriteBatch) -> Result<()> {
+        if self.is_leader {
+            return self.txn_sst_writer.write(batch)
+        }
+
+        let mut buf = Vec::new();
+        let commit_ts = TimeStamp::new(batch.get_commit_ts());
+
+        for m in batch.get_pairs().iter() {
+            if self.batch.is_none(){
+                let mut wb = WriteBatch::default();
+                wb.set_commit_ts(commit_ts.into_inner());
+                wb.pairs.push(m.clone());
+                self.batch = Some(wb);
+            }
+
+            let k: Key = Key::from_raw(m.get_key()).append_ts(commit_ts);
+            buf.append(&mut k.into_encoded());
+            buf.append(&mut m.get_value().to_vec());
+        }
+        let _ = self.common_writer.write(&buf)?;
+        Ok(())
+    }
+
+    pub fn finish(mut self) -> Result<Vec<SstMeta>> {
+        if !self.is_leader {
+            self.common_writer.flush()?;
+
+            // if the region is not leader, write one pair justly. 
+            if let Some(wb) = self.batch {
+                self.txn_sst_writer.write(wb)?;
+            }
+        }
+
+        self.txn_sst_writer.finish()
+    }
+}
+
 pub struct TxnSstWriter<E: KvEngine> {
     default: E::SstWriter,
     default_entries: u64,
     default_bytes: u64,
-    default_path: ImportPath,
+    pub default_path: ImportPath,
     default_meta: SstMeta,
     write: E::SstWriter,
     write_entries: u64,
     write_bytes: u64,
-    write_path: ImportPath,
+    pub write_path: ImportPath,
     write_meta: SstMeta,
     key_manager: Option<Arc<DataKeyManager>>,
     api_version: ApiVersion,
