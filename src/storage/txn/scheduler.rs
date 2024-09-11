@@ -2344,7 +2344,7 @@ mod tests {
                 Context::default(),
             )
             .into(),
-            commands::TxnHeartBeat::new(Key::from_raw(b"k"), 10.into(), 100, Context::default())
+            commands::TxnHeartBeat::new(Key::from_raw(b"k"), 10.into(), 100, 0, Context::default())
                 .into(),
         ];
 
