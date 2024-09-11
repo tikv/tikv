@@ -242,10 +242,10 @@ mod tests {
         let region = new_region(1, b"k00", b"k10");
         let range = CacheRegion::from_region(&region);
         memory_engine.new_region(region.clone());
-        {
-            let mut core = memory_engine.core().write();
-            core.mut_range_manager().set_safe_point(region.id, 10);
-        }
+        memory_engine
+            .core()
+            .region_manager()
+            .set_safe_point(region.id, 10);
 
         let hybrid_engine = HybridEngine::new(disk_engine, memory_engine.clone());
         let s = hybrid_engine.snapshot(None);
