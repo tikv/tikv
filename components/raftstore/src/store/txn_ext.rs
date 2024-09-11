@@ -56,11 +56,11 @@ lazy_static! {
     .unwrap();
 }
 
-const GLOBAL_MEM_SIZE_LIMIT: usize = 10 << 30; // 10 GiB
+const GLOBAL_MEM_SIZE_LIMIT: usize = 2 << 30; // 10 GiB
 
 // 128 MiB, so pessimistic locks in one region can be proposed in a single
 // command.
-const PEER_MEM_SIZE_LIMIT: usize = 128 << 20;
+const PEER_MEM_SIZE_LIMIT: usize = 16 << 20;
 
 /// Pessimistic locks of a region peer.
 #[derive(PartialEq)]
