@@ -60,7 +60,7 @@ impl RegionState {
             3 => LoadingCanceled,
             4 => PendingEvict,
             5 => Evicting,
-            _ => panic!(format!("unknown RegionState value {}", v)),
+            _ => panic!("unknown RegionState value {}", v),
         }
     }
 
