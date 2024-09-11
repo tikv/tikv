@@ -8365,7 +8365,7 @@ mod tests {
         // No lock.
         storage
             .sched_txn_command(
-                commands::TxnHeartBeat::new(k.clone(), 10.into(), 100, Context::default()),
+                commands::TxnHeartBeat::new(k.clone(), 10.into(), 100, 0, Context::default()),
                 expect_fail_callback(tx.clone(), 0, |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
                         box mvcc::ErrorInner::TxnNotFound { .. },
@@ -8407,7 +8407,7 @@ mod tests {
         // remains 100.
         storage
             .sched_txn_command(
-                commands::TxnHeartBeat::new(k.clone(), 10.into(), 90, Context::default()),
+                commands::TxnHeartBeat::new(k.clone(), 10.into(), 90, 0, Context::default()),
                 expect_value_callback(tx.clone(), 0, uncommitted(lock_with_ttl(100), false)),
             )
             .unwrap();
@@ -8417,7 +8417,7 @@ mod tests {
         // updated to 110.
         storage
             .sched_txn_command(
-                commands::TxnHeartBeat::new(k.clone(), 10.into(), 110, Context::default()),
+                commands::TxnHeartBeat::new(k.clone(), 10.into(), 110, 0, Context::default()),
                 expect_value_callback(tx.clone(), 0, uncommitted(lock_with_ttl(110), false)),
             )
             .unwrap();
@@ -8426,7 +8426,7 @@ mod tests {
         // Lock not match. Nothing happens except throwing an error.
         storage
             .sched_txn_command(
-                commands::TxnHeartBeat::new(k, 11.into(), 150, Context::default()),
+                commands::TxnHeartBeat::new(k, 11.into(), 150, 0, Context::default()),
                 expect_fail_callback(tx, 0, |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
                         box mvcc::ErrorInner::TxnNotFound { .. },

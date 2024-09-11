@@ -310,6 +310,7 @@ impl From<TxnHeartBeatRequest> for TypedCommand<TxnStatus> {
             Key::from_raw(req.get_primary_lock()),
             req.get_start_version().into(),
             req.get_advise_lock_ttl(),
+            req.get_min_commit_ts(),
             req.take_context(),
         )
     }
