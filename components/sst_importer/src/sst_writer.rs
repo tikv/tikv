@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{sync::Arc, io::Write};
+use std::{io::Write, path::PathBuf, sync::Arc};
 
 use api_version::{dispatch_api_version, match_template_api_version, KeyMode, KvFormat, RawValue};
 use encryption::DataKeyManager;
@@ -18,25 +18,27 @@ pub enum SstWriterType {
     Raw,
 }
 
-
-pub struct MockTxnSstWriter<E: KvEngine> {
+pub struct PeerTxnWriter<E: KvEngine> {
     is_leader: bool,
-    txn_sst_writer: TxnSstWriter<E>,
+    pub txn_sst_writer: TxnSstWriter<E>,
     // used to file a common file.
+    common_path: PathBuf,
     common_writer: File,
     // used for writing one pair into sst.
     batch: Option<WriteBatch>,
 }
 
-impl<E: KvEngine> MockTxnSstWriter<E> {
+impl<E: KvEngine> PeerTxnWriter<E> {
     pub fn new(
         is_leader: bool,
         txn_sst_writer: TxnSstWriter<E>,
+        common_path: PathBuf,
         common_writer: File,
     ) -> Self {
-        MockTxnSstWriter {
-            is_leader, 
-            txn_sst_writer, 
+        PeerTxnWriter {
+            is_leader,
+            txn_sst_writer,
+            common_path,
             common_writer,
             batch: None,
         }
@@ -44,14 +46,14 @@ impl<E: KvEngine> MockTxnSstWriter<E> {
 
     pub fn write(&mut self, batch: WriteBatch) -> Result<()> {
         if self.is_leader {
-            return self.txn_sst_writer.write(batch)
+            return self.txn_sst_writer.write(batch);
         }
 
         let mut buf = Vec::new();
         let commit_ts = TimeStamp::new(batch.get_commit_ts());
 
         for m in batch.get_pairs().iter() {
-            if self.batch.is_none(){
+            if self.batch.is_none() {
                 let mut wb = WriteBatch::default();
                 wb.set_commit_ts(commit_ts.into_inner());
                 wb.pairs.push(m.clone());
@@ -62,6 +64,7 @@ impl<E: KvEngine> MockTxnSstWriter<E> {
             buf.append(&mut k.into_encoded());
             buf.append(&mut m.get_value().to_vec());
         }
+
         let _ = self.common_writer.write(&buf)?;
         Ok(())
     }
@@ -70,7 +73,7 @@ impl<E: KvEngine> MockTxnSstWriter<E> {
         if !self.is_leader {
             self.common_writer.flush()?;
 
-            // if the region is not leader, write one pair justly. 
+            // if the region is not leader, write one pair justly.
             if let Some(wb) = self.batch {
                 self.txn_sst_writer.write(wb)?;
             }
@@ -353,6 +356,8 @@ impl<E: KvEngine> RawSstWriter<E> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use api_version::{ApiV1Ttl, ApiV2};
     use engine_rocks::RocksEngine;
     use engine_traits::{DATA_CFS, DATA_KEY_PREFIX_LEN};
@@ -364,8 +369,9 @@ mod tests {
     use crate::{Config, SstImporter};
 
     // Return the temp dir path to avoid it drop out of the scope.
-    fn new_writer<W, F: Fn(&SstImporter<RocksEngine>, &RocksEngine, SstMeta) -> Result<W>>(
+    fn new_writer<W, F: Fn(&SstImporter<RocksEngine>, bool, &RocksEngine, SstMeta) -> Result<W>>(
         f: F,
+        is_leader: bool,
         api_version: ApiVersion,
     ) -> (W, TempDir) {
         let mut meta = SstMeta::default();
@@ -377,12 +383,12 @@ mod tests {
             SstImporter::<RocksEngine>::new(&cfg, &importer_dir, None, api_version, false).unwrap();
         let db_path = importer_dir.path().join("db");
         let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
-        (f(&importer, &db, meta).unwrap(), importer_dir)
+        (f(&importer, is_leader, &db, meta).unwrap(), importer_dir)
     }
 
     #[test]
     fn test_write_txn_sst() {
-        let (mut w, _handle) = new_writer(SstImporter::new_txn_writer, ApiVersion::V1);
+        let (mut w, _handle) = new_writer(SstImporter::new_txn_writer, true, ApiVersion::V1);
         let mut batch = WriteBatch::default();
         let mut pairs = vec![];
 
@@ -417,13 +423,81 @@ mod tests {
     }
 
     #[test]
+    fn test_peer_txn_writer_with_leader() {
+        let (mut w, _handle) = new_writer(SstImporter::new_peer_txn_writer, true, ApiVersion::V1);
+        let default_path = w.txn_sst_writer.default_path.clone();
+        let write_path = w.txn_sst_writer.write_path.clone();
+        let common_path = w.common_path.clone();
+
+        let mut pairs = vec![];
+        // put short value kv in write cf
+        let mut pair = Pair::default();
+        pair.set_key(b"k1".to_vec());
+        pair.set_value(b"short_value".to_vec());
+        pairs.push(pair);
+
+        // put big value kv in default cf
+        let big_value = vec![42; 256];
+        let mut pair = Pair::default();
+        pair.set_key(b"k2".to_vec());
+        pair.set_value(big_value);
+        pairs.push(pair);
+
+        let mut batch = WriteBatch::default();
+        batch.set_commit_ts(10086);
+        batch.set_pairs(pairs.into());
+
+        w.write(batch).unwrap();
+        let metas = w.finish().unwrap();
+        assert_eq!(metas.len(), 2);
+        assert!(file_system::file_exists(default_path.save));
+        assert!(file_system::file_exists(write_path.save));
+        assert!(file_system::file_exists(common_path.clone()));
+        assert!(file_system::get_file_size(common_path).unwrap() == 0 as u64);
+    }
+
+    #[test]
+    fn test_peer_txn_writer_with_follower() {
+        let (mut w, _handle) = new_writer(SstImporter::new_peer_txn_writer, false, ApiVersion::V1);
+        let default_path = w.txn_sst_writer.default_path.clone();
+        let write_path = w.txn_sst_writer.write_path.clone();
+        let common_path = w.common_path.clone();
+
+        let mut pairs = vec![];
+        // put short value kv in write cf
+        let mut pair = Pair::default();
+        pair.set_key(b"k1".to_vec());
+        pair.set_value(b"short_value".to_vec());
+        pairs.push(pair);
+
+        // put big value kv in default cf
+        let big_value = vec![42; 256];
+        let mut pair = Pair::default();
+        pair.set_key(b"k2".to_vec());
+        pair.set_value(big_value);
+        pairs.push(pair);
+
+        let mut batch = WriteBatch::default();
+        batch.set_commit_ts(10086);
+        batch.set_pairs(pairs.into());
+
+        w.write(batch).unwrap();
+        let metas = w.finish().unwrap();
+        assert_eq!(metas.len(), 1);
+        assert!(!file_system::file_exists(default_path.save));
+        assert!(file_system::file_exists(write_path.save));
+        assert!(file_system::file_exists(common_path.clone()));
+        assert!(file_system::get_file_size(common_path).unwrap() > 0 as u64);
+    }
+
+    #[test]
     fn test_raw_write_sst_ttl() {
         test_raw_write_sst_ttl_impl(ApiVersion::V1ttl);
         test_raw_write_sst_ttl_impl(ApiVersion::V2);
     }
 
     fn test_raw_write_sst_ttl_impl(api_version: ApiVersion) {
-        let (mut w, _handle) = new_writer(SstImporter::new_raw_writer, api_version);
+        let (mut w, _handle) = new_writer(SstImporter::new_raw_writer, true, api_version);
 
         let mut batch = RawWriteBatch::default();
         batch.set_ts(1);
@@ -495,7 +569,7 @@ mod tests {
 
     #[test]
     fn test_raw_write_ttl_not_enabled() {
-        let (mut w, _handle) = new_writer(SstImporter::new_raw_writer, ApiVersion::V1);
+        let (mut w, _handle) = new_writer(SstImporter::new_raw_writer, true, ApiVersion::V1);
         let mut batch = RawWriteBatch::default();
         batch.set_ttl(10);
         w.write(batch).unwrap_err();
@@ -503,7 +577,7 @@ mod tests {
 
     #[test]
     fn test_raw_write_v1() {
-        let (mut w, _handle) = new_writer(SstImporter::new_raw_writer, ApiVersion::V1);
+        let (mut w, _handle) = new_writer(SstImporter::new_raw_writer, true, ApiVersion::V1);
         let mut batch = RawWriteBatch::default();
 
         let mut pair = Pair::default();
@@ -515,7 +589,7 @@ mod tests {
 
     #[test]
     fn test_raw_write_invalid_key_mode() {
-        let (mut w, _handle) = new_writer(SstImporter::new_raw_writer, ApiVersion::V2);
+        let (mut w, _handle) = new_writer(SstImporter::new_raw_writer, true, ApiVersion::V2);
         let mut batch = RawWriteBatch::default();
         batch.set_ts(1);
 
@@ -531,7 +605,7 @@ mod tests {
 
     #[test]
     fn test_txn_write_v2() {
-        let (mut w, _handle) = new_writer(SstImporter::new_txn_writer, ApiVersion::V2);
+        let (mut w, _handle) = new_writer(SstImporter::new_txn_writer, true, ApiVersion::V2);
         let mut batch = WriteBatch::default();
         batch.set_commit_ts(1);
 

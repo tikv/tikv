@@ -22,12 +22,12 @@ use kvproto::{
     },
     metapb::RegionEpoch,
 };
+use raft::StateRole;
 use raftstore::{
     coprocessor::{RegionInfo, RegionInfoProvider},
     store::util::is_epoch_stale,
     RegionInfoAccessor,
 };
-use raft::StateRole;
 use raftstore_v2::StoreMeta;
 use resource_control::{with_resource_limiter, ResourceGroupManager};
 use sst_importer::{
@@ -474,7 +474,7 @@ impl<E: Engine> ImportSstService<E> {
 fn check_region_is_leader(local_region_info: Option<RegionInfo>) -> bool {
     if let Some(r) = local_region_info {
         if r.role == StateRole::Leader {
-            return true
+            return true;
         }
     }
     false
@@ -1178,7 +1178,13 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         self.threads.spawn(handle_task);
     }
 
-    impl_write!(write, WriteRequest, WriteResponse, Chunk, new_mock_txn_sst_writer);
+    impl_write!(
+        write,
+        WriteRequest,
+        WriteResponse,
+        Chunk,
+        new_peer_txn_writer
+    );
 
     impl_write!(
         raw_write,

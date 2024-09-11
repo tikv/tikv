@@ -3,7 +3,6 @@
 use std::{
     borrow::Cow,
     collections::HashMap,
-    
     io::{self, BufReader, ErrorKind, Read},
     ops::Bound,
     path::{Path, PathBuf},
@@ -22,7 +21,7 @@ use engine_traits::{
 use external_storage::{
     compression_reader_dispatcher, encrypt_wrap_reader, ExternalStorage, RestoreConfig,
 };
-use file_system::{IoType, OpenOptions, File};
+use file_system::{File, IoType, OpenOptions};
 use kvproto::{
     brpb::{CipherInfo, StorageBackend},
     import_sstpb::{Range, *},
@@ -52,7 +51,7 @@ use crate::{
     import_mode::{ImportModeSwitcher, RocksDbMetricsFn},
     import_mode2::{HashRange, ImportModeSwitcherV2},
     metrics::*,
-    sst_writer::{RawSstWriter, TxnSstWriter, MockTxnSstWriter},
+    sst_writer::{PeerTxnWriter, RawSstWriter, TxnSstWriter},
     util, Config, ConfigManager as ImportConfigManager, Error, Result,
 };
 
@@ -1367,15 +1366,31 @@ impl<E: KvEngine> SstImporter<E> {
         self.dir.list_ssts()
     }
 
-    pub fn new_mock_txn_sst_writer(&self, is_leader: bool, db: &E, meta: SstMeta) -> Result<MockTxnSstWriter<E>> {
-        let txn_sst_writer = self.new_txn_writer(db, meta)?;
+    pub fn new_peer_txn_writer(
+        &self,
+        is_leader: bool,
+        db: &E,
+        meta: SstMeta,
+    ) -> Result<PeerTxnWriter<E>> {
+        let txn_sst_writer = self.new_txn_writer(is_leader, db, meta)?;
 
-        let default_file_path = txn_sst_writer.default_path.save.as_path().join(".common");
-        let common_writer = File::create(default_file_path)?;
-        Ok(MockTxnSstWriter::new(is_leader, txn_sst_writer, common_writer))
+        let mut common_path = txn_sst_writer.default_path.temp.clone();
+        common_path.set_extension("raw");
+        let common_writer = File::create(common_path.as_path())?;
+        Ok(PeerTxnWriter::new(
+            is_leader,
+            txn_sst_writer,
+            common_path,
+            common_writer,
+        ))
     }
 
-    pub fn new_txn_writer(&self, db: &E, meta: SstMeta) -> Result<TxnSstWriter<E>> {
+    pub fn new_txn_writer(
+        &self,
+        _is_leader: bool,
+        db: &E,
+        meta: SstMeta,
+    ) -> Result<TxnSstWriter<E>> {
         let mut default_meta = meta.clone();
         default_meta.set_cf_name(CF_DEFAULT.to_owned());
         let default_path = self.dir.join_for_write(&default_meta)?;
@@ -1408,7 +1423,12 @@ impl<E: KvEngine> SstImporter<E> {
         ))
     }
 
-    pub fn new_raw_writer(&self, _is_leader: bool, db: &E, mut meta: SstMeta) -> Result<RawSstWriter<E>> {
+    pub fn new_raw_writer(
+        &self,
+        _is_leader: bool,
+        db: &E,
+        mut meta: SstMeta,
+    ) -> Result<RawSstWriter<E>> {
         meta.set_cf_name(CF_DEFAULT.to_owned());
         let default_path = self.dir.join_for_write(&meta)?;
         let default = E::SstWriterBuilder::new()
@@ -3038,7 +3058,7 @@ mod tests {
         let db_path = importer_dir.path().join("db");
         let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
 
-        let mut w = importer.new_txn_writer(&db, meta).unwrap();
+        let mut w = importer.new_txn_writer(true, &db, meta).unwrap();
         let mut batch = WriteBatch::default();
         let mut pairs = vec![];
 
