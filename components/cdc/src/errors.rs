@@ -99,26 +99,23 @@ impl Error {
 
     pub fn into_error_event(self, region_id: u64) -> ErrorEvent {
         let mut err_event = ErrorEvent::default();
-        match self {
-            Error::Sink(SendError::Congested) => {
-                let mut congested = cdcpb::Congested::default();
-                congested.set_region_id(region_id);
-                err_event.set_congested(congested);
-            }
-            _ => {
-                let mut err = self.extract_region_error();
-                if err.has_not_leader() {
-                    let not_leader = err.take_not_leader();
-                    err_event.set_not_leader(not_leader);
-                } else if err.has_epoch_not_match() {
-                    let epoch_not_match = err.take_epoch_not_match();
-                    err_event.set_epoch_not_match(epoch_not_match);
-                } else {
-                    // TODO: Add more errors to the cdc protocol
-                    let mut region_not_found = errorpb::RegionNotFound::default();
-                    region_not_found.set_region_id(region_id);
-                    err_event.set_region_not_found(region_not_found);
-                }
+        if matches!(self, Error::Sink(SendError::Congested)) {
+            let mut congested = cdcpb::Congested::default();
+            congested.set_region_id(region_id);
+            err_event.set_congested(congested);
+        } else {
+            let mut err = self.extract_region_error();
+            if err.has_not_leader() {
+                let not_leader = err.take_not_leader();
+                err_event.set_not_leader(not_leader);
+            } else if err.has_epoch_not_match() {
+                let epoch_not_match = err.take_epoch_not_match();
+                err_event.set_epoch_not_match(epoch_not_match);
+            } else {
+                // TODO: Add more errors to the cdc protocol
+                let mut region_not_found = errorpb::RegionNotFound::default();
+                region_not_found.set_region_id(region_id);
+                err_event.set_region_not_found(region_not_found);
             }
         }
         err_event
