@@ -392,6 +392,11 @@ impl RangeStatsManager {
             let mut rxs = vec![];
             let mut deleteable_regions = vec![];
             for r in regions {
+                info!(
+                    "ime evict on soft limit reached";
+                    "region_to_evict" => ?r,
+                );
+
                 let (tx, rx) = sync_channel(1);
                 deleteable_regions.extend(evict_region(
                     &CacheRegion::from_region(r),
