@@ -1249,7 +1249,7 @@ impl Runnable for DeleteRangeRunner {
                         let region_meta = regions_map.region_meta(r.id).unwrap();
                         assert_eq!(region_meta.get_region().epoch_version, r.epoch_version);
                         assert_eq!(region_meta.get_state(), RegionState::Evicting);
-                        // If the region is currently writtern into, theregion has to be delayed
+                        // If the region is currently written into, the region has to be delayed
                         // to delete. See comment on `delay_ranges`.
                         if region_meta.is_in_gc() || region_meta.is_written() {
                             regions_to_delay.push(r);
