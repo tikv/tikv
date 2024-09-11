@@ -28,6 +28,9 @@ pub enum RegionEvent {
         source: CacheRegion,
         new_regions: Vec<CacheRegion>,
     },
+    Load {
+        region: Region,
+    },
     Eviction {
         region: CacheRegion,
         reason: EvictReason,

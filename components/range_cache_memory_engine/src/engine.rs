@@ -20,7 +20,7 @@ use engine_traits::{
 use kvproto::metapb::Region;
 use raftstore::coprocessor::RegionInfoProvider;
 use slog_global::error;
-use tikv_util::{config::VersionTrack, info};
+use tikv_util::{config::VersionTrack, info, warn};
 
 use crate::{
     background::{BackgroundTask, BgWorkManager, PdRangeHintService},
@@ -333,16 +333,9 @@ impl RangeCacheMemoryEngine {
         }
 
         // fast path, only need to hold the read lock.
-        'check_region: {
+        {
             let regions_map = manager.regions_map.read();
             let Some(region_meta) = regions_map.region_meta(region.id) else {
-                if regions_map.overlap_with_preferred_range(&region) {
-                    info!(
-                        "try to load range in preferred range";
-                        "range" => ?region,
-                    );
-                    break 'check_region;
-                }
                 return RangeCacheStatus::NotInCache;
             };
             let state = region_meta.get_state();
@@ -497,6 +490,28 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
         match event {
             RegionEvent::Eviction { region, reason } => {
                 self.evict_region(&region, reason, None);
+            }
+            RegionEvent::Load { region } => {
+                let cache_region = CacheRegion::from_region(&region);
+                if self
+                    .core
+                    .region_manager()
+                    .regions_map()
+                    .read()
+                    .overlap_with_preferred_range(&cache_region)
+                {
+                    info!(
+                        "try to load region in preferred range";
+                        "region" => ?region,
+                    );
+                    if let Err(e) = self.load_region(region) {
+                        warn!(
+                            "ime load region failed";
+                            "err" => ?e,
+                            "region" => ?cache_region,
+                        );
+                    }
+                }
             }
             RegionEvent::Split {
                 source,

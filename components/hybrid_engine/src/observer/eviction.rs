@@ -15,7 +15,7 @@ use tikv_util::info;
 #[derive(Clone)]
 pub struct EvictionObserver {
     // observer is per thread so there is no need to use mutex here,
-    // but current inteface only provides `&self` but not `&mut self`,
+    // but current interface only provides `&self` but not `&mut self`,
     // so we use mutex to workaround this restriction.
     // TODO: change Observer's interface to `&mut self`.
     pending_events: Arc<Mutex<Vec<RegionEvent>>>,

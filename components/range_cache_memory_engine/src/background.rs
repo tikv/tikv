@@ -12,6 +12,7 @@ use engine_traits::{
     CacheRegion, EvictReason, IterOptions, Iterable, Iterator, MiscExt, RangeHintService,
     SnapshotMiscExt, CF_DEFAULT, CF_WRITE, DATA_CFS,
 };
+use keys::{origin_end_key, origin_key};
 use pd_client::{PdClient, RpcClient};
 use raftstore::coprocessor::RegionInfoProvider;
 use slog_global::{error, info, warn};
@@ -36,7 +37,7 @@ use crate::{
         GC_FILTERED_STATIC, RANGE_CACHE_COUNT, RANGE_CACHE_MEMORY_USAGE, RANGE_GC_TIME_HISTOGRAM,
         RANGE_LOAD_TIME_HISTOGRAM,
     },
-    range_manager::{CacheRegionMeta, LoadFailedReason, RegionState},
+    range_manager::{CacheRegionMeta, RegionState},
     range_stats::{RangeStatsManager, DEFAULT_EVICT_MIN_DURATION},
     region_label::{
         LabelRule, RegionLabelChangedCallback, RegionLabelRulesManager, RegionLabelServiceBuilder,
@@ -123,7 +124,7 @@ pub struct BgWorkManager {
     delete_region_scheduler: Scheduler<BackgroundTask>,
     tick_stopper: Option<(Worker, Sender<bool>)>,
     core: Arc<RangeCacheMemoryEngineCore>,
-    _region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
+    region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
 }
 
 impl Drop for BgWorkManager {
@@ -160,7 +161,7 @@ impl PdRangeHintService {
     /// label is removed or no longer set to always.
     pub fn start<F>(&self, remote: Remote<yatp::task::future::TaskCell>, range_manager_load_cb: F)
     where
-        F: Fn(&CacheRegion, bool) -> Result<(), LoadFailedReason> + Send + Sync + 'static,
+        F: Fn(&CacheRegion, bool) + Send + Sync + 'static,
     {
         let pd_client = self.0.clone();
         let region_label_changed_cb: RegionLabelChangedCallback = Arc::new(
@@ -177,9 +178,7 @@ impl PdRangeHintService {
                     match CacheRegion::try_from(key_range) {
                         Ok(cache_range) => {
                             info!("ime requested to cache range"; "range" => ?&cache_range);
-                            if let Err(reason) = range_manager_load_cb(&cache_range, is_add) {
-                                error!("ime cache range load failed"; "range" => ?&cache_range, "reason" => ?reason);
-                            }
+                            range_manager_load_cb(&cache_range, is_add);
                         }
                         Err(e) => {
                             error!("ime unable to convert key_range rule to cache range"; "error" => ?e);
@@ -244,7 +243,7 @@ impl BgWorkManager {
             delete_region_scheduler: delete_range_scheduler,
             tick_stopper: Some((ticker, tx)),
             core,
-            _region_info_provider: region_info_provider,
+            region_info_provider,
         }
     }
 
@@ -259,25 +258,58 @@ impl BgWorkManager {
 
     pub fn start_bg_hint_service(&self, range_hint_service: PdRangeHintService) {
         let core = self.core.clone();
+        let region_info_provider = self.region_info_provider.clone();
         range_hint_service.start(
             self.worker.remote(),
             move |cache_range: &CacheRegion, is_add: bool| {
-                let engine = core.region_manager();
-                if is_add {
-                    engine
-                        .regions_map()
-                        .write()
-                        .add_preferred_range(cache_range.clone());
-                } else {
-                    engine
+                let region_manager = core.region_manager();
+                if !is_add {
+                    region_manager
                         .regions_map()
                         .write()
                         .remove_preferred_range(cache_range.clone());
+                    region_manager.evict_region(cache_range, EvictReason::Disabled, None);
+                    return;
                 }
-                // TODO (afeinberg): This does not actually load the range. The load happens
-                // the apply thread begins to apply raft entries. To force this (for read-only
+
+                region_manager
+                    .regions_map()
+                    .write()
+                    .add_preferred_range(cache_range.clone());
+
+                let Some(ref info_provider) = region_info_provider else {
+                    warn!("ime region info provider is none, skip load pinned range.");
+                    return;
+                };
+
+                let start = origin_key(&cache_range.start);
+                let end = origin_end_key(&cache_range.end);
+                let regions = match info_provider.get_regions_in_range(start, end) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        warn!(
+                            "ime get regions in range failed"; "err" => ?e,
+                            "start" => ?log_wrappers::Value(start),
+                            "end" => ?log_wrappers::Value(end)
+                        );
+                        return;
+                    }
+                };
+
+                if regions.is_empty() {
+                    return;
+                }
+
+                for r in regions {
+                    let cache_region = CacheRegion::from_region(&r);
+                    if let Err(e) = region_manager.load_region(cache_region) {
+                        warn!("ime load region by label failed"; "err" => ?e, "region" => ?r);
+                    }
+                }
+                // TODO (afeinberg): This does not actually load the range. The
+                // load happens the apply thread begins to apply
+                // raft entries. To force this (for read-only
                 // use-cases) we should propose a No-Op command.
-                Ok(())
             },
         );
     }

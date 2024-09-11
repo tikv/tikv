@@ -21,7 +21,7 @@ use futures::executor::block_on;
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
 use health_controller::HealthController;
 use hybrid_engine::observer::{
-    EvictionObserver, HybridSnapshotObserver, RegionCacheWriteBatchObserver,
+    EvictionObserver, HybridSnapshotObserver, LoadObserver, RegionCacheWriteBatchObserver,
 };
 use kvproto::{
     deadlock::create_deadlock,
@@ -352,6 +352,9 @@ impl ServerCluster {
             let snapshot_observer =
                 HybridSnapshotObserver::new(in_memory_engine.range_cache_engine().clone());
             snapshot_observer.register_to(&mut coprocessor_host);
+            // Load observer
+            let load_observer = LoadObserver::new(Arc::new(in_memory_engine.clone()));
+            load_observer.register_to(&mut coprocessor_host);
             Some(in_memory_engine)
         } else {
             None
