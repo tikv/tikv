@@ -1043,17 +1043,16 @@ impl Runnable for BackgroundRunner {
                             )
                         }
                         core.memory_controller.set_memory_checking(false);
+                        let mem_usage = core.memory_controller.mem_usage();
+                        info!(
+                            "ime memory usage check and evict completes";
+                            "mem_usage(MB)" => ReadableSize(mem_usage as u64).as_mb()
+                        );
                     };
                     self.load_evict_remote.spawn(task);
                 } else {
                     self.core.memory_controller.set_memory_checking(false);
                 }
-
-                let mem_usage = self.core.memory_controller.mem_usage();
-                info!(
-                    "ime memory usage check and evict completes";
-                    "mem_usage(MB)" => ReadableSize(mem_usage as u64).as_mb()
-                );
             }
             // DeleteRange task is executed by `DeleteRangeRunner` with a different scheduler so
             // that the task will not be scheduled to here.

@@ -370,19 +370,43 @@ impl RangeStatsManager {
             .map(|(_, ra)| ra.cop_detail.mvcc_amplification())
             .sum::<f64>()
             / regions_activity.len() as f64;
+
         let evict_candidates: Vec<_> = {
             let mut regions_loaded = self.region_loaded_at.write().unwrap();
             let mut evict_candidates = regions_activity;
+            info!(
+                "IME evict candidate count before filter";
+                "count" => evict_candidates.len(),
+            );
+            let mut filter_by_time = 0;
+            let mut filter_by_mvcc_amplification = 0;
             evict_candidates.retain(|(r, ra)| {
                 let time_loaded = regions_loaded.entry(r.id).or_insert(Instant::now());
-                ra.cop_detail.mvcc_amplification() < avg_mvcc_amplification
-                    && Instant::now() - *time_loaded > self.evict_min_duration
+                // Do not evict regions with high mvcc amplification
+                if ra.cop_detail.mvcc_amplification() > avg_mvcc_amplification {
+                    filter_by_mvcc_amplification += 1;
+                    return false;
+                }
+                let now = Instant::now();
+                // Do not evict regions that are loaded recently
+                if now - *time_loaded < self.evict_min_duration {
+                    filter_by_time += 1;
+                    return false;
+                }
+                true
             });
             evict_candidates.sort_by(|a, b| {
                 let next_prev_a = a.1.cop_detail.iterated_count();
                 let next_prev_b = b.1.cop_detail.iterated_count();
                 next_prev_a.cmp(&next_prev_b)
             });
+
+            info!(
+                "IME evict candidate count after filter";
+                "count" => evict_candidates.len(),
+                "filter_by_time" => filter_by_time,
+                "filter_by_mvcc_amplification" => filter_by_mvcc_amplification,
+            );
 
             evict_candidates.into_iter().map(|(r, _)| r).collect()
         };
