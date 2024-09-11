@@ -22,7 +22,10 @@ use kvproto::{
 use online_config::OnlineConfig;
 use raftstore::coprocessor::CoprocessorHost;
 use test_raftstore::*;
-use tikv::{config::CdcConfig, server::DEFAULT_CLUSTER_ID};
+use tikv::{
+    config::{CdcConfig, ResolvedTsConfig},
+    server::DEFAULT_CLUSTER_ID,
+};
 use tikv_util::{
     config::ReadableDuration,
     memory::MemoryQuota,
@@ -184,6 +187,7 @@ impl TestSuiteBuilder {
             let mut cdc_endpoint = cdc::Endpoint::new(
                 DEFAULT_CLUSTER_ID,
                 &cfg,
+                &ResolvedTsConfig::default(),
                 cluster.cfg.storage.api_version(),
                 pd_cli.clone(),
                 worker.scheduler(),

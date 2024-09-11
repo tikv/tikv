@@ -369,6 +369,7 @@ where
             router.clone(),
             config.coprocessor.clone(),
         ));
+
         let region_info_accessor = RegionInfoAccessor::new(coprocessor_host.as_mut().unwrap());
 
         // Initialize concurrency manager
@@ -1048,6 +1049,7 @@ where
                 node.id(),
                 etcd_cli,
                 self.config.backup_stream.clone(),
+                self.config.resolved_ts.clone(),
                 backup_stream_scheduler.clone(),
                 backup_stream_ob,
                 self.region_info_accessor.clone(),
@@ -1182,6 +1184,7 @@ where
         let cdc_endpoint = cdc::Endpoint::new(
             self.config.server.cluster_id,
             &self.config.cdc,
+            &self.config.resolved_ts,
             self.config.storage.api_version(),
             self.pd_client.clone(),
             cdc_scheduler.clone(),
@@ -1256,6 +1259,7 @@ where
             self.router.clone(),
             engines.engines.kv.clone(),
             servers.importer.clone(),
+            Arc::new(self.region_info_accessor.clone()),
         );
         if servers
             .server
@@ -1736,8 +1740,18 @@ where
         }
     }
 
+    fn prepare_stop(&self) {
+        if let Some(engines) = self.engines.as_ref() {
+            // Disable manul compaction jobs before shutting down the engines. And it
+            // will stop the compaction thread in advance, so it won't block the
+            // cleanup thread when exiting.
+            let _ = engines.engines.kv.disable_manual_compaction();
+        }
+    }
+
     fn stop(self) {
         tikv_util::thread_group::mark_shutdown();
+        self.prepare_stop();
         let mut servers = self.servers.unwrap();
         servers
             .server

@@ -35,7 +35,7 @@ use tempdir::TempDir;
 use test_pd_client::TestPdClient;
 use test_raftstore::{new_server_cluster, Cluster, ServerCluster};
 use test_util::retry;
-use tikv::config::BackupStreamConfig;
+use tikv::config::{BackupStreamConfig, ResolvedTsConfig};
 use tikv_util::{
     codec::{
         number::NumberEncoder,
@@ -259,6 +259,9 @@ pub struct Suite {
 }
 
 impl Suite {
+    pub const PROMISED_SHORT_VALUE: &'static [u8] = b"hello, world";
+    pub const PROMISED_LONG_VALUE: &'static [u8] = &[0xbb; 4096];
+
     pub fn simple_task(&self, name: &str) -> StreamTask {
         let mut task = StreamTask::default();
         task.info.set_name(name.to_owned());
@@ -343,7 +346,6 @@ impl Suite {
         let (_, port) = server.bind_addrs().next().unwrap();
         let addr = format!("127.0.0.1:{}", port);
         let channel = ChannelBuilder::new(self.env.clone()).connect(&addr);
-        println!("connecting channel to {} for store {}", addr, id);
         let client = LogBackupClient::new(channel);
         self.servers.push(server);
         client
@@ -363,6 +365,7 @@ impl Suite {
             id,
             self.meta_store.clone(),
             cfg,
+            ResolvedTsConfig::default(),
             worker.scheduler(),
             ob,
             regions,
@@ -460,9 +463,9 @@ impl Suite {
             let ts = ts as u64;
             let key = make_record_key(for_table, ts);
             let value = if ts % 4 == 0 {
-                b"hello, world".to_vec()
+                Self::PROMISED_SHORT_VALUE.to_vec()
             } else {
-                [0xdd; 4096].to_vec()
+                Self::PROMISED_LONG_VALUE.to_vec()
             };
             let muts = vec![mutation(key.clone(), value)];
             let enc_key = Key::from_raw(&key).into_encoded();
@@ -524,7 +527,6 @@ impl Suite {
         let mut res = LogFiles::default();
         for entry in WalkDir::new(path.join("v1/backupmeta")) {
             let entry = entry?;
-            println!("reading {}", entry.path().display());
             if entry.file_name().to_str().unwrap().ends_with(".meta") {
                 let content = std::fs::read(entry.path())?;
                 let meta = protobuf::parse_from_bytes::<Metadata>(&content)?;
@@ -612,7 +614,7 @@ impl Suite {
 
                         default_keys.insert(key.into_encoded());
                     } else {
-                        assert_eq!(wf.short_value, Some(b"hello, world" as &[u8]));
+                        assert_eq!(wf.short_value, Some(Self::PROMISED_SHORT_VALUE));
                     }
                 }
             }
@@ -636,7 +638,7 @@ impl Suite {
                     }
 
                     let value = iter.value();
-                    assert_eq!(value, &[0xdd; 4096]);
+                    assert_eq!(value, Self::PROMISED_LONG_VALUE);
                 }
             }
         }

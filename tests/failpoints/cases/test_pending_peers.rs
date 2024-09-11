@@ -1,6 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use test_raftstore::*;
 use tikv_util::{config::*, time::Instant};
@@ -108,4 +108,46 @@ fn test_pending_snapshot() {
         state1,
         state2
     );
+}
+
+#[test]
+fn test_on_apply_snap_failed() {
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(5);
+    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(100);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    // Disable default max peer count check.
+    pd_client.disable_default_operator();
+
+    let region_id = cluster.run_conf_change();
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+
+    // To ensure peer 2 is not pending.
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+
+    // Mock applying snapshot failed on peer 3.
+    fail::cfg("region_apply_snap_io_err", "return").unwrap();
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+    // Region worker is failed on applying snapshot.
+    test_util::eventually(Duration::from_millis(100), Duration::from_secs(1), || {
+        let pending_peers = pd_client.get_pending_peers();
+        pending_peers[&3] == new_peer(3, 3)
+    });
+    must_get_none(&cluster.get_engine(3), b"k1");
+    cluster.must_send_store_heartbeat(3);
+    // Check that the region is marked as damaged.
+    test_util::eventually(Duration::from_millis(100), Duration::from_secs(1), || {
+        if let Some(stats) = pd_client.get_store_stats(3) {
+            !stats.damaged_regions_id.is_empty()
+        } else {
+            false
+        }
+    });
+    let stats = pd_client.get_store_stats(3).unwrap();
+    assert!(stats.damaged_regions_id.contains(&region_id));
+    fail::remove("region_apply_snap_io_err");
 }

@@ -14,7 +14,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
     u64,
 };
 
@@ -36,7 +36,6 @@ use grpcio_health::HealthService;
 use itertools::Itertools;
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use kvproto::{
-    import_sstpb::{SstMeta, SwitchMode},
     metapb::{self, Region, RegionEpoch},
     pdpb::{self, QueryStats, StoreStats},
     raft_cmdpb::{AdminCmdType, AdminRequest},
@@ -160,6 +159,10 @@ pub struct StoreMeta {
     pub region_read_progress: RegionReadProgressRegistry,
     /// record sst_file_name -> (sst_smallest_key, sst_largest_key)
     pub damaged_ranges: HashMap<String, (Vec<u8>, Vec<u8>)>,
+    /// Record regions are damaged on some corner cases, the relative peer must
+    /// be safely removed from the store, such as applying snapshot or
+    /// compacting raft logs.
+    pub damaged_regions: HashSet<u64>,
 }
 
 impl StoreMeta {
@@ -177,6 +180,7 @@ impl StoreMeta {
             destroyed_region_for_snap: HashMap::default(),
             region_read_progress: RegionReadProgressRegistry::new(),
             damaged_ranges: HashMap::default(),
+            damaged_regions: HashSet::default(),
         }
     }
 
@@ -767,9 +771,6 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                     }
                 }
                 StoreMsg::CompactedEvent(event) => self.on_compaction_finished(event),
-                StoreMsg::ValidateSstResult { invalid_ssts } => {
-                    self.on_validate_sst_result(invalid_ssts)
-                }
                 StoreMsg::ClearRegionSizeInRange { start_key, end_key } => {
                     self.clear_region_size_in_range(&start_key, &end_key)
                 }
@@ -1604,12 +1605,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         );
 
         let compact_runner = CompactRunner::new(engines.kv.clone());
-        let cleanup_sst_runner = CleanupSstRunner::new(
-            meta.get_id(),
-            self.router.clone(),
-            Arc::clone(&importer),
-            Arc::clone(&pd_client),
-        );
+        let cleanup_sst_runner = CleanupSstRunner::new(Arc::clone(&importer));
         let gc_snapshot_runner = GcSnapshotRunner::new(
             meta.get_id(),
             self.router.clone(), // RaftRouter
@@ -2452,6 +2448,13 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 let damaged_regions_id = meta.get_all_damaged_region_ids().into_iter().collect();
                 stats.set_damaged_regions_id(damaged_regions_id);
             }
+            if !meta.damaged_regions.is_empty() {
+                // Note: no need to filter overlapped regions, since the regions in
+                // `damaged_ranges` are already non-overlapping.
+                stats
+                    .mut_damaged_regions_id()
+                    .extend(meta.damaged_regions.iter());
+            }
         }
 
         let snap_stats = self.ctx.snap_mgr.stats();
@@ -2660,60 +2663,47 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
     }
 }
 
+// we will remove 1-week old version 1 SST files.
+const VERSION_1_SST_CLEANUP_DURATION: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
 impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER, T> {
-    fn on_validate_sst_result(&mut self, ssts: Vec<SstMeta>) {
-        if ssts.is_empty() || self.ctx.importer.get_mode() == SwitchMode::Import {
-            return;
-        }
-        // A stale peer can still ingest a stale Sst before it is
-        // destroyed. We need to make sure that no stale peer exists.
-        let mut delete_ssts = Vec::new();
-        {
-            let meta = self.ctx.store_meta.lock().unwrap();
-            for sst in ssts {
-                if !meta.regions.contains_key(&sst.get_region_id()) {
-                    delete_ssts.push(sst);
-                }
-            }
-        }
-        if delete_ssts.is_empty() {
-            return;
-        }
-
-        let task = CleanupSstTask::DeleteSst { ssts: delete_ssts };
-        if let Err(e) = self
-            .ctx
-            .cleanup_scheduler
-            .schedule(CleanupTask::CleanupSst(task))
-        {
-            error!(
-                "schedule to delete ssts failed";
-                "store_id" => self.fsm.store.id,
-                "err" => ?e,
-            );
-        }
-    }
-
     fn on_cleanup_import_sst(&mut self) -> Result<()> {
         let mut delete_ssts = Vec::new();
-        let mut validate_ssts = Vec::new();
 
         let ssts = box_try!(self.ctx.importer.list_ssts());
         if ssts.is_empty() {
             return Ok(());
         }
+        let now = SystemTime::now();
         {
             let meta = self.ctx.store_meta.lock().unwrap();
             for sst in ssts {
-                if let Some(r) = meta.regions.get(&sst.get_region_id()) {
+                if let Some(r) = meta.regions.get(&sst.0.get_region_id()) {
                     let region_epoch = r.get_region_epoch();
-                    if util::is_epoch_stale(sst.get_region_epoch(), region_epoch) {
+                    if util::is_epoch_stale(sst.0.get_region_epoch(), region_epoch) {
                         // If the SST epoch is stale, it will not be ingested anymore.
-                        delete_ssts.push(sst);
+                        delete_ssts.push(sst.0);
                     }
+                } else if sst.1 >= sst_importer::API_VERSION_2 {
+                    // The write RPC of import sst service have make sure the region do exist at
+                    // the write time, and now the region is not found,
+                    // sst can be deleted because it won't be used by
+                    // ingest in future.
+                    delete_ssts.push(sst.0);
                 } else {
-                    // If the peer doesn't exist, we need to validate the SST through PD.
-                    validate_ssts.push(sst);
+                    // in the old protocol, we can't easily know if the SST will be used in the
+                    // committed raft log, so we only delete the SST
+                    // files that has not be modified for 1 week.
+                    if let Ok(duration) = now.duration_since(sst.2) {
+                        if duration > VERSION_1_SST_CLEANUP_DURATION {
+                            warn!(
+                                "found 1-week old SST file of version 1, will delete it";
+                                "sst_meta" => ?sst.0,
+                                "last_modified" => ?sst.2
+                            );
+                            delete_ssts.push(sst.0);
+                        }
+                    }
                 }
             }
         }
@@ -2729,27 +2719,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                     "schedule to delete ssts failed";
                     "store_id" => self.fsm.store.id,
                     "err" => ?e
-                );
-            }
-        }
-
-        // When there is an import job running, the region which this sst belongs may
-        // has not been split from the origin region because the apply thread is so busy
-        // that it can not apply SplitRequest as soon as possible. So we can not
-        // delete this sst file.
-        if !validate_ssts.is_empty() && self.ctx.importer.get_mode() != SwitchMode::Import {
-            let task = CleanupSstTask::ValidateSst {
-                ssts: validate_ssts,
-            };
-            if let Err(e) = self
-                .ctx
-                .cleanup_scheduler
-                .schedule(CleanupTask::CleanupSst(task))
-            {
-                error!(
-                   "schedule to validate ssts failed";
-                   "store_id" => self.fsm.store.id,
-                   "err" => ?e,
                 );
             }
         }
