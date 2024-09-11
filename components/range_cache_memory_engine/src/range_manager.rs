@@ -13,27 +13,29 @@ use std::{
 
 use collections::HashMap;
 use engine_traits::{CacheRegion, EvictReason, FailedReason};
+use strum::EnumCount;
 use tikv_util::{info, time::Instant, warn};
 
 use crate::{metrics::observe_eviction_duration, read::RangeCacheSnapshotMeta};
 
-#[derive(PartialEq, Eq, Debug, Clone, Copy, Default, Hash)]
+#[derive(PartialEq, Eq, Debug, Clone, Copy, Default, Hash, EnumCount)]
+#[repr(usize)]
 pub enum RegionState {
     // waiting to be load.
     // NOTE: in this state, the region's epoch may be older than
     // target region in raftstore.
     #[default]
-    Pending,
+    Pending = 0,
     // Region is handling batch loading from rocksdb snapshot.
-    Loading,
+    Loading = 1,
     // Region is cached, ready to handle foreground read.
-    Active,
+    Active = 2,
     // region should be evicted, but batch loading is possible still running.
-    LoadingCanceled,
+    LoadingCanceled = 3,
     // region should be evicted, but there are possible active snapshot or gc task.
-    PendingEvict,
+    PendingEvict = 4,
     // evicting event is running, the region will be removed after the evict task finished.
-    Evicting,
+    Evicting = 5,
 }
 
 impl RegionState {
@@ -46,6 +48,19 @@ impl RegionState {
             LoadingCanceled => "loading_canceled",
             PendingEvict => "pending_evict",
             Evicting => "evicting",
+        }
+    }
+
+    pub fn from_usize(v: usize) -> Self {
+        use RegionState::*;
+        match v {
+            0 => Pending,
+            1 => Loading,
+            2 => Active,
+            3 => LoadingCanceled,
+            4 => PendingEvict,
+            5 => Evicting,
+            _ => panic!(format!("unknown RegionState value {}", v)),
         }
     }
 
