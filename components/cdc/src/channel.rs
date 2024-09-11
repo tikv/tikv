@@ -467,7 +467,6 @@ mod tests {
     use kvproto::cdcpb::{
         ChangeDataEvent, Event, EventEntries, EventRow, Event_oneof_event, ResolvedTs,
     };
-
     use super::*;
 
     type Send = Box<dyn FnMut(CdcEvent) -> Result<(), SendError>>;
@@ -577,10 +576,10 @@ mod tests {
 
     #[test]
     fn test_congest() {
-        let mut e = kvproto::cdcpb::Event::default();
+        let mut e = Event::default();
         e.region_id = 1;
         let event = CdcEvent::Event(e.clone());
-        assert!(event.size() != 0);
+        assert_ne!(event.size(), 0);
         // 1KB
         let max_pending_bytes = 1024;
         let buffer = max_pending_bytes / event.size();
@@ -594,10 +593,10 @@ mod tests {
 
     #[test]
     fn test_set_capacity() {
-        let mut e = kvproto::cdcpb::Event::default();
+        let mut e = Event::default();
         e.region_id = 1;
         let event = CdcEvent::Event(e.clone());
-        assert!(event.size() != 0);
+        assert_ne!(event.size(), 0);
         // 1KB
         let max_pending_bytes = 1024;
         let buffer = max_pending_bytes / event.size();
@@ -645,10 +644,10 @@ mod tests {
 
     #[test]
     fn test_force_send() {
-        let mut e = kvproto::cdcpb::Event::default();
+        let mut e = Event::default();
         e.region_id = 1;
         let event = CdcEvent::Event(e.clone());
-        assert!(event.size() != 0);
+        assert_ne!(event.size(), 0);
         // 1KB
         let max_pending_bytes = 1024;
         let buffer = max_pending_bytes / event.size();
@@ -668,10 +667,10 @@ mod tests {
 
     #[test]
     fn test_channel_memory_leak() {
-        let mut e = kvproto::cdcpb::Event::default();
+        let mut e = Event::default();
         e.region_id = 1;
         let event = CdcEvent::Event(e.clone());
-        assert!(event.size() != 0);
+        assert_ne!(event.size(), 0);
         // 1KB
         let max_pending_bytes = 1024;
         let buffer = max_pending_bytes / event.size() + 1;
