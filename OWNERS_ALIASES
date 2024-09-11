@@ -1,0 +1,14 @@
+# Sort the member alphabetically.
+aliases:
+  sig-critical-approvers-config-components:
+    - easonn7
+    - kevin-xianliu
+    - zhangjinpeng87
+  sig-critical-approvers-config-src:
+    - easonn7
+    - kevin-xianliu
+    - cfzjywxk
+    - zhangjinpeng87
+  sig-critical-approvers-config-cdc:
+    - BenMeadowcroft
+    - kevin-xianliu

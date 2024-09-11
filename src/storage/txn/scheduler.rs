@@ -53,7 +53,6 @@ use smallvec::{smallvec, SmallVec};
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData, WriteEvent};
 use tikv_util::{quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE};
 use tracker::{get_tls_tracker_token, set_tls_tracker_token, TrackerToken, GLOBAL_TRACKERS};
-use txn_types::TimeStamp;
 
 use crate::{
     server::lock_manager::waiter_manager,
@@ -892,6 +891,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let start_ts = lock_info.parameters.start_ts;
         let is_first_lock = lock_info.parameters.is_first_lock;
         let wait_timeout = lock_info.parameters.wait_timeout;
+        let allow_lock_with_conflict = lock_info.parameters.allow_lock_with_conflict;
 
         let diag_ctx = DiagnosticContext {
             key: lock_info.key.to_raw().unwrap(),
@@ -919,6 +919,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             key,
             lock_digest,
             lock_info: lock_info_pb,
+            allow_lock_with_conflict,
         };
         self.inner.lock_mgr.wait_for(
             wait_token,
@@ -1807,9 +1808,8 @@ pub async fn get_raw_ext(
         match cmd {
             Command::RawCompareAndSwap(_) | Command::RawAtomicStore(_) => {
                 if !max_ts_synced {
-                    return Err(ErrorInner::MaxTimestampNotSynced {
+                    return Err(ErrorInner::RawKvMaxTimestampNotSynced {
                         region_id: cmd.ctx().get_region_id(),
-                        start_ts: TimeStamp::zero(),
                     }
                     .into());
                 }
