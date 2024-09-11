@@ -467,6 +467,7 @@ mod tests {
     use kvproto::cdcpb::{
         ChangeDataEvent, Event, EventEntries, EventRow, Event_oneof_event, ResolvedTs,
     };
+
     use super::*;
 
     type Send = Box<dyn FnMut(CdcEvent) -> Result<(), SendError>>;
