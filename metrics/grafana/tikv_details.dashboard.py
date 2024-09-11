@@ -1444,6 +1444,25 @@ def ThreadCPU() -> RowPanel:
             ),
         ]
     )
+    layout.row(
+        [
+            graph_panel(
+                title="IME CPU",
+                description="The CPU utilization of IME threads",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=['name=~"ime.*"'],
+                            by_labels=["instance", "name"],
+                        ),
+                        legend_format="{{instance}}-{{name}}",
+                    ),
+                ],
+            ),
+        ]
+    )
     return layout.row_panel
 
 
