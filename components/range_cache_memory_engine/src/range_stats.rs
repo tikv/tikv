@@ -28,12 +28,11 @@ const ITERATED_COUNT_FILTER_FACTOR: usize = 20;
 
 #[derive(Clone)]
 pub(crate) struct RangeStatsManager {
-    num_regions: Arc<AtomicUsize>,
     info_provider: Arc<dyn RegionInfoProvider>,
     checking_top_regions: Arc<AtomicBool>,
     region_loaded_at: Arc<ShardedLock<BTreeMap<u64, Instant>>>,
     evict_min_duration: Duration,
-    expected_region_size: usize,
+    pub(crate) expected_region_size: usize,
     // Moving average of amplification reduction. Amplification reduction is the reduced
     // multiple before and after the cache. When a new top region (of course, not cached) comes in,
     // this moving average number is used to estimate the mvcc amplification after cache so we can
@@ -64,7 +63,6 @@ impl RangeStatsManager {
         info_provider: Arc<dyn RegionInfoProvider>,
     ) -> Self {
         RangeStatsManager {
-            num_regions: Arc::new(AtomicUsize::new(num_regions)),
             info_provider,
             checking_top_regions: Arc::new(AtomicBool::new(false)),
             region_loaded_at: Arc::new(ShardedLock::new(BTreeMap::new())),
@@ -100,17 +98,6 @@ impl RangeStatsManager {
     /// Return the previous checking status.
     fn set_checking_top_regions(&self, v: bool) -> bool {
         self.checking_top_regions.swap(v, Ordering::Relaxed)
-    }
-
-    fn set_max_num_regions(&self, v: usize) {
-        self.num_regions.store(v, Ordering::Relaxed);
-    }
-
-    /// Returns the maximum number of regions that can be cached.
-    ///
-    /// See also `adjust_max_num_regions` below.
-    pub fn max_num_regions(&self) -> usize {
-        self.num_regions.load(Ordering::Relaxed)
     }
 
     /// Collect candidates for eviction sorted by activity in creasing order:
@@ -230,6 +217,7 @@ impl RangeStatsManager {
     /// (Regions to load, Regions to evict)
     pub fn collect_regions_to_load_and_evict(
         &self,
+        current_region_count: usize,
         cached_region_ids: Vec<u64>,
         memory_controller: &MemoryController,
     ) -> (Vec<Region>, Vec<Region>) {
@@ -268,10 +256,17 @@ impl RangeStatsManager {
             "ma_mvcc_amplification_reduction" => ma_mvcc_amplification_reduction,
         );
 
-        info!("ime collect_changed_ranges"; "num_regions" => self.max_num_regions());
+        // Use soft-limit-threshold rather than stop-load-limit-threshold as there might
+        // be some regions to be evicted.
+        let expected_new_count = (memory_controller
+            .soft_limit_threshold()
+            .saturating_sub(memory_controller.mem_usage()))
+            / self.expected_region_size;
+        let expected_num_regions = current_region_count + expected_new_count;
+        info!("ime collect_changed_ranges"; "num_regions" => expected_new_count);
         let curr_top_regions = self
             .info_provider
-            .get_top_regions(Some(NonZeroUsize::try_from(self.max_num_regions()).unwrap()))
+            .get_top_regions(Some(NonZeroUsize::try_from(expected_new_count).unwrap()))
             .unwrap() // TODO (afeinberg): Potentially custom error handling here.
             .iter()
             .map(|(r, region_stats)| (r.id, (r.clone(), region_stats.clone())))
@@ -502,16 +497,17 @@ pub mod tests {
             Duration::from_millis(10),
             RangeCacheEngineConfig::config_for_test().expected_region_size(),
             10,
+            Duration::from_secs(100),
             sim.clone(),
         );
-        let (added, removed) = rsm.collect_regions_to_load_and_evict(vec![], &mc);
+        let (added, removed) = rsm.collect_regions_to_load_and_evict(0, vec![], &mc);
         assert_eq!(&added, &[region_1.clone()]);
         assert!(removed.is_empty());
         let top_regions = vec![(region_2.clone(), new_region_stat(1000, 8))];
         let region_stats = vec![(region_1.clone(), new_region_stat(20, 10))];
         sim.set_top_regions(&top_regions);
         sim.set_region_stats(&region_stats);
-        let (added, removed) = rsm.collect_regions_to_load_and_evict(vec![1], &mc);
+        let (added, removed) = rsm.collect_regions_to_load_and_evict(0, vec![1], &mc);
         assert_eq!(&added, &[region_2.clone()]);
         assert!(removed.is_empty());
         let region_3 = new_region(3, b"k05", b"k06");
@@ -533,7 +529,7 @@ pub mod tests {
         ];
         sim.set_top_regions(&top_regions);
         sim.set_region_stats(&region_stats);
-        let (added, removed) = rsm.collect_regions_to_load_and_evict(vec![1, 2], &mc);
+        let (added, removed) = rsm.collect_regions_to_load_and_evict(0, vec![1, 2], &mc);
         assert!(removed.is_empty());
         assert_eq!(
             &added,
@@ -557,7 +553,7 @@ pub mod tests {
         ];
         sim.set_top_regions(&vec![]);
         sim.set_region_stats(&region_stats);
-        let (_, removed) = rsm.collect_regions_to_load_and_evict(vec![1, 2, 3, 4, 5, 6, 7], &mc);
+        let (_, removed) = rsm.collect_regions_to_load_and_evict(0, vec![1, 2, 3, 4, 5, 6, 7], &mc);
         // `region_1` is no longer needed to cached, but since it was loaded less
         // than 10 ms ago, it should not be included in the removed ranges.
         assert!(removed.is_empty());
@@ -566,14 +562,14 @@ pub mod tests {
 
         sim.set_top_regions(&vec![]);
         sim.set_region_stats(&region_stats);
-        let (_, removed) = rsm.collect_regions_to_load_and_evict(vec![1, 2, 3, 4, 5, 6, 7], &mc);
+        let (_, removed) = rsm.collect_regions_to_load_and_evict(0, vec![1, 2, 3, 4, 5, 6, 7], &mc);
         assert_eq!(&removed, &[region_1.clone()]);
 
         let top_regions = vec![(region_8.clone(), new_region_stat(4000, 10))];
         sim.set_top_regions(&top_regions);
         sim.set_region_stats(&region_stats);
         mc.acquire(2000);
-        let (_, removed) = rsm.collect_regions_to_load_and_evict(vec![2, 3, 4, 5, 6, 7], &mc);
+        let (_, removed) = rsm.collect_regions_to_load_and_evict(0, vec![2, 3, 4, 5, 6, 7], &mc);
         assert_eq!(&removed, &[region_3.clone()]);
     }
 

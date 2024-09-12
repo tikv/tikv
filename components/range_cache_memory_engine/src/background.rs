@@ -701,9 +701,16 @@ impl BackgroundRunnerCore {
         let threshold = self.memory_controller.stop_load_limit_threshold();
         range_stats_manager.adjust_max_num_regions(curr_memory_usage, threshold);
 
-        let cached_regions = self.engine.read().range_manager().cached_regions();
+        let (current_region_count, cached_regions) = {
+            let region_map = self.engine.region_manager().regions_map().read();
+            (region_map.regions().len(), region_map.cached_regions())
+        };
         let (regions_to_load, regions_to_evict) = range_stats_manager
-            .collect_regions_to_load_and_evict(cached_regions, &self.memory_controller);
+            .collect_regions_to_load_and_evict(
+                current_region_count,
+                cached_regions,
+                &self.memory_controller,
+            );
 
         let mut regions_to_delete = Vec::with_capacity(regions_to_evict.len());
         info!("ime load_evict"; "regions_to_load" => ?&regions_to_load, "regions_to_evict" => ?&regions_to_evict);
@@ -744,7 +751,13 @@ impl BackgroundRunnerCore {
             let _ = rx.recv();
         }
         if !self.memory_controller.reached_stop_load_limit() {
-            for region in regions_to_load {
+            let expected_new_count = (self
+                .memory_controller
+                .soft_limit_threshold()
+                .saturating_sub(self.memory_controller.mem_usage()))
+                / range_stats_manager.expected_region_size;
+            let expected_new_count = usize::max(expected_new_count, 1);
+            for region in regions_to_load.into_iter().take(expected_new_count) {
                 let cache_region = CacheRegion::from_region(&region);
                 let mut core = self.engine.write();
                 if let Err(e) = core.mut_range_manager().load_region(cache_region) {
