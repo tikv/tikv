@@ -23,6 +23,8 @@ pub struct PeerTxnWriter<E: KvEngine> {
     pub txn_sst_writer: TxnSstWriter<E>,
     // used to file a common file.
     common_path: PathBuf,
+    common_entries: u64,
+    common_bytes: u64,
     common_writer: File,
     // used for writing one pair into sst.
     batch: Option<WriteBatch>,
@@ -39,6 +41,8 @@ impl<E: KvEngine> PeerTxnWriter<E> {
             is_leader,
             txn_sst_writer,
             common_path,
+            common_entries: 0,
+            common_bytes: 0,
             common_writer,
             batch: None,
         }
@@ -63,8 +67,10 @@ impl<E: KvEngine> PeerTxnWriter<E> {
             let k: Key = Key::from_raw(m.get_key()).append_ts(commit_ts);
             buf.append(&mut k.into_encoded());
             buf.append(&mut m.get_value().to_vec());
+            self.common_entries += 1;
         }
 
+        self.common_bytes += buf.len() as u64;
         let _ = self.common_writer.write(&buf)?;
         Ok(())
     }
@@ -361,6 +367,7 @@ mod tests {
     use api_version::{ApiV1Ttl, ApiV2};
     use engine_rocks::RocksEngine;
     use engine_traits::{DATA_CFS, DATA_KEY_PREFIX_LEN};
+    use protobuf::reflect::ProtobufValue;
     use tempfile::TempDir;
     use test_sst_importer::*;
     use uuid::Uuid;
@@ -430,30 +437,48 @@ mod tests {
         let common_path = w.common_path.clone();
 
         let mut pairs = vec![];
-        // put short value kv in write cf
+        // put first value kv in write cf
         let mut pair = Pair::default();
         pair.set_key(b"k1".to_vec());
-        pair.set_value(b"short_value".to_vec());
+        pair.set_value(vec![42; 256]);
         pairs.push(pair);
 
-        // put big value kv in default cf
-        let big_value = vec![42; 256];
+        // put second value kv in default cf
         let mut pair = Pair::default();
         pair.set_key(b"k2".to_vec());
-        pair.set_value(big_value);
+        pair.set_value(vec![42; 1048576]); // len = 1M
         pairs.push(pair);
 
         let mut batch = WriteBatch::default();
         batch.set_commit_ts(10086);
         batch.set_pairs(pairs.into());
 
+        // write batch.
         w.write(batch).unwrap();
+        assert_eq!(w.txn_sst_writer.default_entries, 2); // contains only big k-value.
+        assert_eq!(w.txn_sst_writer.write_entries, 2); // contains short k-value and big k-value.
+        assert_eq!(w.common_entries, 0);
+        assert_eq!(w.common_bytes, 0);
+        assert_eq!(w.batch.is_none(), true);
+
         let metas = w.finish().unwrap();
         assert_eq!(metas.len(), 2);
-        assert!(file_system::file_exists(default_path.save));
-        assert!(file_system::file_exists(write_path.save));
-        assert!(file_system::file_exists(common_path.clone()));
-        assert!(file_system::get_file_size(common_path).unwrap() == 0 as u64);
+
+        assert!(file_system::file_exists(default_path.save.as_path()));
+        assert_eq!(
+            file_system::get_file_size(default_path.save.as_path()).unwrap(),
+            5187
+        );
+        assert!(file_system::file_exists(write_path.save.as_path()));
+        assert_eq!(
+            file_system::get_file_size(write_path.save.as_path()).unwrap(),
+            1059
+        );
+        assert!(file_system::file_exists(common_path.as_path()));
+        assert_eq!(
+            file_system::get_file_size(common_path.as_path()).unwrap(),
+            0
+        );
     }
 
     #[test]
@@ -464,30 +489,53 @@ mod tests {
         let common_path = w.common_path.clone();
 
         let mut pairs = vec![];
-        // put short value kv in write cf
+        // put first value kv in write cf
         let mut pair = Pair::default();
         pair.set_key(b"k1".to_vec());
-        pair.set_value(b"short_value".to_vec());
+        pair.set_value(vec![42; 256]);
         pairs.push(pair);
 
-        // put big value kv in default cf
-        let big_value = vec![42; 256];
+        // put second value kv in default cf
         let mut pair = Pair::default();
         pair.set_key(b"k2".to_vec());
-        pair.set_value(big_value);
+        pair.set_value(vec![42; 1048576]); // len = 1M
         pairs.push(pair);
 
         let mut batch = WriteBatch::default();
         batch.set_commit_ts(10086);
         batch.set_pairs(pairs.into());
 
+        // write batch
+        w.write(batch.clone()).unwrap();
+        assert_eq!(w.common_bytes, 273 + 1048593);
+        assert_eq!(w.common_entries, 2);
+
+        // write batch again.
         w.write(batch).unwrap();
+        assert_eq!(w.common_bytes, (273 + 1048593) * 2);
+        assert_eq!(w.common_entries, 4);
+        assert_eq!(w.txn_sst_writer.default_entries, 0);
+        assert_eq!(w.txn_sst_writer.write_entries, 0);
+        assert!(w.batch.is_some());
+        assert_eq!(w.batch.clone().unwrap().pairs.len(), 1);
+
         let metas = w.finish().unwrap();
-        assert_eq!(metas.len(), 1);
-        assert!(!file_system::file_exists(default_path.save));
-        assert!(file_system::file_exists(write_path.save));
-        assert!(file_system::file_exists(common_path.clone()));
-        assert!(file_system::get_file_size(common_path).unwrap() > 0 as u64);
+        assert_eq!(metas.len(), 2);
+        assert_eq!(file_system::file_exists(default_path.save.as_path()), true);
+        assert_eq!(
+            file_system::get_file_size(default_path.save.as_path()).unwrap(),
+            1055
+        );
+        assert_eq!(file_system::file_exists(write_path.save.as_path()), true);
+        assert_eq!(
+            file_system::get_file_size(write_path.save.as_path()).unwrap(),
+            1052
+        );
+        assert_eq!(file_system::file_exists(common_path.as_path()), true);
+        assert_eq!(
+            file_system::get_file_size(common_path.as_path()).unwrap(),
+            (273 + 1048593) * 2
+        );
     }
 
     #[test]
