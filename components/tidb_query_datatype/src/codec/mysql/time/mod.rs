@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 pub mod extension;
+pub mod interval;
 mod tz;
 pub mod weekmode;
 
@@ -22,7 +23,7 @@ use crate::{
     codec::{
         convert::ConvertTo,
         data_type::Real,
-        mysql::{check_fsp, Decimal, Duration},
+        mysql::{check_fsp, Decimal, Duration, Res, DEFAULT_FSP, MAX_FSP},
         Error, Result, TEN_POW,
     },
     expr::{EvalContext, Flag, SqlMode},
@@ -565,7 +566,7 @@ mod parser {
     pub fn parse(
         ctx: &mut EvalContext,
         input: &str,
-        time_type: TimeType,
+        time_type_opt: Option<TimeType>,
         fsp: u8,
         round: bool,
     ) -> Option<Time> {
@@ -578,6 +579,24 @@ mod parser {
         // 2020-12-17T11:55:55-08
         // 2020-12-17T11:55:55+02:00
         let (components, tz) = split_components_with_tz(trimmed)?;
+        // https://github.com/pingcap/tidb/blob/fcf9e5ea75c6a23f80c9246bd7b457a8577774b3/pkg/types/time.go#L2640
+        let time_type = if let Some(tt) = time_type_opt {
+            tt
+        } else {
+            match components.len() {
+                1 => {
+                    let len = components[0].len();
+                    if len == 8 || len == 6 || len == 5 {
+                        TimeType::Date
+                    } else {
+                        TimeType::DateTime
+                    }
+                }
+                3 => TimeType::Date,
+                _ => TimeType::DateTime,
+            }
+        };
+
         let time_without_tz = match components.len() {
             1 | 2 => {
                 let mut whole = parse_whole(components[0])?;
@@ -731,6 +750,73 @@ mod parser {
 
         Time::from_aligned_i64(ctx, aligned, time_type, fsp as i8).ok()
     }
+
+    pub fn parse_from_i64_default(ctx: &mut EvalContext, input: i64) -> Option<Time> {
+        if input == 0 {
+            return Time::zero(ctx, DEFAULT_FSP, TimeType::Date).ok();
+        }
+        // NOTE: These numbers can be consider as strings
+        // The parser eats two digits each time from the end of string,
+        // and fill it into `Time` with reversed order.
+        // Port from: https://github.com/pingcap/tidb/blob/b1aad071489619998e4caefd235ed01f179c2db2/types/time.go#L1263
+        let aligned = match input {
+            101..=691_231 => (input + 20_000_000) * 1_000_000,
+            700_101..=991_231 => (input + 19_000_000) * 1_000_000,
+            991_232..=99_991_231 => input * 1_000_000,
+            101_000_000..=691_231_235_959 => input + 20_000_000_000_000,
+            700_101_000_000..=991_231_235_959 => input + 19_000_000_000_000,
+            1_000_000_000_000..=i64::MAX => input,
+            _ => return None,
+        };
+
+        let time_type = if input >= 101_000_000 {
+            TimeType::DateTime
+        } else {
+            TimeType::Date
+        };
+
+        Time::from_aligned_i64(ctx, aligned, time_type, DEFAULT_FSP).ok()
+    }
+
+    pub fn parse_from_real_default(ctx: &mut EvalContext, input: &Real) -> Option<Time> {
+        let int_part = input.trunc() as i64;
+        let mut t = parse_from_i64_default(ctx, int_part)?;
+        if t.get_time_type() == TimeType::DateTime {
+            let micro = (input.fract() * 1000000.0).round() as u32;
+            t.set_fsp(MAX_FSP as u8);
+            t.set_micro(micro);
+        }
+        Some(t)
+    }
+
+    pub fn parse_from_decimal_default(ctx: &mut EvalContext, input: &Decimal) -> Option<Time> {
+        let int_part = match input.as_i64() {
+            Res::Ok(i) | Res::Truncated(i) => i,
+            _ => return None,
+        };
+        let mut t = parse_from_i64_default(ctx, int_part)?;
+        let fsp = std::cmp::min(MAX_FSP as u8, input.frac_cnt());
+        t.set_fsp(fsp);
+        if fsp == 0 || t.get_time_type() == TimeType::Date {
+            return Some(t);
+        }
+
+        let frac_part_decimal = match input - &int_part.into() {
+            Res::Ok(d) => d,
+            _ => return None,
+        };
+        let micro_part_decimal = match &frac_part_decimal * &1000000i64.into() {
+            Res::Ok(d) | Res::Truncated(d) => d,
+            _ => return None,
+        };
+        let micro_part = match micro_part_decimal.as_u64() {
+            Res::Ok(i) | Res::Truncated(i) => i as u32,
+            _ => return None,
+        };
+        t.set_micro(micro_part);
+
+        return Some(t);
+    }
 }
 
 impl Time {
@@ -741,7 +827,16 @@ impl Time {
         fsp: i8,
         round: bool,
     ) -> Result<Time> {
-        parser::parse(ctx, input, time_type, check_fsp(fsp)?, round)
+        parser::parse(ctx, input, Some(time_type), check_fsp(fsp)?, round)
+            .ok_or_else(|| Error::incorrect_datetime_value(input))
+    }
+    pub fn parse_without_type(
+        ctx: &mut EvalContext,
+        input: &str,
+        fsp: i8,
+        round: bool,
+    ) -> Result<Time> {
+        parser::parse(ctx, input, None, check_fsp(fsp)?, round)
             .ok_or_else(|| Error::incorrect_datetime_value(input))
     }
     pub fn parse_datetime(
@@ -772,6 +867,16 @@ impl Time {
         parser::parse_from_i64(ctx, input, time_type, check_fsp(fsp)?)
             .ok_or_else(|| Error::incorrect_datetime_value(input))
     }
+    pub fn parse_from_real(
+        ctx: &mut EvalContext,
+        input: &Real,
+        time_type: TimeType,
+        fsp: i8,
+        round: bool,
+    ) -> Result<Time> {
+        parser::parse_from_float_string(ctx, input.to_string(), time_type, check_fsp(fsp)?, round)
+            .ok_or_else(|| Error::incorrect_datetime_value(input))
+    }
     pub fn parse_from_decimal(
         ctx: &mut EvalContext,
         input: &Decimal,
@@ -783,14 +888,16 @@ impl Time {
             .ok_or_else(|| Error::incorrect_datetime_value(input))
     }
 
-    pub fn parse_from_real(
-        ctx: &mut EvalContext,
-        input: &Real,
-        time_type: TimeType,
-        fsp: i8,
-        round: bool,
-    ) -> Result<Time> {
-        parser::parse_from_float_string(ctx, input.to_string(), time_type, check_fsp(fsp)?, round)
+    pub fn parse_from_i64_default(ctx: &mut EvalContext, input: i64) -> Result<Time> {
+        parser::parse_from_i64_default(ctx, input)
+            .ok_or_else(|| Error::incorrect_datetime_value(input))
+    }
+    pub fn parse_from_real_default(ctx: &mut EvalContext, input: &Real) -> Result<Time> {
+        parser::parse_from_real_default(ctx, input)
+            .ok_or_else(|| Error::incorrect_datetime_value(input))
+    }
+    pub fn parse_from_decimal_default(ctx: &mut EvalContext, input: &Decimal) -> Result<Time> {
+        parser::parse_from_decimal_default(ctx, input)
             .ok_or_else(|| Error::incorrect_datetime_value(input))
     }
 }
@@ -1139,8 +1246,8 @@ impl Time {
         time.set_minute(minute);
         time.set_second(second);
         time.set_micro(micro);
-        time.set_fsp(fsp as u8);
         time.set_tt(time_type);
+        time.set_fsp(fsp as u8);
         time
     }
 
@@ -1221,7 +1328,10 @@ impl Time {
     }
 
     #[inline]
-    fn set_fsp(&mut self, fsp: u8) {
+    pub fn set_fsp(&mut self, fsp: u8) {
+        if self.get_time_type() == TimeType::Date {
+            return;
+        }
         self.set_fsp_tt((fsp << 1) | (self.get_fsp_tt() & 1));
     }
 
@@ -1475,6 +1585,89 @@ impl Time {
             Time::try_from_chrono_datetime(ctx, naive, TimeType::Timestamp, self.fsp() as i8)
         }
         .ok()
+    }
+
+    pub fn add_duration(self, ctx: &mut EvalContext, dur: Duration) -> Result<Time> {
+        let duration = chrono::Duration::nanoseconds(dur.to_nanos());
+        let time_type = self.get_time_type();
+        let fsp = self.fsp() as i8;
+        let mut new_time = if time_type == TimeType::Timestamp {
+            let datetime = self
+                .try_into_chrono_datetime(ctx)?
+                .checked_sub_signed(duration)
+                .ok_or(Error::datetime_function_overflow())?;
+            Time::try_from_chrono_datetime(ctx, datetime, TimeType::Timestamp, fsp)?
+        } else {
+            let naive = self
+                .try_into_chrono_naive_datetime()?
+                .checked_sub_signed(duration)
+                .ok_or(Error::datetime_function_overflow())?;
+            Time::try_from_chrono_datetime(ctx, naive, time_type, fsp)?
+        };
+
+        if new_time.year() == 0 {
+            // Special handling for year 0
+            new_time.set_month(0);
+            new_time.set_day(0);
+        }
+        Ok(new_time)
+    }
+
+    pub fn add_months(&mut self, months: i64) -> Result<()> {
+        // Get the current year, month, and day
+        let mut current_year = self.get_year() as i64;
+        // Months are 1-based, subtract 1 to make it 0-based
+        let mut current_month = self.get_month() as i64 - 1;
+        let current_day = self.get_day();
+
+        // Calculate new month and year
+        current_month += months;
+        if current_month >= 0 {
+            current_year += current_month / 12;
+            current_month %= 12;
+        } else {
+            let mut year_decrease = (-current_month) / 12;
+            if (-current_month) % 12 != 0 {
+                year_decrease += 1;
+            }
+            current_month += year_decrease * 12;
+            current_year -= year_decrease;
+        }
+
+        // Overflow check: year must be between 0 and 9999
+        if current_year < 0 || current_year > 9999 {
+            return Err(Error::datetime_function_overflow());
+        }
+        if current_year == 0 {
+            // Special handling for year 0
+            self.set_year(0);
+            self.set_month(0);
+            self.set_day(0);
+            return Ok(());
+        }
+
+        // Update the year
+        self.set_year(current_year as u32);
+
+        // Determine the maximum number of days in the current month
+        const DAY_NUM_IN_MONTH: [i32; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+        const DAY_NUM_IN_MONTH_LEAP_YEAR: [i32; 12] =
+            [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+        let max_day = if is_leap_year(current_year as u32) {
+            DAY_NUM_IN_MONTH_LEAP_YEAR[current_month as usize]
+        } else {
+            DAY_NUM_IN_MONTH[current_month as usize]
+        };
+
+        // Update the month
+        self.set_month((current_month + 1) as u32); // Convert month back to 1-based
+
+        // Update the day, ensuring it doesn't exceed the maximum number of days in the
+        // month
+        self.set_day(std::cmp::min(current_day, max_day as u32));
+
+        Ok(())
     }
 
     pub fn date_diff(mut self, mut other: Self) -> Option<i64> {
@@ -2058,6 +2251,38 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_from_i64_default() -> Result<()> {
+        let cases = vec![
+            ("0000-00-00", 0),
+            ("2000-01-01", 101),
+            ("2045-00-00", 450_000),
+            ("2059-12-31", 591_231),
+            ("1970-01-01", 700_101),
+            ("1999-12-31", 991_231),
+            ("1000-01-00", 10_000_100),
+            ("2000-01-01 00:00:00", 101_000_000),
+            ("2069-12-31 23:59:59", 691_231_235_959),
+            ("1970-01-01 00:00:00", 700_101_000_000),
+            ("1999-12-31 23:59:59", 991_231_235_959),
+            ("0100-00-00 00:00:00", 1_000_000_000_000),
+            ("1000-01-01 00:00:00", 10_000_101_000_000),
+            ("1999-01-01 00:00:00", 19_990_101_000_000),
+        ];
+        let mut ctx = EvalContext::default();
+        for (expected, input) in cases {
+            let actual = Time::parse_from_i64_default(&mut ctx, input)?;
+            assert_eq!(actual.to_string(), expected);
+            assert_eq!(actual.fsp(), DEFAULT_FSP as u8);
+        }
+
+        let should_fail = vec![-1111, 1, 100, 700_100, 100_000_000, 100_000_101_000_000];
+        for case in should_fail {
+            Time::parse_from_i64_default(&mut ctx, case).unwrap_err();
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_parse_from_real() -> Result<()> {
         let cases = vec![
             ("2000-03-05 00:00:00", "305", 0),
@@ -2095,6 +2320,42 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_from_real_default() -> Result<()> {
+        let cases = vec![
+            ("2000-03-05", "305"),
+            ("2000-12-03", "1203"),
+            ("2003-12-05", "31205"),
+            ("2007-01-18", "070118"),
+            ("0101-12-09", "1011209.333"),
+            ("2017-01-18", "20170118.123"),
+            ("2012-12-31 11:30:45.123352", "121231113045.123345"),
+            ("2012-12-31 11:30:45.125000", "20121231113045.123345"),
+            ("2012-12-31 11:30:46.000000", "121231113045.9999999"),
+            ("2017-01-05 08:40:59.575592", "170105084059.575601"),
+        ];
+        let mut ctx = EvalContext::default();
+        for (expected, input) in cases {
+            let input: Real = input.parse().unwrap();
+            let actual_real = Time::parse_from_real_default(&mut ctx, &input)?;
+            assert_eq!(actual_real.to_string(), expected);
+        }
+
+        let should_fail = vec![
+            "201705051315111.22",
+            "2011110859.1111",
+            "2011110859.1111",
+            "191203081.1111",
+            "43128.121105",
+        ];
+
+        for case in should_fail {
+            let case: Real = case.parse().unwrap();
+            Time::parse_from_real_default(&mut ctx, &case).unwrap_err();
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_parse_from_decimal() -> Result<()> {
         let cases = vec![
             ("2000-03-05 00:00:00", "305", 0),
@@ -2125,6 +2386,41 @@ mod tests {
         for case in should_fail {
             let case: Decimal = case.parse().unwrap();
             Time::parse_from_decimal(&mut ctx, &case, TimeType::DateTime, 0, true).unwrap_err();
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_from_decimal_default() -> Result<()> {
+        let cases = vec![
+            ("2000-03-05", "305"),
+            // ("2000-12-03", "1203"),
+            // ("2003-12-05", "31205"),
+            // ("2007-01-18", "070118"),
+            // ("0101-12-09", "1011209.333"),
+            // ("2017-01-18", "20170118.123"),
+            // ("2012-12-31 11:30:45.123345", "121231113045.123345"),
+            // ("2012-12-31 11:30:45.123345", "20121231113045.123345"),
+            // ("2012-12-31 11:30:46.000000", "121231113045.9999999"),
+            // ("2017-01-05 08:40:59.575601", "170105084059.575601"),
+        ];
+        let mut ctx = EvalContext::default();
+        for (expected, input) in cases {
+            let input: Decimal = input.parse().unwrap();
+            let actual = Time::parse_from_decimal_default(&mut ctx, &input)?;
+            assert_eq!(actual.to_string(), expected);
+        }
+
+        let should_fail = vec![
+            "201705051315111.22",
+            "2011110859.1111",
+            "2011110859.1111",
+            "191203081.1111",
+            "43128.121105",
+        ];
+        for case in should_fail {
+            let case: Decimal = case.parse().unwrap();
+            Time::parse_from_decimal_default(&mut ctx, &case).unwrap_err();
         }
         Ok(())
     }
