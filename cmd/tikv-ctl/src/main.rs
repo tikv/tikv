@@ -20,7 +20,7 @@ use std::{
 };
 
 use collections::HashMap;
-use compact_log_backup::execute as compact_log;
+use compact_log_backup::{execute as compact_log, TraceResultExt};
 use crypto::fips;
 use encryption_export::{
     create_backend, data_key_manager_from_config, DataKeyManager, DecrypterReader, Iv,
@@ -419,23 +419,44 @@ fn main() {
                     .exit();
                 }
             };
-            let cfg = compact_log::ExecutionConfig {
+            let ccfg = compact_log::ExecutionConfig {
                 from_ts,
                 until_ts,
                 compression,
                 compression_level,
             };
             let exec = compact_log::Execution {
-                out_prefix: cfg.recommended_prefix(&name),
-                cfg,
+                out_prefix: ccfg.recommended_prefix(&name),
+                cfg: ccfg,
                 max_concurrent_subcompaction: max_compaction_num,
                 external_storage,
                 db: Some(tmp_engine.rocks),
             };
+
+            use tikv::server::status_server::lite::Server as LiteStatus;
+            struct WithStatusServer {
+                cfg: TikvConfig,
+            }
+            impl compact_log::hooks::ExecHooks for WithStatusServer {
+                async fn before_execution_started(
+                    &mut self,
+                    cx: compact_log::hooks::BeforeStartCtx<'_>,
+                ) -> compact_log_backup::Result<()> {
+                    use compact_log_backup::OtherErrExt;
+                    let srv = LiteStatus::new(Arc::new(self.cfg.security.clone()));
+                    let _enter = cx.async_rt.enter();
+                    srv.start(&self.cfg.server.status_addr)
+                        .adapt_err()
+                        .annotate("failed to start status server lite")
+                }
+            }
+
             let log_to_term = compact_log::hooks::TuiHooks::default();
             let save_meta = compact_log::hooks::SaveMeta::default();
             let with_lock = compact_log::hooks::WithLock::default();
-            exec.run((log_to_term, (save_meta, with_lock)))
+            let with_status_server = WithStatusServer { cfg: cfg.clone() };
+
+            exec.run(((log_to_term, with_status_server), (save_meta, with_lock)))
                 .expect("failed to execute compact-log-backup")
         }
         // Commands below requires either the data dir or the host.

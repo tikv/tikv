@@ -341,6 +341,7 @@ impl SaveMeta {
             subcompact_stat: self.stats.compact_stat.clone(),
             load_meta_stat: self.stats.load_meta_stat.clone(),
             collect_subcompactions_stat: self.stats.collect_stat.clone(),
+            prometheus: Default::default(),
         };
         serde_json::to_string(&stat).unwrap_or_else(|err| format!("ERR DURING MARSHALING: {}", err))
     }

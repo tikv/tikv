@@ -13,7 +13,7 @@ pub mod test_util;
 
 pub mod execute;
 
-pub use errors::{Error, ErrorKind, Result};
+pub use errors::{Error, ErrorKind, OtherErrExt, Result, TraceResultExt};
 
 #[cfg(test)]
 mod test;

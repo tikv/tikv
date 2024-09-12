@@ -23,6 +23,7 @@ pub struct CompactLogBackupStatistic {
     pub load_meta_stat: LoadMetaStatistic,
     pub collect_subcompactions_stat: CollectSubcompactionStatistic,
     pub subcompact_stat: SubcompactStatistic,
+    pub prometheus: prom::SerAll,
 }
 
 /// The statistic of loading metadata of compactions' source files.
@@ -107,4 +108,107 @@ pub struct CollectSubcompactionStatistic {
 
     /// How many files we have filtered out due to the TS range?
     pub files_filtered_out: u64,
+}
+
+pub mod prom {
+    use prometheus::*;
+    use serde::{ser::SerializeMap, Serialize};
+
+    struct ShowPromHist<'a>(&'a Histogram);
+
+    impl<'a> Serialize for ShowPromHist<'a> {
+        fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            use ::prometheus::core::Metric;
+            let proto = self.0.metric();
+            let hist = proto.get_histogram();
+            let mut m = serializer.serialize_map(Some(hist.get_bucket().len() + 2))?;
+            m.serialize_entry("count", &hist.get_sample_count())?;
+            m.serialize_entry("sum", &hist.get_sample_sum())?;
+            for bucket in hist.get_bucket() {
+                m.serialize_entry(
+                    &format!("le_{}", bucket.get_upper_bound()),
+                    &bucket.get_cumulative_count(),
+                )?;
+            }
+            m.end()
+        }
+    }
+
+    /// SerAll is a placeholder type that when being serialized, it reads
+    /// metrics registered to prometheus from the module and then serialize them
+    /// to the result.
+    #[derive(Clone, Copy, Debug, Default)]
+    pub struct SerAll;
+
+    impl Serialize for SerAll {
+        fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            let histograms = [
+                (
+                    "read_meta_duration",
+                    &*COMPACT_LOG_BACKUP_READ_META_DURATION,
+                ),
+                (
+                    "load_a_file_duration",
+                    &*COMPACT_LOG_BACKUP_LOAD_A_FILE_DURATION,
+                ),
+                ("load_duration", &*COMPACT_LOG_BACKUP_LOAD_DURATION),
+                ("sort_duration", &*COMPACT_LOG_BACKUP_SORT_DURATION),
+                ("save_duration", &*COMPACT_LOG_BACKUP_SAVE_DURATION),
+                (
+                    "write_sst_duration",
+                    &*COMPACT_LOG_BACKUP_WRITE_SST_DURATION,
+                ),
+            ];
+
+            let mut m = serializer.serialize_map(Some(histograms.len()))?;
+            for (name, histogram) in histograms.iter() {
+                m.serialize_entry(name, &ShowPromHist(histogram))?;
+            }
+            m.end()
+        }
+    }
+
+    lazy_static::lazy_static! {
+        pub static ref COMPACT_LOG_BACKUP_READ_META_DURATION: Histogram = register_histogram!(
+            "compact_log_backup_read_meta_duration",
+            "The duration of reading meta files.",
+            exponential_buckets(0.001, 2.0, 13).unwrap()
+        ).unwrap();
+
+        pub static ref COMPACT_LOG_BACKUP_LOAD_A_FILE_DURATION: Histogram = register_histogram!(
+            "compact_log_backup_load_a_file_duration",
+            "The duration of loading a log file.",
+            exponential_buckets(0.001, 2.0, 13).unwrap()
+        ).unwrap();
+
+        pub static ref COMPACT_LOG_BACKUP_LOAD_DURATION: Histogram = register_histogram!(
+            "compact_log_backup_load_duration",
+            "The duration of loading log all log files for a compaction.",
+            exponential_buckets(0.1, 1.5, 13).unwrap()
+        ).unwrap();
+
+        pub static ref COMPACT_LOG_BACKUP_SORT_DURATION: Histogram = register_histogram!(
+            "compact_log_backup_sort_duration",
+            "The duration of sorting contents.",
+            exponential_buckets(0.1, 1.5, 13).unwrap()
+        ).unwrap();
+
+        pub static ref COMPACT_LOG_BACKUP_SAVE_DURATION: Histogram = register_histogram!(
+            "compact_log_backup_save_duration",
+            "The duration of saving log files.",
+            exponential_buckets(0.01, 2.0, 13).unwrap()
+        ).unwrap();
+
+        pub static ref COMPACT_LOG_BACKUP_WRITE_SST_DURATION: Histogram = register_histogram!(
+            "compact_log_backup_write_sst_duration",
+            "The duration of writing SST files.",
+            exponential_buckets(0.01, 2.0, 13).unwrap()
+        ).unwrap();
+    }
 }

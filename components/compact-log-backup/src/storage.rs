@@ -402,6 +402,8 @@ impl MetaFile {
     ) -> Result<(Self, LoadMetaStatistic)> {
         use protobuf::Message;
 
+        let _t = crate::statistic::prom::COMPACT_LOG_BACKUP_READ_META_DURATION.start_coarse_timer();
+
         let mut stat = LoadMetaStatistic::default();
         let begin = Instant::now();
 

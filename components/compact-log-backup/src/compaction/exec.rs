@@ -22,7 +22,7 @@ use crate::{
     compaction::SST_OUT_REL,
     errors::{OtherErrExt, Result, TraceResultExt},
     source::{Record, Source},
-    statistic::{LoadStatistic, SubcompactStatistic},
+    statistic::{prom::*, LoadStatistic, SubcompactStatistic},
     storage::COMPACTION_OUT_PREFIX,
     util::{self, Cooperate, ExecuteAllExt},
 };
@@ -125,7 +125,10 @@ where
     <<DB as SstExt>::SstWriter as SstWriter>::ExternalSstFileReader: 'static,
 {
     fn update_checksum_diff(a: &Record, b: &Record, diff: &mut ChecksumDiff) {
-        assert_eq!(a, b);
+        assert_eq!(
+            a, b,
+            "The record with same key contains different value: the backup might be corrupted."
+        );
 
         diff.removed_key += 1;
         diff.decreaed_size += (a.key.len() + a.value.len()) as u64;
@@ -145,12 +148,14 @@ where
         &mut self,
         items: impl Iterator<Item = Vec<Record>>,
     ) -> (Vec<Record>, ChecksumDiff) {
+        let _t = COMPACT_LOG_BACKUP_SORT_DURATION.start_coarse_timer();
+
         let mut flatten_items = items
             .into_iter()
             .flat_map(|v| v.into_iter())
             .collect::<Vec<_>>();
         tokio::task::yield_now().await;
-        flatten_items.sort_unstable_by(|k1, k2| k1.cmp_key(k2));
+        flatten_items.sort_unstable_by(Record::cmp_key);
         tokio::task::yield_now().await;
         let mut diff = ChecksumDiff::default();
         flatten_items.dedup_by(|k1, k2| {
@@ -170,6 +175,8 @@ where
         c: &Subcompaction,
         ext: &mut SubcompactExt,
     ) -> Result<impl Iterator<Item = Vec<Record>>> {
+        let _t = COMPACT_LOG_BACKUP_LOAD_DURATION.start_coarse_timer();
+
         let mut eext = ExecuteAllExt::default();
         eext.max_concurrency = ext.max_load_concurrency;
 
@@ -180,6 +187,7 @@ where
                 .map(|f| {
                     let source = &self.source;
                     Box::pin(async move {
+                        let _lt = COMPACT_LOG_BACKUP_LOAD_A_FILE_DURATION.start_coarse_timer();
                         let mut out = vec![];
                         let mut stat = LoadStatistic::default();
                         source
@@ -204,6 +212,7 @@ where
             self.load_stat += stat;
             result.push(item);
         }
+
         Ok(result.into_iter())
     }
 
@@ -221,6 +230,8 @@ where
         sorted_items: &[Record],
         ext: &mut SubcompactExt,
     ) -> Result<WrittenSst<<DB::SstWriter as SstWriter>::ExternalSstFileReader>> {
+        let _t = COMPACT_LOG_BACKUP_WRITE_SST_DURATION.start_coarse_timer();
+
         let cf = c.cf;
         let mut wb = <DB as SstExt>::SstWriterBuilder::new()
             .set_cf(cf)
@@ -295,6 +306,8 @@ where
         c: &Subcompaction,
         sst: &mut WrittenSst<<DB::SstWriter as SstWriter>::ExternalSstFileReader>,
     ) -> Result<LogFileSubcompaction> {
+        let _t = COMPACT_LOG_BACKUP_SAVE_DURATION.start_coarse_timer();
+
         use engine_traits::ExternalSstFileReader;
         sst.content.reset()?;
         let (rd, hasher) = Sha256Reader::new(&mut sst.content).adapt_err()?;

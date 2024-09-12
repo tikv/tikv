@@ -39,6 +39,7 @@ pub struct Record {
 }
 
 impl Record {
+    #[inline(always)]
     pub fn cmp_key(&self, other: &Self) -> std::cmp::Ordering {
         self.key.cmp(&other.key)
     }
