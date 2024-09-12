@@ -32,7 +32,7 @@ use crate::{
         encode_key_for_boundary_with_mvcc, encode_key_for_boundary_without_mvcc, InternalBytes,
     },
     memory_controller::MemoryController,
-    range_manager::{LoadFailedReason, RangeCacheStatus, RegionManager, RegionState},
+    range_manager::{AsyncFnOnce, LoadFailedReason, RangeCacheStatus, RegionManager, RegionState},
     read::{RangeCacheIterator, RangeCacheSnapshot},
     statistics::Statistics,
     RangeCacheEngineConfig, RangeCacheEngineContext,
@@ -318,7 +318,7 @@ impl RangeCacheMemoryEngine {
         &self,
         region: &CacheRegion,
         evict_reason: EvictReason,
-        cb: Option<Box<dyn FnOnce() + Send + Sync>>,
+        cb: Option<Box<dyn AsyncFnOnce + Send + Sync>>,
     ) {
         let deleteable_regions =
             self.core
@@ -510,7 +510,7 @@ impl Iterable for RangeCacheMemoryEngine {
 #[cfg(test)]
 pub mod tests {
     use std::{
-        sync::{mpsc::sync_channel, Arc},
+        sync::{Arc, Mutex},
         time::Duration,
     };
 
@@ -520,6 +520,11 @@ pub mod tests {
         CF_LOCK, CF_WRITE,
     };
     use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
+    use tokio::{
+        runtime::{Builder, Runtime},
+        sync::mpsc,
+        time::timeout,
+    };
 
     use super::SkiplistEngine;
     use crate::{
@@ -695,18 +700,27 @@ pub mod tests {
 
         let snap = engine.snapshot(cache_region.clone(), 100, 100).unwrap();
 
-        let (tx, rx) = sync_channel(0);
+        let (tx, rx) = mpsc::channel(1);
         engine.evict_region(
             &cache_region,
             EvictReason::BecomeFollower,
             Some(Box::new(move || {
-                let _ = tx.send(true);
+                Box::pin(async move {
+                    let _ = tx.send(()).await;
+                })
             })),
         );
 
-        rx.recv_timeout(Duration::from_secs(1)).unwrap_err();
+        let rt = Builder::new_current_thread().enable_all().build().unwrap();
+        let rx = Arc::new(Mutex::new(rx));
+        let rx_clone = rx.clone();
+        rt.block_on(async move {
+            timeout(Duration::from_secs(1), rx_clone.lock().unwrap().recv())
+                .await
+                .unwrap_err()
+        });
         drop(snap);
-        let _ = rx.recv();
+        rt.block_on(async move { rx.lock().unwrap().recv().await.unwrap() });
 
         {
             let core = engine.core().read();

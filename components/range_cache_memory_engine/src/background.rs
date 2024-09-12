@@ -24,6 +24,7 @@ use tikv_util::{
     time::Instant,
     worker::{Builder, Runnable, RunnableWithTimer, ScheduleError, Scheduler, Worker},
 };
+use tokio::runtime::{self, Runtime};
 use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 use yatp::Remote;
 
@@ -38,7 +39,7 @@ use crate::{
         GC_FILTERED_STATIC, RANGE_CACHE_COUNT, RANGE_CACHE_MEMORY_USAGE, RANGE_GC_TIME_HISTOGRAM,
         RANGE_LOAD_TIME_HISTOGRAM,
     },
-    range_manager::{CacheRegionMeta, RegionState},
+    range_manager::{AsyncFnOnce, CacheRegionMeta, RegionState},
     range_stats::{RangeStatsManager, DEFAULT_EVICT_MIN_DURATION},
     region_label::{
         KeyRangeRule, LabelRule, RegionLabelAddedCb, RegionLabelRulesManager,
@@ -1025,7 +1026,7 @@ impl Runnable for BackgroundRunner {
 
                             let evict_fn = |evict_region: &CacheRegion,
                                             evict_reason: EvictReason,
-                                            cb: Option<Box<dyn FnOnce() + Send + Sync>>|
+                                            cb: Option<Box<dyn AsyncFnOnce + Send + Sync>>|
                              -> Vec<CacheRegion> {
                                 let mut core = core.engine.write();
                                 core.mut_range_manager().evict_region(
@@ -1035,12 +1036,14 @@ impl Runnable for BackgroundRunner {
                                 )
                             };
 
-                            range_stats_manager.evict_on_soft_limit_reached(
-                                evict_fn,
-                                &delete_range_scheduler,
-                                cached_region_ids,
-                                &core.memory_controller,
-                            )
+                            range_stats_manager
+                                .evict_on_soft_limit_reached(
+                                    evict_fn,
+                                    &delete_range_scheduler,
+                                    cached_region_ids,
+                                    &core.memory_controller,
+                                )
+                                .await;
                         }
                         core.memory_controller.set_memory_checking(false);
                         let mem_usage = core.memory_controller.mem_usage();
@@ -1169,6 +1172,7 @@ impl RunnableWithTimer for BackgroundRunner {
 }
 
 pub struct DeleteRangeRunner {
+    rt: Runtime,
     engine: Arc<RwLock<RangeCacheMemoryEngineCore>>,
     // It is possible that when `DeleteRangeRunner` begins to delete a range, the range is being
     // written by apply threads. In that case, we have to delay the delete range task to avoid race
@@ -1179,7 +1183,12 @@ pub struct DeleteRangeRunner {
 
 impl DeleteRangeRunner {
     fn new(engine: Arc<RwLock<RangeCacheMemoryEngineCore>>) -> Self {
+        let rt = runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         Self {
+            rt,
             engine,
             delay_regions: vec![],
         }
@@ -1193,7 +1202,7 @@ impl DeleteRangeRunner {
         self.engine
             .write()
             .mut_range_manager()
-            .on_delete_regions(regions);
+            .on_delete_regions(regions, &self.rt);
 
         fail::fail_point!("in_memory_engine_delete_range_done");
 

@@ -4523,6 +4523,7 @@ dependencies = [
  "test_util",
  "thiserror",
  "tikv_util",
+ "tokio",
  "txn_types",
  "yatp",
 ]

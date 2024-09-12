@@ -7,6 +7,8 @@ use std::{
         Bound::{self, Excluded, Unbounded},
     },
     fmt::Debug,
+    future::Future,
+    pin::Pin,
     result,
     sync::atomic::{AtomicBool, Ordering},
 };
@@ -14,8 +16,11 @@ use std::{
 use collections::HashMap;
 use engine_traits::{CacheRegion, EvictReason, FailedReason};
 use tikv_util::{info, time::Instant, warn};
+use tokio::runtime::Runtime;
 
 use crate::{metrics::observe_eviction_duration, read::RangeCacheSnapshotMeta};
+
+pub(crate) trait AsyncFnOnce = FnOnce() -> Pin<Box<dyn Future<Output = ()> + Send>>;
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy, Default, Hash)]
 pub enum RegionState {
@@ -104,7 +109,7 @@ struct EvictInfo {
     start: Instant,
     reason: EvictReason,
     // called when eviction finishes
-    cb: Option<Box<dyn FnOnce() + Send + Sync>>,
+    cb: Option<Box<dyn AsyncFnOnce + Send + Sync>>,
 }
 
 impl Debug for EvictInfo {
@@ -188,7 +193,7 @@ impl CacheRegionMeta {
         &mut self,
         state: RegionState,
         reason: EvictReason,
-        cb: Option<Box<dyn FnOnce() + Send + Sync>>,
+        cb: Option<Box<dyn AsyncFnOnce + Send + Sync>>,
     ) {
         use RegionState::*;
         assert_matches!(self.state, Loading | Active | LoadingCanceled);
@@ -637,7 +642,7 @@ impl RegionManager {
         &mut self,
         evict_region: &CacheRegion,
         evict_reason: EvictReason,
-        mut cb: Option<Box<dyn FnOnce() + Send + Sync>>,
+        mut cb: Option<Box<dyn AsyncFnOnce + Send + Sync>>,
     ) -> Vec<CacheRegion> {
         info!(
             "ime try to evict region";
@@ -695,7 +700,7 @@ impl RegionManager {
         id: u64,
         evict_region: &CacheRegion,
         evict_reason: EvictReason,
-        cb: Option<Box<dyn FnOnce() + Send + Sync>>,
+        cb: Option<Box<dyn AsyncFnOnce + Send + Sync>>,
     ) -> Option<CacheRegion> {
         let meta = self.regions.get_mut(&id).unwrap();
         let prev_state = meta.state;
@@ -751,7 +756,7 @@ impl RegionManager {
         meta
     }
 
-    pub fn on_delete_regions(&mut self, regions: &[CacheRegion]) {
+    pub fn on_delete_regions(&mut self, regions: &[CacheRegion], rt: &Runtime) {
         fail::fail_point!("in_memory_engine_on_delete_regions");
         for r in regions {
             let meta = self.remove_region(r.id);
@@ -763,7 +768,7 @@ impl RegionManager {
                 evict_info.reason,
             );
             if let Some(cb) = evict_info.cb {
-                cb();
+                rt.block_on(async { cb().await });
             }
 
             info!(

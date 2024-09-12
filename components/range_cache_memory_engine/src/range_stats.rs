@@ -5,7 +5,6 @@ use std::{
     num::NonZeroUsize,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
-        mpsc::sync_channel,
         Arc,
     },
     time::{Duration, Instant},
@@ -19,8 +18,9 @@ use parking_lot::Mutex;
 use raftstore::coprocessor::RegionInfoProvider;
 use slog_global::error;
 use tikv_util::{info, smoother::Smoother, worker::Scheduler};
+use tokio::sync::mpsc;
 
-use crate::{memory_controller::MemoryController, BackgroundTask};
+use crate::{memory_controller::MemoryController, range_manager::AsyncFnOnce, BackgroundTask};
 
 /// Do not evict a region if has been cached for less than this duration.
 pub const DEFAULT_EVICT_MIN_DURATION: Duration = Duration::from_secs(60 * 5);
@@ -340,7 +340,7 @@ impl RangeStatsManager {
 
     // Evict regions with less read flow until the memory usage is below the soft
     // limit threshold.
-    pub(crate) fn evict_on_soft_limit_reached<F>(
+    pub(crate) async fn evict_on_soft_limit_reached<F>(
         &self,
         mut evict_region: F,
         delete_range_scheduler: &Scheduler<BackgroundTask>,
@@ -350,7 +350,7 @@ impl RangeStatsManager {
         F: FnMut(
             &CacheRegion,
             EvictReason,
-            Option<Box<dyn FnOnce() + Send + Sync>>,
+            Option<Box<dyn AsyncFnOnce + Send + Sync>>,
         ) -> Vec<CacheRegion>,
     {
         // Get regions' stat of the cached region and sort them by next + prev in
@@ -413,26 +413,28 @@ impl RangeStatsManager {
         // Evict two regions each time to reduce the probability that an un-dropped
         // ongoing snapshot blocks the process
         for regions in evict_candidates.chunks(2) {
-            let mut rxs = vec![];
             let mut deleteable_regions = vec![];
+
+            let (tx, mut rx) = mpsc::channel(3);
             for r in regions {
                 info!(
                     "ime evict on soft limit reached";
                     "region_to_evict" => ?r,
                 );
 
-                let (tx, rx) = sync_channel(1);
+                let tx_clone = tx.clone();
                 deleteable_regions.extend(evict_region(
                     &CacheRegion::from_region(r),
                     EvictReason::MemoryLimitReached,
                     // This callback will be executed when eviction finishes at `on_delete_regions`
                     // and when the reletive rx.recv() returns, we know some memory are freed.
                     Some(Box::new(move || {
-                        let _ = tx.send(true);
+                        Box::pin(async move {
+                            let _ = tx_clone.send(()).await;
+                        })
                     })),
                 ));
                 self.handle_region_evicted(r);
-                rxs.push(rx);
             }
             if !deleteable_regions.is_empty() {
                 if let Err(e) = delete_range_scheduler
@@ -445,8 +447,12 @@ impl RangeStatsManager {
                     assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
                 }
             }
-            for rx in rxs {
-                let _ = rx.recv();
+            for _ in 0..regions.len() {
+                // It's better to use `timeout(Duration, rx.recv())` but which needs to use
+                // tokio runtime with timer enabled while yatp does not.
+                if rx.recv().await.is_none() {
+                    break;
+                }
             }
             if !memory_controller.reached_stop_load_limit() {
                 return;
@@ -457,6 +463,7 @@ impl RangeStatsManager {
 
 #[cfg(test)]
 pub mod tests {
+    use futures::executor::block_on;
     use pd_client::{RegionStat, RegionWriteCfCopDetail};
     use raftstore::coprocessor::{self, region_info_accessor::TopRegions, RegionInfoProvider};
     use tikv_util::{
@@ -692,7 +699,7 @@ pub mod tests {
         let cbs2 = cbs.clone();
         let evict_fn = move |evict_region: &CacheRegion,
                              _: EvictReason,
-                             cb: Option<Box<dyn FnOnce() + Send + Sync>>|
+                             cb: Option<Box<dyn AsyncFnOnce + Send + Sync>>|
               -> Vec<CacheRegion> {
             evicted_regions2.lock().push(evict_region.id);
             cbs2.lock().push(cb.unwrap());
@@ -700,7 +707,10 @@ pub mod tests {
         };
 
         let handle = std::thread::spawn(move || {
-            rsm.evict_on_soft_limit_reached(evict_fn, &scheduler, vec![1, 2, 3, 4, 5, 6], &mc);
+            block_on(async {
+                rsm.evict_on_soft_limit_reached(evict_fn, &scheduler, vec![1, 2, 3, 4, 5, 6], &mc)
+                    .await
+            });
         });
 
         let t = Instant::now();
@@ -710,8 +720,10 @@ pub mod tests {
             if cb_lock.len() == 2 {
                 let evicted_regions_lock = evicted_regions.lock();
                 assert_eq!(*evicted_regions_lock, vec![4, 6]);
-                cb_lock.pop().unwrap()();
-                cb_lock.pop().unwrap()();
+                block_on(async {
+                    cb_lock.pop().unwrap()().await;
+                    cb_lock.pop().unwrap()().await;
+                });
                 break;
             }
         }
