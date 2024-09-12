@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use engine_traits::{KvEngine, RangeCacheEngineExt, RegionEvent};
+use engine_traits::{CacheRegion, KvEngine, RangeCacheEngineExt, RegionEvent};
 use raft::StateRole;
 use raftstore::coprocessor::{
     BoxRoleObserver, Coprocessor, CoprocessorHost, ObserverContext, RoleObserver,
@@ -40,8 +40,9 @@ impl RoleObserver for LoadObserver {
         change: &raftstore::coprocessor::RoleChange,
     ) {
         if let StateRole::Leader = change.state {
+            let cache_region = CacheRegion::from_region(ctx.region());
             self.cache_engine.on_region_event(RegionEvent::Load {
-                region: ctx.region().clone(),
+                region: cache_region,
             });
         }
     }

@@ -29,7 +29,7 @@ pub enum RegionEvent {
         new_regions: Vec<CacheRegion>,
     },
     Load {
-        region: Region,
+        region: CacheRegion,
     },
     Eviction {
         region: CacheRegion,
@@ -54,6 +54,7 @@ pub enum EvictReason {
     Merge,
     Disabled,
     ApplySnapshot,
+    Manual,
 }
 
 /// RangeCacheEngine works as a range cache caching some ranges (in Memory or

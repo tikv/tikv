@@ -569,7 +569,7 @@ impl Default for RegionManager {
 
 impl RegionManager {
     // load a new region directly in the active state.
-    // This fucntion is used for unit/integration tests only.
+    // This function is used for unit/integration tests only.
     pub fn new_region(&self, region: CacheRegion) {
         let mut range_meta = CacheRegionMeta::new(region);
         range_meta.state = RegionState::Active;

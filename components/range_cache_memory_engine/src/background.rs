@@ -268,7 +268,7 @@ impl BgWorkManager {
                         .regions_map()
                         .write()
                         .remove_preferred_range(cache_range.clone());
-                    region_manager.evict_region(cache_range, EvictReason::Disabled, None);
+                    region_manager.evict_region(cache_range, EvictReason::Manual, None);
                     return;
                 }
 
@@ -296,10 +296,7 @@ impl BgWorkManager {
                     }
                 };
 
-                if regions.is_empty() {
-                    return;
-                }
-
+                // TODO: Cache leader only.
                 for r in regions {
                     let cache_region = CacheRegion::from_region(&r);
                     if let Err(e) = region_manager.load_region(cache_region) {
@@ -2825,8 +2822,9 @@ pub mod tests {
         rocks_engine.put_cf(CF_WRITE, &key, b"val").unwrap();
 
         for r in [&region1, &region2] {
-            engine.load_region(r.clone()).unwrap();
-            engine.prepare_for_apply(&CacheRegion::from_region(r));
+            let cache_region = CacheRegion::from_region(&r);
+            engine.load_region(cache_region.clone()).unwrap();
+            engine.prepare_for_apply(&cache_region);
         }
 
         // ensure all ranges are finshed
@@ -2902,8 +2900,9 @@ pub mod tests {
         rocks_engine.put_cf(CF_WRITE, &key, b"val").unwrap();
 
         for r in [&region1, &region2, &region3] {
-            engine.load_region(r.clone()).unwrap();
-            engine.prepare_for_apply(&CacheRegion::from_region(r));
+            let cache_region = CacheRegion::from_region(&r);
+            engine.load_region(cache_region.clone()).unwrap();
+            engine.prepare_for_apply(&cache_region);
         }
 
         // ensure all ranges are finshed
@@ -2939,6 +2938,7 @@ pub mod tests {
         let mem_controller = engine.memory_controller();
 
         let region1 = new_region(1, construct_region_key(1), construct_region_key(3));
+        let cache_region1 = CacheRegion::from_region(&region1);
         // Memory for one put is 17(key) + 3(val) + 8(Seqno) + 16(Memory controller in
         // key and val) + 96(Node overhead) = 140
         let key = construct_key(1, 10);
@@ -2951,8 +2951,8 @@ pub mod tests {
         rocks_engine.put_cf(CF_LOCK, &key, b"val").unwrap();
         rocks_engine.put_cf(CF_WRITE, &key, b"val").unwrap();
         // After loading range1, the memory usage should be 140*6=840
-        engine.load_region(region1.clone()).unwrap();
-        engine.prepare_for_apply(&CacheRegion::from_region(&region1));
+        engine.load_region(cache_region1.clone()).unwrap();
+        engine.prepare_for_apply(&cache_region1);
 
         let region2 = new_region(2, construct_region_key(3), construct_region_key(5));
         let key = construct_key(3, 10);
@@ -2976,8 +2976,9 @@ pub mod tests {
         config_manager.dispatch(config_change).unwrap();
         assert_eq!(config.value().hard_limit_threshold(), 2000);
 
-        engine.load_region(region2.clone()).unwrap();
-        engine.prepare_for_apply(&CacheRegion::from_region(&region2));
+        let cache_region2 = CacheRegion::from_region(&region2);
+        engine.load_region(cache_region2.clone()).unwrap();
+        engine.prepare_for_apply(&cache_region2);
 
         // ensure all ranges are finshed
         test_util::eventually(Duration::from_millis(100), Duration::from_secs(2), || {
