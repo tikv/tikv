@@ -66,13 +66,13 @@ fn test_gc_worker() {
         VersionTrack::new(config),
     )));
     let memory_controller = engine.memory_controller();
-    let (write, default) = {
-        let mut core = engine.core().write();
-        core.mut_range_manager()
-            .new_region(CacheRegion::new(1, 0, DATA_MIN_KEY, DATA_MAX_KEY));
-        let engine = core.engine();
-        (engine.cf_handle(CF_WRITE), engine.cf_handle(CF_DEFAULT))
-    };
+    engine
+        .core()
+        .region_manager()
+        .new_region(CacheRegion::new(1, 0, DATA_MIN_KEY, DATA_MAX_KEY));
+    let skip_engine = engine.core().engine();
+    let write = skip_engine.cf_handle(CF_WRITE);
+    let default = skip_engine.cf_handle(CF_DEFAULT);
 
     fail::cfg("in_memory_engine_gc_oldest_seqno", "return(1000)").unwrap();
 
@@ -196,7 +196,7 @@ fn test_clean_up_tombstone() {
     wb.set_sequence_number(120).unwrap();
     wb.write().unwrap();
 
-    let lock_handle = engine.core().read().engine().cf_handle("lock");
+    let lock_handle = engine.core().engine().cf_handle("lock");
     assert_eq!(lock_handle.len(), 13);
 
     engine
@@ -206,7 +206,7 @@ fn test_clean_up_tombstone() {
 
     rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
-    let mut iter = engine.core().read().engine().cf_handle("lock").iterator();
+    let mut iter = engine.core().engine().cf_handle("lock").iterator();
 
     let mut first = true;
     let guard = &epoch::pin();
@@ -350,11 +350,11 @@ fn test_cached_write_batch_cleared_when_load_failed() {
         Duration::from_millis(100),
         Duration::from_millis(2000),
         || {
-            let core = engine.core().read();
+            let regions_map = engine.core().region_manager().regions_map().read();
             // all failed regions should be removed.
             [1, 2]
                 .into_iter()
-                .all(|i| core.range_manager().region_meta(i).is_none())
+                .all(|i| regions_map.region_meta(i).is_none())
         },
     );
 }
@@ -451,7 +451,7 @@ fn test_concurrency_between_delete_range_and_write_to_memory() {
     engine.evict_region(&cache_region2, EvictReason::AutoEvict, None);
 
     let verify_data = |r: &Region, expected_num: u64| {
-        let handle = engine.core().read().engine().cf_handle(CF_LOCK);
+        let handle = engine.core().engine().cf_handle(CF_LOCK);
         let (start, end) = encode_key_for_boundary_without_mvcc(&CacheRegion::from_region(r));
         let mut iter = handle.iterator();
         let guard = &epoch::pin();
@@ -631,7 +631,7 @@ fn test_load_with_gc() {
     load_rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
     let expects = vec![(b"k1", 5), (b"k3", 7), (b"k3", 4)];
-    let write_handle = engine.core().read().engine().cf_handle(CF_WRITE);
+    let write_handle = engine.core().engine().cf_handle(CF_WRITE);
 
     let mut iter = write_handle.iterator();
     let guard = &epoch::pin();
@@ -704,8 +704,9 @@ fn test_region_split_before_batch_loading_start() {
     assert_eq!(
         engine
             .core()
+            .region_manager()
+            .regions_map()
             .read()
-            .range_manager()
             .region_meta(1)
             .unwrap()
             .get_state(),
@@ -727,10 +728,10 @@ fn test_region_split_before_batch_loading_start() {
     };
     engine.on_region_event(event);
     {
-        let core = engine.core().read();
+        let regions_map = engine.core().region_manager().regions_map().read();
         for i in 1..=3 {
             assert_eq!(
-                core.range_manager().region_meta(i).unwrap().get_state(),
+                regions_map.region_meta(i).unwrap().get_state(),
                 RegionState::Loading
             );
         }
@@ -744,10 +745,8 @@ fn test_region_split_before_batch_loading_start() {
         Duration::from_millis(50),
         Duration::from_millis(2000),
         || {
-            let core = engine.core().read();
-            (1..=3).all(|i| {
-                core.range_manager().region_meta(i).unwrap().get_state() == RegionState::Active
-            })
+            let regions_map = engine.core().region_manager().regions_map().read();
+            (1..=3).all(|i| regions_map.region_meta(i).unwrap().get_state() == RegionState::Active)
         },
     );
 }
@@ -800,7 +799,7 @@ fn test_cb_on_eviction() {
     rt.block_on(async move { rx.lock().await.recv().await.unwrap() });
 
     {
-        let core = engine.core().read();
-        assert!(core.range_manager().region_meta(1).is_none());
+        let regions_map = engine.core().region_manager().regions_map().read();
+        assert!(regions_map.region_meta(1).is_none());
     }
 }
