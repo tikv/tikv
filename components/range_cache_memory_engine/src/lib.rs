@@ -40,6 +40,7 @@ pub use keys::{
 };
 pub use metrics::flush_range_cache_engine_statistics;
 pub use range_manager::{RangeCacheStatus, RegionState};
+pub use read::RangeCacheSnapshot;
 pub use statistics::Statistics as RangeCacheMemoryEngineStatistics;
 use txn_types::TimeStamp;
 pub use write_batch::RangeCacheWriteBatch;
@@ -79,7 +80,7 @@ impl Default for RangeCacheEngineConfig {
             soft_limit_threshold: None,
             hard_limit_threshold: None,
             expected_region_size: None,
-            mvcc_amplification_threshold: 10,
+            mvcc_amplification_threshold: 100,
         }
     }
 }

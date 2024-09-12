@@ -4,10 +4,7 @@ use std::{
     fmt::{self, Debug},
     ops::Bound,
     result,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
+    sync::{atomic::AtomicU64, Arc},
 };
 
 use crossbeam::epoch::{self, default_collector, Guard};
@@ -21,7 +18,6 @@ use engine_traits::{
     RegionEvent, Result, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
 use kvproto::metapb::Region;
-use parking_lot::RwLock;
 use raftstore::coprocessor::RegionInfoProvider;
 use slog_global::error;
 use tikv_util::{config::VersionTrack, info};
@@ -185,7 +181,7 @@ impl Debug for SkiplistEngine {
 
 pub struct RangeCacheMemoryEngineCore {
     pub(crate) engine: SkiplistEngine,
-    pub(crate) range_manager: RegionManager,
+    pub(crate) region_manager: RegionManager,
 }
 
 impl Default for RangeCacheMemoryEngineCore {
@@ -198,7 +194,7 @@ impl RangeCacheMemoryEngineCore {
     pub fn new() -> RangeCacheMemoryEngineCore {
         RangeCacheMemoryEngineCore {
             engine: SkiplistEngine::new(),
-            range_manager: RegionManager::default(),
+            region_manager: RegionManager::default(),
         }
     }
 
@@ -206,12 +202,8 @@ impl RangeCacheMemoryEngineCore {
         self.engine.clone()
     }
 
-    pub fn range_manager(&self) -> &RegionManager {
-        &self.range_manager
-    }
-
-    pub fn mut_range_manager(&mut self) -> &mut RegionManager {
-        &mut self.range_manager
+    pub fn region_manager(&self) -> &RegionManager {
+        &self.region_manager
     }
 }
 
@@ -235,7 +227,7 @@ impl RangeCacheMemoryEngineCore {
 #[derive(Clone)]
 pub struct RangeCacheMemoryEngine {
     bg_work_manager: Arc<BgWorkManager>,
-    pub(crate) core: Arc<RwLock<RangeCacheMemoryEngineCore>>,
+    pub(crate) core: Arc<RangeCacheMemoryEngineCore>,
     pub(crate) rocks_engine: Option<RocksEngine>,
     memory_controller: Arc<MemoryController>,
     statistics: Arc<Statistics>,
@@ -245,9 +237,6 @@ pub struct RangeCacheMemoryEngine {
     // When reaching to the threshold, a CleanLockTombstone task will be scheduled to clean lock cf
     // tombstones.
     pub(crate) lock_modification_bytes: Arc<AtomicU64>,
-
-    // `write_batch_id_allocator` is used to allocate id for each write batch
-    write_batch_id_allocator: Arc<AtomicU64>,
 }
 
 impl RangeCacheMemoryEngine {
@@ -260,8 +249,8 @@ impl RangeCacheMemoryEngine {
         region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
     ) -> Self {
         info!("ime init range cache memory engine");
-        let core = Arc::new(RwLock::new(RangeCacheMemoryEngineCore::new()));
-        let skiplist_engine = { core.read().engine().clone() };
+        let core = Arc::new(RangeCacheMemoryEngineCore::new());
+        let skiplist_engine = core.engine().clone();
 
         let RangeCacheEngineContext {
             config,
@@ -277,6 +266,7 @@ impl RangeCacheMemoryEngine {
             config.value().gc_interval.0,
             config.value().load_evict_interval.0,
             config.value().expected_region_size(),
+            config.value().mvcc_amplification_threshold,
             memory_controller.clone(),
             region_info_provider,
         ));
@@ -289,7 +279,6 @@ impl RangeCacheMemoryEngine {
             statistics,
             config,
             lock_modification_bytes: Arc::default(),
-            write_batch_id_allocator: Arc::default(),
         }
     }
 
@@ -299,26 +288,27 @@ impl RangeCacheMemoryEngine {
 
     pub fn new_region(&self, region: Region) {
         let cache_region = CacheRegion::from_region(&region);
-        self.core.write().range_manager.new_region(cache_region);
+        self.core.region_manager.new_region(cache_region);
     }
 
     pub fn load_region(&self, region: Region) -> result::Result<(), LoadFailedReason> {
         let cache_region = CacheRegion::from_region(&region);
-        self.core
-            .write()
-            .mut_range_manager()
-            .load_region(cache_region)
+        self.core.region_manager().load_region(cache_region)
     }
 
     /// Evict a region from the in-memory engine. After this call, the region
     /// will not be readable, but the data of the region may not be deleted
     /// immediately due to some ongoing snapshots.
-    pub fn evict_region(&self, region: &CacheRegion, evict_reason: EvictReason) {
+    pub fn evict_region(
+        &self,
+        region: &CacheRegion,
+        evict_reason: EvictReason,
+        cb: Option<Box<dyn FnOnce() + Send + Sync>>,
+    ) {
         let deleteable_regions = self
             .core
-            .write()
-            .range_manager
-            .evict_region(region, evict_reason);
+            .region_manager
+            .evict_region(region, evict_reason, cb);
         if !deleteable_regions.is_empty() {
             // The range can be deleted directly.
             if let Err(e) = self
@@ -336,38 +326,79 @@ impl RangeCacheMemoryEngine {
 
     // It handles the pending range and check whether to buffer write for this
     // range.
-    pub(crate) fn prepare_for_apply(
-        &self,
-        write_batch_id: u64,
-        region: &CacheRegion,
-    ) -> RangeCacheStatus {
-        let mut core = self.core.write();
-        let range_manager = core.mut_range_manager();
-        let Some(mut region_state) = range_manager.check_region_state(region) else {
+    pub(crate) fn prepare_for_apply(&self, region: &CacheRegion) -> RangeCacheStatus {
+        let manager = self.core.region_manager();
+        if !manager.is_active() {
+            return RangeCacheStatus::NotInCache;
+        }
+
+        // fast path, only need to hold the read lock.
+        {
+            let regions_map = manager.regions_map.read();
+            let Some(region_meta) = regions_map.region_meta(region.id) else {
+                return RangeCacheStatus::NotInCache;
+            };
+            let state = region_meta.get_state();
+            if state == RegionState::Active {
+                region_meta.set_being_written();
+                return RangeCacheStatus::Cached;
+            } else if state.is_evict() {
+                return RangeCacheStatus::NotInCache;
+            } else if state == RegionState::Loading {
+                region_meta.set_being_written();
+                return RangeCacheStatus::Loading;
+            }
+        }
+
+        // slow path, handle pending region
+        let mut regions_map = manager.regions_map.write();
+        let cached_count = regions_map.regions().len();
+        let Some(mut region_meta) = regions_map.mut_region_meta(region.id) else {
             return RangeCacheStatus::NotInCache;
         };
 
+        if region_meta.get_region().epoch_version < region.epoch_version {
+            let meta = regions_map.remove_region(region.id);
+            assert_eq!(meta.get_state(), RegionState::Pending);
+            // try update outdated region.
+            if meta.can_be_updated_to(region) {
+                info!("ime update outdated pending region";
+                    "current_meta" => ?meta,
+                    "new_region" => ?region);
+                // the new region's range is smaller than removed region, so it is impossible to
+                // be overlapped with other existing regions.
+                regions_map.load_region(region.clone()).unwrap();
+                region_meta = regions_map.mut_region_meta(region.id).unwrap();
+            } else {
+                info!("ime remove outdated pending region";
+                    "pending_region" => ?meta.get_region(),
+                    "new_region" => ?region);
+                return RangeCacheStatus::NotInCache;
+            }
+        }
+
+        let mut region_state = region_meta.get_state();
         let schedule_load = region_state == RegionState::Pending;
         if schedule_load {
-            range_manager.update_region_state(region.id, RegionState::Loading);
+            region_meta.set_state(RegionState::Loading);
             info!(
                 "ime region to load";
                 "region" => ?region,
-                "cached" => range_manager.regions().len(),
+                "cached" => cached_count,
             );
             region_state = RegionState::Loading;
         }
 
         let mut result = RangeCacheStatus::NotInCache;
         if region_state == RegionState::Loading || region_state == RegionState::Active {
-            range_manager.record_in_region_being_written(write_batch_id, region.clone());
+            region_meta.set_being_written();
             if region_state == RegionState::Active {
                 result = RangeCacheStatus::Cached;
             } else {
                 result = RangeCacheStatus::Loading;
             }
         }
-        drop(core);
+        drop(regions_map);
 
         // get snapshot and schedule loading task at last to avoid locking IME for too
         // long.
@@ -400,15 +431,10 @@ impl RangeCacheMemoryEngine {
     pub fn statistics(&self) -> Arc<Statistics> {
         self.statistics.clone()
     }
-
-    pub fn alloc_write_batch_id(&self) -> u64 {
-        self.write_batch_id_allocator
-            .fetch_add(1, Ordering::Relaxed)
-    }
 }
 
 impl RangeCacheMemoryEngine {
-    pub fn core(&self) -> &Arc<RwLock<RangeCacheMemoryEngineCore>> {
+    pub fn core(&self) -> &Arc<RangeCacheMemoryEngineCore> {
         &self.core
     }
 }
@@ -453,7 +479,7 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
     }
 
     fn get_region_for_key(&self, key: &[u8]) -> Option<CacheRegion> {
-        self.core.read().range_manager().get_region_for_key(key)
+        self.core.region_manager().get_region_for_key(key)
     }
 
     fn enabled(&self) -> bool {
@@ -463,29 +489,27 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
     fn on_region_event(&self, event: RegionEvent) {
         match event {
             RegionEvent::Eviction { region, reason } => {
-                self.evict_region(&region, reason);
+                self.evict_region(&region, reason, None);
             }
             RegionEvent::Split {
                 source,
                 new_regions,
             } => {
-                self.core
-                    .write()
-                    .range_manager
-                    .split_region(&source, new_regions);
+                self.core.region_manager.split_region(&source, new_regions);
             }
             RegionEvent::EvictByRange { range, reason } => {
                 let mut regions = vec![];
-                self.core()
-                    .read()
-                    .range_manager()
-                    .iter_overlapped_regions(&range, |meta| {
+                {
+                    let regions_map = self.core.region_manager.regions_map.read();
+                    regions_map.iter_overlapped_regions(&range, |meta| {
                         assert!(meta.get_region().overlaps(&range));
                         regions.push(meta.get_region().clone());
                         true
                     });
+                }
+
                 for r in regions {
-                    self.evict_region(&r, reason);
+                    self.evict_region(&r, reason, None);
                 }
             }
         }
@@ -503,11 +527,18 @@ impl Iterable for RangeCacheMemoryEngine {
 
 #[cfg(test)]
 pub mod tests {
-    use std::sync::Arc;
+    use std::{
+        sync::{mpsc::sync_channel, Arc},
+        time::Duration,
+    };
 
     use crossbeam::epoch;
-    use engine_traits::{CacheRegion, CF_DEFAULT, CF_LOCK, CF_WRITE};
-    use tikv_util::config::{ReadableSize, VersionTrack};
+    use engine_rocks::util::new_engine;
+    use engine_traits::{
+        CacheRegion, EvictReason, Mutable, RangeCacheEngine, RegionEvent, WriteBatch,
+        WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
+    };
+    use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
 
     use super::SkiplistEngine;
     use crate::{
@@ -520,7 +551,8 @@ pub mod tests {
     };
 
     fn count_region(mgr: &RegionManager, mut f: impl FnMut(&CacheRegionMeta) -> bool) -> usize {
-        mgr.regions().values().filter(|m| f(m)).count()
+        let regions_map = mgr.regions_map.read();
+        regions_map.regions().values().filter(|m| f(m)).count()
     }
     #[test]
     fn test_region_overlap_with_outdated_epoch() {
@@ -532,9 +564,9 @@ pub mod tests {
 
         let mut region2 = new_region(1, b"k1", b"k5");
         region2.mut_region_epoch().version = 2;
-        engine.prepare_for_apply(1, &CacheRegion::from_region(&region2));
+        engine.prepare_for_apply(&CacheRegion::from_region(&region2));
         assert_eq!(
-            count_region(engine.core.read().range_manager(), |m| {
+            count_region(engine.core.region_manager(), |m| {
                 matches!(m.get_state(), Pending | Loading)
             }),
             0
@@ -545,9 +577,9 @@ pub mod tests {
 
         let mut region2 = new_region(1, b"k2", b"k5");
         region2.mut_region_epoch().version = 2;
-        engine.prepare_for_apply(1, &CacheRegion::from_region(&region2));
+        engine.prepare_for_apply(&CacheRegion::from_region(&region2));
         assert_eq!(
-            count_region(engine.core.read().range_manager(), |m| {
+            count_region(engine.core.region_manager(), |m| {
                 matches!(m.get_state(), Pending | Loading)
             }),
             0
@@ -659,5 +691,136 @@ pub mod tests {
 
         iter.next(guard);
         assert!(!iter.valid());
+    }
+
+    #[test]
+    fn test_is_active() {
+        let mut engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(
+            Arc::new(VersionTrack::new(RangeCacheEngineConfig::config_for_test())),
+        ));
+        let path = tempfile::Builder::new()
+            .prefix("test_is_active")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+        let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
+        engine.set_disk_engine(rocks_engine.clone());
+
+        let region = new_region(1, b"k00", b"k30");
+        let cache_region = CacheRegion::from_region(&region);
+        engine.load_region(region).unwrap();
+        assert!(engine.core.region_manager.is_active());
+
+        let mut wb = engine.write_batch();
+        wb.prepare_for_region(cache_region.clone());
+        wb.put(b"zk00", b"v1").unwrap();
+        wb.put(b"zk10", b"v1").unwrap();
+        wb.put(b"zk20", b"v1").unwrap();
+        wb.set_sequence_number(1).unwrap();
+        wb.write().unwrap();
+
+        test_util::eventually(
+            Duration::from_millis(10),
+            Duration::from_millis(1000),
+            || {
+                let regions_map = engine.core.region_manager().regions_map().read();
+                regions_map.region_meta(1).unwrap().get_state() == Active
+            },
+        );
+
+        let mut wb = engine.write_batch();
+        wb.prepare_for_region(cache_region.clone());
+        wb.put(b"zk10", b"v2").unwrap();
+        wb.set_sequence_number(10).unwrap();
+
+        // trigger split and eviction during write.
+        let new_regions = vec![
+            CacheRegion::new(1, 1, "zk00", "zk10"),
+            CacheRegion::new(2, 1, "zk10", "zk20"),
+            CacheRegion::new(3, 1, "zk20", "zk30"),
+        ];
+        engine.on_region_event(RegionEvent::Split {
+            source: cache_region.clone(),
+            new_regions: new_regions.clone(),
+        });
+
+        engine.on_region_event(RegionEvent::Eviction {
+            region: new_regions[0].clone(),
+            reason: EvictReason::AutoEvict,
+        });
+
+        // trigger split again
+        let split_regions = vec![
+            CacheRegion::new(2, 2, "zk10", "zk13"),
+            CacheRegion::new(4, 2, "zk13", "zk16"),
+            CacheRegion::new(5, 2, "zk16", "zk20"),
+        ];
+        engine.on_region_event(RegionEvent::Split {
+            source: new_regions[1].clone(),
+            new_regions: split_regions.clone(),
+        });
+
+        {
+            let regions_map = engine.core.region_manager.regions_map.read();
+            assert!(regions_map.regions().values().all(|m| m.is_written()));
+        }
+        wb.write().unwrap();
+        {
+            let regions_map = engine.core.region_manager.regions_map.read();
+            assert!(regions_map.regions().values().all(|m| !m.is_written()));
+        }
+
+        engine.on_region_event(RegionEvent::Eviction {
+            region: cache_region,
+            reason: EvictReason::AutoEvict,
+        });
+
+        // engine should become inactive after all regions are evicted.
+        test_util::eventually(
+            Duration::from_millis(10),
+            Duration::from_millis(1000),
+            || !engine.core.region_manager.is_active(),
+        );
+    }
+
+    #[test]
+    fn test_cb_on_eviction_with_on_going_snapshot() {
+        let mut config = RangeCacheEngineConfig::config_for_test();
+        config.gc_interval = ReadableDuration(Duration::from_secs(1));
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(config),
+        )));
+
+        let region = new_region(1, b"", b"z");
+        let cache_region = CacheRegion::from_region(&region);
+        engine.new_region(region.clone());
+
+        let mut wb = engine.write_batch();
+        wb.prepare_for_region(cache_region.clone());
+        wb.set_sequence_number(10).unwrap();
+        wb.put(b"a", b"val1").unwrap();
+        wb.put(b"b", b"val2").unwrap();
+        wb.put(b"c", b"val3").unwrap();
+        wb.write().unwrap();
+
+        let snap = engine.snapshot(cache_region.clone(), 100, 100).unwrap();
+
+        let (tx, rx) = sync_channel(0);
+        engine.evict_region(
+            &cache_region,
+            EvictReason::BecomeFollower,
+            Some(Box::new(move || {
+                let _ = tx.send(true);
+            })),
+        );
+
+        rx.recv_timeout(Duration::from_secs(1)).unwrap_err();
+        drop(snap);
+        let _ = rx.recv();
+
+        {
+            let regions_map = engine.core().region_manager().regions_map().read();
+            assert!(regions_map.region_meta(1).is_none());
+        }
     }
 }

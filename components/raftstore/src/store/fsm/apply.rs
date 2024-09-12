@@ -79,7 +79,7 @@ use crate::{
     bytes_capacity,
     coprocessor::{
         ApplyCtxInfo, Cmd, CmdBatch, CmdObserveInfo, CoprocessorHost, ObserveHandle, ObserveLevel,
-        RegionState,
+        RegionState, WriteBatchWrapper,
     },
     store::{
         cmd_resp,
@@ -406,7 +406,7 @@ where
     exec_log_index: u64,
     exec_log_term: u64,
 
-    kv_wb: EK::WriteBatch,
+    kv_wb: WriteBatchWrapper<EK::WriteBatch>,
     kv_wb_last_bytes: u64,
     kv_wb_last_keys: u64,
 
@@ -492,6 +492,7 @@ where
         priority: Priority,
     ) -> ApplyContext<EK> {
         let kv_wb = engine.write_batch_with_cap(DEFAULT_APPLY_WB_SIZE);
+        let kv_wb = host.on_create_apply_write_batch(kv_wb);
 
         ApplyContext {
             tag,
@@ -619,7 +620,9 @@ where
             let data_size = self.kv_wb().data_size();
             if data_size > APPLY_WB_SHRINK_SIZE {
                 // Control the memory usage for the WriteBatch.
-                self.kv_wb = self.engine.write_batch_with_cap(DEFAULT_APPLY_WB_SIZE);
+                let kv_wb = self.engine.write_batch_with_cap(DEFAULT_APPLY_WB_SIZE);
+                let kv_wb = self.host.on_create_apply_write_batch(kv_wb);
+                self.kv_wb = kv_wb;
             } else {
                 // Clear data, reuse the WriteBatch, this can reduce memory allocations and
                 // deallocations.
@@ -721,12 +724,12 @@ where
     }
 
     #[inline]
-    pub fn kv_wb(&self) -> &EK::WriteBatch {
+    pub fn kv_wb(&self) -> &WriteBatchWrapper<EK::WriteBatch> {
         &self.kv_wb
     }
 
     #[inline]
-    pub fn kv_wb_mut(&mut self) -> &mut EK::WriteBatch {
+    pub fn kv_wb_mut(&mut self) -> &mut WriteBatchWrapper<EK::WriteBatch> {
         &mut self.kv_wb
     }
 
@@ -1204,7 +1207,7 @@ where
         self.metrics.written_keys += apply_ctx.delta_keys();
     }
 
-    fn write_apply_state(&self, wb: &mut EK::WriteBatch) {
+    fn write_apply_state(&self, wb: &mut WriteBatchWrapper<EK::WriteBatch>) {
         wb.put_msg_cf(
             CF_RAFT,
             &keys::apply_state_key(self.region.get_id()),

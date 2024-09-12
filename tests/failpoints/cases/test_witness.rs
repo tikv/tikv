@@ -3,7 +3,6 @@
 use std::{iter::FromIterator, sync::Arc, time::Duration};
 
 use collections::HashMap;
-use engine_rocks::RocksEngine;
 use futures::executor::block_on;
 use kvproto::{metapb, raft_serverpb::RaftApplyState};
 use pd_client::PdClient;
@@ -522,8 +521,8 @@ fn test_non_witness_replica_read() {
     assert_eq!(resp.get_header().has_error(), false);
 }
 
-fn must_get_error_is_witness<T: Simulator<RocksEngine>>(
-    cluster: &mut Cluster<RocksEngine, T>,
+fn must_get_error_is_witness<T: Simulator>(
+    cluster: &mut Cluster<T>,
     region: &metapb::Region,
     cmd: kvproto::raft_cmdpb::Request,
 ) {
