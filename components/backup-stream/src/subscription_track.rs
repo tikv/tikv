@@ -9,6 +9,7 @@ use dashmap::{
 use kvproto::metapb::Region;
 use raftstore::coprocessor::*;
 use resolved_ts::{Resolver, TsSource, TxnLocks};
+use tikv::storage::txn::txn_status_cache::TxnStatusCache;
 use tikv_util::{
     info,
     memory::{MemoryQuota, MemoryQuotaExceeded},
@@ -587,7 +588,8 @@ impl TwoPhaseResolver {
         // TODO: limit the memory usage of the resolver.
         let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
         Self {
-            resolver: Resolver::new(region_id, memory_quota),
+            // FIXME: this cannot handle pipelined transactions, will fall back to start_ts
+            resolver: Resolver::new(region_id, memory_quota, Arc::new(TxnStatusCache::new(1))),
             future_locks: Default::default(),
             stable_ts,
         }

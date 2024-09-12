@@ -4,6 +4,7 @@ use std::{cmp, collections::BTreeMap, sync::Arc, time::Duration};
 
 use collections::{HashMap, HashMapEntry, HashSet};
 use raftstore::store::RegionReadProgress;
+use tikv::storage::txn::txn_status_cache::{TxnState, TxnStatusCache};
 use tikv_util::{
     memory::{MemoryQuota, MemoryQuotaExceeded},
     time::Instant,
@@ -103,6 +104,7 @@ pub struct Resolver {
     memory_quota: Arc<MemoryQuota>,
     // The last attempt of resolve(), used for diagnosis.
     last_attempt: Option<LastAttempt>,
+    txn_status_cache: Arc<TxnStatusCache>,
 }
 
 #[derive(Clone)]
@@ -176,14 +178,29 @@ impl Drop for Resolver {
 }
 
 impl Resolver {
-    pub fn new(region_id: u64, memory_quota: Arc<MemoryQuota>) -> Resolver {
-        Resolver::with_read_progress(region_id, None, memory_quota)
+    pub fn new(
+        region_id: u64,
+        memory_quota: Arc<MemoryQuota>,
+        txn_status_cache: Arc<TxnStatusCache>,
+    ) -> Resolver {
+        Resolver::with_read_progress(region_id, None, memory_quota, txn_status_cache)
+    }
+
+    #[cfg(test)]
+    fn new_for_test(region_id: u64, memory_quota: Arc<MemoryQuota>) -> Resolver {
+        Resolver::with_read_progress(
+            region_id,
+            None,
+            memory_quota,
+            Arc::new(TxnStatusCache::new_for_test()),
+        )
     }
 
     pub fn with_read_progress(
         region_id: u64,
         read_progress: Option<Arc<RegionReadProgress>>,
         memory_quota: Arc<MemoryQuota>,
+        txn_status_cache: Arc<TxnStatusCache>,
     ) -> Resolver {
         Resolver {
             region_id,
@@ -199,6 +216,7 @@ impl Resolver {
             stopped: false,
             memory_quota,
             last_attempt: None,
+            txn_status_cache,
         }
     }
 
@@ -408,14 +426,14 @@ impl Resolver {
         // Find the min start ts.
         let min_lock = self.oldest_transaction();
         let has_lock = min_lock.is_some();
-        let min_start_ts = min_lock.as_ref().map(|(ts, _)| **ts).unwrap_or(min_ts);
+        let min_start_ts = min_lock.as_ref().map(|(ts, _)| *ts).unwrap_or(min_ts);
 
         // No more commit happens before the ts.
         let new_resolved_ts = cmp::min(min_start_ts, min_ts);
         // reason is the min source of the new resolved ts.
         let reason = match (min_lock, min_ts) {
-            (Some((lock_ts, txn_locks)), min_ts) if *lock_ts < min_ts => {
-                TsSource::Lock(txn_locks.clone())
+            (Some((lock_ts, txn_locks)), min_ts) if lock_ts < min_ts => {
+                TsSource::Lock(txn_locks)
             }
             (Some(_), _) => source,
             (None, _) => source,
@@ -484,16 +502,52 @@ impl Resolver {
     }
 
     pub(crate) fn num_transactions(&self) -> u64 {
-        self.lock_ts_heap.len() as u64
+        (self.lock_ts_heap.len() + self.large_txn_ts.len()) as u64
     }
 
     pub(crate) fn read_progress(&self) -> Option<&Arc<RegionReadProgress>> {
         self.read_progress.as_ref()
     }
 
-    pub(crate) fn oldest_transaction(&self) -> Option<(&TimeStamp, &TxnLocks)> {
-        todo!("consider large txns");
-        self.lock_ts_heap.iter().next()
+    pub(crate) fn oldest_transaction(&self) -> Option<(TimeStamp, TxnLocks)> {
+        let oldest_normal_txn = self.lock_ts_heap.iter().next().map(|(ts, txn_locks)| {
+            (ts.clone(), txn_locks.clone())
+        });
+
+        let oldest_large_txn = self
+            .large_txn_ts
+            .iter()
+            .filter_map(|ts| match self.txn_status_cache.get(*ts) {
+                None => {
+                    info!("large txn {} not found in cache", ts);
+                    Some(*ts)
+                }
+                Some(TxnState::Ongoing(min_commit_ts)) => Some(min_commit_ts),
+                Some(TxnState::Committed(_)) | Some(TxnState::RolledBack) => None,
+            })
+            .min()
+            .map(|ts| {
+                (
+                    ts,
+                    TxnLocks {
+                        lock_count: 1,
+                        sample_lock: None,
+                    },
+                )
+            });
+
+        match (oldest_normal_txn, oldest_large_txn) {
+            (Some((ts1, txn_locks1)), Some((ts2, txn_locks2))) => {
+                if ts1 < ts2 {
+                    Some((ts1, txn_locks1))
+                } else {
+                    Some((ts2, txn_locks2))
+                }
+            }
+            (Some((ts, txn_locks)), None) => Some((ts, txn_locks)),
+            (None, Some((ts, txn_locks))) => Some((ts, txn_locks)),
+            (None, None) => None,
+        }
     }
 
     pub(crate) fn take_last_attempt(&mut self) -> Option<LastAttempt> {
@@ -516,6 +570,7 @@ impl Resolver {
 
 #[cfg(test)]
 mod tests {
+    use std::time::SystemTime;
     use txn_types::Key;
 
     use super::*;
@@ -583,7 +638,7 @@ mod tests {
 
         for (i, case) in cases.into_iter().enumerate() {
             let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
-            let mut resolver = Resolver::new(1, memory_quota);
+            let mut resolver = Resolver::new_for_test(1, memory_quota);
             for e in case.clone() {
                 match e {
                     Event::Lock(start_ts, key) => {
@@ -608,7 +663,7 @@ mod tests {
     #[test]
     fn test_memory_quota() {
         let memory_quota = Arc::new(MemoryQuota::new(1024));
-        let mut resolver = Resolver::new(1, memory_quota.clone());
+        let mut resolver = Resolver::new_for_test(1, memory_quota.clone());
         let mut key = vec![0; 77];
         let lock_size = resolver.lock_heap_size(&key);
         let mut ts = TimeStamp::default();
@@ -633,7 +688,7 @@ mod tests {
     #[test]
     fn test_untrack_lock_shrink_ratio() {
         let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
-        let mut resolver = Resolver::new(1, memory_quota);
+        let mut resolver = Resolver::new_for_test(1, memory_quota);
         let mut key = vec![0; 16];
         let mut ts = TimeStamp::default();
         for _ in 0..1000 {
@@ -688,7 +743,7 @@ mod tests {
     #[test]
     fn test_idempotent_track_and_untrack_lock() {
         let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
-        let mut resolver = Resolver::new(1, memory_quota);
+        let mut resolver = Resolver::new_for_test(1, memory_quota);
         let mut key = vec![0; 16];
 
         // track_lock
@@ -757,5 +812,27 @@ mod tests {
         assert_eq!(resolver.memory_quota.in_use(), 0);
         assert_eq!(resolver.locks_by_key.len(), 0);
         assert_eq!(resolver.lock_ts_heap.len(), 0);
+    }
+
+    #[test]
+    fn test_large_txn_tracking() {
+        let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
+        let txn_status_cache = Arc::new(TxnStatusCache::new(100));
+        let mut resolver = Resolver::new(1, memory_quota, txn_status_cache.clone());
+        let key: Vec<u8> = vec![1, 2, 3, 4];
+
+
+        // track a large txn lock
+        resolver.track_lock(1.into(), key.clone(), None, 1).unwrap();
+        assert_eq!(resolver.num_locks(), 1);
+        assert_eq!(resolver.num_transactions(), 1);
+        assert_eq!(resolver.locks_by_key.len(), 0);
+        assert_eq!(resolver.large_txn_ts.len(), 1);
+        assert_eq!(resolver.large_txn_key_representative.len(), 1);
+        assert_eq!(resolver.resolved_ts(), TimeStamp::zero());
+
+        assert_eq!(resolver.resolve(10.into(), None, TsSource::PdTso), 1.into());
+        txn_status_cache.upsert(1.into(), TxnState::Ongoing(5.into()), SystemTime::now());
+        assert_eq!(resolver.resolve(10.into(), None, TsSource::PdTso), 5.into());
     }
 }

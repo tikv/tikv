@@ -27,7 +27,7 @@ use raftstore::{
     },
 };
 use security::SecurityManager;
-use tikv::config::ResolvedTsConfig;
+use tikv::{config::ResolvedTsConfig, storage::txn::txn_status_cache::TxnStatusCache};
 use tikv_util::{
     memory::{HeapSize, MemoryQuota},
     warn,
@@ -194,9 +194,15 @@ impl ObserveRegion {
         rrp: Arc<RegionReadProgress>,
         memory_quota: Arc<MemoryQuota>,
         cancelled: Sender<()>,
+        txn_status_cache: Arc<TxnStatusCache>,
     ) -> Self {
         ObserveRegion {
-            resolver: Resolver::with_read_progress(meta.id, Some(rrp), memory_quota.clone()),
+            resolver: Resolver::with_read_progress(
+                meta.id,
+                Some(rrp),
+                memory_quota.clone(),
+                txn_status_cache,
+            ),
             meta,
             handle: ObserveHandle::new(),
             resolver_status: ResolverStatus::Pending {
@@ -402,6 +408,7 @@ pub struct Endpoint<T, E: KvEngine, S> {
     scan_concurrency_semaphore: Arc<Semaphore>,
     scheduler: Scheduler<Task>,
     advance_worker: AdvanceTsWorker,
+    txn_status_cache: Arc<TxnStatusCache>,
     _phantom: PhantomData<(T, E)>,
 }
 
@@ -681,6 +688,7 @@ where
         concurrency_manager: ConcurrencyManager,
         env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
+        txn_status_cache: Arc<TxnStatusCache>,
     ) -> Self {
         let (region_read_progress, store_id) = {
             let meta = store_meta.lock().unwrap();
@@ -711,6 +719,7 @@ where
             scanner_pool,
             scan_concurrency_semaphore,
             regions: HashMap::default(),
+            txn_status_cache,
             _phantom: PhantomData,
         };
         ep.handle_advance_resolved_ts(leader_resolver);
@@ -731,6 +740,7 @@ where
             read_progress,
             self.memory_quota.clone(),
             cancelled_tx,
+            self.txn_status_cache.clone(),
         );
         let observe_handle = observe_region.handle.clone();
         observe_region
@@ -1251,7 +1261,7 @@ impl LeaderStats {
             last_resolve_attempt: resolver.as_mut().and_then(|r| r.take_last_attempt()),
             min_lock: resolver
                 .as_ref()
-                .and_then(|r| r.oldest_transaction().map(|(t, tk)| (*t, tk.clone()))),
+                .and_then(|r| r.oldest_transaction().map(|(t, tk)| (t, tk.clone()))),
             applied_index: region_read_progress.applied_index(),
             lock_num: resolver.as_ref().map(|r| r.num_locks()),
             txn_num: resolver.as_ref().map(|r| r.num_transactions()),

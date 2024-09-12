@@ -470,6 +470,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
         );
         gc_worker.start(node_id).unwrap();
 
+        let txn_status_cache = Arc::new(TxnStatusCache::new_for_test());
         let rts_worker = if cfg.resolved_ts.enable {
             // Resolved ts worker
             let mut rts_worker = LazyWorker::new("resolved-ts");
@@ -487,6 +488,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
                 concurrency_manager.clone(),
                 self.env.clone(),
                 self.security_mgr.clone(),
+                txn_status_cache.clone(),
             );
             // Start the worker
             rts_worker.start(rts_endpoint);
@@ -548,7 +550,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
                 .as_ref()
                 .map(|m| m.derive_controller("scheduler-worker-pool".to_owned(), true)),
             resource_manager.clone(),
-            Arc::new(TxnStatusCache::new(1 << 2)),
+            txn_status_cache,
         )?;
         self.storages.insert(node_id, raft_kv_v2.clone());
 
