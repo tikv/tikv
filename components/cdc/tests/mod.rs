@@ -108,7 +108,7 @@ fn create_event_feed(
             return ChangeDataEvent::default();
         };
         let change_data =
-            if let Some(event) = recv_timeout(&mut events_rx, Duration::from_secs(10)).unwrap() {
+            if let Some(event) = recv_timeout(&mut events_rx, Duration::from_secs(20)).unwrap() {
                 event
             } else {
                 return ChangeDataEvent::default();
