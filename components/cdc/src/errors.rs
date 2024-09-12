@@ -3,7 +3,7 @@
 use std::{error, io::Error as IoError, result};
 
 use engine_traits::Error as EngineTraitsError;
-use kvproto::{cdcpb::Error as ErrorEvent, errorpb};
+use kvproto::{cdcpb, cdcpb::Error as ErrorEvent, errorpb};
 use thiserror::Error;
 use tikv::storage::{
     kv::{Error as KvError, ErrorInner as EngineErrorInner},
@@ -78,7 +78,7 @@ impl Error {
         )
     }
 
-    pub fn extract_region_error(self) -> errorpb::Error {
+    fn extract_region_error(self) -> errorpb::Error {
         match self {
             Error::Kv(KvError(box EngineErrorInner::Request(e)))
             | Error::Txn(TxnError(box TxnErrorInner::Engine(KvError(
@@ -99,18 +99,24 @@ impl Error {
 
     pub fn into_error_event(self, region_id: u64) -> ErrorEvent {
         let mut err_event = ErrorEvent::default();
-        let mut err = self.extract_region_error();
-        if err.has_not_leader() {
-            let not_leader = err.take_not_leader();
-            err_event.set_not_leader(not_leader);
-        } else if err.has_epoch_not_match() {
-            let epoch_not_match = err.take_epoch_not_match();
-            err_event.set_epoch_not_match(epoch_not_match);
+        if matches!(self, Error::Sink(SendError::Congested)) {
+            let mut congested = cdcpb::Congested::default();
+            congested.set_region_id(region_id);
+            err_event.set_congested(congested);
         } else {
-            // TODO: Add more errors to the cdc protocol
-            let mut region_not_found = errorpb::RegionNotFound::default();
-            region_not_found.set_region_id(region_id);
-            err_event.set_region_not_found(region_not_found);
+            let mut err = self.extract_region_error();
+            if err.has_not_leader() {
+                let not_leader = err.take_not_leader();
+                err_event.set_not_leader(not_leader);
+            } else if err.has_epoch_not_match() {
+                let epoch_not_match = err.take_epoch_not_match();
+                err_event.set_epoch_not_match(epoch_not_match);
+            } else {
+                // TODO: Add more errors to the cdc protocol
+                let mut region_not_found = errorpb::RegionNotFound::default();
+                region_not_found.set_region_id(region_id);
+                err_event.set_region_not_found(region_not_found);
+            }
         }
         err_event
     }

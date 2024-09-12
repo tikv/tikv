@@ -1,10 +1,9 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{
-    cmp,
     collections::{BTreeMap, HashSet},
     num::NonZeroUsize,
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, Ordering},
         Arc,
     },
     time::{Duration, Instant},
@@ -55,7 +54,6 @@ impl RangeStatsManager {
     /// * `evict_min_duration` - do not evict regions that have been loaded for
     ///   less than this duration.
     pub fn new(
-        num_regions: usize,
         evict_min_duration: Duration,
         expected_region_size: usize,
         mvcc_amplification_threshold: usize,
@@ -160,48 +158,6 @@ impl RangeStatsManager {
         self.region_loaded_at.write().unwrap().remove(&region.id);
     }
 
-    /// Attempt to adjust the maximum number of cached regions based on memory
-    /// usage:
-    ///
-    /// If `curr_memory_usage` is LESS THAN `threshold` by 3 *
-    /// self.expected_region_size bytes, *increase* the maximum
-    /// by `threshold - curr_memory_usage / 3 * self.expected_region_size`.
-    ///
-    /// If `curr_memory_usage` is GREATER THAN `threshold`, *decrease* the
-    /// maximum by `(curr_memory_usage - threshold) /
-    /// self.expected_region_size`.
-    pub fn adjust_max_num_regions(&self, curr_memory_usage: usize, threshold: usize) {
-        match curr_memory_usage.cmp(&threshold) {
-            cmp::Ordering::Less => {
-                let room_to_grow = threshold - curr_memory_usage;
-                if room_to_grow > self.expected_region_size * 3 {
-                    let curr_num_regions = self.max_num_regions();
-                    let next_num_regions =
-                        curr_num_regions + room_to_grow / (self.expected_region_size * 3);
-                    info!("ime increasing number of top regions to cache";
-                        "from" => curr_num_regions,
-                        "to" => next_num_regions,
-                    );
-                    self.set_max_num_regions(next_num_regions);
-                }
-            }
-            cmp::Ordering::Greater => {
-                let to_shrink_by = curr_memory_usage - threshold;
-                let curr_num_regions = self.max_num_regions();
-                let next_num_regions = curr_num_regions
-                    .checked_sub(1.max(to_shrink_by / self.expected_region_size))
-                    .unwrap_or(1)
-                    .max(1);
-                info!("ime decreasing number of top regions to cache";
-                    "from" => curr_num_regions,
-                    "to" => next_num_regions,
-                );
-                self.set_max_num_regions(next_num_regions);
-            }
-            _ => (),
-        };
-    }
-
     /// Collects regions to load and evict based on region stat, mvcc
     /// amplification, and memory constraints. New top regions will be
     /// collected in `regions_added_out` to be loaded.
@@ -263,10 +219,10 @@ impl RangeStatsManager {
             .saturating_sub(memory_controller.mem_usage()))
             / self.expected_region_size;
         let expected_num_regions = current_region_count + expected_new_count;
-        info!("ime collect_changed_ranges"; "num_regions" => expected_new_count);
+        info!("ime collect_changed_ranges"; "num_regions" => expected_num_regions);
         let curr_top_regions = self
             .info_provider
-            .get_top_regions(Some(NonZeroUsize::try_from(expected_new_count).unwrap()))
+            .get_top_regions(Some(NonZeroUsize::try_from(expected_num_regions).unwrap()))
             .unwrap() // TODO (afeinberg): Potentially custom error handling here.
             .iter()
             .map(|(r, region_stats)| (r.id, (r.clone(), region_stats.clone())))
@@ -493,7 +449,6 @@ pub mod tests {
         });
         // 10 ms min duration eviction for testing purposes.
         let rsm = RangeStatsManager::new(
-            10,
             Duration::from_millis(10),
             RangeCacheEngineConfig::config_for_test().expected_region_size(),
             10,

@@ -2581,10 +2581,10 @@ mod tests {
         let leader2 = prs[0].clone();
         region1.set_region_epoch(epoch13.clone());
         memory_engine.new_region(region1.clone());
-        {
-            let mut core = memory_engine.core().write();
-            core.mut_range_manager().set_safe_point(region1.id, 1);
-        }
+        memory_engine
+            .core()
+            .region_manager()
+            .set_safe_point(region1.id, 1);
         let kv = (&[DATA_PREFIX, b'a'], b"b");
         reader.kv_engine.put(kv.0, kv.1).unwrap();
         let term6 = 6;
@@ -2628,10 +2628,10 @@ mod tests {
         let s = get_snapshot(None, &mut reader, cmd.clone(), &rx);
         assert!(!s.range_cache_snapshot_available());
 
-        {
-            let mut core = memory_engine.core().write();
-            core.mut_range_manager().set_safe_point(region1.id, 10);
-        }
+        memory_engine
+            .core()
+            .region_manager()
+            .set_safe_point(region1.id, 10);
 
         let snap_ctx = SnapshotContext {
             read_ts: 15,
