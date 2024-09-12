@@ -1328,9 +1328,12 @@ impl Time {
     }
 
     #[inline]
-    pub fn set_fsp(&mut self, fsp: u8) {
+    pub fn set_fsp(&mut self, mut fsp: u8) {
         if self.get_time_type() == TimeType::Date {
             return;
+        }
+        if fsp > super::MAX_FSP as u8 {
+            fsp = super::MAX_FSP as u8;
         }
         self.set_fsp_tt((fsp << 1) | (self.get_fsp_tt() & 1));
     }
@@ -1376,7 +1379,10 @@ impl Time {
 
     #[inline]
     fn set_tt(&mut self, time_type: TimeType) {
-        let ft = self.get_fsp_tt();
+        let mut ft = self.get_fsp_tt();
+        if ft == 0b1110 && time_type != TimeType::Date {
+            ft = 0;
+        }
         let mask = match time_type {
             TimeType::Date => 0b1110,
             TimeType::DateTime => ft & 0b1110,
@@ -1587,20 +1593,20 @@ impl Time {
         .ok()
     }
 
-    pub fn add_duration(self, ctx: &mut EvalContext, dur: Duration) -> Result<Time> {
-        let duration = chrono::Duration::nanoseconds(dur.to_nanos());
+    pub fn add_nanos(self, ctx: &mut EvalContext, nanos: i64) -> Result<Time> {
+        let duration = chrono::Duration::nanoseconds(nanos);
         let time_type = self.get_time_type();
         let fsp = self.fsp() as i8;
         let mut new_time = if time_type == TimeType::Timestamp {
             let datetime = self
                 .try_into_chrono_datetime(ctx)?
-                .checked_sub_signed(duration)
+                .checked_add_signed(duration)
                 .ok_or(Error::datetime_function_overflow())?;
             Time::try_from_chrono_datetime(ctx, datetime, TimeType::Timestamp, fsp)?
         } else {
             let naive = self
                 .try_into_chrono_naive_datetime()?
-                .checked_sub_signed(duration)
+                .checked_add_signed(duration)
                 .ok_or(Error::datetime_function_overflow())?;
             Time::try_from_chrono_datetime(ctx, naive, time_type, fsp)?
         };

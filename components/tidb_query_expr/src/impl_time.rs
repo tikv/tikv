@@ -16,7 +16,7 @@ use tidb_query_datatype::{
                 extension::DateTimeExtension, interval::*, weekmode::WeekMode, WeekdayExtension,
                 MONTH_NAMES,
             },
-            Duration, RoundMode, Time, TimeType, MAX_FSP, MIN_FSP,
+            Duration, RoundMode, Time, TimeType, MAX_FSP,
         },
         Error, Result as CodecResult,
     },
@@ -1146,11 +1146,9 @@ fn add_date(
 ) -> CodecResult<DateTime> {
     let month = interval.month();
     let nano = interval.nano();
-    let fsp = interval.fsp();
 
     if nano != 0 {
-        let duration = Duration::from_nanos(nano, fsp)?;
-        datetime = datetime.add_duration(ctx, duration)?;
+        datetime = datetime.add_nanos(ctx, nano)?;
     }
     if month != 0 {
         datetime.add_months(month)?;
@@ -1198,9 +1196,9 @@ fn add_sub_date<
         Err(e) => return ctx.handle_invalid_time_error(e).map(|_| Ok(None))?,
     };
     if date_res.micro() == 0 {
-        date_res.set_fsp(MIN_FSP as u8);
+        date_res.minimize_fsp();
     } else {
-        date_res.set_fsp(MAX_FSP as u8);
+        date_res.maximize_fsp();
     }
 
     Ok(Some(date_res.to_string().into_bytes()))
