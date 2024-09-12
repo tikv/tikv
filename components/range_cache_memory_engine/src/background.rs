@@ -23,7 +23,6 @@ use tikv_util::{
     time::Instant,
     worker::{Builder, Runnable, RunnableWithTimer, ScheduleError, Scheduler, Worker},
 };
-use tokio::runtime::{self, Runtime};
 use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 use yatp::Remote;
 
@@ -1005,12 +1004,12 @@ impl Runnable for BackgroundRunner {
                 self.range_load_remote.spawn(f);
             }
             BackgroundTask::MemoryCheckAndEvict => {
-                let mem_usage = self.core.memory_controller.mem_usage();
+                let mem_usage_before_check = self.core.memory_controller.mem_usage();
                 info!(
                     "ime start memory usage check and evict";
-                    "mem_usage(MB)" => ReadableSize(mem_usage as u64).as_mb()
+                    "mem_usage(MB)" => ReadableSize(mem_usage_before_check as u64).as_mb()
                 );
-                if mem_usage > self.core.memory_controller.soft_limit_threshold() {
+                if mem_usage_before_check > self.core.memory_controller.soft_limit_threshold() {
                     let delete_range_scheduler = self.delete_range_scheduler.clone();
                     let core = self.core.clone();
                     let task = async move {
@@ -1046,7 +1045,8 @@ impl Runnable for BackgroundRunner {
                         let mem_usage = core.memory_controller.mem_usage();
                         info!(
                             "ime memory usage check and evict completes";
-                            "mem_usage(MB)" => ReadableSize(mem_usage as u64).as_mb()
+                            "mem_usage(MB)" => ReadableSize(mem_usage as u64).as_mb(),
+                            "mem_usage_before_check(MB)" => ReadableSize(mem_usage_before_check as u64).as_mb()
                         );
                     };
                     self.load_evict_remote.spawn(task);
@@ -1169,7 +1169,6 @@ impl RunnableWithTimer for BackgroundRunner {
 }
 
 pub struct DeleteRangeRunner {
-    rt: Runtime,
     engine: Arc<RangeCacheMemoryEngineCore>,
     // It is possible that when `DeleteRangeRunner` begins to delete a range, the range is being
     // written by apply threads. In that case, we have to delay the delete range task to avoid race
@@ -1180,12 +1179,7 @@ pub struct DeleteRangeRunner {
 
 impl DeleteRangeRunner {
     fn new(engine: Arc<RangeCacheMemoryEngineCore>) -> Self {
-        let rt = runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
         Self {
-            rt,
             engine,
             delay_regions: vec![],
         }
@@ -1196,9 +1190,7 @@ impl DeleteRangeRunner {
         for r in regions {
             skiplist_engine.delete_range(r);
         }
-        self.engine
-            .region_manager()
-            .on_delete_regions(regions, &self.rt);
+        self.engine.region_manager().on_delete_regions(regions);
 
         fail::fail_point!("in_memory_engine_delete_range_done");
 

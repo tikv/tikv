@@ -18,9 +18,9 @@ use std::{
 
 use collections::HashMap;
 use engine_traits::{CacheRegion, EvictReason, FailedReason};
+use futures::executor::block_on;
 use parking_lot::RwLock;
 use tikv_util::{info, time::Instant, warn};
-use tokio::runtime::Runtime;
 
 use crate::{metrics::observe_eviction_duration, read::RangeCacheSnapshotMeta};
 
@@ -834,7 +834,7 @@ impl RegionManager {
         None
     }
 
-    pub fn on_delete_regions(&self, regions: &[CacheRegion], rt: &Runtime) {
+    pub fn on_delete_regions(&self, regions: &[CacheRegion]) {
         fail::fail_point!("in_memory_engine_on_delete_regions");
         let mut cbs = vec![];
         {
@@ -858,9 +858,12 @@ impl RegionManager {
                 );
             }
         }
-        for cb in cbs {
-            rt.block_on(async { cb().await });
-        }
+
+        block_on(async {
+            for cb in cbs {
+                cb().await;
+            }
+        });
     }
 
     // return whether the operation is successful.
