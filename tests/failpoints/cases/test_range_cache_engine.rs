@@ -526,14 +526,14 @@ fn test_eviction_after_merge() {
 }
 
 #[test]
-fn test_preferred_range_after_transfer_leader() {
+fn test_manual_load_range_after_transfer_leader() {
     let mut cluster = new_server_cluster_with_hybrid_engine_with_no_range_cache(0, 2);
     cluster.run();
 
     let r = cluster.get_region(b"");
     cluster.must_transfer_leader(r.id, new_peer(1, 1));
 
-    // Set preferred range on store 2.
+    // Set manual load range on store 2.
     let cache_range = CacheRegion::new(
         r.id,
         r.get_region_epoch().version,
@@ -547,7 +547,7 @@ fn test_preferred_range_after_transfer_leader() {
             .region_manager()
             .regions_map()
             .write()
-            .add_preferred_range(cache_range.clone());
+            .add_manual_load_range(cache_range.clone());
         range_cache_engine
     };
 
@@ -555,8 +555,8 @@ fn test_preferred_range_after_transfer_leader() {
         .snapshot(cache_range.clone(), 100, 100)
         .unwrap_err();
 
-    // For region in preferred range, it must load cache automatically after leader
-    // transfer.
+    // For region in manual load range, it must load cache automatically after
+    // leader transfer.
     cluster.must_transfer_leader(r.id, new_peer(2, 2));
 
     eventually(Duration::from_millis(100), Duration::from_secs(5), || {

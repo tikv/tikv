@@ -263,7 +263,7 @@ pub struct RegionMetaMap {
     // active flag, cloned from RegionManager,
     is_active: Arc<AtomicBool>,
 
-    preferred_range: HashSet<CacheRegion>,
+    manual_load_range: HashSet<CacheRegion>,
 }
 
 impl RegionMetaMap {
@@ -437,18 +437,18 @@ impl RegionMetaMap {
         &self.regions
     }
 
-    pub fn overlap_with_preferred_range(&self, range: &CacheRegion) -> bool {
-        self.preferred_range.iter().any(|r| r.overlaps(range))
+    pub fn overlap_with_manual_load_range(&self, range: &CacheRegion) -> bool {
+        self.manual_load_range.iter().any(|r| r.overlaps(range))
     }
 
-    pub fn add_preferred_range(&mut self, range: CacheRegion) {
+    pub fn add_manual_load_range(&mut self, range: CacheRegion) {
         let mut union = range;
-        self.preferred_range.retain(|r| {
+        self.manual_load_range.retain(|r| {
             let Some(u) = r.union(&union) else {
                 return true;
             };
             info!(
-                "ime remove preferred range that is overlapped with range";
+                "ime remove manual load range that is overlapped with range";
                 "union" => ?union,
                 "preferred_range" => ?r,
             );
@@ -457,13 +457,13 @@ impl RegionMetaMap {
             // the union range.
             false
         });
-        info!("ime add preferred range"; "range" => ?union);
-        self.preferred_range.insert(union);
+        info!("ime add manual load range"; "range" => ?union);
+        self.manual_load_range.insert(union);
     }
 
-    pub fn remove_preferred_range(&mut self, range: CacheRegion) {
+    pub fn remove_manual_load_range(&mut self, range: CacheRegion) {
         let mut diffs = Vec::new();
-        self.preferred_range.retain(|r| {
+        self.manual_load_range.retain(|r| {
             match r.difference(&range) {
                 (None, None) => {
                     // Remove the range if it is overlapped with the range.
@@ -474,7 +474,7 @@ impl RegionMetaMap {
                 others => diffs.push(others),
             };
             info!(
-                "ime remove preferred range that is overlapped with range";
+                "ime remove manual load range that is overlapped with range";
                 "range" => ?range,
                 "preferred_range" => ?r,
             );
@@ -485,12 +485,12 @@ impl RegionMetaMap {
         assert!(diffs.len() <= 2, "{:?}", diffs);
         for (left, right) in diffs.into_iter() {
             if let Some(left) = left {
-                info!("ime update preferred range"; "range" => ?left);
-                self.preferred_range.insert(left);
+                info!("ime update manual load range"; "range" => ?left);
+                self.manual_load_range.insert(left);
             }
             if let Some(right) = right {
-                info!("ime update preferred range"; "range" => ?right);
-                self.preferred_range.insert(right);
+                info!("ime update manual load range"; "range" => ?right);
+                self.manual_load_range.insert(right);
             }
         }
     }
@@ -556,7 +556,7 @@ impl Default for RegionManager {
             regions_by_range: BTreeMap::default(),
             regions: HashMap::default(),
             is_active: is_active.clone(),
-            preferred_range: HashSet::default(),
+            manual_load_range: HashSet::default(),
         });
         Self {
             regions_map,
@@ -1272,15 +1272,15 @@ mod tests {
         range_mgr
             .regions_map()
             .write()
-            .add_preferred_range(CacheRegion::new(0, 0, b"k00".to_vec(), b"k10".to_vec()));
+            .add_manual_load_range(CacheRegion::new(0, 0, b"k00".to_vec(), b"k10".to_vec()));
         range_mgr
             .regions_map()
             .write()
-            .add_preferred_range(CacheRegion::new(0, 0, b"k20".to_vec(), b"k30".to_vec()));
+            .add_manual_load_range(CacheRegion::new(0, 0, b"k20".to_vec(), b"k30".to_vec()));
         range_mgr
             .regions_map()
             .write()
-            .add_preferred_range(CacheRegion::new(0, 0, b"k30".to_vec(), b"k50".to_vec()));
+            .add_manual_load_range(CacheRegion::new(0, 0, b"k30".to_vec(), b"k50".to_vec()));
 
         struct Case {
             name: &'static str,
@@ -1336,7 +1336,7 @@ mod tests {
                 range_mgr
                     .regions_map()
                     .read()
-                    .overlap_with_preferred_range(&range),
+                    .overlap_with_manual_load_range(&range),
                 case.expected,
                 "{}",
                 case.name
@@ -1447,25 +1447,25 @@ mod tests {
             let range_mgr = RegionManager::default();
             for (start, end) in case.build {
                 let r = CacheRegion::new(0, 0, start.to_vec(), end.to_vec());
-                range_mgr.regions_map().write().add_preferred_range(r);
+                range_mgr.regions_map().write().add_manual_load_range(r);
             }
 
             // Remove
             for (start, end) in case.remove {
                 let r = CacheRegion::new(0, 0, start.to_vec(), end.to_vec());
-                range_mgr.regions_map().write().remove_preferred_range(r);
+                range_mgr.regions_map().write().remove_manual_load_range(r);
             }
 
             // Add
             for (start, end) in case.add {
                 let r = CacheRegion::new(0, 0, start.to_vec(), end.to_vec());
-                range_mgr.regions_map().write().add_preferred_range(r);
+                range_mgr.regions_map().write().add_manual_load_range(r);
             }
 
             // Check
             let map = range_mgr.regions_map.read();
             let result = map
-                .preferred_range
+                .manual_load_range
                 .iter()
                 .map(|r| (r.start.as_slice(), r.end.as_slice()))
                 .collect::<Vec<_>>();

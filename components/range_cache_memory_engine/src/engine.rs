@@ -496,10 +496,10 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
                     .region_manager()
                     .regions_map()
                     .read()
-                    .overlap_with_preferred_range(&region)
+                    .overlap_with_manual_load_range(&region)
                 {
                     info!(
-                        "try to load region in preferred range";
+                        "try to load region in manual load range";
                         "region" => ?region,
                     );
                     if let Err(e) = self.load_region(region.clone()) {

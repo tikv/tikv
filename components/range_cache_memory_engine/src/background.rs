@@ -267,7 +267,7 @@ impl BgWorkManager {
                     region_manager
                         .regions_map()
                         .write()
-                        .remove_preferred_range(cache_range.clone());
+                        .remove_manual_load_range(cache_range.clone());
                     region_manager.evict_region(cache_range, EvictReason::Manual, None);
                     return;
                 }
@@ -275,10 +275,10 @@ impl BgWorkManager {
                 region_manager
                     .regions_map()
                     .write()
-                    .add_preferred_range(cache_range.clone());
+                    .add_manual_load_range(cache_range.clone());
 
                 let Some(ref info_provider) = region_info_provider else {
-                    warn!("ime region info provider is none, skip load pinned range.");
+                    warn!("ime region info provider is none, skip manual load range.");
                     return;
                 };
 
@@ -296,13 +296,22 @@ impl BgWorkManager {
                     }
                 };
 
-                // TODO: Cache leader only.
+                let total = regions.len();
+                let mut failed = 0;
                 for r in regions {
+                    // TODO: Only load region leaders.
                     let cache_region = CacheRegion::from_region(&r);
                     if let Err(e) = region_manager.load_region(cache_region) {
-                        warn!("ime load region by label failed"; "err" => ?e, "region" => ?r);
+                        failed += 1;
+                        warn!("ime load region failed"; "err" => ?e, "region" => ?r);
                     }
                 }
+                info!(
+                    "ime manual load summary";
+                    "range" => ?cache_range,
+                    "success" => total - failed,
+                    "failed" => failed,
+                );
                 // TODO (afeinberg): This does not actually load the range. The
                 // load happens the apply thread begins to apply
                 // raft entries. To force this (for read-only
