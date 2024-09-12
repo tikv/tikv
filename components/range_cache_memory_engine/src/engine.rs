@@ -509,10 +509,7 @@ impl Iterable for RangeCacheMemoryEngine {
 
 #[cfg(test)]
 pub mod tests {
-    use std::{
-        sync::{Arc, Mutex},
-        time::Duration,
-    };
+    use std::{sync::Arc, time::Duration};
 
     use crossbeam::epoch;
     use engine_traits::{
@@ -521,8 +518,8 @@ pub mod tests {
     };
     use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
     use tokio::{
-        runtime::{Builder, Runtime},
-        sync::mpsc,
+        runtime::Builder,
+        sync::{mpsc, Mutex},
         time::timeout,
     };
 
@@ -715,12 +712,12 @@ pub mod tests {
         let rx = Arc::new(Mutex::new(rx));
         let rx_clone = rx.clone();
         rt.block_on(async move {
-            timeout(Duration::from_secs(1), rx_clone.lock().unwrap().recv())
+            timeout(Duration::from_secs(1), rx_clone.lock().await.recv())
                 .await
                 .unwrap_err()
         });
         drop(snap);
-        rt.block_on(async move { rx.lock().unwrap().recv().await.unwrap() });
+        rt.block_on(async move { rx.lock().await.recv().await.unwrap() });
 
         {
             let core = engine.core().read();

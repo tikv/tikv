@@ -21,6 +21,10 @@ use range_cache_memory_engine::{
 };
 use tempfile::Builder;
 use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
+use tokio::{
+    sync::{mpsc, Mutex},
+    time::timeout,
+};
 use txn_types::{Key, TimeStamp, WriteType};
 
 #[test]
@@ -770,18 +774,30 @@ fn test_cb_on_eviction() {
 
     fail::cfg("in_memory_engine_on_delete_regions", "pause").unwrap();
 
-    let (tx, rx) = sync_channel(0);
+    let (tx, rx) = mpsc::channel(1);
     engine.evict_region(
         &cache_region,
         EvictReason::BecomeFollower,
         Some(Box::new(move || {
-            let _ = tx.send(true);
+            Box::pin(async move {
+                let _ = tx.send(()).await;
+            })
         })),
     );
 
-    rx.recv_timeout(Duration::from_secs(1)).unwrap_err();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let rx = Arc::new(Mutex::new(rx));
+    let rx_clone = rx.clone();
+    rt.block_on(async move {
+        timeout(Duration::from_secs(1), rx_clone.lock().await.recv())
+            .await
+            .unwrap_err()
+    });
     fail::remove("in_memory_engine_on_delete_regions");
-    let _ = rx.recv();
+    rt.block_on(async move { rx.lock().await.recv().await.unwrap() });
 
     {
         let core = engine.core().read();
