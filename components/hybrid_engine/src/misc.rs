@@ -194,7 +194,7 @@ pub mod tests {
         write_batch.put(b"zk23", b"val").unwrap();
         write_batch.prepare_for_region(cache_r3.clone());
         write_batch.put(b"zk42", b"val").unwrap();
-        write_batch.put(b"zk42", b"val").unwrap();
+        write_batch.put(b"zk43", b"val").unwrap();
         write_batch.write().unwrap();
 
         hybrid_engine
