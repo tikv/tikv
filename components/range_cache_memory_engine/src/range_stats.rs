@@ -87,7 +87,7 @@ impl RangeStatsManager {
         // using the same region stats as much as possible, we set a min check interval
         // of 1.5 minutes(considers there are not just one region for stat collection).
         self.last_load_evict_time.lock().elapsed()
-            <= (self.load_evict_interval / 2, Duration::from_secs(90))
+            <= Duration::max(self.load_evict_interval / 2, Duration::from_secs(90))
             && self.set_checking_top_regions(true)
     }
 
