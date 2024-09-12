@@ -45,7 +45,7 @@ use crate::{
     Error, Result, TsSource, TxnLocks, ON_DROP_WARN_HEAP_SIZE,
 };
 
-/// grace period for identifying identifying slow resolved-ts and safe-ts.
+/// grace period for identifying slow resolved-ts and safe-ts.
 const SLOW_LOG_GRACE_PERIOD_MS: u64 = 1000;
 const MEMORY_QUOTA_EXCEEDED_BACKOFF: Duration = Duration::from_secs(30);
 
@@ -157,6 +157,7 @@ enum PendingLock {
     Track {
         key: Key,
         start_ts: TimeStamp,
+        generation: u64,
     },
     Untrack {
         key: Key,
@@ -235,9 +236,15 @@ impl ObserveRegion {
                     ChangeLog::Rows { rows, index } => {
                         for row in rows {
                             let lock = match row {
-                                ChangeRow::Prewrite { key, start_ts, .. } => PendingLock::Track {
+                                ChangeRow::Prewrite {
+                                    key,
+                                    start_ts,
+                                    generation,
+                                    ..
+                                } => PendingLock::Track {
                                     key: key.clone(),
                                     start_ts: *start_ts,
+                                    generation: *generation,
                                 },
                                 ChangeRow::Commit {
                                     key,
@@ -296,17 +303,23 @@ impl ObserveRegion {
                     ChangeLog::Rows { rows, index } => {
                         for row in rows {
                             match row {
-                                ChangeRow::Prewrite { key, start_ts, .. } => {
+                                ChangeRow::Prewrite {
+                                    key,
+                                    start_ts,
+                                    generation,
+                                    ..
+                                } => {
                                     self.resolver.track_lock(
                                         *start_ts,
                                         key.to_raw().unwrap(),
                                         Some(*index),
+                                        *generation,
                                     )?;
                                 }
                                 ChangeRow::Commit { key, .. } => self
                                     .resolver
                                     .untrack_lock(&key.to_raw().unwrap(), Some(*index)),
-                                // One pc command do not contains any lock, so just skip it
+                                // One pc command do not contain any lock, so just skip it
                                 ChangeRow::OnePc { .. } => {
                                     self.resolver.update_tracked_index(*index);
                                 }
@@ -330,8 +343,12 @@ impl ObserveRegion {
                     panic!("region {:?} resolver has ready", self.meta.id)
                 }
                 for (key, lock) in locks {
-                    self.resolver
-                        .track_lock(lock.ts, key.to_raw().unwrap(), Some(apply_index))?;
+                    self.resolver.track_lock(
+                        lock.ts,
+                        key.to_raw().unwrap(),
+                        Some(apply_index),
+                        lock.generation,
+                    )?;
                 }
             }
             ScanEntries::None => {
@@ -343,11 +360,16 @@ impl ObserveRegion {
                     resolver_status.drain_pending_locks(self.meta.id);
                 for lock in pending_locks {
                     match lock {
-                        PendingLock::Track { key, start_ts } => {
+                        PendingLock::Track {
+                            key,
+                            start_ts,
+                            generation,
+                        } => {
                             self.resolver.track_lock(
                                 start_ts,
                                 key.to_raw().unwrap(),
                                 Some(pending_tracked_index),
+                                generation,
                             )?;
                         }
                         PendingLock::Untrack { key, .. } => self

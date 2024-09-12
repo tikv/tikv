@@ -486,17 +486,18 @@ pub struct TwoPhaseResolver {
 }
 
 enum FutureLock {
-    Lock(Vec<u8>, TimeStamp),
+    Lock(Vec<u8>, TimeStamp, u64 /* generation */),
     Unlock(Vec<u8>),
 }
 
 impl std::fmt::Debug for FutureLock {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Lock(arg0, arg1) => f
+            Self::Lock(arg0, arg1, generation) => f
                 .debug_tuple("Lock")
                 .field(&format_args!("{}", utils::redact(arg0)))
                 .field(arg1)
+                .field(generation)
                 .finish(),
             Self::Unlock(arg0) => f
                 .debug_tuple("Unlock")
@@ -523,11 +524,12 @@ impl TwoPhaseResolver {
         &mut self,
         start_ts: TimeStamp,
         key: Vec<u8>,
+        generation: u64,
     ) -> Result<(), MemoryQuotaExceeded> {
         if !self.in_phase_one() {
             warn!("backup stream tracking lock as if in phase one"; "start_ts" => %start_ts, "key" => %utils::redact(&key))
         }
-        self.resolver.track_lock(start_ts, key, None)?;
+        self.resolver.track_lock(start_ts, key, None, generation)?;
         Ok(())
     }
 
@@ -535,12 +537,14 @@ impl TwoPhaseResolver {
         &mut self,
         start_ts: TimeStamp,
         key: Vec<u8>,
+        generation: u64,
     ) -> Result<(), MemoryQuotaExceeded> {
         if self.in_phase_one() {
-            self.future_locks.push(FutureLock::Lock(key, start_ts));
+            self.future_locks
+                .push(FutureLock::Lock(key, start_ts, generation));
             return Ok(());
         }
-        self.resolver.track_lock(start_ts, key, None)?;
+        self.resolver.track_lock(start_ts, key, None, generation)?;
         Ok(())
     }
 
@@ -555,9 +559,9 @@ impl TwoPhaseResolver {
 
     fn handle_future_lock(&mut self, lock: FutureLock) {
         match lock {
-            FutureLock::Lock(key, ts) => {
+            FutureLock::Lock(key, ts, generation) => {
                 // TODO: handle memory quota exceed, for now, quota is set to usize::MAX.
-                self.resolver.track_lock(ts, key, None).unwrap();
+                self.resolver.track_lock(ts, key, None, generation).unwrap();
             }
             FutureLock::Unlock(key) => self.resolver.untrack_lock(&key, None),
         }
@@ -635,13 +639,13 @@ mod test {
         let key = b"somewhere_over_the_rainbow";
         let ts = TimeStamp::new;
         let mut r = TwoPhaseResolver::new(42, Some(ts(42)));
-        r.track_phase_one_lock(ts(48), key.to_vec()).unwrap();
+        r.track_phase_one_lock(ts(48), key.to_vec(), 0).unwrap();
         // When still in phase one, the resolver should not be advanced.
         r.untrack_lock(&key[..]);
         assert_eq!(r.resolve(ts(50)), ts(42));
 
         // Even new lock tracked...
-        r.track_lock(ts(52), key.to_vec()).unwrap();
+        r.track_lock(ts(52), key.to_vec(), 0).unwrap();
         r.untrack_lock(&key[..]);
         assert_eq!(r.resolve(ts(53)), ts(42));
 
@@ -650,7 +654,7 @@ mod test {
         assert_eq!(r.resolve(ts(54)), ts(54));
 
         // It should be able to track incremental locks.
-        r.track_lock(ts(55), key.to_vec()).unwrap();
+        r.track_lock(ts(55), key.to_vec(), 0).unwrap();
         assert_eq!(r.resolve(ts(56)), ts(55));
         r.untrack_lock(&key[..]);
         assert_eq!(r.resolve(ts(57)), ts(57));
@@ -706,7 +710,7 @@ mod test {
         region4_sub
             .value_mut()
             .resolver
-            .track_lock(TimeStamp::new(128), b"Alpi".to_vec())
+            .track_lock(TimeStamp::new(128), b"Alpi".to_vec(), 0)
             .unwrap();
         subs.register_region(&region(5, 8, 1), ObserveHandle::new(), None);
         subs.deregister_region_if(&region(5, 8, 1), |_, _| true);

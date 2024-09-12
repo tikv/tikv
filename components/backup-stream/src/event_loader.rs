@@ -160,7 +160,7 @@ impl<S: Snapshot> EventLoader<S> {
                     debug!("meet lock during initial scanning."; "key" => %utils::redact(&lock_at), "ts" => %lock.ts);
                     if utils::should_track_lock(&lock) {
                         resolver
-                            .track_phase_one_lock(lock.ts, lock_at)
+                            .track_phase_one_lock(lock.ts, lock_at, lock.generation)
                             .map_err(|_| Error::OutOfQuota {
                                 region_id: self.region.id,
                             })?;

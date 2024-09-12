@@ -2,7 +2,7 @@
 
 use std::{cmp, collections::BTreeMap, sync::Arc, time::Duration};
 
-use collections::{HashMap, HashMapEntry};
+use collections::{HashMap, HashMapEntry, HashSet};
 use raftstore::store::RegionReadProgress;
 use tikv_util::{
     memory::{MemoryQuota, MemoryQuotaExceeded},
@@ -80,6 +80,13 @@ pub struct Resolver {
     locks_by_key: HashMap<Arc<[u8]>, TimeStamp>,
     // start_ts -> locked keys.
     lock_ts_heap: BTreeMap<TimeStamp, TxnLocks>,
+    // the start_ts of large transactions, which use a different tracking strategy with normal
+    // transactions.
+    large_txn_ts: HashSet<TimeStamp>,
+    // each large transaction tracked by this resolver has a representative key tracked. So that
+    // when the large transaction is rolled back, we can rely on this key to guarantee that
+    // eventually there will be no dangling locks.
+    large_txn_key_representative: HashMap<Arc<[u8]>, TimeStamp>,
     // The last shrink time.
     last_aggressive_shrink_time: Instant,
     // The timestamps that guarantees no more commit will happen before.
@@ -183,6 +190,8 @@ impl Resolver {
             resolved_ts: TimeStamp::zero(),
             locks_by_key: HashMap::default(),
             lock_ts_heap: BTreeMap::new(),
+            large_txn_ts: HashSet::<TimeStamp>::default(),
+            large_txn_key_representative: HashMap::<Arc<[u8]>, TimeStamp>::default(),
             last_aggressive_shrink_time: Instant::now_coarse(),
             read_progress,
             tracked_index: 0,
@@ -278,11 +287,12 @@ impl Resolver {
         start_ts: TimeStamp,
         key: Vec<u8>,
         index: Option<u64>,
+        generation: u64, /* generation is used to identify whether the lock is a pipelined
+                          * transaction's lock */
     ) -> Result<(), MemoryQuotaExceeded> {
         if let Some(index) = index {
             self.update_tracked_index(index);
         }
-        let bytes = self.lock_heap_size(&key);
         debug!(
             "track lock {}@{}",
             &log_wrappers::Value::key(&key),
@@ -290,8 +300,22 @@ impl Resolver {
             "region_id" => self.region_id,
             "memory_in_use" => self.memory_quota.in_use(),
             "memory_capacity" => self.memory_quota.capacity(),
-            "key_heap_size" => bytes,
+            "generation" => generation,
         );
+        if generation == 0 {
+            self.track_normal_lock(start_ts, key)?;
+        } else {
+            self.track_large_txn_lock(start_ts, key)?;
+        }
+        Ok(())
+    }
+
+    fn track_normal_lock(
+        &mut self,
+        start_ts: TimeStamp,
+        key: Vec<u8>,
+    ) -> Result<(), MemoryQuotaExceeded> {
+        let bytes = self.lock_heap_size(&key);
         self.memory_quota.alloc(bytes)?;
         let key: Arc<[u8]> = key.into_boxed_slice().into();
         match self.locks_by_key.entry(key) {
@@ -318,36 +342,43 @@ impl Resolver {
         if let Some(index) = index {
             self.update_tracked_index(index);
         }
-        let start_ts = if let Some(start_ts) = self.locks_by_key.remove(key) {
+        if let Some(start_ts) = self.locks_by_key.remove(key) {
             let bytes = self.lock_heap_size(key);
             self.memory_quota.free(bytes);
-            start_ts
+            debug!(
+                "untrack lock {}@{}",
+                &log_wrappers::Value::key(key),
+                start_ts;
+                "region_id" => self.region_id,
+                "memory_in_use" => self.memory_quota.in_use(),
+            );
+            if let Some(txn_locks) = self.lock_ts_heap.get_mut(&start_ts) {
+                if txn_locks.lock_count > 0 {
+                    txn_locks.lock_count -= 1;
+                }
+                if txn_locks.lock_count == 0 {
+                    self.lock_ts_heap.remove(&start_ts);
+                }
+            };
+            // Use a large ratio to amortize the cost of rehash.
+            let shrink_ratio = 8;
+            self.shrink_ratio(shrink_ratio);
+        } else if let Some(start_ts) = self.large_txn_key_representative.remove(key) {
+            let is_new = self.large_txn_ts.remove(&start_ts);
+            debug_assert!(is_new, "large txn lock should be untracked only once");
+            debug!(
+                "untrack lock {}@{}",
+                &log_wrappers::Value::key(key),
+                start_ts;
+                "region_id" => self.region_id,
+                "memory_in_use" => self.memory_quota.in_use(),
+            );
         } else {
-            debug!("untrack a lock that was not tracked before";
+            debug!("untrack a lock whose key is not tracked, should be from a pipelined transaction";
                 "key" => &log_wrappers::Value::key(key),
                 "region_id" => self.region_id,
             );
-            return;
-        };
-        debug!(
-            "untrack lock {}@{}",
-            &log_wrappers::Value::key(key),
-            start_ts;
-            "region_id" => self.region_id,
-            "memory_in_use" => self.memory_quota.in_use(),
-        );
-
-        if let Some(txn_locks) = self.lock_ts_heap.get_mut(&start_ts) {
-            if txn_locks.lock_count > 0 {
-                txn_locks.lock_count -= 1;
-            }
-            if txn_locks.lock_count == 0 {
-                self.lock_ts_heap.remove(&start_ts);
-            }
-        };
-        // Use a large ratio to amortize the cost of rehash.
-        let shrink_ratio = 8;
-        self.shrink_ratio(shrink_ratio);
+        }
     }
 
     /// Try to advance resolved ts.
@@ -446,7 +477,10 @@ impl Resolver {
     }
 
     pub(crate) fn num_locks(&self) -> u64 {
-        self.locks_by_key.len() as u64
+        // this is inaccurate, but it's just for monitoring.
+        // TODO: count the number of locks of large transactions, namely also track
+        // TxnLocks
+        (self.locks_by_key.len() + self.large_txn_ts.len()) as u64
     }
 
     pub(crate) fn num_transactions(&self) -> u64 {
@@ -458,11 +492,25 @@ impl Resolver {
     }
 
     pub(crate) fn oldest_transaction(&self) -> Option<(&TimeStamp, &TxnLocks)> {
+        todo!("consider large txns");
         self.lock_ts_heap.iter().next()
     }
 
     pub(crate) fn take_last_attempt(&mut self) -> Option<LastAttempt> {
         self.last_attempt.take()
+    }
+
+    fn track_large_txn_lock(
+        &mut self,
+        start_ts: TimeStamp,
+        key: Vec<u8>,
+    ) -> Result<(), MemoryQuotaExceeded> {
+        let is_new = self.large_txn_ts.insert(start_ts);
+        if is_new {
+            let key: Arc<[u8]> = key.into_boxed_slice().into();
+            self.large_txn_key_representative.insert(key, start_ts);
+        }
+        Ok(())
     }
 }
 
@@ -540,7 +588,7 @@ mod tests {
                 match e {
                     Event::Lock(start_ts, key) => {
                         resolver
-                            .track_lock(start_ts.into(), key.into_raw().unwrap(), None)
+                            .track_lock(start_ts.into(), key.into_raw().unwrap(), None, 0)
                             .unwrap();
                     }
                     Event::Unlock(key) => resolver.untrack_lock(&key.into_raw().unwrap(), None),
@@ -564,7 +612,7 @@ mod tests {
         let mut key = vec![0; 77];
         let lock_size = resolver.lock_heap_size(&key);
         let mut ts = TimeStamp::default();
-        while resolver.track_lock(ts, key.clone(), None).is_ok() {
+        while resolver.track_lock(ts, key.clone(), None, 0).is_ok() {
             ts.incr();
             key[0..8].copy_from_slice(&ts.into_inner().to_be_bytes());
         }
@@ -591,7 +639,7 @@ mod tests {
         for _ in 0..1000 {
             ts.incr();
             key[0..8].copy_from_slice(&ts.into_inner().to_be_bytes());
-            let _ = resolver.track_lock(ts, key.clone(), None);
+            let _ = resolver.track_lock(ts, key.clone(), None, 0);
         }
         assert!(
             resolver.locks_by_key.capacity() >= 1000,
@@ -650,7 +698,7 @@ mod tests {
             for k in 0..100u64 {
                 key[0..8].copy_from_slice(&k.to_be_bytes());
                 key[8..16].copy_from_slice(&ts.into_inner().to_be_bytes());
-                let _ = resolver.track_lock(ts, key.clone(), None);
+                let _ = resolver.track_lock(ts, key.clone(), None, 0);
             }
             let in_use1 = resolver.memory_quota.in_use();
             let key_count1 = resolver.locks_by_key.len();
@@ -664,7 +712,7 @@ mod tests {
             for k in 0..100u64 {
                 key[0..8].copy_from_slice(&k.to_be_bytes());
                 key[8..16].copy_from_slice(&ts.into_inner().to_be_bytes());
-                let _ = resolver.track_lock(ts, key.clone(), None);
+                let _ = resolver.track_lock(ts, key.clone(), None, 0);
             }
             let in_use2 = resolver.memory_quota.in_use();
             let key_count2 = resolver.locks_by_key.len();

@@ -200,7 +200,7 @@ impl ApplyEvents {
                             Ok(lock) => {
                                 if utils::should_track_lock(&lock) {
                                     resolver
-                                        .track_lock(lock.ts, key)
+                                        .track_lock(lock.ts, key, lock.generation)
                                         .map_err(|_| Error::OutOfQuota { region_id })?;
                                 }
                             }
