@@ -375,7 +375,7 @@ impl RangeStatsManager {
             let mut regions_loaded = self.region_loaded_at.write().unwrap();
             let mut evict_candidates = regions_activity;
             info!(
-                "IME evict candidate count before filter";
+                "ime evict candidate count before filter";
                 "count" => evict_candidates.len(),
             );
             let mut filter_by_time = 0;
@@ -402,7 +402,7 @@ impl RangeStatsManager {
             });
 
             info!(
-                "IME evict candidate count after filter";
+                "ime evict candidate count after filter";
                 "count" => evict_candidates.len(),
                 "filter_by_time" => filter_by_time,
                 "filter_by_mvcc_amplification" => filter_by_mvcc_amplification,
