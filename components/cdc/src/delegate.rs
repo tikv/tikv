@@ -1500,6 +1500,10 @@ mod tests {
         let err = receive_error();
         assert!(err.has_region_not_found());
 
+        delegate.stop(Error::Sink(SendError::Congested));
+        let err = receive_error();
+        assert!(err.has_congested());
+
         let mut err_header = ErrorHeader::default();
         err_header.set_epoch_not_match(Default::default());
         delegate.stop(Error::request(err_header));
