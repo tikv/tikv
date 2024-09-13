@@ -2831,7 +2831,7 @@ pub mod tests {
         rocks_engine.put_cf(CF_WRITE, &key, b"val").unwrap();
 
         for r in [&region1, &region2] {
-            let cache_region = CacheRegion::from_region(&r);
+            let cache_region = CacheRegion::from_region(r);
             engine.load_region(cache_region.clone()).unwrap();
             engine.prepare_for_apply(&cache_region);
         }
@@ -2909,7 +2909,7 @@ pub mod tests {
         rocks_engine.put_cf(CF_WRITE, &key, b"val").unwrap();
 
         for r in [&region1, &region2, &region3] {
-            let cache_region = CacheRegion::from_region(&r);
+            let cache_region = CacheRegion::from_region(r);
             engine.load_region(cache_region.clone()).unwrap();
             engine.prepare_for_apply(&cache_region);
         }

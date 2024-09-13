@@ -407,7 +407,6 @@ fn test_concurrency_between_delete_range_and_write_to_memory() {
 
     engine.new_region(r1.clone());
     engine.new_region(r2.clone());
-    let cache_region3 = CacheRegion::from_region(&r3);
     engine.load_region(cache_region3.clone()).unwrap();
 
     let engine_clone = engine.clone();
