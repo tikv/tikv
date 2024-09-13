@@ -110,9 +110,23 @@ impl IntervalUnit {
 
     pub fn is_clock_unit(&self) -> bool {
         use IntervalUnit::*;
-        matches!(self, Microsecond | Second | Minute | Hour | SecondMicrosecond | MinuteMicrosecond
-            | HourMicrosecond | DayMicrosecond | MinuteSecond | HourSecond | DaySecond
-            | HourMinute | DayMinute | DayHour)
+        matches!(
+            self,
+            Microsecond
+                | Second
+                | Minute
+                | Hour
+                | SecondMicrosecond
+                | MinuteMicrosecond
+                | HourMicrosecond
+                | DayMicrosecond
+                | MinuteSecond
+                | HourSecond
+                | DaySecond
+                | HourMinute
+                | DayMinute
+                | DayHour
+        )
     }
 }
 
