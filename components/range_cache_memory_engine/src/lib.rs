@@ -5,6 +5,7 @@
 #![allow(internal_features)]
 #![feature(core_intrinsics)]
 #![feature(slice_pattern)]
+#![feature(trait_alias)]
 
 use std::{sync::Arc, time::Duration};
 

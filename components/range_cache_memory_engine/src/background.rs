@@ -38,7 +38,7 @@ use crate::{
         GC_FILTERED_STATIC, RANGE_CACHE_COUNT, RANGE_CACHE_MEMORY_USAGE, RANGE_GC_TIME_HISTOGRAM,
         RANGE_LOAD_TIME_HISTOGRAM,
     },
-    range_manager::{CacheRegionMeta, RegionState},
+    range_manager::{AsyncFnOnce, CacheRegionMeta, RegionState},
     range_stats::{RangeStatsManager, DEFAULT_EVICT_MIN_DURATION},
     region_label::{
         KeyRangeRule, LabelRule, RegionLabelAddedCb, RegionLabelRulesManager,
@@ -597,74 +597,6 @@ impl BackgroundRunnerCore {
         }
     }
 
-    /// Eviction on soft limit reached:
-    ///
-    /// When soft limit is reached, collect the candidates for eviction, and
-    /// keep evicting until either all candidates are evicted, or the total
-    /// approximated size of evicted regions is equal to or greater than the
-    /// excess memory usage.
-    fn evict_on_soft_limit_reached(&self, delete_range_scheduler: &Scheduler<BackgroundTask>) {
-        if self.range_stats_manager.is_none() {
-            warn!("ime range stats manager is not initialized, cannot evict on soft limit reached");
-            return;
-        }
-        let range_stats_manager = self.range_stats_manager.as_ref().unwrap();
-        let mut remaining = self
-            .memory_controller
-            .mem_usage()
-            .saturating_sub(self.memory_controller.soft_limit_threshold());
-        if remaining == 0 {
-            return;
-        }
-
-        let mut regions_to_evict = Vec::with_capacity(256);
-
-        // TODO (afeinberg, low): consider returning just an iterator and using scan
-        // below for cleaner code.
-        range_stats_manager.collect_candidates_for_eviction(&mut regions_to_evict, |region| {
-            self.engine.region_manager().contains_region(region.id)
-        });
-
-        let mut regions_to_delete = vec![];
-        // TODO (afeinberg): approximate size may differ from size in in-memory cache,
-        // consider taking the actual size into account.
-        for (region, approx_size) in regions_to_evict {
-            if remaining == 0 {
-                break;
-            }
-            let cache_region = CacheRegion::from_region(&region);
-            let deleteable_regions = self.engine.region_manager().evict_region(
-                &cache_region,
-                EvictReason::MemoryLimitReached,
-                None,
-            );
-            if !deleteable_regions.is_empty() {
-                info!(
-                    "ime evict on soft limit reached";
-                    "region_to_evict" => ?cache_region,
-                    "regions_evicted" => ?&deleteable_regions,
-                    "approx_size" => approx_size,
-                    "remaining" => remaining
-                );
-                remaining = remaining.saturating_sub(approx_size as usize);
-                range_stats_manager.handle_region_evicted(&region);
-                regions_to_delete.extend(deleteable_regions);
-            }
-        }
-
-        if !regions_to_delete.is_empty() {
-            if let Err(e) = delete_range_scheduler
-                .schedule_force(BackgroundTask::DeleteRegions(regions_to_delete))
-            {
-                error!(
-                    "ime schedule deletet range failed";
-                    "err" => ?e,
-                );
-                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
-            }
-        }
-    }
-
     /// Periodically load top regions.
     ///
     /// If the soft limit is exceeded, evict (some) regions no longer considered
@@ -1073,17 +1005,50 @@ impl Runnable for BackgroundRunner {
                 self.range_load_remote.spawn(f);
             }
             BackgroundTask::MemoryCheckAndEvict => {
-                let mem_usage = self.core.memory_controller.mem_usage();
+                let mem_usage_before_check = self.core.memory_controller.mem_usage();
                 info!(
                     "ime start memory usage check and evict";
-                    "mem_usage(MB)" => ReadableSize(mem_usage as u64).as_mb()
+                    "mem_usage(MB)" => ReadableSize(mem_usage_before_check as u64).as_mb()
                 );
-                if mem_usage > self.core.memory_controller.soft_limit_threshold() {
+                if mem_usage_before_check > self.core.memory_controller.soft_limit_threshold() {
                     let delete_range_scheduler = self.delete_range_scheduler.clone();
                     let core = self.core.clone();
                     let task = async move {
-                        core.evict_on_soft_limit_reached(&delete_range_scheduler);
+                        if let Some(range_stats_manager) = &core.range_stats_manager {
+                            let cached_region_ids = core
+                                .engine
+                                .region_manager
+                                .regions_map
+                                .read()
+                                .cached_regions();
+
+                            let evict_fn = |evict_region: &CacheRegion,
+                                            evict_reason: EvictReason,
+                                            cb: Option<Box<dyn AsyncFnOnce + Send + Sync>>|
+                             -> Vec<CacheRegion> {
+                                core.engine.region_manager.evict_region(
+                                    evict_region,
+                                    evict_reason,
+                                    cb,
+                                )
+                            };
+
+                            range_stats_manager
+                                .evict_on_soft_limit_reached(
+                                    evict_fn,
+                                    &delete_range_scheduler,
+                                    cached_region_ids,
+                                    &core.memory_controller,
+                                )
+                                .await;
+                        }
                         core.memory_controller.set_memory_checking(false);
+                        let mem_usage = core.memory_controller.mem_usage();
+                        info!(
+                            "ime memory usage check and evict completes";
+                            "mem_usage(MB)" => ReadableSize(mem_usage as u64).as_mb(),
+                            "mem_usage_before_check(MB)" => ReadableSize(mem_usage_before_check as u64).as_mb()
+                        );
                     };
                     self.load_evict_remote.spawn(task);
                 } else {

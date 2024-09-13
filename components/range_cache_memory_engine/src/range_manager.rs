@@ -7,6 +7,8 @@ use std::{
         Bound::{self, Excluded, Unbounded},
     },
     fmt::Debug,
+    future::Future,
+    pin::Pin,
     result,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -16,11 +18,14 @@ use std::{
 
 use collections::HashMap;
 use engine_traits::{CacheRegion, EvictReason, FailedReason};
+use futures::executor::block_on;
 use parking_lot::RwLock;
 use strum::EnumCount;
 use tikv_util::{info, time::Instant, warn};
 
 use crate::{metrics::observe_eviction_duration, read::RangeCacheSnapshotMeta};
+
+pub(crate) trait AsyncFnOnce = FnOnce() -> Pin<Box<dyn Future<Output = ()> + Send>>;
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy, Default, Hash, EnumCount)]
 #[repr(usize)]
@@ -125,7 +130,7 @@ struct EvictInfo {
     start: Instant,
     reason: EvictReason,
     // called when eviction finishes
-    cb: Option<Box<dyn FnOnce() + Send + Sync>>,
+    cb: Option<Box<dyn AsyncFnOnce + Send + Sync>>,
 }
 
 impl Debug for EvictInfo {
@@ -210,7 +215,7 @@ impl CacheRegionMeta {
         &mut self,
         state: RegionState,
         reason: EvictReason,
-        cb: Option<Box<dyn FnOnce() + Send + Sync>>,
+        cb: Option<Box<dyn AsyncFnOnce + Send + Sync>>,
     ) {
         use RegionState::*;
         assert_matches!(self.state, Loading | Active | LoadingCanceled);
@@ -745,7 +750,7 @@ impl RegionManager {
         &self,
         evict_region: &CacheRegion,
         evict_reason: EvictReason,
-        mut cb: Option<Box<dyn FnOnce() + Send + Sync>>,
+        mut cb: Option<Box<dyn AsyncFnOnce + Send + Sync>>,
     ) -> Vec<CacheRegion> {
         info!(
             "ime try to evict region";
@@ -791,7 +796,7 @@ impl RegionManager {
         evict_region: &CacheRegion,
         evict_reason: EvictReason,
         regions_map: &mut RegionMetaMap,
-        cb: Option<Box<dyn FnOnce() + Send + Sync>>,
+        cb: Option<Box<dyn AsyncFnOnce + Send + Sync>>,
     ) -> Option<CacheRegion> {
         let meta = regions_map.mut_region_meta(id).unwrap();
         let prev_state = meta.state;
@@ -846,25 +851,34 @@ impl RegionManager {
 
     pub fn on_delete_regions(&self, regions: &[CacheRegion]) {
         fail::fail_point!("in_memory_engine_on_delete_regions");
-        let mut regions_map = self.regions_map.write();
-        for r in regions {
-            let meta = regions_map.remove_region(r.id);
-            assert_eq!(meta.region.epoch_version, r.epoch_version);
+        let mut cbs = vec![];
+        {
+            let mut regions_map = self.regions_map.write();
+            for r in regions {
+                let meta = regions_map.remove_region(r.id);
+                assert_eq!(meta.region.epoch_version, r.epoch_version);
 
-            let evict_info = meta.evict_info.unwrap();
-            observe_eviction_duration(
-                evict_info.start.saturating_elapsed_secs(),
-                evict_info.reason,
-            );
-            if let Some(cb) = evict_info.cb {
-                cb();
+                let evict_info = meta.evict_info.unwrap();
+                observe_eviction_duration(
+                    evict_info.start.saturating_elapsed_secs(),
+                    evict_info.reason,
+                );
+                if let Some(cb) = evict_info.cb {
+                    cbs.push(cb);
+                }
+
+                info!(
+                    "ime range eviction done";
+                    "region" => ?r,
+                );
             }
-
-            info!(
-                "ime range eviction done";
-                "region" => ?r,
-            );
         }
+
+        block_on(async {
+            for cb in cbs {
+                cb().await;
+            }
+        });
     }
 
     // return whether the operation is successful.
