@@ -1006,8 +1006,8 @@ impl AddSubDateConvertToTime for Decimal {
 
 impl AddSubDateConvertToTime for DateTime {
     #[inline]
-    fn to_time(&self, ctx: &mut EvalContext, metadata: &AddSubDateMeta) -> CodecResult<Time> {
-        let mut t = self.clone();
+    fn to_time(&self, _ctx: &mut EvalContext, metadata: &AddSubDateMeta) -> CodecResult<Time> {
+        let mut t = *self;
         if metadata.is_clock_unit || self.get_time_type() == TimeType::Timestamp {
             t.set_time_type(TimeType::DateTime)?;
         }
@@ -1111,14 +1111,14 @@ impl AddSubDateConvertToInterval for Decimal {
                     interval = interval[1..].to_string();
                 }
                 match metadata.unit {
-                    HourMinute | MinuteSecond => interval = interval.replace(".", ":"),
-                    YearMonth => interval = interval.replace(".", "-"),
-                    DayHour => interval = interval.replace(".", " "),
-                    DayMinute => interval = "0 ".to_string() + &interval.replace(".", ":"),
-                    DaySecond => interval = "0 00:".to_string() + &interval.replace(".", ":"),
+                    HourMinute | MinuteSecond => interval = interval.replace('.', ":"),
+                    YearMonth => interval = interval.replace('.', "-"),
+                    DayHour => interval = interval.replace('.', " "),
+                    DayMinute => interval = "0 ".to_string() + &interval.replace('.', ":"),
+                    DaySecond => interval = "0 00:".to_string() + &interval.replace('.', ":"),
                     DayMicrosecond => interval = "0 00:00:".to_string() + &interval,
                     HourMicrosecond => interval = "00:00:".to_string() + &interval,
-                    HourSecond => interval = "00:".to_string() + &interval.replace(".", ":"),
+                    HourSecond => interval = "00:".to_string() + &interval.replace('.', ":"),
                     MinuteMicrosecond => interval = "00:".to_string() + &interval,
                     SecondMicrosecond => (),
                     _ => unreachable!(),

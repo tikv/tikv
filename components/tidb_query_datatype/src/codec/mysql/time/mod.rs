@@ -815,7 +815,7 @@ mod parser {
         };
         t.set_micro(micro_part);
 
-        return Some(t);
+        Some(t)
     }
 }
 
@@ -1641,7 +1641,7 @@ impl Time {
         }
 
         // Overflow check: year must be between 0 and 9999
-        if current_year < 0 || current_year > 9999 {
+        if !(0..=9999).contains(&current_year) {
             return Err(Error::datetime_function_overflow());
         }
         if current_year == 0 {

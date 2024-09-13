@@ -110,12 +110,9 @@ impl IntervalUnit {
 
     pub fn is_clock_unit(&self) -> bool {
         use IntervalUnit::*;
-        match self {
-            Microsecond | Second | Minute | Hour | SecondMicrosecond | MinuteMicrosecond
+        matches!(self, Microsecond | Second | Minute | Hour | SecondMicrosecond | MinuteMicrosecond
             | HourMicrosecond | DayMicrosecond | MinuteSecond | HourSecond | DaySecond
-            | HourMinute | DayMinute | DayHour => true,
-            _ => false,
-        }
+            | HourMinute | DayMinute | DayHour)
     }
 }
 
@@ -206,7 +203,7 @@ impl Interval {
     ) -> Result<Self> {
         use IntervalUnit::*;
         // Find decimal point position
-        let decimal_point_pos = input.find('.').unwrap_or_else(|| input.len());
+        let decimal_point_pos = input.find('.').unwrap_or(input.len());
 
         // Handle negative sign
         let mut sign: i64 = 1;
@@ -384,7 +381,7 @@ impl Interval {
         }
 
         // Initialize fields as "0"
-        let mut fields = vec!["0"; TIME_VALUE_CNT];
+        let mut fields = ["0"; TIME_VALUE_CNT];
 
         let matches: Vec<&str> = NUMERIC_REGEX.find_iter(input).map(|m| m.as_str()).collect();
 
