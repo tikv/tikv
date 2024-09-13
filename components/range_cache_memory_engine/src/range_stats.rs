@@ -347,7 +347,6 @@ impl RangeStatsManager {
             / regions_activity.len() as f64;
 
         let evict_candidates: Vec<_> = {
-            let mut regions_loaded = self.region_loaded_at.write().unwrap();
             let mut evict_candidates = regions_activity;
             info!(
                 "ime evict candidate count before filter";
@@ -356,16 +355,9 @@ impl RangeStatsManager {
             let mut filter_by_time = 0;
             let mut filter_by_mvcc_amplification = 0;
             evict_candidates.retain(|(r, ra)| {
-                let time_loaded = regions_loaded.entry(r.id).or_insert(Instant::now());
                 // Do not evict regions with high mvcc amplification
                 if ra.cop_detail.mvcc_amplification() > avg_mvcc_amplification {
                     filter_by_mvcc_amplification += 1;
-                    return false;
-                }
-                let now = Instant::now();
-                // Do not evict regions that are loaded recently
-                if now - *time_loaded < self.evict_min_duration {
-                    filter_by_time += 1;
                     return false;
                 }
                 true
