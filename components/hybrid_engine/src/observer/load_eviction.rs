@@ -205,6 +205,7 @@ mod tests {
         metapb::{Peer, Region},
         raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
     };
+    use raftstore::coprocessor::RoleChange;
 
     use super::*;
 
@@ -227,7 +228,7 @@ mod tests {
     }
 
     #[test]
-    fn test_do_not_evict_range_region_split() {
+    fn test_do_not_evict_region_region_split() {
         let cache_engine = Arc::new(MockRangeCacheEngine::default());
         let observer = LoadEvictionObserver::new(cache_engine.clone());
 
@@ -255,7 +256,7 @@ mod tests {
     }
 
     #[test]
-    fn test_evict_range_ingest_sst() {
+    fn test_evict_region_ingest_sst() {
         let cache_engine = Arc::new(MockRangeCacheEngine::default());
         let observer = LoadEvictionObserver::new(cache_engine.clone());
 
@@ -289,6 +290,24 @@ mod tests {
         let expected = RegionEvent::Eviction {
             region: cached_region,
             reason: EvictReason::Merge,
+        };
+        assert_eq!(&cache_engine.region_events.lock().unwrap()[0], &expected);
+    }
+
+    #[test]
+    fn test_load_region_became_leader() {
+        let cache_engine = Arc::new(MockRangeCacheEngine::default());
+        let observer = LoadEvictionObserver::new(cache_engine.clone());
+
+        let mut region = Region::default();
+        region.set_id(1);
+        region.mut_peers().push(Peer::default());
+        let mut ctx = ObserverContext::new(&region);
+        let role_change = RoleChange::new(StateRole::Leader);
+        observer.on_role_change(&mut ctx, &role_change);
+        let cached_region = CacheRegion::from_region(&region);
+        let expected = RegionEvent::TryLoad {
+            region: cached_region,
         };
         assert_eq!(&cache_engine.region_events.lock().unwrap()[0], &expected);
     }
