@@ -447,11 +447,6 @@ impl RegionMetaMap {
             let Some(u) = r.union(&union) else {
                 return true;
             };
-            info!(
-                "ime remove manual load range that is overlapped with range";
-                "union" => ?union,
-                "preferred_range" => ?r,
-            );
             union = u;
             // The intersected range need to be removed before updating
             // the union range.
@@ -473,15 +468,11 @@ impl RegionMetaMap {
                 }
                 others => diffs.push(others),
             };
-            info!(
-                "ime remove manual load range that is overlapped with range";
-                "range" => ?range,
-                "preferred_range" => ?r,
-            );
             // The intersected range need to be removed before updating
             // the union range.
             false
         });
+        info!("ime remove manual load range"; "range" => ?range);
         assert!(diffs.len() <= 2, "{:?}", diffs);
         for (left, right) in diffs.into_iter() {
             if let Some(left) = left {
@@ -1271,7 +1262,7 @@ mod tests {
     }
 
     #[test]
-    fn test_overlap_with_preferred_range() {
+    fn test_overlap_with_manual_load_range() {
         let range_mgr = RegionManager::default();
         range_mgr
             .regions_map()
@@ -1349,7 +1340,7 @@ mod tests {
     }
 
     #[test]
-    fn test_preferred_range_add_remove() {
+    fn test_manual_load_range_add_remove() {
         struct Case {
             name: &'static str,
             build: Vec<(&'static [u8], &'static [u8])>,
