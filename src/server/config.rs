@@ -175,7 +175,7 @@ pub struct Config {
     pub snap_max_total_size: ReadableSize,
     /// Minimal size of snapshot for applying with ingestion.
     /// If the size of snapshot is smaller than this value, it will be applied
-    /// without ingestion, just using batch-write to dump kvs into kvdb.
+    /// without ingestion, just bulk write kvs to kvdb.
     pub snap_min_ingest_size: ReadableSize,
     #[online_config(skip)]
     pub stats_concurrency: usize,

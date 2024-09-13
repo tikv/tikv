@@ -2173,6 +2173,8 @@ impl SnapManagerBuilder {
     }
     pub fn min_ingest_snapshot_limit(mut self, bytes: ReadableSize) -> SnapManagerBuilder {
         self.min_ingest_snapshot_size = bytes.0;
+        // Keeps the same assumptions in region size, "Assume the average size of KVs is
+        // 100B". So, it calculate the count of kvs with `bytes / `MiB` * 10000`.
         self.min_ingest_snapshot_kvs = std::cmp::max(10000, (bytes.as_mb_f64() * 10000.0) as u64);
         self
     }

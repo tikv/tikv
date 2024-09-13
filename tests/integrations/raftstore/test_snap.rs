@@ -1189,8 +1189,14 @@ fn test_leader_step_down_after_requesting_snapshot() {
 }
 
 #[test_case(test_raftstore::new_node_cluster)]
-#[test_case(test_raftstore_v2::new_node_cluster)]
+#[test_case(test_raftstore::new_server_cluster)]
 fn test_node_apply_snapshot_by_or_without_ingest() {
+    let check_snap_count = |snap_dir: &str| -> usize {
+        fs::read_dir(snap_dir)
+            .unwrap()
+            .filter(|p| p.is_ok())
+            .count()
+    };
     for snap_min_ingest_size in [ReadableSize::mb(1), ReadableSize::default()] {
         let mut cluster = new_cluster(0, 4);
         cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
@@ -1210,6 +1216,14 @@ fn test_node_apply_snapshot_by_or_without_ingest() {
         cluster.must_put(b"k2", b"v2");
         pd_client.must_remove_peer(1, new_peer(4, 4));
         pd_client.add_peer(1, new_peer(4, 5));
+        let snap_dir = cluster.get_snap_dir(4);
+        // Verify that the snap will be gced
+        for _ in 0..10 {
+            if check_snap_count(&snap_dir) > 0 {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
         let engine4 = cluster.get_engine(4);
         must_get_equal(&engine4, b"k1", b"v1");
         must_get_equal(&engine4, b"k2", b"v2");
@@ -1222,5 +1236,13 @@ fn test_node_apply_snapshot_by_or_without_ingest() {
         let engine3 = cluster.get_engine(3);
         must_get_equal(&engine3, b"k3", b"v3");
         must_get_equal(&engine3, b"k3", b"v3");
+        // Verify that the snap will be gced
+        let snap_dir = cluster.get_snap_dir(3);
+        for _ in 0..10 {
+            if check_snap_count(&snap_dir) == 0 {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 }
