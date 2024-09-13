@@ -551,14 +551,13 @@ fn test_snap_handling_after_peer_is_replaced_by_split_and_removed() {
     //                    ┌───────────┐  ┌───────────┐  ┌───────────┐
     //                    │           │  │           │  │           │
     //      Region 1      │ Peer 1    │  │ Peer 2    │  │ Peer 3    │
-    //      (-∞, k2)      │           │  │           │  │           │
+    //      [k2, +∞)      │           │  │           │  │           │
     // ───────────────────┼───────────┼──┼───────────┼──┼───────────┼──
     //                    │           │  │           │  │           │
     //      Region 1000   │ Peer 1001 │  │ Peer 1003 │  │ Peer 1002 │
-    //      [k2, +∞)      │           │  │           │  │           │
+    //      (-∞, k2)      │           │  │           │  │           │
     //                    └───────────┘  └───────────┘  └───────────┘
     //                       Store 1        Store 2        Store 3
-    //
     //
     // In this test, there is a split operation and Peer 1003 will be created
     // twice (by raft message and by split). The new Peer 1003 will replace the
@@ -585,11 +584,11 @@ fn test_snap_handling_after_peer_is_replaced_by_split_and_removed() {
     // Pause the snapshot apply of Peer 2.
     let before_check_snapshot_1_2_fp = "before_check_snapshot_1_2";
     fail::cfg(before_check_snapshot_1_2_fp, "pause").unwrap();
-    // Add Peer 2
-    pd_client.must_add_peer(r1, new_peer(2, 2));
 
+    // Add Peer 2. The peer will be created but stuck at applying snapshot due
+    // to the failpoint above.
+    pd_client.must_add_peer(r1, new_peer(2, 2));
     cluster.must_put(b"k1", b"v1");
-    cluster.must_put(b"k2", b"v2");
 
     // Before the split, pause the snapshot apply of Peer 1003.
     let before_check_snapshot_1000_2_fp = "before_check_snapshot_1000_2";
@@ -597,33 +596,36 @@ fn test_snap_handling_after_peer_is_replaced_by_split_and_removed() {
 
     // Split the region into Region 1 and Region 1000. Peer 1003 will be created
     // for the first time when it receives a raft message from Peer 1001, but it
-    // will remain uninitialized, waiting for the snapshot.
+    // will remain uninitialized, waiting for a raft snapshot.
     let region = pd_client.get_region(b"k1").unwrap();
     cluster.must_split(&region, b"k2");
-
     cluster.must_put(b"k22", b"v22");
 
     // Check that Store 2 doesn't have any data yet.
     must_get_none(&cluster.get_engine(2), b"k1");
+    must_get_none(&cluster.get_engine(2), b"k22");
 
     // Unblock Peer 2. It will proceed to apply the split operation, which
     // creates Peer 1003 for the second time and replaces the old Peer 1003.
     fail::remove(before_check_snapshot_1_2_fp);
 
-    // Verify that data can be accessed from the new Peer 1003.
+    // Verify that data can be accessed from Peer 2 and the new Peer 1003.
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k22", b"v22");
 
     // Immediately remove the new Peer 1003. This removes the region metadata.
     let left = pd_client.get_region(b"k1").unwrap();
     let left_peer_2 = find_peer(&left, 2).cloned().unwrap();
     pd_client.must_remove_peer(left.get_id(), left_peer_2);
     must_get_none(&cluster.get_engine(2), b"k1");
+    must_get_equal(&cluster.get_engine(2), b"k22", b"v22");
 
     // Unblock the old Peer 1003. When it continues to process the snapshot
     // message, it would expect the region metadata to exist, causing a panic if
     // #17469 is not fixed.
     fail::remove(before_check_snapshot_1000_2_fp);
     must_get_none(&cluster.get_engine(2), b"k1");
+    must_get_equal(&cluster.get_engine(2), b"k22", b"v22");
 }
 
 // TiKV uses memory lock to control the order between spliting and creating
