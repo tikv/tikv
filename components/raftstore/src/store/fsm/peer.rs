@@ -3322,6 +3322,10 @@ where
         }
 
         let mut meta = self.ctx.store_meta.lock().unwrap();
+        // Check if the region matches the metadata. A mismatch means another
+        // peer has replaced the current peer, which can happen during a split: a
+        // peer is first created via raft message, then replaced by another peer
+        // (of the same region) when the split is applied.
         let region_mismatch = match meta.regions.get(&self.region_id()) {
             Some(region) => *region != *self.region(),
             None => {
