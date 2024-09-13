@@ -352,9 +352,8 @@ impl RangeStatsManager {
                 "ime evict candidate count before filter";
                 "count" => evict_candidates.len(),
             );
-            let mut filter_by_time = 0;
             let mut filter_by_mvcc_amplification = 0;
-            evict_candidates.retain(|(r, ra)| {
+            evict_candidates.retain(|(_, ra)| {
                 // Do not evict regions with high mvcc amplification
                 if ra.cop_detail.mvcc_amplification() > avg_mvcc_amplification {
                     filter_by_mvcc_amplification += 1;
@@ -371,7 +370,6 @@ impl RangeStatsManager {
             info!(
                 "ime evict candidate count after filter";
                 "count" => evict_candidates.len(),
-                "filter_by_time" => filter_by_time,
                 "filter_by_mvcc_amplification" => filter_by_mvcc_amplification,
             );
 
