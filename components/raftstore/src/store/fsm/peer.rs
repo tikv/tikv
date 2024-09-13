@@ -3438,9 +3438,16 @@ where
         let mut meta = self.ctx.store_meta.lock().unwrap();
         let region_mismatch = match meta.regions.get(&self.region_id()) {
             Some(region) => *region != *self.region(),
-            // If the region doesn't exist, treat it as a mismatch. This can
-            // happen in rare situations (#17469).
-            None => true,
+            None => {
+                // If the region doesn't exist, treat it as a mismatch. This can
+                // happen in rare situations (e.g. #17469).
+                warn!(
+                    "region not found in meta";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                );
+                true
+            }
         };
         if region_mismatch {
             if !self.fsm.peer.is_initialized() {
