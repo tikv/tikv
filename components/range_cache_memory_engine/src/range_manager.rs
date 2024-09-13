@@ -14,7 +14,7 @@ use std::{
     },
 };
 
-use collections::{HashMap, HashSet};
+use collections::HashMap;
 use engine_traits::{CacheRegion, EvictReason, FailedReason};
 use parking_lot::RwLock;
 use tikv_util::{info, time::Instant, warn};
@@ -263,7 +263,7 @@ pub struct RegionMetaMap {
     // active flag, cloned from RegionManager,
     is_active: Arc<AtomicBool>,
 
-    manual_load_range: HashSet<CacheRegion>,
+    manual_load_range: Vec<CacheRegion>,
 }
 
 impl RegionMetaMap {
@@ -458,7 +458,7 @@ impl RegionMetaMap {
             false
         });
         info!("ime add manual load range"; "range" => ?union);
-        self.manual_load_range.insert(union);
+        self.manual_load_range.push(union);
     }
 
     pub fn remove_manual_load_range(&mut self, range: CacheRegion) {
@@ -486,12 +486,16 @@ impl RegionMetaMap {
         for (left, right) in diffs.into_iter() {
             if let Some(left) = left {
                 info!("ime update manual load range"; "range" => ?left);
-                self.manual_load_range.insert(left);
+                self.manual_load_range.push(left);
             }
             if let Some(right) = right {
                 info!("ime update manual load range"; "range" => ?right);
-                self.manual_load_range.insert(right);
+                self.manual_load_range.push(right);
             }
+        }
+        const GC_THRESHOLD: usize = 64;
+        if self.manual_load_range.capacity() - self.manual_load_range.len() > GC_THRESHOLD {
+            self.manual_load_range.shrink_to_fit();
         }
     }
 }
@@ -556,7 +560,7 @@ impl Default for RegionManager {
             regions_by_range: BTreeMap::default(),
             regions: HashMap::default(),
             is_active: is_active.clone(),
-            manual_load_range: HashSet::default(),
+            manual_load_range: Vec::default(),
         });
         Self {
             regions_map,
@@ -1440,6 +1444,13 @@ mod tests {
                 remove: vec![],
                 result: vec![(b"k10", b"k50")],
             },
+            Case {
+                name: "add adjacent ranges",
+                build: vec![(b"k10", b"k20")],
+                add: vec![(b"k00", b"k10"), (b"k20", b"k30")],
+                remove: vec![],
+                result: vec![(b"k00", b"k10"), (b"k10", b"k20"), (b"k20", b"k30")],
+            },
         ];
 
         for case in cases {
@@ -1464,12 +1475,21 @@ mod tests {
 
             // Check
             let map = range_mgr.regions_map.read();
-            let result = map
-                .manual_load_range
-                .iter()
-                .map(|r| (r.start.as_slice(), r.end.as_slice()))
-                .collect::<Vec<_>>();
-            assert_eq!(result, case.result, "case: {}", case.name);
+            assert_eq!(
+                map.manual_load_range.len(),
+                case.result.len(),
+                "case: {}",
+                case.name
+            );
+            for r in case.result {
+                assert!(
+                    map.manual_load_range
+                        .iter()
+                        .any(|range| range.start.as_slice() == r.0 && range.end.as_slice() == r.1),
+                    "case: {}",
+                    case.name
+                );
+            }
         }
     }
 }

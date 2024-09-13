@@ -28,7 +28,7 @@ pub enum RegionEvent {
         source: CacheRegion,
         new_regions: Vec<CacheRegion>,
     },
-    Load {
+    TryLoad {
         region: CacheRegion,
     },
     Eviction {

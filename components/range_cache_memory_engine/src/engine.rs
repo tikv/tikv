@@ -490,7 +490,7 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
             RegionEvent::Eviction { region, reason } => {
                 self.evict_region(&region, reason, None);
             }
-            RegionEvent::Load { region } => {
+            RegionEvent::TryLoad { region } => {
                 if self
                     .core
                     .region_manager()
