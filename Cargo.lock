@@ -4517,6 +4517,7 @@ dependencies = [
  "serde_json",
  "slog",
  "slog-global",
+ "strum 0.20.0",
  "tempfile",
  "test_pd",
  "test_pd_client",

@@ -1,6 +1,6 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::HashMap, fmt::Display, sync::Arc, time::Duration};
+use std::{fmt::Display, sync::Arc, time::Duration};
 
 use bytes::Bytes;
 use crossbeam::{
@@ -16,6 +16,7 @@ use hex::FromHexError;
 use pd_client::{PdClient, RpcClient};
 use raftstore::coprocessor::RegionInfoProvider;
 use slog_global::{error, info, warn};
+use strum::EnumCount;
 use tikv_util::{
     config::ReadableSize,
     future::block_on_timeout,
@@ -1150,13 +1151,16 @@ impl RunnableWithTimer for BackgroundRunner {
         let mem_usage = self.core.memory_controller.mem_usage();
         RANGE_CACHE_MEMORY_USAGE.set(mem_usage as i64);
 
-        let regions_map = self.core.engine.region_manager().regions_map.read();
-        let mut count_by_state = HashMap::new();
-        for m in regions_map.regions().values() {
-            *count_by_state.entry(m.get_state()).or_default() += 1;
+        let mut count_by_state = [0; RegionState::COUNT];
+        {
+            let regions_map = self.core.engine.region_manager().regions_map.read();
+            for m in regions_map.regions().values() {
+                count_by_state[m.get_state() as usize] += 1;
+            }
         }
-        drop(regions_map);
-        for (state, count) in count_by_state {
+
+        for (i, count) in count_by_state.into_iter().enumerate() {
+            let state = RegionState::from_usize(i);
             RANGE_CACHE_COUNT
                 .with_label_values(&[state.as_str()])
                 .set(count);
