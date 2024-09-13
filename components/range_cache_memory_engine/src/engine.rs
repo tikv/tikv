@@ -28,7 +28,7 @@ use crate::{
         encode_key_for_boundary_with_mvcc, encode_key_for_boundary_without_mvcc, InternalBytes,
     },
     memory_controller::MemoryController,
-    range_manager::{LoadFailedReason, RangeCacheStatus, RegionManager, RegionState},
+    range_manager::{AsyncFnOnce, LoadFailedReason, RangeCacheStatus, RegionManager, RegionState},
     read::{RangeCacheIterator, RangeCacheSnapshot},
     statistics::Statistics,
     RangeCacheEngineConfig, RangeCacheEngineContext,
@@ -300,7 +300,7 @@ impl RangeCacheMemoryEngine {
         &self,
         region: &CacheRegion,
         evict_reason: EvictReason,
-        cb: Option<Box<dyn FnOnce() + Send + Sync>>,
+        cb: Option<Box<dyn AsyncFnOnce + Send + Sync>>,
     ) {
         let deleteable_regions = self
             .core
@@ -524,10 +524,7 @@ impl Iterable for RangeCacheMemoryEngine {
 
 #[cfg(test)]
 pub mod tests {
-    use std::{
-        sync::{mpsc::sync_channel, Arc},
-        time::Duration,
-    };
+    use std::{sync::Arc, time::Duration};
 
     use crossbeam::epoch;
     use engine_rocks::util::new_engine;
@@ -536,6 +533,11 @@ pub mod tests {
         WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
     };
     use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
+    use tokio::{
+        runtime::Builder,
+        sync::{mpsc, Mutex},
+        time::timeout,
+    };
 
     use super::SkiplistEngine;
     use crate::{
@@ -802,18 +804,27 @@ pub mod tests {
 
         let snap = engine.snapshot(cache_region.clone(), 100, 100).unwrap();
 
-        let (tx, rx) = sync_channel(0);
+        let (tx, rx) = mpsc::channel(1);
         engine.evict_region(
             &cache_region,
             EvictReason::BecomeFollower,
             Some(Box::new(move || {
-                let _ = tx.send(true);
+                Box::pin(async move {
+                    let _ = tx.send(()).await;
+                })
             })),
         );
 
-        rx.recv_timeout(Duration::from_secs(1)).unwrap_err();
+        let rt = Builder::new_current_thread().enable_all().build().unwrap();
+        let rx = Arc::new(Mutex::new(rx));
+        let rx_clone = rx.clone();
+        rt.block_on(async move {
+            timeout(Duration::from_secs(1), rx_clone.lock().await.recv())
+                .await
+                .unwrap_err()
+        });
         drop(snap);
-        let _ = rx.recv();
+        rt.block_on(async move { rx.lock().await.recv().await.unwrap() });
 
         {
             let regions_map = engine.core().region_manager().regions_map().read();

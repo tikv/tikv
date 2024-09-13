@@ -99,7 +99,10 @@ impl Error {
 
     pub fn into_error_event(self, region_id: u64) -> ErrorEvent {
         let mut err_event = ErrorEvent::default();
-        if matches!(self, Error::Sink(SendError::Congested)) {
+        if matches!(
+            self,
+            Error::Sink(SendError::Congested) | Error::MemoryQuotaExceeded(MemoryQuotaExceeded)
+        ) {
             let mut congested = cdcpb::Congested::default();
             congested.set_region_id(region_id);
             err_event.set_congested(congested);
