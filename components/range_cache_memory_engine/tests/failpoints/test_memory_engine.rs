@@ -270,13 +270,13 @@ fn test_evict_with_loading_range() {
     })
     .unwrap();
 
-    engine.load_region(r1.clone()).unwrap();
-    engine.load_region(r2.clone()).unwrap();
-    engine.load_region(r3.clone()).unwrap();
-
     let cache_region1 = CacheRegion::from_region(&r1);
     let cache_region2 = CacheRegion::from_region(&r2);
     let cache_region3 = CacheRegion::from_region(&r3);
+    engine.load_region(cache_region1.clone()).unwrap();
+    engine.load_region(cache_region2.clone()).unwrap();
+    engine.load_region(cache_region3.clone()).unwrap();
+
     let mut wb = engine.write_batch();
     // prepare range to trigger loading
     wb.prepare_for_region(cache_region1.clone());
@@ -329,8 +329,10 @@ fn test_cached_write_batch_cleared_when_load_failed() {
     // canceled at begin
     let r1 = new_region(1, b"k00", b"k10");
     let r2 = new_region(2, b"k20", b"k30");
-    engine.load_region(r1.clone()).unwrap();
-    engine.load_region(r2.clone()).unwrap();
+    let cache_region1 = CacheRegion::from_region(&r1);
+    let cache_region2 = CacheRegion::from_region(&r2);
+    engine.load_region(cache_region1.clone()).unwrap();
+    engine.load_region(cache_region2.clone()).unwrap();
 
     let mut wb = engine.write_batch();
     // range1 starts to load
@@ -409,7 +411,7 @@ fn test_concurrency_between_delete_range_and_write_to_memory() {
 
     engine.new_region(r1.clone());
     engine.new_region(r2.clone());
-    engine.load_region(r3.clone()).unwrap();
+    engine.load_region(cache_region3.clone()).unwrap();
 
     let engine_clone = engine.clone();
     let (range_prepared_tx, range_prepared_rx) = sync_channel(0);
@@ -548,7 +550,8 @@ fn test_double_delete_range_schedule() {
 
     engine.new_region(r1.clone());
     engine.new_region(r2.clone());
-    engine.load_region(r3.clone()).unwrap();
+    let cache_region3 = CacheRegion::from_region(&r3);
+    engine.load_region(cache_region3.clone()).unwrap();
 
     let snap1 = engine
         .snapshot(CacheRegion::from_region(&r1), 100, 100)
@@ -622,7 +625,7 @@ fn test_load_with_gc() {
 
     let region = new_region(1, b"", b"z");
     let range = CacheRegion::from_region(&region);
-    engine.load_region(region.clone()).unwrap();
+    engine.load_region(range.clone()).unwrap();
     let mut wb = engine.write_batch();
     wb.prepare_for_region(range.clone());
     wb.set_sequence_number(100).unwrap();
@@ -691,7 +694,7 @@ fn test_region_split_before_batch_loading_start() {
         );
     }
 
-    engine.load_region(region.clone()).unwrap();
+    engine.load_region(cache_region.clone()).unwrap();
 
     // use write batch to trigger scheduling pending region loading task.
     let mut wb = engine.write_batch();

@@ -23,6 +23,7 @@ use test_raftstore::{
     get_tso, new_peer, new_server_cluster_with_hybrid_engine_with_no_range_cache, Cluster,
     ServerCluster,
 };
+use test_util::eventually;
 use tikv_util::{mpsc::unbounded, HandyRwLock};
 use tipb::SelectResponse;
 use txn_types::Key;
@@ -522,6 +523,47 @@ fn test_eviction_after_merge() {
 
     range_cache_engine.snapshot(range1, 100, 100).unwrap_err();
     range_cache_engine.snapshot(range2, 100, 100).unwrap_err();
+}
+
+#[test]
+fn test_manual_load_range_after_transfer_leader() {
+    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_range_cache(0, 2);
+    cluster.run();
+
+    let r = cluster.get_region(b"");
+    cluster.must_transfer_leader(r.id, new_peer(1, 1));
+
+    // Set manual load range on store 2.
+    let cache_range = CacheRegion::new(
+        r.id,
+        r.get_region_epoch().version,
+        DATA_MIN_KEY.to_vec(),
+        DATA_MAX_KEY.to_vec(),
+    );
+    let range_cache_engine = {
+        let range_cache_engine = cluster.sim.rl().get_range_cache_engine(2);
+        range_cache_engine
+            .core()
+            .region_manager()
+            .regions_map()
+            .write()
+            .add_manual_load_range(cache_range.clone());
+        range_cache_engine
+    };
+
+    range_cache_engine
+        .snapshot(cache_range.clone(), 100, 100)
+        .unwrap_err();
+
+    // For region in manual load range, it must load cache automatically after
+    // leader transfer.
+    cluster.must_transfer_leader(r.id, new_peer(2, 2));
+
+    eventually(Duration::from_millis(100), Duration::from_secs(5), || {
+        range_cache_engine
+            .snapshot(cache_range.clone(), 100, 100)
+            .is_ok()
+    });
 }
 
 #[test]
