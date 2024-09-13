@@ -3404,7 +3404,7 @@ where
                 panic!(
                     "{} meta corrupted: {:?} != {:?}",
                     self.fsm.peer.tag,
-                    meta.regions[&self.region_id()],
+                    meta.regions.get(&self.region_id()),
                     self.region()
                 );
             }
