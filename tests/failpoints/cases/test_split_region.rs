@@ -586,7 +586,7 @@ fn test_stale_peer_handle_raft_msg(on_handle_raft_msg_1000_2_fp: &str) {
     // message).
 
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_merge(&mut cluster.cfg);
+    configure_for_merge(&mut cluster);
     cluster.cfg.raft_store.right_derive_when_split = true;
     cluster.cfg.raft_store.store_batch_system.max_batch_size = Some(1);
     cluster.cfg.raft_store.store_batch_system.pool_size = 2;
