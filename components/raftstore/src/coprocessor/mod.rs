@@ -10,10 +10,15 @@ use std::{
 };
 
 use engine_traits::{CfName, SstMetaInfo};
-use kvproto::{metapb, metapb::Region, pdpb::CheckPolicy, raft_cmdpb::{
-    AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request,
-    TransferLeaderRequest,
-}, raft_serverpb::{ExtraMessage, RaftApplyState}};
+use kvproto::{
+    metapb::Region,
+    pdpb::CheckPolicy,
+    raft_cmdpb::{
+        AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request,
+        TransferLeaderRequest,
+    },
+    raft_serverpb::{ExtraMessage, RaftApplyState},
+};
 use pd_client::RegionStat;
 use raft::{eraftpb, StateRole};
 
@@ -358,6 +363,8 @@ pub trait RegionHeartbeatObserver: Coprocessor {
 }
 
 pub trait MessageObserver: Coprocessor {
+    fn on_extra_message(&self, _: &Region, _: &ExtraMessage) {}
+
     /// Returns false if the message should not be stepped later.
     fn on_raft_message(&self, _: &RaftMessage) -> bool {
         true

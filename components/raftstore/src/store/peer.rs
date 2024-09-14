@@ -3927,14 +3927,13 @@ where
         msg.set_log_term(self.term());
         self.raft_group.raft.msgs.push(msg);
 
-        extra_msgs.into_iter().for_each(|m| {
+        extra_msgs.into_iter().for_each(|extra_msg| {
             let mut msg = RaftMessage::default();
             msg.set_region_id(self.region_id);
             msg.set_from_peer(self.peer.clone());
             msg.set_to_peer(peer.clone());
             msg.set_region_epoch(self.region().get_region_epoch().clone());
-            let extra_msg = msg.mut_extra_msg();
-            extra_msg.set_type(ExtraMessageType::MsgPreLoadRange);
+            msg.set_extra_msg(extra_msg);
             self.send_raft_messages(ctx, vec![msg]);
         });
 
@@ -4845,7 +4844,7 @@ where
         let transferred = if peer.id == self.peer.id {
             false
         } else {
-            self.pre_transfer_leader(peer, msgs, ctx)
+            self.pre_transfer_leader(peer, extra_msgs, ctx)
         };
 
         // transfer leader command doesn't need to replicate log and apply, so we
@@ -5274,7 +5273,7 @@ where
                         "peer_id" => self.peer.get_id(),
                         "target_peer_id" => p.get_id(),
                     );
-                    self.pre_transfer_leader(&p, ctx);
+                    self.pre_transfer_leader(&p, vec![], ctx);
                 }
             }
         } else {

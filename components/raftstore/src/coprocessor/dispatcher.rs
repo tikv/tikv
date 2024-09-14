@@ -710,11 +710,15 @@ impl<E: KvEngine> CoprocessorHost<E> {
         );
     }
 
-    pub fn pre_transfer_leader(&self, r: &Region,  tr: &TransferLeaderRequest) -> Result<Vec<ExtraMessage>> {
+    pub fn pre_transfer_leader(
+        &self,
+        r: &Region,
+        tr: &TransferLeaderRequest,
+    ) -> Result<Vec<ExtraMessage>> {
         let mut ctx = ObserverContext::new(r);
         let mut msgs = vec![];
-        for o in (&self.registry.admin_observers) {
-            if let Some(msg) = (o.observer).inner().pre_transfer_leader((&mut ctx),  tr)? {
+        for o in &self.registry.admin_observers {
+            if let Some(msg) = (o.observer).inner().pre_transfer_leader(&mut ctx, tr)? {
                 msgs.push(msg);
             }
             if ctx.bypass {
@@ -863,6 +867,13 @@ impl<E: KvEngine> CoprocessorHost<E> {
             }
         }
         true
+    }
+
+    pub fn on_extra_message(&self, r: &Region, msg: &ExtraMessage) {
+        for observer in &self.registry.message_observers {
+            let observer = observer.observer.inner();
+            observer.on_extra_message(r, msg);
+        }
     }
 
     /// Returns false if the message should not be stepped later.

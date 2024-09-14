@@ -92,7 +92,7 @@ pub trait RangeCacheEngine:
 
     fn region_cached(&self, range: &Region) -> bool;
 
-    fn load_region(&self, range: Region);
+    fn load_region(&self, range: &Region);
 }
 
 pub trait RangeCacheEngineExt {
@@ -102,7 +102,7 @@ pub trait RangeCacheEngineExt {
 
     fn region_cached(&self, range: &Region) -> bool;
 
-    fn load_region(&self, range: Region);
+    fn load_region(&self, range: &Region);
 }
 
 /// A service that should run in the background to retrieve and apply cache

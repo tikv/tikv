@@ -11,9 +11,7 @@ use std::{
 use engine_traits::{KvEngine, RaftEngine};
 use futures::channel::mpsc::UnboundedSender;
 use kvproto::{
-    brpb::CheckAdminResponse,
-    metapb::{Peer, RegionEpoch},
-    raft_cmdpb::{AdminCmdType, TransferLeaderRequest},
+    brpb::CheckAdminResponse, metapb::RegionEpoch, raft_cmdpb::AdminCmdType,
     raft_serverpb::ExtraMessage,
 };
 use tikv_util::{info, warn};
@@ -22,7 +20,7 @@ use tokio::sync::oneshot;
 use super::{metrics, PeerMsg, RaftRouter, SignificantMsg, SignificantRouter};
 use crate::coprocessor::{
     AdminObserver, BoxAdminObserver, BoxQueryObserver, Coprocessor, CoprocessorHost,
-    Error as CopError, ObserverContext, QueryObserver,
+    Error as CopError, QueryObserver,
 };
 
 fn epoch_second_coarse() -> u64 {
@@ -266,8 +264,8 @@ impl AdminObserver for Arc<PrepareDiskSnapObserver> {
 
     fn pre_transfer_leader(
         &self,
-        _ctx: &mut ObserverContext<'_>,
-        _tr: &TransferLeaderRequest,
+        _ctx: &mut crate::coprocessor::ObserverContext<'_>,
+        _tr: &kvproto::raft_cmdpb::TransferLeaderRequest,
     ) -> crate::coprocessor::Result<Option<ExtraMessage>> {
         if self.allowed() {
             return Ok(None);

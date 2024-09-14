@@ -4,15 +4,15 @@ use std::sync::Arc;
 
 use engine_traits::{CacheRegion, EvictReason, KvEngine, RangeCacheEngineExt, RegionEvent};
 use kvproto::{
-    metapb,
+    metapb::Region,
     raft_cmdpb::AdminCmdType,
-    raft_serverpb::{ExtraMessage, ExtraMessageType, RaftApplyState, RaftMessage},
+    raft_serverpb::{ExtraMessage, ExtraMessageType, RaftApplyState},
 };
 use raft::StateRole;
 use raftstore::coprocessor::{
     AdminObserver, ApplyCtxInfo, ApplySnapshotObserver, BoxAdminObserver, BoxApplySnapshotObserver,
-    BoxQueryObserver, BoxRoleObserver, Cmd, Coprocessor, CoprocessorHost, ObserverContext,
-    QueryObserver, RegionState, RoleObserver,
+    BoxMessageObserver, BoxQueryObserver, BoxRoleObserver, Cmd, Coprocessor, CoprocessorHost,
+    MessageObserver, ObserverContext, QueryObserver, RegionState, RoleObserver,
 };
 use tikv_util::info;
 
@@ -48,6 +48,10 @@ impl LoadEvictionObserver {
         coprocessor_host
             .registry
             .register_role_observer(priority, BoxRoleObserver::new(self.clone()));
+        // Pre load region in transfer leader
+        coprocessor_host
+            .registry
+            .register_message_observer(priority, BoxMessageObserver::new(self.clone()));
     }
 
     fn post_exec_cmd(
@@ -208,6 +212,14 @@ impl RoleObserver for LoadEvictionObserver {
                 "region" => ?cache_region,
             );
             self.evict_region(cache_region, EvictReason::BecomeFollower);
+        }
+    }
+}
+
+impl MessageObserver for LoadEvictionObserver {
+    fn on_extra_message(&self, r: &Region, extra_msg: &ExtraMessage) {
+        if extra_msg.get_type() == ExtraMessageType::MsgPreLoadRange {
+            self.cache_engine.load_region(r);
         }
     }
 }

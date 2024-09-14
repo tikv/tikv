@@ -20,7 +20,7 @@ where
     }
 
     #[inline]
-    fn load_region(&self, region: kvproto::metapb::Region) {
+    fn load_region(&self, region: &kvproto::metapb::Region) {
         self.range_cache_engine().load_region(region)
     }
 }

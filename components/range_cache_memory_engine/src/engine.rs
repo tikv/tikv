@@ -536,17 +536,16 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
     }
 
     fn region_cached(&self, region: &Region) -> bool {
-        let core = self.core.read();
-        if let Some(meta) = core.range_manager().region_meta(region.get_id()) {
+        let regions_map = self.core.region_manager().regions_map().read();
+        if let Some(meta) = regions_map.region_meta(region.get_id()) {
             matches!(meta.get_state(), RegionState::Active | RegionState::Loading)
-                && meta.region() == region
         } else {
             false
         }
     }
 
-    fn load_region(&self, region: Region) {
-        let _ = self.load_region(region);
+    fn load_region(&self, region: &Region) {
+        let _ = self.load_region(CacheRegion::from_region(&region));
     }
 }
 

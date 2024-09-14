@@ -2984,6 +2984,9 @@ where
     }
 
     fn on_extra_message(&mut self, mut msg: RaftMessage) {
+        self.ctx
+            .coprocessor_host
+            .on_extra_message(self.fsm.peer.region(), msg.get_extra_msg());
         match msg.get_extra_msg().get_type() {
             ExtraMessageType::MsgRegionWakeUp | ExtraMessageType::MsgCheckStalePeer => {
                 if msg.get_extra_msg().forcely_awaken {
@@ -3082,7 +3085,7 @@ where
                 }
             }
             ExtraMessageType::MsgPreLoadRange => {
-                self.ctx.engines.kv.load_region(self.region().clone());
+                // it has been handled in on_extra_message in coprocessor_host
             }
         }
     }
