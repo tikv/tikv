@@ -679,7 +679,8 @@ mod tests {
         let r1 = new_region(1, b"k01".to_vec(), b"k05".to_vec());
         {
             // load region with epoch and range change, will remove the pending region.
-            engine.load_region(r1.clone()).unwrap();
+            let cache_r1 = CacheRegion::from_region(&r1);
+            engine.load_region(cache_r1).unwrap();
             let mut r1_new = new_region(1, b"k01".to_vec(), b"k06".to_vec());
             r1_new.mut_region_epoch().version = 2;
             let mut wb = RangeCacheWriteBatch::from(&engine);
@@ -705,7 +706,8 @@ mod tests {
 
         // epoch changes but new range is contained by the pending region, will update
         // the region.
-        engine.load_region(r1.clone()).unwrap();
+        let cache_r1 = CacheRegion::from_region(&r1);
+        engine.load_region(cache_r1).unwrap();
         let mut r1_new = new_region(1, b"k01".to_vec(), b"k05".to_vec());
         r1_new.mut_region_epoch().version = 2;
         let cache_r1_new = CacheRegion::from_region(&r1_new);

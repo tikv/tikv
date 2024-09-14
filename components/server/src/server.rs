@@ -43,7 +43,7 @@ use grpcio::{EnvBuilder, Environment};
 use health_controller::HealthController;
 use hybrid_engine::{
     observer::{
-        EvictionObserver as HybridEngineObserver, HybridSnapshotObserver,
+        HybridSnapshotObserver, LoadEvictionObserver as HybridEngineLoadEvictionObserver,
         RegionCacheWriteBatchObserver,
     },
     HybridEngine,
@@ -1654,7 +1654,8 @@ where
             );
 
             // Hybrid engine observer.
-            let eviction_observer = HybridEngineObserver::new(Arc::new(in_memory_engine.clone()));
+            let eviction_observer =
+                HybridEngineLoadEvictionObserver::new(Arc::new(in_memory_engine.clone()));
             eviction_observer.register_to(self.coprocessor_host.as_mut().unwrap());
             let write_batch_observer =
                 RegionCacheWriteBatchObserver::new(in_memory_engine.range_cache_engine().clone());
