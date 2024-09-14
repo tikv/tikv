@@ -18,7 +18,7 @@ use raftstore::coprocessor::RegionInfoProvider;
 use strum::EnumCount;
 use tikv_util::{
     config::ReadableSize,
-    debug, error,
+    error,
     future::block_on_timeout,
     info,
     keybuilder::KeyBuilder,
