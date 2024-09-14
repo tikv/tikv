@@ -15,13 +15,15 @@ use engine_traits::{
 use keys::{origin_end_key, origin_key};
 use pd_client::{PdClient, RpcClient};
 use raftstore::coprocessor::RegionInfoProvider;
-use slog_global::{error, info, warn};
 use strum::EnumCount;
 use tikv_util::{
     config::ReadableSize,
+    debug, error,
     future::block_on_timeout,
+    info,
     keybuilder::KeyBuilder,
     time::Instant,
+    warn,
     worker::{Builder, Runnable, RunnableWithTimer, ScheduleError, Scheduler, Worker},
 };
 use txn_types::{Key, TimeStamp, WriteRef, WriteType};
@@ -196,7 +198,6 @@ impl PdRangeHintService {
             pd_client,
         )
         .rule_filter_fn(|label_rule| {
-            info!("dbg rule"; "rule" => ?label_rule);
             label_rule
                 .labels
                 .iter()
@@ -1026,7 +1027,7 @@ impl Runnable for BackgroundRunner {
             }
             BackgroundTask::MemoryCheckAndEvict => {
                 let mem_usage_before_check = self.core.memory_controller.mem_usage();
-                info!(
+                debug!(
                     "ime start memory usage check and evict";
                     "mem_usage(MB)" => ReadableSize(mem_usage_before_check as u64).as_mb()
                 );

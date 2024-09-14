@@ -2178,7 +2178,6 @@ fn test_destroy_race_during_atomic_snapshot_after_merge() {
         .when(left_filter_block.clone())
         .reserve_dropped(left_blocked_messages.clone())
         .set_msg_callback(Arc::new(move |msg: &RaftMessage| {
-            debug!("dbg left msg_callback"; "msg" => ?msg);
             if left_filter_block.load(atomic::Ordering::SeqCst) {
                 return;
             }
@@ -2202,7 +2201,6 @@ fn test_destroy_race_during_atomic_snapshot_after_merge() {
         .direction(Direction::Recv)
         .when(right_filter_block.clone())
         .set_msg_callback(Arc::new(move |msg: &RaftMessage| {
-            debug!("dbg right msg_callback"; "msg" => ?msg);
             if msg.get_to_peer().get_id() == new_peer_id {
                 let _ = new_peer_id_tx.lock().unwrap().take().map(|tx| tx.send(()));
                 if msg.get_message().get_msg_type() == MessageType::MsgSnapshot {
