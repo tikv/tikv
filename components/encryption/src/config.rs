@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use cloud::kms::{SubConfigAzure, SubConfigGcp};
-use kvproto::encryptionpb::{EncryptionMethod, MasterKeyKms};
+use kvproto::encryptionpb::{EncryptionMethod, MasterKey, MasterKeyKms, MasterKey_oneof_backend};
 use online_config::OnlineConfig;
 use serde_derive::{Deserialize, Serialize};
 use tikv_util::config::ReadableDuration;
@@ -40,7 +40,27 @@ impl Default for EncryptionConfig {
     }
 }
 
-#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct BackupEncryptionConfig {
+    #[serde(with = "encryption_method_serde")]
+    #[online_config(skip)]
+    pub data_encryption_method: EncryptionMethod,
+    #[online_config(skip)]
+    pub master_keys: Vec<MasterKeyConfig>,
+}
+
+impl Default for BackupEncryptionConfig {
+    fn default() -> BackupEncryptionConfig {
+        BackupEncryptionConfig {
+            data_encryption_method: EncryptionMethod::Plaintext,
+            master_keys: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct FileConfig {
@@ -48,7 +68,7 @@ pub struct FileConfig {
 }
 
 // TODO: the representation of Azure KMS to users needs to be discussed.
-#[derive(Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct AzureConfig {
@@ -85,7 +105,7 @@ impl std::fmt::Debug for AzureConfig {
 }
 
 // TODO: the representation of GCP KMS to users needs to be discussed.
-#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct GcpConfig {
@@ -95,7 +115,7 @@ pub struct GcpConfig {
     pub credential_file_path: Option<String>,
 }
 
-#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
+#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, OnlineConfig, Eq, Hash)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct KmsConfig {
@@ -111,6 +131,7 @@ pub struct KmsConfig {
     pub gcp: Option<GcpConfig>,
 }
 
+// Note: could merge SubConfigAzure and SubConfigGcp into KmsConfig
 impl KmsConfig {
     pub fn into_proto(self) -> MasterKeyKms {
         MasterKeyKms {
@@ -120,6 +141,42 @@ impl KmsConfig {
             vendor: self.vendor,
             ..MasterKeyKms::default()
         }
+    }
+
+    pub fn from_proto(proto: &MasterKeyKms) -> Self {
+        let mut config = KmsConfig {
+            key_id: proto.key_id.clone(),
+            region: proto.region.clone(),
+            endpoint: proto.endpoint.clone(),
+            vendor: proto.vendor.clone(),
+            azure: None,
+            gcp: None,
+        };
+        if proto.has_azure_kms() {
+            let azure_config_proto = proto.azure_kms.as_ref().unwrap();
+            let azure_config = AzureConfig {
+                tenant_id: azure_config_proto.tenant_id.clone(),
+                client_id: azure_config_proto.client_id.clone(),
+                keyvault_url: azure_config_proto.key_vault_url.clone(),
+                hsm_name: azure_config_proto.hsm_name.clone(),
+                hsm_url: azure_config_proto.hsm_url.clone(),
+                client_certificate: string_to_option(azure_config_proto.client_certificate.clone()),
+                client_certificate_path: string_to_option(
+                    azure_config_proto.client_certificate_path.clone(),
+                ),
+                client_certificate_password: azure_config_proto.client_certificate_password.clone(),
+                client_secret: string_to_option(azure_config_proto.client_secret.clone()),
+            };
+            config.azure = Some(azure_config);
+        }
+        if proto.has_gcp_kms() {
+            let gcp_config_proto = proto.gcp_kms.as_ref().unwrap();
+            let gcp_config = GcpConfig {
+                credential_file_path: string_to_option(gcp_config_proto.credential.clone()),
+            };
+            config.gcp = Some(gcp_config);
+        }
+        config
     }
 
     pub fn convert_to_azure_kms_config(self) -> (MasterKeyKms, SubConfigAzure) {
@@ -162,7 +219,15 @@ impl KmsConfig {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+fn string_to_option(string: String) -> Option<String> {
+    if string.is_empty() {
+        None
+    } else {
+        Some(string)
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "kebab-case", tag = "type")]
 #[derive(Default)]
 pub enum MasterKeyConfig {
@@ -184,6 +249,26 @@ pub enum MasterKeyConfig {
         #[serde(flatten)]
         config: KmsConfig,
     },
+}
+
+impl MasterKeyConfig {
+    pub fn from_proto(proto: &MasterKey) -> Option<Self> {
+        if let Some(backend) = &proto.backend {
+            match backend {
+                MasterKey_oneof_backend::Plaintext(_) => Some(MasterKeyConfig::Plaintext),
+                MasterKey_oneof_backend::File(key_file) => Some(MasterKeyConfig::File {
+                    config: FileConfig {
+                        path: key_file.path.clone(),
+                    },
+                }),
+                MasterKey_oneof_backend::Kms(kms) => Some(MasterKeyConfig::Kms {
+                    config: KmsConfig::from_proto(kms),
+                }),
+            }
+        } else {
+            None
+        }
+    }
 }
 
 mod encryption_method_serde {

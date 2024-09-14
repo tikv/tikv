@@ -1,9 +1,13 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use kvproto::encryptionpb::EncryptedContent;
-use tikv_util::box_err;
+use std::sync::Arc;
 
-use crate::{Error, Result};
+use async_trait::async_trait;
+use kvproto::encryptionpb::{EncryptedContent, EncryptionMethod, MasterKey};
+use tikv_util::{box_err, error};
+use tokio::sync::RwLock;
+
+use crate::{manager::generate_data_key, Error, MasterKeyConfig, Result};
 
 /// Provide API to encrypt/decrypt key dictionary content.
 ///
@@ -16,6 +20,12 @@ pub trait Backend: Sync + Send + std::fmt::Debug + 'static {
 
     /// Tests whether this backend is secure.
     fn is_secure(&self) -> bool;
+}
+
+#[async_trait]
+pub trait AsyncBackend: Sync + Send + std::fmt::Debug + 'static {
+    async fn encrypt_async(&self, plaintext: &[u8]) -> Result<EncryptedContent>;
+    async fn decrypt_async(&self, ciphertext: &EncryptedContent) -> Result<Vec<u8>>;
 }
 
 mod mem;
@@ -68,6 +78,167 @@ impl Backend for PlaintextBackend {
         // plain text backend is insecure.
         false
     }
+}
+
+#[async_trait]
+impl AsyncBackend for PlaintextBackend {
+    async fn encrypt_async(&self, plaintext: &[u8]) -> Result<EncryptedContent> {
+        self.encrypt(plaintext)
+    }
+
+    async fn decrypt_async(&self, ciphertext: &EncryptedContent) -> Result<Vec<u8>> {
+        self.decrypt(ciphertext)
+    }
+}
+
+/// Mainly used for restore where multiple master keys could be provided.
+#[derive(Default, Debug, Clone)]
+pub struct MultiMasterKeyBackend {
+    inner: Arc<RwLock<MultiMasterKeyBackendInner>>,
+}
+
+#[derive(Default, Debug)]
+struct MultiMasterKeyBackendInner {
+    backends: Option<Vec<Box<dyn AsyncBackend>>>,
+    configs: Option<Vec<MasterKeyConfig>>,
+}
+impl MultiMasterKeyBackend {
+    pub fn new() -> Self {
+        MultiMasterKeyBackend {
+            inner: Arc::new(RwLock::new(MultiMasterKeyBackendInner {
+                backends: None,
+                configs: None,
+            })),
+        }
+    }
+
+    pub async fn update_from_proto_if_needed<F>(
+        &self,
+        master_keys_proto: Vec<MasterKey>,
+        create_backend_fn: F,
+    ) -> Result<()>
+    where
+        F: Fn(&MasterKeyConfig) -> Result<Box<dyn AsyncBackend>>,
+    {
+        if master_keys_proto.is_empty() {
+            return Ok(());
+        }
+        let mut master_keys_config = Vec::new();
+        for proto in master_keys_proto {
+            let opt_master_key_config = MasterKeyConfig::from_proto(&proto);
+            // sanity check
+            if opt_master_key_config.is_none() {
+                return Err(log_and_error(
+                    "internal error: master key config should not be empty",
+                ));
+            }
+            master_keys_config.push(opt_master_key_config.unwrap());
+        }
+
+        self.update_from_config_if_needed(master_keys_config, create_backend_fn)
+            .await
+    }
+
+    pub async fn update_from_config_if_needed<F>(
+        &self,
+        master_keys_configs: Vec<MasterKeyConfig>,
+        create_backend_fn: F,
+    ) -> Result<()>
+    where
+        F: Fn(&MasterKeyConfig) -> Result<Box<dyn AsyncBackend>>,
+    {
+        if master_keys_configs.is_empty() {
+            return Ok(());
+        }
+
+        let mut write_guard = self.inner.write().await;
+        if write_guard.configs.is_none() {
+            write_guard.backends = Some(create_master_key_backends(
+                &master_keys_configs,
+                create_backend_fn,
+            )?);
+            write_guard.configs = Some(master_keys_configs);
+        } else if let Some(cached_configs) = write_guard.configs.as_ref() {
+            if master_keys_configs != *cached_configs {
+                write_guard.backends = Some(create_master_key_backends(
+                    &master_keys_configs,
+                    create_backend_fn,
+                )?);
+                write_guard.configs = Some(master_keys_configs);
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn encrypt(&self, plaintext: &[u8]) -> Result<EncryptedContent> {
+        let read_guard = self.inner.read().await;
+        if read_guard.backends.is_none() {
+            return Err(log_and_error(
+                "internal error: multi master key backend not initialized when encrypting",
+            ));
+        }
+        let mut errors = Vec::new();
+
+        for master_key_backend in read_guard.backends.as_ref().unwrap() {
+            match master_key_backend.encrypt_async(plaintext).await {
+                Ok(res) => return Ok(res),
+                Err(e) => errors.push(format!("Backend failed to encrypt with error: {}", e)),
+            }
+        }
+
+        let combined_error = format!("failed to encrypt content: {}", errors.join("; "));
+        Err(log_and_error(&combined_error))
+    }
+    pub async fn decrypt(&self, ciphertext: &EncryptedContent) -> Result<Vec<u8>> {
+        let read_guard = self.inner.read().await;
+        if read_guard.backends.is_none() {
+            return Err(log_and_error(
+                "internal error: multi master key backend not initialized when decrypting",
+            ));
+        }
+        let mut errors = Vec::new();
+
+        for master_key_backend in read_guard.backends.as_ref().unwrap() {
+            match master_key_backend.decrypt_async(ciphertext).await {
+                Ok(res) => return Ok(res),
+                Err(e) => errors.push(format!("Backend failed to decrypt with error: {}", e)),
+            }
+        }
+
+        let combined_error = format!("failed to decrypt content: {}", errors.join("; "));
+        Err(log_and_error(&combined_error))
+    }
+
+    pub fn generate_data_key(&self, method: EncryptionMethod) -> Result<Vec<u8>> {
+        let (_id, key) = generate_data_key(method)?;
+        Ok(key)
+    }
+
+    pub async fn is_initialized(&self) -> bool {
+        let read_guard = self.inner.read().await;
+        // configs and backends are updated together, should always be both empty or not
+        // empty.
+        read_guard.configs.is_some() && read_guard.backends.is_some()
+    }
+}
+
+fn create_master_key_backends<F>(
+    master_keys_config: &Vec<MasterKeyConfig>,
+    create_backend_fn: F,
+) -> Result<Vec<Box<dyn AsyncBackend>>>
+where
+    F: Fn(&MasterKeyConfig) -> Result<Box<dyn AsyncBackend>>,
+{
+    let mut backends = Vec::new();
+    for master_key_config in master_keys_config {
+        backends.push(create_backend_fn(master_key_config)?);
+    }
+    Ok(backends)
+}
+
+fn log_and_error(err_msg: &str) -> Error {
+    error!("{}", err_msg);
+    Error::Other(box_err!(err_msg))
 }
 
 #[cfg(test)]

@@ -28,7 +28,7 @@ use std::{
     task::{ready, Context, Poll},
 };
 
-use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter, Iv};
+use encryption::{BackupEncryptionManager, DecrypterReader, EncrypterWriter, Iv};
 use futures::{AsyncWriteExt, TryFutureExt};
 use kvproto::{brpb::CompressionType, encryptionpb::EncryptionMethod};
 use tikv_util::warn;
@@ -64,9 +64,6 @@ pub struct Config {
     /// those content would be kept in memory before they reach a threshold.
     /// This would help us to reduce the I/O system calls.
     pub write_buffer_size: usize,
-    /// The encryption applied to swapped out files.
-    /// The in-memory content will be plaintext always.
-    pub encryption: Option<Arc<DataKeyManager>>,
 }
 
 impl std::fmt::Debug for Config {
@@ -80,10 +77,6 @@ impl std::fmt::Debug for Config {
                 &self.minimal_swap_out_file_size,
             )
             .field("write_buffer_size", &self.write_buffer_size)
-            .field(
-                "encryption",
-                &self.encryption.as_ref().map(|enc| enc.encryption_method()),
-            )
             .finish()
     }
 }
@@ -98,6 +91,7 @@ pub struct TempFilePool {
     cfg: Config,
     current: AtomicUsize,
     files: BlockMutex<FileSet>,
+    backup_encryption_manager: BackupEncryptionManager,
 
     #[cfg(test)]
     override_swapout: Option<
@@ -201,13 +195,12 @@ struct FileSet {
 }
 
 impl TempFilePool {
-    pub fn new(cfg: Config) -> Result<Self> {
+    pub fn new(cfg: Config, backup_encryption_manager: BackupEncryptionManager) -> Result<Self> {
         if let Ok(true) = std::fs::metadata(&cfg.swap_files).map(|x| x.is_dir()) {
             warn!("find content in the swap file directory node. truncating them."; "dir" => %cfg.swap_files.display());
-            if let Some(enc) = &cfg.encryption {
+            if let Some(enc) = backup_encryption_manager.opt_data_key_manager() {
                 enc.remove_dir(&cfg.swap_files, None)?;
             }
-            std::fs::remove_dir_all(&cfg.swap_files)?;
         }
         std::fs::create_dir_all(&cfg.swap_files)?;
 
@@ -215,6 +208,7 @@ impl TempFilePool {
             cfg,
             current: AtomicUsize::new(0usize),
             files: BlockMutex::default(),
+            backup_encryption_manager,
 
             #[cfg(test)]
             override_swapout: None,
@@ -266,9 +260,9 @@ impl TempFilePool {
     /// Please notice that once a compression applied, this would yield the
     /// compressed content (won't decompress them.) -- that is what "raw"
     /// implies.
-    /// "But why there isn't a `open_for_read` which decompresses the content?"
-    /// "Because in our use case, we only need the raw content -- we just send
-    /// it to external storage."
+    /// "But why there isn't an `open_for_read,` which decompresses the
+    /// content?" "Because in our use case, we only need the raw content --
+    /// we just send it to external storage."
     pub fn open_raw_for_read(&self, p: &Path) -> Result<ForRead> {
         use std::io::{Error as IoErr, ErrorKind};
 
@@ -314,7 +308,7 @@ impl TempFilePool {
     }
 
     /// Remove a file from the pool.
-    /// If there are still some reference to the file, the deletion may be
+    /// If there is still some reference to the file, the deletion may be
     /// delayed until all reference to the file drop.
     pub fn remove(&self, p: &Path) -> bool {
         let mut files = self.files.lock().unwrap();
@@ -335,7 +329,7 @@ impl TempFilePool {
     }
 
     /// Create a file for writing.
-    /// This function is synchronous so we can call it easier in the polling
+    /// This function is synchronous, so we can call it easier in the polling
     /// context. (Anyway, it is really hard to call an async function in the
     /// polling context.)
     fn create_relative(&self, p: &Path) -> std::io::Result<SwappedOut> {
@@ -346,7 +340,8 @@ impl TempFilePool {
             None => {}
         }
         let file = OsFile::from_std(SyncOsFile::create(&abs_path)?);
-        let pfile = match &self.cfg.encryption {
+
+        let pfile = match &self.backup_encryption_manager.opt_data_key_manager() {
             Some(enc) => SwappedOut::Encrypted(
                 enc.open_file_with_writer(&abs_path, file.compat(), true)
                     .map_err(Self::convert_encrypt_error_to_io)?
@@ -365,7 +360,7 @@ impl TempFilePool {
         let abs_path = self.cfg.swap_files.join(p);
         let file = SyncOsFile::open(&abs_path)?;
         let async_file = OsFile::from_std(file).compat();
-        let decrypted_file = match &self.cfg.encryption {
+        let decrypted_file = match &self.backup_encryption_manager.opt_data_key_manager() {
             Some(enc) => enc
                 .open_file_with_reader(&abs_path, async_file)
                 .map_err(Self::convert_encrypt_error_to_io)?
@@ -379,7 +374,7 @@ impl TempFilePool {
 
     fn delete_relative(&self, p: &Path) -> std::io::Result<()> {
         let abs_path = self.cfg.swap_files.join(p);
-        if let Some(enc) = &self.cfg.encryption {
+        if let Some(enc) = &self.backup_encryption_manager.opt_data_key_manager() {
             enc.delete_file(&abs_path.to_string_lossy(), None)?;
         }
         std::fs::remove_file(&abs_path)?;
@@ -791,7 +786,7 @@ mod test {
     };
 
     use async_compression::tokio::bufread::ZstdDecoder;
-    use encryption::DataKeyManager;
+    use encryption::{BackupEncryptionManager, DataKeyManager};
     use kvproto::{brpb::CompressionType, encryptionpb::EncryptionMethod};
     use tempfile::{tempdir, TempDir};
     use test_util::new_test_key_manager;
@@ -831,12 +826,11 @@ mod test {
             content_compression: CompressionType::Unknown,
             minimal_swap_out_file_size: 8192,
             write_buffer_size: 4096,
-            encryption: None,
         };
         m(&mut cfg);
         TestPool {
             tmpdir: Arc::new(tmp),
-            pool: Arc::new(TempFilePool::new(cfg).unwrap()),
+            pool: Arc::new(TempFilePool::new(cfg, BackupEncryptionManager::default()).unwrap()),
         }
     }
 
@@ -1123,7 +1117,6 @@ mod test {
     fn test_encryption(enc: DataKeyManager) {
         let method = enc.encryption_method();
         let pool = test_pool_with_modify(|cfg| {
-            cfg.encryption = Some(Arc::new(enc));
             cfg.minimal_swap_out_file_size = 15;
             cfg.write_buffer_size = 15;
             cfg.cache_size = AtomicUsize::new(15);

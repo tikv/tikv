@@ -27,5 +27,8 @@ slog-global = { workspace = true }
 tikv_util = { workspace = true }
 
 [dev-dependencies]
+hex = "0.3.2"
+rand = "0.8.0"
 rust-ini = "0.14.0"
 structopt = "0.3"
+tempfile = "3.1"

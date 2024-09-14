@@ -23,7 +23,7 @@ use std::{
 use api_version::ApiV1Ttl;
 use causal_ts::Config as CausalTsConfig;
 pub use configurable::{loop_registry, ConfigRes, ConfigurableDb};
-use encryption_export::DataKeyManager;
+use encryption_export::{BackupEncryptionConfig, DataKeyManager};
 use engine_rocks::{
     config::{self as rocks_config, BlobRunMode, CompressionType, LogLevel as RocksLogLevel},
     get_env,
@@ -3516,9 +3516,13 @@ pub struct TikvConfig {
     pub backup: BackupConfig,
 
     #[online_config(submodule)]
-    // The term "log backup" and "backup stream" are identity.
-    // The "log backup" should be the only product name exposed to the user.
+    // The term "log backup" and "backup stream" are identical.
+    // The "log backup" is the product name exposed to the user.
     pub log_backup: BackupStreamConfig,
+
+    // common backup encryption config shared by both snapshot backup and log backup.
+    #[online_config(submodule)]
+    pub backup_encryption_config: BackupEncryptionConfig,
 
     #[online_config(submodule)]
     pub pessimistic_txn: PessimisticTxnConfig,
@@ -3592,6 +3596,7 @@ impl Default for TikvConfig {
             causal_ts: CausalTsConfig::default(),
             resource_control: ResourceControlConfig::default(),
             range_cache_engine: RangeCacheEngineConfig::default(),
+            backup_encryption_config: BackupEncryptionConfig::default(),
         }
     }
 }

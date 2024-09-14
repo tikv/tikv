@@ -5,9 +5,9 @@ use aws::{AwsKms, STORAGE_VENDOR_NAME_AWS};
 use azure::{AzureKms, STORAGE_VENDOR_NAME_AZURE};
 use cloud::kms::Config as CloudConfig;
 pub use encryption::{
-    clean_up_dir, clean_up_trash, trash_dir_all, AzureConfig, Backend, DataKeyImporter,
-    DataKeyManager, DataKeyManagerArgs, DecrypterReader, EncryptionConfig, Error, FileConfig, Iv,
-    KmsBackend, KmsConfig, MasterKeyConfig, Result,
+    clean_up_dir, clean_up_trash, trash_dir_all, AsyncBackend, AzureConfig, Backend,
+    BackupEncryptionConfig, DataKeyImporter, DataKeyManager, DataKeyManagerArgs, DecrypterReader,
+    EncryptionConfig, Error, FileConfig, Iv, KmsBackend, KmsConfig, MasterKeyConfig, Result,
 };
 use encryption::{cloud_convert_error, FileBackend, PlaintextBackend};
 use gcp::{GcpKms, STORAGE_VENDOR_NAME_GCP};
@@ -27,6 +27,15 @@ pub fn data_key_manager_from_config(
     DataKeyManager::new(master_key, previous_master_key, args)
 }
 
+pub fn create_async_backend(config: &MasterKeyConfig) -> Result<Box<dyn AsyncBackend>> {
+    let result = create_async_backend_inner(config);
+    if let Err(e) = result {
+        error!("failed to access master key, {}", e);
+        return Err(e);
+    };
+    result
+}
+
 pub fn create_backend(config: &MasterKeyConfig) -> Result<Box<dyn Backend>> {
     let result = create_backend_inner(config);
     if let Err(e) = result {
@@ -36,8 +45,8 @@ pub fn create_backend(config: &MasterKeyConfig) -> Result<Box<dyn Backend>> {
     result
 }
 
-pub fn create_cloud_backend(config: &KmsConfig) -> Result<Box<dyn Backend>> {
-    info!("Encryption init aws backend";
+pub fn create_cloud_backend(config: &KmsConfig) -> Result<Box<KmsBackend>> {
+    info!("Encryption init KMS backend";
         "region" => &config.region,
         "endpoint" => &config.endpoint,
         "key_id" => &config.key_id,
@@ -49,7 +58,7 @@ pub fn create_cloud_backend(config: &KmsConfig) -> Result<Box<dyn Backend>> {
                 .map_err(cloud_convert_error("aws from proto".to_owned()))?;
             let kms_provider =
                 Box::new(AwsKms::new(conf).map_err(cloud_convert_error("new AWS KMS".to_owned()))?);
-            Ok(Box::new(KmsBackend::new(kms_provider)?) as Box<dyn Backend>)
+            Ok(Box::new(KmsBackend::new(kms_provider)?))
         }
         STORAGE_VENDOR_NAME_AZURE => {
             if config.azure.is_none() {
@@ -83,7 +92,17 @@ fn create_backend_inner(config: &MasterKeyConfig) -> Result<Box<dyn Backend>> {
         MasterKeyConfig::File { config } => {
             Box::new(FileBackend::new(Path::new(&config.path))?) as _
         }
-        MasterKeyConfig::Kms { config } => return create_cloud_backend(config),
+        MasterKeyConfig::Kms { config } => create_cloud_backend(config)? as Box<dyn Backend>,
+    })
+}
+
+fn create_async_backend_inner(config: &MasterKeyConfig) -> Result<Box<dyn AsyncBackend>> {
+    Ok(match config {
+        MasterKeyConfig::Plaintext => Box::new(PlaintextBackend {}) as _,
+        MasterKeyConfig::File { config } => {
+            Box::new(FileBackend::new(Path::new(&config.path))?) as _
+        }
+        MasterKeyConfig::Kms { config } => create_cloud_backend(config)? as Box<dyn AsyncBackend>,
     })
 }
 

@@ -20,6 +20,7 @@ cloud = { workspace = true }
 crc32fast = "1.2"
 crossbeam = { workspace = true }
 crypto = { workspace = true }
+dashmap = "5.2.0"
 derive_more = "0.99.3"
 error_code = { workspace = true }
 fail = "0.5"
@@ -33,6 +34,7 @@ online_config = { workspace = true }
 openssl = { workspace = true }
 prometheus = { version = "0.13", features = ["nightly"] }
 protobuf = { version = "2.8", features = ["bytes"] }
+rand = "0.8.0"
 # For simplicity and compliance with FIPS 140 requirements for random number
 # generation, do not use the 'rand' crate in encryption-related code.
 # rand = "*"
@@ -41,6 +43,7 @@ serde_derive = "1.0"
 slog = { workspace = true }
 # better to not use slog-global, but pass in the logger
 slog-global = { workspace = true }
+tempfile = "3.1"
 thiserror = "1.0"
 tikv_alloc = { workspace = true }
 tikv_util = { workspace = true }

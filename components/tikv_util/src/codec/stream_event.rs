@@ -140,7 +140,7 @@ impl EventEncoder {
     }
 
     #[allow(dead_code)]
-    fn decode_event(e: &[u8]) -> (Vec<u8>, Vec<u8>) {
+    pub fn decode_event(e: &[u8]) -> (Vec<u8>, Vec<u8>) {
         let mut buf = Cursor::new(Bytes::from(e.to_vec()));
         let len = buf.get_u32_le() as usize;
         let mut key = vec![0; len];
