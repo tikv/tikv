@@ -172,7 +172,8 @@ impl KmsBackend {
     // KmsProvider::decrypt_data_key() function.
     #[cfg(any(test, feature = "testexport"))]
     pub fn clear_state(&mut self) {
-        let mut opt_state = self.state.lock().unwrap();
+        let runtime = self.runtime.lock().unwrap();
+        let mut opt_state = runtime.block_on(self.state.lock());
         *opt_state = None;
     }
 }
