@@ -256,6 +256,8 @@ fn test_sync_max_ts_after_leader_transfer() {
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_propose_in_memory_pessimistic_locks() {
+    let peer_size_limit = 512 << 10;
+    let global_size_limit = 100 << 20;
     let mut cluster = new_cluster(0, 3);
     cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
     cluster.run();
@@ -279,7 +281,11 @@ fn test_propose_in_memory_pessimistic_locks() {
         let mut pessimistic_locks = txn_ext.pessimistic_locks.write();
         assert!(pessimistic_locks.is_writable());
         pessimistic_locks
-            .insert(vec![(Key::from_raw(b"key"), lock.clone())])
+            .insert(
+                vec![(Key::from_raw(b"key"), lock.clone())],
+                peer_size_limit,
+                global_size_limit,
+            )
             .unwrap();
     }
 
@@ -298,6 +304,8 @@ fn test_propose_in_memory_pessimistic_locks() {
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_memory_pessimistic_locks_status_after_transfer_leader_failure() {
+    let peer_size_limit = 512 << 10;
+    let global_size_limit = 100 << 20;
     let mut cluster = new_cluster(0, 3);
     cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
     cluster.cfg.raft_store.reactive_memory_lock_tick_interval = ReadableDuration::millis(200);
@@ -321,7 +329,11 @@ fn test_memory_pessimistic_locks_status_after_transfer_leader_failure() {
     txn_ext
         .pessimistic_locks
         .write()
-        .insert(vec![(Key::from_raw(b"key"), lock)])
+        .insert(
+            vec![(Key::from_raw(b"key"), lock)],
+            peer_size_limit,
+            global_size_limit,
+        )
         .unwrap();
 
     // Make it fail to transfer leader

@@ -812,6 +812,8 @@ fn test_node_catch_up_logs() {
 
 #[test]
 fn test_leader_drop_with_pessimistic_lock() {
+    let peer_size_limit = 512 << 10;
+    let global_size_limit = 100 << 20;
     let mut cluster = new_server_cluster(0, 3);
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(1, 1));
@@ -825,18 +827,22 @@ fn test_leader_drop_with_pessimistic_lock() {
     txn_ext
         .pessimistic_locks
         .write()
-        .insert(vec![(
-            Key::from_raw(b"k1"),
-            PessimisticLock {
-                primary: b"k1".to_vec().into_boxed_slice(),
-                start_ts: 10.into(),
-                ttl: 1000,
-                for_update_ts: 10.into(),
-                min_commit_ts: 10.into(),
-                last_change: LastChange::make_exist(5.into(), 3),
-                is_locked_with_conflict: false,
-            },
-        )])
+        .insert(
+            vec![(
+                Key::from_raw(b"k1"),
+                PessimisticLock {
+                    primary: b"k1".to_vec().into_boxed_slice(),
+                    start_ts: 10.into(),
+                    ttl: 1000,
+                    for_update_ts: 10.into(),
+                    min_commit_ts: 10.into(),
+                    last_change: LastChange::make_exist(5.into(), 3),
+                    is_locked_with_conflict: false,
+                },
+            )],
+            peer_size_limit,
+            global_size_limit,
+        )
         .unwrap();
 
     // Isolate node 1, leader should be transferred to another node.

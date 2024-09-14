@@ -860,6 +860,8 @@ fn test_serde_custom_tikv_config() {
         wake_up_delay_duration: ReadableDuration::millis(100),
         pipelined: false,
         in_memory: false,
+        in_memory_peer_size_limit: ReadableSize::kb(512),
+        in_memory_global_size_limit: ReadableSize::mb(100),
     };
     value.cdc = CdcConfig {
         min_ts_interval: ReadableDuration::secs(4),

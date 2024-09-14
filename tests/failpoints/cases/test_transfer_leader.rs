@@ -119,18 +119,22 @@ macro_rules! test_delete_lock_proposed_after_proposing_locks_impl {
         txn_ext
             .pessimistic_locks
             .write()
-            .insert(vec![(
-                Key::from_raw(b"key"),
-                PessimisticLock {
-                    primary: b"key".to_vec().into_boxed_slice(),
-                    start_ts: 10.into(),
-                    ttl: 1000,
-                    for_update_ts: 10.into(),
-                    min_commit_ts: 20.into(),
-                    last_change: LastChange::make_exist(5.into(), 3),
-                    is_locked_with_conflict: false,
-                },
-            )])
+            .insert(
+                vec![(
+                    Key::from_raw(b"key"),
+                    PessimisticLock {
+                        primary: b"key".to_vec().into_boxed_slice(),
+                        start_ts: 10.into(),
+                        ttl: 1000,
+                        for_update_ts: 10.into(),
+                        min_commit_ts: 20.into(),
+                        last_change: LastChange::make_exist(5.into(), 3),
+                        is_locked_with_conflict: false,
+                    },
+                )],
+                512 << 10,
+                100 << 20,
+            )
             .unwrap();
 
         let addr = $cluster.sim.rl().get_addr(1);
@@ -202,6 +206,8 @@ fn test_delete_lock_proposed_after_proposing_locks_2() {
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_delete_lock_proposed_before_proposing_locks() {
+    let peer_size_limit = 512 << 10;
+    let global_size_limit = 100 << 20;
     let mut cluster = new_cluster(0, 3);
     cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
     cluster.run();
@@ -215,18 +221,22 @@ fn test_delete_lock_proposed_before_proposing_locks() {
     txn_ext
         .pessimistic_locks
         .write()
-        .insert(vec![(
-            Key::from_raw(b"key"),
-            PessimisticLock {
-                primary: b"key".to_vec().into_boxed_slice(),
-                start_ts: 10.into(),
-                ttl: 1000,
-                for_update_ts: 10.into(),
-                min_commit_ts: 20.into(),
-                last_change: LastChange::make_exist(5.into(), 3),
-                is_locked_with_conflict: false,
-            },
-        )])
+        .insert(
+            vec![(
+                Key::from_raw(b"key"),
+                PessimisticLock {
+                    primary: b"key".to_vec().into_boxed_slice(),
+                    start_ts: 10.into(),
+                    ttl: 1000,
+                    for_update_ts: 10.into(),
+                    min_commit_ts: 20.into(),
+                    last_change: LastChange::make_exist(5.into(), 3),
+                    is_locked_with_conflict: false,
+                },
+            )],
+            peer_size_limit,
+            global_size_limit,
+        )
         .unwrap();
 
     let addr = cluster.sim.rl().get_addr(1);
@@ -280,6 +290,8 @@ fn test_delete_lock_proposed_before_proposing_locks() {
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_read_lock_after_become_follower() {
+    let peer_size_limit = 512 << 10;
+    let global_size_limit = 100 << 20;
     let mut cluster = new_cluster(0, 3);
     cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
     cluster.run();
@@ -300,18 +312,22 @@ fn test_read_lock_after_become_follower() {
     txn_ext
         .pessimistic_locks
         .write()
-        .insert(vec![(
-            Key::from_raw(b"key"),
-            PessimisticLock {
-                primary: b"key".to_vec().into_boxed_slice(),
-                start_ts,
-                ttl: 1000,
-                for_update_ts,
-                min_commit_ts: for_update_ts,
-                last_change: LastChange::make_exist(start_ts.prev(), 1),
-                is_locked_with_conflict: false,
-            },
-        )])
+        .insert(
+            vec![(
+                Key::from_raw(b"key"),
+                PessimisticLock {
+                    primary: b"key".to_vec().into_boxed_slice(),
+                    start_ts,
+                    ttl: 1000,
+                    for_update_ts,
+                    min_commit_ts: for_update_ts,
+                    last_change: LastChange::make_exist(start_ts.prev(), 1),
+                    is_locked_with_conflict: false,
+                },
+            )],
+            peer_size_limit,
+            global_size_limit,
+        )
         .unwrap();
 
     let addr = cluster.sim.rl().get_addr(3);

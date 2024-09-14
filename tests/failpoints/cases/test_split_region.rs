@@ -1161,6 +1161,8 @@ fn test_split_with_concurrent_pessimistic_locking() {
 
 #[test]
 fn test_split_pessimistic_locks_with_concurrent_prewrite() {
+    let peer_size_limit = 512 << 10;
+    let global_size_limit = 100 << 20;
     let mut cluster = new_server_cluster(0, 2);
     cluster.cfg.pessimistic_txn.pipelined = true;
     cluster.cfg.pessimistic_txn.in_memory = true;
@@ -1216,10 +1218,11 @@ fn test_split_pessimistic_locks_with_concurrent_prewrite() {
     {
         let mut locks = txn_ext.pessimistic_locks.write();
         locks
-            .insert(vec![
-                (Key::from_raw(b"a"), lock_a),
-                (Key::from_raw(b"c"), lock_c),
-            ])
+            .insert(
+                vec![(Key::from_raw(b"a"), lock_a), (Key::from_raw(b"c"), lock_c)],
+                peer_size_limit,
+                global_size_limit,
+            )
             .unwrap();
     }
 
