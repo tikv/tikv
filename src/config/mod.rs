@@ -59,7 +59,7 @@ use raftstore::{
     store::{CompactionGuardGeneratorFactory, Config as RaftstoreConfig, SplitConfig},
 };
 use range_cache_memory_engine::RangeCacheEngineConfig;
-use resource_control::Config as ResourceControlConfig;
+use resource_control::config::Config as ResourceControlConfig;
 use resource_metering::Config as ResourceMeteringConfig;
 use security::SecurityConfig;
 use serde::{
@@ -4754,6 +4754,7 @@ pub enum Module {
     Cdc,
     ResolvedTs,
     ResourceMetering,
+    ResourceControl,
     BackupStream,
     Quota,
     Log,
@@ -4785,6 +4786,7 @@ impl From<&str> for Module {
             "cdc" => Module::Cdc,
             "resolved_ts" => Module::ResolvedTs,
             "resource_metering" => Module::ResourceMetering,
+            "resource_control" => Module::ResourceControl,
             "quota" => Module::Quota,
             "log" => Module::Log,
             "memory" => Module::Memory,
