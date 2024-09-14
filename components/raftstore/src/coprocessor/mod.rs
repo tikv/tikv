@@ -10,15 +10,10 @@ use std::{
 };
 
 use engine_traits::{CfName, SstMetaInfo};
-use kvproto::{
-    metapb::Region,
-    pdpb::CheckPolicy,
-    raft_cmdpb::{
-        AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request,
-        TransferLeaderRequest,
-    },
-    raft_serverpb::RaftApplyState,
-};
+use kvproto::{metapb, metapb::Region, pdpb::CheckPolicy, raft_cmdpb::{
+    AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request,
+    TransferLeaderRequest,
+}, raft_serverpb::{ExtraMessage, RaftApplyState}};
 use pd_client::RegionStat;
 use raft::{eraftpb, StateRole};
 
@@ -31,6 +26,7 @@ pub mod region_info_accessor;
 mod split_check;
 pub mod split_observer;
 use kvproto::raft_serverpb::RaftMessage;
+mod read_write;
 
 pub use self::{
     config::{Config, ConsistencyCheckMethod},
@@ -42,6 +38,10 @@ pub use self::{
         StoreHandle,
     },
     error::{Error, Result},
+    read_write::{
+        ObservableWriteBatch, ObservedSnapshot, SnapshotObserver, WriteBatchObserver,
+        WriteBatchWrapper,
+    },
     region_info_accessor::{
         Callback as RegionInfoCallback, RangeKey, RegionCollector, RegionInfo, RegionInfoAccessor,
         RegionInfoProvider, SeekRegionCallback,
@@ -140,8 +140,8 @@ pub trait AdminObserver: Coprocessor {
         &self,
         _ctx: &mut ObserverContext<'_>,
         _tr: &TransferLeaderRequest,
-    ) -> Result<()> {
-        Ok(())
+    ) -> Result<Option<ExtraMessage>> {
+        Ok(None)
     }
 }
 

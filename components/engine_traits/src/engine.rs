@@ -33,7 +33,6 @@ pub trait KvEngine:
     + Debug
     + Unpin
     + Checkpointable
-    + RangeCacheEngineExt
     + 'static
 {
     /// A consistent read-only snapshot of the database
@@ -85,17 +84,13 @@ pub trait KvEngine:
 
 #[derive(Debug, Clone)]
 pub struct SnapshotContext {
-    pub range: Option<CacheRange>,
-    pub region_id: u64,
-    // the version of region epoch.
-    pub epoch_version: u64,
-
+    pub region: Option<CacheRegion>,
     pub read_ts: u64,
 }
 
 impl SnapshotContext {
-    pub fn set_range(&mut self, range: CacheRange) {
-        assert!(self.range.is_none());
-        self.range = Some(range);
+    pub fn set_region(&mut self, region: CacheRegion) {
+        assert!(self.region.is_none());
+        self.region = Some(region);
     }
 }

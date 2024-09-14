@@ -9,10 +9,6 @@ where
     EK: KvEngine,
     EC: RangeCacheEngine,
 {
-    fn range_cache_engine_enabled(&self) -> bool {
-        true
-    }
-
     #[inline]
     fn on_region_event(&self, event: RegionEvent) {
         self.range_cache_engine().on_region_event(event);

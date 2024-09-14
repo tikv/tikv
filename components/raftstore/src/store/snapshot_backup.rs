@@ -10,14 +10,19 @@ use std::{
 
 use engine_traits::{KvEngine, RaftEngine};
 use futures::channel::mpsc::UnboundedSender;
-use kvproto::{brpb::CheckAdminResponse, metapb::RegionEpoch, raft_cmdpb::AdminCmdType};
+use kvproto::{
+    brpb::CheckAdminResponse,
+    metapb::{Peer, RegionEpoch},
+    raft_cmdpb::{AdminCmdType, TransferLeaderRequest},
+    raft_serverpb::ExtraMessage,
+};
 use tikv_util::{info, warn};
 use tokio::sync::oneshot;
 
 use super::{metrics, PeerMsg, RaftRouter, SignificantMsg, SignificantRouter};
 use crate::coprocessor::{
     AdminObserver, BoxAdminObserver, BoxQueryObserver, Coprocessor, CoprocessorHost,
-    Error as CopError, QueryObserver,
+    Error as CopError, ObserverContext, QueryObserver,
 };
 
 fn epoch_second_coarse() -> u64 {
@@ -261,11 +266,11 @@ impl AdminObserver for Arc<PrepareDiskSnapObserver> {
 
     fn pre_transfer_leader(
         &self,
-        _ctx: &mut crate::coprocessor::ObserverContext<'_>,
-        _tr: &kvproto::raft_cmdpb::TransferLeaderRequest,
-    ) -> crate::coprocessor::Result<()> {
+        _ctx: &mut ObserverContext<'_>,
+        _tr: &TransferLeaderRequest,
+    ) -> crate::coprocessor::Result<Option<ExtraMessage>> {
         if self.allowed() {
-            return Ok(());
+            return Ok(None);
         }
         metrics::SNAP_BR_SUSPEND_COMMAND_TYPE
             .with_label_values(&["TransferLeader"])

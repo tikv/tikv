@@ -19,7 +19,7 @@ use bytes::Bytes;
 use collections::{HashMap, HashSet};
 use crossbeam::{atomic::AtomicCell, channel::TrySendError};
 use engine_traits::{
-    CacheRange, Engines, KvEngine, PerfContext, RaftEngine, Snapshot, SnapshotContext, WriteBatch,
+    CacheRegion, Engines, KvEngine, PerfContext, RaftEngine, Snapshot, SnapshotContext, WriteBatch,
     WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use error_code::ErrorCodeExt;
@@ -3898,6 +3898,7 @@ where
     fn pre_transfer_leader<T: Transport>(
         &mut self,
         peer: &metapb::Peer,
+        extra_msgs: Vec<ExtraMessage>,
         ctx: &mut PollContext<EK, ER, T>,
     ) -> bool {
         // Checks if safe to transfer leader.
@@ -3926,7 +3927,7 @@ where
         msg.set_log_term(self.term());
         self.raft_group.raft.msgs.push(msg);
 
-        if ctx.engines.kv.region_cached(&self.region()) {
+        extra_msgs.into_iter().for_each(|m| {
             let mut msg = RaftMessage::default();
             msg.set_region_id(self.region_id);
             msg.set_from_peer(self.peer.clone());
@@ -3935,7 +3936,7 @@ where
             let extra_msg = msg.mut_extra_msg();
             extra_msg.set_type(ExtraMessageType::MsgPreLoadRange);
             self.send_raft_messages(ctx, vec![msg]);
-        }
+        });
 
         true
     }
@@ -4797,20 +4798,22 @@ where
         cb: Callback<EK::Snapshot>,
     ) -> bool {
         let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
-        if let Err(err) = ctx
+        let extra_msgs = match ctx
             .coprocessor_host
             .pre_transfer_leader(self.region(), transfer_leader)
         {
-            warn!("Coprocessor rejected transfer leader."; "err" => ?err,
+            Err(err) => {
+                warn!("Coprocessor rejected transfer leader."; "err" => ?err,
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
                 "transferee" => transfer_leader.get_peer().get_id());
-            let mut resp = RaftCmdResponse::new();
-            *resp.mut_header().mut_error() = Error::from(err).into();
-            cb.invoke_with_response(resp);
-            return false;
-        }
-
+                let mut resp = RaftCmdResponse::new();
+                *resp.mut_header().mut_error() = Error::from(err).into();
+                cb.invoke_with_response(resp);
+                return false;
+            }
+            Ok(msgs) => msgs,
+        };
         ctx.raft_metrics.propose.transfer_leader.inc();
 
         let prs = self.raft_group.raft.prs();
@@ -4842,7 +4845,7 @@ where
         let transferred = if peer.id == self.peer.id {
             false
         } else {
-            self.pre_transfer_leader(peer, ctx)
+            self.pre_transfer_leader(peer, msgs, ctx)
         };
 
         // transfer leader command doesn't need to replicate log and apply, so we
@@ -4979,9 +4982,9 @@ where
         Ok(propose_index)
     }
 
-    fn handle_read<E: ReadExecutor<Tablet = EK>>(
+    fn handle_read<T>(
         &self,
-        reader: &mut E,
+        ctx: &mut PollContext<EK, ER, T>,
         req: RaftCmdRequest,
         check_epoch: bool,
         read_index: Option<u64>,
@@ -5031,16 +5034,24 @@ where
 
         let snap_ctx = if let Ok(read_ts) = decode_u64(&mut req.get_header().get_flag_data()) {
             Some(SnapshotContext {
-                range: Some(CacheRange::from_region(&region)),
-                region_id: region.id,
-                epoch_version: region.get_region_epoch().version,
+                region: Some(CacheRegion::from_region(&region)),
                 read_ts,
             })
         } else {
             None
         };
 
-        let mut resp = reader.execute(&req, &Arc::new(region), read_index, snap_ctx, None);
+        let mut reader = PollContextReader {
+            engines: &ctx.engines,
+        };
+        let mut resp = reader.execute(
+            &req,
+            &Arc::new(region),
+            read_index,
+            snap_ctx,
+            None,
+            &ctx.coprocessor_host,
+        );
         if let Some(snap) = resp.snapshot.as_mut() {
             snap.txn_ext = Some(self.txn_ext.clone());
             snap.bucket_meta = self
@@ -6025,7 +6036,11 @@ where
     }
 }
 
-impl<EK, ER, T> ReadExecutor for PollContext<EK, ER, T>
+struct PollContextReader<'a, EK, ER> {
+    engines: &'a Engines<EK, ER>,
+}
+
+impl<'a, EK, ER> ReadExecutor for PollContextReader<'a, EK, ER>
 where
     EK: KvEngine,
     ER: RaftEngine,

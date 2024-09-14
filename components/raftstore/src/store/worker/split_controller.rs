@@ -14,7 +14,7 @@ use kvproto::{
     metapb::{self, Peer},
     pdpb::QueryKind,
 };
-use pd_client::{BucketMeta, BucketStat};
+use pd_client::{BucketMeta, BucketStat, RegionWriteCfCopDetail};
 use rand::Rng;
 use resource_metering::RawRecords;
 use tikv_util::{
@@ -333,6 +333,7 @@ impl Recorder {
 pub struct RegionInfo {
     pub sample_num: usize,
     pub query_stats: QueryStats,
+    pub cop_detail: RegionWriteCfCopDetail,
     pub peer: Peer,
     pub key_ranges: Vec<KeyRange>,
     pub flow: FlowStatistics,
@@ -343,6 +344,7 @@ impl RegionInfo {
         RegionInfo {
             sample_num,
             query_stats: QueryStats::default(),
+            cop_detail: RegionWriteCfCopDetail::default(),
             key_ranges: Vec::with_capacity(sample_num),
             peer: Peer::default(),
             flow: FlowStatistics::default(),
@@ -444,6 +446,7 @@ impl ReadStats {
         end: Option<&[u8]>,
         write: &FlowStatistics,
         data: &FlowStatistics,
+        write_cf_cop_detail: &RegionWriteCfCopDetail,
     ) {
         let num = self.sample_num;
         let region_info = self
@@ -452,6 +455,7 @@ impl ReadStats {
             .or_insert_with(|| RegionInfo::new(num));
         region_info.flow.add(write);
         region_info.flow.add(data);
+        region_info.cop_detail.add(write_cf_cop_detail);
         // the bucket of the follower only have the version info and not needs to be
         // recorded the hot bucket.
         if let Some(buckets) = buckets
