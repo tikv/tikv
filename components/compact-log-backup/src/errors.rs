@@ -13,6 +13,25 @@ pub struct Error {
     pub attached_frames: Vec<Location<'static>>,
 }
 
+impl Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!("{}", self.kind))?;
+        if !self.notes.is_empty() {
+            f.write_fmt(format_args!(" (note = {})", self.notes))?;
+        }
+        if let Some(l) = self.attached_frames.first() {
+            f.write_fmt(format_args!(
+                " (top_caller = {}:{}:{})",
+                l.file(),
+                l.line(),
+                l.column()
+            ))?;
+        }
+
+        Ok(())
+    }
+}
+
 #[derive(ThisError, Debug)]
 pub enum ErrorKind {
     #[error("I/O {0}")]

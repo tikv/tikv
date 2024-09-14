@@ -1,11 +1,13 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
+pub mod checkpoint;
 pub mod hooks;
 
 #[cfg(test)]
 mod test;
 
-use std::{borrow::Cow, path::Path, sync::Arc};
+use std::{borrow::Cow, cell::Cell, path::Path, sync::Arc};
 
+use chrono::Utc;
 use engine_rocks::RocksEngine;
 pub use engine_traits::SstCompressionType;
 use engine_traits::SstExt;
@@ -19,6 +21,7 @@ use tikv_util::config::ReadableSize;
 use tokio::runtime::Handle;
 use tracing::{trace_span, Instrument};
 use tracing_active_tree::{frame, root};
+use txn_types::TimeStamp;
 
 use self::hooks::AbortedCtx;
 use super::{
@@ -39,6 +42,7 @@ use crate::{
 /// This structure itself fully defines what work the compaction need to do.
 /// That is, keeping this structure unchanged, the compaction should always
 /// generate the same artifices.
+#[derive(Debug)]
 pub struct ExecutionConfig {
     /// Filter out files doesn't contain any record with TS great or equal than
     /// this.
@@ -51,6 +55,35 @@ pub struct ExecutionConfig {
     ///
     /// If `None`, we will use the default level of the selected algorithm.
     pub compression_level: Option<i32>,
+}
+
+impl slog::KV for ExecutionConfig {
+    fn serialize(
+        &self,
+        _record: &slog::Record,
+        serializer: &mut dyn slog::Serializer,
+    ) -> slog::Result {
+        serializer.emit_u64("from_ts", self.from_ts)?;
+        serializer.emit_u64("until_ts", self.until_ts)?;
+        let date = |pts| {
+            let ts = TimeStamp::new(pts).physical();
+            chrono::DateTime::<Utc>::from_utc(
+                chrono::NaiveDateTime::from_timestamp(
+                    ts as i64 / 1000,
+                    (ts % 1000) as u32 * 1_000_000,
+                ),
+                Utc,
+            )
+        };
+        serializer.emit_arguments("from_date", &format_args!("{}", date(self.from_ts)))?;
+        serializer.emit_arguments("until_date", &format_args!("{}", date(self.until_ts)))?;
+        serializer.emit_arguments("compression", &format_args!("{:?}", self.compression))?;
+        if let Some(level) = self.compression_level {
+            serializer.emit_i32("compression.level", level)?;
+        }
+
+        Ok(())
+    }
 }
 
 impl ExecutionConfig {
@@ -128,6 +161,7 @@ impl Execution {
             this: self,
         };
         hooks.before_execution_started(cx).await?;
+
         let meta = StreamyMetaStorage::load_from_ext(storage.as_ref(), ext);
         let stream = meta.flat_map(|file| match file {
             Ok(file) => stream::iter(file.into_logs()).map(Ok).left_stream(),
@@ -154,12 +188,17 @@ impl Execution {
 
             let c = c?;
             let cid = CId(id);
+            let skip = Cell::new(false);
             let cx = SubcompactionStartCtx {
                 subc: &c,
                 load_stat_diff: &lstat,
                 collect_compaction_stat_diff: &cstat,
+                skip: &skip,
             };
             hooks.before_a_subcompaction_start(cid, cx);
+            if skip.get() {
+                continue;
+            }
 
             id += 1;
 

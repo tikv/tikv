@@ -175,6 +175,7 @@ pub mod prom {
     }
 
     lazy_static::lazy_static! {
+        // ==== The following metrics will be collected directly in the call site.
         pub static ref COMPACT_LOG_BACKUP_READ_META_DURATION: Histogram = register_histogram!(
             "compact_log_backup_read_meta_duration",
             "The duration of reading meta files.",
@@ -187,6 +188,7 @@ pub mod prom {
             exponential_buckets(0.001, 2.0, 13).unwrap()
         ).unwrap();
 
+        // ==== The following metrics will be collected in the hooks.
         pub static ref COMPACT_LOG_BACKUP_LOAD_DURATION: Histogram = register_histogram!(
             "compact_log_backup_load_duration",
             "The duration of loading log all log files for a compaction.",

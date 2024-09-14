@@ -1,9 +1,15 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cell::Cell;
+
 use chrono::Local;
 pub use engine_traits::SstCompressionType;
 use external_storage::{locking::RemoteLock, ExternalStorage, UnpinReader};
-use futures::{future::TryFutureExt, io::Cursor};
+use futures::{
+    future::TryFutureExt,
+    io::{AsyncReadExt, Cursor},
+    stream::{StreamExt, TryStreamExt},
+};
 use kvproto::brpb;
 use tikv_util::{
     info,
@@ -21,11 +27,11 @@ use crate::{
     errors::Result,
     execute::Execution,
     statistic::{
-        CollectSubcompactionStatistic, CompactLogBackupStatistic, LoadMetaStatistic, LoadStatistic,
-        SubcompactStatistic,
+        prom, CollectSubcompactionStatistic, CompactLogBackupStatistic, LoadMetaStatistic,
+        LoadStatistic, SubcompactStatistic,
     },
     storage::{StreamyMetaStorage, LOCK_PREFIX},
-    util, Error,
+    util, Error, ErrorKind, TraceResultExt,
 };
 
 pub struct NoHooks;
@@ -88,6 +94,14 @@ pub struct SubcompactionStartCtx<'a> {
     /// Like `load_stat_diff`, we collect subcompactions for every region
     /// concurrently. The statistic diff may not just contributed by the `subc`.
     pub collect_compaction_stat_diff: &'a CollectSubcompactionStatistic,
+    /// Whether to skip this compaction.
+    pub(super) skip: &'a Cell<bool>,
+}
+
+impl<'a> SubcompactionStartCtx<'a> {
+    pub fn skip(&self) {
+        self.skip.set(true);
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -132,6 +146,7 @@ pub trait ExecHooks: 'static {
         Ok(())
     }
 
+    /// This hook will be called once the compaction failed due to some reason.
     async fn on_aborted(&mut self, _cx: AbortedCtx<'_>) {}
 }
 
@@ -177,7 +192,50 @@ impl<T: ExecHooks, U: ExecHooks> ExecHooks for (T, U) {
     }
 }
 
-/// The hooks that used for an execution from a TTY.
+impl<T: ExecHooks> ExecHooks for Option<T> {
+    fn before_a_subcompaction_start(&mut self, cid: CId, c: SubcompactionStartCtx<'_>) {
+        if let Some(h) = self {
+            h.before_a_subcompaction_start(cid, c);
+        }
+    }
+
+    async fn after_a_subcompaction_end(
+        &mut self,
+        cid: CId,
+        cx: SubcompactionFinishCtx<'_>,
+    ) -> Result<()> {
+        if let Some(h) = self {
+            h.after_a_subcompaction_end(cid, cx).await
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn before_execution_started(&mut self, cx: BeforeStartCtx<'_>) -> Result<()> {
+        if let Some(h) = self {
+            h.before_execution_started(cx).await
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn after_execution_finished(&mut self, cx: AfterFinishCtx<'_>) -> Result<()> {
+        if let Some(h) = self {
+            h.after_execution_finished(cx).await
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn on_aborted(&mut self, cx: AbortedCtx<'_>) {
+        if let Some(h) = self {
+            h.on_aborted(cx).await
+        }
+    }
+}
+
+/// The hooks that used for an execution from a TTY. Providing the basic
+/// observability related to the progress of the comapction.
 ///
 /// This prints the log when events happens, and prints statistics after
 /// compaction finished.
@@ -185,12 +243,18 @@ impl<T: ExecHooks, U: ExecHooks> ExecHooks for (T, U) {
 /// This also enables async-backtrace, you can send `SIGUSR1` to the executing
 /// compaction task and the running async tasks will be dumped to a file.
 #[derive(Default)]
-pub struct TuiHooks {
+pub struct Observability {
     stats: CollectStatistic,
     meta_len: u64,
 }
 
-impl ExecHooks for TuiHooks {
+fn storage_url(s: &dyn ExternalStorage) -> String {
+    s.url()
+        .map(|v| v.to_string())
+        .unwrap_or_else(|err| format!("<err: {err}>"))
+}
+
+impl ExecHooks for Observability {
     fn before_a_subcompaction_start(&mut self, cid: CId, cx: SubcompactionStartCtx<'_>) {
         let c = cx.subc;
         self.stats
@@ -222,11 +286,19 @@ impl ExecHooks for TuiHooks {
         let total_take =
             cst.load_duration + cst.sort_duration + cst.save_duration + cst.write_sst_duration;
         let speed = logical_input_size as f64 / total_take.as_millis() as f64;
+
         self.stats.update_subcompaction(cx.result);
 
-        info!("Finishing compaction."; "meta_completed" => self.stats.load_meta_stat.meta_files_in, 
+        prom::COMPACT_LOG_BACKUP_LOAD_DURATION.observe(cst.load_duration.as_secs_f64());
+        prom::COMPACT_LOG_BACKUP_SORT_DURATION.observe(cst.sort_duration.as_secs_f64());
+        prom::COMPACT_LOG_BACKUP_SAVE_DURATION.observe(cst.save_duration.as_secs_f64());
+        prom::COMPACT_LOG_BACKUP_WRITE_SST_DURATION.observe(cst.write_sst_duration.as_secs_f64());
+
+        info!("Finishing compaction."; 
+            "meta_completed" => self.stats.load_meta_stat.meta_files_in, 
             "meta_total" => self.meta_len, 
-            "p_bytes" => self.stats.collect_stat.bytes_in - self.stats.collect_stat.bytes_out, 
+            "bytes_to_compact" => self.stats.collect_stat.bytes_in,
+            "bytes_compacted" => self.stats.collect_stat.bytes_out, 
             "cid" => cid.0, 
             "load_stat" => ?lst, 
             "compact_stat" => ?cst, 
@@ -236,7 +308,12 @@ impl ExecHooks for TuiHooks {
         Ok(())
     }
 
-    async fn after_execution_finished(&mut self, _cx: AfterFinishCtx<'_>) -> Result<()> {
+    async fn after_execution_finished(&mut self, cx: AfterFinishCtx<'_>) -> Result<()> {
+        if self.stats.load_meta_stat.meta_files_in == 0 {
+            let url = storage_url(cx.storage);
+            warn!("No meta files loaded, maybe wrong storage used?"; "url" => %url);
+            return Err(ErrorKind::Other(format!("Nothing loaded from {}", url)).into());
+        }
         info!("All compactions done.");
         Ok(())
     }
@@ -263,6 +340,9 @@ impl ExecHooks for TuiHooks {
 
         cx.async_rt.spawn(sigusr1_handler);
         self.meta_len = StreamyMetaStorage::count_objects(cx.storage).await?;
+
+        info!("About to start compaction."; &cx.this.cfg, 
+            "url" => cx.storage.url().map(|v| v.to_string()).unwrap_or_else(|err| format!("<err: {err}>")));
         Ok(())
     }
 }
@@ -406,6 +486,10 @@ impl ExecHooks for SaveMeta {
     }
 
     async fn after_execution_finished(&mut self, cx: AfterFinishCtx<'_>) -> Result<()> {
+        if self.collector.is_empty() {
+            warn!("Nothing to write, skipping saving meta.");
+            return Ok(());
+        }
         let comments = self.comments();
         self.collector.mut_meta().set_comments(comments);
         self.collector.write_migration(cx.storage).await
@@ -413,13 +497,54 @@ impl ExecHooks for SaveMeta {
 }
 
 #[derive(Default)]
-pub struct WithLock {
+pub struct StorageConsistencyGuard {
     lock: Option<RemoteLock>,
 }
 
-impl ExecHooks for WithLock {
+async fn load_storage_checkpoint(storage: &dyn ExternalStorage) -> Result<u64> {
+    let path = "v1/global_checkpoint/";
+    storage
+        .iter_prefix(path)
+        .err_into()
+        .try_fold(None, |i, v| async move {
+            if !v.key.ends_with(".ts") {
+                return Ok(i);
+            }
+            let mut ts = vec![];
+            storage.read(&v.key).read_to_end(&mut ts).await?;
+            let ts_bytes = <[u8; 8]>::try_from(ts);
+            let ts = match ts_bytes {
+                Ok(bytes) => u64::from_le_bytes(bytes),
+                Err(_) => {
+                    warn!("Cannot parse ts from file."; "file" => %v.key);
+                    return Ok(i);
+                }
+            };
+            let res = match i {
+                None => Some(ts),
+                Some(ts0) => Some(ts.min(ts0)),
+            };
+            Ok(res)
+        })
+        .await
+        .map(|v| v.unwrap_or(0))
+}
+
+impl ExecHooks for StorageConsistencyGuard {
     async fn before_execution_started(&mut self, cx: BeforeStartCtx<'_>) -> Result<()> {
         use external_storage::locking::LockExt;
+
+        let cp = load_storage_checkpoint(cx.storage)
+            .await
+            .annotate("failed to load storage checkpoint")?;
+        if cx.this.cfg.until_ts > cp {
+            let err_msg = format!(
+                "The `--until`({}) is greater than the checkpoint({}). We cannot compact unstable content for now.",
+                cx.this.cfg.until_ts, cp
+            );
+
+            Err(ErrorKind::Other(err_msg))?;
+        }
 
         let hint = format!(
             "This is generated by the compaction {}.",
@@ -439,9 +564,9 @@ impl ExecHooks for WithLock {
 
     async fn on_aborted(&mut self, cx: AbortedCtx<'_>) {
         if let Some(lock) = self.lock.take() {
-            warn!("It seems compaction failed. Resolving the lock."; "err" => ?cx.err);
+            warn!("It seems compaction failed. Resolving the lock."; "err" => %cx.err);
             if let Err(err) = lock.unlock(cx.storage).await {
-                warn!("Failed to unlock when failed, you may resolve the lock manually"; "err" => ?err, "lock" => ?lock);
+                warn!("Failed to unlock when failed, you may resolve the lock manually"; "err" => %err, "lock" => ?lock);
             }
         }
     }

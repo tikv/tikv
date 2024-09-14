@@ -396,6 +396,7 @@ fn main() {
             compression,
             compression_level,
             name,
+            force_regenerate,
         } => {
             let tmp_engine =
                 TemporaryRocks::new(&cfg).expect("failed to create temp engine for writing SSTs.");
@@ -433,30 +434,44 @@ fn main() {
                 db: Some(tmp_engine.rocks),
             };
 
-            use tikv::server::status_server::lite::Server as LiteStatus;
-            struct WithStatusServer {
+            use tikv::server::status_server::lite::Server as StatusServerLite;
+            struct ExportTiKVInfo {
                 cfg: TikvConfig,
             }
-            impl compact_log::hooks::ExecHooks for WithStatusServer {
+            impl compact_log::hooks::ExecHooks for ExportTiKVInfo {
                 async fn before_execution_started(
                     &mut self,
                     cx: compact_log::hooks::BeforeStartCtx<'_>,
                 ) -> compact_log_backup::Result<()> {
                     use compact_log_backup::OtherErrExt;
-                    let srv = LiteStatus::new(Arc::new(self.cfg.security.clone()));
+                    tikv_util::info!("Welcome to TiKV control: compact log backup.");
+                    tikv_util::info!("TiKV version info."; "info_string" => tikv::tikv_version_info(None));
+
+                    let srv = StatusServerLite::new(Arc::new(self.cfg.security.clone()));
                     let _enter = cx.async_rt.enter();
-                    srv.start(&self.cfg.server.status_addr)
+                    let hnd = srv
+                        .start(&self.cfg.server.status_addr)
                         .adapt_err()
-                        .annotate("failed to start status server lite")
+                        .annotate("failed to start status server lite")?;
+                    tikv_util::info!("Started status server lite."; "at" => %hnd.address());
+                    Ok(())
                 }
             }
 
-            let log_to_term = compact_log::hooks::TuiHooks::default();
+            let log_to_term = compact_log::hooks::Observability::default();
             let save_meta = compact_log::hooks::SaveMeta::default();
-            let with_lock = compact_log::hooks::WithLock::default();
-            let with_status_server = WithStatusServer { cfg: cfg.clone() };
-
-            exec.run(((log_to_term, with_status_server), (save_meta, with_lock)))
+            let with_lock = compact_log::hooks::StorageConsistencyGuard::default();
+            let with_status_server = ExportTiKVInfo { cfg: cfg.clone() };
+            let checkpoint = if force_regenerate {
+                None
+            } else {
+                Some(compact_log::checkpoint::Checkpoint::default())
+            };
+            let hooks = (
+                ((log_to_term, checkpoint), with_status_server),
+                (save_meta, with_lock),
+            );
+            exec.run(hooks)
                 .expect("failed to execute compact-log-backup")
         }
         // Commands below requires either the data dir or the host.

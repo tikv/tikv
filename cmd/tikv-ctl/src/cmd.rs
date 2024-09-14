@@ -682,6 +682,9 @@ pub enum Cmd {
             )
         )]
         compression_level: Option<i32>,
+
+        #[structopt(long, help("Don't try to skip already finished compactions."))]
+        force_regenerate: bool,
     },
     /// Get the state of a region's RegionReadProgress.
     GetRegionReadProgress {

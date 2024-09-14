@@ -17,7 +17,7 @@ use futures::{
     stream::StreamExt,
 };
 use keys::origin_key;
-use kvproto::brpb::{self, Metadata};
+use kvproto::brpb::{self, LogFileSubcompaction, Metadata};
 use protobuf::{parse_from_bytes, Message};
 use tempdir::TempDir;
 use tidb_query_datatype::codec::table::encode_row_key;
@@ -30,6 +30,7 @@ use crate::{
         Subcompaction, SubcompactionResult,
     },
     errors::{OtherErrExt, Result},
+    execute::{Execution, ExecutionConfig},
     storage::{id_of_migration, Epoch, LogFile, LogFileId, MetaFile},
 };
 

@@ -32,6 +32,12 @@ pub struct Handle {
     addr: SocketAddr,
 }
 
+impl Handle {
+    pub fn address(&self) -> &SocketAddr {
+        &self.addr
+    }
+}
+
 impl Server {
     pub fn new(sec: Arc<SecurityConfig>) -> Self {
         Server {
@@ -80,7 +86,7 @@ impl Server {
                 let client_cert = client_cert.clone();
                 let security = security.clone();
                 async move {
-                    svc.service(RequestCtx {
+                    svc.call(RequestCtx {
                         req,
                         client_cert,
                         security,
@@ -106,10 +112,7 @@ struct RequestCtx {
 }
 
 impl LiteService {
-    async fn service(
-        &mut self,
-        cx: RequestCtx,
-    ) -> std::result::Result<Response<Body>, hyper::Error> {
+    async fn call(&mut self, cx: RequestCtx) -> std::result::Result<Response<Body>, hyper::Error> {
         let path = cx.req.uri().path().to_owned();
         let method = cx.req.method().to_owned();
 

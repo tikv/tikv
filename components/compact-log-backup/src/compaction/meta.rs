@@ -214,6 +214,10 @@ impl ExpiringFilesOfMeta {
 }
 
 impl CompactionRunInfoBuilder {
+    pub fn is_empty(&self) -> bool {
+        self.files.is_empty()
+    }
+
     pub fn add_subcompaction(&mut self, c: &SubcompactionResult) {
         for file in &c.origin.inputs {
             if !self.files.contains_key(&file.id.name) {

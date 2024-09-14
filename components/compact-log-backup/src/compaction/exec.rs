@@ -148,8 +148,6 @@ where
         &mut self,
         items: impl Iterator<Item = Vec<Record>>,
     ) -> (Vec<Record>, ChecksumDiff) {
-        let _t = COMPACT_LOG_BACKUP_SORT_DURATION.start_coarse_timer();
-
         let mut flatten_items = items
             .into_iter()
             .flat_map(|v| v.into_iter())
@@ -175,8 +173,6 @@ where
         c: &Subcompaction,
         ext: &mut SubcompactExt,
     ) -> Result<impl Iterator<Item = Vec<Record>>> {
-        let _t = COMPACT_LOG_BACKUP_LOAD_DURATION.start_coarse_timer();
-
         let mut eext = ExecuteAllExt::default();
         eext.max_concurrency = ext.max_load_concurrency;
 
@@ -230,8 +226,6 @@ where
         sorted_items: &[Record],
         ext: &mut SubcompactExt,
     ) -> Result<WrittenSst<<DB::SstWriter as SstWriter>::ExternalSstFileReader>> {
-        let _t = COMPACT_LOG_BACKUP_WRITE_SST_DURATION.start_coarse_timer();
-
         let cf = c.cf;
         let mut wb = <DB as SstExt>::SstWriterBuilder::new()
             .set_cf(cf)
@@ -306,8 +300,6 @@ where
         c: &Subcompaction,
         sst: &mut WrittenSst<<DB::SstWriter as SstWriter>::ExternalSstFileReader>,
     ) -> Result<LogFileSubcompaction> {
-        let _t = COMPACT_LOG_BACKUP_SAVE_DURATION.start_coarse_timer();
-
         use engine_traits::ExternalSstFileReader;
         sst.content.reset()?;
         let (rd, hasher) = Sha256Reader::new(&mut sst.content).adapt_err()?;
