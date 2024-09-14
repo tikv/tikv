@@ -486,20 +486,9 @@ mod test {
         let ml = MetaFile::from(meta);
         let c = Subcompaction::of_many(ml.into_logs());
         let res = st.run_subcompaction(c).await;
-        let sst_out = &res.meta.get_sst_outputs()[0];
-        assert_eq!(sst_out.get_start_key(), b"t");
-        assert_eq!(sst_out.get_end_key(), b"t\xff");
-        assert!(
-            sst_out.get_start_key() < enc(b"t").as_slice(),
-            "{:?}",
-            sst_out.get_start_key()
-        );
-        assert!(
-            sst_out.get_end_key() > enc(b"t\xff").as_slice(),
-            "{:?}",
-            sst_out.get_end_key()
-        );
-
+        let sst_out = &res.meta.get_region_meta_hints()[0];
+        assert_eq!(sst_out.get_start_key(), enc(b"t").as_slice());
+        assert_eq!(sst_out.get_end_key(), enc(b"t\xff").as_slice());
         st.verify_result(res, cm);
     }
 
@@ -539,13 +528,13 @@ mod test {
         // Case 1: with ranges only.
         let c = Subcompaction::of_many([logs[0].clone()]);
         let res = st.run_subcompaction(c).await;
-        let sst_out = &res.meta.get_sst_outputs()[0];
+        let sst_out = &res.meta.get_region_meta_hints()[0];
         let bgn = sst_out.get_start_key();
         let end = sst_out.get_end_key();
         let cbgn = res.meta.get_meta().get_min_key();
         let cend = res.meta.get_meta().get_max_key();
-        assert_eq!(bgn, b"t");
-        assert_eq!(end, b"t\xff");
+        assert_eq!(bgn, enc(b"t").as_slice());
+        assert_eq!(end, enc(b"t\xff").as_slice());
         assert!(cbgn > enc(bgn).as_slice(), "{:?}", cbgn);
         assert!(cend < enc(end).as_slice(), "{:?}", cend);
 

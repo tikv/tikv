@@ -309,10 +309,6 @@ impl ExecHooks for Observability {
     }
 
     async fn on_aborted(&mut self, cx: AbortedCtx<'_>) {
-        if self.stats.load_meta_stat.meta_files_in == 0 {
-            let url = storage_url(cx.storage);
-            warn!("No meta files loaded, maybe wrong storage used?"; "url" => %url);
-        }
         error!("Compaction aborted."; "err" => %cx.err);
     }
 
@@ -509,7 +505,7 @@ pub struct StorageConsistencyGuard {
     lock: Option<RemoteLock>,
 }
 
-async fn load_storage_checkpoint(storage: &dyn ExternalStorage) -> Result<u64> {
+async fn load_storage_checkpoint(storage: &dyn ExternalStorage) -> Result<Option<u64>> {
     let path = "v1/global_checkpoint/";
     storage
         .iter_prefix(path)
@@ -535,7 +531,6 @@ async fn load_storage_checkpoint(storage: &dyn ExternalStorage) -> Result<u64> {
             Ok(res)
         })
         .await
-        .map(|v| v.unwrap_or(0))
 }
 
 impl ExecHooks for StorageConsistencyGuard {
@@ -545,13 +540,28 @@ impl ExecHooks for StorageConsistencyGuard {
         let cp = load_storage_checkpoint(cx.storage)
             .await
             .annotate("failed to load storage checkpoint")?;
-        if cx.this.cfg.until_ts > cp {
-            let err_msg = format!(
-                "The `--until`({}) is greater than the checkpoint({}). We cannot compact unstable content for now.",
-                cx.this.cfg.until_ts, cp
-            );
+        match cp {
+            Some(cp) => {
+                if cx.this.cfg.until_ts > cp {
+                    let err_msg = format!(
+                        "The `--until`({}) is greater than the checkpoint({}). We cannot compact unstable content for now.",
+                        cx.this.cfg.until_ts, cp
+                    );
 
-            Err(ErrorKind::Other(err_msg))?;
+                    // We use `?` instead of return here to keep the stack frame in the error.
+                    // Or if we use `.into()` the frame attached will be the default implementation
+                    // of `Into`...
+                    Err(ErrorKind::Other(err_msg))?;
+                }
+            }
+            None => {
+                let url = storage_url(cx.storage);
+                warn!("No checkpoint loaded, maybe wrong storage used?"; "url" => %url);
+                Err(ErrorKind::Other(format!(
+                    "Cannot load checkpoint from {}",
+                    url
+                )))?;
+            }
         }
 
         let hint = format!(

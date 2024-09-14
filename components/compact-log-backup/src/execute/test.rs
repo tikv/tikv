@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    future::Future,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
@@ -7,16 +8,23 @@ use std::{
 };
 
 use engine_rocks::RocksEngine;
-use futures::future::FutureExt;
+use external_storage::ExternalStorage;
+use futures::{future::FutureExt, stream::TryStreamExt};
 use kvproto::brpb::StorageBackend;
 use tokio::sync::mpsc::Sender;
 
-use super::{checkpoint::Checkpoint, hooks::SaveMeta, Execution, ExecutionConfig};
+use super::{
+    checkpoint::Checkpoint,
+    hooks::{SaveMeta, StorageConsistencyGuard},
+    Execution, ExecutionConfig,
+};
 use crate::{
     compaction::SubcompactionResult,
     errors::OtherErrExt,
-    execute::hooks::ExecHooks,
+    execute::hooks::{CId, ExecHooks, SubcompactionFinishCtx},
+    storage::LOCK_PREFIX,
     test_util::{gen_step, CompactInMem, KvGen, LogFileBuilder, TmpStorage},
+    ErrorKind,
 };
 
 #[derive(Clone)]
@@ -112,7 +120,6 @@ async fn test_exec_simple() {
 async fn test_checkpointing() {
     let st = TmpStorage::create();
     let mut cm = HashMap::new();
-    test_util::init_log_for_test();
 
     for i in 0..3 {
         st.build_flush(
@@ -131,8 +138,8 @@ async fn test_checkpointing() {
     impl ExecHooks for AbortEvery3TimesAndRecordFinishCount {
         async fn after_a_subcompaction_end(
             &mut self,
-            cid: crate::execute::hooks::CId,
-            _res: crate::execute::hooks::SubcompactionFinishCtx<'_>,
+            cid: CId,
+            _res: SubcompactionFinishCtx<'_>,
         ) -> crate::Result<()> {
             if cid.0 == 4 {
                 Err(crate::ErrorKind::Other(ERR_MSG.to_owned()).into())
@@ -183,4 +190,121 @@ async fn test_checkpointing() {
         .unwrap();
     assert_eq!(subc.len(), 15);
     assert_eq!(cnt.load(Ordering::SeqCst), 15);
+}
+
+async fn put_checkpoint(storage: &dyn ExternalStorage, store: u64, cp: u64) {
+    let pfx = format!("v1/global_checkpoint/{}.ts", store);
+    let content = futures::io::Cursor::new(cp.to_le_bytes());
+    storage.write(&pfx, content.into(), 8).await.unwrap();
+}
+
+async fn load_locks(storage: &dyn ExternalStorage) -> Vec<String> {
+    storage
+        .iter_prefix(LOCK_PREFIX)
+        .map_ok(|v| v.key)
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_consistency_guard_() {
+    let st = TmpStorage::create();
+    let strg = st.storage().as_ref();
+    put_checkpoint(strg, 1, 42).await;
+
+    let mut exec = create_compaction(st.backend());
+    exec.cfg.until_ts = 43;
+    let c = StorageConsistencyGuard::default();
+    tokio::task::block_in_place(|| exec.run(c).unwrap_err());
+
+    let mut exec = create_compaction(st.backend());
+    exec.cfg.until_ts = 41;
+    let c = StorageConsistencyGuard::default();
+    tokio::task::block_in_place(|| exec.run(c).unwrap());
+
+    put_checkpoint(strg, 2, 40).await;
+
+    let mut exec = create_compaction(st.backend());
+    exec.cfg.until_ts = 41;
+    let c = StorageConsistencyGuard::default();
+    tokio::task::block_in_place(|| exec.run(c).unwrap_err());
+
+    let mut exec = create_compaction(st.backend());
+    exec.cfg.until_ts = 39;
+    let c = StorageConsistencyGuard::default();
+    tokio::task::block_in_place(|| exec.run(c).unwrap());
+}
+
+#[tokio::test]
+async fn test_locking() {
+    let st = TmpStorage::create();
+    let mut cm = HashMap::new();
+    st.build_flush("0.log", "v1/backupmeta/0.meta", gen_builder(&mut cm, 0, 15))
+        .await;
+    put_checkpoint(st.storage().as_ref(), 1, u64::MAX).await;
+
+    struct Blocking<F>(Option<F>);
+    impl<F: Future + Unpin + 'static> ExecHooks for Blocking<F> {
+        async fn after_a_subcompaction_end(
+            &mut self,
+            _cid: CId,
+            _res: SubcompactionFinishCtx<'_>,
+        ) -> crate::Result<()> {
+            if let Some(fut) = self.0.take() {
+                fut.await;
+            }
+            Ok(())
+        }
+    }
+
+    let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+    let exec = create_compaction(st.backend());
+
+    let (ptx, prx) = tokio::sync::oneshot::channel::<()>();
+    let run = Box::pin(async move {
+        ptx.send(()).unwrap();
+        rx.await.unwrap();
+    });
+
+    let hooks = (Blocking(Some(run)), StorageConsistencyGuard::default());
+    let hnd = tokio::task::spawn_blocking(move || exec.run(hooks));
+
+    prx.await.unwrap();
+    let l = load_locks(st.storage().as_ref()).await;
+    assert_eq!(l.len(), 1, "it is {:?}", l);
+    tx.send(()).unwrap();
+    hnd.await.unwrap().unwrap();
+
+    let l = load_locks(st.storage().as_ref()).await;
+    assert_eq!(l.len(), 0, "it is {:?}", l);
+}
+
+#[tokio::test]
+async fn test_abort_unlocking() {
+    let st = TmpStorage::create();
+    let mut cm = HashMap::new();
+    st.build_flush("0.log", "v1/backupmeta/0.meta", gen_builder(&mut cm, 0, 15))
+        .await;
+
+    struct Abort;
+    impl ExecHooks for Abort {
+        async fn after_a_subcompaction_end(
+            &mut self,
+            _cid: CId,
+            _res: SubcompactionFinishCtx<'_>,
+        ) -> crate::Result<()> {
+            Err(ErrorKind::Other("Journey ends here.".to_owned()))?
+        }
+    }
+
+    let exec = create_compaction(st.backend());
+    let hooks = (Abort, StorageConsistencyGuard::default());
+
+    tokio::task::spawn_blocking(move || exec.run(hooks))
+        .await
+        .unwrap()
+        .unwrap_err();
+    let l = load_locks(st.storage().as_ref()).await;
+    assert_eq!(l.len(), 0, "it is {:?}", l);
 }
