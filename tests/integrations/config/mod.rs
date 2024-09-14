@@ -891,7 +891,7 @@ fn test_serde_custom_tikv_config() {
     value
         .split
         .optimize_for(value.coprocessor.region_max_size());
-    value.resource_control = ResourceControlConfig { 
+    value.resource_control = ResourceControlConfig {
         enabled: false,
         priority_ctl_strategy: PriorityCtlStrategy::Aggressive,
     };
