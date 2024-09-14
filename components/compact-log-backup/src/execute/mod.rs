@@ -60,7 +60,7 @@ pub struct ExecutionConfig {
 impl slog::KV for ExecutionConfig {
     fn serialize(
         &self,
-        _record: &slog::Record,
+        _record: &slog::Record<'_>,
         serializer: &mut dyn slog::Serializer,
     ) -> slog::Result {
         serializer.emit_u64("from_ts", self.from_ts)?;

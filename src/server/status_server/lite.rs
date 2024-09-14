@@ -1,7 +1,9 @@
 //! A striped version for the status server. It supports a subset of the status
-//! server.
+//! server. Basically, it exports the mertrics and process information. But
+//! won't provide TiKV server related stuffs, like reloading config or dump
+//! region info.
 //!
-//! This will be used to import the of obserbility some short-term tasks of
+//! This will be used to improve the of obserbility some short-term tasks of
 //! `tikv-ctl`.
 
 use std::{error::Error as StdError, net::SocketAddr, str::FromStr, sync::Arc};
@@ -24,15 +26,19 @@ use crate::server::Result;
 /// server.
 type Svc = StatusServer<()>;
 
+/// Server is the controller of requests.
+/// It listens to a socket, and forwards requests to the service.
 pub struct Server {
     security_config: Arc<SecurityConfig>,
 }
 
+/// Handle is the controller for the sever.
 pub struct Handle {
     addr: SocketAddr,
 }
 
 impl Handle {
+    /// Return the bound address of the server.
     pub fn address(&self) -> &SocketAddr {
         &self.addr
     }
@@ -51,7 +57,7 @@ impl Server {
     ///
     /// This must be run in a tokio context. Or this will panic.
     pub fn start(self, status_addr: &str) -> Result<Handle> {
-        let addr = SocketAddr::from_str(&status_addr)?;
+        let addr = SocketAddr::from_str(status_addr)?;
 
         let incoming = AddrIncoming::bind(&addr)?;
         let hnd = Handle {
@@ -142,33 +148,72 @@ impl LiteService {
 mod test {
     use std::sync::Arc;
 
+    use hyper::{Body, Request, StatusCode};
+    use security::SecurityConfig;
+
+    use super::*;
+
     impl super::Server {
         fn insecure() -> Self {
             Self::new(Arc::default())
         }
     }
 
-    #[cfg(feature = "mem-profiling")]
     #[tokio::test]
-    async fn test_pprof_heap_service() {
-        use http::{StatusCode, Uri};
-        use hyper::{body::to_bytes, Client};
+    async fn test_server_start_insecure() {
+        let server = Server::insecure();
+        let handle = server.start("127.0.0.1:0").unwrap();
+        assert!(handle.address().is_ipv4());
+    }
 
-        let status_server = super::Server::insecure();
-        let addr = "127.0.0.1:0".to_owned();
-        let hnd = status_server.start(&addr).unwrap();
-        let client = Client::new();
-        let uri = Uri::builder()
-            .scheme("http")
-            .authority(hnd.addr.to_string().as_str())
-            .path_and_query("/debug/pprof/heap")
-            .build()
+    #[tokio::test]
+    async fn test_lite_service_call_metrics() {
+        let mut service = LiteService;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/metrics")
+            .body(Body::empty())
             .unwrap();
-        let handle = tokio::spawn(async move { client.get(uri).await.unwrap() });
-        let mut resp = handle.await.unwrap();
-
-        let body = to_bytes(resp.body_mut()).await.unwrap();
-
+        let ctx = RequestCtx {
+            req,
+            client_cert: None,
+            security: Arc::new(SecurityConfig::default()),
+        };
+        let resp = service.call(ctx).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_lite_service_call_profile() {
+        let mut service = LiteService;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/debug/pprof/profile")
+            .body(Body::empty())
+            .unwrap();
+        let ctx = RequestCtx {
+            req,
+            client_cert: None,
+            security: Arc::new(SecurityConfig::default()),
+        };
+        let resp = service.call(ctx).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_lite_service_call_forbidden() {
+        let mut service = LiteService;
+        let req = Request::builder()
+            .method("GET")
+            .uri("/forbidden")
+            .body(Body::empty())
+            .unwrap();
+        let ctx = RequestCtx {
+            req,
+            client_cert: None,
+            security: Arc::new(SecurityConfig::default()),
+        };
+        let resp = service.call(ctx).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 }

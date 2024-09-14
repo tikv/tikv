@@ -1,8 +1,7 @@
 use std::{collections::HashSet, os::unix::ffi::OsStrExt, path::Path};
 
 use external_storage::ExternalStorage;
-use futures::{io::AsyncReadExt, stream::TryStreamExt};
-use kvproto::brpb::LogFileSubcompactions;
+use futures::{ stream::TryStreamExt};
 use tikv_util::{info, time::Instant, warn};
 
 use super::hooks::ExecHooks;
@@ -50,7 +49,7 @@ impl Checkpoint {
             return Err(ErrorKind::Other(err_msg).into());
         }
         let mut hash_bytes = [0u8; 8];
-        hex::decode_to_slice(&segs[2], &mut hash_bytes)
+        hex::decode_to_slice(segs[2], &mut hash_bytes)
             .adapt_err()
             .annotate(format_args!("trying parse {:?} to hex", segs[2]))?;
         Ok(u64::from_be_bytes(hash_bytes))

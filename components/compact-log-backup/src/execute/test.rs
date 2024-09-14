@@ -158,7 +158,7 @@ async fn test_checkpointing() {
     };
     let bg_exec = tokio::task::spawn_blocking(move || {
         while let Err(err) = create_compaction(be.clone()).run(hooks()) {
-            if !err.kind.to_string().contains(&ERR_MSG) {
+            if !err.kind.to_string().contains(ERR_MSG) {
                 return Err(err);
             }
         }

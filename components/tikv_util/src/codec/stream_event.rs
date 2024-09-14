@@ -57,7 +57,7 @@ impl EventIterator<'_> {
         }
     }
 
-    pub fn get_next<'a, 'this>(&'this mut self) -> Result<Option<(&'this [u8], &'this [u8])>> {
+    pub fn get_next(&mut self) -> Result<Option<(&[u8], &[u8])>> {
         let it = self;
         if !it.valid() {
             return Ok(None);

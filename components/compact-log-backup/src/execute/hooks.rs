@@ -8,11 +8,11 @@ use external_storage::{locking::RemoteLock, ExternalStorage, UnpinReader};
 use futures::{
     future::TryFutureExt,
     io::{AsyncReadExt, Cursor},
-    stream::{StreamExt, TryStreamExt},
+    stream::TryStreamExt,
 };
 use kvproto::brpb;
 use tikv_util::{
-    info,
+    error, info,
     logger::{get_log_level, Level},
     stream::{retry, JustRetry},
     warn,
@@ -306,6 +306,14 @@ impl ExecHooks for Observability {
             "total_take" => ?total_take, 
             "global_load_meta_stat" => ?self.stats.load_meta_stat);
         Ok(())
+    }
+
+    async fn on_aborted(&mut self, cx: AbortedCtx<'_>) {
+        if self.stats.load_meta_stat.meta_files_in == 0 {
+            let url = storage_url(cx.storage);
+            warn!("No meta files loaded, maybe wrong storage used?"; "url" => %url);
+        }
+        error!("Compaction aborted."; "err" => %cx.err);
     }
 
     async fn after_execution_finished(&mut self, cx: AfterFinishCtx<'_>) -> Result<()> {
