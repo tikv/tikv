@@ -7,7 +7,8 @@ use regex::Regex;
 
 use crate::{
     codec::{
-        mysql::{duration::*, MAX_FSP, MIN_FSP},
+        data_type::{BytesRef, Decimal, Real},
+        mysql::{duration::*, RoundMode, MAX_FSP, MIN_FSP},
         Error, Result,
     },
     expr::EvalContext,
@@ -53,6 +54,7 @@ const TIME_VALUE_CNT: usize = 7;
 lazy_static! {
     static ref ONE_TO_SIX_DIGIT_REGEX: Regex = Regex::new(r"^[0-9]{0,6}").unwrap();
     static ref NUMERIC_REGEX: Regex = Regex::new(r"[0-9]+").unwrap();
+    static ref INTERVAL_REGEX: Regex = Regex::new(r"^[+-]?[\d]+").unwrap();
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -509,5 +511,134 @@ impl Interval {
 
     pub fn fsp(&self) -> i8 {
         self.fsp
+    }
+}
+
+pub trait ConvertToInterval {
+    fn to_interval_string(
+        &self,
+        ctx: &mut EvalContext,
+        unit: IntervalUnit,
+        is_unsigned: bool,
+        decimal: isize,
+    ) -> Result<String>;
+}
+
+impl<'a> ConvertToInterval for BytesRef<'a> {
+    #[inline]
+    fn to_interval_string(
+        &self,
+        ctx: &mut EvalContext,
+        unit: IntervalUnit,
+        _is_unsigned: bool,
+        _decimal: isize,
+    ) -> Result<String> {
+        let mut interval = "0".to_string();
+        let input = std::str::from_utf8(self).map_err(Error::Encoding)?;
+        use IntervalUnit::*;
+        match unit {
+            Microsecond | Minute | Hour | Day | Week | Month | Quarter | Year => {
+                let trimmed = input.trim();
+                if let Some(m) = INTERVAL_REGEX.find(trimmed) {
+                    interval = m.as_str().to_string();
+                }
+
+                if interval != trimmed {
+                    ctx.handle_truncate(true)?;
+                }
+            }
+            Second => {
+                // The unit SECOND is specially handled, for example:
+                // date + INTERVAL "1e2" SECOND = date + INTERVAL 100 second
+                // date + INTERVAL "1.6" SECOND = date + INTERVAL 1.6 second
+                // But:
+                // date + INTERVAL "1e2" MINUTE = date + INTERVAL 1 MINUTE
+                // date + INTERVAL "1.6" MINUTE = date + INTERVAL 1 MINUTE
+                let dec = Decimal::from_bytes(self)?.into_result(ctx)?;
+                interval = dec.to_string();
+            }
+            _ => {
+                interval = input.to_string();
+            }
+        }
+        Ok(interval)
+    }
+}
+
+impl ConvertToInterval for i64 {
+    #[inline]
+    fn to_interval_string(
+        &self,
+        _ctx: &mut EvalContext,
+        _unit: IntervalUnit,
+        is_unsigned: bool,
+        _decimal: isize,
+    ) -> Result<String> {
+        if is_unsigned {
+            Ok((*self as u64).to_string())
+        } else {
+            Ok(self.to_string())
+        }
+    }
+}
+
+impl ConvertToInterval for Real {
+    #[inline]
+    fn to_interval_string(
+        &self,
+        _ctx: &mut EvalContext,
+        _unit: IntervalUnit,
+        _is_unsigned: bool,
+        decimal: isize,
+    ) -> Result<String> {
+        Ok(format!("{:.*}", decimal as usize, self.into_inner()))
+    }
+}
+
+impl ConvertToInterval for Decimal {
+    #[inline]
+    fn to_interval_string(
+        &self,
+        ctx: &mut EvalContext,
+        unit: IntervalUnit,
+        _is_unsigned: bool,
+        _decimal: isize,
+    ) -> Result<String> {
+        let mut interval = self.to_string();
+        use IntervalUnit::*;
+        match unit {
+            HourMinute | MinuteSecond | YearMonth | DayHour | DayMinute | DaySecond
+            | DayMicrosecond | HourMicrosecond | HourSecond | MinuteMicrosecond
+            | SecondMicrosecond => {
+                let mut neg = false;
+                if !interval.is_empty() && interval.starts_with('-') {
+                    neg = true;
+                    interval = interval[1..].to_string();
+                }
+                match unit {
+                    HourMinute | MinuteSecond => interval = interval.replace('.', ":"),
+                    YearMonth => interval = interval.replace('.', "-"),
+                    DayHour => interval = interval.replace('.', " "),
+                    DayMinute => interval = "0 ".to_string() + &interval.replace('.', ":"),
+                    DaySecond => interval = "0 00:".to_string() + &interval.replace('.', ":"),
+                    DayMicrosecond => interval = "0 00:00:".to_string() + &interval,
+                    HourMicrosecond => interval = "00:00:".to_string() + &interval,
+                    HourSecond => interval = "00:".to_string() + &interval.replace('.', ":"),
+                    MinuteMicrosecond => interval = "00:".to_string() + &interval,
+                    SecondMicrosecond => (),
+                    _ => unreachable!(),
+                }
+                if neg {
+                    interval = "-".to_string() + &interval;
+                }
+            }
+            Second => (),
+            _ => {
+                let rounded = self.round(0, RoundMode::HalfEven).into_result(ctx)?;
+                let int_val = rounded.as_i64().into_result(ctx)?;
+                interval = int_val.to_string();
+            }
+        }
+        Ok(interval)
     }
 }

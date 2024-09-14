@@ -1,7 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use lazy_static::lazy_static;
-use regex::Regex;
 use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
 use tidb_query_datatype::{
@@ -16,7 +14,7 @@ use tidb_query_datatype::{
                 extension::DateTimeExtension, interval::*, weekmode::WeekMode, WeekdayExtension,
                 MONTH_NAMES,
             },
-            Duration, RoundMode, Time, TimeType, MAX_FSP,
+            Duration, Time, TimeType, MAX_FSP,
         },
         Error, Result as CodecResult,
     },
@@ -915,10 +913,6 @@ fn datetime_to_string(mut datetime: DateTime) -> String {
     datetime.to_string()
 }
 
-lazy_static! {
-    static ref INTERVAL_REGEX: Regex = Regex::new(r"^[+-]?[\d]+").unwrap();
-}
-
 pub struct AddSubDateMeta {
     unit: IntervalUnit,
     is_clock_unit: bool,
@@ -1015,129 +1009,6 @@ impl AddSubDateConvertToTime for DateTime {
     }
 }
 
-pub trait AddSubDateConvertToInterval {
-    fn to_interval_string(
-        &self,
-        ctx: &mut EvalContext,
-        metadata: &AddSubDateMeta,
-    ) -> CodecResult<String>;
-}
-
-impl<'a> AddSubDateConvertToInterval for BytesRef<'a> {
-    #[inline]
-    fn to_interval_string(
-        &self,
-        ctx: &mut EvalContext,
-        metadata: &AddSubDateMeta,
-    ) -> CodecResult<String> {
-        let mut interval = "0".to_string();
-        let input = std::str::from_utf8(self).map_err(Error::Encoding)?;
-        use IntervalUnit::*;
-        match metadata.unit {
-            Microsecond | Minute | Hour | Day | Week | Month | Quarter | Year => {
-                let trimmed = input.trim();
-                if let Some(m) = INTERVAL_REGEX.find(trimmed) {
-                    interval = m.as_str().to_string();
-                }
-
-                if interval != trimmed {
-                    ctx.handle_truncate(true)?;
-                }
-            }
-            Second => {
-                // The unit SECOND is specially handled, for example:
-                // date + INTERVAL "1e2" SECOND = date + INTERVAL 100 second
-                // date + INTERVAL "1.6" SECOND = date + INTERVAL 1.6 second
-                // But:
-                // date + INTERVAL "1e2" MINUTE = date + INTERVAL 1 MINUTE
-                // date + INTERVAL "1.6" MINUTE = date + INTERVAL 1 MINUTE
-                let dec = Decimal::from_bytes(self)?.into_result(ctx)?;
-                interval = dec.to_string();
-            }
-            _ => {
-                interval = input.to_string();
-            }
-        }
-        Ok(interval)
-    }
-}
-
-impl AddSubDateConvertToInterval for i64 {
-    #[inline]
-    fn to_interval_string(
-        &self,
-        _: &mut EvalContext,
-        metadata: &AddSubDateMeta,
-    ) -> CodecResult<String> {
-        if metadata.interval_unsigned {
-            Ok((*self as u64).to_string())
-        } else {
-            Ok(self.to_string())
-        }
-    }
-}
-
-impl AddSubDateConvertToInterval for Real {
-    #[inline]
-    fn to_interval_string(
-        &self,
-        _: &mut EvalContext,
-        metadata: &AddSubDateMeta,
-    ) -> CodecResult<String> {
-        Ok(format!(
-            "{:.*}",
-            metadata.interval_decimal as usize,
-            self.into_inner()
-        ))
-    }
-}
-
-impl AddSubDateConvertToInterval for Decimal {
-    #[inline]
-    fn to_interval_string(
-        &self,
-        ctx: &mut EvalContext,
-        metadata: &AddSubDateMeta,
-    ) -> CodecResult<String> {
-        let mut interval = self.to_string();
-        use IntervalUnit::*;
-        match metadata.unit {
-            HourMinute | MinuteSecond | YearMonth | DayHour | DayMinute | DaySecond
-            | DayMicrosecond | HourMicrosecond | HourSecond | MinuteMicrosecond
-            | SecondMicrosecond => {
-                let mut neg = false;
-                if !interval.is_empty() && interval.starts_with('-') {
-                    neg = true;
-                    interval = interval[1..].to_string();
-                }
-                match metadata.unit {
-                    HourMinute | MinuteSecond => interval = interval.replace('.', ":"),
-                    YearMonth => interval = interval.replace('.', "-"),
-                    DayHour => interval = interval.replace('.', " "),
-                    DayMinute => interval = "0 ".to_string() + &interval.replace('.', ":"),
-                    DaySecond => interval = "0 00:".to_string() + &interval.replace('.', ":"),
-                    DayMicrosecond => interval = "0 00:00:".to_string() + &interval,
-                    HourMicrosecond => interval = "00:00:".to_string() + &interval,
-                    HourSecond => interval = "00:".to_string() + &interval.replace('.', ":"),
-                    MinuteMicrosecond => interval = "00:".to_string() + &interval,
-                    SecondMicrosecond => (),
-                    _ => unreachable!(),
-                }
-                if neg {
-                    interval = "-".to_string() + &interval;
-                }
-            }
-            Second => (),
-            _ => {
-                let rounded = self.round(0, RoundMode::HalfEven).into_result(ctx)?;
-                let int_val = rounded.as_i64().into_result(ctx)?;
-                interval = int_val.to_string();
-            }
-        }
-        Ok(interval)
-    }
-}
-
 fn add_date(
     ctx: &mut EvalContext,
     mut datetime: DateTime,
@@ -1168,9 +1039,9 @@ fn sub_date(
 }
 
 #[inline]
-fn add_sub_date<
+fn add_sub_date_as_bytes<
     T: AddSubDateConvertToTime,
-    I: AddSubDateConvertToInterval,
+    I: ConvertToInterval,
     F: Fn(&mut EvalContext, DateTime, &Interval, u8) -> CodecResult<DateTime>,
 >(
     ctx: &mut EvalContext,
@@ -1184,7 +1055,12 @@ fn add_sub_date<
         Ok(d) => d,
         Err(e) => return ctx.handle_invalid_time_error(e).map(|_| Ok(None))?,
     };
-    let interval_str = interval.to_interval_string(ctx, metadata)?;
+    let interval_str = interval.to_interval_string(
+        ctx,
+        metadata.unit,
+        metadata.interval_unsigned,
+        metadata.interval_decimal,
+    )?;
     let interval = Interval::parse_from_str(ctx, &metadata.unit, &interval_str)?;
     let mut date_res = match op(
         ctx,
@@ -1208,7 +1084,7 @@ fn add_sub_date<
 #[inline]
 pub fn add_date_as_bytes<
     T: AddSubDateConvertToTime + Evaluable + EvaluableRet,
-    I: AddSubDateConvertToInterval + Evaluable + EvaluableRet,
+    I: ConvertToInterval + Evaluable + EvaluableRet,
 >(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
@@ -1217,14 +1093,14 @@ pub fn add_date_as_bytes<
     interval: &I,
     _unit: BytesRef,
 ) -> Result<Option<Bytes>> {
-    add_sub_date(ctx, extra, metadata, time, interval, add_date)
+    add_sub_date_as_bytes(ctx, extra, metadata, time, interval, add_date)
 }
 
 #[rpn_fn(capture = [ctx, extra, metadata], metadata_mapper = build_add_sub_date_meta)]
 #[inline]
 pub fn sub_date_as_bytes<
     T: AddSubDateConvertToTime + Evaluable + EvaluableRet,
-    I: AddSubDateConvertToInterval + Evaluable + EvaluableRet,
+    I: ConvertToInterval + Evaluable + EvaluableRet,
 >(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
@@ -1233,7 +1109,7 @@ pub fn sub_date_as_bytes<
     interval: &I,
     _unit: BytesRef,
 ) -> Result<Option<Bytes>> {
-    add_sub_date(ctx, extra, metadata, time, interval, sub_date)
+    add_sub_date_as_bytes(ctx, extra, metadata, time, interval, sub_date)
 }
 
 #[rpn_fn(capture = [ctx, extra, metadata], metadata_mapper = build_add_sub_date_meta)]
@@ -1246,7 +1122,7 @@ pub fn add_date_time_string_interval_string_as_bytes(
     interval: BytesRef,
     _unit: BytesRef,
 ) -> Result<Option<Bytes>> {
-    add_sub_date(ctx, extra, metadata, &time, &interval, add_date)
+    add_sub_date_as_bytes(ctx, extra, metadata, &time, &interval, add_date)
 }
 
 #[rpn_fn(capture = [ctx, extra, metadata], metadata_mapper = build_add_sub_date_meta)]
@@ -1259,12 +1135,12 @@ pub fn sub_date_time_string_interval_string_as_bytes(
     interval: BytesRef,
     _unit: BytesRef,
 ) -> Result<Option<Bytes>> {
-    add_sub_date(ctx, extra, metadata, &time, &interval, sub_date)
+    add_sub_date_as_bytes(ctx, extra, metadata, &time, &interval, sub_date)
 }
 
 #[rpn_fn(capture = [ctx, extra, metadata], metadata_mapper = build_add_sub_date_meta)]
 #[inline]
-pub fn add_date_time_string_as_bytes<I: AddSubDateConvertToInterval + Evaluable + EvaluableRet>(
+pub fn add_date_time_string_as_bytes<I: ConvertToInterval + Evaluable + EvaluableRet>(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
     metadata: &AddSubDateMeta,
@@ -1272,12 +1148,12 @@ pub fn add_date_time_string_as_bytes<I: AddSubDateConvertToInterval + Evaluable 
     interval: &I,
     _unit: BytesRef,
 ) -> Result<Option<Bytes>> {
-    add_sub_date(ctx, extra, metadata, &time, interval, add_date)
+    add_sub_date_as_bytes(ctx, extra, metadata, &time, interval, add_date)
 }
 
 #[rpn_fn(capture = [ctx, extra, metadata], metadata_mapper = build_add_sub_date_meta)]
 #[inline]
-pub fn sub_date_time_string_as_bytes<I: AddSubDateConvertToInterval + Evaluable + EvaluableRet>(
+pub fn sub_date_time_string_as_bytes<I: ConvertToInterval + Evaluable + EvaluableRet>(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
     metadata: &AddSubDateMeta,
@@ -1285,7 +1161,7 @@ pub fn sub_date_time_string_as_bytes<I: AddSubDateConvertToInterval + Evaluable 
     interval: &I,
     _unit: BytesRef,
 ) -> Result<Option<Bytes>> {
-    add_sub_date(ctx, extra, metadata, &time, interval, sub_date)
+    add_sub_date_as_bytes(ctx, extra, metadata, &time, interval, sub_date)
 }
 
 #[rpn_fn(capture = [ctx, extra, metadata], metadata_mapper = build_add_sub_date_meta)]
@@ -1298,7 +1174,7 @@ pub fn add_date_interval_string_as_bytes<T: AddSubDateConvertToTime + Evaluable 
     interval: BytesRef,
     _unit: BytesRef,
 ) -> Result<Option<Bytes>> {
-    add_sub_date(ctx, extra, metadata, time, &interval, add_date)
+    add_sub_date_as_bytes(ctx, extra, metadata, time, &interval, add_date)
 }
 
 #[rpn_fn(capture = [ctx, extra, metadata], metadata_mapper = build_add_sub_date_meta)]
@@ -1311,7 +1187,7 @@ pub fn sub_date_interval_string_as_bytes<T: AddSubDateConvertToTime + Evaluable 
     interval: BytesRef,
     _unit: BytesRef,
 ) -> Result<Option<Bytes>> {
-    add_sub_date(ctx, extra, metadata, time, &interval, sub_date)
+    add_sub_date_as_bytes(ctx, extra, metadata, time, &interval, sub_date)
 }
 
 #[cfg(test)]
