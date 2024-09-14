@@ -1027,7 +1027,7 @@ impl Runnable for BackgroundRunner {
             }
             BackgroundTask::MemoryCheckAndEvict => {
                 let mem_usage_before_check = self.core.memory_controller.mem_usage();
-                debug!(
+                info!(
                     "ime start memory usage check and evict";
                     "mem_usage(MB)" => ReadableSize(mem_usage_before_check as u64).as_mb()
                 );
