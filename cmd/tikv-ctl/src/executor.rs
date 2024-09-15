@@ -1241,11 +1241,16 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerImplV2<ER> {
     }
 
     fn get_region_size(&self, region: u64, cfs: Vec<&str>) -> Vec<(String, usize)> {
-        self.region_size(region, cfs)
-            .unwrap_or_else(|e| perror_and_exit("Debugger::region_size", e))
-            .into_iter()
-            .map(|(cf, size)| (cf.to_owned(), size))
-            .collect()
+        match self.region_size(region, cfs) {
+            Ok(v) => v
+                .into_iter()
+                .map(|(cf, size)| (cf.to_owned(), size))
+                .collect(),
+            Err(e) => {
+                println!("Debugger::region_size: {}", e);
+                vec![]
+            }
+        }
     }
 
     fn get_region_info(&self, region: u64) -> RegionInfo {
