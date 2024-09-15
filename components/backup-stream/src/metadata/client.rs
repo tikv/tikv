@@ -331,6 +331,13 @@ impl<Store: MetaStore> MetadataClient<Store> {
             .await
     }
 
+    /// resume a task.
+    pub async fn resume(&self, name: &str) -> Result<()> {
+        self.meta_store
+            .delete(Keys::Key(MetaKey::pause_of(name)))
+            .await
+    }
+
     pub async fn get_tasks_pause_status(&self) -> Result<HashMap<Vec<u8>, bool>> {
         let kvs = self
             .meta_store
@@ -354,6 +361,11 @@ impl<Store: MetaStore> MetadataClient<Store> {
         defer! {
             super::metrics::METADATA_OPERATION_LATENCY.with_label_values(&["task_get"]).observe(now.saturating_elapsed().as_secs_f64())
         }
+        fail::fail_point!("failed_to_get_task", |_| {
+            Err(Error::MalformedMetadata(
+                "failed to connect etcd client".to_string(),
+            ))
+        });
         let items = self
             .meta_store
             .get_latest(Keys::Key(MetaKey::task_of(name)))
@@ -376,7 +388,7 @@ impl<Store: MetaStore> MetadataClient<Store> {
         }
         fail::fail_point!("failed_to_get_tasks", |_| {
             Err(Error::MalformedMetadata(
-                "faild to connect etcd client".to_string(),
+                "failed to connect etcd client".to_string(),
             ))
         });
         let kvs = self
