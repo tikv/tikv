@@ -256,13 +256,14 @@ impl TempFilePool {
         }
     }
 
-    /// Open a file reference for reading.
-    /// Please notice that once a compression applied, this would yield the
-    /// compressed content (won't decompress them.) -- that is what "raw"
-    /// implies.
-    /// "But why there isn't an `open_for_read,` which decompresses the
-    /// content?" "Because in our use case, we only need the raw content --
-    /// we just send it to external storage."
+    /// Opens a file for reading in its raw format.
+    ///
+    /// This method returns the file content as-is, including any applied
+    /// compression. It does not perform decompression.
+    ///
+    /// Note: We don't provide an `open_for_read` method that decompresses the
+    /// content because our primary use case is to send the raw (potentially
+    /// compressed) data directly to external storage.
     pub fn open_raw_for_read(&self, p: &Path) -> Result<ForRead> {
         use std::io::{Error as IoErr, ErrorKind};
 

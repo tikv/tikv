@@ -9,18 +9,18 @@ use kvproto::{
 
 use crate::{DataKeyManager, Error, MultiMasterKeyBackend};
 
+/// BackupEncryptionManager handles encryption operations for backup processes.
 #[derive(Clone)]
 pub struct BackupEncryptionManager {
     // Plaintext data key directly passed from user in stream back request,
-    // only used to encrypt backup files uploaded to external storage,
-    // useful when backup encryption is not configured. Not recommended in
-    // production.
+    // only used to encrypt log backup files uploaded to external storage,
+    // Not recommended in production.
     pub plaintext_data_key: Option<CipherInfo>,
-    // encryption method for backup data file encryption using master
+    // encryption method used to encrypt log backup files for master key based approach
     pub master_key_based_file_encryption_method: EncryptionMethod,
-    // backend that contains zero or multiple master keys
+    // backend that can contain multiple master keys, initialized as zero key inside
     pub multi_master_key_backend: MultiMasterKeyBackend,
-    // used to encrypt local temp files
+    // used to encrypt local temp files, configured by TiKV
     pub tikv_data_key_manager: Option<Arc<DataKeyManager>>,
 }
 impl BackupEncryptionManager {

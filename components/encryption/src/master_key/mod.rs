@@ -91,7 +91,10 @@ impl AsyncBackend for PlaintextBackend {
     }
 }
 
-/// Mainly used for restore where multiple master keys could be provided.
+/// Used for restore where multiple master keys are provided.
+/// It will iterate the master key list and do the encryption/decryption.
+/// If any master key succeeds, the request succeeds, if none succeeds, the
+/// request will fail with a combined error of each master key error.
 #[derive(Default, Debug, Clone)]
 pub struct MultiMasterKeyBackend {
     inner: Arc<RwLock<MultiMasterKeyBackendInner>>,
@@ -100,7 +103,7 @@ pub struct MultiMasterKeyBackend {
 #[derive(Default, Debug)]
 struct MultiMasterKeyBackendInner {
     backends: Option<Vec<Box<dyn AsyncBackend>>>,
-    configs: Option<Vec<MasterKeyConfig>>,
+    pub(crate) configs: Option<Vec<MasterKeyConfig>>,
 }
 impl MultiMasterKeyBackend {
     pub fn new() -> Self {
@@ -326,5 +329,129 @@ pub mod tests {
         fn is_secure(&self) -> bool {
             true
         }
+    }
+
+    #[derive(Clone)]
+    struct MockAsyncBackend {
+        encrypt_result: Arc<dyn Fn() -> Result<EncryptedContent> + Send + Sync>,
+        decrypt_result: Arc<dyn Fn() -> Result<Vec<u8>> + Send + Sync>,
+    }
+
+    #[async_trait]
+    impl AsyncBackend for MockAsyncBackend {
+        async fn encrypt_async(&self, _plaintext: &[u8]) -> Result<EncryptedContent> {
+            (self.encrypt_result)()
+        }
+
+        async fn decrypt_async(&self, _ciphertext: &EncryptedContent) -> Result<Vec<u8>> {
+            (self.decrypt_result)()
+        }
+    }
+
+    impl std::fmt::Debug for MockAsyncBackend {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("MockAsyncBackend").finish()
+        }
+    }
+
+    fn create_mock_backend<E, D>(encrypt_result: E, decrypt_result: D) -> Box<dyn AsyncBackend>
+    where
+        E: Fn() -> Result<EncryptedContent> + Send + Sync + 'static,
+        D: Fn() -> Result<Vec<u8>> + Send + Sync + 'static,
+    {
+        Box::new(MockAsyncBackend {
+            encrypt_result: Arc::new(encrypt_result),
+            decrypt_result: Arc::new(decrypt_result),
+        })
+    }
+
+    // In your tests:
+    #[tokio::test]
+    async fn test_multi_master_key_backend_encrypt_decrypt_failure() {
+        let backend = MultiMasterKeyBackend::new();
+
+        let configs = vec![MasterKeyConfig::File {
+            config: FileConfig {
+                path: "test".to_string(),
+            },
+        }];
+        backend
+            .update_from_config_if_needed(configs, |_| {
+                Ok(create_mock_backend(
+                    || {
+                        Err(Error::Other(Box::new(std::io::Error::new(
+                            ErrorKind::Other,
+                            "Encrypt error",
+                        ))))
+                    },
+                    || {
+                        Err(Error::Other(Box::new(std::io::Error::new(
+                            ErrorKind::Other,
+                            "Decrypt error",
+                        ))))
+                    },
+                ))
+            })
+            .await
+            .unwrap();
+
+        backend.encrypt(&[4, 5, 6]).await.unwrap();
+        backend.decrypt(&EncryptedContent::default()).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_multi_master_key_backend_inner_with_multiple_backends() {
+        let mut inner = MultiMasterKeyBackendInner::default();
+
+        let configs = vec![
+            MasterKeyConfig::File {
+                config: FileConfig {
+                    path: "test1".to_string(),
+                },
+            },
+            MasterKeyConfig::File {
+                config: FileConfig {
+                    path: "test2".to_string(),
+                },
+            },
+            MasterKeyConfig::File {
+                config: FileConfig {
+                    path: "test3".to_string(),
+                },
+            },
+        ];
+        let backends: Vec<Box<dyn AsyncBackend>> = vec![
+            create_mock_backend(
+                || {
+                    Err(Error::Other(Box::new(std::io::Error::new(
+                        ErrorKind::Other,
+                        "Encrypt error 1",
+                    ))))
+                },
+                || Ok(vec![1, 2, 3]),
+            ),
+            create_mock_backend(
+                || Ok(EncryptedContent::default()),
+                || {
+                    Err(Error::Other(Box::new(std::io::Error::new(
+                        ErrorKind::Other,
+                        "Decrypt error 2",
+                    ))))
+                },
+            ),
+            create_mock_backend(|| Ok(EncryptedContent::default()), || Ok(vec![7, 8, 9])),
+        ];
+
+        inner.configs = Some(configs);
+        inner.backends = Some(backends);
+
+        let backend = MultiMasterKeyBackend {
+            inner: Arc::new(RwLock::new(inner)),
+        };
+
+        backend.encrypt(&[10, 11, 12]).await.unwrap();
+
+        let decrypt_result = backend.decrypt(&EncryptedContent::default()).await.unwrap();
+        assert_eq!(decrypt_result, vec![1, 2, 3]);
     }
 }

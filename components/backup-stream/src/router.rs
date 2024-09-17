@@ -497,58 +497,8 @@ impl RouterInner {
         let task_name = task.info.get_name().to_owned();
         // register task info
         let cfg = self.tempfile_config_for_task(&task);
-        let backup_encryption_manager = if let Some(config) = task.info.security_config.as_ref() {
-            if let Some(encryption) = config.encryption.as_ref() {
-                match encryption {
-                    StreamBackupTaskSecurityConfig_oneof_encryption::PlaintextDataKey(key) => {
-                        // sanity check key is valid
-                        let opt_key = if !key.cipher_key.is_empty()
-                            && (key.cipher_type != EncryptionMethod::Plaintext
-                                && key.cipher_type != EncryptionMethod::Unknown)
-                        {
-                            Some(key.clone())
-                        } else {
-                            None
-                        };
-                        BackupEncryptionManager::new(
-                            opt_key,
-                            self.backup_encryption_manager
-                                .master_key_based_file_encryption_method,
-                            self.backup_encryption_manager
-                                .multi_master_key_backend
-                                .clone(),
-                            self.backup_encryption_manager.tikv_data_key_manager.clone(),
-                        )
-                    }
-                    StreamBackupTaskSecurityConfig_oneof_encryption::MasterKeyConfig(config) => {
-                        let multi_master_key_backend = if !config.master_keys.is_empty() {
-                            let multi_master_key_backend = MultiMasterKeyBackend::new();
-                            multi_master_key_backend
-                                .update_from_proto_if_needed(
-                                    config.master_keys.to_vec(),
-                                    create_async_backend,
-                                )
-                                .await?;
-                            multi_master_key_backend
-                        } else {
-                            self.backup_encryption_manager
-                                .multi_master_key_backend
-                                .clone()
-                        };
-                        BackupEncryptionManager::new(
-                            None,
-                            config.encryption_type,
-                            multi_master_key_backend,
-                            self.backup_encryption_manager.tikv_data_key_manager.clone(),
-                        )
-                    }
-                }
-            } else {
-                self.backup_encryption_manager.clone()
-            }
-        } else {
-            self.backup_encryption_manager.clone()
-        };
+        let backup_encryption_manager =
+            self.build_backup_encryption_manager_for_task(&task).await?;
         let stream_task = StreamTaskHandler::new(
             task,
             ranges.clone(),
@@ -563,6 +513,67 @@ impl RouterInner {
         self.register_ranges(&task_name, ranges);
 
         Ok(())
+    }
+
+    async fn build_backup_encryption_manager_for_task(
+        &self,
+        task: &StreamTask,
+    ) -> Result<BackupEncryptionManager> {
+        if let Some(config) = task.info.security_config.as_ref() {
+            if let Some(encryption) = config.encryption.as_ref() {
+                match encryption {
+                    StreamBackupTaskSecurityConfig_oneof_encryption::PlaintextDataKey(key) => {
+                        // sanity check key is valid
+                        let opt_key = if !key.cipher_key.is_empty()
+                            && (key.cipher_type != EncryptionMethod::Plaintext
+                                && key.cipher_type != EncryptionMethod::Unknown)
+                        {
+                            Some(key.clone())
+                        } else {
+                            None
+                        };
+                        Ok(BackupEncryptionManager::new(
+                            opt_key,
+                            self.backup_encryption_manager
+                                .master_key_based_file_encryption_method,
+                            self.backup_encryption_manager
+                                .multi_master_key_backend
+                                .clone(),
+                            self.backup_encryption_manager.tikv_data_key_manager.clone(),
+                        ))
+                    }
+                    StreamBackupTaskSecurityConfig_oneof_encryption::MasterKeyConfig(config) => {
+                        let multi_master_key_backend = if !config.master_keys.is_empty() {
+                            let multi_master_key_backend = MultiMasterKeyBackend::new();
+                            multi_master_key_backend
+                                .update_from_proto_if_needed(
+                                    config.master_keys.to_vec(),
+                                    create_async_backend,
+                                )
+                                .await?;
+                            multi_master_key_backend
+                        } else {
+                            error!(
+                                "receive master key config but does not find master key inside, fall back to default"
+                            );
+                            self.backup_encryption_manager
+                                .multi_master_key_backend
+                                .clone()
+                        };
+                        Ok(BackupEncryptionManager::new(
+                            None,
+                            config.encryption_type,
+                            multi_master_key_backend,
+                            self.backup_encryption_manager.tikv_data_key_manager.clone(),
+                        ))
+                    }
+                }
+            } else {
+                Ok(self.backup_encryption_manager.clone())
+            }
+        } else {
+            Ok(self.backup_encryption_manager.clone())
+        }
     }
 
     fn tempfile_config_for_task(&self, task: &StreamTask) -> tempfiles::Config {
@@ -1657,7 +1668,7 @@ struct DataFile {
     max_ts: TimeStamp,
     resolved_ts: TimeStamp,
     min_begin_ts: Option<TimeStamp>,
-    // logical checksum of all kv pairs, runs before compression
+    // checksum of plaintext kv file , calculated before compression
     sha256: Hasher,
     // TODO: use lz4 with async feature
     inner: tempfiles::ForWrite,

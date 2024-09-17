@@ -22,7 +22,6 @@ use backup_stream::{
     RegionCheckpointOperation, RegionSet, Task,
 };
 use encryption::{BackupEncryptionManager, MultiMasterKeyBackend};
-use engine_rocks::RocksEngine;
 use futures::{executor::block_on, AsyncWriteExt, Future, Stream, StreamExt};
 use grpcio::{ChannelBuilder, Server, ServerBuilder};
 use kvproto::{
