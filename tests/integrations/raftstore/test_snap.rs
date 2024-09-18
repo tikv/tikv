@@ -1191,11 +1191,25 @@ fn test_leader_step_down_after_requesting_snapshot() {
 #[test_case(test_raftstore::new_node_cluster)]
 #[test_case(test_raftstore::new_server_cluster)]
 fn test_node_apply_snapshot_by_or_without_ingest() {
+    let validate_sst_files = |dir: &std::path::Path| -> bool {
+        let mut sst_file_count = 0_usize;
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_file() && path.ends_with(".sst") {
+                sst_file_count += 1;
+            }
+        }
+        sst_file_count > 0
+    };
     let check_snap_count = |snap_dir: &str| -> usize {
-        fs::read_dir(snap_dir)
-            .unwrap()
-            .filter(|p| p.is_ok())
-            .count()
+        let mut valid_snap_count = 0_usize;
+        for entry in fs::read_dir(snap_dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() && validate_sst_files(&path) {
+                valid_snap_count += 1;
+            }
+        }
+        valid_snap_count
     };
     for snap_min_ingest_size in [ReadableSize::mb(1), ReadableSize::default()] {
         let mut cluster = new_cluster(0, 4);
