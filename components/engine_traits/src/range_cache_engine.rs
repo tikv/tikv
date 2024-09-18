@@ -114,7 +114,7 @@ pub struct CacheRegion {
     pub epoch_version: u64,
     // data start key of the region range,  equals to data_key(region.start_key).
     pub start: Vec<u8>,
-    // data start key of the region range, equals to data_end_key(region.start_key).
+    // data end key of the region range, equals to data_end_key(region.end_key).
     pub end: Vec<u8>,
 }
 
