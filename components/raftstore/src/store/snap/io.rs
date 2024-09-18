@@ -12,7 +12,11 @@ use encryption::{
     from_engine_encryption_method, DataKeyManager, DecrypterReader, EncrypterWriter, Iv,
 };
 use engine_traits::{
+<<<<<<< HEAD
     CfName, EncryptionKeyManager, Error as EngineError, Iterable, KvEngine, Mutable,
+=======
+    CfName, Error as EngineError, IterOptions, Iterable, Iterator, KvEngine, Mutable, RefIterable,
+>>>>>>> 12e03b787c (raftstore: directly write kvs rafther than ingestion when merging small regions. (#17408))
     SstCompressionType, SstReader, SstWriter, SstWriterBuilder, WriteBatch,
 };
 use fail::fail_point;
@@ -252,7 +256,7 @@ pub fn apply_plain_cf_file<E, F>(
     db: &E,
     cf: &str,
     batch_size: usize,
-    mut callback: F,
+    callback: &mut F,
 ) -> Result<(), Error>
 where
     E: KvEngine,
@@ -302,17 +306,98 @@ where
     }
 }
 
-pub fn apply_sst_cf_file<E>(files: &[&str], db: &E, cf: &str) -> Result<(), Error>
+pub fn apply_sst_cf_files_by_ingest<E>(files: &[&str], db: &E, cf: &str) -> Result<(), Error>
 where
     E: KvEngine,
 {
     if files.len() > 1 {
         info!(
-            "apply_sst_cf_file starts on cf {}. All files {:?}",
+            "apply_sst_cf_files_by_ingest starts on cf {}. All files {:?}",
             cf, files
         );
     }
     box_try!(db.ingest_external_file_cf(cf, files));
+    Ok(())
+}
+
+fn apply_sst_cf_file_without_ingest<E, F>(
+    path: &str,
+    db: &E,
+    cf: &str,
+    key_mgr: Option<Arc<DataKeyManager>>,
+    stale_detector: &impl StaleDetector,
+    batch_size: usize,
+    callback: &mut F,
+) -> Result<(), Error>
+where
+    E: KvEngine,
+    F: for<'r> FnMut(&'r [(Vec<u8>, Vec<u8>)]),
+{
+    let sst_reader = E::SstReader::open(path, key_mgr)?;
+    let mut iter = sst_reader.iter(IterOptions::default())?;
+    iter.seek_to_first()?;
+
+    let mut wb = db.write_batch();
+    let mut write_to_db = |batch: &mut Vec<(Vec<u8>, Vec<u8>)>| -> Result<(), EngineError> {
+        batch.iter().try_for_each(|(k, v)| wb.put_cf(cf, k, v))?;
+        wb.write()?;
+        wb.clear();
+        callback(batch);
+        batch.clear();
+        Ok(())
+    };
+
+    // Collect keys to a vec rather than wb so that we can invoke the callback less
+    // times.
+    let mut batch = Vec::with_capacity(1024);
+    let mut batch_data_size = 0;
+    loop {
+        if stale_detector.is_stale() {
+            return Err(Error::Abort);
+        }
+        if !iter.valid()? {
+            break;
+        }
+        let key = iter.key().to_vec();
+        let value = iter.value().to_vec();
+        batch_data_size += key.len() + value.len();
+        batch.push((key, value));
+        if batch_data_size >= batch_size {
+            box_try!(write_to_db(&mut batch));
+            batch_data_size = 0;
+        }
+        iter.next()?;
+    }
+    if !batch.is_empty() {
+        box_try!(write_to_db(&mut batch));
+    }
+    Ok(())
+}
+
+pub fn apply_sst_cf_files_without_ingest<E, F>(
+    files: &[&str],
+    db: &E,
+    cf: &str,
+    key_mgr: Option<Arc<DataKeyManager>>,
+    stale_detector: &impl StaleDetector,
+    batch_size: usize,
+    callback: &mut F,
+) -> Result<(), Error>
+where
+    E: KvEngine,
+    F: for<'r> FnMut(&'r [(Vec<u8>, Vec<u8>)]),
+{
+    for path in files {
+        box_try!(apply_sst_cf_file_without_ingest(
+            path,
+            db,
+            cf,
+            key_mgr.clone(),
+            stale_detector,
+            batch_size,
+            callback
+        ));
+    }
     Ok(())
 }
 
@@ -413,11 +498,19 @@ mod tests {
 
                     let detector = TestStaleDetector {};
                     let tmp_file_path = &cf_file.tmp_file_paths()[0];
-                    apply_plain_cf_file(tmp_file_path, None, &detector, &db1, cf, 16, |v| {
-                        v.iter()
-                            .cloned()
-                            .for_each(|pair| applied_keys.entry(cf).or_default().push(pair))
-                    })
+                    apply_plain_cf_file(
+                        tmp_file_path,
+                        None,
+                        &detector,
+                        &db1,
+                        cf,
+                        16,
+                        &mut |v: &[(Vec<u8>, Vec<u8>)]| {
+                            v.iter()
+                                .cloned()
+                                .for_each(|pair| applied_keys.entry(cf).or_default().push(pair))
+                        },
+                    )
                     .unwrap();
                 }
 
@@ -505,7 +598,7 @@ mod tests {
                         .iter()
                         .map(|s| s.as_str())
                         .collect::<Vec<&str>>();
-                    apply_sst_cf_file(&tmp_file_paths, &db1, CF_DEFAULT).unwrap();
+                    apply_sst_cf_files_by_ingest(&tmp_file_paths, &db1, CF_DEFAULT).unwrap();
                     assert_eq_db(&db, &db1);
                 }
             }
