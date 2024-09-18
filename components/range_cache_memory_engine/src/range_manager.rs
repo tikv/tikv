@@ -383,9 +383,11 @@ impl RegionMetaMap {
             return overlapped_region_state;
         }
 
-        // check region with same id, it is possible that there is a cache region with
-        // outdated epoch that is in the (pending_)evicting state, and a load is
-        // triggered with newer version and the range is not overlapped.
+        // check region with same id. It is possible that there is a cached region with
+        // outdated epoch that is still in the (pending_)evicting state, and a new load is
+        // triggered after the region is merged and split for multiple times. Thus, the new 
+        // pending region's range may not overlap with the old cached region but their region
+        // ids are the same.
         if let Some(region) = self.regions.get(&region.id) {
             return Some(region.state);
         }
