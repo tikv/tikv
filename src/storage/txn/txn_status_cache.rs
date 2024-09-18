@@ -165,7 +165,7 @@ pub struct CacheEntry {
 impl CacheEntry {
     pub(crate) fn commit_ts(&self) -> Option<TimeStamp> {
         match self.state {
-            TxnState::Committed(ts) => Some(ts),
+            TxnState::Committed { commit_ts } => Some(commit_ts),
             _ => None,
         }
     }
@@ -173,8 +173,8 @@ impl CacheEntry {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TxnState {
-    Ongoing(TimeStamp),   // min_commit_ts
-    Committed(TimeStamp), // commit_ts
+    Ongoing { min_commit_ts: TimeStamp },
+    Committed { commit_ts: TimeStamp },
     RolledBack,
 }
 
@@ -264,6 +264,8 @@ pub struct TxnStatusCache {
     // default cache for committed txns
     normal_cache: Vec<CachePadded<Mutex<TxnStatusCacheSlot>>>,
     // for large txns, or any txn whose min_commit_ts needs to be cached
+    // It is isolated from the normal cache to prevents large transactions from being evicted due
+    // to normal transactions. This is how this module "prioritizes" large transactions.
     large_txn_cache: Vec<CachePadded<Mutex<TxnStatusCacheSlot>>>,
     is_enabled: bool,
 }
@@ -402,9 +404,6 @@ impl TxnStatusCache {
     /// Insert a transaction status into the cache, or update it. The current
     /// system time should be passed from outside to avoid getting system time
     /// repeatedly when multiple items are being inserted.
-    ///
-    /// If the transaction's information is already in the cache, it will
-    /// **NOT** be promoted to the most-recent place of the internal LRU.
     pub fn upsert(&self, start_ts: TimeStamp, state: TxnState, now: SystemTime) {
         if !self.is_enabled {
             return;
@@ -417,41 +416,39 @@ impl TxnStatusCache {
         };
         let slot_index = self.slot_index(start_ts);
 
-        let mut previous_size = 0;
-        let mut after_size = 0;
-        let mut previous_allocated = 0;
-        let mut after_allocated = 0;
+        let previous_size;
+        let after_size;
+        let previous_allocated;
+        let after_allocated;
         match &state {
-            TxnState::Ongoing(min_commit_ts) => {
+            // large cache path
+            TxnState::Ongoing { min_commit_ts } if *min_commit_ts > start_ts => {
                 // The large_txn_cache takes precedence over the normal_cache in the retrieval
                 // process.
-                if *min_commit_ts > start_ts {
-                    // This case implies that min_commit_ts would be useful, thus the entry is put
-                    // in the large cache.
-                    let mut large_txn_cache = self.large_txn_cache[slot_index].lock();
-                    previous_size = large_txn_cache.size();
-                    previous_allocated = large_txn_cache.internal_allocated_capacity();
-                    if let Some(existing_entry) = large_txn_cache.get_mut(&start_ts) {
-                        // don't update committed or rolled back txns.
-                        if let TxnState::Ongoing(_) = existing_entry.state {
+                // This case implies that min_commit_ts would be useful, thus the entry is put
+                // in the large cache.
+                let mut large_txn_cache = self.large_txn_cache[slot_index].lock();
+                previous_size = large_txn_cache.size();
+                previous_allocated = large_txn_cache.internal_allocated_capacity();
+                if let Some(existing_entry) = large_txn_cache.get_mut(&start_ts) {
+                    // don't update committed or rolled back txns.
+                    if let TxnState::Ongoing {
+                        min_commit_ts: existing_min_commit_ts,
+                    } = existing_entry.state
+                    {
+                        if *min_commit_ts > existing_min_commit_ts {
                             existing_entry.state = state;
                             existing_entry.update_time = update_time;
                         }
-                    } else {
-                        large_txn_cache.insert(start_ts, entry);
                     }
-                    after_size = large_txn_cache.size();
-                    after_allocated = large_txn_cache.internal_allocated_capacity();
                 } else {
-                    let mut normal_cache = self.normal_cache[slot_index].lock();
-                    previous_size = normal_cache.size();
-                    previous_allocated = normal_cache.internal_allocated_capacity();
-                    normal_cache.insert(start_ts, entry);
-                    after_size = normal_cache.size();
-                    after_allocated = normal_cache.internal_allocated_capacity();
+                    large_txn_cache.insert(start_ts, entry);
                 }
+                after_size = large_txn_cache.size();
+                after_allocated = large_txn_cache.internal_allocated_capacity();
             }
-            TxnState::Committed(_) | TxnState::RolledBack => {
+            // normal cache path
+            _ => {
                 let mut normal_cache = self.normal_cache[slot_index].lock();
                 previous_size = normal_cache.size();
                 previous_allocated = normal_cache.internal_allocated_capacity();
@@ -462,13 +459,15 @@ impl TxnStatusCache {
                 let mut large_cache = self.large_txn_cache[slot_index].lock();
                 if let Some(existing_entry) = large_cache.get_mut(&start_ts) {
                     // don't update committed or rolled back txns.
-                    if let TxnState::Ongoing(_) = existing_entry.state {
+                    if let TxnState::Ongoing { .. } = existing_entry.state {
                         existing_entry.state = state;
                         existing_entry.update_time = update_time;
                     }
                 }
             }
         }
+        // Update statistics.
+        // CAUTION: Assuming that only one TxnStatusCache instance is in a TiKV process.
         SCHED_TXN_STATUS_CACHE_SIZE
             .used
             .add(after_size as i64 - previous_size as i64);
@@ -479,7 +478,7 @@ impl TxnStatusCache {
 
     /// Insert a committed txn into the normal cache.
     pub fn insert_committed(&self, start_ts: TimeStamp, commit_ts: TimeStamp, now: SystemTime) {
-        let state = TxnState::Committed(commit_ts);
+        let state = TxnState::Committed { commit_ts };
         self.upsert(start_ts, state, now);
     }
 
@@ -968,7 +967,7 @@ mod tests {
         // 11@2003, 13@2005
         // Test inserting existed entries.
         // According to the implementation of LruCache, though it won't do any update to
-        // the content, it still check the tail to see if anything can be
+        // the content, it still checks the tail to see if anything can be
         // evicted.
         set_time(3004);
         c.insert_committed(13.into(), 14.into(), now());
@@ -1176,11 +1175,33 @@ mod tests {
         let cache = setup_cache();
         let now = SystemTime::now();
 
-        cache.upsert(1.into(), TxnState::Ongoing(2.into()), now);
-        assert_eq!(cache.get(1.into()), Some(TxnState::Ongoing(2.into())));
+        cache.upsert(
+            1.into(),
+            TxnState::Ongoing {
+                min_commit_ts: 2.into(),
+            },
+            now,
+        );
+        assert_eq!(
+            cache.get(1.into()),
+            Some(TxnState::Ongoing {
+                min_commit_ts: 2.into()
+            })
+        );
 
-        cache.upsert(1.into(), TxnState::Committed(3.into()), now);
-        assert_eq!(cache.get(1.into()), Some(TxnState::Committed(3.into())));
+        cache.upsert(
+            1.into(),
+            TxnState::Committed {
+                commit_ts: 3.into(),
+            },
+            now,
+        );
+        assert_eq!(
+            cache.get(1.into()),
+            Some(TxnState::Committed {
+                commit_ts: 3.into()
+            })
+        );
     }
 
     #[test]
@@ -1189,11 +1210,33 @@ mod tests {
         let now = SystemTime::now();
         let large_ts = 10000.into();
 
-        cache.upsert(1.into(), TxnState::Ongoing(large_ts), now);
-        assert_eq!(cache.get(1.into()), Some(TxnState::Ongoing(large_ts)));
+        cache.upsert(
+            1.into(),
+            TxnState::Ongoing {
+                min_commit_ts: large_ts,
+            },
+            now,
+        );
+        assert_eq!(
+            cache.get(1.into()),
+            Some(TxnState::Ongoing {
+                min_commit_ts: large_ts
+            })
+        );
 
-        cache.upsert(1.into(), TxnState::Committed(large_ts), now);
-        assert_eq!(cache.get(1.into()), Some(TxnState::Committed(large_ts)));
+        cache.upsert(
+            1.into(),
+            TxnState::Committed {
+                commit_ts: large_ts,
+            },
+            now,
+        );
+        assert_eq!(
+            cache.get(1.into()),
+            Some(TxnState::Committed {
+                commit_ts: large_ts
+            })
+        );
     }
 
     #[test]
@@ -1201,9 +1244,26 @@ mod tests {
         let cache = setup_cache();
         let now = SystemTime::now();
 
-        cache.upsert(1.into(), TxnState::Ongoing(2.into()), now);
-        cache.upsert(1.into(), TxnState::Ongoing(3.into()), now);
-        assert_eq!(cache.get(1.into()), Some(TxnState::Ongoing(3.into())));
+        cache.upsert(
+            1.into(),
+            TxnState::Ongoing {
+                min_commit_ts: 2.into(),
+            },
+            now,
+        );
+        cache.upsert(
+            1.into(),
+            TxnState::Ongoing {
+                min_commit_ts: 3.into(),
+            },
+            now,
+        );
+        assert_eq!(
+            cache.get(1.into()),
+            Some(TxnState::Ongoing {
+                min_commit_ts: 3.into()
+            })
+        );
     }
 
     #[test]
@@ -1211,9 +1271,20 @@ mod tests {
         let cache = setup_cache();
         let now = SystemTime::now();
 
-        cache.upsert(1.into(), TxnState::Committed(2.into()), now);
+        cache.upsert(
+            1.into(),
+            TxnState::Committed {
+                commit_ts: 2.into(),
+            },
+            now,
+        );
         cache.upsert(1.into(), TxnState::RolledBack, now);
-        assert_eq!(cache.get(1.into()), Some(TxnState::Committed(2.into())));
+        assert_eq!(
+            cache.get(1.into()),
+            Some(TxnState::Committed {
+                commit_ts: 2.into()
+            })
+        );
     }
 
     #[test]
@@ -1221,11 +1292,33 @@ mod tests {
         let cache = setup_cache();
         let now = SystemTime::now();
 
-        cache.upsert(1.into(), TxnState::Ongoing(1.into()), now);
-        assert_eq!(cache.get(1.into()), Some(TxnState::Ongoing(1.into())));
+        cache.upsert(
+            1.into(),
+            TxnState::Ongoing {
+                min_commit_ts: 1.into(),
+            },
+            now,
+        );
+        assert_eq!(
+            cache.get(1.into()),
+            Some(TxnState::Ongoing {
+                min_commit_ts: 1.into()
+            })
+        );
 
-        cache.upsert(1.into(), TxnState::Ongoing(2.into()), now);
-        assert_eq!(cache.get(1.into()), Some(TxnState::Ongoing(2.into())));
+        cache.upsert(
+            1.into(),
+            TxnState::Ongoing {
+                min_commit_ts: 2.into(),
+            },
+            now,
+        );
+        assert_eq!(
+            cache.get(1.into()),
+            Some(TxnState::Ongoing {
+                min_commit_ts: 2.into()
+            })
+        );
     }
 
     #[test]
@@ -1233,11 +1326,33 @@ mod tests {
         let cache = setup_cache();
         let now = SystemTime::now();
 
-        cache.upsert(1.into(), TxnState::Ongoing(10000.into()), now);
-        assert_eq!(cache.get(1.into()), Some(TxnState::Ongoing(10000.into())));
+        cache.upsert(
+            1.into(),
+            TxnState::Ongoing {
+                min_commit_ts: 10000.into(),
+            },
+            now,
+        );
+        assert_eq!(
+            cache.get(1.into()),
+            Some(TxnState::Ongoing {
+                min_commit_ts: 10000.into()
+            })
+        );
 
-        cache.upsert(1.into(), TxnState::Committed(10001.into()), now);
-        assert_eq!(cache.get(1.into()), Some(TxnState::Committed(10001.into())));
+        cache.upsert(
+            1.into(),
+            TxnState::Committed {
+                commit_ts: 10001.into(),
+            },
+            now,
+        );
+        assert_eq!(
+            cache.get(1.into()),
+            Some(TxnState::Committed {
+                commit_ts: 10001.into()
+            })
+        );
     }
 
     #[test]
@@ -1246,12 +1361,29 @@ mod tests {
             TxnStatusCache::with_simulated_system_time(1, Duration::from_secs(30), 1);
 
         time.store(0, Ordering::SeqCst);
-        cache.upsert(1.into(), TxnState::Ongoing(2.into()), SystemTime::now());
+        cache.upsert(
+            1.into(),
+            TxnState::Ongoing {
+                min_commit_ts: 2.into(),
+            },
+            SystemTime::now(),
+        );
 
         time.store(31 * 1000, Ordering::SeqCst); // 31 seconds later
-        cache.upsert(3.into(), TxnState::Ongoing(4.into()), SystemTime::now());
+        cache.upsert(
+            3.into(),
+            TxnState::Ongoing {
+                min_commit_ts: 4.into(),
+            },
+            SystemTime::now(),
+        );
         assert_eq!(cache.get(1.into()), None);
-        assert_eq!(cache.get(3.into()), Some(TxnState::Ongoing(4.into())));
+        assert_eq!(
+            cache.get(3.into()),
+            Some(TxnState::Ongoing {
+                min_commit_ts: 4.into()
+            })
+        );
     }
 
     #[test]
@@ -1260,12 +1392,29 @@ mod tests {
             TxnStatusCache::with_simulated_system_time(1, Duration::from_secs(60), 1);
 
         time.store(0, Ordering::SeqCst);
-        cache.upsert(1.into(), TxnState::Ongoing(10000.into()), SystemTime::now());
+        cache.upsert(
+            1.into(),
+            TxnState::Ongoing {
+                min_commit_ts: 10000.into(),
+            },
+            SystemTime::now(),
+        );
 
         time.store(61 * 1000, Ordering::SeqCst); // 61 seconds later
-        cache.upsert(2.into(), TxnState::Ongoing(20000.into()), SystemTime::now());
+        cache.upsert(
+            2.into(),
+            TxnState::Ongoing {
+                min_commit_ts: 20000.into(),
+            },
+            SystemTime::now(),
+        );
         assert_eq!(cache.get(1.into()), None);
-        assert_eq!(cache.get(2.into()), Some(TxnState::Ongoing(20000.into())));
+        assert_eq!(
+            cache.get(2.into()),
+            Some(TxnState::Ongoing {
+                min_commit_ts: 20000.into()
+            })
+        );
     }
 
     #[test]
@@ -1279,12 +1428,29 @@ mod tests {
         let now = SystemTime::now();
 
         for i in 1..=5 {
-            cache.upsert(i.into(), TxnState::Ongoing((i + 1).into()), now);
+            cache.upsert(
+                i.into(),
+                TxnState::Ongoing {
+                    min_commit_ts: (i + 1).into(),
+                },
+                now,
+            );
         }
 
-        cache.upsert(6.into(), TxnState::Ongoing(7.into()), now);
+        cache.upsert(
+            6.into(),
+            TxnState::Ongoing {
+                min_commit_ts: 7.into(),
+            },
+            now,
+        );
         assert_eq!(cache.get(1.into()), None);
-        assert_eq!(cache.get(6.into()), Some(TxnState::Ongoing(7.into())));
+        assert_eq!(
+            cache.get(6.into()),
+            Some(TxnState::Ongoing {
+                min_commit_ts: 7.into()
+            })
+        );
     }
 
     #[test]
@@ -1292,8 +1458,20 @@ mod tests {
         let cache = setup_cache();
         let now = SystemTime::now();
 
-        cache.upsert(1.into(), TxnState::Committed(2.into()), now);
-        cache.upsert(3.into(), TxnState::Ongoing(4.into()), now);
+        cache.upsert(
+            1.into(),
+            TxnState::Committed {
+                commit_ts: 2.into(),
+            },
+            now,
+        );
+        cache.upsert(
+            3.into(),
+            TxnState::Ongoing {
+                min_commit_ts: 4.into(),
+            },
+            now,
+        );
 
         assert_eq!(cache.get_committed(1.into()), Some(2.into()));
         assert_eq!(cache.get_committed(3.into()), None);
@@ -1304,8 +1482,19 @@ mod tests {
         let cache = setup_cache();
         let now = SystemTime::now();
 
-        cache.upsert(1.into(), TxnState::Ongoing(10000.into()), now);
-        assert_eq!(cache.get(1.into()), Some(TxnState::Ongoing(10000.into())));
+        cache.upsert(
+            1.into(),
+            TxnState::Ongoing {
+                min_commit_ts: 10000.into(),
+            },
+            now,
+        );
+        assert_eq!(
+            cache.get(1.into()),
+            Some(TxnState::Ongoing {
+                min_commit_ts: 10000.into()
+            })
+        );
 
         let removed = cache.remove_large_txn(1.into());
         assert!(removed.is_some());
