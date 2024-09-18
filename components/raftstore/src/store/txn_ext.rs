@@ -49,7 +49,7 @@ impl fmt::Debug for TxnExt {
 }
 
 lazy_static! {
-    pub static ref GLOBAL_MEM_SIZE: IntGauge = register_int_gauge!(
+    pub static ref INSTANCE_MEM_SIZE: IntGauge = register_int_gauge!(
         "tikv_pessimistic_lock_memory_size",
         "Total memory size of pessimistic locks in bytes."
     )
@@ -168,7 +168,7 @@ impl PeerPessimisticLocks {
             }
         }
         if self.memory_size + incr > peer_mem_size_limit
-            || GLOBAL_MEM_SIZE.get() as usize + incr > instance_mem_size_limit
+            || INSTANCE_MEM_SIZE.get() as usize + incr > instance_mem_size_limit
         {
             return Err(pairs);
         }
@@ -178,7 +178,7 @@ impl PeerPessimisticLocks {
             self.map.insert(key, (lock, false));
         }
         self.memory_size += incr;
-        GLOBAL_MEM_SIZE.add(incr as i64);
+        INSTANCE_MEM_SIZE.add(incr as i64);
         Ok(())
     }
 
@@ -186,13 +186,13 @@ impl PeerPessimisticLocks {
         if let Some((lock, _)) = self.map.remove(key) {
             let desc = key.len() + lock.memory_size();
             self.memory_size -= desc;
-            GLOBAL_MEM_SIZE.sub(desc as i64);
+            INSTANCE_MEM_SIZE.sub(desc as i64);
         }
     }
 
     pub fn clear(&mut self) {
         self.map = BTreeMap::default();
-        GLOBAL_MEM_SIZE.sub(self.memory_size as i64);
+        INSTANCE_MEM_SIZE.sub(self.memory_size as i64);
         self.memory_size = 0;
     }
 
@@ -321,7 +321,7 @@ impl<'a> IntoIterator for &'a PeerPessimisticLocks {
 
 impl Drop for PeerPessimisticLocks {
     fn drop(&mut self) {
-        GLOBAL_MEM_SIZE.sub(self.memory_size as i64);
+        INSTANCE_MEM_SIZE.sub(self.memory_size as i64);
     }
 }
 
@@ -429,7 +429,7 @@ mod tests {
             .unwrap();
         assert_eq!(locks2.get(&k3), Some(&(lock(b"k1"), false)));
         assert_eq!(
-            GLOBAL_MEM_SIZE.get() as usize,
+            INSTANCE_MEM_SIZE.get() as usize,
             locks1.memory_size + locks2.memory_size
         );
 
@@ -447,7 +447,7 @@ mod tests {
             k1.len() + k2.len() + 2 * lock(b"k1").memory_size()
         );
         assert_eq!(
-            GLOBAL_MEM_SIZE.get() as usize,
+            INSTANCE_MEM_SIZE.get() as usize,
             locks1.memory_size + locks2.memory_size
         );
 
@@ -456,7 +456,7 @@ mod tests {
         assert!(locks1.get(&k1).is_none());
         assert_eq!(locks1.memory_size, k2.len() + lock(b"k2").memory_size());
         assert_eq!(
-            GLOBAL_MEM_SIZE.get() as usize,
+            INSTANCE_MEM_SIZE.get() as usize,
             locks1.memory_size + locks2.memory_size
         );
 
@@ -464,18 +464,18 @@ mod tests {
         locks2.clear();
         assert!(locks2.is_empty());
         assert_eq!(locks2.memory_size, 0);
-        assert_eq!(GLOBAL_MEM_SIZE.get() as usize, locks1.memory_size);
+        assert_eq!(INSTANCE_MEM_SIZE.get() as usize, locks1.memory_size);
 
         // Test the global memory size after dropping.
         drop(locks1);
         drop(locks2);
-        assert_eq!(GLOBAL_MEM_SIZE.get(), 0);
+        assert_eq!(INSTANCE_MEM_SIZE.get(), 0);
     }
 
     #[test]
     fn test_insert_checking_memory_limit() {
         let _guard = TEST_MUTEX.lock().unwrap();
-        defer!(GLOBAL_MEM_SIZE.set(0));
+        defer!(INSTANCE_MEM_SIZE.set(0));
         let peer_mem_size_limit = 512 << 10;
         let instance_mem_size_limit = 100 << 20;
 
@@ -499,7 +499,7 @@ mod tests {
         assert!(locks.get(&Key::from_raw(b"k2")).is_none());
 
         // Not exceeding the region limit, but exceeding the global limit
-        GLOBAL_MEM_SIZE.set(101 << 20);
+        INSTANCE_MEM_SIZE.set(101 << 20);
         let res = locks.insert(
             vec![(Key::from_raw(b"k2"), lock(b"abc"))],
             peer_mem_size_limit,
@@ -518,7 +518,7 @@ mod tests {
             region
         }
         let _guard = TEST_MUTEX.lock().unwrap();
-        defer!(GLOBAL_MEM_SIZE.set(0));
+        defer!(INSTANCE_MEM_SIZE.set(0));
 
         let mut original = PeerPessimisticLocks::from_locks(vec![
             lock_with_key(b"a", true),
