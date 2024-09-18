@@ -634,3 +634,33 @@ fn test_eviction_after_ingest_sst() {
         .snapshot(cache_region, 100, 100)
         .unwrap_err();
 }
+
+#[test]
+fn test_pre_load_when_transfer_ledaer() {
+    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_range_cache(0, 3);
+    cluster.run();
+
+    let (tx, rx) = unbounded();
+    fail::cfg_callback("on_completes_batch_loading", move || {
+        tx.send(true).unwrap();
+    })
+    .unwrap();
+
+    let r = cluster.get_region(b"");
+    cluster.must_transfer_leader(r.id, new_peer(1, 1));
+    let range_cache_engine = cluster.sim.rl().get_range_cache_engine(1);
+    range_cache_engine
+        .load_region(CacheRegion::from_region(&r))
+        .unwrap();
+    // put some key to trigger load
+    cluster.must_put(b"k", b"val");
+    let _ = rx.recv_timeout(Duration::from_secs(500)).unwrap();
+
+    cluster.must_transfer_leader(r.id, new_peer(2, 2));
+    // put some key to trigger load
+    cluster.must_put(b"k2", b"val");
+    let _ = rx.recv_timeout(Duration::from_secs(500)).unwrap();
+
+    let range_cache_engine = cluster.sim.rl().get_range_cache_engine(2);
+    range_cache_engine.region_cached(&r);
+}

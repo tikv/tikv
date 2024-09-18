@@ -545,9 +545,13 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
     }
 
     fn load_region(&self, region: &Region) {
-        self.on_region_event(RegionEvent::TryLoad {
-            region: CacheRegion::from_region(&region),
-        });
+        if let Err(e) = self.load_region(CacheRegion::from_region(&region)) {
+            info!(
+                "ime load region failed";
+                "error" => ?e,
+                "region" => ?region,
+            );
+        }
     }
 }
 
