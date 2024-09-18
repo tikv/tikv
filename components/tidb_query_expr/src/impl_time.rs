@@ -1039,9 +1039,9 @@ fn sub_date(
 }
 
 #[inline]
-fn add_sub_date_as_bytes<
+fn add_sub_date_time_any_interval_any_as_datetime<
     T: AddSubDateConvertToTime,
-    I: ConvertToInterval,
+    I: ConvertToIntervalStr,
     F: Fn(&mut EvalContext, DateTime, &Interval, u8) -> CodecResult<DateTime>,
 >(
     ctx: &mut EvalContext,
@@ -1080,11 +1080,116 @@ fn add_sub_date_as_bytes<
     Ok(Some(date_res.to_string().into_bytes()))
 }
 
+#[inline]
+fn add_sub_date_time_datetime_interval_any_as_datetime<
+    I: ConvertToIntervalStr,
+    F: Fn(&mut EvalContext, DateTime, &Interval, u8) -> CodecResult<DateTime>,
+>(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    metadata: &AddSubDateMeta,
+    time: &DateTime,
+    interval: &I,
+    op: F,
+) -> Result<Option<DateTime>> {
+    let datetime = match time.to_time(ctx, metadata) {
+        Ok(d) => d,
+        Err(e) => return ctx.handle_invalid_time_error(e).map(|_| Ok(None))?,
+    };
+    let interval_str = interval.to_interval_string(
+        ctx,
+        metadata.unit,
+        metadata.interval_unsigned,
+        metadata.interval_decimal,
+    )?;
+    let interval = Interval::parse_from_str(ctx, &metadata.unit, &interval_str)?;
+    let date_res = match op(
+        ctx,
+        datetime,
+        &interval,
+        extra.ret_field_type.get_decimal() as u8,
+    ) {
+        Ok(d) => d,
+        Err(e) => return ctx.handle_invalid_time_error(e).map(|_| Ok(None))?,
+    };
+
+    Ok(Some(date_res))
+}
+
+#[inline]
+fn add_sub_date_time_duration_interval_any_as_datetime<
+    I: ConvertToIntervalStr,
+    F: Fn(&mut EvalContext, DateTime, &Interval, u8) -> CodecResult<DateTime>,
+>(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    metadata: &AddSubDateMeta,
+    dur: &Duration,
+    interval: &I,
+    op: F,
+) -> Result<Option<DateTime>> {
+    let datetime = DateTime::from_duration(ctx, *dur, TimeType::DateTime)?;
+    let interval_str = interval.to_interval_string(
+        ctx,
+        metadata.unit,
+        metadata.interval_unsigned,
+        metadata.interval_decimal,
+    )?;
+    let interval = Interval::parse_from_str(ctx, &metadata.unit, &interval_str)?;
+    let date_res = match op(
+        ctx,
+        datetime,
+        &interval,
+        extra.ret_field_type.get_decimal() as u8,
+    ) {
+        Ok(d) => d,
+        Err(e) => return ctx.handle_invalid_time_error(e).map(|_| Ok(None))?,
+    };
+
+    Ok(Some(date_res))
+}
+
+#[inline]
+fn add_sub_date_time_duration_interval_any_as_duration<
+    I: ConvertToIntervalStr,
+    F: Fn(Duration, Duration) -> Option<Duration>,
+>(
+    ctx: &mut EvalContext,
+    metadata: &AddSubDateMeta,
+    dur: &Duration,
+    interval: &I,
+    op: F,
+) -> Result<Option<Duration>> {
+    let interval_str = interval.to_interval_string(
+        ctx,
+        metadata.unit,
+        metadata.interval_unsigned,
+        metadata.interval_decimal,
+    )?;
+    let interval = match Interval::extract_duration(ctx, &metadata.unit, &interval_str) {
+        Ok(d) => d,
+        Err(e) => return ctx.handle_invalid_time_error(e).map(|_| Ok(None))?,
+    };
+    let dur_res = match op(*dur, interval) {
+        Some(d) => d,
+        None => {
+            return ctx
+                .handle_invalid_time_error(Error::overflow(
+                    "Duration",
+                    format!("({} - {})", dur, interval),
+                ))
+                .map(|_| Ok(None))?;
+        }
+    };
+
+    Ok(Some(dur_res))
+}
+
 #[rpn_fn(capture = [ctx, extra, metadata], metadata_mapper = build_add_sub_date_meta)]
 #[inline]
-pub fn add_date_as_bytes<
+pub fn add_date_time_any_interval_any_as_string<
     T: AddSubDateConvertToTime + Evaluable + EvaluableRet,
-    I: ConvertToInterval + Evaluable + EvaluableRet,
+    I: ConvertToIntervalStr + Evaluable + EvaluableRet,
 >(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
@@ -1093,14 +1198,14 @@ pub fn add_date_as_bytes<
     interval: &I,
     _unit: BytesRef,
 ) -> Result<Option<Bytes>> {
-    add_sub_date_as_bytes(ctx, extra, metadata, time, interval, add_date)
+    add_sub_date_time_any_interval_any_as_datetime(ctx, extra, metadata, time, interval, add_date)
 }
 
 #[rpn_fn(capture = [ctx, extra, metadata], metadata_mapper = build_add_sub_date_meta)]
 #[inline]
-pub fn sub_date_as_bytes<
+pub fn sub_date_time_any_interval_any_as_string<
     T: AddSubDateConvertToTime + Evaluable + EvaluableRet,
-    I: ConvertToInterval + Evaluable + EvaluableRet,
+    I: ConvertToIntervalStr + Evaluable + EvaluableRet,
 >(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
@@ -1109,12 +1214,12 @@ pub fn sub_date_as_bytes<
     interval: &I,
     _unit: BytesRef,
 ) -> Result<Option<Bytes>> {
-    add_sub_date_as_bytes(ctx, extra, metadata, time, interval, sub_date)
+    add_sub_date_time_any_interval_any_as_datetime(ctx, extra, metadata, time, interval, sub_date)
 }
 
 #[rpn_fn(capture = [ctx, extra, metadata], metadata_mapper = build_add_sub_date_meta)]
 #[inline]
-pub fn add_date_time_string_interval_string_as_bytes(
+pub fn add_date_time_string_interval_string_as_string(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
     metadata: &AddSubDateMeta,
@@ -1122,12 +1227,12 @@ pub fn add_date_time_string_interval_string_as_bytes(
     interval: BytesRef,
     _unit: BytesRef,
 ) -> Result<Option<Bytes>> {
-    add_sub_date_as_bytes(ctx, extra, metadata, &time, &interval, add_date)
+    add_sub_date_time_any_interval_any_as_datetime(ctx, extra, metadata, &time, &interval, add_date)
 }
 
 #[rpn_fn(capture = [ctx, extra, metadata], metadata_mapper = build_add_sub_date_meta)]
 #[inline]
-pub fn sub_date_time_string_interval_string_as_bytes(
+pub fn sub_date_time_string_interval_string_as_string(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
     metadata: &AddSubDateMeta,
@@ -1135,25 +1240,14 @@ pub fn sub_date_time_string_interval_string_as_bytes(
     interval: BytesRef,
     _unit: BytesRef,
 ) -> Result<Option<Bytes>> {
-    add_sub_date_as_bytes(ctx, extra, metadata, &time, &interval, sub_date)
+    add_sub_date_time_any_interval_any_as_datetime(ctx, extra, metadata, &time, &interval, sub_date)
 }
 
 #[rpn_fn(capture = [ctx, extra, metadata], metadata_mapper = build_add_sub_date_meta)]
 #[inline]
-pub fn add_date_time_string_as_bytes<I: ConvertToInterval + Evaluable + EvaluableRet>(
-    ctx: &mut EvalContext,
-    extra: &RpnFnCallExtra,
-    metadata: &AddSubDateMeta,
-    time: BytesRef,
-    interval: &I,
-    _unit: BytesRef,
-) -> Result<Option<Bytes>> {
-    add_sub_date_as_bytes(ctx, extra, metadata, &time, interval, add_date)
-}
-
-#[rpn_fn(capture = [ctx, extra, metadata], metadata_mapper = build_add_sub_date_meta)]
-#[inline]
-pub fn sub_date_time_string_as_bytes<I: ConvertToInterval + Evaluable + EvaluableRet>(
+pub fn add_date_time_string_interval_any_as_string<
+    I: ConvertToIntervalStr + Evaluable + EvaluableRet,
+>(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
     metadata: &AddSubDateMeta,
@@ -1161,12 +1255,29 @@ pub fn sub_date_time_string_as_bytes<I: ConvertToInterval + Evaluable + Evaluabl
     interval: &I,
     _unit: BytesRef,
 ) -> Result<Option<Bytes>> {
-    add_sub_date_as_bytes(ctx, extra, metadata, &time, interval, sub_date)
+    add_sub_date_time_any_interval_any_as_datetime(ctx, extra, metadata, &time, interval, add_date)
 }
 
 #[rpn_fn(capture = [ctx, extra, metadata], metadata_mapper = build_add_sub_date_meta)]
 #[inline]
-pub fn add_date_interval_string_as_bytes<T: AddSubDateConvertToTime + Evaluable + EvaluableRet>(
+pub fn sub_date_time_string_interval_any_as_string<
+    I: ConvertToIntervalStr + Evaluable + EvaluableRet,
+>(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    metadata: &AddSubDateMeta,
+    time: BytesRef,
+    interval: &I,
+    _unit: BytesRef,
+) -> Result<Option<Bytes>> {
+    add_sub_date_time_any_interval_any_as_datetime(ctx, extra, metadata, &time, interval, sub_date)
+}
+
+#[rpn_fn(capture = [ctx, extra, metadata], metadata_mapper = build_add_sub_date_meta)]
+#[inline]
+pub fn add_date_time_any_interval_string_as_string<
+    T: AddSubDateConvertToTime + Evaluable + EvaluableRet,
+>(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
     metadata: &AddSubDateMeta,
@@ -1174,12 +1285,14 @@ pub fn add_date_interval_string_as_bytes<T: AddSubDateConvertToTime + Evaluable 
     interval: BytesRef,
     _unit: BytesRef,
 ) -> Result<Option<Bytes>> {
-    add_sub_date_as_bytes(ctx, extra, metadata, time, &interval, add_date)
+    add_sub_date_time_any_interval_any_as_datetime(ctx, extra, metadata, time, &interval, add_date)
 }
 
 #[rpn_fn(capture = [ctx, extra, metadata], metadata_mapper = build_add_sub_date_meta)]
 #[inline]
-pub fn sub_date_interval_string_as_bytes<T: AddSubDateConvertToTime + Evaluable + EvaluableRet>(
+pub fn sub_date_time_any_interval_string_as_string<
+    T: AddSubDateConvertToTime + Evaluable + EvaluableRet,
+>(
     ctx: &mut EvalContext,
     extra: &RpnFnCallExtra,
     metadata: &AddSubDateMeta,
@@ -1187,7 +1300,211 @@ pub fn sub_date_interval_string_as_bytes<T: AddSubDateConvertToTime + Evaluable 
     interval: BytesRef,
     _unit: BytesRef,
 ) -> Result<Option<Bytes>> {
-    add_sub_date_as_bytes(ctx, extra, metadata, time, &interval, sub_date)
+    add_sub_date_time_any_interval_any_as_datetime(ctx, extra, metadata, time, &interval, sub_date)
+}
+
+#[rpn_fn(capture = [ctx, extra, metadata], metadata_mapper = build_add_sub_date_meta)]
+#[inline]
+pub fn add_date_time_datetime_interval_string_as_datetime(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    metadata: &AddSubDateMeta,
+    time: &DateTime,
+    interval: BytesRef,
+    _unit: BytesRef,
+) -> Result<Option<DateTime>> {
+    add_sub_date_time_datetime_interval_any_as_datetime(
+        ctx, extra, metadata, time, &interval, add_date,
+    )
+}
+
+#[rpn_fn(capture = [ctx, extra, metadata], metadata_mapper = build_add_sub_date_meta)]
+#[inline]
+pub fn sub_date_time_datetime_interval_string_as_datetime(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    metadata: &AddSubDateMeta,
+    time: &DateTime,
+    interval: BytesRef,
+    _unit: BytesRef,
+) -> Result<Option<DateTime>> {
+    add_sub_date_time_datetime_interval_any_as_datetime(
+        ctx, extra, metadata, time, &interval, sub_date,
+    )
+}
+
+#[rpn_fn(capture = [ctx, extra, metadata], metadata_mapper = build_add_sub_date_meta)]
+#[inline]
+pub fn add_date_time_datetime_interval_any_as_datetime<
+    I: ConvertToIntervalStr + Evaluable + EvaluableRet,
+>(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    metadata: &AddSubDateMeta,
+    time: &DateTime,
+    interval: &I,
+    _unit: BytesRef,
+) -> Result<Option<DateTime>> {
+    add_sub_date_time_datetime_interval_any_as_datetime(
+        ctx, extra, metadata, time, interval, add_date,
+    )
+}
+
+#[rpn_fn(capture = [ctx, extra, metadata], metadata_mapper = build_add_sub_date_meta)]
+#[inline]
+pub fn sub_date_time_datetime_interval_any_as_datetime<
+    I: ConvertToIntervalStr + Evaluable + EvaluableRet,
+>(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    metadata: &AddSubDateMeta,
+    time: &DateTime,
+    interval: &I,
+    _unit: BytesRef,
+) -> Result<Option<DateTime>> {
+    add_sub_date_time_datetime_interval_any_as_datetime(
+        ctx, extra, metadata, time, interval, sub_date,
+    )
+}
+
+#[rpn_fn(capture = [ctx, extra, metadata], metadata_mapper = build_add_sub_date_meta)]
+#[inline]
+pub fn add_date_time_duration_interval_string_as_datetime(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    metadata: &AddSubDateMeta,
+    dur: &Duration,
+    interval: BytesRef,
+    _unit: BytesRef,
+) -> Result<Option<DateTime>> {
+    add_sub_date_time_duration_interval_any_as_datetime(
+        ctx, extra, metadata, dur, &interval, add_date,
+    )
+}
+
+#[rpn_fn(capture = [ctx, extra, metadata], metadata_mapper = build_add_sub_date_meta)]
+#[inline]
+pub fn sub_date_time_duration_interval_string_as_datetime(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    metadata: &AddSubDateMeta,
+    dur: &Duration,
+    interval: BytesRef,
+    _unit: BytesRef,
+) -> Result<Option<DateTime>> {
+    add_sub_date_time_duration_interval_any_as_datetime(
+        ctx, extra, metadata, dur, &interval, sub_date,
+    )
+}
+
+#[rpn_fn(capture = [ctx, extra, metadata], metadata_mapper = build_add_sub_date_meta)]
+#[inline]
+pub fn add_date_time_duration_interval_any_as_datetime<
+    I: ConvertToIntervalStr + Evaluable + EvaluableRet,
+>(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    metadata: &AddSubDateMeta,
+    dur: &Duration,
+    interval: &I,
+    _unit: BytesRef,
+) -> Result<Option<DateTime>> {
+    add_sub_date_time_duration_interval_any_as_datetime(
+        ctx, extra, metadata, dur, interval, add_date,
+    )
+}
+
+#[rpn_fn(capture = [ctx, extra, metadata], metadata_mapper = build_add_sub_date_meta)]
+#[inline]
+pub fn sub_date_time_duration_interval_any_as_datetime<
+    I: ConvertToIntervalStr + Evaluable + EvaluableRet,
+>(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    metadata: &AddSubDateMeta,
+    dur: &Duration,
+    interval: &I,
+    _unit: BytesRef,
+) -> Result<Option<DateTime>> {
+    add_sub_date_time_duration_interval_any_as_datetime(
+        ctx, extra, metadata, dur, interval, sub_date,
+    )
+}
+
+#[rpn_fn(capture = [ctx, metadata], metadata_mapper = build_add_sub_date_meta)]
+#[inline]
+pub fn add_date_time_duration_interval_string_as_duration(
+    ctx: &mut EvalContext,
+    metadata: &AddSubDateMeta,
+    dur: &Duration,
+    interval: BytesRef,
+    _unit: BytesRef,
+) -> Result<Option<Duration>> {
+    add_sub_date_time_duration_interval_any_as_duration(
+        ctx,
+        metadata,
+        dur,
+        &interval,
+        Duration::checked_add,
+    )
+}
+
+#[rpn_fn(capture = [ctx, metadata], metadata_mapper = build_add_sub_date_meta)]
+#[inline]
+pub fn sub_date_time_duration_interval_string_as_duration(
+    ctx: &mut EvalContext,
+    metadata: &AddSubDateMeta,
+    dur: &Duration,
+    interval: BytesRef,
+    _unit: BytesRef,
+) -> Result<Option<Duration>> {
+    add_sub_date_time_duration_interval_any_as_duration(
+        ctx,
+        metadata,
+        dur,
+        &interval,
+        Duration::checked_sub,
+    )
+}
+
+#[rpn_fn(capture = [ctx, metadata], metadata_mapper = build_add_sub_date_meta)]
+#[inline]
+pub fn add_date_time_duration_interval_any_as_duration<
+    I: ConvertToIntervalStr + Evaluable + EvaluableRet,
+>(
+    ctx: &mut EvalContext,
+    metadata: &AddSubDateMeta,
+    dur: &Duration,
+    interval: &I,
+    _unit: BytesRef,
+) -> Result<Option<Duration>> {
+    add_sub_date_time_duration_interval_any_as_duration(
+        ctx,
+        metadata,
+        dur,
+        interval,
+        Duration::checked_add,
+    )
+}
+
+#[rpn_fn(capture = [ctx, metadata], metadata_mapper = build_add_sub_date_meta)]
+#[inline]
+pub fn sub_date_time_duration_interval_any_as_duration<
+    I: ConvertToIntervalStr + Evaluable + EvaluableRet,
+>(
+    ctx: &mut EvalContext,
+    metadata: &AddSubDateMeta,
+    dur: &Duration,
+    interval: &I,
+    _unit: BytesRef,
+) -> Result<Option<Duration>> {
+    add_sub_date_time_duration_interval_any_as_duration(
+        ctx,
+        metadata,
+        dur,
+        interval,
+        Duration::checked_sub,
+    )
 }
 
 #[cfg(test)]

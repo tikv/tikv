@@ -514,7 +514,8 @@ impl Interval {
     }
 }
 
-pub trait ConvertToInterval {
+/// Convert to a string which has a uniform interval format and can be parsed into Interval struct then.
+pub trait ConvertToIntervalStr {
     fn to_interval_string(
         &self,
         ctx: &mut EvalContext,
@@ -524,7 +525,7 @@ pub trait ConvertToInterval {
     ) -> Result<String>;
 }
 
-impl<'a> ConvertToInterval for BytesRef<'a> {
+impl<'a> ConvertToIntervalStr for BytesRef<'a> {
     #[inline]
     fn to_interval_string(
         &self,
@@ -565,7 +566,7 @@ impl<'a> ConvertToInterval for BytesRef<'a> {
     }
 }
 
-impl ConvertToInterval for i64 {
+impl ConvertToIntervalStr for i64 {
     #[inline]
     fn to_interval_string(
         &self,
@@ -582,7 +583,7 @@ impl ConvertToInterval for i64 {
     }
 }
 
-impl ConvertToInterval for Real {
+impl ConvertToIntervalStr for Real {
     #[inline]
     fn to_interval_string(
         &self,
@@ -595,7 +596,7 @@ impl ConvertToInterval for Real {
     }
 }
 
-impl ConvertToInterval for Decimal {
+impl ConvertToIntervalStr for Decimal {
     #[inline]
     fn to_interval_string(
         &self,
