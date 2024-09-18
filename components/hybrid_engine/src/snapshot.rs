@@ -184,10 +184,7 @@ mod tests {
             RangeCacheEngineConfig::config_for_test(),
             move |memory_engine| {
                 memory_engine.new_region(region_clone);
-                {
-                    let mut core = memory_engine.core().write();
-                    core.mut_range_manager().set_safe_point(1, 5);
-                }
+                memory_engine.core().region_manager().set_safe_point(1, 5);
             },
         )
         .unwrap();

@@ -41,6 +41,7 @@ make_auto_flush_static_metric! {
         memory_limit_reached,
         disabled,
         apply_snapshot,
+        manual,
     }
 
     pub struct GcFilteredCountVec: LocalIntCounter {
@@ -207,6 +208,9 @@ pub(crate) fn observe_eviction_duration(secs: f64, evict_reason: EvictReason) {
             .observe(secs),
         EvictReason::ApplySnapshot => RANGE_EVICTION_DURATION_HISTOGRAM_STATIC
             .apply_snapshot
+            .observe(secs),
+        EvictReason::Manual => RANGE_EVICTION_DURATION_HISTOGRAM_STATIC
+            .manual
             .observe(secs),
     }
 }
