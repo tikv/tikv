@@ -384,10 +384,14 @@ impl RegionMetaMap {
         }
 
         // check region with same id. It is possible that there is a cached region with
-        // outdated epoch that is still in the (pending_)evicting state, and a new load is
-        // triggered after the region is merged and split for multiple times. Thus, the new 
-        // pending region's range may not overlap with the old cached region but their region
-        // ids are the same.
+        // outdated epoch that is still in the (pending_)evicting state, and a new load
+        // is triggered after the region is merged and split for multiple times.
+        // Thus, the new pending region's range may not overlap with the old
+        // cached region but their region ids are the same.
+        // While in theory we should keep the new region as it doesn't overlap with any
+        // other region, but because we use region_id as the unique identifier, we do
+        // not load it for implementation simplicity as this kind of scenario
+        // should be very rare.
         if let Some(region) = self.regions.get(&region.id) {
             return Some(region.state);
         }
