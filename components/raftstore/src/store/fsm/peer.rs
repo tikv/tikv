@@ -3085,7 +3085,7 @@ where
                 }
             }
             ExtraMessageType::MsgPreLoadRange => {
-                // it has been handled in on_extra_message in coprocessor_host
+                // It has been handled in on_extra_message in coprocessor_host
             }
         }
     }

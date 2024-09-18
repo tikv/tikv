@@ -545,7 +545,9 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
     }
 
     fn load_region(&self, region: &Region) {
-        let _ = self.load_region(CacheRegion::from_region(&region));
+        self.on_region_event(RegionEvent::TryLoad {
+            region: CacheRegion::from_region(&region),
+        });
     }
 }
 
