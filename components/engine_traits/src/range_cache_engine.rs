@@ -28,6 +28,9 @@ pub enum RegionEvent {
         source: CacheRegion,
         new_regions: Vec<CacheRegion>,
     },
+    TryLoad {
+        region: CacheRegion,
+    },
     Eviction {
         region: CacheRegion,
         reason: EvictReason,
@@ -51,6 +54,7 @@ pub enum EvictReason {
     Merge,
     Disabled,
     ApplySnapshot,
+    Manual,
 }
 
 /// RangeCacheEngine works as a range cache caching some ranges (in Memory or
@@ -101,7 +105,7 @@ pub trait RangeCacheEngineExt {
 /// as it continues to evolve to handle eviction, using stats.
 pub trait RangeHintService: Send + Sync {}
 
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq, Hash)]
 pub struct CacheRegion {
     // target region id
     pub id: u64,
@@ -162,6 +166,46 @@ impl CacheRegion {
     // Note: overlaps also includes "contains"
     pub fn overlaps(&self, other: &CacheRegion) -> bool {
         self.start < other.end && other.start < self.end
+    }
+
+    pub fn union(&self, other: &CacheRegion) -> Option<CacheRegion> {
+        if self.overlaps(other) {
+            Some(CacheRegion {
+                id: 0,
+                epoch_version: 0,
+                start: std::cmp::min(&self.start, &other.start).clone(),
+                end: std::cmp::max(&self.end, &other.end).clone(),
+            })
+        } else {
+            None
+        }
+    }
+
+    pub fn difference(&self, other: &CacheRegion) -> (Option<CacheRegion>, Option<CacheRegion>) {
+        if !self.overlaps(other) {
+            return (None, None);
+        }
+        let left = if self.start < other.start {
+            Some(CacheRegion {
+                id: 0,
+                epoch_version: 0,
+                start: self.start.clone(),
+                end: other.start.clone(),
+            })
+        } else {
+            None
+        };
+        let right = if self.end > other.end {
+            Some(CacheRegion {
+                id: 0,
+                epoch_version: 0,
+                start: other.end.clone(),
+                end: self.end.clone(),
+            })
+        } else {
+            None
+        };
+        (left, right)
     }
 }
 
