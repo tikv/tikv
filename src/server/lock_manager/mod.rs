@@ -66,7 +66,7 @@ pub struct LockManager {
     wake_up_delay_duration_ms: Arc<AtomicU64>,
 
     in_memory_peer_size_limit: Arc<AtomicU64>,
-    in_memory_global_size_limit: Arc<AtomicU64>,
+    in_memory_instance_size_limit: Arc<AtomicU64>,
 }
 
 impl Clone for LockManager {
@@ -82,7 +82,7 @@ impl Clone for LockManager {
             in_memory: self.in_memory.clone(),
             wake_up_delay_duration_ms: self.wake_up_delay_duration_ms.clone(),
             in_memory_peer_size_limit: self.in_memory_peer_size_limit.clone(),
-            in_memory_global_size_limit: self.in_memory_global_size_limit.clone(),
+            in_memory_instance_size_limit: self.in_memory_instance_size_limit.clone(),
         }
     }
 }
@@ -105,8 +105,8 @@ impl LockManager {
                 cfg.wake_up_delay_duration.as_millis(),
             )),
             in_memory_peer_size_limit: Arc::new(AtomicU64::new(cfg.in_memory_peer_size_limit.0)),
-            in_memory_global_size_limit: Arc::new(AtomicU64::new(
-                cfg.in_memory_global_size_limit.0,
+            in_memory_instance_size_limit: Arc::new(AtomicU64::new(
+                cfg.in_memory_instance_size_limit.0,
             )),
         }
     }
@@ -231,7 +231,7 @@ impl LockManager {
             self.in_memory.clone(),
             self.wake_up_delay_duration_ms.clone(),
             self.in_memory_peer_size_limit.clone(),
-            self.in_memory_global_size_limit.clone(),
+            self.in_memory_instance_size_limit.clone(),
         )
     }
 
@@ -241,7 +241,7 @@ impl LockManager {
             in_memory_pessimistic_lock: self.in_memory.clone(),
             wake_up_delay_duration_ms: self.wake_up_delay_duration_ms.clone(),
             in_memory_peer_size_limit: self.in_memory_peer_size_limit.clone(),
-            in_memory_global_size_limit: self.in_memory_global_size_limit.clone(),
+            in_memory_instance_size_limit: self.in_memory_instance_size_limit.clone(),
         }
     }
 }
@@ -342,7 +342,7 @@ mod tests {
             pipelined: false,
             in_memory: false,
             in_memory_peer_size_limit: ReadableSize::kb(512),
-            in_memory_global_size_limit: ReadableSize::mb(100),
+            in_memory_instance_size_limit: ReadableSize::mb(100),
         };
         let mut lock_mgr = LockManager::new(&cfg);
 

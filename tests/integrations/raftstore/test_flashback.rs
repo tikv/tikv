@@ -27,7 +27,7 @@ const TEST_VALUE: &[u8] = b"v1";
 fn test_flashback_with_in_memory_pessimistic_locks() {
     let mut cluster = new_cluster(0, 3);
     let peer_size_limit = 512 << 10;
-    let global_size_limit = 100 << 20;
+    let instance_size_limit = 100 << 20;
     cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(1, 1));
@@ -54,7 +54,7 @@ fn test_flashback_with_in_memory_pessimistic_locks() {
                     },
                 )],
                 peer_size_limit,
-                global_size_limit,
+                instance_size_limit,
             )
             .unwrap();
         assert_eq!(pessimistic_locks.len(), 1);

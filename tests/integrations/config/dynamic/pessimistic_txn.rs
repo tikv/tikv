@@ -84,7 +84,7 @@ fn test_lock_manager_cfg_update() {
     const DEFAULT_TIMEOUT: u64 = 3000;
     const DEFAULT_DELAY: u64 = 100;
     const DEFAULT_IN_MEMORY_PEER_SIZE_LIMIT: u64 = 512 << 10;
-    const DEFAULT_IN_MEMORY_GLOBAL_SIZE_LIMIT: u64 = 100 << 20;
+    const DEFAULT_IN_MEMORY_INSTANCE_SIZE_LIMIT: u64 = 100 << 20;
     let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
     cfg.pessimistic_txn.wait_for_lock_timeout = ReadableDuration::millis(DEFAULT_TIMEOUT);
     cfg.pessimistic_txn.wake_up_delay_duration = ReadableDuration::millis(DEFAULT_DELAY);
@@ -191,17 +191,17 @@ fn test_lock_manager_cfg_update() {
     assert_eq!(
         lock_mgr
             .get_storage_dynamic_configs()
-            .in_memory_global_size_limit
+            .in_memory_instance_size_limit
             .load(Ordering::SeqCst),
-        DEFAULT_IN_MEMORY_GLOBAL_SIZE_LIMIT
+        DEFAULT_IN_MEMORY_INSTANCE_SIZE_LIMIT
     );
     cfg_controller
-        .update_config("pessimistic-txn.in-memory-global-size-limit", "1GiB")
+        .update_config("pessimistic-txn.in-memory-instance-size-limit", "1GiB")
         .unwrap();
     assert_eq!(
         lock_mgr
             .get_storage_dynamic_configs()
-            .in_memory_global_size_limit
+            .in_memory_instance_size_limit
             .load(Ordering::SeqCst),
         1 << 30
     );

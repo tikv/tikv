@@ -1452,7 +1452,7 @@ fn test_merge_snapshot_demote() {
 #[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_propose_in_memory_pessimistic_locks() {
     let peer_size_limit = 512 << 10;
-    let global_size_limit = 100 << 20;
+    let instance_size_limit = 100 << 20;
     let mut cluster = new_cluster(0, 2);
     configure_for_merge(&mut cluster.cfg);
     cluster.run();
@@ -1491,7 +1491,7 @@ fn test_propose_in_memory_pessimistic_locks() {
         .insert(
             vec![(Key::from_raw(b"k1"), l1.clone())],
             peer_size_limit,
-            global_size_limit,
+            instance_size_limit,
         )
         .unwrap();
 
@@ -1513,7 +1513,7 @@ fn test_propose_in_memory_pessimistic_locks() {
         .insert(
             vec![(Key::from_raw(b"k3"), l2.clone())],
             peer_size_limit,
-            global_size_limit,
+            instance_size_limit,
         )
         .unwrap();
 
@@ -1593,7 +1593,7 @@ fn test_merge_pessimistic_locks_when_gap_is_too_large() {
 #[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_merge_pessimistic_locks_repeated_merge() {
     let peer_size_limit = 512 << 10;
-    let global_size_limit = 100 << 20;
+    let instance_size_limit = 100 << 20;
     let mut cluster = new_cluster(0, 2);
     configure_for_merge(&mut cluster.cfg);
     cluster.cfg.pessimistic_txn.pipelined = true;
@@ -1630,7 +1630,7 @@ fn test_merge_pessimistic_locks_repeated_merge() {
         .insert(
             vec![(Key::from_raw(b"k1"), lock.clone())],
             peer_size_limit,
-            global_size_limit,
+            instance_size_limit,
         )
         .unwrap();
 

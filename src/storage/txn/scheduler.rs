@@ -289,7 +289,7 @@ struct TxnSchedulerInner<L: LockManager> {
     memory_quota: Arc<MemoryQuota>,
 
     in_memory_peer_size_limit: Arc<AtomicU64>,
-    in_memory_global_size_limit: Arc<AtomicU64>,
+    in_memory_instance_size_limit: Arc<AtomicU64>,
 }
 
 #[inline]
@@ -485,7 +485,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             txn_status_cache: TxnStatusCache::new(config.txn_status_cache_capacity),
             memory_quota: Arc::new(MemoryQuota::new(config.memory_quota.0 as _)),
             in_memory_peer_size_limit: dynamic_configs.in_memory_peer_size_limit,
-            in_memory_global_size_limit: dynamic_configs.in_memory_global_size_limit,
+            in_memory_instance_size_limit: dynamic_configs.in_memory_instance_size_limit,
         });
 
         SCHED_TXN_MEMORY_QUOTA
@@ -1910,7 +1910,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             mem::take(&mut to_be_write.modifies),
             self.inner.in_memory_peer_size_limit.load(Ordering::Relaxed) as usize,
             self.inner
-                .in_memory_global_size_limit
+                .in_memory_instance_size_limit
                 .load(Ordering::Relaxed) as usize,
         ) {
             Ok(()) => {
@@ -2243,7 +2243,7 @@ mod tests {
                     in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
                     wake_up_delay_duration_ms: Arc::new(AtomicU64::new(0)),
                     in_memory_peer_size_limit: Arc::new(AtomicU64::new(512 << 10)),
-                    in_memory_global_size_limit: Arc::new(AtomicU64::new(100 << 20)),
+                    in_memory_instance_size_limit: Arc::new(AtomicU64::new(100 << 20)),
                 },
                 Arc::new(FlowController::Singleton(EngineFlowController::empty())),
                 None,
@@ -2595,7 +2595,7 @@ mod tests {
                 in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
                 wake_up_delay_duration_ms: Arc::new(AtomicU64::new(0)),
                 in_memory_peer_size_limit: Arc::new(AtomicU64::new(512 << 10)),
-                in_memory_global_size_limit: Arc::new(AtomicU64::new(100 << 20)),
+                in_memory_instance_size_limit: Arc::new(AtomicU64::new(100 << 20)),
             },
             Arc::new(FlowController::Singleton(EngineFlowController::empty())),
             None,

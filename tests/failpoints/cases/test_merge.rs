@@ -1393,7 +1393,7 @@ fn test_source_peer_read_delegate_after_apply() {
 #[test]
 fn test_merge_with_concurrent_pessimistic_locking() {
     let peer_size_limit = 512 << 10;
-    let global_size_limit = 100 << 20;
+    let instance_size_limit = 100 << 20;
     let mut cluster = new_server_cluster(0, 2);
     configure_for_merge(&mut cluster.cfg);
     cluster.cfg.pessimistic_txn.pipelined = true;
@@ -1433,7 +1433,7 @@ fn test_merge_with_concurrent_pessimistic_locking() {
                 },
             )],
             peer_size_limit,
-            global_size_limit,
+            instance_size_limit,
         )
         .unwrap();
 
@@ -1487,7 +1487,7 @@ fn test_merge_with_concurrent_pessimistic_locking() {
 #[test]
 fn test_merge_pessimistic_locks_with_concurrent_prewrite() {
     let peer_size_limit = 512 << 10;
-    let global_size_limit = 100 << 20;
+    let instance_size_limit = 100 << 20;
     let mut cluster = new_server_cluster(0, 2);
     configure_for_merge(&mut cluster.cfg);
     cluster.cfg.pessimistic_txn.pipelined = true;
@@ -1534,7 +1534,7 @@ fn test_merge_pessimistic_locks_with_concurrent_prewrite() {
                 (Key::from_raw(b"k1"), lock),
             ],
             peer_size_limit,
-            global_size_limit,
+            instance_size_limit,
         )
         .unwrap();
 
@@ -1578,7 +1578,7 @@ fn test_merge_pessimistic_locks_with_concurrent_prewrite() {
 #[test]
 fn test_retry_pending_prepare_merge_fail() {
     let peer_size_limit = 512 << 10;
-    let global_size_limit = 100 << 20;
+    let instance_size_limit = 100 << 20;
     let mut cluster = new_server_cluster(0, 2);
     configure_for_merge(&mut cluster.cfg);
     cluster.cfg.pessimistic_txn.pipelined = true;
@@ -1618,7 +1618,7 @@ fn test_retry_pending_prepare_merge_fail() {
         .insert(
             vec![(Key::from_raw(b"k1"), l1)],
             peer_size_limit,
-            global_size_limit,
+            instance_size_limit,
         )
         .unwrap();
 
@@ -1661,7 +1661,7 @@ fn test_retry_pending_prepare_merge_fail() {
 #[test]
 fn test_merge_pessimistic_locks_propose_fail() {
     let peer_size_limit = 512 << 10;
-    let global_size_limit = 100 << 20;
+    let instance_size_limit = 100 << 20;
     let mut cluster = new_server_cluster(0, 2);
     configure_for_merge(&mut cluster.cfg);
     cluster.cfg.pessimistic_txn.pipelined = true;
@@ -1700,7 +1700,7 @@ fn test_merge_pessimistic_locks_propose_fail() {
         .insert(
             vec![(Key::from_raw(b"k1"), lock)],
             peer_size_limit,
-            global_size_limit,
+            instance_size_limit,
         )
         .unwrap();
 

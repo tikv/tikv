@@ -32,7 +32,7 @@ pub struct Config {
     /// to people who disable the pipelined pessimistic lock feature.
     pub in_memory: bool,
     pub in_memory_peer_size_limit: ReadableSize,
-    pub in_memory_global_size_limit: ReadableSize,
+    pub in_memory_instance_size_limit: ReadableSize,
 }
 
 // u64 is for backward compatibility since v3.x uses it.
@@ -65,7 +65,7 @@ impl Default for Config {
             pipelined: true,
             in_memory: true,
             in_memory_peer_size_limit: ReadableSize::kb(512),
-            in_memory_global_size_limit: ReadableSize::mb(100),
+            in_memory_instance_size_limit: ReadableSize::mb(100),
         }
     }
 }
@@ -86,7 +86,7 @@ pub struct LockManagerConfigManager {
     pub in_memory: Arc<AtomicBool>,
     pub wake_up_delay_duration_ms: Arc<AtomicU64>,
     pub in_memory_peer_size_limit: Arc<AtomicU64>,
-    pub in_memory_global_size_limit: Arc<AtomicU64>,
+    pub in_memory_instance_size_limit: Arc<AtomicU64>,
 }
 
 impl LockManagerConfigManager {
@@ -97,7 +97,7 @@ impl LockManagerConfigManager {
         in_memory: Arc<AtomicBool>,
         wake_up_delay_duration_ms: Arc<AtomicU64>,
         in_memory_peer_size_limit: Arc<AtomicU64>,
-        in_memory_global_size_limit: Arc<AtomicU64>,
+        in_memory_instance_size_limit: Arc<AtomicU64>,
     ) -> Self {
         LockManagerConfigManager {
             waiter_mgr_scheduler,
@@ -106,7 +106,7 @@ impl LockManagerConfigManager {
             in_memory,
             wake_up_delay_duration_ms,
             in_memory_peer_size_limit,
-            in_memory_global_size_limit,
+            in_memory_instance_size_limit,
         }
     }
 }
@@ -141,10 +141,10 @@ impl ConfigManager for LockManagerConfigManager {
             self.in_memory_peer_size_limit.store(p.0, Ordering::Relaxed);
         }
         if let Some(p) = change
-            .remove("in_memory_global_size_limit")
+            .remove("in_memory_instance_size_limit")
             .map(ReadableSize::from)
         {
-            self.in_memory_global_size_limit
+            self.in_memory_instance_size_limit
                 .store(p.0, Ordering::Relaxed);
         }
         Ok(())
@@ -164,7 +164,7 @@ mod tests {
         pipelined = false
         in-memory = false
         in-memory-peer-size-limit = "512KiB"
-        in-memory-global-size-limit = "100MiB"
+        in-memory-instance-size-limit = "100MiB"
         "#;
 
         let config: Config = toml::from_str(conf).unwrap();
@@ -173,6 +173,6 @@ mod tests {
         assert_eq!(config.pipelined, false);
         assert_eq!(config.in_memory, false);
         assert_eq!(config.in_memory_peer_size_limit.0, 512 << 10);
-        assert_eq!(config.in_memory_global_size_limit.0, 100 << 20);
+        assert_eq!(config.in_memory_instance_size_limit.0, 100 << 20);
     }
 }

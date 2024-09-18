@@ -564,7 +564,7 @@ fn test_pessimistic_lock_check_valid() {
 #[test]
 fn test_concurrent_write_after_transfer_leader_invalidates_locks() {
     let peer_size_limit = 512 << 10;
-    let global_size_limit = 100 << 20;
+    let instance_size_limit = 100 << 20;
     let mut cluster = new_server_cluster(0, 1);
     cluster.cfg.pessimistic_txn.pipelined = true;
     cluster.cfg.pessimistic_txn.in_memory = true;
@@ -593,7 +593,7 @@ fn test_concurrent_write_after_transfer_leader_invalidates_locks() {
         .insert(
             vec![(Key::from_raw(b"key"), lock.clone())],
             peer_size_limit,
-            global_size_limit,
+            instance_size_limit,
         )
         .unwrap();
 

@@ -861,7 +861,7 @@ fn test_serde_custom_tikv_config() {
         pipelined: false,
         in_memory: false,
         in_memory_peer_size_limit: ReadableSize::kb(512),
-        in_memory_global_size_limit: ReadableSize::mb(100),
+        in_memory_instance_size_limit: ReadableSize::mb(100),
     };
     value.cdc = CdcConfig {
         min_ts_interval: ReadableDuration::secs(4),

@@ -813,7 +813,7 @@ fn test_node_catch_up_logs() {
 #[test]
 fn test_leader_drop_with_pessimistic_lock() {
     let peer_size_limit = 512 << 10;
-    let global_size_limit = 100 << 20;
+    let instance_size_limit = 100 << 20;
     let mut cluster = new_server_cluster(0, 3);
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(1, 1));
@@ -841,7 +841,7 @@ fn test_leader_drop_with_pessimistic_lock() {
                 },
             )],
             peer_size_limit,
-            global_size_limit,
+            instance_size_limit,
         )
         .unwrap();
 
