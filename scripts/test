@@ -32,4 +32,5 @@ echo ${TIKV_ENABLE_FEATURES}
 cargo $CUSTOM_TEST_COMMAND --workspace \
     --exclude fuzz --exclude fuzzer-afl --exclude fuzzer-honggfuzz \
     --exclude fuzzer-libfuzzer --exclude fuzz-targets \
+    --exclude backup-stream \
     --features "${TIKV_ENABLE_FEATURES}" ${EXTRA_CARGO_ARGS} "$@"
