@@ -16,7 +16,9 @@ use engine_traits::{
 };
 use keys::data_key;
 use kvproto::metapb::{Peer, Region};
-use raftstore::store::{apply_sst_cf_file, build_sst_cf_file_list, CfFile, RegionSnapshot};
+use raftstore::store::{
+    apply_sst_cf_files_by_ingest, build_sst_cf_file_list, CfFile, RegionSnapshot,
+};
 use tempfile::Builder;
 use test_raftstore::*;
 use tikv::{
@@ -408,13 +410,13 @@ fn test_delete_files_in_range_for_titan() {
         .iter()
         .map(|s| s.as_str())
         .collect::<Vec<&str>>();
-    apply_sst_cf_file(&tmp_file_paths, &engines1.kv, CF_DEFAULT).unwrap();
+    apply_sst_cf_files_by_ingest(&tmp_file_paths, &engines1.kv, CF_DEFAULT).unwrap();
     let tmp_file_paths = cf_file_write.tmp_file_paths();
     let tmp_file_paths = tmp_file_paths
         .iter()
         .map(|s| s.as_str())
         .collect::<Vec<&str>>();
-    apply_sst_cf_file(&tmp_file_paths, &engines1.kv, CF_WRITE).unwrap();
+    apply_sst_cf_files_by_ingest(&tmp_file_paths, &engines1.kv, CF_WRITE).unwrap();
 
     // Do scan on other DB.
     let mut r = Region::default();
