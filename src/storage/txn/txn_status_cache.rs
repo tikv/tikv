@@ -171,7 +171,7 @@ impl CacheEntry {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Copy, Debug, Clone, PartialEq, Eq)]
 pub enum TxnState {
     Ongoing { min_commit_ts: TimeStamp },
     Committed { commit_ts: TimeStamp },
@@ -410,10 +410,7 @@ impl TxnStatusCache {
         }
 
         let update_time = now.duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
-        let entry = CacheEntry {
-            state: state.clone(),
-            update_time,
-        };
+        let entry = CacheEntry { state, update_time };
         let slot_index = self.slot_index(start_ts);
 
         let previous_size;
@@ -452,7 +449,15 @@ impl TxnStatusCache {
                 let mut normal_cache = self.normal_cache[slot_index].lock();
                 previous_size = normal_cache.size();
                 previous_allocated = normal_cache.internal_allocated_capacity();
-                normal_cache.insert(start_ts, entry);
+                if let Some(existing_entry) = normal_cache.get_mut(&start_ts) {
+                    // don't update committed or rolled back txns.
+                    if let TxnState::Ongoing { .. } = existing_entry.state {
+                        existing_entry.state = state;
+                        existing_entry.update_time = update_time;
+                    }
+                } else {
+                    normal_cache.insert(start_ts, entry);
+                }
                 after_size = normal_cache.size();
                 after_allocated = normal_cache.internal_allocated_capacity();
 
@@ -494,12 +499,12 @@ impl TxnStatusCache {
         // The one in large_txn_cache is more up-to-date.
         let mut large_txn_cache = self.large_txn_cache[slot_index].lock();
         if let Some(entry) = large_txn_cache.get(&start_ts) {
-            return Some(entry.state.clone());
+            return Some(entry.state);
         }
 
         let mut normal_cache = self.normal_cache[slot_index].lock();
         if let Some(entry) = normal_cache.get(&start_ts) {
-            return Some(entry.state.clone());
+            return Some(entry.state);
         }
 
         None
@@ -876,12 +881,6 @@ mod tests {
         c.insert_committed(3.into(), 4.into(), now);
         assert_eq!(c.get_committed_no_promote(3.into()).unwrap(), 4.into());
 
-        // This won't actually happen, since a transaction will never have commit info
-        // with two different commit_ts. We just use this to check replacing
-        // won't happen.
-        c.insert_committed(1.into(), 4.into(), now);
-        assert_eq!(c.get_committed_no_promote(1.into()).unwrap(), 2.into());
-
         let mut start_ts_list: Vec<_> = (1..100).step_by(2).map(TimeStamp::from).collect();
         start_ts_list.shuffle(&mut rand::thread_rng());
         for &start_ts in &start_ts_list {
@@ -922,10 +921,6 @@ mod tests {
         // Size should be calculated by count.
         assert_eq!(c.normal_cache[0].lock().size(), 3);
 
-        // Insert entry 1 again. So if entry 1 is the first one to be popped out, it
-        // verifies that inserting an existing key won't promote it.
-        c.insert_committed(1.into(), 2.into(), now());
-
         // All the 3 entries are kept
         assert_eq!(c.get_committed_no_promote(1.into()).unwrap(), 2.into());
         assert_eq!(c.get_committed_no_promote(3.into()).unwrap(), 4.into());
@@ -965,27 +960,18 @@ mod tests {
 
         // Now the cache's contents are:
         // 11@2003, 13@2005
-        // Test inserting existed entries.
-        // According to the implementation of LruCache, though it won't do any update to
-        // the content, it still checks the tail to see if anything can be
-        // evicted.
         set_time(3004);
-        c.insert_committed(13.into(), 14.into(), now());
+        c.insert_committed(14.into(), 14.into(), now());
         assert!(c.get_committed_no_promote(11.into()).is_none());
         assert_eq!(c.get_committed_no_promote(13.into()).unwrap(), 14.into());
 
         set_time(3006);
-        c.insert_committed(13.into(), 14.into(), now());
-        assert!(c.get_committed_no_promote(13.into()).is_none());
+        c.remove_normal(13.into());
 
         // Now the cache is empty.
         c.insert_committed(15.into(), 16.into(), now());
         set_time(3008);
         c.insert_committed(17.into(), 18.into(), now());
-        // Test inserting existed entry doesn't promote it.
-        // Re-insert 15.
-        set_time(3009);
-        c.insert_committed(15.into(), 16.into(), now());
         set_time(4007);
         c.insert_committed(19.into(), 20.into(), now());
         // 15's insert time is not updated, and is at the tail of the LRU, so it should
@@ -1009,7 +995,7 @@ mod tests {
         assert_eq!(c.get_committed(19.into()).unwrap(), 20.into());
         assert_eq!(c.get_committed(23.into()).unwrap(), 24.into());
         // `get` promotes the entries, and entry 21 is put to the tail.
-        c.insert_committed(23.into(), 24.into(), now());
+        c.insert_committed(24.into(), 24.into(), now());
         assert_eq!(c.get_committed_no_promote(17.into()).unwrap(), 18.into());
         assert_eq!(c.get_committed_no_promote(19.into()).unwrap(), 20.into());
         assert!(c.get_committed_no_promote(21.into()).is_none());
