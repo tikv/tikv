@@ -514,7 +514,8 @@ impl Interval {
     }
 }
 
-/// Convert to a string which has a uniform interval format and can be parsed into Interval struct then.
+/// Convert to a string which has a uniform interval format and then can be
+/// parsed into Interval struct.
 pub trait ConvertToIntervalStr {
     fn to_interval_string(
         &self,
