@@ -1009,7 +1009,7 @@ where
         snap_updated: &mut bool,
         last_valid_ts: Timespec,
     ) -> Option<ReadResponse<E::Snapshot>> {
-        let mut local_read_ctx = LocalReadContext::new(&mut self.snap_cache, ctx.read_id);
+        let mut local_read_ctx = LocalReadContext::new(&mut self.snap_cache, ctx.read_id.clone());
 
         (*snap_updated) =
             local_read_ctx.maybe_update_snapshot(delegate.get_tablet(), last_valid_ts);
