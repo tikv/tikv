@@ -31,7 +31,9 @@ pub struct Config {
     /// assume that the success rate of pessimistic transactions is important
     /// to people who disable the pipelined pessimistic lock feature.
     pub in_memory: bool,
+    /// The maximum size of the in-memory pessimistic locks for each region.
     pub in_memory_peer_size_limit: ReadableSize,
+    /// The maximum size of the in-memory pessimistic locks in the TiKV instance.
     pub in_memory_instance_size_limit: ReadableSize,
 }
 
