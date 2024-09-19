@@ -282,6 +282,8 @@ pub struct RegionMetaMap {
     regions: HashMap<u64, CacheRegionMeta>,
     // active flag, cloned from RegionManager,
     is_active: Arc<AtomicBool>,
+
+    manual_load_range: Vec<CacheRegion>,
 }
 
 impl RegionMetaMap {
@@ -289,8 +291,10 @@ impl RegionMetaMap {
         assert!(!self.overlaps_with(&meta.region));
         let id = meta.region.id;
         let data_end_key = meta.region.end.clone();
-        self.regions.insert(id, meta);
-        self.regions_by_range.insert(data_end_key, id);
+        let old_meta = self.regions.insert(id, meta);
+        assert!(old_meta.is_none(), "old_meta: {:?}", old_meta.unwrap());
+        let old_id = self.regions_by_range.insert(data_end_key, id);
+        assert!(old_id.is_none(), "old_region_id: {}", old_id.unwrap());
         if self.regions.len() == 1 {
             assert!(!self.is_active.load(Ordering::Relaxed));
             self.is_active.store(true, Ordering::Relaxed);
@@ -310,6 +314,7 @@ impl RegionMetaMap {
             };
             return Err(reason);
         }
+        info!("ime load new region"; "region" => ?cache_region);
         let meta = CacheRegionMeta::new(cache_region);
         self.new_region_meta(meta);
         Ok(())
@@ -374,7 +379,24 @@ impl RegionMetaMap {
         for id in removed_regions {
             self.remove_region(id);
         }
-        overlapped_region_state
+        if overlapped_region_state.is_some() {
+            return overlapped_region_state;
+        }
+
+        // check region with same id. It is possible that there is a cached region with
+        // outdated epoch that is still in the (pending_)evicting state, and a new load
+        // is triggered after the region is merged and split for multiple times.
+        // Thus, the new pending region's range may not overlap with the old
+        // cached region but their region ids are the same.
+        // While in theory we should keep the new region as it doesn't overlap with any
+        // other region, but because we use region_id as the unique identifier, we do
+        // not load it for implementation simplicity as this kind of scenario
+        // should be very rare.
+        if let Some(region) = self.regions.get(&region.id) {
+            return Some(region.state);
+        }
+
+        None
     }
 
     fn on_all_overlapped_regions(&self, region: &CacheRegion, mut f: impl FnMut(&CacheRegionMeta)) {
@@ -454,6 +476,59 @@ impl RegionMetaMap {
     pub(crate) fn regions(&self) -> &HashMap<u64, CacheRegionMeta> {
         &self.regions
     }
+
+    pub fn overlap_with_manual_load_range(&self, range: &CacheRegion) -> bool {
+        self.manual_load_range.iter().any(|r| r.overlaps(range))
+    }
+
+    pub fn add_manual_load_range(&mut self, range: CacheRegion) {
+        let mut union = range;
+        self.manual_load_range.retain(|r| {
+            let Some(u) = r.union(&union) else {
+                return true;
+            };
+            union = u;
+            // The intersected range need to be removed before updating
+            // the union range.
+            false
+        });
+        info!("ime add manual load range"; "range" => ?union);
+        self.manual_load_range.push(union);
+    }
+
+    pub fn remove_manual_load_range(&mut self, range: CacheRegion) {
+        let mut diffs = Vec::new();
+        self.manual_load_range.retain(|r| {
+            match r.difference(&range) {
+                (None, None) => {
+                    // Remove the range if it is overlapped with the range.
+                    if !r.overlaps(&range) {
+                        return true;
+                    }
+                }
+                others => diffs.push(others),
+            };
+            // The intersected range need to be removed before updating
+            // the union range.
+            false
+        });
+        info!("ime remove manual load range"; "range" => ?range);
+        assert!(diffs.len() <= 2, "{:?}", diffs);
+        for (left, right) in diffs.into_iter() {
+            if let Some(left) = left {
+                info!("ime update manual load range"; "range" => ?left);
+                self.manual_load_range.push(left);
+            }
+            if let Some(right) = right {
+                info!("ime update manual load range"; "range" => ?right);
+                self.manual_load_range.push(right);
+            }
+        }
+        const GC_THRESHOLD: usize = 64;
+        if self.manual_load_range.capacity() - self.manual_load_range.len() > GC_THRESHOLD {
+            self.manual_load_range.shrink_to_fit();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -516,6 +591,7 @@ impl Default for RegionManager {
             regions_by_range: BTreeMap::default(),
             regions: HashMap::default(),
             is_active: is_active.clone(),
+            manual_load_range: Vec::default(),
         });
         Self {
             regions_map,
@@ -528,7 +604,7 @@ impl Default for RegionManager {
 
 impl RegionManager {
     // load a new region directly in the active state.
-    // This fucntion is used for unit/integration tests only.
+    // This function is used for unit/integration tests only.
     pub fn new_region(&self, region: CacheRegion) {
         let mut range_meta = CacheRegionMeta::new(region);
         range_meta.state = RegionState::Active;
@@ -857,6 +933,7 @@ impl RegionManager {
             for r in regions {
                 let meta = regions_map.remove_region(r.id);
                 assert_eq!(meta.region.epoch_version, r.epoch_version);
+                info!("ime remove evicted region"; "meta" => ?meta);
 
                 let evict_info = meta.evict_info.unwrap();
                 observe_eviction_duration(
@@ -1131,6 +1208,13 @@ mod tests {
             range_mgr.load_region(r).unwrap_err(),
             LoadFailedReason::PendingRange
         );
+
+        // test range overlap but id overlap
+        let r = CacheRegion::new(1, 2, b"k20", b"k30");
+        assert_eq!(
+            range_mgr.load_region(r).unwrap_err(),
+            LoadFailedReason::Evicting
+        );
     }
 
     #[test]
@@ -1231,6 +1315,229 @@ mod tests {
                     .count(),
                 1
             );
+        }
+    }
+
+    #[test]
+    fn test_overlap_with_manual_load_range() {
+        let range_mgr = RegionManager::default();
+        range_mgr
+            .regions_map()
+            .write()
+            .add_manual_load_range(CacheRegion::new(0, 0, b"k00".to_vec(), b"k10".to_vec()));
+        range_mgr
+            .regions_map()
+            .write()
+            .add_manual_load_range(CacheRegion::new(0, 0, b"k20".to_vec(), b"k30".to_vec()));
+        range_mgr
+            .regions_map()
+            .write()
+            .add_manual_load_range(CacheRegion::new(0, 0, b"k30".to_vec(), b"k50".to_vec()));
+
+        struct Case {
+            name: &'static str,
+            range: (&'static [u8], &'static [u8]),
+            expected: bool,
+        }
+        let cases = [
+            Case {
+                name: "left intersect 1",
+                range: (b"k00", b"k05"),
+                expected: true,
+            },
+            Case {
+                name: "left intersect 2",
+                range: (b"k15", b"k25"),
+                expected: true,
+            },
+            Case {
+                name: "cover all",
+                range: (b"k00", b"k60"),
+                expected: true,
+            },
+            Case {
+                name: "right intersect",
+                range: (b"k05", b"k15"),
+                expected: true,
+            },
+            Case {
+                name: "left and right intersect",
+                range: (b"k25", b"k45"),
+                expected: true,
+            },
+            Case {
+                name: "not overlap 1",
+                range: (b"k15", b"k20"),
+                expected: false,
+            },
+            Case {
+                name: "not overlap 2",
+                range: (b"k", b"k0"),
+                expected: false,
+            },
+            Case {
+                name: "not overlap 3",
+                range: (b"k60", b"k70"),
+                expected: false,
+            },
+        ];
+
+        for case in cases {
+            let range = CacheRegion::new(0, 0, case.range.0.to_vec(), case.range.1.to_vec());
+            assert_eq!(
+                range_mgr
+                    .regions_map()
+                    .read()
+                    .overlap_with_manual_load_range(&range),
+                case.expected,
+                "{}",
+                case.name
+            );
+        }
+    }
+
+    #[test]
+    fn test_manual_load_range_add_remove() {
+        struct Case {
+            name: &'static str,
+            build: Vec<(&'static [u8], &'static [u8])>,
+            remove: Vec<(&'static [u8], &'static [u8])>,
+            add: Vec<(&'static [u8], &'static [u8])>,
+            result: Vec<(&'static [u8], &'static [u8])>,
+        }
+        let cases = [
+            Case {
+                name: "remove empty",
+                build: vec![],
+                remove: vec![(b"k00", b"k10")],
+                add: vec![],
+                result: vec![],
+            },
+            Case {
+                name: "add empty",
+                build: vec![],
+                remove: vec![],
+                add: vec![(b"k00", b"k10")],
+                result: vec![(b"k00", b"k10")],
+            },
+            // Test remove
+            Case {
+                name: "remove one range",
+                build: vec![(b"k00", b"k10"), (b"k20", b"k30"), (b"k40", b"k50")],
+                remove: vec![(b"k20", b"k30")],
+                add: vec![],
+                result: vec![(b"k00", b"k10"), (b"k40", b"k50")],
+            },
+            Case {
+                name: "remove left intersected ranges",
+                build: vec![(b"k00", b"k10"), (b"k20", b"k30"), (b"k40", b"k50")],
+                remove: vec![(b"k", b"k05")],
+                add: vec![],
+                result: vec![(b"k05", b"k10"), (b"k20", b"k30"), (b"k40", b"k50")],
+            },
+            Case {
+                name: "remove left and right intersected ranges",
+                build: vec![(b"k00", b"k10"), (b"k20", b"k30"), (b"k40", b"k50")],
+                remove: vec![(b"k05", b"k45")],
+                add: vec![],
+                result: vec![(b"k00", b"k05"), (b"k45", b"k50")],
+            },
+            Case {
+                name: "remove right intersected ranges",
+                build: vec![(b"k00", b"k10"), (b"k20", b"k30"), (b"k40", b"k50")],
+                remove: vec![(b"k45", b"k60")],
+                add: vec![],
+                result: vec![(b"k00", b"k10"), (b"k20", b"k30"), (b"k40", b"k45")],
+            },
+            // Test add
+            Case {
+                name: "add left intersected ranges 1",
+                build: vec![(b"k00", b"k10"), (b"k20", b"k30")],
+                add: vec![(b"k", b"k05")],
+                remove: vec![],
+                result: vec![(b"k", b"k10"), (b"k20", b"k30")],
+            },
+            Case {
+                name: "add left intersected ranges 2",
+                build: vec![(b"k00", b"k10"), (b"k20", b"k30")],
+                add: vec![(b"k", b"k25")],
+                remove: vec![],
+                result: vec![(b"k", b"k30")],
+            },
+            Case {
+                name: "add right intersected ranges 1",
+                build: vec![(b"k20", b"k30"), (b"k40", b"k50")],
+                add: vec![(b"k45", b"k55")],
+                remove: vec![],
+                result: vec![(b"k20", b"k30"), (b"k40", b"k55")],
+            },
+            Case {
+                name: "add right intersected ranges 2",
+                build: vec![(b"k20", b"k30"), (b"k40", b"k50")],
+                add: vec![(b"k25", b"k55")],
+                remove: vec![],
+                result: vec![(b"k20", b"k55")],
+            },
+            Case {
+                name: "add left and right intersected ranges 1",
+                build: vec![(b"k20", b"k30")],
+                add: vec![(b"k10", b"k50")],
+                remove: vec![],
+                result: vec![(b"k10", b"k50")],
+            },
+            Case {
+                name: "add left and right intersected ranges 2",
+                build: vec![(b"k10", b"k20"), (b"k20", b"k30")],
+                add: vec![(b"k10", b"k50")],
+                remove: vec![],
+                result: vec![(b"k10", b"k50")],
+            },
+            Case {
+                name: "add adjacent ranges",
+                build: vec![(b"k10", b"k20")],
+                add: vec![(b"k00", b"k10"), (b"k20", b"k30")],
+                remove: vec![],
+                result: vec![(b"k00", b"k10"), (b"k10", b"k20"), (b"k20", b"k30")],
+            },
+        ];
+
+        for case in cases {
+            // Build
+            let range_mgr = RegionManager::default();
+            for (start, end) in case.build {
+                let r = CacheRegion::new(0, 0, start.to_vec(), end.to_vec());
+                range_mgr.regions_map().write().add_manual_load_range(r);
+            }
+
+            // Remove
+            for (start, end) in case.remove {
+                let r = CacheRegion::new(0, 0, start.to_vec(), end.to_vec());
+                range_mgr.regions_map().write().remove_manual_load_range(r);
+            }
+
+            // Add
+            for (start, end) in case.add {
+                let r = CacheRegion::new(0, 0, start.to_vec(), end.to_vec());
+                range_mgr.regions_map().write().add_manual_load_range(r);
+            }
+
+            // Check
+            let map = range_mgr.regions_map.read();
+            assert_eq!(
+                map.manual_load_range.len(),
+                case.result.len(),
+                "case: {}",
+                case.name
+            );
+            for r in case.result {
+                assert!(
+                    map.manual_load_range
+                        .iter()
+                        .any(|range| range.start.as_slice() == r.0 && range.end.as_slice() == r.1),
+                    "case: {}",
+                    case.name
+                );
+            }
         }
     }
 }

@@ -21,7 +21,7 @@ use futures::executor::block_on;
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
 use health_controller::HealthController;
 use hybrid_engine::observer::{
-    EvictionObserver, HybridSnapshotObserver, RegionCacheWriteBatchObserver,
+    HybridSnapshotObserver, LoadEvictionObserver, RegionCacheWriteBatchObserver,
 };
 use kvproto::{
     deadlock::create_deadlock,
@@ -342,7 +342,7 @@ impl ServerCluster {
                 Some(Arc::new(region_info_accessor.clone())),
             );
             // Eviction observer
-            let observer = EvictionObserver::new(Arc::new(in_memory_engine.clone()));
+            let observer = LoadEvictionObserver::new(Arc::new(in_memory_engine.clone()));
             observer.register_to(&mut coprocessor_host);
             // Write batch observer
             let write_batch_observer =
@@ -522,6 +522,7 @@ impl ServerCluster {
             .max_per_file_size(cfg.raft_store.max_snapshot_file_raw_size.0)
             .enable_multi_snapshot_files(true)
             .enable_receive_tablet_snapshot(cfg.raft_store.enable_v2_compatible_learner)
+            .min_ingest_snapshot_limit(cfg.server.snap_min_ingest_size)
             .build(tmp_str);
         self.snap_mgrs.insert(node_id, snap_mgr.clone());
         let server_cfg = Arc::new(VersionTrack::new(cfg.server.clone()));

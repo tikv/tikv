@@ -20,7 +20,7 @@ use engine_traits::{
 use kvproto::metapb::Region;
 use raftstore::coprocessor::RegionInfoProvider;
 use slog_global::error;
-use tikv_util::{config::VersionTrack, info};
+use tikv_util::{config::VersionTrack, info, warn};
 
 use crate::{
     background::{BackgroundTask, BgWorkManager, PdRangeHintService},
@@ -288,8 +288,7 @@ impl RangeCacheMemoryEngine {
         self.core.region_manager.new_region(cache_region);
     }
 
-    pub fn load_region(&self, region: Region) -> result::Result<(), LoadFailedReason> {
-        let cache_region = CacheRegion::from_region(&region);
+    pub fn load_region(&self, cache_region: CacheRegion) -> result::Result<(), LoadFailedReason> {
         self.core.region_manager().load_region(cache_region)
     }
 
@@ -488,6 +487,27 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
             RegionEvent::Eviction { region, reason } => {
                 self.evict_region(&region, reason, None);
             }
+            RegionEvent::TryLoad { region } => {
+                if self
+                    .core
+                    .region_manager()
+                    .regions_map()
+                    .read()
+                    .overlap_with_manual_load_range(&region)
+                {
+                    info!(
+                        "try to load region in manual load range";
+                        "region" => ?region,
+                    );
+                    if let Err(e) = self.load_region(region.clone()) {
+                        warn!(
+                            "ime load region failed";
+                            "err" => ?e,
+                            "region" => ?region,
+                        );
+                    }
+                }
+            }
             RegionEvent::Split {
                 source,
                 new_regions,
@@ -559,7 +579,8 @@ pub mod tests {
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let region1 = new_region(1, b"k1", b"k3");
-        engine.load_region(region1).unwrap();
+        let cache_region1 = CacheRegion::from_region(&region1);
+        engine.load_region(cache_region1).unwrap();
 
         let mut region2 = new_region(1, b"k1", b"k5");
         region2.mut_region_epoch().version = 2;
@@ -572,7 +593,8 @@ pub mod tests {
         );
 
         let region1 = new_region(1, b"k1", b"k3");
-        engine.load_region(region1).unwrap();
+        let cache_region1 = CacheRegion::from_region(&region1);
+        engine.load_region(cache_region1).unwrap();
 
         let mut region2 = new_region(1, b"k2", b"k5");
         region2.mut_region_epoch().version = 2;
@@ -707,7 +729,7 @@ pub mod tests {
 
         let region = new_region(1, b"k00", b"k30");
         let cache_region = CacheRegion::from_region(&region);
-        engine.load_region(region).unwrap();
+        engine.load_region(cache_region.clone()).unwrap();
         assert!(engine.core.region_manager.is_active());
 
         let mut wb = engine.write_batch();
