@@ -609,7 +609,7 @@ impl BackgroundRunnerCore {
                 return;
             }
         };
-        if range_stats_manager.ready_for_auto_load_and_evict() {
+        if !range_stats_manager.ready_for_auto_load_and_evict() {
             return;
         }
 
@@ -676,7 +676,7 @@ impl BackgroundRunnerCore {
             for region in regions_to_load.into_iter().take(expected_new_count) {
                 let cache_region = CacheRegion::from_region(&region);
                 if let Err(e) = regions_map.load_region(cache_region) {
-                    error!("ime error loading range"; "cache_range" => ?region, "err" => ?e);
+                    warn!("ime error loading range"; "cache_range" => ?region, "err" => ?e);
                 }
             }
         }
