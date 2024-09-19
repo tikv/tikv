@@ -6862,7 +6862,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#f68a89f1d79db38d5cfe31f24ca33be7376c90b4"
+source = "git+https://github.com/pingcap/tipb.git#cf70966bef25e205cb845c19265301542d1238d1"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
