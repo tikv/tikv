@@ -60,7 +60,7 @@ pub enum EvictReason {
 /// RangeCacheEngine works as a range cache caching some ranges (in Memory or
 /// NVME for instance) to improve the read performance.
 pub trait RangeCacheEngine:
-    WriteBatchExt + Iterable + Debug + Clone + Unpin + Send + Sync + 'static
+    RangeCacheEngineExt + WriteBatchExt + Iterable + Debug + Clone + Unpin + Send + Sync + 'static
 {
     type Snapshot: Snapshot;
 
@@ -87,12 +87,6 @@ pub trait RangeCacheEngine:
     fn enabled(&self) -> bool {
         false
     }
-
-    fn on_region_event(&self, event: RegionEvent);
-
-    fn region_cached(&self, range: &Region) -> bool;
-
-    fn load_region(&self, range: &Region);
 }
 
 pub trait RangeCacheEngineExt {

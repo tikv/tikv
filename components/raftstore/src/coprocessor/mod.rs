@@ -38,7 +38,7 @@ pub use self::{
     consistency_check::{ConsistencyCheckObserver, Raw as RawConsistencyCheckObserver},
     dispatcher::{
         BoxAdminObserver, BoxApplySnapshotObserver, BoxCmdObserver, BoxConsistencyCheckObserver,
-        BoxMessageObserver, BoxPdTaskObserver, BoxQueryObserver, BoxRegionChangeObserver,
+        BoxPdTaskObserver, BoxQueryObserver, BoxRaftMessageObserver, BoxRegionChangeObserver,
         BoxRoleObserver, BoxSplitCheckObserver, BoxUpdateSafeTsObserver, CoprocessorHost, Registry,
         StoreHandle,
     },
@@ -362,13 +362,16 @@ pub trait RegionHeartbeatObserver: Coprocessor {
     fn on_region_heartbeat(&self, _: &mut ObserverContext<'_>, _: &RegionStat) {}
 }
 
-pub trait MessageObserver: Coprocessor {
-    fn on_extra_message(&self, _: &Region, _: &ExtraMessage) {}
-
+pub trait RaftMessageObserver: Coprocessor {
     /// Returns false if the message should not be stepped later.
     fn on_raft_message(&self, _: &RaftMessage) -> bool {
         true
     }
+}
+
+//
+pub trait ExtraMessageObserver: Coprocessor {
+    fn on_extra_message(&self, _: &Region, _: &ExtraMessage) {}
 }
 
 #[derive(Clone, Debug, Default)]

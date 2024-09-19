@@ -10,9 +10,10 @@ use kvproto::{
 };
 use raft::StateRole;
 use raftstore::coprocessor::{
-    AdminObserver, ApplyCtxInfo, ApplySnapshotObserver, BoxAdminObserver, BoxApplySnapshotObserver,
-    BoxMessageObserver, BoxQueryObserver, BoxRoleObserver, Cmd, Coprocessor, CoprocessorHost,
-    MessageObserver, ObserverContext, QueryObserver, RegionState, RoleObserver,
+    dispatcher::BoxExtraMessageObserver, AdminObserver, ApplyCtxInfo, ApplySnapshotObserver,
+    BoxAdminObserver, BoxApplySnapshotObserver, BoxQueryObserver, BoxRoleObserver, Cmd,
+    Coprocessor, CoprocessorHost, ExtraMessageObserver, ObserverContext, QueryObserver,
+    RegionState, RoleObserver,
 };
 use tikv_util::info;
 
@@ -51,7 +52,7 @@ impl LoadEvictionObserver {
         // Pre load region in transfer leader
         coprocessor_host
             .registry
-            .register_message_observer(priority, BoxMessageObserver::new(self.clone()));
+            .register_extra_message_observer(priority, BoxExtraMessageObserver::new(self.clone()));
     }
 
     fn post_exec_cmd(
@@ -216,7 +217,7 @@ impl RoleObserver for LoadEvictionObserver {
     }
 }
 
-impl MessageObserver for LoadEvictionObserver {
+impl ExtraMessageObserver for LoadEvictionObserver {
     fn on_extra_message(&self, r: &Region, extra_msg: &ExtraMessage) {
         if extra_msg.get_type() == ExtraMessageType::MsgPreLoadRegionRequest {
             self.cache_engine.load_region(r);

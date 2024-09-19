@@ -7,7 +7,8 @@ use std::{
 
 use engine_rocks::RocksSstWriterBuilder;
 use engine_traits::{
-    CacheRegion, EvictReason, RangeCacheEngine, SstWriter, SstWriterBuilder, CF_DEFAULT,
+    CacheRegion, EvictReason, RangeCacheEngine, RangeCacheEngineExt, SstWriter, SstWriterBuilder,
+    CF_DEFAULT,
 };
 use file_system::calc_crc32_bytes;
 use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};

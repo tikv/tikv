@@ -15,7 +15,7 @@ use crossbeam_skiplist::{
 use engine_rocks::RocksEngine;
 use engine_traits::{
     CacheRegion, EvictReason, FailedReason, IterOptions, Iterable, KvEngine, RangeCacheEngine,
-    RegionEvent, Result, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
+    RangeCacheEngineExt, RegionEvent, Result, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
 use kvproto::metapb::Region;
 use raftstore::coprocessor::RegionInfoProvider;
@@ -484,7 +484,9 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
     fn enabled(&self) -> bool {
         self.config.value().enabled
     }
+}
 
+impl RangeCacheEngineExt for RangeCacheMemoryEngine {
     fn on_region_event(&self, event: RegionEvent) {
         match event {
             RegionEvent::Eviction { region, reason } => {
@@ -571,8 +573,8 @@ pub mod tests {
     use crossbeam::epoch;
     use engine_rocks::util::new_engine;
     use engine_traits::{
-        CacheRegion, EvictReason, Mutable, RangeCacheEngine, RegionEvent, WriteBatch,
-        WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
+        CacheRegion, EvictReason, Mutable, RangeCacheEngine, RangeCacheEngineExt, RegionEvent,
+        WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
     };
     use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
     use tokio::{
