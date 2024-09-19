@@ -3084,8 +3084,11 @@ where
                     }
                 }
             }
-            ExtraMessageType::MsgPreLoadRange => {
+            ExtraMessageType::MsgPreLoadRegionRequest => {
                 // It has been handled in on_extra_message in coprocessor_host
+            }
+            ExtraMessageType::MsgPreLoadRegionResponse => {
+                // Ignore now
             }
         }
     }

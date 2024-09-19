@@ -168,7 +168,7 @@ impl AdminObserver for LoadEvictionObserver {
             return Ok(None);
         }
         let mut msg = ExtraMessage::new();
-        msg.set_type(ExtraMessageType::MsgPreLoadRange);
+        msg.set_type(ExtraMessageType::MsgPreLoadRegionRequest);
         Ok(Some(msg))
     }
 }
@@ -218,7 +218,7 @@ impl RoleObserver for LoadEvictionObserver {
 
 impl MessageObserver for LoadEvictionObserver {
     fn on_extra_message(&self, r: &Region, extra_msg: &ExtraMessage) {
-        if extra_msg.get_type() == ExtraMessageType::MsgPreLoadRange {
+        if extra_msg.get_type() == ExtraMessageType::MsgPreLoadRegionRequest {
             self.cache_engine.load_region(r);
         }
     }
@@ -245,6 +245,14 @@ mod tests {
     impl RangeCacheEngineExt for MockRangeCacheEngine {
         fn on_region_event(&self, event: RegionEvent) {
             self.region_events.lock().unwrap().push(event);
+        }
+
+        fn region_cached(&self, range: &Region) -> bool {
+            unreachable!()
+        }
+
+        fn load_region(&self, range: &Region) {
+            unreachable!()
         }
     }
 
