@@ -189,9 +189,11 @@ impl TxnState {
         if rolled_back {
             TxnState::RolledBack
         } else if commit_ts.is_zero() {
-            TxnState::Ongoing(max(start_ts, min_commit_ts))
+            TxnState::Ongoing {
+                min_commit_ts: max(start_ts, min_commit_ts),
+            }
         } else {
-            TxnState::Committed(commit_ts)
+            TxnState::Committed { commit_ts }
         }
     }
 }
