@@ -116,9 +116,12 @@ impl LoadEvictionObserver {
         });
     }
 
+    // Try to load region. It will be loaded if it's overlapped with maunal range
     fn try_load_region(&self, region: CacheRegion) {
-        self.cache_engine
-            .on_region_event(RegionEvent::TryLoad { region });
+        self.cache_engine.on_region_event(RegionEvent::TryLoad {
+            region,
+            for_manual_range: true,
+        });
     }
 
     fn evict_region(&self, region: CacheRegion, reason: EvictReason) {
@@ -200,7 +203,7 @@ impl RoleObserver for LoadEvictionObserver {
             // Currently, it is only used by the manual load.
             let cache_region = CacheRegion::from_region(ctx.region());
             info!(
-                "ime load region due to became leader";
+                "ime try to load region due to became leader";
                 "region" => ?cache_region,
             );
             self.try_load_region(cache_region);
@@ -209,7 +212,7 @@ impl RoleObserver for LoadEvictionObserver {
         {
             let cache_region = CacheRegion::from_region(ctx.region());
             info!(
-                "ime evict region due to became follower";
+                "ime try to evict region due to became follower";
                 "region" => ?cache_region,
             );
             self.evict_region(cache_region, EvictReason::BecomeFollower);
@@ -346,6 +349,7 @@ mod tests {
         let cached_region = CacheRegion::from_region(&region);
         let expected = RegionEvent::TryLoad {
             region: cached_region,
+            for_manual_range: true,
         };
         assert_eq!(&cache_engine.region_events.lock().unwrap()[0], &expected);
     }

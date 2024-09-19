@@ -492,25 +492,36 @@ impl RangeCacheEngineExt for RangeCacheMemoryEngine {
             RegionEvent::Eviction { region, reason } => {
                 self.evict_region(&region, reason, None);
             }
-            RegionEvent::TryLoad { region } => {
-                if self
-                    .core
-                    .region_manager()
-                    .regions_map()
-                    .read()
-                    .overlap_with_manual_load_range(&region)
-                {
-                    info!(
-                        "try to load region in manual load range";
-                        "region" => ?region,
-                    );
-                    if let Err(e) = self.load_region(region.clone()) {
-                        warn!(
-                            "ime load region failed";
-                            "err" => ?e,
+            RegionEvent::TryLoad {
+                region,
+                for_manual_range,
+            } => {
+                if for_manual_range {
+                    if self
+                        .core
+                        .region_manager()
+                        .regions_map()
+                        .read()
+                        .overlap_with_manual_load_range(&region)
+                    {
+                        info!(
+                            "try to load region in manual load range";
                             "region" => ?region,
                         );
+                        if let Err(e) = self.load_region(region.clone()) {
+                            warn!(
+                                "ime load region failed";
+                                "err" => ?e,
+                                "region" => ?region,
+                            );
+                        }
                     }
+                } else if let Err(e) = self.core.region_manager().load_region(region.clone()) {
+                    warn!(
+                        "ime load region failed";
+                        "error" => ?e,
+                        "region" => ?region,
+                    );
                 }
             }
             RegionEvent::Split {
@@ -547,13 +558,10 @@ impl RangeCacheEngineExt for RangeCacheMemoryEngine {
     }
 
     fn load_region(&self, region: &Region) {
-        if let Err(e) = self.load_region(CacheRegion::from_region(region)) {
-            info!(
-                "ime load region failed";
-                "error" => ?e,
-                "region" => ?region,
-            );
-        }
+        self.on_region_event(RegionEvent::TryLoad {
+            region: CacheRegion::from_region(region),
+            for_manual_range: false,
+        });
     }
 }
 

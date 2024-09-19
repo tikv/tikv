@@ -30,6 +30,7 @@ pub enum RegionEvent {
     },
     TryLoad {
         region: CacheRegion,
+        for_manual_range: bool,
     },
     Eviction {
         region: CacheRegion,
