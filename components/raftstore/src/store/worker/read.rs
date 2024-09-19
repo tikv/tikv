@@ -1078,7 +1078,7 @@ where
                     // Leader can read local if and only if it is in lease.
                     RequestPolicy::ReadLocal => {
                         if let Some(read_resp) = self.try_local_leader_read(
-                            &ctx,
+                            ctx,
                             &req,
                             &mut delegate,
                             &mut snap_updated,
