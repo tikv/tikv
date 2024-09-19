@@ -1340,6 +1340,14 @@
 ## It only takes effect when `pessimistic-txn.pipelined` is also set to true.
 # in-memory = true
 
+## Control the memory size limit of pessimistic locks for one region. The pessimistic locks
+## would be written persistently if the memory usage exceeds the limit.
+# in-memory-peer-size-limit = "512KiB"
+
+## Control the memory size limit of pessimistic locks for one TiKV instance. The pessimistic
+## locks would be written persistently if the memory usage exceeds the limit.
+# in-memory-instance-size-limit = "100MiB"
+
 [gc]
 ## The number of keys to GC in one batch.
 # batch-keys = 512
