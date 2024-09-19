@@ -155,20 +155,12 @@ impl MultiMasterKeyBackend {
         }
 
         let mut write_guard = self.inner.write().await;
-        if write_guard.configs.is_none() {
+        if write_guard.configs.as_ref() != Some(&master_keys_configs) {
             write_guard.backends = Some(create_master_key_backends(
                 &master_keys_configs,
                 create_backend_fn,
             )?);
             write_guard.configs = Some(master_keys_configs);
-        } else if let Some(cached_configs) = write_guard.configs.as_ref() {
-            if master_keys_configs != *cached_configs {
-                write_guard.backends = Some(create_master_key_backends(
-                    &master_keys_configs,
-                    create_backend_fn,
-                )?);
-                write_guard.configs = Some(master_keys_configs);
-            }
         }
         Ok(())
     }
@@ -395,8 +387,25 @@ pub mod tests {
             .await
             .unwrap();
 
-        backend.encrypt(&[4, 5, 6]).await.unwrap();
-        backend.decrypt(&EncryptedContent::default()).await.unwrap();
+        let encrypt_result = backend.encrypt(&[4, 5, 6]).await;
+        assert!(encrypt_result.is_err(), "Encryption should have failed");
+        if let Err(e) = encrypt_result {
+            assert!(
+                e.to_string().contains("Encrypt error"),
+                "Unexpected error message: {}",
+                e
+            );
+        }
+
+        let decrypt_result = backend.decrypt(&EncryptedContent::default()).await;
+        assert!(decrypt_result.is_err(), "Decryption should have failed");
+        if let Err(e) = decrypt_result {
+            assert!(
+                e.to_string().contains("Decrypt error"),
+                "Unexpected error message: {}",
+                e
+            );
+        }
     }
 
     #[tokio::test]

@@ -1507,6 +1507,7 @@ impl StreamTaskHandler {
         Vec<FileEncryptionInfo>,
         Vec<Arc<std::sync::Mutex<Hasher>>>,
     )> {
+        // to do: limiter to storage
         let limiter = Limiter::builder(f64::INFINITY).build();
 
         // prioritize plaintext key passed from the user, it will override the default

@@ -68,6 +68,7 @@ impl KmsBackend {
         let runtime = self.runtime.lock().unwrap();
         runtime.block_on(self.encrypt_content_async(plaintext, iv))
     }
+
     async fn encrypt_content_async(&self, plaintext: &[u8], iv: Iv) -> Result<EncryptedContent> {
         let mut opt_state = self.state.lock().await;
         if opt_state.is_none() {

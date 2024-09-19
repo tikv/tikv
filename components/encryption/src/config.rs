@@ -1,6 +1,9 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use cloud::kms::{SubConfigAzure, SubConfigGcp};
+use cloud::{
+    kms::{SubConfigAzure, SubConfigGcp},
+    Config as CloudConfig,
+};
 use kvproto::encryptionpb::{EncryptionMethod, MasterKey, MasterKeyKms, MasterKey_oneof_backend};
 use online_config::OnlineConfig;
 use serde_derive::{Deserialize, Serialize};
@@ -115,6 +118,16 @@ pub struct GcpConfig {
     pub credential_file_path: Option<String>,
 }
 
+#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct AwsConfig {
+    /// optional since can read from env if not directly passed from user.
+    pub access_key: Option<String>,
+    /// optional since can read from env if not directly passed from user.
+    pub secret_access_key: Option<String>,
+}
+
 #[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, OnlineConfig, Eq, Hash)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -129,20 +142,13 @@ pub struct KmsConfig {
     // Gcp Kms configuration.
     #[online_config(skip)]
     pub gcp: Option<GcpConfig>,
+    // optional aws Kms configuration.
+    #[online_config(skip)]
+    pub aws: Option<AwsConfig>,
 }
 
 // Note: could merge SubConfigAzure and SubConfigGcp into KmsConfig
 impl KmsConfig {
-    pub fn into_proto(self) -> MasterKeyKms {
-        MasterKeyKms {
-            key_id: self.key_id,
-            region: self.region,
-            endpoint: self.endpoint,
-            vendor: self.vendor,
-            ..MasterKeyKms::default()
-        }
-    }
-
     pub fn from_proto(proto: &MasterKeyKms) -> Self {
         let mut config = KmsConfig {
             key_id: proto.key_id.clone(),
@@ -151,6 +157,7 @@ impl KmsConfig {
             vendor: proto.vendor.clone(),
             azure: None,
             gcp: None,
+            aws: None,
         };
         if proto.has_azure_kms() {
             let azure_config_proto = proto.azure_kms.as_ref().unwrap();
@@ -176,46 +183,45 @@ impl KmsConfig {
             };
             config.gcp = Some(gcp_config);
         }
+        if proto.has_aws_kms() {
+            let aws_config_proto = proto.aws_kms.as_ref().unwrap();
+            let aws_config = AwsConfig {
+                access_key: string_to_option(aws_config_proto.access_key.clone()),
+                secret_access_key: string_to_option(aws_config_proto.secret_access_key.clone()),
+            };
+            config.aws = Some(aws_config)
+        }
         config
     }
 
-    pub fn convert_to_azure_kms_config(self) -> (MasterKeyKms, SubConfigAzure) {
-        let azure_kms_cfg = {
-            let cfg = self.azure.unwrap();
-            SubConfigAzure {
-                tenant_id: cfg.tenant_id,
-                client_id: cfg.client_id,
-                keyvault_url: cfg.keyvault_url,
-                hsm_name: cfg.hsm_name,
-                hsm_url: cfg.hsm_url,
-                client_certificate: cfg.client_certificate,
-                client_certificate_path: cfg.client_certificate_path,
-                client_certificate_password: cfg.client_certificate_password,
-                client_secret: cfg.client_secret,
-            }
-        };
-        let mk = MasterKeyKms {
-            key_id: self.key_id,
-            region: self.region,
-            endpoint: self.endpoint,
-            vendor: self.vendor,
-            ..MasterKeyKms::default()
-        };
-        (mk, azure_kms_cfg)
-    }
-
-    pub fn convert_to_gcp_config(self) -> (MasterKeyKms, SubConfigGcp) {
-        let gcp_cfg = SubConfigGcp {
-            credential_file_path: self.gcp.unwrap().credential_file_path,
-        };
-        let mk = MasterKeyKms {
-            key_id: self.key_id,
-            region: self.region,
-            endpoint: self.endpoint,
-            vendor: self.vendor,
-            ..MasterKeyKms::default()
-        };
-        (mk, gcp_cfg)
+    pub fn to_cloud_config(&self) -> CloudConfig {
+        CloudConfig {
+            key_id: cloud::kms::KeyId::new(self.key_id.clone())
+                .expect("key_id should not be empty"),
+            location: cloud::kms::Location {
+                region: self.region.clone(),
+                endpoint: self.endpoint.clone(),
+            },
+            vendor: self.vendor.clone(),
+            azure: self.azure.as_ref().map(|azure| SubConfigAzure {
+                tenant_id: azure.tenant_id.clone(),
+                client_id: azure.client_id.clone(),
+                keyvault_url: azure.keyvault_url.clone(),
+                hsm_name: azure.hsm_name.clone(),
+                hsm_url: azure.hsm_url.clone(),
+                client_certificate: azure.client_certificate.clone(),
+                client_certificate_path: azure.client_certificate_path.clone(),
+                client_certificate_password: azure.client_certificate_password.clone(),
+                client_secret: azure.client_secret.clone(),
+            }),
+            gcp: self.gcp.as_ref().map(|gcp| SubConfigGcp {
+                credential_file_path: gcp.credential_file_path.clone(),
+            }),
+            aws: self.aws.as_ref().map(|aws| cloud::kms::SubConfigAws {
+                access_key: aws.access_key.clone(),
+                secret_access_key: aws.secret_access_key.clone(),
+            }),
+        }
     }
 }
 
@@ -353,11 +359,30 @@ mod tests {
                     vendor: "".to_owned(),
                     azure: None,
                     gcp: None,
+                    aws: None,
                 },
             },
             previous_master_key: MasterKeyConfig::Plaintext,
             enable_file_dictionary_log: true,
             file_dictionary_rewrite_threshold: 1000000,
+        };
+
+        let kms_config_aws = EncryptionConfig {
+            master_key: MasterKeyConfig::Kms {
+                config: KmsConfig {
+                    key_id: "key_id".to_owned(),
+                    region: "region".to_owned(),
+                    endpoint: "endpoint".to_owned(),
+                    vendor: "aws".to_owned(),
+                    azure: None,
+                    gcp: None,
+                    aws: Some(AwsConfig {
+                        access_key: Some("foo".into()),
+                        secret_access_key: Some("bar".into()),
+                    }),
+                },
+            },
+            ..kms_config.clone()
         };
         let kms_config_azure = EncryptionConfig {
             master_key: MasterKeyConfig::Kms {
@@ -375,6 +400,7 @@ mod tests {
                         ..AzureConfig::default()
                     }),
                     gcp: None,
+                    aws: None,
                 },
             },
             ..kms_config.clone()
@@ -391,24 +417,31 @@ mod tests {
                     gcp: Some(GcpConfig {
                         credential_file_path: Some("/tmp/credential.json".into()),
                     }),
+                    aws: None,
                 },
             },
             ..kms_config.clone()
         };
 
         // KMS with default(aws).
-        let kms_str = r#"
+        let kms_str_aws = r#"
             data-encryption-method = "aes128-ctr"
             data-key-rotation-period = "14d"
             enable-file-dictionary-log = true
             file-dictionary-rewrite-threshold = 1000000
             [previous-master-key]
             type = "plaintext"
+
             [master-key]
             type = "kms"
             key-id = "key_id"
             region = "region"
             endpoint = "endpoint"
+            vendor = "aws"
+
+            [master-key.aws]
+            access-key = "foo"
+            secret-access-key = "bar"
         "#;
         // KMS with azure
         let kms_str_azure = r#"
@@ -452,7 +485,7 @@ mod tests {
             credential-file-path = '/tmp/credential.json'
         "#;
         for (kms_cfg, kms_str) in [
-            (kms_config, kms_str),
+            (kms_config_aws, kms_str_aws),
             (kms_config_azure, kms_str_azure),
             (kms_config_gcp, kms_str_gcp),
         ] {
