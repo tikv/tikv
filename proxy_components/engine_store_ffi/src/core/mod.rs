@@ -4,6 +4,7 @@ pub(crate) mod common;
 pub mod fast_add_peer;
 pub mod forward_raft;
 pub mod forwarder;
+pub mod serverless_extra;
 
 pub use fast_add_peer::*;
 pub use forward_raft::*;

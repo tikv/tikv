@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 use crate::{
-    core::{common::*, ProxyForwarder},
+    core::{common::*, serverless_extra::*, ProxyForwarder},
     ffi::interfaces_ffi::FastAddPeerStatus,
 };
 
@@ -439,7 +439,15 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
             "new_region" => ?new_region,
             "apply_state" => ?apply_state,
         );
-        match self.build_and_send_snapshot(region_id, new_peer_id, msg, apply_state, new_region) {
+        let serverless_extra = ServerlessExtra::new(&res);
+        match self.build_and_send_snapshot(
+            region_id,
+            new_peer_id,
+            msg,
+            apply_state,
+            new_region,
+            serverless_extra,
+        ) {
             Ok(s) => {
                 match s {
                     FastAddPeerStatus::Ok => {
@@ -517,6 +525,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
         msg: &RaftMessage,
         apply_state: RaftApplyState,
         new_region: kvproto::metapb::Region,
+        _serverless_extra: ServerlessExtra,
     ) -> RaftStoreResult<FastAddPeerStatus> {
         let cached_manager = self.get_cached_manager();
         let inner_msg = msg.get_message();
@@ -623,8 +632,8 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
             pb_snapshot_metadata.set_term(key.term);
         }
 
-        debug!(
-            "pb_snapshot_data {:?} pb_snapshot_metadata {:?}",
+        info!(
+            "fast path: pb_snapshot_data {:?} pb_snapshot_metadata {:?}",
             pb_snapshot_data, pb_snapshot_metadata
         );
 

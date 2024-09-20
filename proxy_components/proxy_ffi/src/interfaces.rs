@@ -361,6 +361,10 @@ pub mod root {
             pub status: root::DB::FastAddPeerStatus,
             pub apply_state: root::DB::CppStrWithView,
             pub region: root::DB::CppStrWithView,
+            pub shard_ver: u64,
+            pub inner_key: root::DB::CppStrWithView,
+            pub enc_key: root::DB::CppStrWithView,
+            pub txn_file_ref: root::DB::CppStrWithView,
         }
         #[repr(u32)]
         #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -789,7 +793,7 @@ pub mod root {
                 arg3: root::DB::RawVoidPtr,
             ) -> u32;
         }
-        pub const RAFT_STORE_PROXY_VERSION: u64 = 9679186549381427051;
+        pub const RAFT_STORE_PROXY_VERSION: u64 = 2149052863435660119;
         pub const RAFT_STORE_PROXY_MAGIC_NUMBER: u32 = 324508639;
     }
 }

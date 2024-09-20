@@ -243,6 +243,10 @@ struct FastAddPeerRes {
   FastAddPeerStatus status;
   CppStrWithView apply_state;
   CppStrWithView region;
+  uint64_t shard_ver;
+  CppStrWithView inner_key;
+  CppStrWithView enc_key;
+  CppStrWithView txn_file_ref;
 };
 
 enum class FapSnapshotState : uint32_t {

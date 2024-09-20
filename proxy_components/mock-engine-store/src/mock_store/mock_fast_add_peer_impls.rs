@@ -133,6 +133,10 @@ pub(crate) unsafe extern "C" fn ffi_fast_add_peer(
             status,
             apply_state: create_cpp_str(None),
             region: create_cpp_str(None),
+            shard_ver: 0,
+            inner_key: create_cpp_str(None),
+            enc_key: create_cpp_str(None),
+            txn_file_ref: create_cpp_str(None),
         };
     let from_store = (|| {
         fail::fail_point!("fap_mock_add_peer_from_id", |t| {
@@ -313,6 +317,10 @@ pub(crate) unsafe extern "C" fn ffi_fast_add_peer(
                 status: interfaces_ffi::FastAddPeerStatus::Ok,
                 apply_state: apply_state_ptr,
                 region: region_ptr,
+                shard_ver: 0,
+                inner_key: create_cpp_str(None),
+                enc_key: create_cpp_str(None),
+                txn_file_ref: create_cpp_str(None),
             });
         });
         if let Some(r) = ret {
