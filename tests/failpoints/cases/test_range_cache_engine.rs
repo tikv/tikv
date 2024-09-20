@@ -180,13 +180,6 @@ fn test_load_with_split() {
     cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
     cluster.run();
 
-    let mut tables = vec![];
-    for _ in 0..3 {
-        let product = ProductTable::new();
-        tables.push(product.clone());
-        must_copr_load_data(&mut cluster, &product, 1);
-    }
-
     let (tx, rx) = sync_channel(0);
     // let channel to make load process block at finishing loading snapshot
     let (tx2, rx2) = sync_channel(0);
@@ -208,6 +201,13 @@ fn test_load_with_split() {
             .region_manager()
             .load_region(CacheRegion::from_region(&cache_range))
             .unwrap();
+    }
+
+    let mut tables = vec![];
+    for _ in 0..3 {
+        let product = ProductTable::new();
+        tables.push(product.clone());
+        must_copr_load_data(&mut cluster, &product, 1);
     }
 
     rx.recv_timeout(Duration::from_secs(5)).unwrap();
