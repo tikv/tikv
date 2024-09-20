@@ -2,6 +2,7 @@
 
 // #[PerformanceCriticalPath]: TiKV gRPC APIs implementation
 use std::{
+    assert_matches::assert_matches,
     mem,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -2288,6 +2289,12 @@ fn future_broadcast_txn_status<E: Engine, L: LockManager, F: KvFormat>(
                 txn_status.commit_ts.into(),
                 txn_status.rolled_back,
             );
+            if txn_status.is_completed {
+                // large_txn_cache is only for **ongoing** large txns, so remove it when
+                // completed.
+                assert_matches!(txn_state, TxnState::Committed { .. } | TxnState::RolledBack);
+                cache.remove_large_txn(txn_status.start_ts.into());
+            }
             cache.upsert(txn_status.start_ts.into(), txn_state, now);
         }
         Ok(BroadcastTxnStatusResponse::default())
