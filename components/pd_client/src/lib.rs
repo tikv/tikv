@@ -607,10 +607,7 @@ impl RegionWriteCfCopDetail {
     }
 
     pub fn mvcc_amplification(&self) -> f64 {
-        if self.processed_keys == 0 {
-            0f64
-        } else {
-            (self.next + self.prev) as f64 / self.processed_keys as f64
-        }
+        // Sometimes, processed_keys is 0 even (next + prev) is pretty high
+        (self.next + self.prev) as f64 / (self.processed_keys as f64 + 1)
     }
 }
