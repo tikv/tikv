@@ -1451,6 +1451,8 @@ fn test_merge_snapshot_demote() {
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_propose_in_memory_pessimistic_locks() {
+    let peer_size_limit = 512 << 10;
+    let instance_size_limit = 100 << 20;
     let mut cluster = new_cluster(0, 2);
     configure_for_merge(&mut cluster.cfg);
     cluster.run();
@@ -1486,7 +1488,11 @@ fn test_propose_in_memory_pessimistic_locks() {
     txn_ext
         .pessimistic_locks
         .write()
-        .insert(vec![(Key::from_raw(b"k1"), l1.clone())])
+        .insert(
+            vec![(Key::from_raw(b"k1"), l1.clone())],
+            peer_size_limit,
+            instance_size_limit,
+        )
         .unwrap();
 
     // Insert lock l2 into the right region
@@ -1504,7 +1510,11 @@ fn test_propose_in_memory_pessimistic_locks() {
     txn_ext
         .pessimistic_locks
         .write()
-        .insert(vec![(Key::from_raw(b"k3"), l2.clone())])
+        .insert(
+            vec![(Key::from_raw(b"k3"), l2.clone())],
+            peer_size_limit,
+            instance_size_limit,
+        )
         .unwrap();
 
     // Merge left region into the right region
@@ -1582,6 +1592,8 @@ fn test_merge_pessimistic_locks_when_gap_is_too_large() {
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_merge_pessimistic_locks_repeated_merge() {
+    let peer_size_limit = 512 << 10;
+    let instance_size_limit = 100 << 20;
     let mut cluster = new_cluster(0, 2);
     configure_for_merge(&mut cluster.cfg);
     cluster.cfg.pessimistic_txn.pipelined = true;
@@ -1615,7 +1627,11 @@ fn test_merge_pessimistic_locks_repeated_merge() {
     txn_ext
         .pessimistic_locks
         .write()
-        .insert(vec![(Key::from_raw(b"k1"), lock.clone())])
+        .insert(
+            vec![(Key::from_raw(b"k1"), lock.clone())],
+            peer_size_limit,
+            instance_size_limit,
+        )
         .unwrap();
 
     // Filter MsgAppend, so the proposed PrepareMerge will not succeed

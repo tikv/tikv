@@ -896,6 +896,8 @@ fn test_split_with_epoch_not_match() {
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_split_with_in_memory_pessimistic_locks() {
+    let peer_size_limit = 512 << 10;
+    let instance_size_limit = 100 << 20;
     let mut cluster = new_cluster(0, 3);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
@@ -932,10 +934,14 @@ fn test_split_with_in_memory_pessimistic_locks() {
     {
         let mut locks = txn_ext.pessimistic_locks.write();
         locks
-            .insert(vec![
-                (Key::from_raw(b"a"), lock_a.clone()),
-                (Key::from_raw(b"c"), lock_c.clone()),
-            ])
+            .insert(
+                vec![
+                    (Key::from_raw(b"a"), lock_a.clone()),
+                    (Key::from_raw(b"c"), lock_c.clone()),
+                ],
+                peer_size_limit,
+                instance_size_limit,
+            )
             .unwrap();
     }
 

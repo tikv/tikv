@@ -671,8 +671,8 @@ mod tests {
     };
     use engine_traits::{
         CacheRegion, EvictReason, FailedReason, IterMetricsCollector, IterOptions, Iterable,
-        Iterator, MetricsExt, Mutable, Peekable, RangeCacheEngine, ReadOptions, RegionEvent,
-        WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_WRITE,
+        Iterator, MetricsExt, Mutable, Peekable, RangeCacheEngine, RangeCacheEngineExt,
+        ReadOptions, RegionEvent, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_WRITE,
     };
     use keys::DATA_PREFIX_KEY;
     use tempfile::Builder;
