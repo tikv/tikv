@@ -1,6 +1,7 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{KvEngine, SnapshotContext};
+use engine_traits::{CacheRegion, KvEngine};
+use kvproto::metapb::Region;
 use raftstore::coprocessor::{
     dispatcher::BoxSnapshotObserver, CoprocessorHost, ObservedSnapshot, SnapshotObserver,
 };
@@ -36,11 +37,17 @@ impl HybridSnapshotObserver {
 }
 
 impl SnapshotObserver for HybridSnapshotObserver {
-    fn on_snapshot(&self, ctx: SnapshotContext, sequence_number: u64) -> Box<dyn ObservedSnapshot> {
+    fn on_snapshot(
+        &self,
+        region: &Region,
+        read_ts: u64,
+        sequence_number: u64,
+    ) -> Box<dyn ObservedSnapshot> {
         // Taking a snapshot to pin data in the cache engine which prevents the
         // data from being evicted or deleted from the cache.
         // The data should be released when the snapshot is dropped.
-        let snap = new_in_memory_snapshot(&self.cache_engine, ctx, sequence_number);
+        let region = CacheRegion::from_region(region);
+        let snap = new_in_memory_snapshot(&self.cache_engine, region, read_ts, sequence_number);
         Box::new(RangeCacheSnapshotPin { snap })
     }
 }

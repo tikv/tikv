@@ -459,7 +459,7 @@ mod tests {
                     .unwrap();
                 let db1: KvTestEngine = open_test_empty_db(dir1.path(), db_opt, None).unwrap();
 
-                let snap = db.snapshot(None);
+                let snap = db.snapshot();
                 for cf in SNAPSHOT_CFS {
                     let snap_cf_dir = Builder::new().prefix("test-snap-cf").tempdir().unwrap();
                     let mut cf_file = CfFile {
@@ -551,7 +551,7 @@ mod tests {
                     let stats = build_sst_cf_file_list::<KvTestEngine>(
                         &mut cf_file,
                         &db,
-                        &db.snapshot(None),
+                        &db.snapshot(),
                         &keys::data_key(b"a"),
                         &keys::data_key(b"z"),
                         *max_file_size,

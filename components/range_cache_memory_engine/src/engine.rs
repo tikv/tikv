@@ -399,7 +399,7 @@ impl RangeCacheMemoryEngine {
         // get snapshot and schedule loading task at last to avoid locking IME for too
         // long.
         if schedule_load {
-            let rocks_snap = Arc::new(self.rocks_engine.as_ref().unwrap().snapshot(None));
+            let rocks_snap = Arc::new(self.rocks_engine.as_ref().unwrap().snapshot());
             if let Err(e) = self
                 .bg_work_manager
                 .schedule_task(BackgroundTask::LoadRegion(region.clone(), rocks_snap))

@@ -3,7 +3,7 @@
 // #[PerformanceCriticalPath] called by Fsm on_ready_compute_hash
 use std::{borrow::Cow, marker::PhantomData, mem, ops::Deref};
 
-use engine_traits::{CfName, KvEngine, SnapshotContext, WriteBatch};
+use engine_traits::{CfName, KvEngine, WriteBatch};
 use kvproto::{
     metapb::{Region, RegionEpoch},
     pdpb::CheckPolicy,
@@ -960,13 +960,14 @@ impl<E: KvEngine> CoprocessorHost<E> {
 
     pub fn on_snapshot(
         &self,
-        ctx: SnapshotContext,
+        region: &Region,
+        read_ts: u64,
         seqno: u64,
     ) -> Option<Box<dyn ObservedSnapshot>> {
         self.registry
             .snapshot_observer
             .as_ref()
-            .map(move |observer| observer.inner().on_snapshot(ctx, seqno))
+            .map(move |observer| observer.inner().on_snapshot(region, read_ts, seqno))
     }
 
     pub fn shutdown(&self) {
