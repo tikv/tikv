@@ -23,6 +23,7 @@ crossbeam-skiplist = "0.1"
 derive_more = "0.99.3"
 error_code = { workspace = true }
 fail = "0.5"
+fs2 = "0.4"
 futures = { version = "0.3", features = ["compat", "thread-pool"] }
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
 grpcio = { workspace = true }
@@ -30,7 +31,10 @@ http = "0.2.0"
 kvproto = { workspace = true }
 lazy_static = "1.3"
 libc = "0.2"
-log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
+log = { version = "0.4", features = [
+    "max_level_trace",
+    "release_max_level_debug",
+] }
 log_wrappers = { workspace = true }
 mnt = "0.3.1"
 nix = "0.24"
