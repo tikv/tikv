@@ -137,20 +137,17 @@ pub trait ExternalStorage: 'static + Send + Sync {
                 self.read(storage_name)
             };
 
-            // create encrypted reader if configured
-            // decrypt the data first then decompress
-            //
-            let encrypted_reader = encrypt_wrap_reader(file_crypter, inner)?;
-
             // wrap with checksum reader if needed
             //
-            let (checksum_reader, opt_hasher) = wrap_with_checksum_reader_if_needed(
-                opt_encrypted_file_checksum.is_some(),
-                encrypted_reader,
-            )?;
+            let (checksum_reader, opt_hasher) =
+                wrap_with_checksum_reader_if_needed(opt_encrypted_file_checksum.is_some(), inner)?;
+
+            // wrap with decrypter if needed
+            //
+            let encrypted_reader = encrypt_wrap_reader(file_crypter, checksum_reader)?;
 
             (
-                compression_reader_dispatcher(compression_type, checksum_reader)?,
+                compression_reader_dispatcher(compression_type, encrypted_reader)?,
                 opt_hasher,
             )
         };

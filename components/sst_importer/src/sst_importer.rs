@@ -1799,9 +1799,9 @@ mod tests {
         content_a == content_b
     }
 
-    fn new_key_manager_for_test() -> (tempfile::TempDir, Arc<DataKeyManager>) {
+    fn new_key_manager_for_test() -> (TempDir, Arc<DataKeyManager>) {
         // test with tde
-        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let tmp_dir = TempDir::new().unwrap();
         let key_manager = new_test_key_manager(&tmp_dir, None, None, None);
         (tmp_dir, Arc::new(key_manager.unwrap().unwrap()))
     }
@@ -3459,8 +3459,10 @@ mod tests {
     fn test_download_kv_with_no_encryption() {
         // test both on disk and in mem case
         //
-        test_download_kv_with_optional_encryption(None, Vec::new(), true);
-        test_download_kv_with_optional_encryption(None, Vec::new(), false);
+        test_download_kv_with_optional_encryption(None, Vec::new(), true, true);
+        test_download_kv_with_optional_encryption(None, Vec::new(), false, true);
+        test_download_kv_with_optional_encryption(None, Vec::new(), true, false);
+        test_download_kv_with_optional_encryption(None, Vec::new(), false, false);
     }
 
     #[test]
@@ -3472,8 +3474,10 @@ mod tests {
 
         // test both on disk and in mem case
         //
-        test_download_kv_with_optional_encryption(Some(cipher.clone()), Vec::new(), true);
-        test_download_kv_with_optional_encryption(Some(cipher), Vec::new(), false);
+        test_download_kv_with_optional_encryption(Some(cipher.clone()), Vec::new(), true, true);
+        test_download_kv_with_optional_encryption(Some(cipher.clone()), Vec::new(), false, true);
+        test_download_kv_with_optional_encryption(Some(cipher.clone()), Vec::new(), true, false);
+        test_download_kv_with_optional_encryption(Some(cipher), Vec::new(), false, false);
     }
 
     #[test]
@@ -3493,14 +3497,17 @@ mod tests {
 
         // test both on disk and in mem case
         //
-        test_download_kv_with_optional_encryption(None, master_key_proto_vec.clone(), true);
-        test_download_kv_with_optional_encryption(None, master_key_proto_vec.clone(), false);
+        test_download_kv_with_optional_encryption(None, master_key_proto_vec.clone(), true, true);
+        test_download_kv_with_optional_encryption(None, master_key_proto_vec.clone(), false, true);
+        test_download_kv_with_optional_encryption(None, master_key_proto_vec.clone(), true, false);
+        test_download_kv_with_optional_encryption(None, master_key_proto_vec.clone(), false, false);
     }
 
     fn test_download_kv_with_optional_encryption(
         opt_cipher_info: Option<CipherInfo>,
         master_key_configs: Vec<MasterKey>,
         in_mem: bool,
+        with_local_file_encryption: bool,
     ) {
         // set up external kv file
         //
@@ -3516,7 +3523,12 @@ mod tests {
         // set up importer
         //
         let import_dir = tempfile::tempdir().unwrap();
-        let (_, key_manager) = new_key_manager_for_test();
+        let opt_key_manager = if with_local_file_encryption {
+            let (_, key_manager) = new_key_manager_for_test();
+            Some(key_manager)
+        } else {
+            None
+        };
         let cfg = Config {
             memory_use_ratio: if in_mem { 0.5 } else { 0.0 },
             ..Default::default()
@@ -3524,7 +3536,7 @@ mod tests {
         let importer = SstImporter::<TestEngine>::new(
             &cfg,
             import_dir,
-            Some(key_manager.clone()),
+            opt_key_manager.clone(),
             ApiVersion::V1,
             false,
         )
@@ -3554,7 +3566,7 @@ mod tests {
         .unwrap();
         assert_eq!(*output, file_content);
         if !in_mem {
-            check_file_exists(&path.save, Some(&*key_manager));
+            check_file_exists(&path.save, opt_key_manager.as_deref());
         }
     }
 }
