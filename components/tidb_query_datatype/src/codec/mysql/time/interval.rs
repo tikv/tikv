@@ -1,6 +1,6 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::str::FromStr;
+use std::{collections::HashMap, str::FromStr};
 
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -8,56 +8,13 @@ use regex::Regex;
 use crate::{
     codec::{
         data_type::{BytesRef, Decimal, Real},
-        mysql::{duration::*, RoundMode, MAX_FSP, MIN_FSP},
+        mysql::{duration::*, RoundMode, DEFAULT_FSP, MAX_FSP, MIN_FSP},
         Error, Result,
     },
     expr::EvalContext,
 };
 
-/// Index of 'YEARS-MONTHS DAYS HOURS:MINUTES:SECONDS.MICROSECONDS' expr Format
-const YEAR_INDEX: usize = 0;
-const MONTH_INDEX: usize = YEAR_INDEX + 1;
-const DAY_INDEX: usize = MONTH_INDEX + 1;
-const HOUR_INDEX: usize = DAY_INDEX + 1;
-const MINUTE_INDEX: usize = HOUR_INDEX + 1;
-const SECOND_INDEX: usize = MINUTE_INDEX + 1;
-const MICROSECOND_INDEX: usize = SECOND_INDEX + 1;
-
-/// Max parameters count 'YEARS-MONTHS' expr Format allowed
-const YEAR_MONTH_MAX_CNT: usize = 2;
-/// Max parameters count 'DAYS HOURS' expr Format allowed
-const DAY_HOUR_MAX_CNT: usize = 2;
-/// Max parameters count 'DAYS HOURS:MINUTES' expr Format allowed
-const DAY_MINUTE_MAX_CNT: usize = 3;
-/// Max parameters count 'DAYS HOURS:MINUTES:SECONDS' expr Format allowed
-const DAY_SECOND_MAX_CNT: usize = 4;
-/// Max parameters count 'DAYS HOURS:MINUTES:SECONDS.MICROSECONDS' expr Format
-/// allowed
-const DAY_MICROSECOND_MAX_CNT: usize = 5;
-/// Max parameters count 'HOURS:MINUTES' expr Format allowed
-const HOUR_MINUTE_MAX_CNT: usize = 2;
-/// Max parameters count 'HOURS:MINUTES:SECONDS' expr Format allowed
-const HOUR_SECOND_MAX_CNT: usize = 3;
-/// Max parameters count 'HOURS:MINUTES:SECONDS.MICROSECONDS' expr Format
-/// allowed
-const HOUR_MICROSECOND_MAX_CNT: usize = 4;
-/// Max parameters count 'MINUTES:SECONDS' expr Format allowed
-const MINUTE_SECOND_MAX_CNT: usize = 2;
-/// Max parameters count 'MINUTES:SECONDS.MICROSECONDS' expr Format allowed
-const MINUTE_MICROSECOND_MAX_CNT: usize = 3;
-/// Max parameters count 'SECONDS.MICROSECONDS' expr Format allowed
-const SECOND_MICROSECOND_MAX_CNT: usize = 2;
-/// Parameters count 'YEARS-MONTHS DAYS HOURS:MINUTES:SECONDS.MICROSECONDS' expr
-/// Format
-const TIME_VALUE_CNT: usize = 7;
-
-lazy_static! {
-    static ref ONE_TO_SIX_DIGIT_REGEX: Regex = Regex::new(r"^[0-9]{0,6}").unwrap();
-    static ref NUMERIC_REGEX: Regex = Regex::new(r"[0-9]+").unwrap();
-    static ref INTERVAL_REGEX: Regex = Regex::new(r"^[+-]?[\d]+").unwrap();
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 /// See https://dev.mysql.com/doc/refman/8.0/en/expressions.html#temporal-intervals
 pub enum IntervalUnit {
     Microsecond,
@@ -132,6 +89,53 @@ impl IntervalUnit {
     }
 }
 
+#[derive(Clone, Copy, PartialEq)]
+#[repr(usize)]
+enum TimeIndex {
+    Year = 0,
+    Month = 1,
+    Day = 2,
+    Hour = 3,
+    Minute = 4,
+    Second = 5,
+    Microsecond = 6,
+    Max = 7,
+}
+
+lazy_static! {
+    static ref ONE_TO_SIX_DIGIT_REGEX: Regex = Regex::new(r"^[0-9]{0,6}").unwrap();
+    static ref NUMERIC_REGEX: Regex = Regex::new(r"[0-9]+").unwrap();
+    static ref INTERVAL_REGEX: Regex = Regex::new(r"^[+-]?[\d]+").unwrap();
+    /// Index of 'YEARS-MONTHS DAYS HOURS:MINUTES:SECONDS.MICROSECONDS' interval string Format.
+    /// IntervalUnit -> (Time Index, Max Count)
+    static ref INTERVAL_STR_INDEX_MAP: HashMap<IntervalUnit, (TimeIndex, usize)> = {
+        [
+            // 'SECONDS.MICROSECONDS'
+            (IntervalUnit::SecondMicrosecond, (TimeIndex::Microsecond, 2)),
+            // 'MINUTES:SECONDS.MICROSECONDS'
+            (IntervalUnit::MinuteMicrosecond, (TimeIndex::Microsecond, 3)),
+            // 'MINUTES:SECONDS'
+            (IntervalUnit::MinuteSecond, (TimeIndex::Second, 2)),
+            // 'HOURS:MINUTES:SECONDS.MICROSECONDS'
+            (IntervalUnit::HourMicrosecond, (TimeIndex::Microsecond, 4)),
+            // 'HOURS:MINUTES:SECONDS'
+            (IntervalUnit::HourSecond, (TimeIndex::Second, 3)),
+            // 'HOURS:MINUTES'
+            (IntervalUnit::HourMinute, (TimeIndex::Minute, 2)),
+            // 'DAYS HOURS:MINUTES:SECONDS.MICROSECONDS'
+            (IntervalUnit::DayMicrosecond, (TimeIndex::Microsecond, 5)),
+            // 'DAYS HOURS:MINUTES:SECONDS'
+            (IntervalUnit::DaySecond, (TimeIndex::Second, 4)),
+            // 'DAYS HOURS:MINUTES'
+            (IntervalUnit::DayMinute, (TimeIndex::Minute, 3)),
+            // 'DAYS HOURS'
+            (IntervalUnit::DayHour, (TimeIndex::Hour, 2)),
+            // 'YEARS-MONTHS'
+            (IntervalUnit::YearMonth, (TimeIndex::Month, 2)),
+        ].iter().cloned().collect()
+    };
+}
+
 #[derive(Debug)]
 pub struct Interval {
     month: i64,
@@ -144,70 +148,17 @@ impl Interval {
         Self::parse_from_str_internal(ctx, unit, input, false)
     }
 
+    #[inline]
     fn parse_from_str_internal(
         ctx: &mut EvalContext,
         unit: &IntervalUnit,
         input: &str,
         for_duration: bool,
     ) -> Result<Self> {
-        use IntervalUnit::*;
-        match unit {
-            Microsecond | Second | Minute | Hour | Day | Week | Month | Quarter | Year => {
-                Self::parse_single_time_value(ctx, unit, input, for_duration)
-            }
-            SecondMicrosecond => Self::parse_time_value(
-                ctx,
-                input,
-                MICROSECOND_INDEX,
-                SECOND_MICROSECOND_MAX_CNT,
-                for_duration,
-            ),
-            MinuteMicrosecond => Self::parse_time_value(
-                ctx,
-                input,
-                MICROSECOND_INDEX,
-                MINUTE_MICROSECOND_MAX_CNT,
-                for_duration,
-            ),
-            MinuteSecond => Self::parse_time_value(
-                ctx,
-                input,
-                SECOND_INDEX,
-                MINUTE_SECOND_MAX_CNT,
-                for_duration,
-            ),
-            HourMicrosecond => Self::parse_time_value(
-                ctx,
-                input,
-                MICROSECOND_INDEX,
-                HOUR_MICROSECOND_MAX_CNT,
-                for_duration,
-            ),
-            HourSecond => {
-                Self::parse_time_value(ctx, input, SECOND_INDEX, HOUR_SECOND_MAX_CNT, for_duration)
-            }
-            HourMinute => {
-                Self::parse_time_value(ctx, input, MINUTE_INDEX, HOUR_MINUTE_MAX_CNT, for_duration)
-            }
-            DayMicrosecond => Self::parse_time_value(
-                ctx,
-                input,
-                MICROSECOND_INDEX,
-                DAY_MICROSECOND_MAX_CNT,
-                for_duration,
-            ),
-            DaySecond => {
-                Self::parse_time_value(ctx, input, SECOND_INDEX, DAY_SECOND_MAX_CNT, for_duration)
-            }
-            DayMinute => {
-                Self::parse_time_value(ctx, input, MINUTE_INDEX, DAY_MINUTE_MAX_CNT, for_duration)
-            }
-            DayHour => {
-                Self::parse_time_value(ctx, input, HOUR_INDEX, DAY_HOUR_MAX_CNT, for_duration)
-            }
-            YearMonth => {
-                Self::parse_time_value(ctx, input, MONTH_INDEX, YEAR_MONTH_MAX_CNT, for_duration)
-            }
+        if let Some(&(index, max_cnt)) = INTERVAL_STR_INDEX_MAP.get(unit) {
+            Self::parse_time_value(ctx, input, index, max_cnt, for_duration)
+        } else {
+            Self::parse_single_time_value(ctx, unit, input, for_duration)
         }
     }
 
@@ -382,8 +333,8 @@ impl Interval {
     fn parse_time_value(
         ctx: &mut EvalContext,
         input: &str,
-        index: usize,
-        count: usize,
+        index: TimeIndex,
+        max_cnt: usize,
         for_duration: bool,
     ) -> Result<Self> {
         let mut neg = false;
@@ -397,11 +348,11 @@ impl Interval {
         }
 
         // Initialize fields as "0"
-        let mut fields = ["0"; TIME_VALUE_CNT];
+        let mut fields = ["0"; TimeIndex::Max as usize];
 
         let matches: Vec<&str> = NUMERIC_REGEX.find_iter(input).map(|m| m.as_str()).collect();
 
-        if matches.len() > count {
+        if matches.len() > max_cnt {
             if for_duration {
                 return Err(Error::incorrect_datetime_value(original_input));
             }
@@ -409,13 +360,13 @@ impl Interval {
             return Ok(Self {
                 month: 0,
                 nano: 0,
-                fsp: 0,
+                fsp: DEFAULT_FSP,
             });
         }
 
         // Populate fields in reverse order
-        for (i, &matched) in matches.iter().enumerate() {
-            fields[index - i] = &matched;
+        for (i, &matched) in matches.iter().rev().enumerate() {
+            fields[index as usize - i] = &matched;
         }
 
         // Helper to parse integer fields and handle errors
@@ -433,14 +384,14 @@ impl Interval {
         };
 
         // Parse the fields (year, month, day, hour, minute, second, microsecond)
-        let years = parse_field(fields[YEAR_INDEX])?;
-        let months = parse_field(fields[MONTH_INDEX])?;
-        let days = parse_field(fields[DAY_INDEX])?;
-        let hours = parse_field(fields[HOUR_INDEX])?;
-        let minutes = parse_field(fields[MINUTE_INDEX])?;
-        let seconds = parse_field(fields[SECOND_INDEX])?;
+        let years = parse_field(fields[TimeIndex::Year as usize])?;
+        let months = parse_field(fields[TimeIndex::Month as usize])?;
+        let days = parse_field(fields[TimeIndex::Day as usize])?;
+        let hours = parse_field(fields[TimeIndex::Hour as usize])?;
+        let minutes = parse_field(fields[TimeIndex::Minute as usize])?;
+        let seconds = parse_field(fields[TimeIndex::Second as usize])?;
 
-        let mut frac_part = fields[MICROSECOND_INDEX].to_string();
+        let mut frac_part = fields[TimeIndex::Microsecond as usize].to_string();
         let frac_part_len = frac_part.len();
         if frac_part_len < MAX_FSP as usize {
             frac_part.push_str(&"0".repeat(MAX_FSP as usize - frac_part_len));
@@ -465,7 +416,7 @@ impl Interval {
         Ok(Self {
             month,
             nano,
-            fsp: if index == MICROSECOND_INDEX {
+            fsp: if index == TimeIndex::Microsecond {
                 MAX_FSP
             } else {
                 MIN_FSP
@@ -642,5 +593,47 @@ impl ConvertToIntervalStr for Decimal {
             }
         }
         Ok(interval)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_clock_unit() -> Result<()> {
+        let cases = vec![
+            ("MICROSECOND", true),
+            ("secOnd", true),
+            ("MINUTE", true),
+            ("HOUR", true),
+            ("daY", false),
+            ("WeeK", false),
+            ("MONTH", false),
+            ("QUARTER", false),
+            ("year", false),
+            ("SECOND_MIcROSECOnD", true),
+            ("MINUTE_MICROSECOND", true),
+            ("MINUTE_second", true),
+            ("HOUR_MICROSECOND", true),
+            ("HOUR_SECOND", true),
+            ("HOUR_MINUTE", true),
+            ("DAY_MICROSECOND", true),
+            ("DAY_SECOND", true),
+            ("DAY_MINUTE", true),
+            ("DAY_HOUR", true),
+            ("year_MONTH", false),
+        ];
+        for (str, result) in cases {
+            let unit = IntervalUnit::from_str(str)?;
+            assert_eq!(unit.is_clock_unit(), result);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_bytes_to_interval_string() -> Result<()> {
+        //let mut ctx = EvalContext::default();
+        Ok(())
     }
 }
