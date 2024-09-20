@@ -290,7 +290,16 @@ impl_box_observer_g!(
     ConsistencyCheckObserver,
     WrappedConsistencyCheckObserver
 );
-impl_box_observer!(BoxMessageObserver, MessageObserver, WrappedMessageObserver);
+impl_box_observer!(
+    BoxRaftMessageObserver,
+    RaftMessageObserver,
+    WrappedRaftMessageObserver
+);
+impl_box_observer!(
+    BoxExtraMessageObserver,
+    ExtraMessageObserver,
+    WrappedExtraMessageObserver
+);
 impl_box_observer!(
     BoxRegionHeartbeatObserver,
     RegionHeartbeatObserver,
@@ -324,7 +333,8 @@ where
     read_index_observers: Vec<Entry<BoxReadIndexObserver>>,
     pd_task_observers: Vec<Entry<BoxPdTaskObserver>>,
     update_safe_ts_observers: Vec<Entry<BoxUpdateSafeTsObserver>>,
-    message_observers: Vec<Entry<BoxMessageObserver>>,
+    raft_message_observers: Vec<Entry<BoxRaftMessageObserver>>,
+    extra_message_observers: Vec<Entry<BoxExtraMessageObserver>>,
     region_heartbeat_observers: Vec<Entry<BoxRegionHeartbeatObserver>>,
     // For now, `write_batch_observer` and `snapshot_observer` can only have one
     // observer solely because of simplicity. However, it is possible to have
@@ -348,7 +358,8 @@ impl<E: KvEngine> Default for Registry<E> {
             read_index_observers: Default::default(),
             pd_task_observers: Default::default(),
             update_safe_ts_observers: Default::default(),
-            message_observers: Default::default(),
+            raft_message_observers: Default::default(),
+            extra_message_observers: Default::default(),
             region_heartbeat_observers: Default::default(),
             write_batch_observer: None,
             snapshot_observer: None,
@@ -421,8 +432,12 @@ impl<E: KvEngine> Registry<E> {
         push!(priority, qo, self.update_safe_ts_observers);
     }
 
-    pub fn register_message_observer(&mut self, priority: u32, qo: BoxMessageObserver) {
-        push!(priority, qo, self.message_observers);
+    pub fn register_raft_message_observer(&mut self, priority: u32, qo: BoxRaftMessageObserver) {
+        push!(priority, qo, self.raft_message_observers);
+    }
+
+    pub fn register_extra_message_observer(&mut self, priority: u32, qo: BoxExtraMessageObserver) {
+        push!(priority, qo, self.extra_message_observers);
     }
 
     pub fn register_region_heartbeat_observer(
@@ -710,8 +725,22 @@ impl<E: KvEngine> CoprocessorHost<E> {
         );
     }
 
-    pub fn pre_transfer_leader(&self, r: &Region, tr: &TransferLeaderRequest) -> Result<()> {
-        try_loop_ob!(r, &self.registry.admin_observers, pre_transfer_leader, tr)
+    pub fn pre_transfer_leader(
+        &self,
+        r: &Region,
+        tr: &TransferLeaderRequest,
+    ) -> Result<Vec<ExtraMessage>> {
+        let mut ctx = ObserverContext::new(r);
+        let mut msgs = vec![];
+        for o in &self.registry.admin_observers {
+            if let Some(msg) = (o.observer).inner().pre_transfer_leader(&mut ctx, tr)? {
+                msgs.push(msg);
+            }
+            if ctx.bypass {
+                break;
+            }
+        }
+        Ok(msgs)
     }
 
     pub fn post_apply_snapshot(
@@ -855,9 +884,16 @@ impl<E: KvEngine> CoprocessorHost<E> {
         true
     }
 
+    pub fn on_extra_message(&self, r: &Region, msg: &ExtraMessage) {
+        for observer in &self.registry.extra_message_observers {
+            let observer = observer.observer.inner();
+            observer.on_extra_message(r, msg);
+        }
+    }
+
     /// Returns false if the message should not be stepped later.
     pub fn on_raft_message(&self, msg: &RaftMessage) -> bool {
-        for observer in &self.registry.message_observers {
+        for observer in &self.registry.raft_message_observers {
             let observer = observer.observer.inner();
             if !observer.on_raft_message(msg) {
                 return false;
@@ -1247,7 +1283,7 @@ mod tests {
         }
     }
 
-    impl MessageObserver for TestCoprocessor {
+    impl RaftMessageObserver for TestCoprocessor {
         fn on_raft_message(&self, _: &RaftMessage) -> bool {
             self.called
                 .fetch_add(ObserverIndex::OnRaftMessage as usize, Ordering::SeqCst);
@@ -1292,7 +1328,7 @@ mod tests {
         host.registry
             .register_update_safe_ts_observer(1, BoxUpdateSafeTsObserver::new(ob.clone()));
         host.registry
-            .register_message_observer(1, BoxMessageObserver::new(ob.clone()));
+            .register_raft_message_observer(1, BoxRaftMessageObserver::new(ob.clone()));
 
         let mut index: usize = 0;
         let region = Region::default();
