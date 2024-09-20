@@ -602,12 +602,27 @@ impl RegionWriteCfCopDetail {
         )
     }
 
+    #[inline]
     pub fn iterated_count(&self) -> usize {
         self.next + self.prev
     }
 
+    #[inline]
     pub fn mvcc_amplification(&self) -> f64 {
         // Sometimes, processed_keys is 0 even (next + prev) is pretty high
-        (self.next + self.prev) as f64 / (self.processed_keys as f64 + 1)
+        self.iterated_count() as f64 / (self.processed_keys as f64 + 1.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::RegionWriteCfCopDetail;
+
+    #[test]
+    fn test_procssed_key_0() {
+        let mut cop_detail = RegionWriteCfCopDetail::default();
+        cop_detail.next = 11;
+
+        assert_eq!(cop_detail.mvcc_amplification(), 11.0);
     }
 }
