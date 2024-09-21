@@ -432,9 +432,7 @@ impl Resolver {
         let new_resolved_ts = cmp::min(min_start_ts, min_ts);
         // reason is the min source of the new resolved ts.
         let reason = match (min_lock, min_ts) {
-            (Some((lock_ts, txn_locks)), min_ts) if lock_ts < min_ts => {
-                TsSource::Lock(txn_locks)
-            }
+            (Some((lock_ts, txn_locks)), min_ts) if lock_ts < min_ts => TsSource::Lock(txn_locks),
             (Some(_), _) => source,
             (None, _) => source,
         };
@@ -510,9 +508,11 @@ impl Resolver {
     }
 
     pub(crate) fn oldest_transaction(&self) -> Option<(TimeStamp, TxnLocks)> {
-        let oldest_normal_txn = self.lock_ts_heap.iter().next().map(|(ts, txn_locks)| {
-            (ts.clone(), txn_locks.clone())
-        });
+        let oldest_normal_txn = self
+            .lock_ts_heap
+            .iter()
+            .next()
+            .map(|(ts, txn_locks)| (ts, txn_locks.clone()));
 
         let oldest_large_txn = self
             .large_txn_ts
@@ -522,8 +522,8 @@ impl Resolver {
                     info!("large txn {} not found in cache", ts);
                     Some(*ts)
                 }
-                Some(TxnState::Ongoing(min_commit_ts)) => Some(min_commit_ts),
-                Some(TxnState::Committed(_)) | Some(TxnState::RolledBack) => None,
+                Some(TxnState::Ongoing { min_commit_ts }) => Some(min_commit_ts),
+                Some(TxnState::Committed { .. }) | Some(TxnState::RolledBack) => None,
             })
             .min()
             .map(|ts| {
@@ -537,14 +537,14 @@ impl Resolver {
             });
 
         match (oldest_normal_txn, oldest_large_txn) {
-            (Some((ts1, txn_locks1)), Some((ts2, txn_locks2))) => {
+            (Some((&ts1, txn_locks1)), Some((ts2, txn_locks2))) => {
                 if ts1 < ts2 {
                     Some((ts1, txn_locks1))
                 } else {
                     Some((ts2, txn_locks2))
                 }
             }
-            (Some((ts, txn_locks)), None) => Some((ts, txn_locks)),
+            (Some((&ts, txn_locks)), None) => Some((ts, txn_locks)),
             (None, Some((ts, txn_locks))) => Some((ts, txn_locks)),
             (None, None) => None,
         }
@@ -571,6 +571,7 @@ impl Resolver {
 #[cfg(test)]
 mod tests {
     use std::time::SystemTime;
+
     use txn_types::Key;
 
     use super::*;
@@ -821,7 +822,6 @@ mod tests {
         let mut resolver = Resolver::new(1, memory_quota, txn_status_cache.clone());
         let key: Vec<u8> = vec![1, 2, 3, 4];
 
-
         // track a large txn lock
         resolver.track_lock(1.into(), key.clone(), None, 1).unwrap();
         assert_eq!(resolver.num_locks(), 1);
@@ -832,7 +832,13 @@ mod tests {
         assert_eq!(resolver.resolved_ts(), TimeStamp::zero());
 
         assert_eq!(resolver.resolve(10.into(), None, TsSource::PdTso), 1.into());
-        txn_status_cache.upsert(1.into(), TxnState::Ongoing(5.into()), SystemTime::now());
+        txn_status_cache.upsert(
+            1.into(),
+            TxnState::Ongoing {
+                min_commit_ts: 5.into(),
+            },
+            SystemTime::now(),
+        );
         assert_eq!(resolver.resolve(10.into(), None, TsSource::PdTso), 5.into());
     }
 }
