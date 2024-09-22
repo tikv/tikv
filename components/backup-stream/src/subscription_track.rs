@@ -19,9 +19,18 @@ use txn_types::TimeStamp;
 
 use crate::{debug, metrics::TRACK_REGION, utils};
 
-/// A utility to tracing the regions being subscripted.
-#[derive(Clone, Default, Debug)]
-pub struct SubscriptionTracer(Arc<DashMap<u64, SubscribeState>>);
+/// A utility to tracing the regions being subscribed.
+#[derive(Clone)]
+pub struct SubscriptionTracer(
+    pub Arc<DashMap<u64, SubscribeState>>,
+    pub Arc<TxnStatusCache>,
+);
+
+impl std::fmt::Debug for SubscriptionTracer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("SubscriptionTracer").field(&self.0).finish()
+    }
+}
 
 /// The state of the subscription state machine:
 /// Initial state is `ABSENT`, the subscription isn't in the tracer.
@@ -74,8 +83,13 @@ impl std::fmt::Debug for ActiveSubscription {
 }
 
 impl ActiveSubscription {
-    pub fn new(region: Region, handle: ObserveHandle, start_ts: Option<TimeStamp>) -> Self {
-        let resolver = TwoPhaseResolver::new(region.get_id(), start_ts);
+    pub fn new(
+        region: Region,
+        handle: ObserveHandle,
+        start_ts: Option<TimeStamp>,
+        txn_status_cache: Arc<TxnStatusCache>,
+    ) -> Self {
+        let resolver = TwoPhaseResolver::new(region.get_id(), start_ts, txn_status_cache);
         Self {
             handle,
             meta: region,
@@ -227,7 +241,7 @@ impl SubscriptionTracer {
         let e = self.0.entry(region.id);
         match e {
             Entry::Occupied(o) => {
-                let sub = ActiveSubscription::new(region.clone(), handle, start_ts);
+                let sub = ActiveSubscription::new(region.clone(), handle, start_ts, self.1.clone());
                 let (_, s) = o.replace_entry(SubscribeState::Running(sub));
                 if !s.is_pending() {
                     // If there is another subscription already (perhaps repeated Start),
@@ -238,7 +252,7 @@ impl SubscriptionTracer {
             }
             Entry::Vacant(e) => {
                 warn!("excepted state transform: absent -> running"; utils::slog_region(region));
-                let sub = ActiveSubscription::new(region.clone(), handle, start_ts);
+                let sub = ActiveSubscription::new(region.clone(), handle, start_ts, self.1.clone());
                 e.insert(SubscribeState::Running(sub));
             }
         }
@@ -584,12 +598,15 @@ impl TwoPhaseResolver {
         self.resolver.resolved_ts()
     }
 
-    pub fn new(region_id: u64, stable_ts: Option<TimeStamp>) -> Self {
+    pub fn new(
+        region_id: u64,
+        stable_ts: Option<TimeStamp>,
+        txn_status_cache: Arc<TxnStatusCache>,
+    ) -> Self {
         // TODO: limit the memory usage of the resolver.
         let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
         Self {
-            // FIXME: this cannot handle pipelined transactions, will fall back to start_ts
-            resolver: Resolver::new(region_id, memory_quota, Arc::new(TxnStatusCache::new(1))),
+            resolver: Resolver::new(region_id, memory_quota, txn_status_cache),
             future_locks: Default::default(),
             stable_ts,
         }
@@ -628,9 +645,11 @@ impl std::fmt::Debug for TwoPhaseResolver {
 mod test {
     use std::sync::Arc;
 
+    use dashmap::DashMap;
     use kvproto::metapb::{Region, RegionEpoch};
     use raftstore::coprocessor::ObserveHandle;
     use resolved_ts::TxnLocks;
+    use tikv::storage::txn::txn_status_cache::TxnStatusCache;
     use txn_types::TimeStamp;
 
     use super::{SubscriptionTracer, TwoPhaseResolver};
@@ -640,7 +659,8 @@ mod test {
     fn test_two_phase_resolver() {
         let key = b"somewhere_over_the_rainbow";
         let ts = TimeStamp::new;
-        let mut r = TwoPhaseResolver::new(42, Some(ts(42)));
+        let mut r =
+            TwoPhaseResolver::new(42, Some(ts(42)), Arc::new(TxnStatusCache::new_for_test()));
         r.track_phase_one_lock(ts(48), key.to_vec(), 0).unwrap();
         // When still in phase one, the resolver should not be advanced.
         r.untrack_lock(&key[..]);
@@ -674,7 +694,10 @@ mod test {
 
     #[test]
     fn test_delay_remove() {
-        let subs = SubscriptionTracer::default();
+        let subs = SubscriptionTracer(
+            Arc::new(DashMap::new()),
+            Arc::new(TxnStatusCache::new_for_test()),
+        );
         let handle = ObserveHandle::new();
         subs.register_region(&region(1, 1, 1), handle, Some(TimeStamp::new(42)));
         assert!(subs.get_subscription_of(1).is_some());
@@ -685,7 +708,10 @@ mod test {
 
     #[test]
     fn test_cal_checkpoint() {
-        let subs = SubscriptionTracer::default();
+        let subs = SubscriptionTracer(
+            Arc::new(DashMap::new()),
+            Arc::new(TxnStatusCache::new_for_test()),
+        );
         subs.register_region(
             &region(1, 1, 1),
             ObserveHandle::new(),

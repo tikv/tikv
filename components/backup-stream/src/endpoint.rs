@@ -10,6 +10,7 @@ use std::{
 };
 
 use concurrency_manager::ConcurrencyManager;
+use dashmap::DashMap;
 use encryption::DataKeyManager;
 use engine_traits::KvEngine;
 use error_code::ErrorCodeExt;
@@ -25,7 +26,10 @@ use raftstore::{
     router::CdcHandle,
 };
 use resolved_ts::{resolve_by_raft, LeadershipResolver};
-use tikv::config::{BackupStreamConfig, ResolvedTsConfig};
+use tikv::{
+    config::{BackupStreamConfig, ResolvedTsConfig},
+    storage::txn::txn_status_cache::TxnStatusCache,
+};
 use tikv_util::{
     box_err,
     config::ReadableDuration,
@@ -85,7 +89,7 @@ pub struct Endpoint<S, R, E: KvEngine, PDC> {
     pub(crate) subs: SubscriptionTracer,
     pub(crate) concurrency_manager: ConcurrencyManager,
 
-    // Note: some of fields are public so test cases are able to access them.
+    // Note: some of the fields are public so test cases are able to access them.
     pub range_router: Router,
     observer: BackupStreamObserver,
     pool: Runtime,
@@ -124,6 +128,7 @@ where
         concurrency_manager: ConcurrencyManager,
         resolver: BackupStreamResolver<RT, E>,
         data_key_manager: Option<Arc<DataKeyManager>>,
+        txn_status_cache: Arc<TxnStatusCache>,
     ) -> Self {
         crate::metrics::STREAM_ENABLED.inc();
         let pool = create_tokio_runtime((config.num_threads / 2).max(1), "backup-stream")
@@ -157,7 +162,7 @@ where
         };
         let initial_scan_throughput_quota = Limiter::new(limit);
         info!("the endpoint of stream backup started"; "path" => %config.temp_path);
-        let subs = SubscriptionTracer::default();
+        let subs = SubscriptionTracer(Arc::new(DashMap::new()), txn_status_cache.clone());
 
         let initial_scan_semaphore = Arc::new(Semaphore::new(config.initial_scan_concurrency));
         let (region_operator, op_loop) = RegionSubscriptionManager::start(

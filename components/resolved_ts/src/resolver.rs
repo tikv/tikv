@@ -272,6 +272,12 @@ impl Resolver {
         self.locks_by_key.len() * (key_bytes / key_count + std::mem::size_of::<TimeStamp>())
             + self.lock_ts_heap.len()
                 * (std::mem::size_of::<TimeStamp>() + std::mem::size_of::<TxnLocks>())
+            + self
+                .large_txn_key_representative
+                .keys()
+                .map(|k| k.len() + std::mem::size_of::<TimeStamp>())
+                .sum::<usize>()
+            + self.large_txn_ts.len() * std::mem::size_of::<TimeStamp>()
     }
 
     fn lock_heap_size(&self, key: &[u8]) -> usize {
@@ -528,6 +534,8 @@ impl Resolver {
                 info!("Large txn not found in cache"; "start_ts" => start_ts);
                 Some(start_ts)
             }
+            // TODO: optimization: whenever a large txn is committed or rolled back, we can stop
+            // tracking this txn
             Some(TxnState::Ongoing { min_commit_ts }) => Some(min_commit_ts),
             Some(TxnState::Committed { .. }) | Some(TxnState::RolledBack) => None,
         }

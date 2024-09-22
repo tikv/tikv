@@ -37,7 +37,10 @@ use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use test_raftstore::{new_server_cluster, Cluster, Config, ServerCluster};
 use test_util::retry;
-use tikv::config::{BackupStreamConfig, ResolvedTsConfig};
+use tikv::{
+    config::{BackupStreamConfig, ResolvedTsConfig},
+    storage::txn::txn_status_cache::TxnStatusCache,
+};
 use tikv_util::{
     codec::{
         number::NumberEncoder,
@@ -405,6 +408,7 @@ impl Suite {
             cm,
             BackupStreamResolver::V1(resolver),
             sim.encryption.clone(),
+            Arc::new(TxnStatusCache::new_for_test()),
         );
         worker.start(endpoint);
     }

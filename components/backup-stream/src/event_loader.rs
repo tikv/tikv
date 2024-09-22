@@ -483,7 +483,10 @@ mod tests {
 
     use futures::executor::block_on;
     use kvproto::metapb::*;
-    use tikv::storage::{txn::tests::*, TestEngineBuilder};
+    use tikv::storage::{
+        txn::{tests::*, txn_status_cache::TxnStatusCache},
+        TestEngineBuilder,
+    };
     use tikv_kv::SnapContext;
     use tikv_util::memory::{MemoryQuota, OwnedAllocated};
     use txn_types::TimeStamp;
@@ -524,7 +527,7 @@ mod tests {
         });
         r.unwrap();
         let mut events = ApplyEvents::with_capacity(1024, 42);
-        let mut res = TwoPhaseResolver::new(42, None);
+        let mut res = TwoPhaseResolver::new(42, None, Arc::new(TxnStatusCache::new_for_test()));
         loader.emit_entries_to(&mut events, &mut res).unwrap();
         assert_ne!(events.len(), 0);
         assert_ne!(data_load, 0);
