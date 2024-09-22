@@ -476,19 +476,60 @@ impl Resolver {
         self.resolved_ts
     }
 
-    pub(crate) fn log_locks(&self, min_start_ts: u64) {
-        // log lock with the minimum start_ts >= min_start_ts
-        if let Some((start_ts, txn_locks)) = self
-            .lock_ts_heap
-            .range(TimeStamp::new(min_start_ts)..)
-            .next()
-        {
+    /// Logs the txns with min start_ts or min_commit_ts. Search from
+    /// `lower_bound`. Normal txns are logged with start_ts.
+    /// Large txns are logged with min_commit_ts.
+    pub(crate) fn log_locks(&self, lower_bound: u64) {
+        self.log_min_lock(lower_bound.into());
+        self.log_min_large_txn(lower_bound.into());
+    }
+
+    fn log_min_lock(&self, lower_bound: TimeStamp) {
+        if let Some((start_ts, txn_locks)) = self.lock_ts_heap.range(lower_bound..).next() {
             info!(
-                "locks with the minimum start_ts in resolver";
-                "region_id" => self.region_id,
+                "non-large txn locks with the minimum start_ts in resolver";
+                "search_lower_bound" => lower_bound,
                 "start_ts" => start_ts,
                 "txn_locks" => ?txn_locks,
+                "region_id" => self.region_id,
             );
+        }
+    }
+
+    fn log_min_large_txn(&self, lower_bound: TimeStamp) {
+        let min_min_commit_ts_txn = self
+            .large_txn_ts
+            .iter()
+            .filter_map(|&start_ts| {
+                self.lookup_min_commit_ts(start_ts)
+                    .map(|min_commit_ts| (start_ts, min_commit_ts))
+            })
+            .filter(|(_, min_commit_ts)| *min_commit_ts >= lower_bound)
+            .min_by_key(|(_, min_commit_ts)| *min_commit_ts);
+
+        if let Some((start_ts, min_commit_ts)) = min_min_commit_ts_txn {
+            info!(
+                "large txn locks with the minimum min_commit_ts in resolver";
+                "search_lower_bound" => lower_bound,
+                "start_ts" => start_ts,
+                "min_commit_ts" => min_commit_ts,
+                "region_id" => self.region_id,
+            );
+        }
+    }
+
+    // Map a transaction's start_ts to a min_commit_ts.
+    // When a large txn is committed or rolled back, return None.
+    // When not found in cache, fallback to its start_ts as start_ts is also a valid
+    // min_commit_ts
+    fn lookup_min_commit_ts(&self, start_ts: TimeStamp) -> Option<TimeStamp> {
+        match self.txn_status_cache.get(start_ts) {
+            None => {
+                info!("Large txn not found in cache"; "start_ts" => start_ts);
+                Some(start_ts)
+            }
+            Some(TxnState::Ongoing { min_commit_ts }) => Some(min_commit_ts),
+            Some(TxnState::Committed { .. }) | Some(TxnState::RolledBack) => None,
         }
     }
 
@@ -517,20 +558,14 @@ impl Resolver {
         let oldest_large_txn = self
             .large_txn_ts
             .iter()
-            .filter_map(|ts| match self.txn_status_cache.get(*ts) {
-                None => {
-                    info!("large txn {} not found in cache", ts);
-                    Some(*ts)
-                }
-                Some(TxnState::Ongoing { min_commit_ts }) => Some(min_commit_ts),
-                Some(TxnState::Committed { .. }) | Some(TxnState::RolledBack) => None,
-            })
+            .filter_map(|start_ts| self.lookup_min_commit_ts(*start_ts))
             .min()
             .map(|ts| {
                 (
                     ts,
                     TxnLocks {
                         lock_count: 1,
+                        // TODO: maybe fill this
                         sample_lock: None,
                     },
                 )
