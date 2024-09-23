@@ -34,6 +34,7 @@ serde_derive = "1.0"
 serde_json = "1.0"
 slog-global = { workspace = true }
 slog = { workspace = true }
+strum = { version = "0.20", features = ["derive"] }
 engine_rocks = { workspace = true }
 fail = "0.5"
 yatp = { workspace = true }
@@ -47,6 +48,7 @@ thiserror = "1.0"
 online_config = { workspace = true }
 libc = "0.2"
 rand = "0.8"
+tokio = { version = "1.5", features = ["rt-multi-thread"] }
 
 [dev-dependencies]
 tempfile = "3.0"

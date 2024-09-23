@@ -10,6 +10,7 @@ approvers:
   - cfzjywxk
   - Connor1996
   - coocood
+  - crazycs520
   - disksing
   - ekexium
   - gengliqi
@@ -47,10 +48,11 @@ approvers:
   - zhangjinpeng87
   - zhongzc
   - zhouqiang-cl
+  - zyguan
 reviewers:
+  - 3AceShowHand
   - 3pointer
   - CalvinNeo
-  - crazycs520
   - ethercflow
   - fredchenbj
   - Fullstop000
@@ -74,4 +76,3 @@ reviewers:
   - wjhuang2016
   - wshwsh12
   - Xuanwo
-  - zyguan

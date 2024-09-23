@@ -59,12 +59,12 @@ impl TryFrom<&KeyRangeRule> for CacheRegion {
         Ok(CacheRegion::new(0, 0, start_key, end_key))
     }
 }
-pub type RegionLabelAddedCb = Arc<dyn Fn(&LabelRule) + Send + Sync>;
+pub type RegionLabelChangedCallback = Arc<dyn Fn(&LabelRule, bool) + Send + Sync>;
 
 #[derive(Default)]
 pub struct RegionLabelRulesManager {
     pub(crate) region_labels: DashMap<String, LabelRule>,
-    pub(crate) region_label_added_cb: Option<RegionLabelAddedCb>,
+    pub(crate) region_label_change_cb: Option<RegionLabelChangedCallback>,
 }
 
 impl RegionLabelRulesManager {
@@ -72,19 +72,19 @@ impl RegionLabelRulesManager {
         let old_value = self
             .region_labels
             .insert(label_rule.id.clone(), label_rule.clone());
-        if let Some(cb) = self.region_label_added_cb.as_ref() {
+        if let Some(cb) = self.region_label_change_cb.as_ref() {
             match old_value.as_ref() {
                 // If a watch fires twice on an identical label rule, ignore the second invocation.
                 Some(old_value) if old_value == label_rule => {
                     info!("ime identical region label rule added twice; ignoring.";
                         "rule_id" => &label_rule.id)
                 }
-                _ => cb(label_rule),
+                _ => cb(label_rule, true),
             }
         }
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn region_labels(&self) -> Vec<LabelRule> {
         self.region_labels
             .iter()
@@ -92,11 +92,14 @@ impl RegionLabelRulesManager {
             .collect::<Vec<_>>()
     }
 
-    pub fn remove_region_label(&self, label_rule_id: &String) {
-        let _ = self.region_labels.remove(label_rule_id);
+    pub fn remove_region_label(&self, label_rule: &LabelRule) {
+        let _ = self.region_labels.remove(&label_rule.id);
+        if let Some(cb) = self.region_label_change_cb.as_ref() {
+            cb(label_rule, false);
+        }
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn get_region_label(&self, label_rule_id: &str) -> Option<LabelRule> {
         self.region_labels
             .get(label_rule_id)
@@ -147,12 +150,6 @@ impl RegionLabelServiceBuilder {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn path_suffix(mut self, suffix: String) -> Self {
-        self.path_suffix = Some(suffix);
-        self
-    }
-
     pub fn rule_filter_fn<F>(mut self, rule_filter_fn: F) -> Self
     where
         F: Fn(&LabelRule) -> bool + Send + Sync + 'static,
@@ -185,13 +182,22 @@ impl RegionLabelService {
         )
     }
 
-    fn on_label_rule(&mut self, label_rule: &LabelRule) {
+    fn on_label_rule_add(&mut self, label_rule: &LabelRule) {
         let should_add_label = self
             .rule_filter_fn
             .as_ref()
             .map_or_else(|| true, |r_f_fn| r_f_fn(label_rule));
         if should_add_label {
             self.manager.add_region_label(label_rule)
+        }
+    }
+    fn on_label_rule_delete(&mut self, label_rule: &LabelRule) {
+        let should_remove_label = self
+            .rule_filter_fn
+            .as_ref()
+            .map_or_else(|| true, |r_f_fn| r_f_fn(label_rule));
+        if should_remove_label {
+            self.manager.remove_region_label(label_rule)
         }
     }
     pub async fn watch_region_labels(&mut self) {
@@ -218,7 +224,7 @@ impl RegionLabelService {
                                 match serde_json::from_slice::<LabelRule>(
                                     event.get_kv().get_value(),
                                 ) {
-                                    Ok(label_rule) => self.on_label_rule(&label_rule),
+                                    Ok(label_rule) => self.on_label_rule_add(&label_rule),
                                     Err(e) => error!("ime parse put region label event failed"; "name" => ?event.get_kv().get_key(), "err" => ?e),
                                 }
                             }
@@ -226,7 +232,7 @@ impl RegionLabelService {
                                 match serde_json::from_slice::<LabelRule>(
                                     event.get_prev_kv().get_value()
                                 ) {
-                                    Ok(label_rule) => self.manager.remove_region_label(&label_rule.id),
+                                    Ok(label_rule) => self.on_label_rule_delete(&label_rule),
                                     Err(e) => error!("ime parse delete region label event failed"; "name" => ?event.get_kv().get_key(), "err" => ?e),
                                 }
                             }
@@ -263,7 +269,7 @@ impl RegionLabelService {
                     let kvs = resp.take_kvs().into_iter().collect::<Vec<_>>();
                     for g in kvs.iter() {
                         match serde_json::from_slice::<LabelRule>(g.get_value()) {
-                            Ok(label_rule) => self.on_label_rule(&label_rule),
+                            Ok(label_rule) => self.on_label_rule_add(&label_rule),
 
                             Err(e) => {
                                 error!("ime parse label rule failed"; "name" => ?g.get_key(), "err" => ?e);
@@ -424,7 +430,7 @@ pub mod tests {
             );
         };
 
-        let background_worker = Builder::new("background").thread_count(1).create();
+        let background_worker = Builder::new("ime-test").thread_count(1).create();
         let mut s_clone = s.clone();
         background_worker.spawn_async_task(async move {
             s_clone.watch_region_labels().await;
