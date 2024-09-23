@@ -211,7 +211,7 @@ impl RangeCacheMemoryEngineCore {
     pub(crate) fn prepare_for_apply(
         &self,
         region: &CacheRegion,
-        rocks_engine: &RocksEngine,
+        rocks_engine: Option<&RocksEngine>,
         scheduler: &Scheduler<BackgroundTask>,
         should_set_in_written: bool,
     ) -> RangeCacheStatus {
@@ -296,7 +296,7 @@ impl RangeCacheMemoryEngineCore {
         // get snapshot and schedule loading task at last to avoid locking IME for too
         // long.
         if schedule_load {
-            let rocks_snap = Arc::new(rocks_engine.snapshot());
+            let rocks_snap = Arc::new(rocks_engine.unwrap().snapshot());
             if let Err(e) =
                 scheduler.schedule(BackgroundTask::LoadRegion(region.clone(), rocks_snap))
             {
@@ -433,7 +433,7 @@ impl RangeCacheMemoryEngine {
     pub(crate) fn prepare_for_apply(&self, region: &CacheRegion) -> RangeCacheStatus {
         self.core.prepare_for_apply(
             region,
-            self.rocks_engine.as_ref().unwrap(),
+            self.rocks_engine.as_ref(),
             self.bg_work_manager.background_scheduler(),
             true,
         )

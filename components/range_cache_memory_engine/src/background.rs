@@ -1251,7 +1251,7 @@ impl Runnable for BackgroundRunner {
                                     let cache_region = CacheRegion::from_region(r);
                                     _ = ime_engine.prepare_for_apply(
                                         &cache_region,
-                                        &rocks_engine,
+                                        Some(&rocks_engine),
                                         &scheduler,
                                         false,
                                     );
