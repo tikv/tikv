@@ -14,8 +14,8 @@ use crate::{
     expr::EvalContext,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 /// See https://dev.mysql.com/doc/refman/8.0/en/expressions.html#temporal-intervals
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IntervalUnit {
     Microsecond,
     Second,
@@ -599,6 +599,7 @@ impl ConvertToIntervalStr for Decimal {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::expr::{EvalConfig, Flag};
 
     #[test]
     fn test_is_clock_unit() -> Result<()> {
@@ -632,8 +633,139 @@ mod tests {
     }
 
     #[test]
-    fn test_bytes_to_interval_string() -> Result<()> {
-        //let mut ctx = EvalContext::default();
+    fn test_bytes_ref_to_interval_string() -> Result<()> {
+        use IntervalUnit::*;
+        let cases = vec![
+            (b"365" as &[u8], Microsecond, "365"),
+            (b"10", Minute, "10"),
+            (b"-123", Minute, "-123"),
+            (b"24", Hour, "24"),
+            (b"  365", Day, "365"),
+            (b"abc", Day, "0"),
+            (b" -221", Week, "-221"),
+            (b"a6", Month, "0"),
+            (b"-24a", Quarter, "-24"),
+            (b"1024", Year, "1024"),
+            (b"1e2", Second, "100"),
+            (b"-2e4", Second, "-20000"),
+            (b"1.6", Second, "1.6"),
+            (b"-1.6554", Second, "-1.6554"),
+        ];
+
+        let mut config = EvalConfig::new();
+        config.set_flag(Flag::TRUNCATE_AS_WARNING);
+        let mut ctx = EvalContext::new(std::sync::Arc::new(config));
+        for (input, unit, expected) in cases {
+            let result = input.to_interval_string(&mut ctx, unit, false, 0).unwrap();
+            assert_eq!(result, expected);
+        }
+
+        let mut ctx = EvalContext::default();
+        let err_cases = vec![(b"abc" as &[u8], Day), (b"a6", Month), (b"-24a", Quarter)];
+        for (input, unit) in err_cases {
+            assert!(input.to_interval_string(&mut ctx, unit, false, 0).is_err());
+        }
+
         Ok(())
+    }
+
+    #[test]
+    fn test_i64_to_interval_string() -> Result<()> {
+        let cases = vec![
+            (42i64, false, "42"),
+            (-100i64, false, "-100"),
+            (0i64, false, "0"),
+            (9999999999i64, false, "9999999999"),
+            (-9999999999i64, false, "-9999999999"),
+            (9999999999i64, true, "9999999999"),
+            (-9999999999i64, true, "18446744063709551617"),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (input, is_unsigned, expected) in cases {
+            let result = input
+                .to_interval_string(&mut ctx, IntervalUnit::Second, is_unsigned, 0)
+                .unwrap();
+            assert_eq!(result, expected);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_real_to_interval_string() {
+        let mut ctx = EvalContext::default();
+
+        let cases = vec![
+            (1.2345, 4, "1.2345"),
+            (1.2345, 5, "1.23450"),
+            (1.2345, 2, "1.23"),
+            (-1.6789, 3, "-1.679"),
+            (-1.6789, 6, "-1.678900"),
+            (100.779, 0, "101"),
+            (-100.779, 0, "-101"),
+        ];
+
+        for (input, decimal, expected) in cases {
+            let real = Real::new(input).unwrap();
+            let result = real
+                .to_interval_string(&mut ctx, IntervalUnit::Second, false, decimal)
+                .unwrap();
+            assert_eq!(result, expected);
+        }
+    }
+
+    #[test]
+    fn test_decimal_to_interval() {
+        use IntervalUnit::*;
+        let mut ctx = EvalContext::default();
+
+        let cases = vec![
+            // Basic unit cases
+            ("12.34", Year, "12"),
+            ("-12.34", Month, "-12"),
+            ("12.5", Day, "13"),
+            ("12.45", Hour, "12"),
+            ("-12.6", Minute, "-13"),
+            ("12.34", Second, "12.34"),
+            ("-12.34", Second, "-12.34"),
+            // Compound unit cases
+            ("12.34", HourMinute, "12:34"),
+            ("-12.34", MinuteSecond, "-12:34"),
+            ("12.34", YearMonth, "12-34"),
+            ("-12.34", YearMonth, "-12-34"),
+            ("12.34", DayHour, "12 34"),
+            ("-12.34", DayHour, "-12 34"),
+            ("12.34", DayMinute, "0 12:34"),
+            ("-12.34", DayMinute, "-0 12:34"),
+            ("12.34", DaySecond, "0 00:12:34"),
+            ("-12.34", DaySecond, "-0 00:12:34"),
+            ("12.34", DayMicrosecond, "0 00:00:12.34"),
+            ("-12.34", DayMicrosecond, "-0 00:00:12.34"),
+            ("12.34", HourMicrosecond, "00:00:12.34"),
+            ("-12.34", HourMicrosecond, "-00:00:12.34"),
+            ("12.34", HourSecond, "00:12:34"),
+            ("-12.34", HourSecond, "-00:12:34"),
+            ("12.34", MinuteMicrosecond, "00:12.34"),
+            ("-12.34", MinuteMicrosecond, "-00:12.34"),
+            ("12.34", SecondMicrosecond, "12.34"),
+            ("-12.34", SecondMicrosecond, "-12.34"),
+            // Rounding case 
+            ("12.99", Year, "13"),
+            ("12.49", Year, "12"),
+            ("-12.99", Year, "-13"),
+        ];
+
+        for (input, unit, expected) in cases {
+            let decimal = Decimal::from_str(input).unwrap();
+            let result = decimal
+                .to_interval_string(&mut ctx, unit, false, 0)
+                .unwrap();
+            assert_eq!(
+                result, expected,
+                "Failed for input: {}, unit: {:?}",
+                input, unit
+            );
+        }
     }
 }
