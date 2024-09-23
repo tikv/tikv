@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use cloud::{
-    kms::{SubConfigAzure, SubConfigGcp},
+    kms::{SubConfigAzure, SubConfigGcp, SubConfigAws},
     Config as CloudConfig,
 };
 use kvproto::encryptionpb::{EncryptionMethod, MasterKey, MasterKeyKms, MasterKey_oneof_backend};
@@ -217,7 +217,7 @@ impl KmsConfig {
             gcp: self.gcp.as_ref().map(|gcp| SubConfigGcp {
                 credential_file_path: gcp.credential_file_path.clone(),
             }),
-            aws: self.aws.as_ref().map(|aws| cloud::kms::SubConfigAws {
+            aws: self.aws.as_ref().map(|aws| SubConfigAws {
                 access_key: aws.access_key.clone(),
                 secret_access_key: aws.secret_access_key.clone(),
             }),

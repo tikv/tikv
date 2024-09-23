@@ -201,6 +201,7 @@ impl TempFilePool {
             if let Some(enc) = backup_encryption_manager.opt_data_key_manager() {
                 enc.remove_dir(&cfg.swap_files, None)?;
             }
+            std::fs::remove_dir_all(&cfg.swap_files)?;
         }
         std::fs::create_dir_all(&cfg.swap_files)?;
 
