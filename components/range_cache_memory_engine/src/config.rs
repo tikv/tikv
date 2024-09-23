@@ -23,7 +23,7 @@ impl ConfigManager for RangeCacheConfigManager {
             let change = change.clone();
             self.0.update(move |cfg: &mut RangeCacheEngineConfig| {
                 let mut cfg_verify = cfg.clone();
-                cfg_verify.update(change);
+                cfg_verify.update(change.clone())?;
                 cfg_verify.validate()?;
                 cfg.update(change)
             })?;
