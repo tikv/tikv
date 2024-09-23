@@ -71,6 +71,7 @@ pub struct RangeCacheEngineConfig {
     pub mvcc_amplification_threshold: usize,
     // Cross check is only for test usage and should not be turned on in production
     // environment. Interval 0 means it is turned off, which is the default value.
+    #[online_config(skip)]
     pub cross_check_interval: ReadableDuration,
 }
 
