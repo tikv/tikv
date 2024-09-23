@@ -602,15 +602,7 @@ impl<E: KvEngine> SstImporter<E> {
             }
 
             for f in shrink_files {
-                if let Err(e) = file_system::remove_file(&f) {
-                    info!("failed to remove file"; "filename" => ?f, "error" => ?e);
-                }
-                // remove tracking from key manager
-                if let Some(key_manager) = self.key_manager.as_ref() {
-                    if let Err(e) = key_manager.delete_file(&f.to_string_lossy(), None) {
-                        info!("failed to remove file from key manager"; "filename" => ?f, "error" => ?e);
-                    }
-                }
+                self.remove_file_no_throw(&f);
             }
             shrink_file_count
         } else {
@@ -1404,7 +1396,7 @@ impl<E: KvEngine> SstImporter<E> {
             }
         }
 
-        let _ = file_system::remove_file(&path.temp);
+        self.remove_file_no_throw(&path.temp);
 
         IMPORTER_DOWNLOAD_DURATION
             .with_label_values(&["rewrite"])
@@ -1425,7 +1417,7 @@ impl<E: KvEngine> SstImporter<E> {
             // nothing is written: prevents finishing the SST at all.
             // also delete the empty sst file that is created when creating sst_writer
             drop(sst_writer);
-            let _ = file_system::remove_file(&path.save);
+            self.remove_file_no_throw(&path.save);
             Ok(None)
         }
     }
@@ -1560,6 +1552,19 @@ impl<E: KvEngine> SstImporter<E> {
         } else {
             // doesn't have encryption info, plaintext log backup files.
             Ok(None)
+        }
+    }
+
+    fn remove_file_no_throw(&self, path_buf: &PathBuf) {
+        // remove from file system
+        if let Err(e) = file_system::remove_file(path_buf) {
+            warn!("failed to remove file"; "filename" => ?path_buf, "error" => ?e);
+        }
+        // remove tracking from key manager if needed
+        if let Some(key_manager) = self.key_manager.as_ref() {
+            if let Err(e) = key_manager.delete_file(&path_buf.to_string_lossy(), None) {
+                warn!("failed to remove file from key manager"; "filename" => ?path_buf, "error" => ?e);
+            }
         }
     }
 }
@@ -2637,7 +2642,7 @@ mod tests {
         .unwrap();
 
         let db_path = temp_dir.path().join("db");
-        let env = get_env(Some(key_manager), None /* io_rate_limiter */).unwrap();
+        let env = get_env(Some(key_manager.clone()), None /* io_rate_limiter */).unwrap();
         let db = new_test_engine_with_env(db_path.to_str().unwrap(), DATA_CFS, env.clone());
 
         let range = importer
@@ -2661,6 +2666,9 @@ mod tests {
         let sst_file_metadata = sst_file_path.metadata().unwrap();
         assert!(sst_file_metadata.is_file());
         assert_eq!(sst_file_metadata.len(), meta.get_length());
+
+        // verified the tmp files are correctly cleaned up
+        check_file_not_exists(importer.dir.join_for_read(&meta).unwrap().temp.as_path(), Some(&*key_manager));
 
         // verifies the SST content is correct.
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), Some(env));
