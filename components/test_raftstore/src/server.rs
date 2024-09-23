@@ -320,11 +320,6 @@ impl ServerCluster {
                 hook(&mut coprocessor_host);
             }
         }
-        let region_info_accessor = RegionInfoAccessor::new(
-            &mut coprocessor_host,
-            enable_region_stats_mgr_cb,
-            cfg.range_cache_engine.mvcc_amplification_threshold,
-        );
 
         // In-memory engine
         let mut range_cache_engine_config = cfg.range_cache_engine.clone();
@@ -332,6 +327,17 @@ impl ServerCluster {
             .expected_region_size
             .get_or_insert(cfg.coprocessor.region_split_size());
         let range_cache_engine_config = Arc::new(VersionTrack::new(range_cache_engine_config));
+        let range_cache_engine_config_clone = range_cache_engine_config.clone();
+        let region_info_accessor = RegionInfoAccessor::new(
+            &mut coprocessor_host,
+            enable_region_stats_mgr_cb,
+            Box::new(move || {
+                range_cache_engine_config_clone
+                    .value()
+                    .mvcc_amplification_threshold
+            }),
+        );
+
         let range_cache_engine_context =
             RangeCacheEngineContext::new(range_cache_engine_config.clone(), self.pd_client.clone());
         let in_memory_engine = if cfg.range_cache_engine.enabled {

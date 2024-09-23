@@ -407,10 +407,12 @@ where
                 Arc::new(|| false)
             };
 
+        let ime_config = Arc::new(VersionTrack::new(config.range_cache_engine.clone()));
+        let ime_config_clone = ime_config.clone();
         let region_info_accessor = RegionInfoAccessor::new(
             coprocessor_host.as_mut().unwrap(),
             region_stats_manager_enabled_cb,
-            config.range_cache_engine.mvcc_amplification_threshold,
+            Box::new(move || ime_config_clone.value().mvcc_amplification_threshold),
         );
 
         // Initialize concurrency manager
@@ -452,6 +454,7 @@ where
         TikvServer {
             core: TikvServerCore {
                 config,
+                ime_config,
                 store_path,
                 lock_files: vec![],
                 encryption_key_manager: None,
@@ -1629,7 +1632,7 @@ where
         let _ = range_cache_engine_config
             .expected_region_size
             .get_or_insert(self.core.config.coprocessor.region_split_size());
-        let range_cache_engine_config = Arc::new(VersionTrack::new(range_cache_engine_config));
+        let range_cache_engine_config = self.core.ime_config.clone();
         let range_cache_engine_context =
             RangeCacheEngineContext::new(range_cache_engine_config.clone(), self.pd_client.clone());
         let range_cache_engine_statistics = range_cache_engine_context.statistics();
