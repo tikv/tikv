@@ -8,10 +8,10 @@ use std::{
 use crossbeam::epoch;
 use engine_rocks::util::new_engine;
 use engine_traits::{
-    CacheRange, EvictReason, Mutable, RangeCacheEngine, RegionEvent, WriteBatch, WriteBatchExt,
-    CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
+    CacheRegion, EvictReason, Mutable, RangeCacheEngine, RangeCacheEngineExt, RegionEvent,
+    WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
-use keys::data_key;
+use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};
 use kvproto::metapb::Region;
 use range_cache_memory_engine::{
     decode_key, encode_key_for_boundary_without_mvcc, encoding_for_filter,
@@ -21,6 +21,10 @@ use range_cache_memory_engine::{
 };
 use tempfile::Builder;
 use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
+use tokio::{
+    sync::{mpsc, Mutex},
+    time::timeout,
+};
 use txn_types::{Key, TimeStamp, WriteType};
 
 #[test]
@@ -62,13 +66,13 @@ fn test_gc_worker() {
         VersionTrack::new(config),
     )));
     let memory_controller = engine.memory_controller();
-    let (write, default) = {
-        let mut core = engine.core().write();
-        core.mut_range_manager()
-            .new_region(new_region(1, b"", b"z"));
-        let engine = core.engine();
-        (engine.cf_handle(CF_WRITE), engine.cf_handle(CF_DEFAULT))
-    };
+    engine
+        .core()
+        .region_manager()
+        .new_region(CacheRegion::new(1, 0, DATA_MIN_KEY, DATA_MAX_KEY));
+    let skip_engine = engine.core().engine();
+    let write = skip_engine.cf_handle(CF_WRITE);
+    let default = skip_engine.cf_handle(CF_DEFAULT);
 
     fail::cfg("in_memory_engine_gc_oldest_seqno", "return(1000)").unwrap();
 
@@ -161,7 +165,7 @@ fn test_clean_up_tombstone() {
     let engine =
         RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(config.clone()));
     let region = new_region(1, b"".to_vec(), b"z".to_vec());
-
+    let cache_region = CacheRegion::from_region(&region);
     let (tx, rx) = sync_channel(0);
     fail::cfg_callback("clean_lock_tombstone_done", move || {
         tx.send(true).unwrap();
@@ -170,7 +174,7 @@ fn test_clean_up_tombstone() {
 
     engine.new_region(region.clone());
     let mut wb = engine.write_batch();
-    wb.prepare_for_region(&region);
+    wb.prepare_for_region(cache_region.clone());
     wb.put_cf("lock", b"k", b"val").unwrap();
     wb.put_cf("lock", b"k1", b"val").unwrap();
     wb.put_cf("lock", b"k2", b"val").unwrap();
@@ -182,7 +186,7 @@ fn test_clean_up_tombstone() {
     wb.write().unwrap();
 
     let mut wb = engine.write_batch();
-    wb.prepare_for_region(&region);
+    wb.prepare_for_region(cache_region.clone());
     wb.put_cf("lock", b"k", b"val").unwrap(); // seq 120
     wb.put_cf("lock", b"k1", b"val").unwrap(); // seq 121
     wb.put_cf("lock", b"k2", b"val").unwrap(); // seq 122
@@ -192,7 +196,7 @@ fn test_clean_up_tombstone() {
     wb.set_sequence_number(120).unwrap();
     wb.write().unwrap();
 
-    let lock_handle = engine.core().read().engine().cf_handle("lock");
+    let lock_handle = engine.core().engine().cf_handle("lock");
     assert_eq!(lock_handle.len(), 13);
 
     engine
@@ -202,7 +206,7 @@ fn test_clean_up_tombstone() {
 
     rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
-    let mut iter = engine.core().read().engine().cf_handle("lock").iterator();
+    let mut iter = engine.core().engine().cf_handle("lock").iterator();
 
     let mut first = true;
     let guard = &epoch::pin();
@@ -256,7 +260,7 @@ fn test_evict_with_loading_range() {
     let engine_clone = engine.clone();
     fail::cfg_callback("on_snapshot_load_finished", move || {
         let _ = snapshot_load_tx.send(true);
-        engine_clone.evict_region(&r, EvictReason::AutoEvict);
+        engine_clone.evict_region(&CacheRegion::from_region(&r), EvictReason::AutoEvict, None);
     })
     .unwrap();
 
@@ -266,15 +270,18 @@ fn test_evict_with_loading_range() {
     })
     .unwrap();
 
-    engine.load_region(r1.clone()).unwrap();
-    engine.load_region(r2.clone()).unwrap();
-    engine.load_region(r3.clone()).unwrap();
+    let cache_region1 = CacheRegion::from_region(&r1);
+    let cache_region2 = CacheRegion::from_region(&r2);
+    let cache_region3 = CacheRegion::from_region(&r3);
+    engine.load_region(cache_region1.clone()).unwrap();
+    engine.load_region(cache_region2.clone()).unwrap();
+    engine.load_region(cache_region3.clone()).unwrap();
 
     let mut wb = engine.write_batch();
     // prepare range to trigger loading
-    wb.prepare_for_region(&r1);
-    wb.prepare_for_region(&r2);
-    wb.prepare_for_region(&r3);
+    wb.prepare_for_region(cache_region1.clone());
+    wb.prepare_for_region(cache_region2.clone());
+    wb.prepare_for_region(cache_region3.clone());
     wb.set_sequence_number(10).unwrap();
     wb.write().unwrap();
 
@@ -290,15 +297,9 @@ fn test_evict_with_loading_range() {
         .unwrap();
 
     let read_ts = TimeStamp::compose(TimeStamp::physical_now(), 0).into_inner();
-    engine
-        .snapshot(r1.id, 0, CacheRange::from_region(&r1), read_ts, 100)
-        .unwrap_err();
-    engine
-        .snapshot(r2.id, 0, CacheRange::from_region(&r2), read_ts, 100)
-        .unwrap_err();
-    engine
-        .snapshot(r3.id, 0, CacheRange::from_region(&r3), read_ts, 100)
-        .unwrap();
+    engine.snapshot(cache_region1, read_ts, 100).unwrap_err();
+    engine.snapshot(cache_region2, read_ts, 100).unwrap_err();
+    engine.snapshot(cache_region3, read_ts, 100).unwrap();
 }
 
 #[test]
@@ -308,7 +309,8 @@ fn test_cached_write_batch_cleared_when_load_failed() {
     let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
 
     let mut config = RangeCacheEngineConfig::config_for_test();
-    config.soft_limit_threshold = Some(ReadableSize(20));
+    config.stop_load_limit_threshold = Some(ReadableSize(20));
+    config.soft_limit_threshold = Some(ReadableSize(30));
     config.hard_limit_threshold = Some(ReadableSize(40));
     let config = Arc::new(VersionTrack::new(config));
     let mut engine =
@@ -327,17 +329,19 @@ fn test_cached_write_batch_cleared_when_load_failed() {
     // canceled at begin
     let r1 = new_region(1, b"k00", b"k10");
     let r2 = new_region(2, b"k20", b"k30");
-    engine.load_region(r1.clone()).unwrap();
-    engine.load_region(r2.clone()).unwrap();
+    let cache_region1 = CacheRegion::from_region(&r1);
+    let cache_region2 = CacheRegion::from_region(&r2);
+    engine.load_region(cache_region1.clone()).unwrap();
+    engine.load_region(cache_region2.clone()).unwrap();
 
     let mut wb = engine.write_batch();
     // range1 starts to load
-    wb.prepare_for_region(&r1);
+    wb.prepare_for_region(CacheRegion::from_region(&r1));
     rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
     wb.put(b"zk05", b"val").unwrap();
     wb.put(b"zk06", b"val").unwrap();
-    wb.prepare_for_region(&r2);
+    wb.prepare_for_region(CacheRegion::from_region(&r2));
     wb.put(b"zk25", b"val").unwrap();
     wb.set_sequence_number(100).unwrap();
     wb.write().unwrap();
@@ -348,11 +352,11 @@ fn test_cached_write_batch_cleared_when_load_failed() {
         Duration::from_millis(100),
         Duration::from_millis(2000),
         || {
-            let core = engine.core().read();
+            let regions_map = engine.core().region_manager().regions_map().read();
             // all failed regions should be removed.
             [1, 2]
                 .into_iter()
-                .all(|i| core.range_manager().region_meta(i).is_none())
+                .all(|i| regions_map.region_meta(i).is_none())
         },
     );
 }
@@ -401,31 +405,35 @@ fn test_concurrency_between_delete_range_and_write_to_memory() {
     })
     .unwrap();
 
+    let cache_region1 = CacheRegion::from_region(&r1);
+    let cache_region2 = CacheRegion::from_region(&r2);
+    let cache_region3 = CacheRegion::from_region(&r3);
+
     engine.new_region(r1.clone());
     engine.new_region(r2.clone());
-    engine.load_region(r3.clone()).unwrap();
+    engine.load_region(cache_region3.clone()).unwrap();
 
     let engine_clone = engine.clone();
     let (range_prepared_tx, range_prepared_rx) = sync_channel(0);
-    let region1_clone = r1.clone();
-    let region2_clone = r2.clone();
-    let region3_clone = r3.clone();
+    let region1_clone = cache_region1.clone();
+    let region2_clone = cache_region2.clone();
+    let region3_clone = cache_region3.clone();
     let handle = std::thread::spawn(move || {
         let mut wb = engine_clone.write_batch();
-        wb.prepare_for_region(&region1_clone);
+        wb.prepare_for_region(region1_clone);
         wb.put_cf(CF_LOCK, b"zk02", b"val").unwrap();
         wb.put_cf(CF_LOCK, b"zk03", b"val").unwrap();
         wb.put_cf(CF_LOCK, b"zk04", b"val").unwrap();
         wb.set_sequence_number(100).unwrap();
 
         let mut wb2 = engine_clone.write_batch();
-        wb2.prepare_for_region(&region2_clone);
+        wb2.prepare_for_region(region2_clone);
         wb.put_cf(CF_LOCK, b"zk22", b"val").unwrap();
         wb.put_cf(CF_LOCK, b"zk23", b"val").unwrap();
         wb2.set_sequence_number(200).unwrap();
 
         let mut wb3 = engine_clone.write_batch();
-        wb3.prepare_for_region(&region3_clone);
+        wb3.prepare_for_region(region3_clone);
         wb3.set_sequence_number(300).unwrap();
 
         range_prepared_tx.send(true).unwrap();
@@ -441,12 +449,12 @@ fn test_concurrency_between_delete_range_and_write_to_memory() {
     // Now, three ranges are in write status, delete range will not be performed
     // until they leave the write status
 
-    engine.evict_region(&r1, EvictReason::AutoEvict);
-    engine.evict_region(&r2, EvictReason::AutoEvict);
+    engine.evict_region(&cache_region1, EvictReason::AutoEvict, None);
+    engine.evict_region(&cache_region2, EvictReason::AutoEvict, None);
 
     let verify_data = |r: &Region, expected_num: u64| {
-        let handle = engine.core().read().engine().cf_handle(CF_LOCK);
-        let (start, end) = encode_key_for_boundary_without_mvcc(&CacheRange::from_region(r));
+        let handle = engine.core().engine().cf_handle(CF_LOCK);
+        let (start, end) = encode_key_for_boundary_without_mvcc(&CacheRegion::from_region(r));
         let mut iter = handle.iterator();
         let guard = &epoch::pin();
         let mut count = 0;
@@ -489,7 +497,7 @@ fn test_concurrency_between_delete_range_and_write_to_memory() {
     snapshot_load_rx
         .recv_timeout(Duration::from_secs(5))
         .unwrap();
-    engine.evict_region(&r3, EvictReason::AutoEvict);
+    engine.evict_region(&CacheRegion::from_region(&r3), EvictReason::AutoEvict, None);
 
     fail::cfg("before_clear_ranges_in_being_written", "pause").unwrap();
     write_batch_consume_rx
@@ -520,17 +528,17 @@ fn test_double_delete_range_schedule() {
     )));
     engine.set_disk_engine(rocks_engine);
 
-    let r1 = new_region(1, b"k00".to_vec(), b"k10".to_vec());
-    let r2 = new_region(2, b"k20".to_vec(), b"k30".to_vec());
-    let r3 = new_region(3, b"k40".to_vec(), b"k50".to_vec());
+    let r1 = new_region(1, b"k00", b"k10");
+    let r2 = new_region(2, b"k20", b"k30");
+    let r3 = new_region(3, b"k40", b"k50");
     let (snapshot_load_tx, snapshot_load_rx) = sync_channel(0);
     let engine_clone = engine.clone();
-    let r = new_region(4, b"k00".to_vec(), b"k60".to_vec());
+    let r = new_region(4, b"k00", b"k60");
     fail::cfg_callback("on_snapshot_load_finished", move || {
         let _ = snapshot_load_tx.send(true);
         // evict all ranges. So the loading ranges will also be evicted and a delete
         // range task will be scheduled.
-        engine_clone.evict_region(&r, EvictReason::AutoEvict);
+        engine_clone.evict_region(&CacheRegion::from_region(&r), EvictReason::AutoEvict, None);
     })
     .unwrap();
 
@@ -542,18 +550,19 @@ fn test_double_delete_range_schedule() {
 
     engine.new_region(r1.clone());
     engine.new_region(r2.clone());
-    engine.load_region(r3.clone()).unwrap();
+    let cache_region3 = CacheRegion::from_region(&r3);
+    engine.load_region(cache_region3.clone()).unwrap();
 
     let snap1 = engine
-        .snapshot(r1.id, 0, CacheRange::from_region(&r1), 100, 100)
+        .snapshot(CacheRegion::from_region(&r1), 100, 100)
         .unwrap();
     let snap2 = engine
-        .snapshot(r2.id, 0, CacheRange::from_region(&r2), 100, 100)
+        .snapshot(CacheRegion::from_region(&r2), 100, 100)
         .unwrap();
 
     let mut wb = engine.write_batch();
     // prepare range to trigger loading
-    wb.prepare_for_region(&r3);
+    wb.prepare_for_region(CacheRegion::from_region(&r3));
     wb.set_sequence_number(10).unwrap();
     wb.write().unwrap();
 
@@ -615,17 +624,17 @@ fn test_load_with_gc() {
     .unwrap();
 
     let region = new_region(1, b"", b"z");
-    let range = CacheRange::from_region(&region);
-    engine.load_region(region.clone()).unwrap();
+    let range = CacheRegion::from_region(&region);
+    engine.load_region(range.clone()).unwrap();
     let mut wb = engine.write_batch();
-    wb.prepare_for_region(&region);
+    wb.prepare_for_region(range.clone());
     wb.set_sequence_number(100).unwrap();
     wb.write().unwrap();
 
     load_rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
     let expects = vec![(b"k1", 5), (b"k3", 7), (b"k3", 4)];
-    let write_handle = engine.core().read().engine().cf_handle(CF_WRITE);
+    let write_handle = engine.core().engine().cf_handle(CF_WRITE);
 
     let mut iter = write_handle.iterator();
     let guard = &epoch::pin();
@@ -640,10 +649,8 @@ fn test_load_with_gc() {
     }
 
     // ensure the safe point of the engine
-    engine
-        .snapshot(region.id, 0, range.clone(), 6, 100)
-        .unwrap_err();
-    engine.snapshot(region.id, 0, range, 7, 100).unwrap();
+    engine.snapshot(range.clone(), 6, 100).unwrap_err();
+    engine.snapshot(range, 7, 100).unwrap();
 }
 
 // test in-memory-engine can handle region split event after load region task
@@ -671,6 +678,7 @@ fn test_region_split_before_batch_loading_start() {
     fail::cfg("on_start_loading_region", "pause").unwrap();
 
     let region = new_region(1, b"k00", b"k30");
+    let cache_region = CacheRegion::from_region(&region);
 
     // write some data into rocksdb to trigger batch loading.
     for i in 0..30 {
@@ -686,21 +694,22 @@ fn test_region_split_before_batch_loading_start() {
         );
     }
 
-    engine.load_region(region.clone()).unwrap();
+    engine.load_region(cache_region.clone()).unwrap();
 
     // use write batch to trigger scheduling pending region loading task.
     let mut wb = engine.write_batch();
-    wb.prepare_for_region(&region);
+    wb.prepare_for_region(cache_region.clone());
     wb.set_sequence_number(10).unwrap();
-    wb.put(b"k00", b"val2").unwrap();
-    wb.put(b"k10", b"val2").unwrap();
-    wb.put(b"k20", b"val2").unwrap();
+    wb.put(b"zk00", b"val2").unwrap();
+    wb.put(b"zk10", b"val2").unwrap();
+    wb.put(b"zk20", b"val2").unwrap();
     wb.write().unwrap();
     assert_eq!(
         engine
             .core()
+            .region_manager()
+            .regions_map()
             .read()
-            .range_manager()
             .region_meta(1)
             .unwrap()
             .get_state(),
@@ -711,24 +720,21 @@ fn test_region_split_before_batch_loading_start() {
     rx.recv().unwrap();
 
     // split source region into multiple new regions.
-    let mut new_regions = vec![
-        new_region(1, b"k00", b"k10"),
-        new_region(2, b"k10", b"k20"),
-        new_region(3, b"k20", b"k30"),
+    let new_regions = vec![
+        CacheRegion::new(1, 2, b"zk00", b"zk10"),
+        CacheRegion::new(2, 2, b"zk10", b"zk20"),
+        CacheRegion::new(3, 2, b"zk20", b"zk30"),
     ];
-    for r in &mut new_regions {
-        r.mut_region_epoch().version = 2;
-    }
     let event = RegionEvent::Split {
-        source: region.clone(),
+        source: cache_region.clone(),
         new_regions: new_regions.clone(),
     };
     engine.on_region_event(event);
     {
-        let core = engine.core().read();
+        let regions_map = engine.core().region_manager().regions_map().read();
         for i in 1..=3 {
             assert_eq!(
-                core.range_manager().region_meta(i).unwrap().get_state(),
+                regions_map.region_meta(i).unwrap().get_state(),
                 RegionState::Loading
             );
         }
@@ -742,10 +748,61 @@ fn test_region_split_before_batch_loading_start() {
         Duration::from_millis(50),
         Duration::from_millis(2000),
         || {
-            let core = engine.core().read();
-            (1..=3).all(|i| {
-                core.range_manager().region_meta(i).unwrap().get_state() == RegionState::Active
-            })
+            let regions_map = engine.core().region_manager().regions_map().read();
+            (1..=3).all(|i| regions_map.region_meta(i).unwrap().get_state() == RegionState::Active)
         },
     );
+}
+
+#[test]
+fn test_cb_on_eviction() {
+    let mut config = RangeCacheEngineConfig::config_for_test();
+    config.gc_interval = ReadableDuration(Duration::from_secs(1));
+    let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
+        VersionTrack::new(config),
+    )));
+
+    let region = new_region(1, b"", b"z");
+    let cache_region = CacheRegion::from_region(&region);
+    engine.new_region(region.clone());
+
+    let mut wb = engine.write_batch();
+    wb.prepare_for_region(cache_region.clone());
+    wb.set_sequence_number(10).unwrap();
+    wb.put(b"a", b"val1").unwrap();
+    wb.put(b"b", b"val2").unwrap();
+    wb.put(b"c", b"val3").unwrap();
+    wb.write().unwrap();
+
+    fail::cfg("in_memory_engine_on_delete_regions", "pause").unwrap();
+
+    let (tx, rx) = mpsc::channel(1);
+    engine.evict_region(
+        &cache_region,
+        EvictReason::BecomeFollower,
+        Some(Box::new(move || {
+            Box::pin(async move {
+                let _ = tx.send(()).await;
+            })
+        })),
+    );
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let rx = Arc::new(Mutex::new(rx));
+    let rx_clone = rx.clone();
+    rt.block_on(async move {
+        timeout(Duration::from_secs(1), rx_clone.lock().await.recv())
+            .await
+            .unwrap_err()
+    });
+    fail::remove("in_memory_engine_on_delete_regions");
+    rt.block_on(async move { rx.lock().await.recv().await.unwrap() });
+
+    {
+        let regions_map = engine.core().region_manager().regions_map().read();
+        assert!(regions_map.region_meta(1).is_none());
+    }
 }

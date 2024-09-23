@@ -277,7 +277,8 @@ impl<E: KvEngine> Initializer<E> {
             for (key, lock) in key_locks {
                 // When `decode_lock`, only consider `Put` and `Delete`
                 if matches!(lock.lock_type, LockType::Put | LockType::Delete) {
-                    locks.insert(key, MiniLock::new(lock.ts, lock.txn_source));
+                    let mini_lock = MiniLock::new(lock.ts, lock.txn_source, lock.generation);
+                    locks.insert(key, mini_lock);
                 }
             }
             self.finish_scan_locks(region, locks);

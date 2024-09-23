@@ -53,9 +53,16 @@ impl<T: UnicodeVersion> Collator for CollatorUca<T> {
     }
 
     #[inline]
-    fn sort_compare(a: &[u8], b: &[u8]) -> Result<Ordering> {
-        let mut ca = T::preprocess(str::from_utf8(a)?).chars();
-        let mut cb = T::preprocess(str::from_utf8(b)?).chars();
+    fn sort_compare(a: &[u8], b: &[u8], force_no_pad: bool) -> Result<Ordering> {
+        let mut sa = str::from_utf8(a)?;
+        let mut sb = str::from_utf8(b)?;
+        if !force_no_pad {
+            sa = T::preprocess(sa);
+            sb = T::preprocess(sb);
+        }
+
+        let mut ca = sa.chars();
+        let mut cb = sb.chars();
         let mut an = 0;
         let mut bn = 0;
 

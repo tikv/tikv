@@ -1,13 +1,21 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fmt::{self, Debug, Formatter};
+use std::{
+    any::Any,
+    fmt::{self, Debug, Formatter},
+};
 
 use engine_traits::{
     is_data_cf, CfNamesExt, IterOptions, Iterable, KvEngine, Peekable, RangeCacheEngine,
     ReadOptions, Result, Snapshot, SnapshotMiscExt, CF_DEFAULT,
 };
+use raftstore::coprocessor::ObservedSnapshot;
+use range_cache_memory_engine::RangeCacheMemoryEngine;
 
-use crate::{db_vector::HybridDbVector, engine_iterator::HybridEngineIterator};
+use crate::{
+    db_vector::HybridDbVector, engine_iterator::HybridEngineIterator,
+    observer::RangeCacheSnapshotPin,
+};
 
 pub struct HybridEngineSnapshot<EK, EC>
 where
@@ -40,6 +48,27 @@ where
 
     pub fn disk_snap(&self) -> &EK::Snapshot {
         &self.disk_snap
+    }
+}
+
+impl<EK> HybridEngineSnapshot<EK, RangeCacheMemoryEngine>
+where
+    EK: KvEngine,
+{
+    pub fn from_observed_snapshot(
+        disk_snap: EK::Snapshot,
+        snap_pin: Option<Box<dyn ObservedSnapshot>>,
+    ) -> Self {
+        let mut range_cache_snap = None;
+        if let Some(snap_pin) = snap_pin {
+            let snap_any: Box<dyn Any> = snap_pin;
+            let range_cache_snap_pin: Box<RangeCacheSnapshotPin> = snap_any.downcast().unwrap();
+            range_cache_snap = range_cache_snap_pin.snap;
+        }
+        HybridEngineSnapshot {
+            disk_snap,
+            range_cache_snap,
+        }
     }
 }
 
@@ -132,8 +161,8 @@ where
 mod tests {
 
     use engine_traits::{
-        CacheRange, IterOptions, Iterable, Iterator, KvEngine, Mutable, SnapshotContext,
-        WriteBatch, WriteBatchExt, CF_DEFAULT,
+        CacheRegion, IterOptions, Iterable, Iterator, Mutable, SnapshotContext, WriteBatch,
+        WriteBatchExt, CF_DEFAULT,
     };
     use range_cache_memory_engine::{
         test_util::new_region, RangeCacheEngineConfig, RangeCacheStatus,
@@ -144,10 +173,10 @@ mod tests {
     #[test]
     fn test_iterator() {
         let region = new_region(1, b"", b"z");
-        let range = CacheRange::from_region(&region);
+        let cache_region = CacheRegion::from_region(&region);
         let mut iter_opt = IterOptions::default();
-        iter_opt.set_upper_bound(&range.end, 0);
-        iter_opt.set_lower_bound(&range.start, 0);
+        iter_opt.set_upper_bound(&cache_region.end, 0);
+        iter_opt.set_lower_bound(&cache_region.start, 0);
 
         let region_clone = region.clone();
         let (_path, hybrid_engine) = hybrid_engine_for_tests(
@@ -155,20 +184,17 @@ mod tests {
             RangeCacheEngineConfig::config_for_test(),
             move |memory_engine| {
                 memory_engine.new_region(region_clone);
-                {
-                    let mut core = memory_engine.core().write();
-                    core.mut_range_manager().set_safe_point(1, 5);
-                }
+                memory_engine.core().region_manager().set_safe_point(1, 5);
             },
         )
         .unwrap();
-        let snap = hybrid_engine.snapshot(None);
+        let snap = hybrid_engine.new_snapshot(None);
         {
             let mut iter = snap.iterator_opt(CF_DEFAULT, iter_opt.clone()).unwrap();
             assert!(!iter.seek_to_first().unwrap());
         }
         let mut write_batch = hybrid_engine.write_batch();
-        write_batch.prepare_for_region(&region);
+        write_batch.prepare_for_region(cache_region.clone());
         write_batch
             .cache_write_batch
             .set_range_cache_status(RangeCacheStatus::Cached);
@@ -176,12 +202,10 @@ mod tests {
         let seq = write_batch.write().unwrap();
         assert!(seq > 0);
         let ctx = SnapshotContext {
-            region_id: 1,
-            epoch_version: 0,
-            range: Some(CacheRange::from_region(&region)),
+            region: Some(cache_region.clone()),
             read_ts: 10,
         };
-        let snap = hybrid_engine.snapshot(Some(ctx));
+        let snap = hybrid_engine.new_snapshot(Some(ctx));
         {
             let mut iter = snap.iterator_opt(CF_DEFAULT, iter_opt).unwrap();
             assert!(iter.seek_to_first().unwrap());
