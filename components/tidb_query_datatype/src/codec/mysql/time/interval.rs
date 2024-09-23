@@ -136,7 +136,7 @@ lazy_static! {
     };
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Interval {
     month: i64,
     nano: i64,
@@ -210,7 +210,7 @@ impl Interval {
             }
             decimal_len = std::cmp::min(decimal_len, MAX_FSP as usize);
 
-            dv = match i64::from_str(&dv_pre[..6]) {
+            dv = match i64::from_str(&dv_pre[..MAX_FSP as usize]) {
                 Ok(val) => val,
                 Err(_) => {
                     if for_duration {
@@ -352,7 +352,7 @@ impl Interval {
 
         let matches: Vec<&str> = NUMERIC_REGEX.find_iter(input).map(|m| m.as_str()).collect();
 
-        if matches.len() > max_cnt {
+        if matches.len() > max_cnt || matches.len() > index as usize + 1 {
             if for_duration {
                 return Err(Error::incorrect_datetime_value(original_input));
             }
@@ -633,7 +633,7 @@ mod tests {
     }
 
     #[test]
-    fn test_bytes_ref_to_interval_string() -> Result<()> {
+    fn test_bytes_ref_to_interval_string() {
         use IntervalUnit::*;
         let cases = vec![
             (b"365" as &[u8], Microsecond, "365"),
@@ -665,12 +665,10 @@ mod tests {
         for (input, unit) in err_cases {
             assert!(input.to_interval_string(&mut ctx, unit, false, 0).is_err());
         }
-
-        Ok(())
     }
 
     #[test]
-    fn test_i64_to_interval_string() -> Result<()> {
+    fn test_i64_to_interval_string() {
         let cases = vec![
             (42i64, false, "42"),
             (-100i64, false, "-100"),
@@ -688,8 +686,6 @@ mod tests {
                 .unwrap();
             assert_eq!(result, expected);
         }
-
-        Ok(())
     }
 
     #[test]
@@ -718,8 +714,6 @@ mod tests {
     #[test]
     fn test_decimal_to_interval() {
         use IntervalUnit::*;
-        let mut ctx = EvalContext::default();
-
         let cases = vec![
             // Basic unit cases
             ("12.34", Year, "12"),
@@ -750,12 +744,13 @@ mod tests {
             ("-12.34", MinuteMicrosecond, "-00:12.34"),
             ("12.34", SecondMicrosecond, "12.34"),
             ("-12.34", SecondMicrosecond, "-12.34"),
-            // Rounding case 
+            // Rounding case
             ("12.99", Year, "13"),
             ("12.49", Year, "12"),
             ("-12.99", Year, "-13"),
         ];
 
+        let mut ctx = EvalContext::default();
         for (input, unit, expected) in cases {
             let decimal = Decimal::from_str(input).unwrap();
             let result = decimal
@@ -766,6 +761,1010 @@ mod tests {
                 "Failed for input: {}, unit: {:?}",
                 input, unit
             );
+        }
+    }
+
+    #[test]
+    fn test_interval_parse_from_str() {
+        use IntervalUnit::*;
+        let cases = vec![
+            (
+                "123456",
+                Microsecond,
+                Interval {
+                    month: 0,
+                    nano: 123456 * NANOS_PER_MICRO,
+                    fsp: 6,
+                },
+            ),
+            (
+                "-123456",
+                Microsecond,
+                Interval {
+                    month: 0,
+                    nano: -123456 * NANOS_PER_MICRO,
+                    fsp: 6,
+                },
+            ),
+            (
+                "2.123456",
+                Second,
+                Interval {
+                    month: 0,
+                    nano: 2 * NANOS_PER_SEC + 123456 * NANOS_PER_MICRO,
+                    fsp: 6,
+                },
+            ),
+            (
+                "-2.123456",
+                Second,
+                Interval {
+                    month: 0,
+                    nano: -2 * NANOS_PER_SEC - 123456 * NANOS_PER_MICRO,
+                    fsp: 6,
+                },
+            ),
+            (
+                "2.12345",
+                Second,
+                Interval {
+                    month: 0,
+                    nano: 2 * NANOS_PER_SEC + 123450 * NANOS_PER_MICRO,
+                    fsp: 5,
+                },
+            ),
+            (
+                "-2.12345",
+                Second,
+                Interval {
+                    month: 0,
+                    nano: -2 * NANOS_PER_SEC - 123450 * NANOS_PER_MICRO,
+                    fsp: 5,
+                },
+            ),
+            (
+                "2.1234567",
+                Second,
+                Interval {
+                    month: 0,
+                    nano: 2 * NANOS_PER_SEC + 123456 * NANOS_PER_MICRO,
+                    fsp: 6,
+                },
+            ),
+            (
+                "-2.1234567",
+                Second,
+                Interval {
+                    month: 0,
+                    nano: -2 * NANOS_PER_SEC - 123456 * NANOS_PER_MICRO,
+                    fsp: 6,
+                },
+            ),
+            (
+                "2.99",
+                Second,
+                Interval {
+                    month: 0,
+                    nano: 2 * NANOS_PER_SEC + 990000 * NANOS_PER_MICRO,
+                    fsp: 2,
+                },
+            ),
+            (
+                "-2.50000",
+                Second,
+                Interval {
+                    month: 0,
+                    nano: -2 * NANOS_PER_SEC - 500000 * NANOS_PER_MICRO,
+                    fsp: 5,
+                },
+            ),
+            (
+                "2.500000",
+                Minute,
+                Interval {
+                    month: 0,
+                    nano: 3 * NANOS_PER_MIN,
+                    fsp: 0,
+                },
+            ),
+            (
+                "-2.50000",
+                Minute,
+                Interval {
+                    month: 0,
+                    nano: -3 * NANOS_PER_MIN,
+                    fsp: 0,
+                },
+            ),
+            (
+                "99.9",
+                Minute,
+                Interval {
+                    month: 0,
+                    nano: 100 * NANOS_PER_MIN,
+                    fsp: 0,
+                },
+            ),
+            (
+                "-99.4",
+                Minute,
+                Interval {
+                    month: 0,
+                    nano: -99 * NANOS_PER_MIN,
+                    fsp: 0,
+                },
+            ),
+            (
+                "99.9",
+                Hour,
+                Interval {
+                    month: 0,
+                    nano: 100 * NANOS_PER_HOUR,
+                    fsp: 0,
+                },
+            ),
+            (
+                "-99.4",
+                Hour,
+                Interval {
+                    month: 0,
+                    nano: -99 * NANOS_PER_HOUR,
+                    fsp: 0,
+                },
+            ),
+            (
+                "99.9",
+                Day,
+                Interval {
+                    month: 0,
+                    nano: 100 * NANOS_PER_DAY,
+                    fsp: 0,
+                },
+            ),
+            (
+                "-99.4",
+                Day,
+                Interval {
+                    month: 0,
+                    nano: -99 * NANOS_PER_DAY,
+                    fsp: 0,
+                },
+            ),
+            (
+                "99.9",
+                Week,
+                Interval {
+                    month: 0,
+                    nano: 100 * NANOS_PER_DAY * 7,
+                    fsp: 0,
+                },
+            ),
+            (
+                "-99.4",
+                Week,
+                Interval {
+                    month: 0,
+                    nano: -99 * NANOS_PER_DAY * 7,
+                    fsp: 0,
+                },
+            ),
+            (
+                "99.9",
+                Month,
+                Interval {
+                    month: 100,
+                    nano: 0,
+                    fsp: 0,
+                },
+            ),
+            (
+                "-99.4",
+                Month,
+                Interval {
+                    month: -99,
+                    nano: 0,
+                    fsp: 0,
+                },
+            ),
+            (
+                "99.9",
+                Quarter,
+                Interval {
+                    month: 100 * 3,
+                    nano: 0,
+                    fsp: 0,
+                },
+            ),
+            (
+                "-99.4",
+                Quarter,
+                Interval {
+                    month: -99 * 3,
+                    nano: 0,
+                    fsp: 0,
+                },
+            ),
+            (
+                "99.9",
+                Year,
+                Interval {
+                    month: 100 * 12,
+                    nano: 0,
+                    fsp: 0,
+                },
+            ),
+            (
+                "-99.4",
+                Year,
+                Interval {
+                    month: -99 * 12,
+                    nano: 0,
+                    fsp: 0,
+                },
+            ),
+            // Compound unit cases
+            (
+                "123",
+                SecondMicrosecond,
+                Interval {
+                    month: 0,
+                    nano: 123000 * NANOS_PER_MICRO,
+                    fsp: 6,
+                },
+            ),
+            (
+                "-123",
+                SecondMicrosecond,
+                Interval {
+                    month: 0,
+                    nano: -123000 * NANOS_PER_MICRO,
+                    fsp: 6,
+                },
+            ),
+            (
+                "123.123",
+                SecondMicrosecond,
+                Interval {
+                    month: 0,
+                    nano: 123 * NANOS_PER_SEC + 123000 * NANOS_PER_MICRO,
+                    fsp: 6,
+                },
+            ),
+            (
+                "-123.123",
+                SecondMicrosecond,
+                Interval {
+                    month: 0,
+                    nano: -123 * NANOS_PER_SEC - 123000 * NANOS_PER_MICRO,
+                    fsp: 6,
+                },
+            ),
+            (
+                "123",
+                MinuteMicrosecond,
+                Interval {
+                    month: 0,
+                    nano: 123000 * NANOS_PER_MICRO,
+                    fsp: 6,
+                },
+            ),
+            (
+                "-123",
+                MinuteMicrosecond,
+                Interval {
+                    month: 0,
+                    nano: -123000 * NANOS_PER_MICRO,
+                    fsp: 6,
+                },
+            ),
+            (
+                "123.123",
+                MinuteMicrosecond,
+                Interval {
+                    month: 0,
+                    nano: 123 * NANOS_PER_SEC + 123000 * NANOS_PER_MICRO,
+                    fsp: 6,
+                },
+            ),
+            (
+                "-123.123",
+                MinuteMicrosecond,
+                Interval {
+                    month: 0,
+                    nano: -123 * NANOS_PER_SEC - 123000 * NANOS_PER_MICRO,
+                    fsp: 6,
+                },
+            ),
+            (
+                "2:123.123",
+                MinuteMicrosecond,
+                Interval {
+                    month: 0,
+                    nano: 2 * NANOS_PER_MIN + 123 * NANOS_PER_SEC + 123000 * NANOS_PER_MICRO,
+                    fsp: 6,
+                },
+            ),
+            (
+                "-62:123.123",
+                MinuteMicrosecond,
+                Interval {
+                    month: 0,
+                    nano: -62 * NANOS_PER_MIN - 123 * NANOS_PER_SEC - 123000 * NANOS_PER_MICRO,
+                    fsp: 6,
+                },
+            ),
+            (
+                "123",
+                MinuteSecond,
+                Interval {
+                    month: 0,
+                    nano: 123 * NANOS_PER_SEC,
+                    fsp: 0,
+                },
+            ),
+            (
+                "-123",
+                MinuteSecond,
+                Interval {
+                    month: 0,
+                    nano: -123 * NANOS_PER_SEC,
+                    fsp: 0,
+                },
+            ),
+            (
+                "2:123",
+                MinuteSecond,
+                Interval {
+                    month: 0,
+                    nano: 2 * NANOS_PER_MIN + 123 * NANOS_PER_SEC,
+                    fsp: 0,
+                },
+            ),
+            (
+                "-2:123",
+                MinuteSecond,
+                Interval {
+                    month: 0,
+                    nano: -2 * NANOS_PER_MIN - 123 * NANOS_PER_SEC,
+                    fsp: 0,
+                },
+            ),
+            (
+                "123",
+                HourMicrosecond,
+                Interval {
+                    month: 0,
+                    nano: 123000 * NANOS_PER_MICRO,
+                    fsp: 6,
+                },
+            ),
+            (
+                "-123",
+                HourMicrosecond,
+                Interval {
+                    month: 0,
+                    nano: -123000 * NANOS_PER_MICRO,
+                    fsp: 6,
+                },
+            ),
+            (
+                "123.123",
+                HourMicrosecond,
+                Interval {
+                    month: 0,
+                    nano: 123 * NANOS_PER_SEC + 123000 * NANOS_PER_MICRO,
+                    fsp: 6,
+                },
+            ),
+            (
+                "-123.123",
+                HourMicrosecond,
+                Interval {
+                    month: 0,
+                    nano: -123 * NANOS_PER_SEC - 123000 * NANOS_PER_MICRO,
+                    fsp: 6,
+                },
+            ),
+            (
+                "2:123.123",
+                HourMicrosecond,
+                Interval {
+                    month: 0,
+                    nano: 2 * NANOS_PER_MIN + 123 * NANOS_PER_SEC + 123000 * NANOS_PER_MICRO,
+                    fsp: 6,
+                },
+            ),
+            (
+                "-62:123.123",
+                HourMicrosecond,
+                Interval {
+                    month: 0,
+                    nano: -62 * NANOS_PER_MIN - 123 * NANOS_PER_SEC - 123000 * NANOS_PER_MICRO,
+                    fsp: 6,
+                },
+            ),
+            (
+                "12:2:123.123",
+                HourMicrosecond,
+                Interval {
+                    month: 0,
+                    nano: 12 * NANOS_PER_HOUR
+                        + 2 * NANOS_PER_MIN
+                        + 123 * NANOS_PER_SEC
+                        + 123000 * NANOS_PER_MICRO,
+                    fsp: 6,
+                },
+            ),
+            (
+                "-2:62:123.123",
+                HourMicrosecond,
+                Interval {
+                    month: 0,
+                    nano: -2 * NANOS_PER_HOUR
+                        - 62 * NANOS_PER_MIN
+                        - 123 * NANOS_PER_SEC
+                        - 123000 * NANOS_PER_MICRO,
+                    fsp: 6,
+                },
+            ),
+            (
+                "123",
+                HourSecond,
+                Interval {
+                    month: 0,
+                    nano: 123 * NANOS_PER_SEC,
+                    fsp: 0,
+                },
+            ),
+            (
+                "-123",
+                HourSecond,
+                Interval {
+                    month: 0,
+                    nano: -123 * NANOS_PER_SEC,
+                    fsp: 0,
+                },
+            ),
+            (
+                "2:123",
+                HourSecond,
+                Interval {
+                    month: 0,
+                    nano: 2 * NANOS_PER_MIN + 123 * NANOS_PER_SEC,
+                    fsp: 0,
+                },
+            ),
+            (
+                "-2:123",
+                HourSecond,
+                Interval {
+                    month: 0,
+                    nano: -2 * NANOS_PER_MIN - 123 * NANOS_PER_SEC,
+                    fsp: 0,
+                },
+            ),
+            (
+                "9:62:123",
+                HourSecond,
+                Interval {
+                    month: 0,
+                    nano: 9 * NANOS_PER_HOUR + 62 * NANOS_PER_MIN + 123 * NANOS_PER_SEC,
+                    fsp: 0,
+                },
+            ),
+            (
+                "-55:62:123",
+                HourSecond,
+                Interval {
+                    month: 0,
+                    nano: -55 * NANOS_PER_HOUR - 62 * NANOS_PER_MIN - 123 * NANOS_PER_SEC,
+                    fsp: 0,
+                },
+            ),
+            (
+                "123",
+                HourMinute,
+                Interval {
+                    month: 0,
+                    nano: 123 * NANOS_PER_MIN,
+                    fsp: 0,
+                },
+            ),
+            (
+                "-123",
+                HourMinute,
+                Interval {
+                    month: 0,
+                    nano: -123 * NANOS_PER_MIN,
+                    fsp: 0,
+                },
+            ),
+            (
+                "2:123",
+                HourMinute,
+                Interval {
+                    month: 0,
+                    nano: 2 * NANOS_PER_HOUR + 123 * NANOS_PER_MIN,
+                    fsp: 0,
+                },
+            ),
+            (
+                "-88:123",
+                HourMinute,
+                Interval {
+                    month: 0,
+                    nano: -88 * NANOS_PER_HOUR - 123 * NANOS_PER_MIN,
+                    fsp: 0,
+                },
+            ),
+            (
+                "123",
+                DayMicrosecond,
+                Interval {
+                    month: 0,
+                    nano: 123000 * NANOS_PER_MICRO,
+                    fsp: 6,
+                },
+            ),
+            (
+                "-123",
+                DayMicrosecond,
+                Interval {
+                    month: 0,
+                    nano: -123000 * NANOS_PER_MICRO,
+                    fsp: 6,
+                },
+            ),
+            (
+                "123.123",
+                DayMicrosecond,
+                Interval {
+                    month: 0,
+                    nano: 123 * NANOS_PER_SEC + 123000 * NANOS_PER_MICRO,
+                    fsp: 6,
+                },
+            ),
+            (
+                "-123.123",
+                DayMicrosecond,
+                Interval {
+                    month: 0,
+                    nano: -123 * NANOS_PER_SEC - 123000 * NANOS_PER_MICRO,
+                    fsp: 6,
+                },
+            ),
+            (
+                "2:123.123",
+                DayMicrosecond,
+                Interval {
+                    month: 0,
+                    nano: 2 * NANOS_PER_MIN + 123 * NANOS_PER_SEC + 123000 * NANOS_PER_MICRO,
+                    fsp: 6,
+                },
+            ),
+            (
+                "-62:123.123",
+                DayMicrosecond,
+                Interval {
+                    month: 0,
+                    nano: -62 * NANOS_PER_MIN - 123 * NANOS_PER_SEC - 123000 * NANOS_PER_MICRO,
+                    fsp: 6,
+                },
+            ),
+            (
+                "12:2:123.123",
+                DayMicrosecond,
+                Interval {
+                    month: 0,
+                    nano: 12 * NANOS_PER_HOUR
+                        + 2 * NANOS_PER_MIN
+                        + 123 * NANOS_PER_SEC
+                        + 123000 * NANOS_PER_MICRO,
+                    fsp: 6,
+                },
+            ),
+            (
+                "-2:62:123.123",
+                DayMicrosecond,
+                Interval {
+                    month: 0,
+                    nano: -2 * NANOS_PER_HOUR
+                        - 62 * NANOS_PER_MIN
+                        - 123 * NANOS_PER_SEC
+                        - 123000 * NANOS_PER_MICRO,
+                    fsp: 6,
+                },
+            ),
+            (
+                "9 12:2:123.123",
+                DayMicrosecond,
+                Interval {
+                    month: 0,
+                    nano: 9 * NANOS_PER_DAY
+                        + 12 * NANOS_PER_HOUR
+                        + 2 * NANOS_PER_MIN
+                        + 123 * NANOS_PER_SEC
+                        + 123000 * NANOS_PER_MICRO,
+                    fsp: 6,
+                },
+            ),
+            (
+                "-77 2:62:123.123",
+                DayMicrosecond,
+                Interval {
+                    month: 0,
+                    nano: -77 * NANOS_PER_DAY
+                        - 2 * NANOS_PER_HOUR
+                        - 62 * NANOS_PER_MIN
+                        - 123 * NANOS_PER_SEC
+                        - 123000 * NANOS_PER_MICRO,
+                    fsp: 6,
+                },
+            ),
+            (
+                "123",
+                DaySecond,
+                Interval {
+                    month: 0,
+                    nano: 123 * NANOS_PER_SEC,
+                    fsp: 0,
+                },
+            ),
+            (
+                "-123",
+                DaySecond,
+                Interval {
+                    month: 0,
+                    nano: -123 * NANOS_PER_SEC,
+                    fsp: 0,
+                },
+            ),
+            (
+                "2:123",
+                DaySecond,
+                Interval {
+                    month: 0,
+                    nano: 2 * NANOS_PER_MIN + 123 * NANOS_PER_SEC,
+                    fsp: 0,
+                },
+            ),
+            (
+                "-2:123",
+                DaySecond,
+                Interval {
+                    month: 0,
+                    nano: -2 * NANOS_PER_MIN - 123 * NANOS_PER_SEC,
+                    fsp: 0,
+                },
+            ),
+            (
+                "9:62:123",
+                DaySecond,
+                Interval {
+                    month: 0,
+                    nano: 9 * NANOS_PER_HOUR + 62 * NANOS_PER_MIN + 123 * NANOS_PER_SEC,
+                    fsp: 0,
+                },
+            ),
+            (
+                "-55:62:123",
+                DaySecond,
+                Interval {
+                    month: 0,
+                    nano: -55 * NANOS_PER_HOUR - 62 * NANOS_PER_MIN - 123 * NANOS_PER_SEC,
+                    fsp: 0,
+                },
+            ),
+            (
+                "1 9:62:123",
+                DaySecond,
+                Interval {
+                    month: 0,
+                    nano: NANOS_PER_DAY
+                        + 9 * NANOS_PER_HOUR
+                        + 62 * NANOS_PER_MIN
+                        + 123 * NANOS_PER_SEC,
+                    fsp: 0,
+                },
+            ),
+            (
+                "-3 55:62:123",
+                DaySecond,
+                Interval {
+                    month: 0,
+                    nano: -3 * NANOS_PER_DAY
+                        - 55 * NANOS_PER_HOUR
+                        - 62 * NANOS_PER_MIN
+                        - 123 * NANOS_PER_SEC,
+                    fsp: 0,
+                },
+            ),
+            (
+                "123",
+                DayMinute,
+                Interval {
+                    month: 0,
+                    nano: 123 * NANOS_PER_MIN,
+                    fsp: 0,
+                },
+            ),
+            (
+                "-123",
+                DayMinute,
+                Interval {
+                    month: 0,
+                    nano: -123 * NANOS_PER_MIN,
+                    fsp: 0,
+                },
+            ),
+            (
+                "2:123",
+                DayMinute,
+                Interval {
+                    month: 0,
+                    nano: 2 * NANOS_PER_HOUR + 123 * NANOS_PER_MIN,
+                    fsp: 0,
+                },
+            ),
+            (
+                "-88:123",
+                DayMinute,
+                Interval {
+                    month: 0,
+                    nano: -88 * NANOS_PER_HOUR - 123 * NANOS_PER_MIN,
+                    fsp: 0,
+                },
+            ),
+            (
+                "08 2:123",
+                DayMinute,
+                Interval {
+                    month: 0,
+                    nano: 8 * NANOS_PER_DAY + 2 * NANOS_PER_HOUR + 123 * NANOS_PER_MIN,
+                    fsp: 0,
+                },
+            ),
+            (
+                "-70 88:123",
+                DayMinute,
+                Interval {
+                    month: 0,
+                    nano: -70 * NANOS_PER_DAY - 88 * NANOS_PER_HOUR - 123 * NANOS_PER_MIN,
+                    fsp: 0,
+                },
+            ),
+            (
+                "123",
+                DayHour,
+                Interval {
+                    month: 0,
+                    nano: 123 * NANOS_PER_HOUR,
+                    fsp: 0,
+                },
+            ),
+            (
+                "-123",
+                DayHour,
+                Interval {
+                    month: 0,
+                    nano: -123 * NANOS_PER_HOUR,
+                    fsp: 0,
+                },
+            ),
+            (
+                "66 123",
+                DayHour,
+                Interval {
+                    month: 0,
+                    nano: 66 * NANOS_PER_DAY + 123 * NANOS_PER_HOUR,
+                    fsp: 0,
+                },
+            ),
+            (
+                "-77 123",
+                DayHour,
+                Interval {
+                    month: 0,
+                    nano: -77 * NANOS_PER_DAY - 123 * NANOS_PER_HOUR,
+                    fsp: 0,
+                },
+            ),
+            (
+                "123",
+                YearMonth,
+                Interval {
+                    month: 123,
+                    nano: 0,
+                    fsp: 0,
+                },
+            ),
+            (
+                "-123",
+                YearMonth,
+                Interval {
+                    month: -123,
+                    nano: 0,
+                    fsp: 0,
+                },
+            ),
+            (
+                "99 123",
+                YearMonth,
+                Interval {
+                    month: 99 * 12 + 123,
+                    nano: 0,
+                    fsp: 0,
+                },
+            ),
+            (
+                "-7 123",
+                YearMonth,
+                Interval {
+                    month: -7 * 12 - 123,
+                    nano: 0,
+                    fsp: 0,
+                },
+            ),
+        ];
+        let mut ctx = EvalContext::default();
+        for (input, unit, expected) in cases {
+            let result = Interval::parse_from_str(&mut ctx, &unit, input).unwrap();
+            assert_eq!(
+                result, expected,
+                "Failed for input: {}, unit: {:?}",
+                input, unit
+            );
+        }
+
+        let err_cases = vec![
+            ("12:12.123", SecondMicrosecond),
+            ("20:12:12.123", MinuteMicrosecond),
+            ("12:12:12", MinuteSecond),
+            ("1 12:12:12.11", HourMicrosecond),
+            ("12:12:12.123", HourSecond),
+            ("12:12:12", HourMinute),
+            ("3 2 12:12:12.123", DayMicrosecond),
+            ("3 12:12:12.123", DaySecond),
+            ("3 12:12:12", DayMinute),
+            ("3 12:12", DayHour),
+            ("99 123:123", YearMonth),
+        ];
+        for (input, unit) in err_cases {
+            let result = Interval::parse_from_str(&mut ctx, &unit, input).unwrap();
+            assert_eq!(
+                result,
+                Interval {
+                    month: 0,
+                    nano: 0,
+                    fsp: DEFAULT_FSP
+                },
+                "Failed for input: {}, unit: {:?}",
+                input,
+                unit
+            );
+        }
+    }
+
+    #[test]
+    fn test_interval_extrac_duration() {
+        use IntervalUnit::*;
+        let cases = vec![
+            (
+                "123456",
+                Microsecond,
+                Duration::from_nanos(123456 * NANOS_PER_MICRO, 6),
+            ),
+            (
+                "-123456",
+                Microsecond,
+                Duration::from_nanos(-123456 * NANOS_PER_MICRO, 6),
+            ),
+            (
+                "2.123456",
+                Second,
+                Duration::from_nanos(2 * NANOS_PER_SEC + 123456 * NANOS_PER_MICRO, 6),
+            ),
+            (
+                "-2.123456",
+                Second,
+                Duration::from_nanos(-2 * NANOS_PER_SEC - 123456 * NANOS_PER_MICRO, 6),
+            ),
+            (
+                "2.12345",
+                Second,
+                Duration::from_nanos(2 * NANOS_PER_SEC + 123450 * NANOS_PER_MICRO, 5),
+            ),
+            (
+                "-2.12345",
+                Second,
+                Duration::from_nanos(-2 * NANOS_PER_SEC - 123450 * NANOS_PER_MICRO, 5),
+            ),
+            (
+                "2.1234567",
+                Second,
+                Duration::from_nanos(2 * NANOS_PER_SEC + 123456 * NANOS_PER_MICRO, 6),
+            ),
+            (
+                "-2.1234567",
+                Second,
+                Duration::from_nanos(-2 * NANOS_PER_SEC - 123456 * NANOS_PER_MICRO, 6),
+            ),
+            (
+                "2.99",
+                Second,
+                Duration::from_nanos(2 * NANOS_PER_SEC + 990000 * NANOS_PER_MICRO, 2),
+            ),
+            (
+                "-2.50000",
+                Second,
+                Duration::from_nanos(-2 * NANOS_PER_SEC - 500000 * NANOS_PER_MICRO, 5),
+            ),
+            ("99", Minute, Duration::from_nanos(99 * NANOS_PER_MIN, 0)),
+            ("-99", Minute, Duration::from_nanos(-99 * NANOS_PER_MIN, 0)),
+            ("30", Day, Duration::from_nanos(30 * NANOS_PER_DAY, 0)),
+            ("-30", Day, Duration::from_nanos(-30 * NANOS_PER_DAY, 0)),
+            ("2", Week, Duration::from_nanos(2 * NANOS_PER_DAY * 7, 0)),
+            ("-2", Week, Duration::from_nanos(-2 * NANOS_PER_DAY * 7, 0)),
+            ("1", Month, Duration::from_nanos(1 * 30 * NANOS_PER_DAY, 0)),
+            (
+                "-1",
+                Month,
+                Duration::from_nanos(-1 * 30 * NANOS_PER_DAY, 0),
+            ),
+            (
+                "29 12:23:36.1234",
+                DayMicrosecond,
+                Duration::from_nanos(
+                    29 * NANOS_PER_DAY
+                        + 12 * NANOS_PER_HOUR
+                        + 23 * NANOS_PER_MIN
+                        + 36 * NANOS_PER_SEC
+                        + 123400 * NANOS_PER_MICRO,
+                    6,
+                ),
+            ),
+            (
+                "-29 12:23:36.1234",
+                DayMicrosecond,
+                Duration::from_nanos(
+                    -29 * NANOS_PER_DAY
+                        - 12 * NANOS_PER_HOUR
+                        - 23 * NANOS_PER_MIN
+                        - 36 * NANOS_PER_SEC
+                        - 123400 * NANOS_PER_MICRO,
+                    6,
+                ),
+            ),
+        ];
+        let mut ctx = EvalContext::default();
+        for (input, unit, expected) in cases {
+            let result = Interval::extract_duration(&mut ctx, &unit, input).unwrap();
+            assert_eq!(
+                result,
+                expected.unwrap(),
+                "Failed for input: {}, unit: {:?}",
+                input,
+                unit
+            );
+        }
+        let err_cases = vec![
+            ("2.500000", Minute),
+            ("-2.50000", Minute),
+            ("99.9", Hour),
+            ("-99.4", Hour),
+            ("35", Day),
+            ("-35", Day),
+            ("2", Month),
+            ("-2", Month),
+            ("99", Quarter),
+            ("-99", Quarter),
+            ("99", Year),
+            ("-99", Year),
+            ("-34 23:59:59.1234", DayMicrosecond),
+        ];
+        for (input, unit) in err_cases {
+            let result = Interval::extract_duration(&mut ctx, &unit, input);
+            assert!(result.is_err());
         }
     }
 }

@@ -2181,7 +2181,12 @@ mod tests {
 
     use super::*;
     use crate::{
-        codec::mysql::{MAX_FSP, UNSPECIFIED_FSP},
+        codec::mysql::{
+            duration::{
+                NANOS_PER_DAY, NANOS_PER_HOUR, NANOS_PER_MICRO, NANOS_PER_MIN, NANOS_PER_SEC,
+            },
+            MAX_FSP, UNSPECIFIED_FSP,
+        },
         expr::EvalConfig,
     };
 
@@ -3477,5 +3482,180 @@ mod tests {
                 get
             );
         }
+    }
+
+    #[test]
+    fn test_add_months() {
+        // (input_year, input_month, input_day, add_months, expected_year,
+        // expected_month, expected_day, should_err)
+        let cases = vec![
+            // Basic
+            (2023, 1, 31, 1, 2023, 2, 28, false),
+            (2024, 1, 31, 1, 2024, 2, 29, false),
+            (2023, 5, 15, 2, 2023, 7, 15, false),
+            (2023, 7, 30, 1, 2023, 8, 30, false),
+            (2023, 8, 31, 1, 2023, 9, 30, false),
+            // Leap year
+            (2024, 1, 31, 1, 2024, 2, 29, false),
+            (2024, 2, 29, 12, 2025, 2, 28, false),
+            // Crossing over a year boundary
+            (2023, 12, 15, 1, 2024, 1, 15, false),
+            (2022, 12, 31, 2, 2023, 2, 28, false),
+            // Decreasing months
+            (2023, 3, 15, -3, 2022, 12, 15, false),
+            (2023, 1, 31, -1, 2022, 12, 31, false),
+            // Crossing a century (non-leap year to leap year)
+            (1999, 12, 31, 1, 2000, 1, 31, false),
+            (2000, 2, 29, 12, 2001, 2, 28, false),
+            // Speical case
+            (1, 1, 1, -1, 0, 0, 0, false),
+            (1, 2, 1, -2, 0, 0, 0, false),
+            (0, 1, 1, 0, 0, 0, 0, false),
+            // Overflow
+            (0, 1, 1, -1, 0, 0, 0, true),
+            (9999, 12, 31, 1, 0, 0, 0, true),
+        ];
+
+        // Iterate over each test case and run the test
+        for case in cases {
+            let (
+                input_year,
+                input_month,
+                input_day,
+                add_months,
+                expected_year,
+                expected_month,
+                expected_day,
+                should_err,
+            ) = case;
+
+            let mut time = Time::default();
+            time.set_year(input_year);
+            time.set_month(input_month);
+            time.set_day(input_day);
+
+            let result = time.add_months(add_months);
+            if should_err {
+                assert!(
+                    result.is_err(),
+                    "Test case with input: {:?} should have error",
+                    case
+                );
+            } else {
+                assert!(
+                    result.is_ok(),
+                    "Test case with input: {:?} should not have error",
+                    case
+                );
+                assert_eq!(
+                    time.get_year(),
+                    expected_year,
+                    "Year mismatch for input: {:?}",
+                    case
+                );
+                assert_eq!(
+                    time.get_month(),
+                    expected_month,
+                    "Month mismatch for input: {:?}",
+                    case
+                );
+                assert_eq!(
+                    time.get_day(),
+                    expected_day,
+                    "Day mismatch for input: {:?}",
+                    case
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_add_nanos() -> Result<()> {
+        // (initial time, nanos to add, expected time, should_overflow)
+        let cases = vec![
+            (
+                "2023-01-01 00:00:00",
+                2 * NANOS_PER_SEC,
+                "2023-01-01 00:00:02.000000",
+                false,
+            ),
+            (
+                "2023-01-01 00:00:00",
+                -1 * NANOS_PER_SEC,
+                "2022-12-31 23:59:59.000000",
+                false,
+            ),
+            (
+                "2023-12-31 23:59:59",
+                NANOS_PER_SEC,
+                "2024-01-01 00:00:00.000000",
+                false,
+            ),
+            (
+                "2023-01-01 00:00:00",
+                5 * NANOS_PER_DAY,
+                "2023-01-06 00:00:00.000000",
+                false,
+            ),
+            (
+                "2024-02-27 00:00:00",
+                3 * NANOS_PER_DAY
+                    + 12 * NANOS_PER_HOUR
+                    + 3 * NANOS_PER_MIN
+                    + 55 * NANOS_PER_SEC
+                    + 123456 * NANOS_PER_MICRO,
+                "2024-03-01 12:03:55.123456",
+                false,
+            ),
+            (
+                "0001-01-01 00:00:00",
+                -2 * NANOS_PER_DAY,
+                "0000-00-00 00:00:00.000000",
+                false,
+            ),
+            (
+                "2023-01-01 00:00:00",
+                10000 * NANOS_PER_DAY,
+                "2050-05-19 00:00:00.000000",
+                false,
+            ),
+            (
+                "0001-01-01 00:00:00",
+                -NANOS_PER_DAY,
+                "0000-00-00 00:00:00.000000",
+                false,
+            ),
+            ("0000-01-01 00:00:00", -2 * NANOS_PER_DAY, "", true),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for case in cases {
+            let (input, nanos, expected, should_overflow) = case;
+            let time = Time::parse_datetime(&mut ctx, input, 6, false)?;
+            let result = time.add_nanos(&mut ctx, nanos);
+            if should_overflow {
+                assert!(
+                    result.is_err(),
+                    "Test case with input: {:?} should have error, result {}",
+                    case,
+                    result.unwrap().to_string()
+                );
+            } else {
+                assert!(
+                    result.is_ok(),
+                    "Test case with input: {:?} should not have error, result {:?}",
+                    case,
+                    result
+                );
+                assert_eq!(
+                    expected,
+                    result.unwrap().to_string(),
+                    "result mismatch for input: {:?}",
+                    case
+                );
+            }
+        }
+
+        Ok(())
     }
 }
