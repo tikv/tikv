@@ -5,6 +5,7 @@
 #![allow(internal_features)]
 #![feature(core_intrinsics)]
 #![feature(slice_pattern)]
+#![feature(trait_alias)]
 
 use std::{sync::Arc, time::Duration};
 
@@ -84,7 +85,7 @@ impl Default for RangeCacheEngineConfig {
             soft_limit_threshold: None,
             hard_limit_threshold: None,
             expected_region_size: None,
-            mvcc_amplification_threshold: 10,
+            mvcc_amplification_threshold: 100,
             cross_check_interval: ReadableDuration(Duration::from_secs(0)),
         }
     }

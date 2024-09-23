@@ -16,12 +16,12 @@ use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
-use engine_traits::{Engines, MiscExt, SnapshotContext};
+use engine_traits::{Engines, MiscExt};
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
 use health_controller::HealthController;
 use hybrid_engine::observer::{
-    EvictionObserver, HybridSnapshotObserver, RegionCacheWriteBatchObserver,
+    HybridSnapshotObserver, LoadEvictionObserver, RegionCacheWriteBatchObserver,
 };
 use kvproto::{
     deadlock::create_deadlock,
@@ -37,7 +37,7 @@ use pd_client::PdClient;
 use raftstore::{
     coprocessor::{CoprocessorHost, RegionInfoAccessor},
     errors::Error as RaftError,
-    router::{CdcRaftRouter, LocalReadRouter, RaftStoreRouter, ServerRaftStoreRouter},
+    router::{CdcRaftRouter, LocalReadRouter, RaftStoreRouter, ReadContext, ServerRaftStoreRouter},
     store::{
         fsm::{store::StoreMeta, ApplyRouter, RaftBatchSystem, RaftRouter},
         msg::RaftCmdExtraOpts,
@@ -342,7 +342,7 @@ impl ServerCluster {
                 Some(Arc::new(region_info_accessor.clone())),
             );
             // Eviction observer
-            let observer = EvictionObserver::new(Arc::new(in_memory_engine.clone()));
+            let observer = LoadEvictionObserver::new(Arc::new(in_memory_engine.clone()));
             observer.register_to(&mut coprocessor_host);
             // Write batch observer
             let write_batch_observer =
@@ -370,7 +370,6 @@ impl ServerCluster {
         let mut raft_kv = RaftKv::new(
             sim_router.clone(),
             engines.kv.clone(),
-            in_memory_engine,
             region_info_accessor.region_leaders(),
         );
 
@@ -522,6 +521,7 @@ impl ServerCluster {
             .max_per_file_size(cfg.raft_store.max_snapshot_file_raw_size.0)
             .enable_multi_snapshot_files(true)
             .enable_receive_tablet_snapshot(cfg.raft_store.enable_v2_compatible_learner)
+            .min_ingest_snapshot_limit(cfg.server.snap_min_ingest_size)
             .build(tmp_str);
         self.snap_mgrs.insert(node_id, snap_mgr.clone());
         let server_cfg = Arc::new(VersionTrack::new(cfg.server.clone()));
@@ -812,7 +812,6 @@ impl Simulator for ServerCluster {
 
     fn async_read(
         &mut self,
-        snap_ctx: Option<SnapshotContext>,
         node_id: u64,
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
@@ -826,9 +825,8 @@ impl Simulator for ServerCluster {
                 cb.invoke_with_response(resp);
             }
             Some(meta) => {
-                meta.sim_router
-                    .read(snap_ctx, batch_id, request, cb)
-                    .unwrap();
+                let read_ctx = ReadContext::new(batch_id, None);
+                meta.sim_router.read(read_ctx, request, cb).unwrap();
             }
         };
     }

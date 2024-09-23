@@ -72,11 +72,13 @@ impl CrossChecker {
             false,
         );
         let mut safe_point = {
-            let core = self.memory_engine.core().read();
-            let Some(s) = core
-                .range_manager
-                .region_meta(range_snap.snapshot_meta().region.id)
-            else {
+            let region_maps = self
+                .memory_engine
+                .core()
+                .region_manager()
+                .regions_map()
+                .read();
+            let Some(s) = region_maps.region_meta(range_snap.snapshot_meta().region.id) else {
                 return;
             };
             s.safe_point()
@@ -424,9 +426,9 @@ impl CrossChecker {
                             if disk_mvcc < read_ts {
                                 // get safe point again as it may be updated
                                 *safe_point = {
-                                    let core = engine.core().read();
-                                    let meta =
-                                        core.range_manager().region_meta(cached_region.id).unwrap();
+                                    let region_maps =
+                                        engine.core().region_manager().regions_map().read();
+                                    let meta = region_maps.region_meta(cached_region.id).unwrap();
                                     // region might have split
                                     if meta.get_region() != cached_region {
                                         return false;
@@ -484,8 +486,8 @@ impl CrossChecker {
             } else {
                 if disk_mvcc > *safe_point {
                     *safe_point = {
-                        let core = engine.core().read();
-                        let meta = core.range_manager().region_meta(cached_region.id).unwrap();
+                        let region_maps = engine.core().region_manager().regions_map().read();
+                        let meta = region_maps.region_meta(cached_region.id).unwrap();
                         // region might have split
                         if meta.get_region() != cached_region {
                             return false;
@@ -577,8 +579,8 @@ impl CrossChecker {
             // and check again.
             if disk_mvcc > *safe_point {
                 *safe_point = {
-                    let core = engine.core().read();
-                    let meta = core.range_manager().region_meta(cached_region.id).unwrap();
+                    let region_maps = engine.core().region_manager().regions_map().read();
+                    let meta = region_maps.region_meta(cached_region.id).unwrap();
                     // region might have split
                     if meta.get_region() != cached_region {
                         return false;
@@ -677,8 +679,8 @@ impl CrossChecker {
             // legally.
             if prev_key_info.last_mvcc_version_before_safe_point == 0 {
                 *safe_point = {
-                    let core = engine.core().read();
-                    let meta = core.range_manager().region_meta(cached_region.id).unwrap();
+                    let region_maps = engine.core().region_manager().regions_map().read();
+                    let meta = region_maps.region_meta(cached_region.id).unwrap();
                     // region might have split
                     if meta.get_region() != cached_region {
                         return false;
@@ -773,8 +775,13 @@ impl Runnable for CrossChecker {
 
     fn run(&mut self, _: Self::Task) {
         let active_regions: Vec<_> = {
-            let core = self.memory_engine.core().read();
-            core.range_manager
+            let regions_map = self
+                .memory_engine
+                .core()
+                .region_manager()
+                .regions_map()
+                .read();
+            regions_map
                 .regions()
                 .iter()
                 .filter_map(|(_, meta)| {
@@ -787,7 +794,7 @@ impl Runnable for CrossChecker {
                 .collect()
         };
 
-        let snap = self.rocks_engine.snapshot(None);
+        let snap = self.rocks_engine.snapshot();
 
         let tso_timeout = Duration::from_secs(5);
         let now = match block_on_timeout(self.pd_client.get_tso(), tso_timeout) {
@@ -965,8 +972,9 @@ mod tests {
         engine.set_disk_engine(rocks_engine.clone());
         engine
             .core()
+            .region_manager()
+            .regions_map()
             .write()
-            .mut_range_manager()
             .mut_region_meta(region.id)
             .unwrap()
             .set_safe_point(6);
@@ -997,7 +1005,7 @@ mod tests {
             disk_wb.write().unwrap();
 
             let snap = engine.snapshot(cache_region.clone(), 10, 10000).unwrap();
-            let disk_snap = rocks_engine.snapshot(None);
+            let disk_snap = rocks_engine.snapshot();
 
             cross_checker.cross_check_range(&snap, &disk_snap);
         }
