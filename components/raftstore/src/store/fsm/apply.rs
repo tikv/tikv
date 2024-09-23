@@ -3810,6 +3810,11 @@ where
         term: u64,
         compact_index: u64,
     },
+    // Trigger loading pending region for range_cache_memory_engine,
+    InMemoryEngineLoadRegion {
+        region_id: u64,
+        cb: Box<dyn FnOnce(&Region) + Send + 'static>,
+    },
 }
 
 impl<EK: KvEngine> ResourceMetered for Box<Msg<EK>> {
@@ -3910,6 +3915,9 @@ where
                     "[region {}] force compact, term: {} compact_index: {}",
                     region_id, term, compact_index
                 )
+            }
+            Msg::InMemoryEngineLoadRegion { region_id, .. } => {
+                write!(f, "[region {}] try load in memory cache", region_id)
             }
         }
     }
@@ -4525,6 +4533,10 @@ where
                 } => {
                     self.unsafe_force_compact(apply_ctx, term, compact_index);
                 }
+                Msg::InMemoryEngineLoadRegion { cb, .. } => {
+                    fail_point!("on_apply_in_memory_engine_load_region");
+                    cb(&self.delegate.region);
+                }
             }
         }
     }
@@ -4956,6 +4968,11 @@ where
                             "region_id" => region_id);
                     return;
                 }
+                Msg::InMemoryEngineLoadRegion { region_id, .. } => {
+                    info!("skip check load in memory region cache because target region is not found";
+                        "region_id" => region_id);
+                    return;
+                }
             },
             Either::Left(Err(TrySendError::Full(_))) => unreachable!(),
         };
@@ -5096,6 +5113,7 @@ mod memtrace {
                 Msg::Recover(..) => 0,
                 Msg::CheckCompact { .. } => 0,
                 Msg::UnsafeForceCompact { .. } => 0,
+                Msg::InMemoryEngineLoadRegion { .. } => 0,
             }
         }
     }

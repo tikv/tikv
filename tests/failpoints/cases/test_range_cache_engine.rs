@@ -665,3 +665,26 @@ fn test_pre_load_when_transfer_ledaer() {
     let range_cache_engine = cluster.sim.rl().get_range_cache_engine(2);
     range_cache_engine.region_cached(&r);
 }
+
+#[test]
+fn test_background_loading_pending_region() {
+    fail::cfg("background_check_load_pending_interval", "return(1000)").unwrap();
+
+    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
+    cluster.run();
+
+    let r = cluster.get_region(b"");
+    let range_cache_engine = cluster.sim.rl().get_range_cache_engine(1);
+    range_cache_engine
+        .load_region(CacheRegion::from_region(&r))
+        .unwrap();
+
+    let (tx, rx) = unbounded();
+    fail::cfg_callback("on_apply_in_memory_engine_load_region", move || {
+        tx.send(()).unwrap();
+    })
+    .unwrap();
+
+    rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    range_cache_engine.region_cached(&r);
+}

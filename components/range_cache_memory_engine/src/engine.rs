@@ -18,9 +18,9 @@ use engine_traits::{
     RangeCacheEngineExt, RegionEvent, Result, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
 use kvproto::metapb::Region;
-use raftstore::coprocessor::RegionInfoProvider;
+use raftstore::{coprocessor::RegionInfoProvider, store::CasualRouter};
 use slog_global::error;
-use tikv_util::{config::VersionTrack, info, warn};
+use tikv_util::{config::VersionTrack, info, warn, worker::Scheduler};
 
 use crate::{
     background::{BackgroundTask, BgWorkManager, PdRangeHintService},
@@ -205,6 +205,112 @@ impl RangeCacheMemoryEngineCore {
     pub fn region_manager(&self) -> &RegionManager {
         &self.region_manager
     }
+
+    // It handles the pending range and check whether to buffer write for this
+    // range.
+    pub(crate) fn prepare_for_apply(
+        &self,
+        region: &CacheRegion,
+        rocks_engine: &RocksEngine,
+        scheduler: &Scheduler<BackgroundTask>,
+        should_set_in_written: bool,
+    ) -> RangeCacheStatus {
+        if !self.region_manager.is_active() {
+            return RangeCacheStatus::NotInCache;
+        }
+
+        // fast path, only need to hold the read lock.
+        {
+            let regions_map = self.region_manager.regions_map.read();
+            let Some(region_meta) = regions_map.region_meta(region.id) else {
+                return RangeCacheStatus::NotInCache;
+            };
+            let state = region_meta.get_state();
+            if state == RegionState::Active {
+                if should_set_in_written {
+                    region_meta.set_being_written();
+                }
+                return RangeCacheStatus::Cached;
+            } else if state.is_evict() {
+                return RangeCacheStatus::NotInCache;
+            } else if state == RegionState::Loading {
+                if should_set_in_written {
+                    region_meta.set_being_written();
+                }
+                return RangeCacheStatus::Loading;
+            }
+        }
+
+        // slow path, handle pending region
+        let mut regions_map = self.region_manager.regions_map.write();
+        let cached_count = regions_map.regions().len();
+        let Some(mut region_meta) = regions_map.mut_region_meta(region.id) else {
+            return RangeCacheStatus::NotInCache;
+        };
+
+        if region_meta.get_region().epoch_version < region.epoch_version {
+            let meta = regions_map.remove_region(region.id);
+            assert_eq!(meta.get_state(), RegionState::Pending);
+            // try update outdated region.
+            if meta.can_be_updated_to(region) {
+                info!("ime update outdated pending region";
+                    "current_meta" => ?meta,
+                    "new_region" => ?region);
+                // the new region's range is smaller than removed region, so it is impossible to
+                // be overlapped with other existing regions.
+                regions_map.load_region(region.clone()).unwrap();
+                region_meta = regions_map.mut_region_meta(region.id).unwrap();
+            } else {
+                info!("ime remove outdated pending region";
+                    "pending_region" => ?meta.get_region(),
+                    "new_region" => ?region);
+                return RangeCacheStatus::NotInCache;
+            }
+        }
+
+        let mut region_state = region_meta.get_state();
+        let schedule_load = region_state == RegionState::Pending;
+        if schedule_load {
+            region_meta.set_state(RegionState::Loading);
+            info!(
+                "ime region to load";
+                "region" => ?region,
+                "cached" => cached_count,
+            );
+            region_state = RegionState::Loading;
+        }
+
+        let mut result = RangeCacheStatus::NotInCache;
+        if region_state == RegionState::Loading || region_state == RegionState::Active {
+            if should_set_in_written {
+                region_meta.set_being_written();
+            }
+            if region_state == RegionState::Active {
+                result = RangeCacheStatus::Cached;
+            } else {
+                result = RangeCacheStatus::Loading;
+            }
+        }
+        drop(regions_map);
+
+        // get snapshot and schedule loading task at last to avoid locking IME for too
+        // long.
+        if schedule_load {
+            let rocks_snap = Arc::new(rocks_engine.snapshot());
+            if let Err(e) =
+                scheduler.schedule(BackgroundTask::LoadRegion(region.clone(), rocks_snap))
+            {
+                error!(
+                    "ime schedule region load failed";
+                    "err" => ?e,
+                    "region" => ?region,
+                );
+                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
+            }
+        }
+
+        result
+    }
 }
 
 /// The RangeCacheMemoryEngine serves as a range cache, storing hot ranges in
@@ -241,12 +347,13 @@ pub struct RangeCacheMemoryEngine {
 
 impl RangeCacheMemoryEngine {
     pub fn new(range_cache_engine_context: RangeCacheEngineContext) -> Self {
-        RangeCacheMemoryEngine::with_region_info_provider(range_cache_engine_context, None)
+        RangeCacheMemoryEngine::with_region_info_provider(range_cache_engine_context, None, None)
     }
 
     pub fn with_region_info_provider(
         range_cache_engine_context: RangeCacheEngineContext,
         region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
+        raft_casual_router: Option<Box<dyn CasualRouter<RocksEngine>>>,
     ) -> Self {
         info!("ime init range cache memory engine");
         let core = Arc::new(RangeCacheMemoryEngineCore::new());
@@ -266,6 +373,7 @@ impl RangeCacheMemoryEngine {
             config.clone(),
             memory_controller.clone(),
             region_info_provider,
+            raft_casual_router,
         ));
 
         Self {
@@ -323,97 +431,12 @@ impl RangeCacheMemoryEngine {
     // It handles the pending range and check whether to buffer write for this
     // range.
     pub(crate) fn prepare_for_apply(&self, region: &CacheRegion) -> RangeCacheStatus {
-        let manager = self.core.region_manager();
-        if !manager.is_active() {
-            return RangeCacheStatus::NotInCache;
-        }
-
-        // fast path, only need to hold the read lock.
-        {
-            let regions_map = manager.regions_map.read();
-            let Some(region_meta) = regions_map.region_meta(region.id) else {
-                return RangeCacheStatus::NotInCache;
-            };
-            let state = region_meta.get_state();
-            if state == RegionState::Active {
-                region_meta.set_being_written();
-                return RangeCacheStatus::Cached;
-            } else if state.is_evict() {
-                return RangeCacheStatus::NotInCache;
-            } else if state == RegionState::Loading {
-                region_meta.set_being_written();
-                return RangeCacheStatus::Loading;
-            }
-        }
-
-        // slow path, handle pending region
-        let mut regions_map = manager.regions_map.write();
-        let cached_count = regions_map.regions().len();
-        let Some(mut region_meta) = regions_map.mut_region_meta(region.id) else {
-            return RangeCacheStatus::NotInCache;
-        };
-
-        if region_meta.get_region().epoch_version < region.epoch_version {
-            let meta = regions_map.remove_region(region.id);
-            assert_eq!(meta.get_state(), RegionState::Pending);
-            // try update outdated region.
-            if meta.can_be_updated_to(region) {
-                info!("ime update outdated pending region";
-                    "current_meta" => ?meta,
-                    "new_region" => ?region);
-                // the new region's range is smaller than removed region, so it is impossible to
-                // be overlapped with other existing regions.
-                regions_map.load_region(region.clone()).unwrap();
-                region_meta = regions_map.mut_region_meta(region.id).unwrap();
-            } else {
-                info!("ime remove outdated pending region";
-                    "pending_region" => ?meta.get_region(),
-                    "new_region" => ?region);
-                return RangeCacheStatus::NotInCache;
-            }
-        }
-
-        let mut region_state = region_meta.get_state();
-        let schedule_load = region_state == RegionState::Pending;
-        if schedule_load {
-            region_meta.set_state(RegionState::Loading);
-            info!(
-                "ime region to load";
-                "region" => ?region,
-                "cached" => cached_count,
-            );
-            region_state = RegionState::Loading;
-        }
-
-        let mut result = RangeCacheStatus::NotInCache;
-        if region_state == RegionState::Loading || region_state == RegionState::Active {
-            region_meta.set_being_written();
-            if region_state == RegionState::Active {
-                result = RangeCacheStatus::Cached;
-            } else {
-                result = RangeCacheStatus::Loading;
-            }
-        }
-        drop(regions_map);
-
-        // get snapshot and schedule loading task at last to avoid locking IME for too
-        // long.
-        if schedule_load {
-            let rocks_snap = Arc::new(self.rocks_engine.as_ref().unwrap().snapshot());
-            if let Err(e) = self
-                .bg_work_manager
-                .schedule_task(BackgroundTask::LoadRegion(region.clone(), rocks_snap))
-            {
-                error!(
-                    "ime schedule region load failed";
-                    "err" => ?e,
-                    "region" => ?region,
-                );
-                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
-            }
-        }
-
-        result
+        self.core.prepare_for_apply(
+            region,
+            self.rocks_engine.as_ref().unwrap(),
+            self.bg_work_manager.background_scheduler(),
+            true,
+        )
     }
 
     pub fn bg_worker_manager(&self) -> &BgWorkManager {

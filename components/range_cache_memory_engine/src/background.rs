@@ -1,6 +1,6 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{fmt::Display, sync::Arc, time::Duration};
+use std::{fmt, sync::Arc, time::Duration};
 
 use bytes::Bytes;
 use crossbeam::{
@@ -12,9 +12,13 @@ use engine_traits::{
     CacheRegion, EvictReason, IterOptions, Iterable, Iterator, MiscExt, RangeHintService,
     SnapshotMiscExt, CF_DEFAULT, CF_WRITE, DATA_CFS,
 };
+use fail::fail_point;
 use keys::{origin_end_key, origin_key};
 use pd_client::{PdClient, RpcClient};
-use raftstore::coprocessor::RegionInfoProvider;
+use raftstore::{
+    coprocessor::RegionInfoProvider,
+    store::{CasualMessage, CasualRouter},
+};
 use slog_global::{error, info, warn};
 use strum::EnumCount;
 use tikv_util::{
@@ -74,7 +78,6 @@ fn parse_write(value: &[u8]) -> Result<WriteRef<'_>, String> {
     }
 }
 
-#[derive(Debug)]
 pub enum BackgroundTask {
     Gc(GcTask),
     LoadRegion(CacheRegion, Arc<RocksSnapshot>),
@@ -83,10 +86,11 @@ pub enum BackgroundTask {
     TopRegionsLoadEvict,
     CleanLockTombstone(u64),
     SetRocksEngine(RocksEngine),
+    CheckLoadPendingRegions(Scheduler<BackgroundTask>),
 }
 
-impl Display for BackgroundTask {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for BackgroundTask {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self {
             BackgroundTask::Gc(t) => t.fmt(f),
             BackgroundTask::LoadRegion(..) => f.debug_struct("LoadTask").finish(),
@@ -100,7 +104,16 @@ impl Display for BackgroundTask {
                 .field("seqno", r)
                 .finish(),
             BackgroundTask::SetRocksEngine(_) => f.debug_struct("SetDiskEngine").finish(),
+            BackgroundTask::CheckLoadPendingRegions(_) => {
+                f.debug_struct("CheckLoadPendingRegions").finish()
+            }
         }
+    }
+}
+
+impl fmt::Debug for BackgroundTask {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self)
     }
 }
 
@@ -109,8 +122,8 @@ pub struct GcTask {
     pub safe_point: u64,
 }
 
-impl Display for GcTask {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for GcTask {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("GcTask")
             .field("safe_point", &self.safe_point)
             .finish()
@@ -217,6 +230,7 @@ impl BgWorkManager {
         config: Arc<VersionTrack<RangeCacheEngineConfig>>,
         memory_controller: Arc<MemoryController>,
         region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
+        raft_casual_router: Option<Box<dyn CasualRouter<RocksEngine>>>,
     ) -> Self {
         let worker = Worker::new("ime-bg");
         let (runner, delete_range_scheduler) = BackgroundRunner::new(
@@ -225,6 +239,7 @@ impl BgWorkManager {
             region_info_provider.clone(),
             &config,
             pd_client.clone(),
+            raft_casual_router,
         );
         let config = config.value();
         let scheduler = worker.start_with_timer("ime-bg-runner", runner);
@@ -253,6 +268,10 @@ impl BgWorkManager {
             }
             task => self.scheduler.schedule_force(task),
         }
+    }
+
+    pub(crate) fn background_scheduler(&self) -> &Scheduler<BackgroundTask> {
+        &self.scheduler
     }
 
     pub fn start_bg_hint_service(&self, range_hint_service: PdRangeHintService) {
@@ -334,10 +353,18 @@ impl BgWorkManager {
         // blocking task.
         // TODO: Spawn non-blocking tasks and make full use of the ticker.
         let interval = Duration::from_millis(100);
+        let check_load_pending_interval = (|| {
+            fail_point!("background_check_load_pending_interval", |t| {
+                let t = t.unwrap().parse::<u64>().unwrap();
+                Duration::from_millis(t)
+            });
+            Duration::from_secs(5)
+        })();
         ticker.spawn_interval_task(interval, move || {
             let gc_ticker = tick(gc_interval);
             let load_evict_ticker = tick(load_evict_interval); // TODO (afeinberg): Use a real value.
             let tso_timeout = std::cmp::min(gc_interval, TIMTOUT_FOR_TSO);
+            let check_pending_region_ticker = tick(check_load_pending_interval);
             'LOOP: loop {
                 select! {
                     recv(gc_ticker) -> _ => {
@@ -369,6 +396,15 @@ impl BgWorkManager {
                             );
                         }
                     },
+                    recv(check_pending_region_ticker) -> _ => {
+                        let s = scheduler.clone();
+                        if let Err(e) = scheduler.schedule(BackgroundTask::CheckLoadPendingRegions(s)) {
+                            error!(
+                                "ime schedule check pending regions failed";
+                                "err" => ?e,
+                            );
+                        }
+                    }
                     recv(rx) -> r => {
                         if let Err(e) = r {
                             error!(
@@ -749,6 +785,7 @@ pub struct BackgroundRunner {
     last_seqno: u64,
     // RocksEngine is used to get the oldest snapshot sequence number.
     rocks_engine: Option<RocksEngine>,
+    raft_casual_router: Option<Box<dyn CasualRouter<RocksEngine>>>,
 }
 
 impl Drop for BackgroundRunner {
@@ -768,6 +805,7 @@ impl BackgroundRunner {
         region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
         config: &Arc<VersionTrack<RangeCacheEngineConfig>>,
         pd_client: Arc<dyn PdClient>,
+        raft_casual_router: Option<Box<dyn CasualRouter<RocksEngine>>>,
     ) -> (Self, Scheduler<BackgroundTask>) {
         let config = config.value();
         let range_load_worker = Builder::new("ime-load")
@@ -825,6 +863,7 @@ impl BackgroundRunner {
                 lock_cleanup_worker,
                 last_seqno: 0,
                 rocks_engine: None,
+                raft_casual_router,
             },
             delete_range_scheduler,
         )
@@ -1178,6 +1217,51 @@ impl Runnable for BackgroundRunner {
                 };
 
                 self.lock_cleanup_remote.spawn(f);
+            }
+            BackgroundTask::CheckLoadPendingRegions(s) => {
+                if let Some(router) = &self.raft_casual_router
+                    && let Some(e) = &self.rocks_engine
+                {
+                    let pending_regions: Vec<_> = self
+                        .core
+                        .engine
+                        .region_manager()
+                        .regions_map()
+                        .read()
+                        .regions()
+                        .values()
+                        .filter_map(|meta| {
+                            if meta.get_state() == RegionState::Pending {
+                                Some(meta.get_region().id)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+
+                    for region_id in pending_regions {
+                        let scheduler = s.clone();
+                        let rocks_engine = e.clone();
+                        let ime_engine = self.core.engine.clone();
+                        if let Err(e) = router.send(
+                            region_id,
+                            CasualMessage::InMemoryEngineLoadRegion {
+                                region_id,
+                                cb: Box::new(move |r| {
+                                    let cache_region = CacheRegion::from_region(r);
+                                    _ = ime_engine.prepare_for_apply(
+                                        &cache_region,
+                                        &rocks_engine,
+                                        &scheduler,
+                                        false,
+                                    );
+                                }),
+                            },
+                        ) {
+                            warn!("ime send load pending cache region msg failed"; "err" => ?e);
+                        }
+                    }
+                }
             }
         }
     }
@@ -1897,6 +1981,7 @@ pub mod tests {
             None,
             &config,
             Arc::new(MockPdClient {}),
+            None,
         );
         worker.core.gc_region(&cache_region, 40, 100);
 
@@ -1971,6 +2056,7 @@ pub mod tests {
             None,
             &config,
             Arc::new(MockPdClient {}),
+            None,
         );
 
         let cache_region = CacheRegion::from_region(&region);
@@ -2131,6 +2217,7 @@ pub mod tests {
             None,
             &config,
             Arc::new(MockPdClient {}),
+            None,
         );
         let filter = worker.core.gc_region(&region1, 100, 100);
         assert_eq!(2, filter.filtered);
@@ -2148,6 +2235,7 @@ pub mod tests {
             None,
             &config,
             Arc::new(MockPdClient {}),
+            None,
         );
         worker.core.gc_region(&region2, 100, 100);
         assert_eq!(2, filter.filtered);
@@ -2194,6 +2282,7 @@ pub mod tests {
             None,
             &config,
             Arc::new(MockPdClient {}),
+            None,
         );
 
         let filter = worker
@@ -2292,6 +2381,7 @@ pub mod tests {
             None,
             &config,
             Arc::new(MockPdClient {}),
+            None,
         );
         let cache_region = CacheRegion::from_region(&region);
         let s1 = engine.snapshot(cache_region.clone(), 10, u64::MAX);
@@ -2440,6 +2530,7 @@ pub mod tests {
             None,
             &config,
             Arc::new(MockPdClient {}),
+            None,
         );
 
         let regions: Vec<_> = engine
@@ -2588,6 +2679,7 @@ pub mod tests {
             None,
             &config,
             Arc::new(MockPdClient {}),
+            None,
         );
         let regions = runner.core.regions_for_gc();
         assert_eq!(2, regions.len());
@@ -2647,6 +2739,7 @@ pub mod tests {
                 RangeCacheEngineConfig::config_for_test(),
             ))),
             Some(region_info_provider.clone()),
+            None,
         );
         let path = Builder::new()
             .prefix("test_load_from_pd_hint_service")

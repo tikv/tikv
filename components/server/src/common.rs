@@ -31,7 +31,7 @@ use grpcio::Environment;
 use hybrid_engine::HybridEngine;
 use pd_client::{PdClient, RpcClient};
 use raft_log_engine::RaftLogEngine;
-use raftstore::coprocessor::RegionInfoProvider;
+use raftstore::{coprocessor::RegionInfoProvider, store::CasualRouter};
 use range_cache_memory_engine::{
     flush_range_cache_engine_statistics, RangeCacheEngineContext, RangeCacheMemoryEngine,
     RangeCacheMemoryEngineStatistics,
@@ -700,11 +700,13 @@ pub fn build_hybrid_engine(
     disk_engine: RocksEngine,
     pd_client: Option<Arc<RpcClient>>,
     region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
+    casual_router: Box<dyn CasualRouter<RocksEngine>>,
 ) -> HybridEngine<RocksEngine, RangeCacheMemoryEngine> {
     // todo(SpadeA): add config for it
     let mut memory_engine = RangeCacheMemoryEngine::with_region_info_provider(
         range_cache_engine_context,
         region_info_provider,
+        Some(casual_router),
     );
     memory_engine.set_disk_engine(disk_engine.clone());
     if let Some(pd_client) = pd_client.as_ref() {

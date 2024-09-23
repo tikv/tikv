@@ -340,6 +340,7 @@ impl ServerCluster {
                 engines.kv.clone(),
                 None,
                 Some(Arc::new(region_info_accessor.clone())),
+                Box::new(router.clone()),
             );
             // Eviction observer
             let observer = LoadEvictionObserver::new(Arc::new(in_memory_engine.clone()));
