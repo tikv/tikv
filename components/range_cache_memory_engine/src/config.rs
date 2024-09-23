@@ -21,8 +21,12 @@ impl ConfigManager for RangeCacheConfigManager {
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         {
             let change = change.clone();
-            self.0
-                .update(move |cfg: &mut RangeCacheEngineConfig| cfg.update(change))?;
+            self.0.update(move |cfg: &mut RangeCacheEngineConfig| {
+                let mut cfg_verify = cfg.clone();
+                cfg_verify.update(change);
+                cfg_verify.validate()?;
+                cfg.update(change)
+            })?;
         }
         info!(
             "ime range cache config changed";
