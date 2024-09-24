@@ -3774,16 +3774,11 @@ where
 
 impl<EK: KvEngine> ResourceMetered for Box<Msg<EK>> {
     fn consume_resource(&self, resource_ctl: &Arc<ResourceController>) -> Option<String> {
-<<<<<<< HEAD
-        match self {
-            Msg::Apply { apply, .. } => {
-=======
         if !resource_ctl.is_customized() {
             return None;
         }
         match **self {
             Msg::Apply { ref apply, .. } => {
->>>>>>> 7c509085cb (batch-system: Reduce the memory usage of peers' message channel  (#17326))
                 let mut dominant_group = "".to_owned();
                 let mut max_write_bytes = 0;
                 for cached_entries in &apply.entries {
@@ -4359,36 +4354,8 @@ where
         }
     }
 
-<<<<<<< HEAD
-    fn handle_tasks(&mut self, apply_ctx: &mut ApplyContext<EK>, msgs: &mut Vec<Msg<EK>>) {
-=======
-    // Force advance compact index to the current applied_index. This function
-    // should only be used in the online unsafe recovery scenario to recover the
-    // raft state when applied index is larger than raft last index.
-    fn unsafe_force_compact(&mut self, ctx: &mut ApplyContext<EK>, term: u64, compact_index: u64) {
-        assert_eq!(self.delegate.apply_state.applied_index, compact_index);
-        if self.delegate.apply_state.get_truncated_state().index < compact_index {
-            assert!(self.delegate.apply_state.get_truncated_state().term <= term);
-
-            info!("unsafe force compact"; "apply_state" => ?&self.delegate.apply_state, "term" => term,
-                "compact_index" => compact_index);
-
-            self.delegate.apply_state.mut_truncated_state().index = compact_index;
-        }
-
-        if ctx.timer.is_none() {
-            ctx.timer = Some(Instant::now_coarse());
-        }
-        let mut result = VecDeque::with_capacity(1);
-        result.push_back(ExecResult::UnsafeForceCompact {
-            apply_state: self.delegate.apply_state.clone(),
-        });
-        ctx.finish_for(&mut self.delegate, result);
-    }
-
     #[allow(clippy::vec_box)]
     fn handle_tasks(&mut self, apply_ctx: &mut ApplyContext<EK>, msgs: &mut Vec<Box<Msg<EK>>>) {
->>>>>>> 7c509085cb (batch-system: Reduce the memory usage of peers' message channel  (#17326))
         let mut drainer = msgs.drain(..);
         let mut batch_apply = None;
         loop {

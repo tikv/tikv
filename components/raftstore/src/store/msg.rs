@@ -762,11 +762,7 @@ pub enum PeerMsg<EK: KvEngine> {
     /// Raft message is the message sent between raft nodes in the same
     /// raft group. Messages need to be redirected to raftstore if target
     /// peer doesn't exist.
-<<<<<<< HEAD
-    RaftMessage(InspectedRaftMessage, Option<Instant>) = 0,
-=======
     RaftMessage(Box<InspectedRaftMessage>, Option<Instant>),
->>>>>>> 7c509085cb (batch-system: Reduce the memory usage of peers' message channel  (#17326))
     /// Raft command is the command that is expected to be proposed by the
     /// leader of the target raft group. If it's failed to be sent, callback
     /// usually needs to be called before dropping in case of resource leak.
