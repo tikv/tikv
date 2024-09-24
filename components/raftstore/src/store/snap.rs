@@ -1790,18 +1790,6 @@ impl SnapManager {
         self.core.limiter.speed_limit()
     }
 
-<<<<<<< HEAD
-=======
-    pub fn set_concurrent_recv_snap_limit(&self, limit: usize) {
-        self.core.recv_concurrency_limiter.set_limit(limit);
-    }
-
-    pub fn set_min_ingest_cf_limit(&mut self, bytes: ReadableSize) {
-        self.core.min_ingest_cf_size = bytes.0;
-        self.core.min_ingest_cf_kvs = std::cmp::max(10000, (bytes.as_mb_f64() * 10000.0) as u64);
-    }
-
->>>>>>> 12e03b787c (raftstore: directly write kvs rafther than ingestion when merging small regions. (#17408))
     pub fn collect_stat(&self, snap: SnapshotStat) {
         debug!(
             "collect snapshot stat";
@@ -2018,12 +2006,8 @@ pub struct SnapManagerBuilder {
     enable_multi_snapshot_files: bool,
     enable_receive_tablet_snapshot: bool,
     key_manager: Option<Arc<DataKeyManager>>,
-<<<<<<< HEAD
-=======
-    concurrent_recv_snap_limit: usize,
     min_ingest_snapshot_size: u64,
     min_ingest_snapshot_kvs: u64,
->>>>>>> 12e03b787c (raftstore: directly write kvs rafther than ingestion when merging small regions. (#17408))
 }
 
 impl SnapManagerBuilder {

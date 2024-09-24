@@ -12,12 +12,8 @@ use encryption::{
     from_engine_encryption_method, DataKeyManager, DecrypterReader, EncrypterWriter, Iv,
 };
 use engine_traits::{
-<<<<<<< HEAD
-    CfName, EncryptionKeyManager, Error as EngineError, Iterable, KvEngine, Mutable,
-=======
-    CfName, Error as EngineError, IterOptions, Iterable, Iterator, KvEngine, Mutable, RefIterable,
->>>>>>> 12e03b787c (raftstore: directly write kvs rafther than ingestion when merging small regions. (#17408))
-    SstCompressionType, SstReader, SstWriter, SstWriterBuilder, WriteBatch,
+    CfName, EncryptionKeyManager, Error as EngineError, IterOptions, Iterable, Iterator, KvEngine,
+    Mutable, RefIterable, SstCompressionType, SstReader, SstWriter, SstWriterBuilder, WriteBatch,
 };
 use fail::fail_point;
 use kvproto::encryptionpb::EncryptionMethod;
@@ -333,7 +329,11 @@ where
     E: KvEngine,
     F: for<'r> FnMut(&'r [(Vec<u8>, Vec<u8>)]),
 {
-    let sst_reader = E::SstReader::open(path, key_mgr)?;
+    let sst_reader = if let Some(mgr) = key_mgr {
+        E::SstReader::open_encrypted(&path, mgr)?
+    } else {
+        E::SstReader::open(&path)?
+    };
     let mut iter = sst_reader.iter(IterOptions::default())?;
     iter.seek_to_first()?;
 
