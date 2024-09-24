@@ -36,8 +36,8 @@ use crate::{
     },
     memory_controller::{MemoryController, MemoryUsage},
     metrics::{
-        GC_FILTERED_STATIC, REGION_CACHE_COUNT, REGION_CACHE_MEMORY_USAGE,
-        REGION_GC_TIME_HISTOGRAM, REGION_LOAD_TIME_HISTOGRAM,
+        IN_MEMORY_ENGINE_GC_FILTERED_STATIC, IN_MEMORY_ENGINE_CACHE_COUNT, IN_MEMORY_ENGINE_MEMORY_USAGE,
+        IN_MEMORY_ENGINE_GC_TIME_HISTOGRAM, IN_MEMORY_ENGINE_LOAD_TIME_HISTOGRAM,
     },
     region_label::{
         LabelRule, RegionLabelChangedCallback, RegionLabelRulesManager, RegionLabelServiceBuilder,
@@ -389,7 +389,7 @@ impl BgWorkManager {
 struct BackgroundRunnerCore {
     engine: Arc<RegionCacheMemoryEngineCore>,
     memory_controller: Arc<MemoryController>,
-    range_stats_manager: Option<RegionStatsManager>,
+    region_stats_manager: Option<RegionStatsManager>,
 }
 
 impl BackgroundRunnerCore {
@@ -482,7 +482,7 @@ impl BackgroundRunnerCore {
         self.engine.region_manager().on_gc_region_finished(region);
 
         let duration = start.saturating_elapsed();
-        REGION_GC_TIME_HISTOGRAM.observe(duration.as_secs_f64());
+        IN_MEMORY_ENGINE_GC_TIME_HISTOGRAM.observe(duration.as_secs_f64());
         info!(
             "ime range gc complete";
             "region" => ?region,
@@ -623,7 +623,7 @@ impl BackgroundRunnerCore {
     /// See: [`RangeStatsManager::collect_changes_ranges`] for
     /// algorithm details.
     async fn top_regions_load_evict(&self, delete_range_scheduler: &Scheduler<BackgroundTask>) {
-        let range_stats_manager = match &self.range_stats_manager {
+        let range_stats_manager = match &self.region_stats_manager {
             Some(m) => m,
             None => {
                 return;
@@ -809,7 +809,7 @@ impl BackgroundRunner {
                 core: BackgroundRunnerCore {
                     engine,
                     memory_controller,
-                    range_stats_manager,
+                    region_stats_manager: range_stats_manager,
                 },
                 pd_client,
                 gc_interval: config.gc_interval.0,
@@ -1021,7 +1021,7 @@ impl Runnable for BackgroundRunner {
                             safe_point,
                         ) {
                             let duration = start.saturating_elapsed();
-                            REGION_LOAD_TIME_HISTOGRAM.observe(duration.as_secs_f64());
+                            IN_MEMORY_ENGINE_LOAD_TIME_HISTOGRAM.observe(duration.as_secs_f64());
                             info!(
                                 "ime Loading region finished";
                                 "region" => ?region,
@@ -1050,7 +1050,7 @@ impl Runnable for BackgroundRunner {
                     let delete_range_scheduler = self.delete_range_scheduler.clone();
                     let core = self.core.clone();
                     let task = async move {
-                        if let Some(range_stats_manager) = &core.range_stats_manager {
+                        if let Some(range_stats_manager) = &core.region_stats_manager {
                             let cached_region_ids = core
                                 .engine
                                 .region_manager
@@ -1186,7 +1186,7 @@ impl Runnable for BackgroundRunner {
 impl RunnableWithTimer for BackgroundRunner {
     fn on_timeout(&mut self) {
         let mem_usage = self.core.memory_controller.mem_usage();
-        REGION_CACHE_MEMORY_USAGE.set(mem_usage as i64);
+        IN_MEMORY_ENGINE_MEMORY_USAGE.set(mem_usage as i64);
 
         let mut count_by_state = [0; RegionState::COUNT];
         {
@@ -1198,7 +1198,7 @@ impl RunnableWithTimer for BackgroundRunner {
 
         for (i, count) in count_by_state.into_iter().enumerate() {
             let state = RegionState::from_usize(i);
-            REGION_CACHE_COUNT
+            IN_MEMORY_ENGINE_CACHE_COUNT
                 .with_label_values(&[state.as_str()])
                 .set(count);
         }
@@ -1310,12 +1310,12 @@ impl FilterMetrics {
     }
 
     fn flush(&self) {
-        GC_FILTERED_STATIC.total.inc_by(self.total as u64);
-        GC_FILTERED_STATIC
+        IN_MEMORY_ENGINE_GC_FILTERED_STATIC.total.inc_by(self.total as u64);
+        IN_MEMORY_ENGINE_GC_FILTERED_STATIC
             .below_safe_point_total
             .inc_by(self.versions as u64);
-        GC_FILTERED_STATIC.filtered.inc_by(self.filtered as u64);
-        GC_FILTERED_STATIC
+        IN_MEMORY_ENGINE_GC_FILTERED_STATIC.filtered.inc_by(self.filtered as u64);
+        IN_MEMORY_ENGINE_GC_FILTERED_STATIC
             .below_safe_point_unique
             .inc_by(self.unique_key as u64);
     }

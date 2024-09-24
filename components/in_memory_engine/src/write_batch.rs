@@ -18,7 +18,7 @@ use crate::{
     engine::{cf_to_id, id_to_cf, is_lock_cf, SkiplistEngine},
     keys::{encode_key, InternalBytes, ValueType, ENC_KEY_SEQ_LENGTH},
     memory_controller::{MemoryController, MemoryUsage},
-    metrics::{REGION_PREPARE_FOR_WRITE_DURATION_HISTOGRAM, WRITE_DURATION_HISTOGRAM},
+    metrics::{IN_MEMORY_ENGINE_PREPARE_FOR_WRITE_DURATION_HISTOGRAM, IN_MEMORY_ENGINE_WRITE_DURATION_HISTOGRAM},
     region_manager::RegionCacheStatus,
     RegionCacheMemoryEngine,
 };
@@ -42,8 +42,8 @@ const AMOUNT_TO_CLEAN_TOMBSTONE: u64 = ReadableSize::mb(16).0;
 const DELETE_ENTRY_VAL: &[u8] = b"";
 
 // `prepare_for_region` should be called before raft command apply for each peer
-// delegate. It sets `region_cache_status` which is used to determine whether
-// the writes of this peer should be buffered.
+// delegate. It sets `region_cache_status` which is used to determine whether the
+// writes of this peer should be buffered.
 pub struct RegionCacheWriteBatch {
     // `region_cache_status` indicates whether the range is cached, loading data, or not cached. If
     // it is cached, we should buffer the write in `buffer` which is consumed during the write
@@ -188,7 +188,7 @@ impl RegionCacheWriteBatch {
             seq += 1;
         });
         let duration = start.saturating_elapsed_secs();
-        WRITE_DURATION_HISTOGRAM.observe(duration);
+        IN_MEMORY_ENGINE_WRITE_DURATION_HISTOGRAM.observe(duration);
 
         fail::fail_point!("in_memory_engine_write_batch_consumed");
         fail::fail_point!("before_clear_ranges_in_being_written");
@@ -204,7 +204,7 @@ impl RegionCacheWriteBatch {
             .lock_modification_bytes
             .fetch_add(lock_modification, Ordering::Relaxed);
 
-        REGION_PREPARE_FOR_WRITE_DURATION_HISTOGRAM
+        IN_MEMORY_ENGINE_PREPARE_FOR_WRITE_DURATION_HISTOGRAM
             .observe(self.prepare_for_write_duration.as_secs_f64());
 
         Ok(())
@@ -240,8 +240,7 @@ impl RegionCacheWriteBatch {
         F1: FnOnce() -> usize,
         F2: FnOnce() -> RegionCacheWriteBatchEntry,
     {
-        if self.region_cache_status == RegionCacheStatus::NotInCache || self.current_region_evicted
-        {
+        if self.region_cache_status == RegionCacheStatus::NotInCache || self.current_region_evicted {
             return;
         }
 
@@ -587,9 +586,9 @@ mod tests {
 
     #[test]
     fn test_write_to_skiplist() {
-        let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-            Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test())),
-        ));
+        let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(RegionCacheEngineConfig::config_for_test()),
+        )));
         let r = new_region(1, b"", b"z");
         engine.new_region(r.clone());
         engine.core.region_manager().set_safe_point(r.id, 10);
@@ -607,9 +606,9 @@ mod tests {
 
     #[test]
     fn test_savepoints() {
-        let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-            Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test())),
-        ));
+        let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(RegionCacheEngineConfig::config_for_test()),
+        )));
         let r = new_region(1, b"", b"z");
         engine.new_region(r.clone());
         engine.core.region_manager().set_safe_point(r.id, 10);
@@ -632,9 +631,9 @@ mod tests {
 
     #[test]
     fn test_put_write_clear_delete_put_write() {
-        let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-            Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test())),
-        ));
+        let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(RegionCacheEngineConfig::config_for_test()),
+        )));
         let r = new_region(1, b"", b"z");
         engine
             .core
@@ -789,9 +788,9 @@ mod tests {
         config.soft_limit_threshold = Some(ReadableSize(500));
         config.hard_limit_threshold = Some(ReadableSize(1000));
         config.enabled = true;
-        let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-            Arc::new(VersionTrack::new(config)),
-        ));
+        let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(config),
+        )));
         let regions = [
             new_region(1, b"k00", b"k10"),
             new_region(2, b"k10", b"k20"),

@@ -4112,7 +4112,9 @@ def CoprocessorDetail() -> RowPanel:
                     target(
                         expr=expr_sum_rate(
                             "tikv_coprocessor_scan_details",
-                            label_selectors=['req=~"select|select_by_region_cache"'],
+                            label_selectors=[
+                                'req=~"select|select_by_in_memory_engine"'
+                            ],
                             by_labels=["tag"],
                         ),
                     ),
@@ -4142,7 +4144,9 @@ def CoprocessorDetail() -> RowPanel:
                     target(
                         expr=expr_sum_rate(
                             "tikv_coprocessor_scan_details",
-                            label_selectors=['req=~"select|select_by_region_cache"'],
+                            label_selectors=[
+                                'req=~"select|select_by_in_memory_engine"'
+                            ],
                             by_labels=["cf", "tag"],
                         ),
                     ),
@@ -4212,7 +4216,7 @@ def RegionCacheMemoryEngine() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_avg(
-                            "tikv_region_cache_count",
+                            "in_memory_engine_cache_count",
                             by_labels=["instance", "type"],
                         ),
                         legend_format="{{instance}}--{{type}}",
@@ -4230,7 +4234,7 @@ def RegionCacheMemoryEngine() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_avg(
-                            "tikv_region_cache_memory_usage_bytes",
+                            "in_memory_engine_memory_usage_bytes",
                             by_labels=["instance"],
                         ),
                     ),
@@ -4242,7 +4246,7 @@ def RegionCacheMemoryEngine() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_sum_rate(
-                            "tikv_in_memory_engine_gc_filtered",
+                            "in_memory_engine_gc_filtered",
                             by_labels=["type"],
                         ),
                         legend_format="{{type}}",
@@ -4253,7 +4257,7 @@ def RegionCacheMemoryEngine() -> RowPanel:
                 title="Range GC Duration",
                 description="The handle duration of range gc",
                 yaxis=yaxis(format=UNITS.SECONDS),
-                metric="tikv_region_gc_duration_secs_bucket",
+                metric="in_memory_engine_gc_duration_secs_bucket",
             ),
         ]
     )
@@ -4263,7 +4267,7 @@ def RegionCacheMemoryEngine() -> RowPanel:
                 title="Range Load Duration",
                 description="The handle duration of range load",
                 yaxis=yaxis(format=UNITS.SECONDS),
-                metric="tikv_region_load_duration_secs_bucket",
+                metric="in_memory_engine_load_duration_secs_bucket",
             ),
             graph_panel(
                 title="Range Load Count",
@@ -4272,7 +4276,7 @@ def RegionCacheMemoryEngine() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_sum_rate(
-                            "tikv_region_load_duration_secs_count",
+                            "in_memory_engine_load_duration_secs_count",
                             by_labels=["instance"],
                         ),
                         legend_format="{{instance}}",
@@ -4287,7 +4291,7 @@ def RegionCacheMemoryEngine() -> RowPanel:
                 title="Range Eviction Duration",
                 description="The handle duration of range eviction",
                 yaxis=yaxis(format=UNITS.SECONDS),
-                metric="tikv_region_eviction_duration_secs_bucket",
+                metric="in_memory_engine_eviction_duration_secs_bucket",
             ),
             graph_panel(
                 title="Range Eviction Count",
@@ -4296,7 +4300,7 @@ def RegionCacheMemoryEngine() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_sum_rate(
-                            "tikv_region_eviction_duration_secs_count",
+                            "in_memory_engine_eviction_duration_secs_count",
                             by_labels=["type"],
                         ),
                         legend_format="{{type}}",
@@ -4314,7 +4318,7 @@ def RegionCacheMemoryEngine() -> RowPanel:
             graph_by_labels=["instance"],
             graph_hides=["count", "avg"],
             yaxis_format=UNITS.SECONDS,
-            metric="tikv_region_cache_engine_write_duration_seconds",
+            metric="in_memory_engine_write_duration_seconds",
         )
     )
     layout.row(
@@ -4326,7 +4330,7 @@ def RegionCacheMemoryEngine() -> RowPanel:
             graph_by_labels=["instance"],
             graph_hides=["count", "avg"],
             yaxis_format=UNITS.SECONDS,
-            metric="tikv_region_cache_engine_prepare_for_write_duration_seconds",
+            metric="in_memory_engine_prepare_for_write_duration_seconds",
         )
     )
     layout.row(

@@ -58,7 +58,7 @@ pub enum EvictReason {
     Manual,
 }
 
-/// RegionCacheEngine works as a region cache caching some region (in Memory or
+/// RegionCacheEngine works as a region cache caching some regions (in Memory or
 /// NVME for instance) to improve the read performance.
 pub trait RegionCacheEngine:
     RegionCacheEngineExt + WriteBatchExt + Iterable + Debug + Clone + Unpin + Send + Sync + 'static
