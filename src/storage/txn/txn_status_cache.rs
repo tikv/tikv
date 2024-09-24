@@ -421,9 +421,10 @@ impl TxnStatusCache {
         fxhash::hash(&start_ts) % self.normal_cache.len()
     }
 
-    /// Insert a transaction status into the cache, or update it. The current
-    /// system time should be passed from outside to avoid getting system time
-    /// repeatedly when multiple items are being inserted.
+    /// Insert a transaction status into the cache. If it already exists, update
+    /// it. The current system time should be passed from outside to avoid
+    /// getting system time repeatedly when multiple items are being
+    /// inserted.
     pub fn upsert(&self, start_ts: TimeStamp, state: TxnState, now: SystemTime) {
         if !self.is_enabled {
             return;
