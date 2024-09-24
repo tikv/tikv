@@ -84,6 +84,10 @@ impl RegionCacheSnapshot {
             engine: engine.clone(),
         })
     }
+
+    pub(crate) fn snapshot_meta(&self) -> &RegionCacheSnapshotMeta {
+        &self.snapshot_meta
+    }
 }
 
 impl Drop for RegionCacheSnapshot {
@@ -155,6 +159,7 @@ impl Iterable for RegionCacheSnapshot {
             prefix_extractor,
             local_stats: LocalStatistics::default(),
             seek_duration: IN_MEMORY_ENGINE_SEEK_DURATION.local(),
+            snapshot_read_ts: self.snapshot_meta.snapshot_ts,
         })
     }
 }
@@ -225,11 +230,11 @@ pub struct RegionCacheIterator {
     iter: OwnedIter<Arc<SkipList<InternalBytes, InternalBytes>>, InternalBytes, InternalBytes>,
     // The lower bound is inclusive while the upper bound is exclusive if set
     // Note: bounds (region boundaries) have no mvcc versions
-    lower_bound: Vec<u8>,
-    upper_bound: Vec<u8>,
+    pub(crate) lower_bound: Vec<u8>,
+    pub(crate) upper_bound: Vec<u8>,
     // A snapshot sequence number passed from RocksEngine Snapshot to guarantee suitable
     // visibility.
-    sequence_number: u64,
+    pub(crate) sequence_number: u64,
 
     saved_user_key: Vec<u8>,
     // This is only used by backwawrd iteration where the value we want may not be pointed by the
@@ -246,6 +251,8 @@ pub struct RegionCacheIterator {
     statistics: Arc<Statistics>,
     local_stats: LocalStatistics,
     seek_duration: LocalHistogram,
+
+    pub(crate) snapshot_read_ts: u64,
 }
 
 impl Drop for RegionCacheIterator {

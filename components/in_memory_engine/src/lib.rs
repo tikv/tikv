@@ -18,6 +18,7 @@ use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
 
 mod background;
 pub mod config;
+mod cross_check;
 mod engine;
 mod keys;
 mod memory_controller;
@@ -68,6 +69,10 @@ pub struct RegionCacheEngineConfig {
     // used in getting top regions to filter those with less mvcc amplification. Here, we define
     // mvcc amplification to be '(next + prev) / processed_keys'.
     pub mvcc_amplification_threshold: usize,
+    // Cross check is only for test usage and should not be turned on in production
+    // environment. Interval 0 means it is turned off, which is the default value.
+    #[online_config(skip)]
+    pub cross_check_interval: ReadableDuration,
 }
 
 impl Default for RegionCacheEngineConfig {
@@ -82,6 +87,7 @@ impl Default for RegionCacheEngineConfig {
             hard_limit_threshold: None,
             expected_region_size: None,
             mvcc_amplification_threshold: 100,
+            cross_check_interval: ReadableDuration(Duration::from_secs(0)),
         }
     }
 }
@@ -159,10 +165,12 @@ impl RegionCacheEngineConfig {
             hard_limit_threshold: Some(ReadableSize::gb(2)),
             expected_region_size: Some(ReadableSize::mb(20)),
             mvcc_amplification_threshold: 10,
+            cross_check_interval: ReadableDuration(Duration::from_secs(0)),
         }
     }
 }
 
+#[derive(Clone)]
 pub struct RegionCacheEngineContext {
     config: Arc<VersionTrack<RegionCacheEngineConfig>>,
     statistics: Arc<RegionCacheMemoryEngineStatistics>,
@@ -195,6 +203,14 @@ impl RegionCacheEngineContext {
             statistics: Arc::default(),
             pd_client: Arc::new(MockPdClient),
         }
+    }
+
+    pub fn pd_client(&self) -> Arc<dyn PdClient> {
+        self.pd_client.clone()
+    }
+
+    pub fn config(&self) -> &Arc<VersionTrack<RegionCacheEngineConfig>> {
+        &self.config
     }
 
     pub fn statistics(&self) -> Arc<RegionCacheMemoryEngineStatistics> {

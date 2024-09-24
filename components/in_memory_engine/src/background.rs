@@ -29,6 +29,7 @@ use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 use yatp::Remote;
 
 use crate::{
+    cross_check::CrossChecker,
     engine::{RegionCacheMemoryEngineCore, SkiplistHandle},
     keys::{
         decode_key, encode_key, encode_key_for_boundary_with_mvcc, encoding_for_filter,
@@ -46,7 +47,7 @@ use crate::{
     region_manager::{AsyncFnOnce, CacheRegionMeta, RegionState},
     region_stats::{RegionStatsManager, DEFAULT_EVICT_MIN_DURATION},
     write_batch::RegionCacheWriteBatchEntry,
-    RegionCacheEngineConfig,
+    RegionCacheEngineConfig, RegionCacheMemoryEngine,
 };
 
 // 5 seconds should be long enough for getting a TSO from PD.
@@ -55,7 +56,7 @@ const TIMTOUT_FOR_TSO: Duration = Duration::from_secs(5);
 /// Try to extract the key and `u64` timestamp from `encoded_key`.
 ///
 /// See also: [`txn_types::Key::split_on_ts_for`]
-fn split_ts(key: &[u8]) -> Result<(&[u8], u64), String> {
+pub(crate) fn split_ts(key: &[u8]) -> Result<(&[u8], u64), String> {
     match Key::split_on_ts_for(key) {
         Ok((key, ts)) => Ok((key, ts.into_inner())),
         Err(_) => Err(format!(
@@ -65,7 +66,7 @@ fn split_ts(key: &[u8]) -> Result<(&[u8], u64), String> {
     }
 }
 
-fn parse_write(value: &[u8]) -> Result<WriteRef<'_>, String> {
+pub(crate) fn parse_write(value: &[u8]) -> Result<WriteRef<'_>, String> {
     match WriteRef::parse(value) {
         Ok(write) => Ok(write),
         Err(_) => Err(format!(
@@ -75,7 +76,6 @@ fn parse_write(value: &[u8]) -> Result<WriteRef<'_>, String> {
     }
 }
 
-#[derive(Debug)]
 pub enum BackgroundTask {
     Gc(GcTask),
     LoadRegion(CacheRegion, Arc<RocksSnapshot>),
@@ -83,6 +83,14 @@ pub enum BackgroundTask {
     DeleteRegions(Vec<CacheRegion>),
     TopRegionsLoadEvict,
     CleanLockTombstone(u64),
+    TurnOnCrossCheck(
+        (
+            RegionCacheMemoryEngine,
+            RocksEngine,
+            Arc<dyn PdClient>,
+            Duration,
+        ),
+    ),
     SetRocksEngine(RocksEngine),
 }
 
@@ -100,6 +108,7 @@ impl Display for BackgroundTask {
                 .debug_struct("CleanLockTombstone")
                 .field("seqno", r)
                 .finish(),
+            BackgroundTask::TurnOnCrossCheck(_) => f.debug_struct("TurnOnCrossCheck").finish(),
             BackgroundTask::SetRocksEngine(_) => f.debug_struct("SetDiskEngine").finish(),
         }
     }
@@ -746,6 +755,8 @@ pub struct BackgroundRunner {
     lock_cleanup_remote: Remote<yatp::task::future::TaskCell>,
     lock_cleanup_worker: Worker,
 
+    cross_check_worker: Option<Worker>,
+
     // The last sequence number for the lock cf tombstone cleanup
     last_seqno: u64,
     // RocksEngine is used to get the oldest snapshot sequence number.
@@ -759,6 +770,9 @@ impl Drop for BackgroundRunner {
         self.gc_region_worker.stop();
         self.load_evict_worker.stop();
         self.lock_cleanup_worker.stop();
+        if let Some(cross_check_worker) = self.cross_check_worker.take() {
+            cross_check_worker.stop()
+        };
     }
 }
 
@@ -824,6 +838,7 @@ impl BackgroundRunner {
                 load_evict_remote,
                 lock_cleanup_remote,
                 lock_cleanup_worker,
+                cross_check_worker: None,
                 last_seqno: 0,
                 rocks_engine: None,
             },
@@ -1179,6 +1194,14 @@ impl Runnable for BackgroundRunner {
                 };
 
                 self.lock_cleanup_remote.spawn(f);
+            }
+            BackgroundTask::TurnOnCrossCheck((engine, rocks_engine, pd_client, check_interval)) => {
+                let cross_check_worker = Worker::new("cross-check-worker");
+                let cross_check_runner =
+                    CrossChecker::new(pd_client, engine, rocks_engine, check_interval);
+                let _ =
+                    cross_check_worker.start_with_timer("cross-check-runner", cross_check_runner);
+                self.cross_check_worker = Some(cross_check_worker);
             }
         }
     }
