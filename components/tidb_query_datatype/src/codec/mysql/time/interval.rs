@@ -544,7 +544,11 @@ impl ConvertToIntervalStr for Real {
         _is_unsigned: bool,
         decimal: isize,
     ) -> Result<String> {
-        Ok(format!("{:.*}", decimal as usize, self.into_inner()))
+        if decimal < 0 {
+            Ok(self.to_string())
+        } else {
+            Ok(format!("{:.*}", decimal as usize, self.into_inner()))
+        }
     }
 }
 
@@ -702,6 +706,8 @@ mod tests {
             (-1.6789, 6, "-1.678900"),
             (100.779, 0, "101"),
             (-100.779, 0, "-101"),
+            (-123.123, -1, "-123.123"),
+            (-123.1239123, -1, "-123.1239123"),
         ];
 
         for (input, decimal, expected) in cases {
@@ -1648,7 +1654,7 @@ mod tests {
     }
 
     #[test]
-    fn test_interval_extrac_duration() {
+    fn test_interval_extract_duration() {
         use IntervalUnit::*;
         let cases = vec![
             (

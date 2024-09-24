@@ -2,9 +2,7 @@
 
 use codec::prelude::NumberEncoder;
 use tidb_query_datatype::{
-    codec::mysql::{
-        Decimal, DecimalEncoder, Duration, DurationEncoder, Time, TimeEncoder, TimeType, MAX_FSP,
-    },
+    codec::mysql::{Decimal, DecimalEncoder, Duration, TimeType},
     FieldTypeAccessor, FieldTypeFlag, FieldTypeTp,
 };
 use tipb::{Expr, ExprType, FieldType, ScalarFuncSig};
@@ -42,9 +40,7 @@ impl ExprDefBuilder {
         expr.mut_field_type()
             .as_mut_accessor()
             .set_tp(FieldTypeTp::Double);
-        if v.fract() != 0.0 {
-            expr.mut_field_type().set_decimal(MAX_FSP as i32);
-        }
+        expr.mut_field_type().set_decimal(-1);
         Self(expr)
     }
 
@@ -69,10 +65,10 @@ impl ExprDefBuilder {
         Self(expr)
     }
 
-    pub fn constant_time(v: Time, time_type: TimeType) -> Self {
+    pub fn constant_time(v: u64, time_type: TimeType) -> Self {
         let mut expr = Expr::default();
         expr.set_tp(ExprType::MysqlTime);
-        expr.mut_val().write_time(v).unwrap();
+        expr.mut_val().write_u64(v).unwrap();
         let tp = match time_type {
             TimeType::Date => FieldTypeTp::Date,
             TimeType::DateTime => FieldTypeTp::DateTime,
@@ -85,7 +81,7 @@ impl ExprDefBuilder {
     pub fn constant_duration(v: Duration) -> Self {
         let mut expr = Expr::default();
         expr.set_tp(ExprType::MysqlDuration);
-        expr.mut_val().write_duration_to_chunk(v).unwrap();
+        expr.mut_val().write_i64(v.to_nanos()).unwrap();
         expr.mut_field_type()
             .as_mut_accessor()
             .set_tp(FieldTypeTp::Duration);
