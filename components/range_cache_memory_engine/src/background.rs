@@ -331,7 +331,7 @@ impl BgWorkManager {
             let mut gc_interval = config.value().gc_interval.0;
             let mut gc_ticker = tick(gc_interval);
             let mut load_evict_interval = config.value().load_evict_interval.0;
-            let mut load_evict_ticker = tick(load_evict_interval); 
+            let mut load_evict_ticker = tick(load_evict_interval);
             let mut tso_timeout = std::cmp::min(gc_interval, TIMTOUT_FOR_TSO);
             'LOOP: loop {
                 select! {
