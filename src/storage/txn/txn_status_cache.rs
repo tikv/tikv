@@ -104,7 +104,32 @@
 //! lock; and for write requests, if it finds the transaction of that lock is
 //! already committed, it can merge together the resolve-lock-committing and the
 //! write operation that the request needs to perform.
-
+//!
+//! ## Design Update-1: Dual-Cache System
+//!
+//! Goal: maximize all TiKV nodes' awareness of large pipelined transactions
+//! during their lifetime, i.e. from their first writes to all locks being
+//! committed. This is crucial to resolved-ts resolver to handle locks belonging
+//! to large transactions.
+//!
+//! The txn_status_cache is then split into two independent parts.
+//! 1. `normal_cache`: For most transactions, including committed and rolled
+//!    back transactions.
+//! 2. `large_txn_cache`: Specifically for ongoing large transactions.
+//!
+//! ### Key characteristics:
+//!
+//! - Large Transaction Identification: Large transactions are identified if
+//!   their `start_ts` and `min_commit_ts` differ. Non-large transactions which
+//!   request to be cached in the cache can also be treated as large
+//!   transactions, as they imply their min_commit_ts are useful.
+//!
+//! - Prioritized Caching: The `large_txn_cache` has a higher priority when
+//!   upserting and retrieving transaction status.
+//!
+//! This dual-cache design allows for more efficient handling of both normal and
+//! large transactions, preventing either type from dominating the cache and
+//! evicting information about transactions of the other type.
 use std::{
     sync::{atomic::AtomicU64, Arc},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -122,18 +147,35 @@ use crate::storage::metrics::*;
 
 const TXN_STATUS_CACHE_SLOTS: usize = 128;
 
-/// An cache item should be kept for at least this time.
+/// A cache item should be kept for at least this time.
 /// Actually this should be guaranteed only for committed transactions. See
 /// [this section](#
 /// for-filtering-out-unwanted-late-arrived-stale-prewrite-requests) for details
 /// about why this is needed.
 const CACHE_ITEMS_REQUIRED_KEEP_TIME: Duration = Duration::from_secs(30);
+const CACHE_ITEMS_REQUIRED_KEEP_TIME_FOR_LARGE_TXNS: Duration = Duration::from_secs(30);
 
-struct CacheEntry {
-    commit_ts: TimeStamp,
+pub struct CacheEntry {
+    state: TxnState,
     /// The system timestamp in milliseconds when the entry is inserted to the
     /// cache.
-    insert_time: u64,
+    update_time: u64,
+}
+
+impl CacheEntry {
+    pub(crate) fn commit_ts(&self) -> Option<TimeStamp> {
+        match self.state {
+            TxnState::Committed { commit_ts } => Some(commit_ts),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Copy, Debug, Clone, PartialEq, Eq)]
+pub enum TxnState {
+    Ongoing { min_commit_ts: TimeStamp },
+    Committed { commit_ts: TimeStamp },
+    RolledBack,
 }
 
 /// Defines the policy to evict expired entries from the cache.
@@ -192,7 +234,7 @@ impl lru::EvictPolicy<TimeStamp, CacheEntry> for TxnStatusCacheEvictPolicy {
         // If it's long enough, remove it.
         if let Some((_, v)) = get_tail_entry.get_tail_entry() {
             if self.now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64
-                > self.required_keep_time_millis + v.insert_time
+                > self.required_keep_time_millis + v.update_time
             {
                 return true;
             }
@@ -219,7 +261,12 @@ type TxnStatusCacheSlot =
 /// Note that the `TxnStatusCache` updates metrics in some operations assuming
 /// there's at most one instance of `TxnStatusCache` in a process.
 pub struct TxnStatusCache {
-    slots: Vec<CachePadded<Mutex<TxnStatusCacheSlot>>>,
+    // default cache for committed txns
+    normal_cache: Vec<CachePadded<Mutex<TxnStatusCacheSlot>>>,
+    // for large txns, or any txn whose min_commit_ts needs to be cached
+    // It is isolated from the normal cache to prevents large transactions from being evicted due
+    // to normal transactions. This is how this module "prioritizes" large transactions.
+    large_txn_cache: Vec<CachePadded<Mutex<TxnStatusCacheSlot>>>,
     is_enabled: bool,
 }
 
@@ -229,24 +276,28 @@ impl TxnStatusCache {
     fn new_impl(
         slots: usize,
         required_keep_time: Duration,
+        large_txn_required_keep_time: Duration,
         capacity: usize,
+        large_txn_capacity: usize,
         simulated_system_time: Option<Arc<AtomicU64>>,
     ) -> Self {
         if capacity == 0 {
             return Self {
-                slots: vec![],
+                normal_cache: vec![],
+                large_txn_cache: vec![],
                 is_enabled: false,
             };
         }
 
         // The limit of the LruCache of each slot.
         let allowed_capacity_per_slot = capacity / slots;
+        let capacity_per_slot_for_large_txns = large_txn_capacity / slots;
         // The total memory allocated initially by the LruCache's internal data
         // structure for all slots.
 
         let mut initial_allocated_capacity_total = 0;
         let res = Self {
-            slots: (0..slots)
+            normal_cache: (0..slots)
                 .map(|_| {
                     let cache = LruCache::new(
                         allowed_capacity_per_slot,
@@ -254,6 +305,22 @@ impl TxnStatusCache {
                         lru::CountTracker::default(),
                         TxnStatusCacheEvictPolicy::new(
                             required_keep_time,
+                            simulated_system_time.clone(),
+                        ),
+                    );
+                    let allocated_capacity = cache.internal_allocated_capacity();
+                    initial_allocated_capacity_total += allocated_capacity;
+                    Mutex::new(cache).into()
+                })
+                .collect(),
+            large_txn_cache: (0..slots)
+                .map(|_| {
+                    let cache = LruCache::new(
+                        capacity_per_slot_for_large_txns,
+                        0,
+                        lru::CountTracker::default(),
+                        TxnStatusCacheEvictPolicy::new(
+                            large_txn_required_keep_time,
                             simulated_system_time.clone(),
                         ),
                     );
@@ -274,6 +341,7 @@ impl TxnStatusCache {
         Self::with_slots_and_time_limit(
             TXN_STATUS_CACHE_SLOTS,
             CACHE_ITEMS_REQUIRED_KEEP_TIME,
+            CACHE_ITEMS_REQUIRED_KEEP_TIME_FOR_LARGE_TXNS,
             capacity,
         )
     }
@@ -281,15 +349,28 @@ impl TxnStatusCache {
     #[cfg(test)]
     pub fn new_for_test() -> Self {
         // 1M capacity should be enough for tests.
-        Self::with_slots_and_time_limit(16, CACHE_ITEMS_REQUIRED_KEEP_TIME, 1 << 20)
+        Self::with_slots_and_time_limit(
+            16,
+            CACHE_ITEMS_REQUIRED_KEEP_TIME,
+            CACHE_ITEMS_REQUIRED_KEEP_TIME_FOR_LARGE_TXNS,
+            1 << 20,
+        )
     }
 
     pub fn with_slots_and_time_limit(
         slots: usize,
         required_keep_time: Duration,
+        large_txn_required_keep_time: Duration,
         capacity: usize,
     ) -> Self {
-        Self::new_impl(slots, required_keep_time, capacity, None)
+        Self::new_impl(
+            slots,
+            required_keep_time,
+            large_txn_required_keep_time,
+            capacity,
+            capacity,
+            None,
+        )
     }
 
     /// Create a `TxnStatusCache` instance for test purpose, with simulating
@@ -301,13 +382,15 @@ impl TxnStatusCache {
     #[cfg(test)]
     fn with_simulated_system_time(
         slots: usize,
-        requried_keep_time: Duration,
+        required_keep_time: Duration,
         capacity: usize,
     ) -> (Self, Arc<AtomicU64>) {
         let system_time = Arc::new(AtomicU64::new(0));
         let res = Self::new_impl(
             slots,
-            requried_keep_time,
+            required_keep_time,
+            CACHE_ITEMS_REQUIRED_KEEP_TIME_FOR_LARGE_TXNS,
+            capacity,
             capacity,
             Some(system_time.clone()),
         );
@@ -315,78 +398,176 @@ impl TxnStatusCache {
     }
 
     fn slot_index(&self, start_ts: TimeStamp) -> usize {
-        fxhash::hash(&start_ts) % self.slots.len()
+        fxhash::hash(&start_ts) % self.normal_cache.len()
     }
 
-    /// Insert a transaction status into the cache. The current system time
-    /// should be passed from outside to avoid getting system time repeatedly
-    /// when multiple items is being inserted.
-    ///
-    /// If the transaction's information is already in the cache, it will
-    /// **NOT** be promoted to the most-recent place of the internal LRU.
-    pub fn insert(&self, start_ts: TimeStamp, commit_ts: TimeStamp, now: SystemTime) {
+    /// Insert a transaction status into the cache, or update it. The current
+    /// system time should be passed from outside to avoid getting system time
+    /// repeatedly when multiple items are being inserted.
+    pub fn upsert(&self, start_ts: TimeStamp, state: TxnState, now: SystemTime) {
         if !self.is_enabled {
             return;
         }
 
-        let insert_time = now.duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
-        let mut slot = self.slots[self.slot_index(start_ts)].lock();
-        let previous_size = slot.size();
-        let previous_allocated = slot.internal_allocated_capacity();
-        slot.insert_if_not_exist(
-            start_ts,
-            CacheEntry {
-                commit_ts,
-                insert_time,
-            },
-        );
-        let size = slot.size();
-        let allocated = slot.internal_allocated_capacity();
+        let update_time = now.duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
+        let entry = CacheEntry { state, update_time };
+        let slot_index = self.slot_index(start_ts);
+
+        let previous_size;
+        let after_size;
+        let previous_allocated;
+        let after_allocated;
+        match &state {
+            // large cache path
+            TxnState::Ongoing { min_commit_ts } if *min_commit_ts > start_ts => {
+                // The large_txn_cache takes precedence over the normal_cache in the retrieval
+                // process.
+                // This case implies that min_commit_ts would be useful, thus the entry is put
+                // in the large cache.
+                let mut large_txn_cache = self.large_txn_cache[slot_index].lock();
+                previous_size = large_txn_cache.size();
+                previous_allocated = large_txn_cache.internal_allocated_capacity();
+                if let Some(existing_entry) = large_txn_cache.get_mut(&start_ts) {
+                    // don't update committed or rolled back txns.
+                    if let TxnState::Ongoing {
+                        min_commit_ts: existing_min_commit_ts,
+                    } = existing_entry.state
+                    {
+                        if *min_commit_ts > existing_min_commit_ts {
+                            existing_entry.state = state;
+                            existing_entry.update_time = update_time;
+                        }
+                    }
+                } else {
+                    large_txn_cache.insert(start_ts, entry);
+                }
+                after_size = large_txn_cache.size();
+                after_allocated = large_txn_cache.internal_allocated_capacity();
+            }
+            // normal cache path
+            _ => {
+                let mut normal_cache = self.normal_cache[slot_index].lock();
+                previous_size = normal_cache.size();
+                previous_allocated = normal_cache.internal_allocated_capacity();
+                if let Some(existing_entry) = normal_cache.get_mut(&start_ts) {
+                    // don't update committed or rolled back txns.
+                    if let TxnState::Ongoing { min_commit_ts } = existing_entry.state {
+                        if let TxnState::Committed { commit_ts } = state {
+                            assert!(min_commit_ts <= commit_ts);
+                        }
+                        existing_entry.state = state;
+                        existing_entry.update_time = update_time;
+                    }
+                } else {
+                    normal_cache.insert(start_ts, entry);
+                }
+                after_size = normal_cache.size();
+                after_allocated = normal_cache.internal_allocated_capacity();
+
+                let mut large_cache = self.large_txn_cache[slot_index].lock();
+                if let Some(existing_entry) = large_cache.get_mut(&start_ts) {
+                    // don't update committed or rolled back txns.
+                    if let TxnState::Ongoing { min_commit_ts } = existing_entry.state {
+                        if let TxnState::Committed { commit_ts } = state {
+                            assert!(min_commit_ts <= commit_ts);
+                        }
+                        existing_entry.state = state;
+                        existing_entry.update_time = update_time;
+                    }
+                }
+            }
+        }
         // Update statistics.
         // CAUTION: Assuming that only one TxnStatusCache instance is in a TiKV process.
         SCHED_TXN_STATUS_CACHE_SIZE
             .used
-            .add(size as i64 - previous_size as i64);
+            .add(after_size as i64 - previous_size as i64);
         SCHED_TXN_STATUS_CACHE_SIZE
             .allocated
-            .add(allocated as i64 - previous_allocated as i64);
+            .add(after_allocated as i64 - previous_allocated as i64);
     }
 
-    /// Try to get an item from the cache, without promoting the item (if
-    /// exists) to the most recent place.
-    pub fn get_no_promote(&self, start_ts: TimeStamp) -> Option<TimeStamp> {
+    /// Insert a committed txn into the normal cache.
+    pub fn insert_committed(&self, start_ts: TimeStamp, commit_ts: TimeStamp, now: SystemTime) {
+        let state = TxnState::Committed { commit_ts };
+        self.upsert(start_ts, state, now);
+    }
+
+    pub fn get(&self, start_ts: TimeStamp) -> Option<TxnState> {
         if !self.is_enabled {
             return None;
         }
 
-        let slot = self.slots[self.slot_index(start_ts)].lock();
-        slot.get_no_promote(&start_ts).map(|entry| entry.commit_ts)
+        let slot_index = self.slot_index(start_ts);
+
+        // large txn cache should be queried first, because it has a higher priority
+        // when upserting. It's possible for a start_ts to exist in both caches.
+        // The one in large_txn_cache is more up-to-date.
+        let mut large_txn_cache = self.large_txn_cache[slot_index].lock();
+        if let Some(entry) = large_txn_cache.get(&start_ts) {
+            return Some(entry.state);
+        }
+
+        let mut normal_cache = self.normal_cache[slot_index].lock();
+        if let Some(entry) = normal_cache.get(&start_ts) {
+            return Some(entry.state);
+        }
+
+        None
     }
 
-    pub fn get(&self, start_ts: TimeStamp) -> Option<TimeStamp> {
+    /// Try to get the committed txn from the normal cache, without promoting
+    /// the item (if exists) to the most recent place.
+    /// If the txn is ongoing or rolled back, returns None.
+    pub fn get_committed_no_promote(&self, start_ts: TimeStamp) -> Option<TimeStamp> {
         if !self.is_enabled {
             return None;
         }
 
-        let mut slot = self.slots[self.slot_index(start_ts)].lock();
-        slot.get(&start_ts).map(|entry| entry.commit_ts)
+        let slot = self.normal_cache[self.slot_index(start_ts)].lock();
+        slot.get_no_promote(&start_ts)
+            .and_then(|entry| entry.commit_ts())
     }
 
-    /// Remove an entry from the cache. We usually don't need to remove anything
-    /// from the `TxnStatusCache`, but it's useful in tests to construct cache-
-    /// miss cases.
+    /// Try to get the committed txn from the normal cache.
+    /// If the txn is ongoing or rolled back, returns None.
+    pub fn get_committed(&self, start_ts: TimeStamp) -> Option<TimeStamp> {
+        if !self.is_enabled {
+            return None;
+        }
+
+        let mut slot = self.normal_cache[self.slot_index(start_ts)].lock();
+        slot.get(&start_ts).and_then(|entry| entry.commit_ts())
+    }
+
+    /// Removes a txn from the normal cache. We usually don't need to
+    /// remove anything from the normal cache, but it's useful in tests
+    /// to construct cache-miss cases.
+    /// Return its commit_ts if it's committed; return None otherwise.
     #[cfg(test)]
-    pub fn remove(&self, start_ts: TimeStamp) -> Option<TimeStamp> {
+    pub fn remove_normal(&self, start_ts: TimeStamp) -> Option<TimeStamp> {
         if !self.is_enabled {
             return None;
         }
 
         let res = {
-            let mut slot = self.slots[self.slot_index(start_ts)].lock();
-            slot.remove(&start_ts).map(|e| e.commit_ts)
+            let mut slot = self.normal_cache[self.slot_index(start_ts)].lock();
+            slot.remove(&start_ts).and_then(|e| e.commit_ts())
         };
-        debug_assert!(self.get_no_promote(start_ts).is_none());
+        debug_assert!(self.get_committed_no_promote(start_ts).is_none());
         res
+    }
+
+    /// Remove a txn from the large-txn cache.
+    /// This could happen when the large txn finishes its
+    /// secondary commit phase, i.e. all locks have been cleared. There is no
+    /// need to keep this txn in cache any longer.
+    pub fn remove_large_txn(&self, start_ts: TimeStamp) -> Option<CacheEntry> {
+        if !self.is_enabled {
+            return None;
+        }
+        let mut slot = self.large_txn_cache[self.slot_index(start_ts)].lock();
+        slot.remove(&start_ts)
     }
 }
 
@@ -414,7 +595,7 @@ mod tests {
         // Spread these items evenly in a specific time limit, so that every time
         // a new item is inserted, an item will be popped out.
         for i in 1..=init_size {
-            c.insert(
+            c.insert_committed(
                 (i as u64).into(),
                 (i as u64 + 1).into(),
                 start_time + Duration::from_millis(i as u64),
@@ -431,7 +612,7 @@ mod tests {
                     .as_millis() as u64,
                 Ordering::Release,
             );
-            c.insert(
+            c.insert_committed(
                 current_time_shift.into(),
                 (current_time_shift + 1).into(),
                 simulated_now,
@@ -445,11 +626,12 @@ mod tests {
         let c = TxnStatusCache::with_slots_and_time_limit(
             TXN_STATUS_CACHE_SLOTS,
             CACHE_ITEMS_REQUIRED_KEEP_TIME,
+            CACHE_ITEMS_REQUIRED_KEEP_TIME_FOR_LARGE_TXNS,
             1 << 20,
         );
         let now = SystemTime::now();
         for i in 1..=init_size {
-            c.insert(
+            c.insert_committed(
                 (i as u64).into(),
                 (i as u64 + 1).into(),
                 now + Duration::from_millis(i as u64),
@@ -458,7 +640,7 @@ mod tests {
         let rand_range = if init_size == 0 { 10000 } else { init_size } as u64;
         b.iter(|| {
             let ts = rand::thread_rng().gen_range(0u64, rand_range);
-            let res = c.get_no_promote(ts.into());
+            let res = c.get_committed_no_promote(ts.into());
             test::black_box(&res);
         })
     }
@@ -633,7 +815,7 @@ mod tests {
         );
         let start_time = SystemTime::now();
         for i in 1..=init_size {
-            c.insert(
+            c.insert_committed(
                 (i as u64).into(),
                 (i as u64 + 1).into(),
                 start_time + Duration::from_millis(i as u64),
@@ -665,9 +847,9 @@ mod tests {
             );
 
             if get_before_insert {
-                test::black_box(c.get_no_promote(time_shift.into()));
+                test::black_box(c.get_committed_no_promote(time_shift.into()));
             }
-            c.insert(time_shift.into(), (time_shift + 1).into(), now);
+            c.insert_committed(time_shift.into(), (time_shift + 1).into(), now);
             test::black_box(&c);
         });
     }
@@ -696,31 +878,25 @@ mod tests {
     #[test]
     fn test_insert_and_get() {
         let c = TxnStatusCache::new_for_test();
-        assert!(c.get_no_promote(1.into()).is_none());
+        assert!(c.get_committed_no_promote(1.into()).is_none());
 
         let now = SystemTime::now();
 
-        c.insert(1.into(), 2.into(), now);
-        assert_eq!(c.get_no_promote(1.into()).unwrap(), 2.into());
-        c.insert(3.into(), 4.into(), now);
-        assert_eq!(c.get_no_promote(3.into()).unwrap(), 4.into());
-
-        // This won't actually happen, since a transaction will never have commit info
-        // with two different commit_ts. We just use this to check replacing
-        // won't happen.
-        c.insert(1.into(), 4.into(), now);
-        assert_eq!(c.get_no_promote(1.into()).unwrap(), 2.into());
+        c.insert_committed(1.into(), 2.into(), now);
+        assert_eq!(c.get_committed_no_promote(1.into()).unwrap(), 2.into());
+        c.insert_committed(3.into(), 4.into(), now);
+        assert_eq!(c.get_committed_no_promote(3.into()).unwrap(), 4.into());
 
         let mut start_ts_list: Vec<_> = (1..100).step_by(2).map(TimeStamp::from).collect();
         start_ts_list.shuffle(&mut rand::thread_rng());
         for &start_ts in &start_ts_list {
             let commit_ts = start_ts.next();
-            c.insert(start_ts, commit_ts, now);
+            c.insert_committed(start_ts, commit_ts, now);
         }
         start_ts_list.shuffle(&mut rand::thread_rng());
         for &start_ts in &start_ts_list {
             let commit_ts = start_ts.next();
-            assert_eq!(c.get_no_promote(start_ts).unwrap(), commit_ts);
+            assert_eq!(c.get_committed_no_promote(start_ts).unwrap(), commit_ts);
         }
     }
 
@@ -743,106 +919,93 @@ mod tests {
             Duration::from_millis(1)
         );
 
-        c.insert(1.into(), 2.into(), now());
+        c.insert_committed(1.into(), 2.into(), now());
         set_time(1);
-        c.insert(3.into(), 4.into(), now());
+        c.insert_committed(3.into(), 4.into(), now());
         set_time(2);
-        c.insert(5.into(), 6.into(), now());
+        c.insert_committed(5.into(), 6.into(), now());
         // Size should be calculated by count.
-        assert_eq!(c.slots[0].lock().size(), 3);
-
-        // Insert entry 1 again. So if entry 1 is the first one to be popped out, it
-        // verifies that inserting an existing key won't promote it.
-        c.insert(1.into(), 2.into(), now());
+        assert_eq!(c.normal_cache[0].lock().size(), 3);
 
         // All the 3 entries are kept
-        assert_eq!(c.get_no_promote(1.into()).unwrap(), 2.into());
-        assert_eq!(c.get_no_promote(3.into()).unwrap(), 4.into());
-        assert_eq!(c.get_no_promote(5.into()).unwrap(), 6.into());
+        assert_eq!(c.get_committed_no_promote(1.into()).unwrap(), 2.into());
+        assert_eq!(c.get_committed_no_promote(3.into()).unwrap(), 4.into());
+        assert_eq!(c.get_committed_no_promote(5.into()).unwrap(), 6.into());
 
         set_time(1001);
-        c.insert(7.into(), 8.into(), now());
+        c.insert_committed(7.into(), 8.into(), now());
         // Entry 1 will be popped out.
-        assert!(c.get_no_promote(1.into()).is_none());
-        assert_eq!(c.get_no_promote(3.into()).unwrap(), 4.into());
-        assert_eq!(c.get_no_promote(5.into()).unwrap(), 6.into());
+        assert!(c.get_committed_no_promote(1.into()).is_none());
+        assert_eq!(c.get_committed_no_promote(3.into()).unwrap(), 4.into());
+        assert_eq!(c.get_committed_no_promote(5.into()).unwrap(), 6.into());
         set_time(1004);
-        c.insert(9.into(), 10.into(), now());
-        // It pops more than 1 entries if there are many expired items at the tail.
+        c.insert_committed(9.into(), 10.into(), now());
+        // It pops more than 1 entry if there are many expired items at the tail.
         // Entry 3 and 5 will be popped out.
-        assert!(c.get_no_promote(1.into()).is_none());
-        assert!(c.get_no_promote(3.into()).is_none());
-        assert!(c.get_no_promote(5.into()).is_none());
-        assert_eq!(c.get_no_promote(7.into()).unwrap(), 8.into());
-        assert_eq!(c.get_no_promote(9.into()).unwrap(), 10.into());
+        assert!(c.get_committed_no_promote(1.into()).is_none());
+        assert!(c.get_committed_no_promote(3.into()).is_none());
+        assert!(c.get_committed_no_promote(5.into()).is_none());
+        assert_eq!(c.get_committed_no_promote(7.into()).unwrap(), 8.into());
+        assert_eq!(c.get_committed_no_promote(9.into()).unwrap(), 10.into());
 
         // Now the cache's contents are:
         // 7@1001, 9@1004
         // Test `get` promotes an entry and entries are not in order on insert time.
-        assert_eq!(c.get(7.into()).unwrap(), 8.into());
+        assert_eq!(c.get_committed(7.into()).unwrap(), 8.into());
         set_time(2003);
-        c.insert(11.into(), 12.into(), now());
-        assert_eq!(c.get_no_promote(7.into()).unwrap(), 8.into());
-        assert_eq!(c.get_no_promote(9.into()).unwrap(), 10.into());
-        assert_eq!(c.get_no_promote(11.into()).unwrap(), 12.into());
+        c.insert_committed(11.into(), 12.into(), now());
+        assert_eq!(c.get_committed_no_promote(7.into()).unwrap(), 8.into());
+        assert_eq!(c.get_committed_no_promote(9.into()).unwrap(), 10.into());
+        assert_eq!(c.get_committed_no_promote(11.into()).unwrap(), 12.into());
 
         set_time(2005);
-        c.insert(13.into(), 14.into(), now());
-        assert!(c.get_no_promote(7.into()).is_none());
-        assert!(c.get_no_promote(9.into()).is_none());
-        assert_eq!(c.get_no_promote(11.into()).unwrap(), 12.into());
+        c.insert_committed(13.into(), 14.into(), now());
+        assert!(c.get_committed_no_promote(7.into()).is_none());
+        assert!(c.get_committed_no_promote(9.into()).is_none());
+        assert_eq!(c.get_committed_no_promote(11.into()).unwrap(), 12.into());
 
         // Now the cache's contents are:
         // 11@2003, 13@2005
-        // Test inserting existed entries.
-        // According to the implementation of LruCache, though it won't do any update to
-        // the content, it still check the tail to see if anything can be
-        // evicted.
         set_time(3004);
-        c.insert(13.into(), 14.into(), now());
-        assert!(c.get_no_promote(11.into()).is_none());
-        assert_eq!(c.get_no_promote(13.into()).unwrap(), 14.into());
+        c.insert_committed(14.into(), 14.into(), now());
+        assert!(c.get_committed_no_promote(11.into()).is_none());
+        assert_eq!(c.get_committed_no_promote(13.into()).unwrap(), 14.into());
 
         set_time(3006);
-        c.insert(13.into(), 14.into(), now());
-        assert!(c.get_no_promote(13.into()).is_none());
+        c.remove_normal(13.into());
 
         // Now the cache is empty.
-        c.insert(15.into(), 16.into(), now());
+        c.insert_committed(15.into(), 16.into(), now());
         set_time(3008);
-        c.insert(17.into(), 18.into(), now());
-        // Test inserting existed entry doesn't promote it.
-        // Re-insert 15.
-        set_time(3009);
-        c.insert(15.into(), 16.into(), now());
+        c.insert_committed(17.into(), 18.into(), now());
         set_time(4007);
-        c.insert(19.into(), 20.into(), now());
+        c.insert_committed(19.into(), 20.into(), now());
         // 15's insert time is not updated, and is at the tail of the LRU, so it should
         // be popped.
-        assert!(c.get_no_promote(15.into()).is_none());
-        assert_eq!(c.get_no_promote(17.into()).unwrap(), 18.into());
+        assert!(c.get_committed_no_promote(15.into()).is_none());
+        assert_eq!(c.get_committed_no_promote(17.into()).unwrap(), 18.into());
 
         // Now the cache's contents are:
         // 17@3008, 19@4007
         // Test system time being changed, which can lead to current time being less
         // than entries' insert time.
         set_time(2000);
-        c.insert(21.into(), 22.into(), now());
-        assert_eq!(c.get_no_promote(17.into()).unwrap(), 18.into());
-        assert_eq!(c.get_no_promote(19.into()).unwrap(), 20.into());
-        assert_eq!(c.get_no_promote(21.into()).unwrap(), 22.into());
+        c.insert_committed(21.into(), 22.into(), now());
+        assert_eq!(c.get_committed_no_promote(17.into()).unwrap(), 18.into());
+        assert_eq!(c.get_committed_no_promote(19.into()).unwrap(), 20.into());
+        assert_eq!(c.get_committed_no_promote(21.into()).unwrap(), 22.into());
         set_time(3500);
-        c.insert(23.into(), 24.into(), now());
-        assert_eq!(c.get_no_promote(21.into()).unwrap(), 22.into());
-        assert_eq!(c.get(17.into()).unwrap(), 18.into());
-        assert_eq!(c.get(19.into()).unwrap(), 20.into());
-        assert_eq!(c.get(23.into()).unwrap(), 24.into());
+        c.insert_committed(23.into(), 24.into(), now());
+        assert_eq!(c.get_committed_no_promote(21.into()).unwrap(), 22.into());
+        assert_eq!(c.get_committed(17.into()).unwrap(), 18.into());
+        assert_eq!(c.get_committed(19.into()).unwrap(), 20.into());
+        assert_eq!(c.get_committed(23.into()).unwrap(), 24.into());
         // `get` promotes the entries, and entry 21 is put to the tail.
-        c.insert(23.into(), 24.into(), now());
-        assert_eq!(c.get_no_promote(17.into()).unwrap(), 18.into());
-        assert_eq!(c.get_no_promote(19.into()).unwrap(), 20.into());
-        assert!(c.get_no_promote(21.into()).is_none());
-        assert_eq!(c.get_no_promote(23.into()).unwrap(), 24.into());
+        c.insert_committed(24.into(), 24.into(), now());
+        assert_eq!(c.get_committed_no_promote(17.into()).unwrap(), 18.into());
+        assert_eq!(c.get_committed_no_promote(19.into()).unwrap(), 20.into());
+        assert!(c.get_committed_no_promote(21.into()).is_none());
+        assert_eq!(c.get_committed_no_promote(23.into()).unwrap(), 24.into());
 
         // Now the cache's contents are:
         // 17@3008, 19@4007, 23@3500
@@ -850,28 +1013,28 @@ mod tests {
         // the `TxnStatusCacheEvictPolicy` as they are fetched at different time.
         set_time(4009);
         // Insert with time 4007, but check with time 4009
-        c.insert(25.into(), 26.into(), now() - Duration::from_millis(2));
-        assert!(c.get_no_promote(17.into()).is_none());
-        assert_eq!(c.get_no_promote(19.into()).unwrap(), 20.into());
+        c.insert_committed(25.into(), 26.into(), now() - Duration::from_millis(2));
+        assert!(c.get_committed_no_promote(17.into()).is_none());
+        assert_eq!(c.get_committed_no_promote(19.into()).unwrap(), 20.into());
 
         // The cache's contents:
         // 19@4007, 23@3500, 25@4007
         set_time(4010);
-        c.insert(27.into(), 28.into(), now());
+        c.insert_committed(27.into(), 28.into(), now());
         // The cache's contents:
         // 19@4007, 23@3500, 25@4007, 27@4010
 
         // It's also possible to check with a lower time considering that system time
         // may be changed. Insert with time 5018, but check with time 5008
         set_time(5008);
-        c.insert(29.into(), 30.into(), now() + Duration::from_millis(10));
-        assert!(c.get_no_promote(19.into()).is_none());
-        assert!(c.get_no_promote(23.into()).is_none());
-        assert!(c.get_no_promote(25.into()).is_none());
-        assert_eq!(c.get_no_promote(27.into()).unwrap(), 28.into());
-        assert_eq!(c.get_no_promote(29.into()).unwrap(), 30.into());
+        c.insert_committed(29.into(), 30.into(), now() + Duration::from_millis(10));
+        assert!(c.get_committed_no_promote(19.into()).is_none());
+        assert!(c.get_committed_no_promote(23.into()).is_none());
+        assert!(c.get_committed_no_promote(25.into()).is_none());
+        assert_eq!(c.get_committed_no_promote(27.into()).unwrap(), 28.into());
+        assert_eq!(c.get_committed_no_promote(29.into()).unwrap(), 30.into());
 
-        // Now the the cache's contents are:
+        // Now the cache's contents are:
         // 27@4010, 29@5018
         // Considering the case that system time is being changed, it's even
         // possible that the entry being inserted is already expired
@@ -879,29 +1042,43 @@ mod tests {
         // entry will be dropped immediately or not. We just ensure it won't
         // trigger more troubles.
         set_time(7000);
-        c.insert(31.into(), 32.into(), now() - Duration::from_millis(1001));
-        assert!(c.get_no_promote(27.into()).is_none());
-        assert!(c.get_no_promote(29.into()).is_none());
-        assert!(c.get_no_promote(31.into()).is_none());
-        assert_eq!(c.slots[0].lock().size(), 0);
+        c.insert_committed(31.into(), 32.into(), now() - Duration::from_millis(1001));
+        assert!(c.get_committed_no_promote(27.into()).is_none());
+        assert!(c.get_committed_no_promote(29.into()).is_none());
+        assert!(c.get_committed_no_promote(31.into()).is_none());
+        assert_eq!(c.normal_cache[0].lock().size(), 0);
     }
 
     #[test]
     fn test_setting_capacity() {
-        let c = TxnStatusCache::new_impl(2, Duration::from_millis(1000), 10, None);
+        let c = TxnStatusCache::new_impl(
+            2,
+            Duration::from_millis(1000),
+            Duration::from_millis(1000),
+            10,
+            10,
+            None,
+        );
         assert!(c.is_enabled);
-        assert_eq!(c.slots.len(), 2);
-        assert_eq!(c.slots[0].lock().capacity(), 5);
-        assert_eq!(c.slots[1].lock().capacity(), 5);
+        assert_eq!(c.normal_cache.len(), 2);
+        assert_eq!(c.normal_cache[0].lock().capacity(), 5);
+        assert_eq!(c.normal_cache[1].lock().capacity(), 5);
 
-        let c = TxnStatusCache::new_impl(2, Duration::from_millis(1000), 0, None);
+        let c = TxnStatusCache::new_impl(
+            2,
+            Duration::from_millis(1000),
+            Duration::from_millis(1000),
+            0,
+            0,
+            None,
+        );
         assert!(!c.is_enabled);
-        assert_eq!(c.slots.len(), 0);
+        assert_eq!(c.normal_cache.len(), 0);
         // All operations are noops and won't cause panic or return any incorrect
         // result.
-        c.insert(1.into(), 2.into(), SystemTime::now());
-        assert!(c.get_no_promote(1.into()).is_none());
-        assert!(c.get(1.into()).is_none());
+        c.insert_committed(1.into(), 2.into(), SystemTime::now());
+        assert!(c.get_committed_no_promote(1.into()).is_none());
+        assert!(c.get_committed(1.into()).is_none());
     }
 
     #[test]
@@ -918,61 +1095,401 @@ mod tests {
         let now = || UNIX_EPOCH + Duration::from_millis(time.load(Ordering::Acquire));
 
         set_time(0);
-        c.insert(1.into(), 2.into(), now());
+        c.insert_committed(1.into(), 2.into(), now());
         set_time(2);
-        c.insert(3.into(), 4.into(), now());
+        c.insert_committed(3.into(), 4.into(), now());
         set_time(4);
-        c.insert(5.into(), 6.into(), now());
+        c.insert_committed(5.into(), 6.into(), now());
         set_time(6);
-        c.insert(7.into(), 8.into(), now());
+        c.insert_committed(7.into(), 8.into(), now());
 
         // The cache can keep at most 5 entries.
         set_time(8);
-        c.insert(9.into(), 10.into(), now());
+        c.insert_committed(9.into(), 10.into(), now());
         // Entry 1 not evicted. 5 entries in the cache currently
-        assert_eq!(c.slots[0].lock().len(), 5);
-        assert_eq!(c.get_no_promote(1.into()).unwrap(), 2.into());
+        assert_eq!(c.normal_cache[0].lock().len(), 5);
+        assert_eq!(c.get_committed_no_promote(1.into()).unwrap(), 2.into());
         set_time(10);
-        c.insert(11.into(), 12.into(), now());
+        c.insert_committed(11.into(), 12.into(), now());
         // Entry 1 evicted. Still 5 entries in the cache.
-        assert_eq!(c.slots[0].lock().len(), 5);
-        assert!(c.get_no_promote(1.into()).is_none());
-        assert_eq!(c.get_no_promote(3.into()).unwrap(), 4.into());
+        assert_eq!(c.normal_cache[0].lock().len(), 5);
+        assert!(c.get_committed_no_promote(1.into()).is_none());
+        assert_eq!(c.get_committed_no_promote(3.into()).unwrap(), 4.into());
 
         // Nothing will be evicted after trying to insert an existing key.
-        c.insert(11.into(), 12.into(), now());
-        assert_eq!(c.slots[0].lock().len(), 5);
-        assert_eq!(c.get_no_promote(3.into()).unwrap(), 4.into());
+        c.insert_committed(11.into(), 12.into(), now());
+        assert_eq!(c.normal_cache[0].lock().len(), 5);
+        assert_eq!(c.get_committed_no_promote(3.into()).unwrap(), 4.into());
 
         // Current contents (key@time):
         // 3@2, 5@4, 7@6. 9@8, 11@10
         // Evicting by time works as well.
         set_time(1005);
-        c.insert(13.into(), 14.into(), now());
-        assert_eq!(c.slots[0].lock().len(), 4);
-        assert!(c.get_no_promote(3.into()).is_none());
-        assert!(c.get_no_promote(5.into()).is_none());
-        assert_eq!(c.get_no_promote(7.into()).unwrap(), 8.into());
+        c.insert_committed(13.into(), 14.into(), now());
+        assert_eq!(c.normal_cache[0].lock().len(), 4);
+        assert!(c.get_committed_no_promote(3.into()).is_none());
+        assert!(c.get_committed_no_promote(5.into()).is_none());
+        assert_eq!(c.get_committed_no_promote(7.into()).unwrap(), 8.into());
 
         // Reorder the entries by `get` to prepare for testing the next case.
-        assert_eq!(c.get(7.into()).unwrap(), 8.into());
-        assert_eq!(c.get(9.into()).unwrap(), 10.into());
-        assert_eq!(c.get(11.into()).unwrap(), 12.into());
+        assert_eq!(c.get_committed(7.into()).unwrap(), 8.into());
+        assert_eq!(c.get_committed(9.into()).unwrap(), 10.into());
+        assert_eq!(c.get_committed(11.into()).unwrap(), 12.into());
 
-        c.insert(15.into(), 16.into(), now());
+        c.insert_committed(15.into(), 16.into(), now());
         // Current contents:
         // 13@1005, 7@6. 9@8, 11@10, 15@1005
-        assert_eq!(c.slots[0].lock().len(), 5);
+        assert_eq!(c.normal_cache[0].lock().len(), 5);
         // Expired entries that are not the tail can be evicted after the tail
         // is evicted due to capacity exceeded.
         set_time(1011);
-        c.insert(17.into(), 18.into(), now());
-        assert_eq!(c.slots[0].lock().len(), 2);
-        assert!(c.get_no_promote(13.into()).is_none());
-        assert!(c.get_no_promote(7.into()).is_none());
-        assert!(c.get_no_promote(9.into()).is_none());
-        assert!(c.get_no_promote(11.into()).is_none());
-        assert_eq!(c.get(15.into()).unwrap(), 16.into());
-        assert_eq!(c.get(17.into()).unwrap(), 18.into());
+        c.insert_committed(17.into(), 18.into(), now());
+        assert_eq!(c.normal_cache[0].lock().len(), 2);
+        assert!(c.get_committed_no_promote(13.into()).is_none());
+        assert!(c.get_committed_no_promote(7.into()).is_none());
+        assert!(c.get_committed_no_promote(9.into()).is_none());
+        assert!(c.get_committed_no_promote(11.into()).is_none());
+        assert_eq!(c.get_committed(15.into()).unwrap(), 16.into());
+        assert_eq!(c.get_committed(17.into()).unwrap(), 18.into());
+    }
+
+    fn setup_cache() -> TxnStatusCache {
+        TxnStatusCache::with_slots_and_time_limit(
+            16,
+            Duration::from_secs(30),
+            Duration::from_secs(60),
+            1000,
+        )
+    }
+
+    #[test]
+    fn test_upsert_and_get_normal_txn() {
+        let cache = setup_cache();
+        let now = SystemTime::now();
+
+        cache.upsert(
+            1.into(),
+            TxnState::Ongoing {
+                min_commit_ts: 2.into(),
+            },
+            now,
+        );
+        assert_eq!(
+            cache.get(1.into()),
+            Some(TxnState::Ongoing {
+                min_commit_ts: 2.into()
+            })
+        );
+
+        cache.upsert(
+            1.into(),
+            TxnState::Committed {
+                commit_ts: 3.into(),
+            },
+            now,
+        );
+        assert_eq!(
+            cache.get(1.into()),
+            Some(TxnState::Committed {
+                commit_ts: 3.into()
+            })
+        );
+    }
+
+    #[test]
+    fn test_upsert_and_get_large_txn() {
+        let cache = setup_cache();
+        let now = SystemTime::now();
+        let large_ts = 10000.into();
+
+        cache.upsert(
+            1.into(),
+            TxnState::Ongoing {
+                min_commit_ts: large_ts,
+            },
+            now,
+        );
+        assert_eq!(
+            cache.get(1.into()),
+            Some(TxnState::Ongoing {
+                min_commit_ts: large_ts
+            })
+        );
+
+        cache.upsert(
+            1.into(),
+            TxnState::Committed {
+                commit_ts: large_ts,
+            },
+            now,
+        );
+        assert_eq!(
+            cache.get(1.into()),
+            Some(TxnState::Committed {
+                commit_ts: large_ts
+            })
+        );
+    }
+
+    #[test]
+    fn test_update_ongoing_txn() {
+        let cache = setup_cache();
+        let now = SystemTime::now();
+
+        cache.upsert(
+            1.into(),
+            TxnState::Ongoing {
+                min_commit_ts: 2.into(),
+            },
+            now,
+        );
+        cache.upsert(
+            1.into(),
+            TxnState::Ongoing {
+                min_commit_ts: 3.into(),
+            },
+            now,
+        );
+        assert_eq!(
+            cache.get(1.into()),
+            Some(TxnState::Ongoing {
+                min_commit_ts: 3.into()
+            })
+        );
+    }
+
+    #[test]
+    fn test_update_committed_txn() {
+        let cache = setup_cache();
+        let now = SystemTime::now();
+
+        cache.upsert(
+            1.into(),
+            TxnState::Committed {
+                commit_ts: 2.into(),
+            },
+            now,
+        );
+        cache.upsert(1.into(), TxnState::RolledBack, now);
+        assert_eq!(
+            cache.get(1.into()),
+            Some(TxnState::Committed {
+                commit_ts: 2.into()
+            })
+        );
+    }
+
+    #[test]
+    fn test_normal_to_large_txn_transition() {
+        let cache = setup_cache();
+        let now = SystemTime::now();
+
+        cache.upsert(
+            1.into(),
+            TxnState::Ongoing {
+                min_commit_ts: 1.into(),
+            },
+            now,
+        );
+        assert_eq!(
+            cache.get(1.into()),
+            Some(TxnState::Ongoing {
+                min_commit_ts: 1.into()
+            })
+        );
+
+        cache.upsert(
+            1.into(),
+            TxnState::Ongoing {
+                min_commit_ts: 2.into(),
+            },
+            now,
+        );
+        assert_eq!(
+            cache.get(1.into()),
+            Some(TxnState::Ongoing {
+                min_commit_ts: 2.into()
+            })
+        );
+    }
+
+    #[test]
+    fn test_large_to_normal_txn_transition() {
+        let cache = setup_cache();
+        let now = SystemTime::now();
+
+        cache.upsert(
+            1.into(),
+            TxnState::Ongoing {
+                min_commit_ts: 10000.into(),
+            },
+            now,
+        );
+        assert_eq!(
+            cache.get(1.into()),
+            Some(TxnState::Ongoing {
+                min_commit_ts: 10000.into()
+            })
+        );
+
+        cache.upsert(
+            1.into(),
+            TxnState::Committed {
+                commit_ts: 10001.into(),
+            },
+            now,
+        );
+        assert_eq!(
+            cache.get(1.into()),
+            Some(TxnState::Committed {
+                commit_ts: 10001.into()
+            })
+        );
+    }
+
+    #[test]
+    fn test_eviction_normal_txn() {
+        let (cache, time) =
+            TxnStatusCache::with_simulated_system_time(1, Duration::from_secs(30), 1);
+
+        time.store(0, Ordering::SeqCst);
+        cache.upsert(
+            1.into(),
+            TxnState::Ongoing {
+                min_commit_ts: 2.into(),
+            },
+            SystemTime::now(),
+        );
+
+        time.store(31 * 1000, Ordering::SeqCst); // 31 seconds later
+        cache.upsert(
+            3.into(),
+            TxnState::Ongoing {
+                min_commit_ts: 4.into(),
+            },
+            SystemTime::now(),
+        );
+        assert_eq!(cache.get(1.into()), None);
+        assert_eq!(
+            cache.get(3.into()),
+            Some(TxnState::Ongoing {
+                min_commit_ts: 4.into()
+            })
+        );
+    }
+
+    #[test]
+    fn test_eviction_large_txn() {
+        let (cache, time) =
+            TxnStatusCache::with_simulated_system_time(1, Duration::from_secs(60), 1);
+
+        time.store(0, Ordering::SeqCst);
+        cache.upsert(
+            1.into(),
+            TxnState::Ongoing {
+                min_commit_ts: 10000.into(),
+            },
+            SystemTime::now(),
+        );
+
+        time.store(61 * 1000, Ordering::SeqCst); // 61 seconds later
+        cache.upsert(
+            2.into(),
+            TxnState::Ongoing {
+                min_commit_ts: 20000.into(),
+            },
+            SystemTime::now(),
+        );
+        assert_eq!(cache.get(1.into()), None);
+        assert_eq!(
+            cache.get(2.into()),
+            Some(TxnState::Ongoing {
+                min_commit_ts: 20000.into()
+            })
+        );
+    }
+
+    #[test]
+    fn test_capacity_limit() {
+        let cache = TxnStatusCache::with_slots_and_time_limit(
+            1,
+            Duration::from_secs(30),
+            Duration::from_secs(60),
+            5,
+        );
+        let now = SystemTime::now();
+
+        for i in 1..=5 {
+            cache.upsert(
+                i.into(),
+                TxnState::Ongoing {
+                    min_commit_ts: (i + 1).into(),
+                },
+                now,
+            );
+        }
+
+        cache.upsert(
+            6.into(),
+            TxnState::Ongoing {
+                min_commit_ts: 7.into(),
+            },
+            now,
+        );
+        assert_eq!(cache.get(1.into()), None);
+        assert_eq!(
+            cache.get(6.into()),
+            Some(TxnState::Ongoing {
+                min_commit_ts: 7.into()
+            })
+        );
+    }
+
+    #[test]
+    fn test_get_committed() {
+        let cache = setup_cache();
+        let now = SystemTime::now();
+
+        cache.upsert(
+            1.into(),
+            TxnState::Committed {
+                commit_ts: 2.into(),
+            },
+            now,
+        );
+        cache.upsert(
+            3.into(),
+            TxnState::Ongoing {
+                min_commit_ts: 4.into(),
+            },
+            now,
+        );
+
+        assert_eq!(cache.get_committed(1.into()), Some(2.into()));
+        assert_eq!(cache.get_committed(3.into()), None);
+    }
+
+    #[test]
+    fn test_remove_large_txn() {
+        let cache = setup_cache();
+        let now = SystemTime::now();
+
+        cache.upsert(
+            1.into(),
+            TxnState::Ongoing {
+                min_commit_ts: 10000.into(),
+            },
+            now,
+        );
+        assert_eq!(
+            cache.get(1.into()),
+            Some(TxnState::Ongoing {
+                min_commit_ts: 10000.into()
+            })
+        );
+
+        let removed = cache.remove_large_txn(1.into());
+        assert!(removed.is_some());
+        assert_eq!(cache.get(1.into()), None);
     }
 }
