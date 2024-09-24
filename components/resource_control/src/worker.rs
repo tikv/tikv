@@ -13,7 +13,7 @@ use prometheus::Histogram;
 use strum::EnumCount;
 use tikv_util::{
     debug,
-    resource_control::TaskPriority,
+    resource_control::{TaskPriority, DEFAULT_RESOURCE_GROUP_NAME},
     sys::{cpu_time::ProcessStat, SysQuota},
     time::Instant,
     warn,
@@ -137,6 +137,20 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         }
         self.last_adjust_time = now;
 
+        let mut background_util_limit = self
+            .resource_ctl
+            .get_resource_group(DEFAULT_RESOURCE_GROUP_NAME)
+            .map_or(0, |r| {
+                r.group.get_background_settings().get_utilization_limit()
+            });
+        if background_util_limit == 0 {
+            background_util_limit = 100;
+        }
+
+        BACKGROUND_TASK_RESOURCE_UTILITATION_VEC
+            .with_label_values(&["limit"])
+            .set(background_util_limit as i64);
+
         let mut background_groups: Vec<_> = self
             .resource_ctl
             .resource_groups
@@ -156,8 +170,18 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             return;
         }
 
-        self.do_adjust(ResourceType::Cpu, dur_secs, &mut background_groups);
-        self.do_adjust(ResourceType::Io, dur_secs, &mut background_groups);
+        self.do_adjust(
+            ResourceType::Cpu,
+            dur_secs,
+            background_util_limit,
+            &mut background_groups,
+        );
+        self.do_adjust(
+            ResourceType::Io,
+            dur_secs,
+            background_util_limit,
+            &mut background_groups,
+        );
 
         // clean up deleted group stats
         if self.prev_stats_by_group[0].len() != background_groups.len() {
@@ -173,6 +197,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         &mut self,
         resource_type: ResourceType,
         dur_secs: f64,
+        utilization_limit: u64,
         bg_group_stats: &mut [GroupStats],
     ) {
         let resource_stats = match self.resource_quota_getter.get_current_stats(resource_type) {
@@ -219,6 +244,12 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             }
         }
 
+        let background_util =
+            (background_consumed_total / resource_stats.total_quota * 100.0) as u64;
+        BACKGROUND_TASK_RESOURCE_UTILITATION_VEC
+            .with_label_values(&[resource_type.as_str()])
+            .set(background_util as i64);
+
         // fast path if process cpu is low
         let is_low_load = resource_stats.current_used <= (resource_stats.total_quota * 0.1);
         if is_low_load && !has_wait && self.is_last_time_low_load[resource_type as usize] {
@@ -226,6 +257,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         }
         self.is_last_time_low_load[resource_type as usize] = is_low_load;
 
+        let util_limit_percent = (utilization_limit as f64 / 100.0).min(1.0);
         // the available resource for background tasks is defined as:
         // (total_resource_quota - foreground_task_used). foreground_task_used
         // resource is calculated by: (resource_current_total_used -
@@ -235,6 +267,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             - resource_stats.current_used
             + background_consumed_total)
             * 0.8)
+            .min(resource_stats.total_quota * util_limit_percent)
             .max(resource_stats.total_quota * 0.1);
         let mut total_expected_cost = 0.0;
         for g in bg_group_stats.iter_mut() {
