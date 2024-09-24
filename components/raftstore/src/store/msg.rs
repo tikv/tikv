@@ -757,7 +757,6 @@ pub struct InspectedRaftMessage {
 
 /// Message that can be sent to a peer.
 #[derive(EnumCount, EnumVariantNames)]
-#[repr(u8)]
 pub enum PeerMsg<EK: KvEngine> {
     /// Raft message is the message sent between raft nodes in the same
     /// raft group. Messages need to be redirected to raftstore if target
