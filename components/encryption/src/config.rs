@@ -1,5 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::result;
+
 use cloud::{
     kms::{SubConfigAws, SubConfigAzure, SubConfigGcp},
     Config as CloudConfig,
@@ -7,7 +9,11 @@ use cloud::{
 use kvproto::encryptionpb::{EncryptionMethod, MasterKey, MasterKeyKms, MasterKey_oneof_backend};
 use online_config::OnlineConfig;
 use serde_derive::{Deserialize, Serialize};
-use tikv_util::config::ReadableDuration;
+use tikv_util::{box_err, config::ReadableDuration};
+
+use crate::Error;
+
+pub type Result<T> = result::Result<T, Error>;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]
@@ -173,11 +179,10 @@ impl KmsConfig {
         }
         config
     }
-
-    pub fn to_cloud_config(&self) -> CloudConfig {
-        CloudConfig {
+    pub fn to_cloud_config(&self) -> Result<CloudConfig> {
+        Ok(CloudConfig {
             key_id: cloud::kms::KeyId::new(self.key_id.clone())
-                .expect("key_id should not be empty"),
+                .map_err(|_| Error::Other(box_err!("key id should not be empty")))?,
             location: cloud::kms::Location {
                 region: self.region.clone(),
                 endpoint: self.endpoint.clone(),
@@ -201,7 +206,7 @@ impl KmsConfig {
                 access_key: aws.access_key.clone(),
                 secret_access_key: aws.secret_access_key.clone(),
             }),
-        }
+        })
     }
 }
 
@@ -324,6 +329,8 @@ mod encryption_method_serde {
 
 #[cfg(test)]
 mod tests {
+    use kvproto::encryptionpb;
+
     use super::*;
 
     #[test]
@@ -477,5 +484,179 @@ mod tests {
                 toml::to_string_pretty(&kms_cfg).unwrap()
             );
         }
+    }
+
+    #[test]
+    fn test_from_proto() {
+        // Test case 1: Basic KMS config without vendor-specific details
+        let proto = MasterKeyKms {
+            key_id: "test_key".to_string(),
+            region: "test_region".to_string(),
+            endpoint: "test_endpoint".to_string(),
+            vendor: "test_vendor".to_string(),
+            ..Default::default()
+        };
+        let config = KmsConfig::from_proto(&proto);
+        assert_eq!(config.key_id, "test_key");
+        assert_eq!(config.region, "test_region");
+        assert_eq!(config.endpoint, "test_endpoint");
+        assert_eq!(config.vendor, "test_vendor");
+        assert!(config.azure.is_none());
+        assert!(config.gcp.is_none());
+        assert!(config.aws.is_none());
+        // Test case 2: KMS config with Azure details
+        let mut proto_azure = proto.clone();
+        proto_azure.azure_kms = Some(encryptionpb::AzureKms {
+            tenant_id: "azure_tenant".to_string(),
+            client_id: "azure_client".to_string(),
+            key_vault_url: "azure_vault".to_string(),
+            hsm_name: "azure_hsm".to_string(),
+            hsm_url: "azure_hsm_url".to_string(),
+            client_certificate: "azure_cert".to_string(),
+            client_certificate_path: "azure_cert_path".to_string(),
+            client_certificate_password: "azure_password".to_string(),
+            client_secret: "azure_secret".to_string(),
+            ..Default::default()
+        })
+        .into();
+        let config_azure = KmsConfig::from_proto(&proto_azure);
+        assert!(config_azure.azure.is_some());
+        let azure_config = config_azure.azure.unwrap();
+        assert_eq!(azure_config.tenant_id, "azure_tenant");
+        assert_eq!(azure_config.client_id, "azure_client");
+        assert_eq!(azure_config.keyvault_url, "azure_vault");
+        assert_eq!(azure_config.hsm_name, "azure_hsm");
+        assert_eq!(azure_config.hsm_url, "azure_hsm_url");
+        assert_eq!(
+            azure_config.client_certificate,
+            Some("azure_cert".to_string())
+        );
+        assert_eq!(
+            azure_config.client_certificate_path,
+            Some("azure_cert_path".to_string())
+        );
+        assert_eq!(azure_config.client_certificate_password, "azure_password");
+        assert_eq!(azure_config.client_secret, Some("azure_secret".to_string()));
+
+        // Test case 3: KMS config with GCP details
+        let mut proto_gcp = proto.clone();
+        proto_gcp.gcp_kms = Some(encryptionpb::GcpKms {
+            credential: "gcp_credential".to_string(),
+            ..Default::default()
+        })
+        .into();
+        let config_gcp = KmsConfig::from_proto(&proto_gcp);
+        assert!(config_gcp.gcp.is_some());
+        let gcp_config = config_gcp.gcp.unwrap();
+        assert_eq!(
+            gcp_config.credential_file_path,
+            Some("gcp_credential".to_string())
+        );
+
+        // Test case 4: KMS config with AWS details
+        let mut proto_aws = proto.clone();
+        proto_aws.aws_kms = Some(encryptionpb::AwsKms {
+            access_key: "aws_access".to_string(),
+            secret_access_key: "aws_secret".to_string(),
+            ..Default::default()
+        })
+        .into();
+        let config_aws = KmsConfig::from_proto(&proto_aws);
+        assert!(config_aws.aws.is_some());
+        let aws_config = config_aws.aws.unwrap();
+        assert_eq!(aws_config.access_key, Some("aws_access".to_string()));
+        assert_eq!(aws_config.secret_access_key, Some("aws_secret".to_string()));
+    }
+
+    #[test]
+    fn test_to_cloud_config() {
+        // Test case 1: Basic KMS config without vendor-specific details
+        let kms_config = KmsConfig {
+            key_id: "test_key".to_string(),
+            region: "test_region".to_string(),
+            endpoint: "test_endpoint".to_string(),
+            vendor: "test_vendor".to_string(),
+            azure: None,
+            gcp: None,
+            aws: None,
+        };
+        let cloud_config = kms_config.to_cloud_config().unwrap();
+        assert_eq!(cloud_config.key_id.as_str(), "test_key");
+        assert_eq!(cloud_config.location.region, "test_region");
+        assert_eq!(cloud_config.location.endpoint, "test_endpoint");
+        assert_eq!(cloud_config.vendor, "test_vendor");
+        assert!(cloud_config.azure.is_none());
+        assert!(cloud_config.gcp.is_none());
+        assert!(cloud_config.aws.is_none());
+
+        // Test case 2: KMS config with Azure details
+        let kms_config_azure = KmsConfig {
+            azure: Some(AzureConfig {
+                tenant_id: "azure_tenant".to_string(),
+                client_id: "azure_client".to_string(),
+                keyvault_url: "azure_vault".to_string(),
+                hsm_name: "azure_hsm".to_string(),
+                hsm_url: "azure_hsm_url".to_string(),
+                client_certificate: Some("azure_cert".to_string()),
+                client_certificate_path: Some("azure_cert_path".to_string()),
+                client_certificate_password: "azure_password".to_string(),
+                client_secret: Some("azure_secret".to_string()),
+            }),
+            ..kms_config.clone()
+        };
+        let cloud_config_azure = kms_config_azure.to_cloud_config().unwrap();
+        assert!(cloud_config_azure.azure.is_some());
+        let azure_config = cloud_config_azure.azure.unwrap();
+        assert_eq!(azure_config.tenant_id, "azure_tenant");
+        assert_eq!(azure_config.client_id, "azure_client");
+        assert_eq!(azure_config.keyvault_url, "azure_vault");
+        assert_eq!(azure_config.hsm_name, "azure_hsm");
+        assert_eq!(azure_config.hsm_url, "azure_hsm_url");
+        assert_eq!(
+            azure_config.client_certificate,
+            Some("azure_cert".to_string())
+        );
+        assert_eq!(
+            azure_config.client_certificate_path,
+            Some("azure_cert_path".to_string())
+        );
+        assert_eq!(azure_config.client_certificate_password, "azure_password");
+        assert_eq!(azure_config.client_secret, Some("azure_secret".to_string()));
+
+        // Test case 3: KMS config with GCP details
+        let kms_config_gcp = KmsConfig {
+            gcp: Some(GcpConfig {
+                credential_file_path: Some("gcp_credential".to_string()),
+            }),
+            ..kms_config.clone()
+        };
+        let cloud_config_gcp = kms_config_gcp.to_cloud_config().unwrap();
+        assert!(cloud_config_gcp.gcp.is_some());
+        let gcp_config = cloud_config_gcp.gcp.unwrap();
+        assert_eq!(
+            gcp_config.credential_file_path,
+            Some("gcp_credential".to_string())
+        );
+
+        // Test case 4: KMS config with AWS details
+        let kms_config_aws = KmsConfig {
+            aws: Some(AwsConfig {
+                access_key: Some("aws_access".to_string()),
+                secret_access_key: Some("aws_secret".to_string()),
+            }),
+            ..kms_config.clone()
+        };
+        let cloud_config_aws = kms_config_aws.to_cloud_config().unwrap();
+        assert!(cloud_config_aws.aws.is_some());
+        let aws_config = cloud_config_aws.aws.unwrap();
+        assert_eq!(aws_config.access_key, Some("aws_access".to_string()));
+        assert_eq!(aws_config.secret_access_key, Some("aws_secret".to_string()));
+
+        // Test case 5: KMS config with empty key_id (should return an error)
+        let kms_config_empty_key = KmsConfig {
+            key_id: "".to_string(),
+            ..kms_config.clone()
+        };
+        kms_config_empty_key.to_cloud_config().unwrap_err();
     }
 }

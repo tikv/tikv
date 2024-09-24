@@ -51,7 +51,7 @@ pub fn create_cloud_backend(config: &KmsConfig) -> Result<Box<KmsBackend>> {
         "key_id" => &config.key_id,
         "vendor" => &config.vendor,
     );
-    let cloud_config = config.to_cloud_config();
+    let cloud_config = config.to_cloud_config()?;
     match config.vendor.as_str() {
         STORAGE_VENDOR_NAME_AWS | "" => {
             let kms_provider = Box::new(
