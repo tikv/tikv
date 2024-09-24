@@ -303,7 +303,7 @@ pub struct Config {
     #[doc(hidden)]
     #[online_config(skip)]
     /// Disable this feature by set to 0, logic will be removed in other pr.
-    /// When TiKV memory usage reaches `memory_usage_high_water` it will try to
+    /// When TiKV memory usage is near `memory_usage_high_water` it will try to
     /// limit memory increasing. For raftstore layer entries will be evicted
     /// from entry cache, if they utilize memory more than
     /// `evict_cache_on_memory_ratio` * total.
