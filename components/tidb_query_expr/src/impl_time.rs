@@ -3647,9 +3647,7 @@ mod tests {
                         FieldTypeTp::DateTime => {
                             let v = value.to_date_time_vec();
                             assert_eq!(
-                                v[0].map(|s| s.to_numeric_string())
-                                    .as_ref()
-                                    .map(|s| s.as_str()),
+                                v[0].map(|s| s.to_numeric_string()).as_deref(),
                                 expected,
                                 "{:?} {:?} {:?} {:?}",
                                 func_sig,
@@ -3661,9 +3659,7 @@ mod tests {
                         FieldTypeTp::Duration => {
                             let v = value.to_duration_vec();
                             assert_eq!(
-                                v[0].map(|s| s.to_numeric_string())
-                                    .as_ref()
-                                    .map(|s| s.as_str()),
+                                v[0].map(|s| s.to_numeric_string()).as_deref(),
                                 expected,
                                 "{:?} {:?} {:?} {:?}",
                                 func_sig,
