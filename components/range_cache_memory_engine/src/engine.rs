@@ -15,7 +15,7 @@ use crossbeam_skiplist::{
 use engine_rocks::RocksEngine;
 use engine_traits::{
     CacheRegion, EvictReason, FailedReason, IterOptions, Iterable, KvEngine, RangeCacheEngine,
-    RegionEvent, Result, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
+    RangeCacheEngineExt, RegionEvent, Result, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
 use kvproto::metapb::Region;
 use raftstore::coprocessor::RegionInfoProvider;
@@ -263,10 +263,7 @@ impl RangeCacheMemoryEngine {
         let bg_work_manager = Arc::new(BgWorkManager::new(
             core.clone(),
             pd_client,
-            config.value().gc_interval.0,
-            config.value().load_evict_interval.0,
-            config.value().expected_region_size(),
-            config.value().mvcc_amplification_threshold,
+            config.clone(),
             memory_controller.clone(),
             region_info_provider,
         ));
@@ -402,7 +399,7 @@ impl RangeCacheMemoryEngine {
         // get snapshot and schedule loading task at last to avoid locking IME for too
         // long.
         if schedule_load {
-            let rocks_snap = Arc::new(self.rocks_engine.as_ref().unwrap().snapshot(None));
+            let rocks_snap = Arc::new(self.rocks_engine.as_ref().unwrap().snapshot());
             if let Err(e) = self
                 .bg_work_manager
                 .schedule_task(BackgroundTask::LoadRegion(region.clone(), rocks_snap))
@@ -484,31 +481,44 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
     fn enabled(&self) -> bool {
         self.config.value().enabled
     }
+}
 
+impl RangeCacheEngineExt for RangeCacheMemoryEngine {
     fn on_region_event(&self, event: RegionEvent) {
         match event {
             RegionEvent::Eviction { region, reason } => {
                 self.evict_region(&region, reason, None);
             }
-            RegionEvent::TryLoad { region } => {
-                if self
-                    .core
-                    .region_manager()
-                    .regions_map()
-                    .read()
-                    .overlap_with_manual_load_range(&region)
-                {
-                    info!(
-                        "try to load region in manual load range";
-                        "region" => ?region,
-                    );
-                    if let Err(e) = self.load_region(region.clone()) {
-                        warn!(
-                            "ime load region failed";
-                            "err" => ?e,
+            RegionEvent::TryLoad {
+                region,
+                for_manual_range,
+            } => {
+                if for_manual_range {
+                    if self
+                        .core
+                        .region_manager()
+                        .regions_map()
+                        .read()
+                        .overlap_with_manual_load_range(&region)
+                    {
+                        info!(
+                            "try to load region in manual load range";
                             "region" => ?region,
                         );
+                        if let Err(e) = self.load_region(region.clone()) {
+                            warn!(
+                                "ime load region failed";
+                                "err" => ?e,
+                                "region" => ?region,
+                            );
+                        }
                     }
+                } else if let Err(e) = self.core.region_manager().load_region(region.clone()) {
+                    warn!(
+                        "ime load region failed";
+                        "error" => ?e,
+                        "region" => ?region,
+                    );
                 }
             }
             RegionEvent::Split {
@@ -534,6 +544,22 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
             }
         }
     }
+
+    fn region_cached(&self, region: &Region) -> bool {
+        let regions_map = self.core.region_manager().regions_map().read();
+        if let Some(meta) = regions_map.region_meta(region.get_id()) {
+            matches!(meta.get_state(), RegionState::Active | RegionState::Loading)
+        } else {
+            false
+        }
+    }
+
+    fn load_region(&self, region: &Region) {
+        self.on_region_event(RegionEvent::TryLoad {
+            region: CacheRegion::from_region(region),
+            for_manual_range: false,
+        });
+    }
 }
 
 impl Iterable for RangeCacheMemoryEngine {
@@ -552,8 +578,8 @@ pub mod tests {
     use crossbeam::epoch;
     use engine_rocks::util::new_engine;
     use engine_traits::{
-        CacheRegion, EvictReason, Mutable, RangeCacheEngine, RegionEvent, WriteBatch,
-        WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
+        CacheRegion, EvictReason, Mutable, RangeCacheEngine, RangeCacheEngineExt, RegionEvent,
+        WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
     };
     use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
     use tokio::{

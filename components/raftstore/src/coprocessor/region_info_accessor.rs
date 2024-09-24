@@ -689,8 +689,8 @@ impl RegionCollector {
         top_regions.retain(|(_, s)| {
             s.cop_detail.iterated_count() >= iterated_count_to_filter
                 // plus processed_keys by 1 to make it not 0
-                && (s.cop_detail.iterated_count()) / (s.cop_detail.processed_keys + 1)
-                    >= self.mvcc_amplification_threshold
+                && s.cop_detail.mvcc_amplification()
+                    >= self.mvcc_amplification_threshold as f64
         });
 
         // TODO(SpadeA): remove it when auto load/evict is stable

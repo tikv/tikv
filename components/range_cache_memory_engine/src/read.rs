@@ -4,7 +4,7 @@ use core::slice::SlicePattern;
 use std::{fmt::Debug, ops::Deref, result, sync::Arc};
 
 use bytes::Bytes;
-use crossbeam::epoch::{self};
+use crossbeam::epoch;
 use crossbeam_skiplist::{base::OwnedIter, SkipList};
 use engine_rocks::{raw::SliceTransform, util::FixedSuffixSliceTransform};
 use engine_traits::{
@@ -671,8 +671,8 @@ mod tests {
     };
     use engine_traits::{
         CacheRegion, EvictReason, FailedReason, IterMetricsCollector, IterOptions, Iterable,
-        Iterator, MetricsExt, Mutable, Peekable, RangeCacheEngine, ReadOptions, RegionEvent,
-        WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_WRITE,
+        Iterator, MetricsExt, Mutable, Peekable, RangeCacheEngine, RangeCacheEngineExt,
+        ReadOptions, RegionEvent, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_WRITE,
     };
     use keys::DATA_PREFIX_KEY;
     use tempfile::Builder;

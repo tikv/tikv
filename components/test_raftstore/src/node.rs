@@ -10,7 +10,7 @@ use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
-use engine_traits::{Engines, MiscExt, Peekable, SnapshotContext};
+use engine_traits::{Engines, MiscExt, Peekable};
 use health_controller::HealthController;
 use kvproto::{
     kvrpcpb::ApiVersion,
@@ -23,7 +23,7 @@ use raft::{eraftpb::MessageType, SnapshotStatus};
 use raftstore::{
     coprocessor::{config::SplitCheckConfigManager, CoprocessorHost},
     errors::Error as RaftError,
-    router::{LocalReadRouter, RaftStoreRouter, ServerRaftStoreRouter},
+    router::{LocalReadRouter, RaftStoreRouter, ReadContext, ServerRaftStoreRouter},
     store::{
         config::RaftstoreConfigManager,
         fsm::{store::StoreMeta, RaftBatchSystem, RaftRouter},
@@ -286,6 +286,7 @@ impl Simulator for NodeCluster {
                 .max_per_file_size(cfg.raft_store.max_snapshot_file_raw_size.0)
                 .enable_multi_snapshot_files(true)
                 .enable_receive_tablet_snapshot(cfg.raft_store.enable_v2_compatible_learner)
+                .min_ingest_snapshot_limit(cfg.server.snap_min_ingest_size)
                 .build(tmp.path().to_str().unwrap());
             (snap_mgr, Some(tmp))
         } else {
@@ -459,7 +460,6 @@ impl Simulator for NodeCluster {
 
     fn async_read(
         &mut self,
-        snap_ctx: Option<SnapshotContext>,
         node_id: u64,
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
@@ -481,7 +481,8 @@ impl Simulator for NodeCluster {
         }
         let mut guard = self.trans.core.lock().unwrap();
         let router = guard.routers.get_mut(&node_id).unwrap();
-        router.read(snap_ctx, batch_id, request, cb).unwrap();
+        let read_ctx = ReadContext::new(batch_id, None);
+        router.read(read_ctx, request, cb).unwrap();
     }
 
     fn send_raft_msg(&mut self, msg: raft_serverpb::RaftMessage) -> Result<()> {

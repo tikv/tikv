@@ -30,6 +30,7 @@ pub enum RegionEvent {
     },
     TryLoad {
         region: CacheRegion,
+        for_manual_range: bool,
     },
     Eviction {
         region: CacheRegion,
@@ -60,7 +61,7 @@ pub enum EvictReason {
 /// RangeCacheEngine works as a range cache caching some ranges (in Memory or
 /// NVME for instance) to improve the read performance.
 pub trait RangeCacheEngine:
-    WriteBatchExt + Iterable + Debug + Clone + Unpin + Send + Sync + 'static
+    RangeCacheEngineExt + WriteBatchExt + Iterable + Debug + Clone + Unpin + Send + Sync + 'static
 {
     type Snapshot: Snapshot;
 
@@ -87,14 +88,16 @@ pub trait RangeCacheEngine:
     fn enabled(&self) -> bool {
         false
     }
-
-    fn on_region_event(&self, event: RegionEvent);
 }
 
 pub trait RangeCacheEngineExt {
     // TODO(SpadeA): try to find a better way to reduce coupling degree of range
     // cache engine and kv engine
     fn on_region_event(&self, event: RegionEvent);
+
+    fn region_cached(&self, range: &Region) -> bool;
+
+    fn load_region(&self, range: &Region);
 }
 
 /// A service that should run in the background to retrieve and apply cache
@@ -114,7 +117,7 @@ pub struct CacheRegion {
     pub epoch_version: u64,
     // data start key of the region range,  equals to data_key(region.start_key).
     pub start: Vec<u8>,
-    // data start key of the region range, equals to data_end_key(region.start_key).
+    // data end key of the region range, equals to data_end_key(region.end_key).
     pub end: Vec<u8>,
 }
 

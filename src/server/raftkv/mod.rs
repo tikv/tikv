@@ -22,9 +22,9 @@ use std::{
 
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot, SnapshotContext};
+use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot};
 use futures::{future::BoxFuture, task::AtomicWaker, Future, Stream, StreamExt, TryFutureExt};
-use hybrid_engine::{HybridEngine, HybridEngineSnapshot};
+use hybrid_engine::HybridEngineSnapshot;
 use kvproto::{
     errorpb,
     kvrpcpb::{Context, IsolationLevel},
@@ -43,7 +43,7 @@ use raftstore::{
         dispatcher::BoxReadIndexObserver, Coprocessor, CoprocessorHost, ReadIndexObserver,
     },
     errors::Error as RaftServerError,
-    router::{LocalReadRouter, RaftStoreRouter},
+    router::{LocalReadRouter, RaftStoreRouter, ReadContext},
     store::{
         self, util::encode_start_ts_into_flag_data, Callback as StoreCallback, RaftCmdExtraOpts,
         ReadCallback, ReadIndexContext, ReadResponse, RegionSnapshot, StoreMsg, WriteResponse,
@@ -355,7 +355,6 @@ where
 {
     router: RaftRouterWrap<S, E>,
     engine: E,
-    in_memory_engine: Option<HybridEngine<E, RangeCacheMemoryEngine>>,
     txn_extra_scheduler: Option<Arc<dyn TxnExtraScheduler>>,
     region_leaders: Arc<RwLock<HashSet<u64>>>,
 }
@@ -366,16 +365,10 @@ where
     S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
 {
     /// Create a RaftKv using specified configuration.
-    pub fn new(
-        router: S,
-        engine: E,
-        in_memory_engine: Option<HybridEngine<E, RangeCacheMemoryEngine>>,
-        region_leaders: Arc<RwLock<HashSet<u64>>>,
-    ) -> RaftKv<E, S> {
+    pub fn new(router: S, engine: E, region_leaders: Arc<RwLock<HashSet<u64>>>) -> RaftKv<E, S> {
         RaftKv {
             router: RaftRouterWrap::new(router),
             engine,
-            in_memory_engine,
             txn_extra_scheduler: None,
             region_leaders,
         }
@@ -610,7 +603,7 @@ where
 
     type SnapshotRes = impl Future<Output = kv::Result<Self::Snap>> + Send;
     fn async_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::SnapshotRes {
-        async_snapshot(&mut self.router, ctx, None)
+        async_snapshot(&mut self.router, ctx)
     }
 
     fn release_snapshot(&mut self) {
@@ -620,17 +613,7 @@ where
     type IMSnap = RegionSnapshot<HybridEngineSnapshot<E, RangeCacheMemoryEngine>>;
     type IMSnapshotRes = impl Future<Output = kv::Result<Self::IMSnap>> + Send;
     fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes {
-        let snap_ctx = if self.in_memory_engine.is_some() {
-            // When range cache engine is enabled, we need snapshot context to determine
-            // whether we should use range cache engine snapshot for this request.
-            ctx.start_ts.map(|ts| SnapshotContext {
-                region: None,
-                read_ts: ts.into_inner(),
-            })
-        } else {
-            None
-        };
-        async_snapshot(&mut self.router, ctx, snap_ctx.clone()).map_ok(|region_snap| {
+        async_snapshot(&mut self.router, ctx).map_ok(|region_snap| {
             // TODO: Remove replace_snapshot. Taking a snapshot and replacing it
             // with a new one is a bit confusing.
             // A better way to build an in-memory snapshot is to return
@@ -697,7 +680,6 @@ where
 fn async_snapshot<E, S>(
     router: &mut RaftRouterWrap<S, E>,
     mut ctx: SnapContext<'_>,
-    snap_ctx: Option<SnapshotContext>,
 ) -> impl Future<Output = kv::Result<RegionSnapshot<E::Snapshot>>> + Send
 where
     E: KvEngine,
@@ -745,9 +727,10 @@ where
     }));
     let tracker = store_cb.read_tracker().unwrap();
 
+    let read_ctx = ReadContext::new(ctx.read_id, ctx.start_ts.map(|ts| ts.into_inner()));
     if res.is_ok() {
         res = router
-            .read(snap_ctx, ctx.read_id, cmd, store_cb)
+            .read(read_ctx, cmd, store_cb)
             .map_err(kv::Error::from);
     }
     async move {

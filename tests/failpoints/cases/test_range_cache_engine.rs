@@ -7,7 +7,8 @@ use std::{
 
 use engine_rocks::RocksSstWriterBuilder;
 use engine_traits::{
-    CacheRegion, EvictReason, RangeCacheEngine, SstWriter, SstWriterBuilder, CF_DEFAULT,
+    CacheRegion, EvictReason, RangeCacheEngine, RangeCacheEngineExt, SstWriter, SstWriterBuilder,
+    CF_DEFAULT,
 };
 use file_system::calc_crc32_bytes;
 use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};
@@ -179,13 +180,6 @@ fn test_load_with_split() {
     cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
     cluster.run();
 
-    let mut tables = vec![];
-    for _ in 0..3 {
-        let product = ProductTable::new();
-        tables.push(product.clone());
-        must_copr_load_data(&mut cluster, &product, 1);
-    }
-
     let (tx, rx) = sync_channel(0);
     // let channel to make load process block at finishing loading snapshot
     let (tx2, rx2) = sync_channel(0);
@@ -207,6 +201,13 @@ fn test_load_with_split() {
             .region_manager()
             .load_region(CacheRegion::from_region(&cache_range))
             .unwrap();
+    }
+
+    let mut tables = vec![];
+    for _ in 0..3 {
+        let product = ProductTable::new();
+        tables.push(product.clone());
+        must_copr_load_data(&mut cluster, &product, 1);
     }
 
     rx.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -633,4 +634,34 @@ fn test_eviction_after_ingest_sst() {
     range_cache_engine
         .snapshot(cache_region, 100, 100)
         .unwrap_err();
+}
+
+#[test]
+fn test_pre_load_when_transfer_ledaer() {
+    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_range_cache(0, 3);
+    cluster.run();
+
+    let (tx, rx) = unbounded();
+    fail::cfg_callback("on_completes_batch_loading", move || {
+        tx.send(true).unwrap();
+    })
+    .unwrap();
+
+    let r = cluster.get_region(b"");
+    cluster.must_transfer_leader(r.id, new_peer(1, 1));
+    let range_cache_engine = cluster.sim.rl().get_range_cache_engine(1);
+    range_cache_engine
+        .load_region(CacheRegion::from_region(&r))
+        .unwrap();
+    // put some key to trigger load
+    cluster.must_put(b"k", b"val");
+    let _ = rx.recv_timeout(Duration::from_secs(500)).unwrap();
+
+    cluster.must_transfer_leader(r.id, new_peer(2, 2));
+    // put some key to trigger load
+    cluster.must_put(b"k2", b"val");
+    let _ = rx.recv_timeout(Duration::from_secs(500)).unwrap();
+
+    let range_cache_engine = cluster.sim.rl().get_range_cache_engine(2);
+    range_cache_engine.region_cached(&r);
 }
