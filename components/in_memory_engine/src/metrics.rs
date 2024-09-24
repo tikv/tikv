@@ -81,25 +81,27 @@ lazy_static! {
         exponential_buckets(0.001, 2.0, 20).unwrap()
     )
     .unwrap();
-    pub static ref IN_MEMORY_ENGINE_EVICTION_DURATION_HISTOGRAM: HistogramVec = register_histogram_vec!(
-        "in_memory_engine_eviction_duration_secs",
-        "Bucketed histogram of region eviction time duration.",
-        &["type"],
-        exponential_buckets(0.001, 2.0, 20).unwrap()
-    )
-    .unwrap();
+    pub static ref IN_MEMORY_ENGINE_EVICTION_DURATION_HISTOGRAM: HistogramVec =
+        register_histogram_vec!(
+            "in_memory_engine_eviction_duration_secs",
+            "Bucketed histogram of region eviction time duration.",
+            &["type"],
+            exponential_buckets(0.001, 2.0, 20).unwrap()
+        )
+        .unwrap();
     pub static ref IN_MEMORY_ENGINE_WRITE_DURATION_HISTOGRAM: Histogram = register_histogram!(
         "in_memory_engine_write_duration_seconds",
         "Bucketed histogram of write duration in region cache engine.",
         exponential_buckets(0.00001, 2.0, 20).unwrap()
     )
     .unwrap();
-    pub static ref IN_MEMORY_ENGINE_PREPARE_FOR_WRITE_DURATION_HISTOGRAM: Histogram = register_histogram!(
-        "in_memory_engine_prepare_for_write_duration_seconds",
-        "Bucketed histogram of prepare for write duration in region cache engine.",
-        exponential_buckets(0.00001, 2.0, 20).unwrap()
-    )
-    .unwrap();
+    pub static ref IN_MEMORY_ENGINE_PREPARE_FOR_WRITE_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "in_memory_engine_prepare_for_write_duration_seconds",
+            "Bucketed histogram of prepare for write duration in region cache engine.",
+            exponential_buckets(0.00001, 2.0, 20).unwrap()
+        )
+        .unwrap();
     pub static ref IN_MEMORY_ENGINE_CACHE_COUNT: IntGaugeVec = register_int_gauge_vec!(
         "in_memory_engine_cache_count",
         "The count of each type on region cache.",
@@ -133,8 +135,10 @@ lazy_static! {
         auto_flush_from!(IN_MEMORY_ENGINE_FLOW, InMemoryEngineTickerMetrics);
     pub static ref IN_MEMORY_ENGINE_LOCATE_STATIC: InMemoryEngineTickerMetrics =
         auto_flush_from!(IN_MEMORY_ENGINE_LOCATE, InMemoryEngineTickerMetrics);
-    pub static ref IN_MEMORY_ENGINE_EVICTION_DURATION_HISTOGRAM_STATIC: EvictionDurationVec =
-        auto_flush_from!(IN_MEMORY_ENGINE_EVICTION_DURATION_HISTOGRAM, EvictionDurationVec);
+    pub static ref IN_MEMORY_ENGINE_EVICTION_DURATION_HISTOGRAM_STATIC: EvictionDurationVec = auto_flush_from!(
+        IN_MEMORY_ENGINE_EVICTION_DURATION_HISTOGRAM,
+        EvictionDurationVec
+    );
 }
 
 pub fn flush_region_cache_engine_statistics(statistics: &Arc<RegionCacheMemoryEngineStatistics>) {

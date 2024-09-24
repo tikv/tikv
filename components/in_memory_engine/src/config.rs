@@ -25,7 +25,7 @@ impl ConfigManager for RegionCacheConfigManager {
                 .update(move |cfg: &mut RegionCacheEngineConfig| cfg.update(change))?;
         }
         info!(
-            "ime range cache config changed";
+            "ime config changed";
             "change" => ?change,
         );
         Ok(())

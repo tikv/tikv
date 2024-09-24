@@ -61,7 +61,7 @@ pub struct RegionCacheEngineConfig {
     // TODO(SpadeA): ultimately we only expose one memory limit to user.
     // When memory usage reaches this amount, no further load will be performed.
     pub stop_load_limit_threshold: Option<ReadableSize>,
-    // When memory usage reaches this amount, we start to pick some ranges to evict.
+    // When memory usage reaches this amount, we start to pick some regions to evict.
     pub soft_limit_threshold: Option<ReadableSize>,
     pub hard_limit_threshold: Option<ReadableSize>,
     pub expected_region_size: Option<ReadableSize>,

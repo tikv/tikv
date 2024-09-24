@@ -36,8 +36,9 @@ use crate::{
     },
     memory_controller::{MemoryController, MemoryUsage},
     metrics::{
-        IN_MEMORY_ENGINE_GC_FILTERED_STATIC, IN_MEMORY_ENGINE_CACHE_COUNT, IN_MEMORY_ENGINE_MEMORY_USAGE,
+        IN_MEMORY_ENGINE_CACHE_COUNT, IN_MEMORY_ENGINE_GC_FILTERED_STATIC,
         IN_MEMORY_ENGINE_GC_TIME_HISTOGRAM, IN_MEMORY_ENGINE_LOAD_TIME_HISTOGRAM,
+        IN_MEMORY_ENGINE_MEMORY_USAGE,
     },
     region_label::{
         LabelRule, RegionLabelChangedCallback, RegionLabelRulesManager, RegionLabelServiceBuilder,
@@ -119,7 +120,7 @@ impl Display for GcTask {
 
 // BgWorkManager managers the worker inits, stops, and task schedules. When
 // created, it starts a worker which receives tasks such as gc task, range
-// delete task, range snapshot load and so on, and starts a thread for
+// delete task, region snapshot load and so on, and starts a thread for
 // periodically schedule gc tasks.
 pub struct BgWorkManager {
     worker: Worker,
@@ -345,7 +346,7 @@ impl BgWorkManager {
                             Ok(Ok(ts)) => ts,
                             err => {
                                 error!(
-                                    "ime schedule range cache engine gc failed ";
+                                    "ime schedule region cache engine gc failed ";
                                     "timeout_duration" => ?tso_timeout,
                                     "error" => ?err,
                                 );
@@ -356,7 +357,7 @@ impl BgWorkManager {
                         let safe_point = TimeStamp::compose(safe_point, 0).into_inner();
                         if let Err(e) = scheduler.schedule(BackgroundTask::Gc(GcTask {safe_point})) {
                             error!(
-                                "ime schedule range cache engine gc failed";
+                                "ime schedule region cache engine gc failed";
                                 "err" => ?e,
                             );
                         }
@@ -372,7 +373,7 @@ impl BgWorkManager {
                     recv(rx) -> r => {
                         if let Err(e) = r {
                             error!(
-                                "ime receive error in range cache engine gc ticker";
+                                "ime receive error in region cache engine gc ticker";
                                 "err" => ?e,
                             );
                         }
@@ -393,10 +394,10 @@ struct BackgroundRunnerCore {
 }
 
 impl BackgroundRunnerCore {
-    /// Returns the ranges that are eligible for garbage collection.
+    /// Returns the regions that are eligible for garbage collection.
     ///
-    /// Returns empty vector if there are no ranges cached or the previous gc is
-    /// not finished.
+    /// Returns empty vector if there are no regions cached or the previous gc
+    /// is not finished.
     fn regions_for_gc(&self) -> Vec<CacheRegion> {
         // another gc task is running, skipped.
         if !self.engine.region_manager().try_set_regions_in_gc(true) {
@@ -425,8 +426,8 @@ impl BackgroundRunnerCore {
     ) -> FilterMetrics {
         let safe_point = {
             let region_manager = self.engine.region_manager();
-            // We should also consider the ongoing snapshot of the historical ranges (ranges
-            // that have been evicted).
+            // We should also consider the ongoing snapshot of the historical regions
+            // (regions that have been evicted).
             let historical_safe_point = region_manager
                 .get_history_regions_min_ts(region)
                 .unwrap_or(u64::MAX);
@@ -478,13 +479,13 @@ impl BackgroundRunnerCore {
             skiplist_engine.cf_handle(CF_DEFAULT),
             skiplist_engine.cf_handle(CF_WRITE),
         );
-        filter.filter_keys_in_range(region);
+        filter.filter_keys_in_region(region);
         self.engine.region_manager().on_gc_region_finished(region);
 
         let duration = start.saturating_elapsed();
         IN_MEMORY_ENGINE_GC_TIME_HISTOGRAM.observe(duration.as_secs_f64());
         info!(
-            "ime range gc complete";
+            "ime region gc complete";
             "region" => ?region,
             "gc_duration" => ?duration,
             "total_version" => filter.metrics.total,
@@ -620,16 +621,16 @@ impl BackgroundRunnerCore {
     /// If the soft limit is exceeded, evict (some) regions no longer considered
     /// top.
     ///
-    /// See: [`RangeStatsManager::collect_changes_ranges`] for
+    /// See: [`RegionStatsManager::collect_changes_regions`] for
     /// algorithm details.
     async fn top_regions_load_evict(&self, delete_range_scheduler: &Scheduler<BackgroundTask>) {
-        let range_stats_manager = match &self.region_stats_manager {
+        let region_stats_manager = match &self.region_stats_manager {
             Some(m) => m,
             None => {
                 return;
             }
         };
-        if !range_stats_manager.ready_for_auto_load_and_evict() {
+        if !region_stats_manager.ready_for_auto_load_and_evict() {
             return;
         }
 
@@ -637,7 +638,7 @@ impl BackgroundRunnerCore {
             let region_map = self.engine.region_manager().regions_map().read();
             (region_map.regions().len(), region_map.cached_regions())
         };
-        let (regions_to_load, regions_to_evict) = range_stats_manager
+        let (regions_to_load, regions_to_evict) = region_stats_manager
             .collect_regions_to_load_and_evict(
                 current_region_count,
                 cached_regions,
@@ -690,17 +691,17 @@ impl BackgroundRunnerCore {
                 .memory_controller
                 .soft_limit_threshold()
                 .saturating_sub(self.memory_controller.mem_usage()))
-                / range_stats_manager.expected_region_size;
+                / region_stats_manager.expected_region_size;
             let expected_new_count = usize::max(expected_new_count, 1);
             let mut regions_map = self.engine.region_manager().regions_map.write();
             for region in regions_to_load.into_iter().take(expected_new_count) {
                 let cache_region = CacheRegion::from_region(&region);
                 if let Err(e) = regions_map.load_region(cache_region) {
-                    warn!("ime error loading range"; "cache_range" => ?region, "err" => ?e);
+                    warn!("ime error loading region"; "cache_region" => ?region, "err" => ?e);
                 }
             }
         }
-        range_stats_manager.complete_auto_load_and_evict();
+        region_stats_manager.complete_auto_load_and_evict();
         info!("ime load_evict complete");
     }
 }
@@ -728,14 +729,14 @@ pub struct BackgroundRunner {
 
     // We have following four separate workers so that each type of task would not block each
     // others
-    range_load_remote: Remote<yatp::task::future::TaskCell>,
-    range_load_worker: Worker,
+    region_load_remote: Remote<yatp::task::future::TaskCell>,
+    region_load_worker: Worker,
 
     delete_range_scheduler: Scheduler<BackgroundTask>,
     delete_range_worker: Worker,
 
-    gc_range_remote: Remote<yatp::task::future::TaskCell>,
-    gc_range_worker: Worker,
+    gc_region_remote: Remote<yatp::task::future::TaskCell>,
+    gc_region_worker: Worker,
 
     // Region load and eviction worker.
     // TODO: this can be consolidated, possibly with the GC worker.
@@ -753,9 +754,9 @@ pub struct BackgroundRunner {
 
 impl Drop for BackgroundRunner {
     fn drop(&mut self) {
-        self.range_load_worker.stop();
+        self.region_load_worker.stop();
         self.delete_range_worker.stop();
-        self.gc_range_worker.stop();
+        self.gc_region_worker.stop();
         self.load_evict_worker.stop();
         self.lock_cleanup_worker.stop();
     }
@@ -770,12 +771,12 @@ impl BackgroundRunner {
         pd_client: Arc<dyn PdClient>,
     ) -> (Self, Scheduler<BackgroundTask>) {
         let config = config.value();
-        let range_load_worker = Builder::new("ime-load")
+        let region_load_worker = Builder::new("ime-load")
             // Range load now is implemented sequentially, so we must use exactly one thread to handle it.
             // todo(SpadeA): if the load speed is a bottleneck, we may consider to use multiple threads to load ranges.
             .thread_count(1)
             .create();
-        let range_load_remote = range_load_worker.remote();
+        let region_load_remote = region_load_worker.remote();
 
         let delete_range_worker = Worker::new("ime-delete");
         let delete_range_runner = DeleteRangeRunner::new(engine.clone());
@@ -785,17 +786,17 @@ impl BackgroundRunner {
         let lock_cleanup_worker = Worker::new("ime-lock-cleanup");
         let lock_cleanup_remote = lock_cleanup_worker.remote();
 
-        let gc_range_worker = Builder::new("ime-gc")
+        let gc_region_worker = Builder::new("ime-gc")
             // Gc must also use exactly one thread to handle it.
             .thread_count(1)
             .create();
-        let gc_range_remote = gc_range_worker.remote();
+        let gc_region_remote = gc_region_worker.remote();
 
         let load_evict_worker = Worker::new("ime-evict");
         let load_evict_remote = load_evict_worker.remote();
 
         let expected_region_size = config.expected_region_size();
-        let range_stats_manager = region_info_provider.map(|region_info_provider| {
+        let region_stats_manager = region_info_provider.map(|region_info_provider| {
             RegionStatsManager::new(
                 DEFAULT_EVICT_MIN_DURATION,
                 expected_region_size,
@@ -809,16 +810,16 @@ impl BackgroundRunner {
                 core: BackgroundRunnerCore {
                     engine,
                     memory_controller,
-                    region_stats_manager: range_stats_manager,
+                    region_stats_manager,
                 },
                 pd_client,
                 gc_interval: config.gc_interval.0,
-                range_load_worker,
-                range_load_remote,
+                region_load_worker,
+                region_load_remote,
                 delete_range_worker,
                 delete_range_scheduler: delete_range_scheduler.clone(),
-                gc_range_worker,
-                gc_range_remote,
+                gc_region_worker,
+                gc_region_remote,
                 load_evict_worker,
                 load_evict_remote,
                 lock_cleanup_remote,
@@ -879,7 +880,7 @@ impl Runnable for BackgroundRunner {
                         metrics.flush();
                         fail::fail_point!("in_memory_engine_gc_finish");
                     };
-                    self.gc_range_remote.spawn(f);
+                    self.gc_region_remote.spawn(f);
                 } else {
                     core.on_gc_finished();
                 }
@@ -983,7 +984,7 @@ impl Runnable for BackgroundRunner {
                             Ok(Ok(ts)) => ts,
                             err => {
                                 error!(
-                                    "ime get timestamp failed, skip gc loaded range";
+                                    "ime get timestamp failed, skip gc loaded region";
                                     "timeout_duration" => ?tso_timeout,
                                     "error" => ?err,
                                 );
@@ -1009,7 +1010,7 @@ impl Runnable for BackgroundRunner {
                             skiplist_engine.cf_handle(CF_DEFAULT),
                             skiplist_engine.cf_handle(CF_WRITE),
                         );
-                        filter.filter_keys_in_range(&region);
+                        filter.filter_keys_in_region(&region);
 
                         Some(safe_point)
                     };
@@ -1038,7 +1039,7 @@ impl Runnable for BackgroundRunner {
                         core.on_snapshot_load_failed(&region, &delete_range_scheduler, true);
                     }
                 };
-                self.range_load_remote.spawn(f);
+                self.region_load_remote.spawn(f);
             }
             BackgroundTask::MemoryCheckAndEvict => {
                 let mem_usage_before_check = self.core.memory_controller.mem_usage();
@@ -1050,7 +1051,7 @@ impl Runnable for BackgroundRunner {
                     let delete_range_scheduler = self.delete_range_scheduler.clone();
                     let core = self.core.clone();
                     let task = async move {
-                        if let Some(range_stats_manager) = &core.region_stats_manager {
+                        if let Some(region_stats_manager) = &core.region_stats_manager {
                             let cached_region_ids = core
                                 .engine
                                 .region_manager
@@ -1069,7 +1070,7 @@ impl Runnable for BackgroundRunner {
                                 )
                             };
 
-                            range_stats_manager
+                            region_stats_manager
                                 .evict_on_soft_limit_reached(
                                     evict_fn,
                                     &delete_range_scheduler,
@@ -1310,11 +1311,15 @@ impl FilterMetrics {
     }
 
     fn flush(&self) {
-        IN_MEMORY_ENGINE_GC_FILTERED_STATIC.total.inc_by(self.total as u64);
+        IN_MEMORY_ENGINE_GC_FILTERED_STATIC
+            .total
+            .inc_by(self.total as u64);
         IN_MEMORY_ENGINE_GC_FILTERED_STATIC
             .below_safe_point_total
             .inc_by(self.versions as u64);
-        IN_MEMORY_ENGINE_GC_FILTERED_STATIC.filtered.inc_by(self.filtered as u64);
+        IN_MEMORY_ENGINE_GC_FILTERED_STATIC
+            .filtered
+            .inc_by(self.filtered as u64);
         IN_MEMORY_ENGINE_GC_FILTERED_STATIC
             .below_safe_point_unique
             .inc_by(self.unique_key as u64);
@@ -1376,7 +1381,7 @@ impl Filter {
         }
     }
 
-    fn filter_keys_in_range(&mut self, region: &CacheRegion) {
+    fn filter_keys_in_region(&mut self, region: &CacheRegion) {
         let mut iter = self.write_cf_handle.iterator();
         let guard = &epoch::pin();
         let (start_key, end_key) = encode_key_for_boundary_with_mvcc(region);
@@ -2007,9 +2012,9 @@ pub mod tests {
         assert_eq!(0, element_count(&default));
     }
 
-    // The GC of one range should not impact other ranges
+    // The GC of one region should not impact other regions
     #[test]
-    fn test_gc_one_range() {
+    fn test_gc_one_region() {
         let config = RegionCacheEngineConfig::config_for_test();
         let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
             Arc::new(VersionTrack::new(config)),
@@ -2324,7 +2329,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_gc_region_contained_in_historical_range() {
+    fn test_gc_region_contained_in_historical_region() {
         let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
             Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test())),
         ));
@@ -2571,7 +2576,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_ranges_for_gc() {
+    fn test_regions_for_gc() {
         let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
             Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test())),
         ));
@@ -2592,7 +2597,7 @@ pub mod tests {
         let regions = runner.core.regions_for_gc();
         assert_eq!(2, regions.len());
 
-        // until the previous gc finished, node ranges will be returned
+        // until the previous gc finished, node regions will be returned
         assert!(runner.core.regions_for_gc().is_empty());
         runner.core.on_gc_finished();
 

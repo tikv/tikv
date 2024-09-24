@@ -115,7 +115,7 @@ impl SkiplistHandle {
     }
 }
 
-/// A single global set of skiplists shared by all cached ranges
+/// A single global set of skiplists shared by all cached regions
 #[derive(Clone)]
 pub struct SkiplistEngine {
     pub(crate) data: [Arc<SkipList<InternalBytes, InternalBytes>>; 3],
@@ -177,7 +177,7 @@ impl SkiplistEngine {
 
 impl Debug for SkiplistEngine {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Range Memory Engine")
+        write!(f, "Region Memory Engine")
     }
 }
 
@@ -209,14 +209,14 @@ impl RegionCacheMemoryEngineCore {
     }
 }
 
-/// The RegionCacheMemoryEngine serves as a range cache, storing hot ranges in
+/// The RegionCacheMemoryEngine serves as a region cache, storing hot regions in
 /// the leaders' store. Incoming writes that are written to disk engine (now,
 /// RocksDB) are also written to the RegionCacheMemoryEngine, leading to a
-/// mirrored data set in the cached ranges with the disk engine.
+/// mirrored data set in the cached regions with the disk engine.
 ///
-/// A load/evict unit manages the memory, deciding which ranges should be
+/// A load/evict unit manages the memory, deciding which regions should be
 /// evicted when the memory used by the RegionCacheMemoryEngine reaches a
-/// certain limit, and determining which ranges should be loaded when there is
+/// certain limit, and determining which regions should be loaded when there is
 /// spare memory capacity.
 ///
 /// The safe point lifetime differs between RegionCacheMemoryEngine and the disk
@@ -250,7 +250,7 @@ impl RegionCacheMemoryEngine {
         region_cache_engine_context: RegionCacheEngineContext,
         region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
     ) -> Self {
-        info!("ime init range cache memory engine");
+        info!("ime init region cache memory engine");
         let core = Arc::new(RegionCacheMemoryEngineCore::new());
         let skiplist_engine = core.engine().clone();
 
@@ -308,7 +308,7 @@ impl RegionCacheMemoryEngine {
             .region_manager
             .evict_region(region, evict_reason, cb);
         if !deleteable_regions.is_empty() {
-            // The range can be deleted directly.
+            // The region can be deleted directly.
             if let Err(e) = self
                 .bg_worker_manager()
                 .schedule_task(BackgroundTask::DeleteRegions(deleteable_regions))
@@ -322,8 +322,8 @@ impl RegionCacheMemoryEngine {
         }
     }
 
-    // It handles the pending range and check whether to buffer write for this
-    // range.
+    // It handles the pending region and check whether to buffer write for this
+    // region.
     pub(crate) fn prepare_for_apply(&self, region: &CacheRegion) -> RegionCacheStatus {
         let manager = self.core.region_manager();
         if !manager.is_active() {
@@ -439,7 +439,7 @@ impl RegionCacheMemoryEngine {
 
 impl Debug for RegionCacheMemoryEngine {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Range Cache Memory Engine")
+        write!(f, "Region Cache Memory Engine")
     }
 }
 
