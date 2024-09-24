@@ -538,7 +538,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     pub async fn apply_unsafe_write(&mut self, data: Box<[u8]>) {
         let decoder = match SimpleWriteReqDecoder::new(
             |buf, index, term| parse_at(&self.logger, buf, index, term),
-            &self.logger,
+            Some(&self.logger),
             &data,
             u64::MAX,
             u64::MAX,
@@ -646,7 +646,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         let req = match entry.get_entry_type() {
             EntryType::EntryNormal => match SimpleWriteReqDecoder::new(
                 |buf, index, term| parse_at(&self.logger, buf, index, term),
-                &self.logger,
+                Some(&self.logger),
                 entry.get_data(),
                 log_index,
                 entry.get_term(),

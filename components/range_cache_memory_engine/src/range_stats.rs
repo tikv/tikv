@@ -92,7 +92,7 @@ impl RangeStatsManager {
 
     pub fn complete_auto_load_and_evict(&self) {
         *self.last_load_evict_time.lock() = Instant::now();
-        self.set_checking_top_regions(true);
+        self.set_checking_top_regions(false);
     }
 
     /// Prevents two instances of this from running concurrently.
@@ -694,5 +694,33 @@ pub mod tests {
         }
 
         let _ = handle.join();
+    }
+
+    #[test]
+    fn test_check_after_check() {
+        let sim = Arc::new(RegionInfoSimulator {
+            regions: Mutex::new(vec![]),
+            region_stats: Mutex::new(HashMap::default()),
+        });
+        let mgr = RangeStatsManager::new(
+            Duration::from_secs(120),
+            100,
+            10,
+            Duration::from_secs(120),
+            sim,
+        );
+
+        // Interval is not enough
+        assert!(!mgr.ready_for_auto_load_and_evict());
+        *mgr.last_load_evict_time.lock() = Instant::now() - Duration::from_secs(120);
+        assert!(mgr.ready_for_auto_load_and_evict());
+        // Checking
+        assert!(!mgr.ready_for_auto_load_and_evict());
+
+        mgr.complete_auto_load_and_evict();
+        // Interval is not enough
+        assert!(!mgr.ready_for_auto_load_and_evict());
+        *mgr.last_load_evict_time.lock() = Instant::now() - Duration::from_secs(120);
+        assert!(mgr.ready_for_auto_load_and_evict());
     }
 }
