@@ -4257,7 +4257,7 @@ def InMemoryEngine() -> RowPanel:
                 title="Region GC Duration",
                 description="The handle duration of region gc",
                 yaxis=yaxis(format=UNITS.SECONDS),
-                metric="in_memory_engine_gc_duration_secs_bucket",
+                metric="tikv_in_memory_engine_gc_duration_secs_bucket",
             ),
         ]
     )
@@ -4267,7 +4267,7 @@ def InMemoryEngine() -> RowPanel:
                 title="Region Load Duration",
                 description="The handle duration of region load",
                 yaxis=yaxis(format=UNITS.SECONDS),
-                metric="in_memory_engine_load_duration_secs_bucket",
+                metric="tikv_in_memory_engine_load_duration_secs_bucket",
             ),
             graph_panel(
                 title="Region Load Count",
@@ -4276,7 +4276,7 @@ def InMemoryEngine() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_sum_rate(
-                            "in_memory_engine_load_duration_secs_count",
+                            "tikv_in_memory_engine_load_duration_secs_count",
                             by_labels=["instance"],
                         ),
                         legend_format="{{instance}}",
@@ -4291,7 +4291,7 @@ def InMemoryEngine() -> RowPanel:
                 title="Region Eviction Duration",
                 description="The handle duration of region eviction",
                 yaxis=yaxis(format=UNITS.SECONDS),
-                metric="in_memory_engine_eviction_duration_secs_bucket",
+                metric="tikv_in_memory_engine_eviction_duration_secs_bucket",
             ),
             graph_panel(
                 title="Region Eviction Count",
@@ -4300,7 +4300,7 @@ def InMemoryEngine() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_sum_rate(
-                            "in_memory_engine_eviction_duration_secs_count",
+                            "tikv_in_memory_engine_eviction_duration_secs_count",
                             by_labels=["type"],
                         ),
                         legend_format="{{type}}",
