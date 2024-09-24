@@ -283,7 +283,7 @@ pub mod tests {
         let (k, v) = (b"k1", b"v1");
 
         // Create a lock with TTL=100.
-        must_prewrite_put(&mut engine, k, v, k, 5);
+        must_flush_put(&mut engine, k, v, k, 5, 1);
         must_locked(&mut engine, k, 5);
 
         let ctx = Context::default();
@@ -294,7 +294,7 @@ pub mod tests {
             ctx: ctx.clone(),
             primary_key: Key::from_raw(k),
             start_ts,
-            advise_ttl: 100,
+            advise_ttl: 3333,
             min_commit_ts: 10,
             deadline: Deadline::from_now(DEFAULT_EXECUTION_DURATION_LIMIT),
         };
@@ -317,7 +317,7 @@ pub mod tests {
         } = result.pr
         {
             write(&engine, &ctx, result.to_be_write.modifies);
-            assert_eq!(lock.ttl, 100);
+            assert_eq!(lock.ttl, 3333);
             assert_eq!(lock.min_commit_ts, 10.into());
         } else {
             unreachable!();
