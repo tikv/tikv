@@ -142,6 +142,7 @@ use crate::{
     setup::*,
     signal_handler,
     tikv_util::sys::thread::ThreadBuildWrapper,
+    utils,
 };
 
 #[inline]
@@ -924,6 +925,12 @@ where
                 Duration::from_secs(60),
             );
 
+            // build stream backup encryption manager
+            let backup_encryption_manager =
+                utils::build_backup_encryption_manager(self.core.encryption_key_manager.clone())
+                    .expect("failed to build backup encryption manager in server");
+
+            // build stream backup endpoint
             let backup_stream_endpoint = backup_stream::Endpoint::new(
                 raft_server.id(),
                 PdStore::new(Checked::new(Sourced::new(
@@ -939,7 +946,7 @@ where
                 self.pd_client.clone(),
                 self.concurrency_manager.clone(),
                 BackupStreamResolver::V1(leadership_resolver),
-                self.core.encryption_key_manager.clone(),
+                backup_encryption_manager,
             );
             backup_stream_worker.start(backup_stream_endpoint);
             self.core.to_stop.push(backup_stream_worker);
