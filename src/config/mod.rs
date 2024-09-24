@@ -98,6 +98,9 @@ pub const BLOCK_CACHE_RATE: f64 = 0.45;
 /// Because multi-rocksdb has 25% memory table quota, we have to reduce block
 /// cache a bit
 pub const RAFTSTORE_V2_BLOCK_CACHE_RATE: f64 = 0.30;
+/// By default. 20% of block cache size will be used for in-memory engine.
+const IN_MEMORY_ENGINE_BLOCK_CACHE_RATE: f64 = 0.20;
+
 /// By default, TiKV will try to limit memory usage to 75% of system memory.
 pub const MEMORY_USAGE_LIMIT_RATE: f64 = 0.75;
 
@@ -3742,6 +3745,8 @@ impl TikvConfig {
         }
         self.raft_engine
             .optimize_for(&self.raft_store, self.storage.engine == EngineType::RaftKv2);
+
+        let mut in_memory_engine_capacity = 0.0f64;
         if self.storage.block_cache.capacity.is_none() {
             let total_mem = SysQuota::memory_limit_in_bytes();
             let capacity = if self.storage.engine == EngineType::RaftKv2 {
@@ -3749,8 +3754,19 @@ impl TikvConfig {
             } else {
                 (total_mem as f64) * BLOCK_CACHE_RATE
             };
+            // Adjust block cache size if in-memory engine is enabled.
+            let capacity = if self.range_cache_engine.enabled {
+                in_memory_engine_capacity = capacity * IN_MEMORY_ENGINE_BLOCK_CACHE_RATE;
+                capacity * (1.0 - IN_MEMORY_ENGINE_BLOCK_CACHE_RATE)
+            } else {
+                capacity
+            };
             self.storage.block_cache.capacity = Some(ReadableSize(capacity as u64));
         }
+        self.range_cache_engine.validate(
+            in_memory_engine_capacity as u64,
+            self.coprocessor.region_max_size().0,
+        )?;
 
         // Validate for v2.
         if self.storage.engine == EngineType::RaftKv2 {
@@ -3960,7 +3976,6 @@ impl TikvConfig {
         self.resource_metering.validate()?;
         self.quota.validate()?;
         self.causal_ts.validate()?;
-        self.range_cache_engine.validate()?;
 
         // Validate feature TTL with Titan configuration.
         if matches!(self.rocksdb.titan.enabled, Some(true)) && self.storage.enable_ttl {
