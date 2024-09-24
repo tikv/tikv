@@ -23,6 +23,9 @@ use health_controller::HealthController;
 use hybrid_engine::observer::{
     HybridSnapshotObserver, LoadEvictionObserver, RegionCacheWriteBatchObserver,
 };
+use in_memory_engine::{
+    RegionCacheEngineConfig, RegionCacheEngineContext, RegionCacheMemoryEngine,
+};
 use kvproto::{
     deadlock::create_deadlock,
     debugpb::{create_debug, DebugClient},
@@ -45,9 +48,6 @@ use raftstore::{
         SnapManagerBuilder, SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
     },
     Result,
-};
-use region_cache_memory_engine::{
-    RegionCacheEngineConfig, RegionCacheEngineContext, RegionCacheMemoryEngine,
 };
 use resource_control::ResourceGroupManager;
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
@@ -332,8 +332,10 @@ impl ServerCluster {
             .expected_region_size
             .get_or_insert(cfg.coprocessor.region_split_size());
         let region_cache_engine_config = Arc::new(VersionTrack::new(region_cache_engine_config));
-        let region_cache_engine_context =
-            RegionCacheEngineContext::new(region_cache_engine_config.clone(), self.pd_client.clone());
+        let region_cache_engine_context = RegionCacheEngineContext::new(
+            region_cache_engine_config.clone(),
+            self.pd_client.clone(),
+        );
         let in_memory_engine = if cfg.region_cache_engine.enabled {
             let in_memory_engine = build_hybrid_engine(
                 region_cache_engine_context,

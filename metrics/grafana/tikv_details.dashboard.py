@@ -317,7 +317,7 @@ def Cluster() -> RowPanel:
                     ),
                     target(
                         expr=expr_sum_rate(
-                            "tikv_region_cache_memory_engine_flow",
+                            "tikv_in_memory_engine_flow",
                             label_selectors=['type=~"bytes_read|iter_bytes_read"'],
                         ),
                         legend_format=r"{{instance}}-regio-cache-engine-read-",
@@ -4242,7 +4242,7 @@ def RegionCacheMemoryEngine() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_sum_rate(
-                            "tikv_region_cache_memory_engine_gc_filtered",
+                            "tikv_in_memory_engine_gc_filtered",
                             by_labels=["type"],
                         ),
                         legend_format="{{type}}",
@@ -4253,7 +4253,7 @@ def RegionCacheMemoryEngine() -> RowPanel:
                 title="Range GC Duration",
                 description="The handle duration of range gc",
                 yaxis=yaxis(format=UNITS.SECONDS),
-                metric="tikv_range_gc_duration_secs_bucket",
+                metric="tikv_region_gc_duration_secs_bucket",
             ),
         ]
     )
@@ -4263,7 +4263,7 @@ def RegionCacheMemoryEngine() -> RowPanel:
                 title="Range Load Duration",
                 description="The handle duration of range load",
                 yaxis=yaxis(format=UNITS.SECONDS),
-                metric="tikv_range_load_duration_secs_bucket",
+                metric="tikv_region_load_duration_secs_bucket",
             ),
             graph_panel(
                 title="Range Load Count",
@@ -4272,7 +4272,7 @@ def RegionCacheMemoryEngine() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_sum_rate(
-                            "tikv_range_load_duration_secs_count",
+                            "tikv_region_load_duration_secs_count",
                             by_labels=["instance"],
                         ),
                         legend_format="{{instance}}",
@@ -4287,7 +4287,7 @@ def RegionCacheMemoryEngine() -> RowPanel:
                 title="Range Eviction Duration",
                 description="The handle duration of range eviction",
                 yaxis=yaxis(format=UNITS.SECONDS),
-                metric="tikv_range_eviction_duration_secs_bucket",
+                metric="tikv_region_eviction_duration_secs_bucket",
             ),
             graph_panel(
                 title="Range Eviction Count",
@@ -4296,7 +4296,7 @@ def RegionCacheMemoryEngine() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_sum_rate(
-                            "tikv_range_eviction_duration_secs_count",
+                            "tikv_region_eviction_duration_secs_count",
                             by_labels=["type"],
                         ),
                         legend_format="{{type}}",
@@ -4338,7 +4338,7 @@ def RegionCacheMemoryEngine() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_sum_rate(
-                            "tikv_region_cache_memory_engine_locate",
+                            "tikv_in_memory_engine_locate",
                             label_selectors=[
                                 'type="number_db_seek"',
                             ],
@@ -4348,7 +4348,7 @@ def RegionCacheMemoryEngine() -> RowPanel:
                     ),
                     target(
                         expr=expr_sum_rate(
-                            "tikv_region_cache_memory_engine_locate",
+                            "tikv_in_memory_engine_locate",
                             label_selectors=[
                                 'type="number_db_seek_found"',
                             ],
@@ -4358,7 +4358,7 @@ def RegionCacheMemoryEngine() -> RowPanel:
                     ),
                     target(
                         expr=expr_sum_rate(
-                            "tikv_region_cache_memory_engine_locate",
+                            "tikv_in_memory_engine_locate",
                             label_selectors=[
                                 'type="number_db_next"',
                             ],
@@ -4368,7 +4368,7 @@ def RegionCacheMemoryEngine() -> RowPanel:
                     ),
                     target(
                         expr=expr_sum_rate(
-                            "tikv_region_cache_memory_engine_locate",
+                            "tikv_in_memory_engine_locate",
                             label_selectors=[
                                 'type="number_db_next_found"',
                             ],
@@ -4378,7 +4378,7 @@ def RegionCacheMemoryEngine() -> RowPanel:
                     ),
                     target(
                         expr=expr_sum_rate(
-                            "tikv_region_cache_memory_engine_locate",
+                            "tikv_in_memory_engine_locate",
                             label_selectors=[
                                 'type="number_db_prev"',
                             ],
@@ -4388,7 +4388,7 @@ def RegionCacheMemoryEngine() -> RowPanel:
                     ),
                     target(
                         expr=expr_sum_rate(
-                            "tikv_region_cache_memory_engine_locate",
+                            "tikv_in_memory_engine_locate",
                             label_selectors=[
                                 'type="number_db_prev_found"',
                             ],
@@ -4406,27 +4406,27 @@ def RegionCacheMemoryEngine() -> RowPanel:
                     target(
                         expr=expr_histogram_quantile(
                             1,
-                            "tikv_region_cache_memory_engine_seek_duration",
+                            "tikv_in_memory_engine_seek_duration",
                         ),
                         legend_format="max",
                     ),
                     target(
                         expr=expr_histogram_quantile(
                             0.99,
-                            "tikv_region_cache_memory_engine_seek_duration",
+                            "tikv_in_memory_engine_seek_duration",
                         ),
                         legend_format="99%",
                     ),
                     target(
                         expr=expr_histogram_quantile(
                             0.95,
-                            "tikv_region_cache_memory_engine_seek_duration",
+                            "tikv_in_memory_engine_seek_duration",
                         ),
                         legend_format="95%",
                     ),
                     target(
                         expr=expr_histogram_avg(
-                            "tikv_region_cache_memory_engine_seek_duration",
+                            "tikv_in_memory_engine_seek_duration",
                             by_labels=["type"],
                         ),
                         legend_format="avg",

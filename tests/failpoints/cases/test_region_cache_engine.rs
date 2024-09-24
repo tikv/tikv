@@ -11,13 +11,13 @@ use engine_traits::{
     CF_DEFAULT,
 };
 use file_system::calc_crc32_bytes;
+use in_memory_engine::test_util::new_region;
 use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};
 use kvproto::{
     import_sstpb::SstMeta,
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request},
 };
 use protobuf::Message;
-use region_cache_memory_engine::test_util::new_region;
 use tempfile::tempdir;
 use test_coprocessor::{handle_request, init_data_with_details_pd_client, DagSelect, ProductTable};
 use test_raftstore::{

@@ -25,10 +25,10 @@ mod metrics;
 mod perf_context;
 #[cfg(test)]
 mod prop_test;
-mod range_manager;
-mod range_stats;
 mod read;
 mod region_label;
+mod region_manager;
+mod region_stats;
 mod statistics;
 pub mod test_util;
 mod write_batch;
@@ -40,8 +40,8 @@ pub use keys::{
     InternalKey, ValueType,
 };
 pub use metrics::flush_region_cache_engine_statistics;
-pub use range_manager::{RegionCacheStatus, RegionState};
 pub use read::RegionCacheSnapshot;
+pub use region_manager::{RegionCacheStatus, RegionState};
 pub use statistics::Statistics as RegionCacheMemoryEngineStatistics;
 use txn_types::TimeStamp;
 pub use write_batch::RegionCacheWriteBatch;

@@ -1,11 +1,11 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{CacheRegion, KvEngine};
+use in_memory_engine::{RegionCacheMemoryEngine, RegionCacheSnapshot};
 use kvproto::metapb::Region;
 use raftstore::coprocessor::{
     dispatcher::BoxSnapshotObserver, CoprocessorHost, ObservedSnapshot, SnapshotObserver,
 };
-use region_cache_memory_engine::{RegionCacheMemoryEngine, RegionCacheSnapshot};
 
 use crate::new_in_memory_snapshot;
 

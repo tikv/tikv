@@ -158,7 +158,7 @@ pub mod tests {
         CacheRegion, DeleteStrategy, MiscExt, Mutable, Range, RegionCacheEngine, WriteBatch,
         WriteBatchExt, WriteOptions, CF_DEFAULT,
     };
-    use region_cache_memory_engine::{test_util::new_region, RegionCacheEngineConfig};
+    use in_memory_engine::{test_util::new_region, RegionCacheEngineConfig};
 
     use crate::util::hybrid_engine_for_tests;
 

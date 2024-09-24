@@ -39,6 +39,7 @@ grpcio = { workspace = true }
 grpcio-health = { workspace = true }
 health_controller = { workspace = true }
 hybrid_engine = { workspace = true }
+in_memory_engine = { workspace = true }
 keys = { workspace = true }
 kvproto = { workspace = true }
 lazy_static = "1.3"
@@ -48,7 +49,6 @@ protobuf = { version = "2.8", features = ["bytes"] }
 raft = { workspace = true }
 raftstore = { workspace = true, features = ["testexport"] }
 rand = "0.8"
-region_cache_memory_engine = { workspace = true }
 resolved_ts = { workspace = true }
 resource_control = { workspace = true }
 resource_metering = { workspace = true }

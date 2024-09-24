@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use engine_rocks::{util::new_engine, RocksEngine};
 use engine_traits::{RegionCacheEngine, Result, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use region_cache_memory_engine::{
+use in_memory_engine::{
     RegionCacheEngineConfig, RegionCacheEngineContext, RegionCacheMemoryEngine,
 };
 use tempfile::{Builder, TempDir};
@@ -19,7 +19,7 @@ use crate::HybridEngine;
 ///
 /// ```
 /// use hybrid_engine::util::hybrid_engine_for_tests;
-/// use region_cache_memory_engine::{test_util::new_region, RegionCacheEngineConfig};
+/// use in_memory_engine::{test_util::new_region, RegionCacheEngineConfig};
 /// let mut config = RegionCacheEngineConfig::default();
 /// config.enabled = true;
 /// let (_path, _hybrid_engine) = hybrid_engine_for_tests("temp", config, |memory_engine| {

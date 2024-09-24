@@ -223,11 +223,11 @@ mod tests {
 
     use engine_rocks::util::new_engine;
     use engine_traits::{CacheRegion, SnapshotContext, CF_DEFAULT, CF_LOCK, CF_WRITE};
-    use online_config::{ConfigChange, ConfigManager, ConfigValue};
-    use region_cache_memory_engine::{
+    use in_memory_engine::{
         config::RegionCacheConfigManager, test_util::new_region, RegionCacheEngineConfig,
         RegionCacheEngineContext, RegionCacheMemoryEngine,
     };
+    use online_config::{ConfigChange, ConfigManager, ConfigValue};
     use tempfile::Builder;
     use tikv_util::config::VersionTrack;
 

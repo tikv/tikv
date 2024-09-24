@@ -28,8 +28,10 @@ use crate::{
         encode_key_for_boundary_with_mvcc, encode_key_for_boundary_without_mvcc, InternalBytes,
     },
     memory_controller::MemoryController,
-    range_manager::{AsyncFnOnce, LoadFailedReason, RegionCacheStatus, RegionManager, RegionState},
     read::{RegionCacheIterator, RegionCacheSnapshot},
+    region_manager::{
+        AsyncFnOnce, LoadFailedReason, RegionCacheStatus, RegionManager, RegionState,
+    },
     statistics::Statistics,
     RegionCacheEngineConfig, RegionCacheEngineContext,
 };
@@ -592,7 +594,7 @@ pub mod tests {
     use crate::{
         keys::{construct_key, construct_user_key, encode_key},
         memory_controller::MemoryController,
-        range_manager::{CacheRegionMeta, RegionManager, RegionState::*},
+        region_manager::{CacheRegionMeta, RegionManager, RegionState::*},
         test_util::new_region,
         InternalBytes, RegionCacheEngineConfig, RegionCacheEngineContext, RegionCacheMemoryEngine,
         ValueType,
@@ -604,9 +606,9 @@ pub mod tests {
     }
     #[test]
     fn test_region_overlap_with_outdated_epoch() {
-        let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(Arc::new(
-            VersionTrack::new(RegionCacheEngineConfig::config_for_test()),
-        )));
+        let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
+            Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test())),
+        ));
         let region1 = new_region(1, b"k1", b"k3");
         let cache_region1 = CacheRegion::from_region(&region1);
         engine.load_region(cache_region1).unwrap();
@@ -837,9 +839,9 @@ pub mod tests {
     fn test_cb_on_eviction_with_on_going_snapshot() {
         let mut config = RegionCacheEngineConfig::config_for_test();
         config.gc_interval = ReadableDuration(Duration::from_secs(1));
-        let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(Arc::new(
-            VersionTrack::new(config),
-        )));
+        let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
+            Arc::new(VersionTrack::new(config)),
+        ));
 
         let region = new_region(1, b"", b"z");
         let cache_region = CacheRegion::from_region(&region);

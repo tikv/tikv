@@ -6,11 +6,11 @@ use std::{
 };
 
 use engine_traits::{
-    is_data_cf, CfNamesExt, IterOptions, Iterable, KvEngine, Peekable, RegionCacheEngine,
-    ReadOptions, Result, Snapshot, SnapshotMiscExt, CF_DEFAULT,
+    is_data_cf, CfNamesExt, IterOptions, Iterable, KvEngine, Peekable, ReadOptions,
+    RegionCacheEngine, Result, Snapshot, SnapshotMiscExt, CF_DEFAULT,
 };
+use in_memory_engine::RegionCacheMemoryEngine;
 use raftstore::coprocessor::ObservedSnapshot;
-use region_cache_memory_engine::RegionCacheMemoryEngine;
 
 use crate::{
     db_vector::HybridDbVector, engine_iterator::HybridEngineIterator,
@@ -164,9 +164,7 @@ mod tests {
         CacheRegion, IterOptions, Iterable, Iterator, Mutable, SnapshotContext, WriteBatch,
         WriteBatchExt, CF_DEFAULT,
     };
-    use region_cache_memory_engine::{
-        test_util::new_region, RegionCacheEngineConfig, RegionCacheStatus,
-    };
+    use in_memory_engine::{test_util::new_region, RegionCacheEngineConfig, RegionCacheStatus};
 
     use crate::util::hybrid_engine_for_tests;
 

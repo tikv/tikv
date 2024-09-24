@@ -1057,7 +1057,7 @@ mod tests {
     use engine_traits::{CacheRegion, EvictReason, FailedReason};
 
     use super::*;
-    use crate::range_manager::LoadFailedReason;
+    use crate::region_manager::LoadFailedReason;
 
     #[test]
     fn test_range_manager() {

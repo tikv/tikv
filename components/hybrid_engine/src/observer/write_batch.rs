@@ -1,11 +1,11 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{is_data_cf, CacheRegion, KvEngine, Mutable, Result, WriteBatch, WriteOptions};
+use in_memory_engine::{RegionCacheMemoryEngine, RegionCacheWriteBatch};
 use raftstore::coprocessor::{
     dispatcher::BoxWriteBatchObserver, Coprocessor, CoprocessorHost, ObservableWriteBatch,
     WriteBatchObserver,
 };
-use region_cache_memory_engine::{RegionCacheMemoryEngine, RegionCacheWriteBatch};
 
 #[derive(Clone)]
 pub struct RegionCacheWriteBatchObserver {

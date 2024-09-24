@@ -29,13 +29,13 @@ use error_code::ErrorCodeExt;
 use file_system::{get_io_rate_limiter, set_io_rate_limiter, BytesFetcher, File, IoBudgetAdjustor};
 use grpcio::Environment;
 use hybrid_engine::HybridEngine;
-use pd_client::{PdClient, RpcClient};
-use raft_log_engine::RaftLogEngine;
-use raftstore::coprocessor::RegionInfoProvider;
-use region_cache_memory_engine::{
+use in_memory_engine::{
     flush_region_cache_engine_statistics, RegionCacheEngineContext, RegionCacheMemoryEngine,
     RegionCacheMemoryEngineStatistics,
 };
+use pd_client::{PdClient, RpcClient};
+use raft_log_engine::RaftLogEngine;
+use raftstore::coprocessor::RegionInfoProvider;
 use security::SecurityManager;
 use tikv::{
     config::{ConfigController, DbConfigManger, DbType, TikvConfig},
@@ -709,7 +709,9 @@ pub fn build_hybrid_engine(
     memory_engine.set_disk_engine(disk_engine.clone());
     if let Some(pd_client) = pd_client.as_ref() {
         memory_engine.start_hint_service(
-            <RegionCacheMemoryEngine as RegionCacheEngine>::RangeHintService::from(pd_client.clone()),
+            <RegionCacheMemoryEngine as RegionCacheEngine>::RangeHintService::from(
+                pd_client.clone(),
+            ),
         )
     }
     HybridEngine::new(disk_engine, memory_engine)

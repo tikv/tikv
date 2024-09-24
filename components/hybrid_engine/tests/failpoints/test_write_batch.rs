@@ -5,14 +5,15 @@ use std::sync::mpsc::sync_channel;
 use crossbeam::epoch;
 use engine_traits::{CacheRegion, Mutable, WriteBatch, WriteBatchExt};
 use hybrid_engine::util::hybrid_engine_for_tests;
-use region_cache_memory_engine::{
+use in_memory_engine::{
     decode_key, test_util::new_region, InternalKey, RegionCacheEngineConfig, ValueType,
 };
 
 #[test]
 fn test_sequence_number_unique() {
     let (_path, hybrid_engine) =
-        hybrid_engine_for_tests("temp", RegionCacheEngineConfig::config_for_test(), |_| {}).unwrap();
+        hybrid_engine_for_tests("temp", RegionCacheEngineConfig::config_for_test(), |_| {})
+            .unwrap();
 
     let (tx, rx) = sync_channel(0);
     fail::cfg_callback("on_completes_batch_loading", move || {

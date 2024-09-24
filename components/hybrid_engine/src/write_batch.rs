@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use engine_traits::{
     is_data_cf, CacheRegion, KvEngine, Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions,
 };
-use region_cache_memory_engine::{RegionCacheMemoryEngine, RegionCacheWriteBatch};
+use in_memory_engine::{RegionCacheMemoryEngine, RegionCacheWriteBatch};
 
 use crate::engine::HybridEngine;
 
@@ -155,9 +155,7 @@ mod tests {
         CacheRegion, Mutable, Peekable, RegionCacheEngine, SnapshotContext, WriteBatch,
         WriteBatchExt,
     };
-    use region_cache_memory_engine::{
-        test_util::new_region, RegionCacheEngineConfig, RegionCacheStatus,
-    };
+    use in_memory_engine::{test_util::new_region, RegionCacheEngineConfig, RegionCacheStatus};
 
     use crate::util::hybrid_engine_for_tests;
 
@@ -205,7 +203,7 @@ mod tests {
     }
 
     #[test]
-    fn test_region_cache_memory_engine() {
+    fn test_in_memory_engine() {
         let (_path, hybrid_engine) = hybrid_engine_for_tests(
             "temp",
             RegionCacheEngineConfig::config_for_test(),

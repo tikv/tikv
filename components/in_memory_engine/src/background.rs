@@ -36,14 +36,14 @@ use crate::{
     },
     memory_controller::{MemoryController, MemoryUsage},
     metrics::{
-        GC_FILTERED_STATIC, RANGE_GC_TIME_HISTOGRAM, RANGE_LOAD_TIME_HISTOGRAM, REGION_CACHE_COUNT,
-        REGION_CACHE_MEMORY_USAGE,
+        GC_FILTERED_STATIC, REGION_CACHE_COUNT, REGION_CACHE_MEMORY_USAGE,
+        REGION_GC_TIME_HISTOGRAM, REGION_LOAD_TIME_HISTOGRAM,
     },
-    range_manager::{AsyncFnOnce, CacheRegionMeta, RegionState},
-    range_stats::{RangeStatsManager, DEFAULT_EVICT_MIN_DURATION},
     region_label::{
         LabelRule, RegionLabelChangedCallback, RegionLabelRulesManager, RegionLabelServiceBuilder,
     },
+    region_manager::{AsyncFnOnce, CacheRegionMeta, RegionState},
+    region_stats::{RegionStatsManager, DEFAULT_EVICT_MIN_DURATION},
     write_batch::RegionCacheWriteBatchEntry,
     RegionCacheEngineConfig,
 };
@@ -389,7 +389,7 @@ impl BgWorkManager {
 struct BackgroundRunnerCore {
     engine: Arc<RegionCacheMemoryEngineCore>,
     memory_controller: Arc<MemoryController>,
-    range_stats_manager: Option<RangeStatsManager>,
+    range_stats_manager: Option<RegionStatsManager>,
 }
 
 impl BackgroundRunnerCore {
@@ -482,7 +482,7 @@ impl BackgroundRunnerCore {
         self.engine.region_manager().on_gc_region_finished(region);
 
         let duration = start.saturating_elapsed();
-        RANGE_GC_TIME_HISTOGRAM.observe(duration.as_secs_f64());
+        REGION_GC_TIME_HISTOGRAM.observe(duration.as_secs_f64());
         info!(
             "ime range gc complete";
             "region" => ?region,
@@ -796,7 +796,7 @@ impl BackgroundRunner {
 
         let expected_region_size = config.expected_region_size();
         let range_stats_manager = region_info_provider.map(|region_info_provider| {
-            RangeStatsManager::new(
+            RegionStatsManager::new(
                 DEFAULT_EVICT_MIN_DURATION,
                 expected_region_size,
                 config.mvcc_amplification_threshold,
@@ -1021,7 +1021,7 @@ impl Runnable for BackgroundRunner {
                             safe_point,
                         ) {
                             let duration = start.saturating_elapsed();
-                            RANGE_LOAD_TIME_HISTOGRAM.observe(duration.as_secs_f64());
+                            REGION_LOAD_TIME_HISTOGRAM.observe(duration.as_secs_f64());
                             info!(
                                 "ime Loading region finished";
                                 "region" => ?region,
@@ -1566,11 +1566,11 @@ pub mod tests {
             encoding_for_filter, InternalBytes, ValueType,
         },
         memory_controller::MemoryController,
-        range_manager::RegionState::*,
         region_label::{
             region_label_meta_client,
             tests::{add_region_label_rule, new_region_label_rule, new_test_server_and_client},
         },
+        region_manager::RegionState::*,
         test_util::{new_region, put_data, put_data_with_overwrite},
         write_batch::RegionCacheWriteBatchEntry,
         RegionCacheEngineConfig, RegionCacheEngineContext, RegionCacheMemoryEngine,

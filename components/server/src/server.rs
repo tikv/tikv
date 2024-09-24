@@ -45,6 +45,9 @@ use hybrid_engine::observer::{
     HybridSnapshotObserver, LoadEvictionObserver as HybridEngineLoadEvictionObserver,
     RegionCacheWriteBatchObserver,
 };
+use in_memory_engine::{
+    config::RegionCacheConfigManager, RegionCacheEngineContext, RegionCacheMemoryEngineStatistics,
+};
 use kvproto::{
     brpb::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
     debugpb::create_debug, diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
@@ -74,9 +77,6 @@ use raftstore::{
         SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
     },
     RaftRouterCompactedEventSender,
-};
-use region_cache_memory_engine::{
-    config::RegionCacheConfigManager, RegionCacheEngineContext, RegionCacheMemoryEngineStatistics,
 };
 use resolved_ts::{LeadershipResolver, Task};
 use resource_control::ResourceGroupManager;
@@ -1630,8 +1630,10 @@ where
             .expected_region_size
             .get_or_insert(self.core.config.coprocessor.region_split_size());
         let region_cache_engine_config = Arc::new(VersionTrack::new(region_cache_engine_config));
-        let region_cache_engine_context =
-            RegionCacheEngineContext::new(region_cache_engine_config.clone(), self.pd_client.clone());
+        let region_cache_engine_context = RegionCacheEngineContext::new(
+            region_cache_engine_config.clone(),
+            self.pd_client.clone(),
+        );
         let region_cache_engine_statistics = region_cache_engine_context.statistics();
         if self.core.config.region_cache_engine.enabled {
             let in_memory_engine = build_hybrid_engine(

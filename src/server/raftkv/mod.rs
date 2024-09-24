@@ -25,6 +25,7 @@ use concurrency_manager::ConcurrencyManager;
 use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot};
 use futures::{future::BoxFuture, task::AtomicWaker, Future, Stream, StreamExt, TryFutureExt};
 use hybrid_engine::HybridEngineSnapshot;
+use in_memory_engine::RegionCacheMemoryEngine;
 use kvproto::{
     errorpb,
     kvrpcpb::{Context, IsolationLevel},
@@ -49,7 +50,6 @@ use raftstore::{
         ReadCallback, ReadIndexContext, ReadResponse, RegionSnapshot, StoreMsg, WriteResponse,
     },
 };
-use region_cache_memory_engine::RegionCacheMemoryEngine;
 use thiserror::Error;
 use tikv_kv::{write_modifies, OnAppliedCb, WriteEvent};
 use tikv_util::{

@@ -11,14 +11,14 @@ use engine_traits::{
     CacheRegion, EvictReason, Mutable, RegionCacheEngine, RegionCacheEngineExt, RegionEvent,
     WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
-use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};
-use kvproto::metapb::Region;
-use region_cache_memory_engine::{
+use in_memory_engine::{
     decode_key, encode_key_for_boundary_without_mvcc, encoding_for_filter,
     test_util::{new_region, put_data, put_data_in_rocks},
     BackgroundTask, InternalBytes, InternalKey, RegionCacheEngineConfig, RegionCacheEngineContext,
     RegionCacheMemoryEngine, RegionState, SkiplistHandle, ValueType,
 };
+use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};
+use kvproto::metapb::Region;
 use tempfile::Builder;
 use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
 use tokio::{
@@ -34,9 +34,9 @@ fn test_set_disk_engine() {
         let _ = tx.send(true);
     })
     .unwrap();
-    let mut engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(Arc::new(
-        VersionTrack::new(RegionCacheEngineConfig::config_for_test()),
-    )));
+    let mut engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
+        Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test())),
+    ));
     let path = Builder::new()
         .prefix("test_set_disk_engine")
         .tempdir()
@@ -245,9 +245,9 @@ fn test_evict_with_loading_range() {
     let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
 
     let config = RegionCacheEngineConfig::config_for_test();
-    let mut engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(Arc::new(
-        VersionTrack::new(config),
-    )));
+    let mut engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
+        Arc::new(VersionTrack::new(config)),
+    ));
     engine.set_disk_engine(rocks_engine);
 
     let r1 = new_region(1, b"k00".to_vec(), b"k10".to_vec());
@@ -373,9 +373,9 @@ fn test_concurrency_between_delete_range_and_write_to_memory() {
     wb.write().unwrap();
 
     let config = RegionCacheEngineConfig::config_for_test();
-    let mut engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(Arc::new(
-        VersionTrack::new(config),
-    )));
+    let mut engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
+        Arc::new(VersionTrack::new(config)),
+    ));
     engine.set_disk_engine(rocks_engine);
 
     let r1 = new_region(1, b"k00".to_vec(), b"k10".to_vec());
@@ -523,9 +523,9 @@ fn test_double_delete_range_schedule() {
     let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
 
     let config = RegionCacheEngineConfig::config_for_test();
-    let mut engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(Arc::new(
-        VersionTrack::new(config),
-    )));
+    let mut engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
+        Arc::new(VersionTrack::new(config)),
+    ));
     engine.set_disk_engine(rocks_engine);
 
     let r1 = new_region(1, b"k00", b"k10");
@@ -597,9 +597,9 @@ fn test_load_with_gc() {
 
     let mut config = RegionCacheEngineConfig::config_for_test();
     config.gc_interval = ReadableDuration(Duration::from_secs(1));
-    let mut engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(Arc::new(
-        VersionTrack::new(config),
-    )));
+    let mut engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
+        Arc::new(VersionTrack::new(config)),
+    ));
     engine.set_disk_engine(rocks_engine.clone());
 
     // safe_point: 6
@@ -665,9 +665,9 @@ fn test_region_split_before_batch_loading_start() {
 
     let mut config = RegionCacheEngineConfig::config_for_test();
     config.gc_interval = ReadableDuration(Duration::from_secs(1));
-    let mut engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(Arc::new(
-        VersionTrack::new(config),
-    )));
+    let mut engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
+        Arc::new(VersionTrack::new(config)),
+    ));
     engine.set_disk_engine(rocks_engine.clone());
 
     let (tx, rx) = sync_channel(0);

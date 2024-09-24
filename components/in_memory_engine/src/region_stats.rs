@@ -19,7 +19,7 @@ use slog_global::error;
 use tikv_util::{info, smoother::Smoother, worker::Scheduler};
 use tokio::sync::mpsc;
 
-use crate::{memory_controller::MemoryController, range_manager::AsyncFnOnce, BackgroundTask};
+use crate::{memory_controller::MemoryController, region_manager::AsyncFnOnce, BackgroundTask};
 
 /// Do not evict a region if has been cached for less than this duration.
 pub const DEFAULT_EVICT_MIN_DURATION: Duration = Duration::from_secs(60 * 5);
@@ -29,7 +29,7 @@ const MVCC_AMPLIFICATION_FILTER_FACTOR: f64 = 10.0;
 const ITERATED_COUNT_FILTER_FACTOR: usize = 20;
 
 #[derive(Clone)]
-pub(crate) struct RangeStatsManager {
+pub(crate) struct RegionStatsManager {
     info_provider: Arc<dyn RegionInfoProvider>,
     checking_top_regions: Arc<AtomicBool>,
     region_loaded_at: Arc<ShardedLock<BTreeMap<u64, Instant>>>,
@@ -48,7 +48,7 @@ pub(crate) struct RangeStatsManager {
     last_load_evict_time: Arc<Mutex<Instant>>,
 }
 
-impl RangeStatsManager {
+impl RegionStatsManager {
     /// Creates a new RangeStatsManager that retrieves state from
     /// `info_provider`.
     ///
@@ -63,7 +63,7 @@ impl RangeStatsManager {
         load_evict_interval: Duration,
         info_provider: Arc<dyn RegionInfoProvider>,
     ) -> Self {
-        RangeStatsManager {
+        RegionStatsManager {
             info_provider,
             checking_top_regions: Arc::new(AtomicBool::new(false)),
             region_loaded_at: Arc::new(ShardedLock::new(BTreeMap::new())),
@@ -518,7 +518,7 @@ pub mod tests {
             region_stats: Mutex::default(),
         });
         // 10 ms min duration eviction for testing purposes.
-        let rsm = RangeStatsManager::new(
+        let rsm = RegionStatsManager::new(
             Duration::from_millis(10),
             RegionCacheEngineConfig::config_for_test().expected_region_size(),
             10,
@@ -647,7 +647,7 @@ pub mod tests {
             region_stats: Mutex::new(region_stats),
         });
         // 10 ms min duration eviction for testing purposes.
-        let rsm = RangeStatsManager::new(
+        let rsm = RegionStatsManager::new(
             Duration::from_millis(10),
             RegionCacheEngineConfig::config_for_test().expected_region_size(),
             10,
@@ -702,7 +702,7 @@ pub mod tests {
             regions: Mutex::new(vec![]),
             region_stats: Mutex::new(HashMap::default()),
         });
-        let mgr = RangeStatsManager::new(
+        let mgr = RegionStatsManager::new(
             Duration::from_secs(120),
             100,
             10,

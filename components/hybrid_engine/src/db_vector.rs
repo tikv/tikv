@@ -5,7 +5,7 @@ use std::{
     ops::Deref,
 };
 
-use engine_traits::{DbVector, KvEngine, Peekable, RegionCacheEngine, ReadOptions, Result};
+use engine_traits::{DbVector, KvEngine, Peekable, ReadOptions, RegionCacheEngine, Result};
 use tikv_util::Either;
 
 pub struct HybridDbVector<EK, EC>
