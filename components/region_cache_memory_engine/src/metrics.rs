@@ -9,7 +9,7 @@ use prometheus_static_metric::*;
 
 use crate::{
     statistics::{Tickers, ENGINE_TICKER_TYPES},
-    RangeCacheMemoryEngineStatistics,
+    RegionCacheMemoryEngineStatistics,
 };
 
 make_auto_flush_static_metric! {
@@ -59,13 +59,13 @@ make_auto_flush_static_metric! {
 
 lazy_static! {
     pub static ref GC_FILTERED: IntCounterVec = register_int_counter_vec!(
-        "tikv_range_cache_memory_engine_gc_filtered",
+        "tikv_region_cache_memory_engine_gc_filtered",
         "Filtered version by GC",
         &["type"]
     )
     .unwrap();
-    pub static ref RANGE_CACHE_MEMORY_USAGE: IntGauge = register_int_gauge!(
-        "tikv_range_cache_memory_usage_bytes",
+    pub static ref REGION_CACHE_MEMORY_USAGE: IntGauge = register_int_gauge!(
+        "tikv_region_cache_memory_usage_bytes",
         "The memory usage of the range cache engine",
     )
     .unwrap();
@@ -89,37 +89,37 @@ lazy_static! {
     )
     .unwrap();
     pub static ref WRITE_DURATION_HISTOGRAM: Histogram = register_histogram!(
-        "tikv_range_cache_engine_write_duration_seconds",
+        "tikv_region_cache_engine_write_duration_seconds",
         "Bucketed histogram of write duration in range cache engine.",
         exponential_buckets(0.00001, 2.0, 20).unwrap()
     )
     .unwrap();
     pub static ref RANGE_PREPARE_FOR_WRITE_DURATION_HISTOGRAM: Histogram = register_histogram!(
-        "tikv_range_cache_engine_prepare_for_write_duration_seconds",
+        "tikv_region_cache_engine_prepare_for_write_duration_seconds",
         "Bucketed histogram of prepare for write duration in range cache engine.",
         exponential_buckets(0.00001, 2.0, 20).unwrap()
     )
     .unwrap();
-    pub static ref RANGE_CACHE_COUNT: IntGaugeVec = register_int_gauge_vec!(
-        "tikv_range_cache_count",
+    pub static ref REGION_CACHE_COUNT: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_region_cache_count",
         "The count of each type on range cache.",
         &["type"]
     )
     .unwrap();
     pub static ref IN_MEMORY_ENGINE_FLOW: IntCounterVec = register_int_counter_vec!(
-        "tikv_range_cache_memory_engine_flow",
+        "tikv_region_cache_memory_engine_flow",
         "Bytes and keys of read/written of range cache memory engine",
         &["type"]
     )
     .unwrap();
     pub static ref IN_MEMORY_ENGINE_LOCATE: IntCounterVec = register_int_counter_vec!(
-        "tikv_range_cache_memory_engine_locate",
+        "tikv_region_cache_memory_engine_locate",
         "Number of calls to seek/next/prev",
         &["type"]
     )
     .unwrap();
     pub static ref IN_MEMORY_ENGINE_SEEK_DURATION: Histogram = register_histogram!(
-        "tikv_range_cache_memory_engine_seek_duration",
+        "tikv_region_cache_memory_engine_seek_duration",
         "Histogram of seek duration",
         exponential_buckets(0.00001, 2.0, 26).unwrap()
     )
@@ -137,7 +137,7 @@ lazy_static! {
         auto_flush_from!(RANGE_EVICTION_DURATION_HISTOGRAM, EvictionDurationVec);
 }
 
-pub fn flush_range_cache_engine_statistics(statistics: &Arc<RangeCacheMemoryEngineStatistics>) {
+pub fn flush_region_cache_engine_statistics(statistics: &Arc<RegionCacheMemoryEngineStatistics>) {
     for t in ENGINE_TICKER_TYPES {
         let v = statistics.get_and_reset_ticker_count(*t);
         flush_engine_ticker_metrics(*t, v);

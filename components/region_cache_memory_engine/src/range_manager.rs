@@ -23,7 +23,7 @@ use parking_lot::RwLock;
 use strum::EnumCount;
 use tikv_util::{info, time::Instant, warn};
 
-use crate::{metrics::observe_eviction_duration, read::RangeCacheSnapshotMeta};
+use crate::{metrics::observe_eviction_duration, read::RegionCacheSnapshotMeta};
 
 pub(crate) trait AsyncFnOnce = FnOnce() -> Pin<Box<dyn Future<Output = ()> + Send>>;
 
@@ -543,7 +543,7 @@ impl Drop for RegionMetaMap {
     }
 }
 
-// RegionManger manges the regions for RangeCacheMemoryEngine. Every new region
+// RegionManger manges the regions for RegionCacheMemoryEngine. Every new region
 // (whether created by new_region/load_region or by split)'s range is unique and
 // is not overlap with any other regions.
 //
@@ -690,7 +690,7 @@ impl RegionManager {
     // removed.
     pub(crate) fn remove_region_snapshot(
         &self,
-        snapshot_meta: &RangeCacheSnapshotMeta,
+        snapshot_meta: &RegionCacheSnapshotMeta,
     ) -> Vec<CacheRegion> {
         let regions_map = self.regions_map.read();
         // fast path: in most case, region is not changed.
@@ -1046,7 +1046,7 @@ pub enum LoadFailedReason {
 }
 
 #[derive(PartialEq, Debug)]
-pub enum RangeCacheStatus {
+pub enum RegionCacheStatus {
     NotInCache,
     Cached,
     Loading,
@@ -1071,9 +1071,9 @@ mod tests {
             FailedReason::TooOldRead
         );
         range_mgr.region_snapshot(r1.id, 0, 8).unwrap();
-        let snapshot1 = RangeCacheSnapshotMeta::new(r1.clone(), 8, 1);
+        let snapshot1 = RegionCacheSnapshotMeta::new(r1.clone(), 8, 1);
         range_mgr.region_snapshot(r1.id, 0, 10).unwrap();
-        let snapshot2 = RangeCacheSnapshotMeta::new(r1.clone(), 10, 2);
+        let snapshot2 = RegionCacheSnapshotMeta::new(r1.clone(), 10, 2);
         assert_eq!(
             range_mgr.region_snapshot(2, 0, 8).unwrap_err(),
             FailedReason::NotCached
@@ -1107,7 +1107,7 @@ mod tests {
 
         // evict a range with accurate match
         range_mgr.region_snapshot(r_left.id, 2, 10).unwrap();
-        let snapshot3 = RangeCacheSnapshotMeta::new(r_left.clone(), 10, 3);
+        let snapshot3 = RegionCacheSnapshotMeta::new(r_left.clone(), 10, 3);
         range_mgr.evict_region(&r_left, EvictReason::AutoEvict, None);
         assert_eq!(
             range_mgr

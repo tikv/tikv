@@ -317,10 +317,10 @@ def Cluster() -> RowPanel:
                     ),
                     target(
                         expr=expr_sum_rate(
-                            "tikv_range_cache_memory_engine_flow",
+                            "tikv_region_cache_memory_engine_flow",
                             label_selectors=['type=~"bytes_read|iter_bytes_read"'],
                         ),
-                        legend_format=r"{{instance}}-range-cache-engine-read-",
+                        legend_format=r"{{instance}}-regio-cache-engine-read-",
                     ),
                 ],
             ),
@@ -4112,7 +4112,7 @@ def CoprocessorDetail() -> RowPanel:
                     target(
                         expr=expr_sum_rate(
                             "tikv_coprocessor_scan_details",
-                            label_selectors=['req=~"select|select_by_range_cache"'],
+                            label_selectors=['req=~"select|select_by_region_cache"'],
                             by_labels=["tag"],
                         ),
                     ),
@@ -4125,7 +4125,7 @@ def CoprocessorDetail() -> RowPanel:
                     target(
                         expr=expr_sum_rate(
                             "tikv_coprocessor_scan_details",
-                            label_selectors=['req=~"index|index_by_range_cache"'],
+                            label_selectors=['req=~"index|index_by_region_cache"'],
                             by_labels=["tag"],
                         ),
                     ),
@@ -4142,7 +4142,7 @@ def CoprocessorDetail() -> RowPanel:
                     target(
                         expr=expr_sum_rate(
                             "tikv_coprocessor_scan_details",
-                            label_selectors=['req=~"select|select_by_range_cache"'],
+                            label_selectors=['req=~"select|select_by_region_cache"'],
                             by_labels=["cf", "tag"],
                         ),
                     ),
@@ -4155,7 +4155,7 @@ def CoprocessorDetail() -> RowPanel:
                     target(
                         expr=expr_sum_rate(
                             "tikv_coprocessor_scan_details",
-                            label_selectors=['req=~"index|index_by_range_cache"'],
+                            label_selectors=['req=~"index|index_by_region_cache"'],
                             by_labels=["cf", "tag"],
                         ),
                     ),
@@ -4176,7 +4176,7 @@ def CoprocessorDetail() -> RowPanel:
     return layout.row_panel
 
 
-def RangeCacheMemoryEngine() -> RowPanel:
+def RegionCacheMemoryEngine() -> RowPanel:
     layout = Layout(title="Range Cache Memory Engine")
     layout.row(
         [
@@ -4199,7 +4199,7 @@ def RangeCacheMemoryEngine() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_sum_rate(
-                            "tikv_range_cache_snapshot_acquire_failed_reason_count",
+                            "tikv_region_cache_snapshot_acquire_failed_reason_count",
                             by_labels=["type"],
                         ),
                         legend_format="{{type}}",
@@ -4212,7 +4212,7 @@ def RangeCacheMemoryEngine() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_avg(
-                            "tikv_range_cache_count",
+                            "tikv_region_cache_count",
                             by_labels=["instance", "type"],
                         ),
                         legend_format="{{instance}}--{{type}}",
@@ -4230,7 +4230,7 @@ def RangeCacheMemoryEngine() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_avg(
-                            "tikv_range_cache_memory_usage_bytes",
+                            "tikv_region_cache_memory_usage_bytes",
                             by_labels=["instance"],
                         ),
                     ),
@@ -4242,7 +4242,7 @@ def RangeCacheMemoryEngine() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_sum_rate(
-                            "tikv_range_cache_memory_engine_gc_filtered",
+                            "tikv_region_cache_memory_engine_gc_filtered",
                             by_labels=["type"],
                         ),
                         legend_format="{{type}}",
@@ -4314,7 +4314,7 @@ def RangeCacheMemoryEngine() -> RowPanel:
             graph_by_labels=["instance"],
             graph_hides=["count", "avg"],
             yaxis_format=UNITS.SECONDS,
-            metric="tikv_range_cache_engine_write_duration_seconds",
+            metric="tikv_region_cache_engine_write_duration_seconds",
         )
     )
     layout.row(
@@ -4326,7 +4326,7 @@ def RangeCacheMemoryEngine() -> RowPanel:
             graph_by_labels=["instance"],
             graph_hides=["count", "avg"],
             yaxis_format=UNITS.SECONDS,
-            metric="tikv_range_cache_engine_prepare_for_write_duration_seconds",
+            metric="tikv_region_cache_engine_prepare_for_write_duration_seconds",
         )
     )
     layout.row(
@@ -4338,7 +4338,7 @@ def RangeCacheMemoryEngine() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_sum_rate(
-                            "tikv_range_cache_memory_engine_locate",
+                            "tikv_region_cache_memory_engine_locate",
                             label_selectors=[
                                 'type="number_db_seek"',
                             ],
@@ -4348,7 +4348,7 @@ def RangeCacheMemoryEngine() -> RowPanel:
                     ),
                     target(
                         expr=expr_sum_rate(
-                            "tikv_range_cache_memory_engine_locate",
+                            "tikv_region_cache_memory_engine_locate",
                             label_selectors=[
                                 'type="number_db_seek_found"',
                             ],
@@ -4358,7 +4358,7 @@ def RangeCacheMemoryEngine() -> RowPanel:
                     ),
                     target(
                         expr=expr_sum_rate(
-                            "tikv_range_cache_memory_engine_locate",
+                            "tikv_region_cache_memory_engine_locate",
                             label_selectors=[
                                 'type="number_db_next"',
                             ],
@@ -4368,7 +4368,7 @@ def RangeCacheMemoryEngine() -> RowPanel:
                     ),
                     target(
                         expr=expr_sum_rate(
-                            "tikv_range_cache_memory_engine_locate",
+                            "tikv_region_cache_memory_engine_locate",
                             label_selectors=[
                                 'type="number_db_next_found"',
                             ],
@@ -4378,7 +4378,7 @@ def RangeCacheMemoryEngine() -> RowPanel:
                     ),
                     target(
                         expr=expr_sum_rate(
-                            "tikv_range_cache_memory_engine_locate",
+                            "tikv_region_cache_memory_engine_locate",
                             label_selectors=[
                                 'type="number_db_prev"',
                             ],
@@ -4388,7 +4388,7 @@ def RangeCacheMemoryEngine() -> RowPanel:
                     ),
                     target(
                         expr=expr_sum_rate(
-                            "tikv_range_cache_memory_engine_locate",
+                            "tikv_region_cache_memory_engine_locate",
                             label_selectors=[
                                 'type="number_db_prev_found"',
                             ],
@@ -4406,27 +4406,27 @@ def RangeCacheMemoryEngine() -> RowPanel:
                     target(
                         expr=expr_histogram_quantile(
                             1,
-                            "tikv_range_cache_memory_engine_seek_duration",
+                            "tikv_region_cache_memory_engine_seek_duration",
                         ),
                         legend_format="max",
                     ),
                     target(
                         expr=expr_histogram_quantile(
                             0.99,
-                            "tikv_range_cache_memory_engine_seek_duration",
+                            "tikv_region_cache_memory_engine_seek_duration",
                         ),
                         legend_format="99%",
                     ),
                     target(
                         expr=expr_histogram_quantile(
                             0.95,
-                            "tikv_range_cache_memory_engine_seek_duration",
+                            "tikv_region_cache_memory_engine_seek_duration",
                         ),
                         legend_format="95%",
                     ),
                     target(
                         expr=expr_histogram_avg(
-                            "tikv_range_cache_memory_engine_seek_duration",
+                            "tikv_region_cache_memory_engine_seek_duration",
                             by_labels=["type"],
                         ),
                         legend_format="avg",
@@ -9272,7 +9272,7 @@ dashboard = Dashboard(
         RaftEngine(),
         RocksDB(),
         Titan(),
-        RangeCacheMemoryEngine(),
+        RegionCacheMemoryEngine(),
         # Scheduler and Read Pools
         FlowControl(),
         Scheduler(),

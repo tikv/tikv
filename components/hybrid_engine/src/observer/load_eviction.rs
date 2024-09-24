@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use engine_traits::{CacheRegion, EvictReason, KvEngine, RangeCacheEngineExt, RegionEvent};
+use engine_traits::{CacheRegion, EvictReason, KvEngine, RegionCacheEngineExt, RegionEvent};
 use kvproto::{
     metapb::Region,
     raft_cmdpb::AdminCmdType,
@@ -19,11 +19,11 @@ use tikv_util::info;
 
 #[derive(Clone)]
 pub struct LoadEvictionObserver {
-    cache_engine: Arc<dyn RangeCacheEngineExt + Send + Sync>,
+    cache_engine: Arc<dyn RegionCacheEngineExt + Send + Sync>,
 }
 
 impl LoadEvictionObserver {
-    pub fn new(cache_engine: Arc<dyn RangeCacheEngineExt + Send + Sync>) -> Self {
+    pub fn new(cache_engine: Arc<dyn RegionCacheEngineExt + Send + Sync>) -> Self {
         LoadEvictionObserver { cache_engine }
     }
 
@@ -243,10 +243,10 @@ mod tests {
     use super::*;
 
     #[derive(Default)]
-    struct MockRangeCacheEngine {
+    struct MockRegionCacheEngine {
         region_events: Arc<Mutex<Vec<RegionEvent>>>,
     }
-    impl RangeCacheEngineExt for MockRangeCacheEngine {
+    impl RegionCacheEngineExt for MockRegionCacheEngine {
         fn on_region_event(&self, event: RegionEvent) {
             self.region_events.lock().unwrap().push(event);
         }
@@ -270,7 +270,7 @@ mod tests {
 
     #[test]
     fn test_do_not_evict_region_region_split() {
-        let cache_engine = Arc::new(MockRangeCacheEngine::default());
+        let cache_engine = Arc::new(MockRegionCacheEngine::default());
         let observer = LoadEvictionObserver::new(cache_engine.clone());
 
         let mut region = Region::default();
@@ -298,7 +298,7 @@ mod tests {
 
     #[test]
     fn test_evict_region_ingest_sst() {
-        let cache_engine = Arc::new(MockRangeCacheEngine::default());
+        let cache_engine = Arc::new(MockRegionCacheEngine::default());
         let observer = LoadEvictionObserver::new(cache_engine.clone());
 
         let mut region = Region::default();
@@ -337,7 +337,7 @@ mod tests {
 
     #[test]
     fn test_load_region_became_leader() {
-        let cache_engine = Arc::new(MockRangeCacheEngine::default());
+        let cache_engine = Arc::new(MockRegionCacheEngine::default());
         let observer = LoadEvictionObserver::new(cache_engine.clone());
 
         let mut region = Region::default();

@@ -34,17 +34,17 @@ pub mod test_util;
 mod write_batch;
 
 pub use background::{BackgroundRunner, BackgroundTask, GcTask};
-pub use engine::{RangeCacheMemoryEngine, SkiplistHandle};
+pub use engine::{RegionCacheMemoryEngine, SkiplistHandle};
 pub use keys::{
     decode_key, encode_key_for_boundary_without_mvcc, encoding_for_filter, InternalBytes,
     InternalKey, ValueType,
 };
-pub use metrics::flush_range_cache_engine_statistics;
-pub use range_manager::{RangeCacheStatus, RegionState};
-pub use read::RangeCacheSnapshot;
-pub use statistics::Statistics as RangeCacheMemoryEngineStatistics;
+pub use metrics::flush_region_cache_engine_statistics;
+pub use range_manager::{RegionCacheStatus, RegionState};
+pub use read::RegionCacheSnapshot;
+pub use statistics::Statistics as RegionCacheMemoryEngineStatistics;
 use txn_types::TimeStamp;
-pub use write_batch::RangeCacheWriteBatch;
+pub use write_batch::RegionCacheWriteBatch;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -54,7 +54,7 @@ pub enum Error {
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, OnlineConfig)]
 #[serde(default, rename_all = "kebab-case")]
-pub struct RangeCacheEngineConfig {
+pub struct RegionCacheEngineConfig {
     pub enabled: bool,
     pub gc_interval: ReadableDuration,
     pub load_evict_interval: ReadableDuration,
@@ -70,7 +70,7 @@ pub struct RangeCacheEngineConfig {
     pub mvcc_amplification_threshold: usize,
 }
 
-impl Default for RangeCacheEngineConfig {
+impl Default for RegionCacheEngineConfig {
     fn default() -> Self {
         Self {
             enabled: false,
@@ -86,7 +86,7 @@ impl Default for RangeCacheEngineConfig {
     }
 }
 
-impl RangeCacheEngineConfig {
+impl RegionCacheEngineConfig {
     pub fn validate(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         if !self.enabled {
             return Ok(());
@@ -148,8 +148,8 @@ impl RangeCacheEngineConfig {
         )
     }
 
-    pub fn config_for_test() -> RangeCacheEngineConfig {
-        RangeCacheEngineConfig {
+    pub fn config_for_test() -> RegionCacheEngineConfig {
+        RegionCacheEngineConfig {
             enabled: true,
             gc_interval: ReadableDuration(Duration::from_secs(180)),
             load_evict_interval: ReadableDuration(Duration::from_secs(300)), /* Should run within
@@ -163,18 +163,18 @@ impl RangeCacheEngineConfig {
     }
 }
 
-pub struct RangeCacheEngineContext {
-    config: Arc<VersionTrack<RangeCacheEngineConfig>>,
-    statistics: Arc<RangeCacheMemoryEngineStatistics>,
+pub struct RegionCacheEngineContext {
+    config: Arc<VersionTrack<RegionCacheEngineConfig>>,
+    statistics: Arc<RegionCacheMemoryEngineStatistics>,
     pd_client: Arc<dyn PdClient>,
 }
 
-impl RangeCacheEngineContext {
+impl RegionCacheEngineContext {
     pub fn new(
-        config: Arc<VersionTrack<RangeCacheEngineConfig>>,
+        config: Arc<VersionTrack<RegionCacheEngineConfig>>,
         pd_client: Arc<dyn PdClient>,
-    ) -> RangeCacheEngineContext {
-        RangeCacheEngineContext {
+    ) -> RegionCacheEngineContext {
+        RegionCacheEngineContext {
             config,
             statistics: Arc::default(),
             pd_client,
@@ -182,22 +182,22 @@ impl RangeCacheEngineContext {
     }
 
     pub fn new_for_tests(
-        config: Arc<VersionTrack<RangeCacheEngineConfig>>,
-    ) -> RangeCacheEngineContext {
+        config: Arc<VersionTrack<RegionCacheEngineConfig>>,
+    ) -> RegionCacheEngineContext {
         struct MockPdClient;
         impl PdClient for MockPdClient {
             fn get_tso(&self) -> pd_client::PdFuture<txn_types::TimeStamp> {
                 Box::pin(ready(Ok(TimeStamp::compose(TimeStamp::physical_now(), 0))))
             }
         }
-        RangeCacheEngineContext {
+        RegionCacheEngineContext {
             config,
             statistics: Arc::default(),
             pd_client: Arc::new(MockPdClient),
         }
     }
 
-    pub fn statistics(&self) -> Arc<RangeCacheMemoryEngineStatistics> {
+    pub fn statistics(&self) -> Arc<RegionCacheMemoryEngineStatistics> {
         self.statistics.clone()
     }
 }

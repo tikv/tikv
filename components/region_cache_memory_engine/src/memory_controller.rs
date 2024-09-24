@@ -11,7 +11,7 @@ use std::{
 use tikv_util::config::VersionTrack;
 
 use crate::{
-    engine::SkiplistEngine, write_batch::NODE_OVERHEAD_SIZE_EXPECTATION, RangeCacheEngineConfig,
+    engine::SkiplistEngine, write_batch::NODE_OVERHEAD_SIZE_EXPECTATION, RegionCacheEngineConfig,
 };
 
 #[derive(Debug, PartialEq)]
@@ -32,7 +32,7 @@ pub struct MemoryController {
     // Allocated memory for keys and values (node overhead is not included)
     // The number of writes that are buffered but not yet written.
     allocated: AtomicUsize,
-    config: Arc<VersionTrack<RangeCacheEngineConfig>>,
+    config: Arc<VersionTrack<RegionCacheEngineConfig>>,
     memory_checking: AtomicBool,
     skiplist_engine: SkiplistEngine,
 }
@@ -50,7 +50,7 @@ impl fmt::Debug for MemoryController {
 }
 impl MemoryController {
     pub fn new(
-        config: Arc<VersionTrack<RangeCacheEngineConfig>>,
+        config: Arc<VersionTrack<RegionCacheEngineConfig>>,
         skiplist_engine: SkiplistEngine,
     ) -> Self {
         Self {
@@ -124,7 +124,7 @@ mod tests {
     #[test]
     fn test_memory_controller() {
         let skiplist_engine = SkiplistEngine::new();
-        let config = Arc::new(VersionTrack::new(RangeCacheEngineConfig {
+        let config = Arc::new(VersionTrack::new(RegionCacheEngineConfig {
             enabled: true,
             gc_interval: Default::default(),
             load_evict_interval: Default::default(),

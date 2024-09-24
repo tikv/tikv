@@ -45,7 +45,7 @@ use raftstore::{
     RaftRouterCompactedEventSender, Result,
 };
 use rand::{seq::SliceRandom, RngCore};
-use range_cache_memory_engine::RangeCacheMemoryEngine;
+use region_cache_memory_engine::RegionCacheMemoryEngine;
 use server::common::ConfiguredRaftEngine;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
@@ -71,7 +71,7 @@ use txn_types::Key;
 
 use crate::{Cluster, Config, RawEngine, ServerCluster, Simulator};
 
-pub type HybridEngineImpl = HybridEngine<RocksEngine, RangeCacheMemoryEngine>;
+pub type HybridEngineImpl = HybridEngine<RocksEngine, RegionCacheMemoryEngine>;
 
 pub fn must_get<EK: KvEngine>(
     engine: &impl RawEngine<EK>,

@@ -46,8 +46,8 @@ use raftstore::{
     },
     Result,
 };
-use range_cache_memory_engine::{
-    RangeCacheEngineConfig, RangeCacheEngineContext, RangeCacheMemoryEngine,
+use region_cache_memory_engine::{
+    RegionCacheEngineConfig, RegionCacheEngineContext, RegionCacheMemoryEngine,
 };
 use resource_control::ResourceGroupManager;
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
@@ -309,7 +309,7 @@ impl ServerCluster {
 
         // Create coprocessor.
         let enable_region_stats_mgr_cb: Arc<dyn Fn() -> bool + Send + Sync> =
-            if cfg.range_cache_engine.enabled {
+            if cfg.region_cache_engine.enabled {
                 Arc::new(|| true)
             } else {
                 Arc::new(|| false)
@@ -323,20 +323,20 @@ impl ServerCluster {
         let region_info_accessor = RegionInfoAccessor::new(
             &mut coprocessor_host,
             enable_region_stats_mgr_cb,
-            cfg.range_cache_engine.mvcc_amplification_threshold,
+            cfg.region_cache_engine.mvcc_amplification_threshold,
         );
 
         // In-memory engine
-        let mut range_cache_engine_config = cfg.range_cache_engine.clone();
-        let _ = range_cache_engine_config
+        let mut region_cache_engine_config = cfg.region_cache_engine.clone();
+        let _ = region_cache_engine_config
             .expected_region_size
             .get_or_insert(cfg.coprocessor.region_split_size());
-        let range_cache_engine_config = Arc::new(VersionTrack::new(range_cache_engine_config));
-        let range_cache_engine_context =
-            RangeCacheEngineContext::new(range_cache_engine_config.clone(), self.pd_client.clone());
-        let in_memory_engine = if cfg.range_cache_engine.enabled {
+        let region_cache_engine_config = Arc::new(VersionTrack::new(region_cache_engine_config));
+        let region_cache_engine_context =
+            RegionCacheEngineContext::new(region_cache_engine_config.clone(), self.pd_client.clone());
+        let in_memory_engine = if cfg.region_cache_engine.enabled {
             let in_memory_engine = build_hybrid_engine(
-                range_cache_engine_context,
+                region_cache_engine_context,
                 engines.kv.clone(),
                 None,
                 Some(Arc::new(region_info_accessor.clone())),
@@ -346,11 +346,11 @@ impl ServerCluster {
             observer.register_to(&mut coprocessor_host);
             // Write batch observer
             let write_batch_observer =
-                RegionCacheWriteBatchObserver::new(in_memory_engine.range_cache_engine().clone());
+                RegionCacheWriteBatchObserver::new(in_memory_engine.region_cache_engine().clone());
             write_batch_observer.register_to(&mut coprocessor_host);
             // Snapshot observer
             let snapshot_observer =
-                HybridSnapshotObserver::new(in_memory_engine.range_cache_engine().clone());
+                HybridSnapshotObserver::new(in_memory_engine.region_cache_engine().clone());
             snapshot_observer.register_to(&mut coprocessor_host);
             Some(in_memory_engine)
         } else {
@@ -729,13 +729,13 @@ impl ServerCluster {
         Some(w.scheduler())
     }
 
-    pub fn get_range_cache_engine(&self, node_id: u64) -> RangeCacheMemoryEngine {
+    pub fn get_region_cache_engine(&self, node_id: u64) -> RegionCacheMemoryEngine {
         self.in_memory_engines
             .get(&node_id)
             .unwrap()
             .as_ref()
             .unwrap()
-            .range_cache_engine()
+            .region_cache_engine()
             .clone()
     }
 }
@@ -941,14 +941,14 @@ pub fn new_server_cluster(id: u64, count: usize) -> Cluster<ServerCluster> {
     Cluster::new(id, count, sim, pd_client, ApiVersion::V1)
 }
 
-pub fn new_server_cluster_with_hybrid_engine_with_no_range_cache(
+pub fn new_server_cluster_with_hybrid_engine_with_no_region_cache(
     id: u64,
     count: usize,
 ) -> Cluster<ServerCluster> {
     let pd_client = Arc::new(TestPdClient::new(id, false));
     let sim = Arc::new(RwLock::new(ServerCluster::new(Arc::clone(&pd_client))));
     let mut cluster = Cluster::new(id, count, sim, pd_client, ApiVersion::V1);
-    cluster.cfg.tikv.range_cache_engine = RangeCacheEngineConfig::config_for_test();
+    cluster.cfg.tikv.region_cache_engine = RegionCacheEngineConfig::config_for_test();
     cluster
 }
 

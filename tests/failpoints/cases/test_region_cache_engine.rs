@@ -7,7 +7,7 @@ use std::{
 
 use engine_rocks::RocksSstWriterBuilder;
 use engine_traits::{
-    CacheRegion, EvictReason, RangeCacheEngine, RangeCacheEngineExt, SstWriter, SstWriterBuilder,
+    CacheRegion, EvictReason, RegionCacheEngine, RegionCacheEngineExt, SstWriter, SstWriterBuilder,
     CF_DEFAULT,
 };
 use file_system::calc_crc32_bytes;
@@ -17,11 +17,11 @@ use kvproto::{
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request},
 };
 use protobuf::Message;
-use range_cache_memory_engine::test_util::new_region;
+use region_cache_memory_engine::test_util::new_region;
 use tempfile::tempdir;
 use test_coprocessor::{handle_request, init_data_with_details_pd_client, DagSelect, ProductTable};
 use test_raftstore::{
-    get_tso, new_peer, new_server_cluster_with_hybrid_engine_with_no_range_cache, Cluster,
+    get_tso, new_peer, new_server_cluster_with_hybrid_engine_with_no_region_cache, Cluster,
     ServerCluster,
 };
 use test_util::eventually;
@@ -63,21 +63,21 @@ fn must_copr_load_data(cluster: &mut Cluster<ServerCluster>, table: &ProductTabl
 
 #[test]
 fn test_put_copr_get() {
-    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
+    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 1;
     cluster.run();
 
     let current_ts = get_tso(&cluster.pd_client);
-    let range_cache_engine = cluster.sim.rl().get_range_cache_engine(1);
+    let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
     // FIXME: load is not implemented, so we have to insert range manually
     {
         let region = cluster.get_region(b"k");
         let rid = region.id;
-        range_cache_engine
+        region_cache_engine
             .core()
             .region_manager()
             .new_region(CacheRegion::from_region(&region));
-        range_cache_engine
+        region_cache_engine
             .core()
             .region_manager()
             .set_safe_point(rid, current_ts);
@@ -86,7 +86,7 @@ fn test_put_copr_get() {
     let product = ProductTable::new();
     must_copr_load_data(&mut cluster, &product, 1);
     let (tx, rx) = unbounded();
-    fail::cfg_callback("on_range_cache_iterator_seek", move || {
+    fail::cfg_callback("on_region_cache_iterator_seek", move || {
         tx.send(true).unwrap();
     })
     .unwrap();
@@ -99,7 +99,7 @@ fn test_put_copr_get() {
 
 #[test]
 fn test_load() {
-    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
+    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
     cluster.run();
 
@@ -130,18 +130,18 @@ fn test_load() {
         let r = cluster.get_region(b"");
         let r1 = cluster.get_region(&split_keys[0]);
         let r2 = cluster.get_region(&split_keys[1]);
-        let range_cache_engine = cluster.sim.rl().get_range_cache_engine(1);
-        range_cache_engine
+        let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
+        region_cache_engine
             .core()
             .region_manager()
             .load_region(CacheRegion::from_region(&r))
             .unwrap();
-        range_cache_engine
+        region_cache_engine
             .core()
             .region_manager()
             .load_region(CacheRegion::from_region(&r1))
             .unwrap();
-        range_cache_engine
+        region_cache_engine
             .core()
             .region_manager()
             .load_region(CacheRegion::from_region(&r2))
@@ -159,7 +159,7 @@ fn test_load() {
     rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
     let (tx, rx) = unbounded();
-    fail::cfg_callback("on_range_cache_iterator_seek", move || {
+    fail::cfg_callback("on_region_cache_iterator_seek", move || {
         tx.send(true).unwrap();
     })
     .unwrap();
@@ -176,7 +176,7 @@ fn test_load() {
 // splits.
 #[test]
 fn test_load_with_split() {
-    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
+    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
     cluster.run();
 
@@ -192,11 +192,11 @@ fn test_load_with_split() {
 
     // load range
     {
-        let range_cache_engine = cluster.sim.rl().get_range_cache_engine(1);
+        let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
         // Load the whole range as if it is not splitted. Loading process should handle
         // it correctly.
         let cache_range = new_region(1, "", "");
-        range_cache_engine
+        region_cache_engine
             .core()
             .region_manager()
             .load_region(CacheRegion::from_region(&cache_range))
@@ -230,7 +230,7 @@ fn test_load_with_split() {
     tx2.send(true).unwrap();
 
     let (tx, rx) = unbounded();
-    fail::cfg_callback("on_range_cache_iterator_seek", move || {
+    fail::cfg_callback("on_region_cache_iterator_seek", move || {
         tx.send(true).unwrap();
     })
     .unwrap();
@@ -254,10 +254,10 @@ fn test_load_with_split() {
 // table1-table2 is scheduled.
 #[test]
 fn test_load_with_split2() {
-    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
+    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 4;
     cluster.run();
-    let range_cache_engine = cluster.sim.rl().get_range_cache_engine(1);
+    let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
 
     let product1 = ProductTable::new();
     let product2 = ProductTable::new();
@@ -309,7 +309,7 @@ fn test_load_with_split2() {
     std::thread::sleep(Duration::from_secs(1));
     // try to load a region with old epoch and bigger range,
     // it should be updated to the real region range.
-    range_cache_engine
+    region_cache_engine
         .core()
         .region_manager()
         .load_region(CacheRegion::new(r_split.id, 0, DATA_MIN_KEY, DATA_MAX_KEY))
@@ -327,8 +327,8 @@ fn test_load_with_split2() {
     drop(handle_put_pause_tx);
 
     {
-        let range_cache_engine = cluster.sim.rl().get_range_cache_engine(1);
-        let regions_map = range_cache_engine
+        let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
+        let regions_map = region_cache_engine
             .core()
             .region_manager()
             .regions_map()
@@ -344,7 +344,7 @@ fn test_load_with_split2() {
     handle2.join().unwrap();
 
     let (tx, rx) = unbounded();
-    fail::cfg_callback("on_range_cache_iterator_seek", move || {
+    fail::cfg_callback("on_region_cache_iterator_seek", move || {
         tx.send(true).unwrap();
     })
     .unwrap();
@@ -354,8 +354,8 @@ fn test_load_with_split2() {
     // ["", table2) should not cached.
     must_copr_load_data(&mut cluster, &product1, 3);
     let (tx, rx) = unbounded();
-    fail::remove("on_range_cache_iterator_seek");
-    fail::cfg_callback("on_range_cache_iterator_seek", move || {
+    fail::remove("on_region_cache_iterator_seek");
+    fail::cfg_callback("on_region_cache_iterator_seek", move || {
         tx.send(true).unwrap();
     })
     .unwrap();
@@ -369,14 +369,14 @@ fn test_load_with_split2() {
 // range, and even been evicted.
 #[test]
 fn test_load_with_eviction() {
-    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
+    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
     cluster.run();
     // load range
-    let range_cache_engine = cluster.sim.rl().get_range_cache_engine(1);
+    let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
     // Load the whole range as if it is not splitted. Loading process should handle
     // it correctly.
     let cache_range = CacheRegion::new(1, 0, DATA_MIN_KEY, DATA_MAX_KEY);
-    range_cache_engine
+    region_cache_engine
         .core()
         .region_manager()
         .load_region(cache_range)
@@ -390,7 +390,7 @@ fn test_load_with_eviction() {
     let r = cluster.get_region(&split_key);
     cluster.must_split(&r, &split_key);
 
-    fail::cfg("on_range_cache_write_batch_write_impl", "pause").unwrap();
+    fail::cfg("on_region_cache_write_batch_write_impl", "pause").unwrap();
     let mut async_put = |table: &ProductTable, row_id| {
         let engine = cluster.sim.rl().storages[&1].clone();
         let cfg = cluster.cfg.tikv.server.clone();
@@ -415,9 +415,9 @@ fn test_load_with_eviction() {
     let handle2 = async_put(&product2, 15);
 
     {
-        let range_cache_engine = cluster.sim.rl().get_range_cache_engine(1);
+        let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
         let mut tried_count = 0;
-        while range_cache_engine
+        while region_cache_engine
             .snapshot(CacheRegion::from_region(&r), u64::MAX, u64::MAX)
             .is_err()
             && tried_count < 5
@@ -427,21 +427,21 @@ fn test_load_with_eviction() {
         }
         // Now, the range ["", "") should be cached
         let region = new_region(1, split_key, "");
-        range_cache_engine.evict_region(
+        region_cache_engine.evict_region(
             &CacheRegion::from_region(&region),
             EvictReason::AutoEvict,
             None,
         );
     }
 
-    fail::remove("on_range_cache_write_batch_write_impl");
+    fail::remove("on_region_cache_write_batch_write_impl");
     handle1.join().unwrap();
     handle2.join().unwrap();
 
     for (table, is_cached) in &[(product1, true), (product2, false)] {
-        fail::remove("on_range_cache_iterator_seek");
+        fail::remove("on_region_cache_iterator_seek");
         let (tx, rx) = unbounded();
-        fail::cfg_callback("on_range_cache_iterator_seek", move || {
+        fail::cfg_callback("on_region_cache_iterator_seek", move || {
             tx.send(true).unwrap();
         })
         .unwrap();
@@ -467,32 +467,32 @@ fn test_load_with_eviction() {
 
 #[test]
 fn test_evictions_after_transfer_leader() {
-    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_range_cache(0, 2);
+    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 2);
     cluster.run();
 
     let r = cluster.get_region(b"");
     cluster.must_transfer_leader(r.id, new_peer(1, 1));
 
     let cache_region = CacheRegion::new(1, 0, DATA_MIN_KEY, DATA_MAX_KEY);
-    let range_cache_engine = cluster.sim.rl().get_range_cache_engine(1);
-    range_cache_engine
+    let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
+    region_cache_engine
         .core()
         .region_manager()
         .new_region(cache_region.clone());
 
-    range_cache_engine
+    region_cache_engine
         .snapshot(cache_region.clone(), 100, 100)
         .unwrap();
 
     cluster.must_transfer_leader(r.id, new_peer(2, 2));
-    range_cache_engine
+    region_cache_engine
         .snapshot(cache_region, 100, 100)
         .unwrap_err();
 }
 
 #[test]
 fn test_eviction_after_merge() {
-    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
+    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
     cluster.run();
     let r = cluster.get_region(b"");
     cluster.must_split(&r, b"key1");
@@ -502,33 +502,33 @@ fn test_eviction_after_merge() {
     let r2 = cluster.get_region(b"key1");
     let range2 = CacheRegion::from_region(&r2);
 
-    let range_cache_engine = cluster.sim.rl().get_range_cache_engine(1);
-    range_cache_engine
+    let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
+    region_cache_engine
         .core()
         .region_manager()
         .new_region(range1.clone());
-    range_cache_engine
+    region_cache_engine
         .core()
         .region_manager()
         .new_region(range2.clone());
 
-    range_cache_engine
+    region_cache_engine
         .snapshot(range1.clone(), 100, 100)
         .unwrap();
-    range_cache_engine
+    region_cache_engine
         .snapshot(range2.clone(), 100, 100)
         .unwrap();
 
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.must_merge(r.get_id(), r2.get_id());
 
-    range_cache_engine.snapshot(range1, 100, 100).unwrap_err();
-    range_cache_engine.snapshot(range2, 100, 100).unwrap_err();
+    region_cache_engine.snapshot(range1, 100, 100).unwrap_err();
+    region_cache_engine.snapshot(range2, 100, 100).unwrap_err();
 }
 
 #[test]
 fn test_manual_load_range_after_transfer_leader() {
-    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_range_cache(0, 2);
+    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 2);
     cluster.run();
 
     let r = cluster.get_region(b"");
@@ -541,18 +541,18 @@ fn test_manual_load_range_after_transfer_leader() {
         DATA_MIN_KEY.to_vec(),
         DATA_MAX_KEY.to_vec(),
     );
-    let range_cache_engine = {
-        let range_cache_engine = cluster.sim.rl().get_range_cache_engine(2);
-        range_cache_engine
+    let region_cache_engine = {
+        let region_cache_engine = cluster.sim.rl().get_region_cache_engine(2);
+        region_cache_engine
             .core()
             .region_manager()
             .regions_map()
             .write()
             .add_manual_load_range(cache_range.clone());
-        range_cache_engine
+        region_cache_engine
     };
 
-    range_cache_engine
+    region_cache_engine
         .snapshot(cache_range.clone(), 100, 100)
         .unwrap_err();
 
@@ -561,7 +561,7 @@ fn test_manual_load_range_after_transfer_leader() {
     cluster.must_transfer_leader(r.id, new_peer(2, 2));
 
     eventually(Duration::from_millis(100), Duration::from_secs(5), || {
-        range_cache_engine
+        region_cache_engine
             .snapshot(cache_range.clone(), 100, 100)
             .is_ok()
     });
@@ -569,7 +569,7 @@ fn test_manual_load_range_after_transfer_leader() {
 
 #[test]
 fn test_eviction_after_ingest_sst() {
-    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
+    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
     cluster.run();
 
     // Generate a sst file.
@@ -584,13 +584,13 @@ fn test_eviction_after_ingest_sst() {
     // Add region r to cache.
     let region = cluster.get_region(b"");
     let cache_region = CacheRegion::from_region(&region);
-    let range_cache_engine = cluster.sim.rl().get_range_cache_engine(1);
-    range_cache_engine
+    let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
+    region_cache_engine
         .core()
         .region_manager()
         .new_region(cache_region.clone());
 
-    range_cache_engine
+    region_cache_engine
         .snapshot(cache_region.clone(), 100, 100)
         .unwrap();
 
@@ -631,14 +631,14 @@ fn test_eviction_after_ingest_sst() {
         .unwrap();
     assert!(!resp.get_header().has_error(), "{:?}", resp);
 
-    range_cache_engine
+    region_cache_engine
         .snapshot(cache_region, 100, 100)
         .unwrap_err();
 }
 
 #[test]
 fn test_pre_load_when_transfer_ledaer() {
-    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_range_cache(0, 3);
+    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 3);
     cluster.run();
 
     let (tx, rx) = unbounded();
@@ -649,8 +649,8 @@ fn test_pre_load_when_transfer_ledaer() {
 
     let r = cluster.get_region(b"");
     cluster.must_transfer_leader(r.id, new_peer(1, 1));
-    let range_cache_engine = cluster.sim.rl().get_range_cache_engine(1);
-    range_cache_engine
+    let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
+    region_cache_engine
         .load_region(CacheRegion::from_region(&r))
         .unwrap();
     // put some key to trigger load
@@ -662,6 +662,6 @@ fn test_pre_load_when_transfer_ledaer() {
     cluster.must_put(b"k2", b"val");
     let _ = rx.recv_timeout(Duration::from_secs(500)).unwrap();
 
-    let range_cache_engine = cluster.sim.rl().get_range_cache_engine(2);
-    range_cache_engine.region_cached(&r);
+    let region_cache_engine = cluster.sim.rl().get_region_cache_engine(2);
+    region_cache_engine.region_cached(&r);
 }

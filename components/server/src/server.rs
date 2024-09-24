@@ -75,8 +75,8 @@ use raftstore::{
     },
     RaftRouterCompactedEventSender,
 };
-use range_cache_memory_engine::{
-    config::RangeCacheConfigManager, RangeCacheEngineContext, RangeCacheMemoryEngineStatistics,
+use region_cache_memory_engine::{
+    config::RegionCacheConfigManager, RegionCacheEngineContext, RegionCacheMemoryEngineStatistics,
 };
 use resolved_ts::{LeadershipResolver, Task};
 use resource_control::ResourceGroupManager;
@@ -254,7 +254,7 @@ where
     snap_mgr: Option<SnapManager>, // Will be filled in `init_servers`.
     engines: Option<TikvEngines<RocksEngine, ER>>,
     kv_statistics: Option<Arc<RocksStatistics>>,
-    range_cache_engine_statistics: Option<Arc<RangeCacheMemoryEngineStatistics>>,
+    region_cache_engine_statistics: Option<Arc<RegionCacheMemoryEngineStatistics>>,
     raft_statistics: Option<Arc<RocksStatistics>>,
     servers: Option<Servers<RocksEngine, ER, F>>,
     region_info_accessor: RegionInfoAccessor,
@@ -400,7 +400,7 @@ where
                 Arc::new(move || {
                     cfg_controller_clone
                         .get_current()
-                        .range_cache_engine
+                        .region_cache_engine
                         .enabled
                 })
             } else {
@@ -410,7 +410,7 @@ where
         let region_info_accessor = RegionInfoAccessor::new(
             coprocessor_host.as_mut().unwrap(),
             region_stats_manager_enabled_cb,
-            config.range_cache_engine.mvcc_amplification_threshold,
+            config.region_cache_engine.mvcc_amplification_threshold,
         );
 
         // Initialize concurrency manager
@@ -469,7 +469,7 @@ where
             snap_mgr: None,
             engines: None,
             kv_statistics: None,
-            range_cache_engine_statistics: None,
+            region_cache_engine_statistics: None,
             raft_statistics: None,
             servers: None,
             region_info_accessor,
@@ -1320,7 +1320,7 @@ where
         let mut engine_metrics = EngineMetricsManager::<RocksEngine, ER>::new(
             self.tablet_registry.clone().unwrap(),
             self.kv_statistics.clone(),
-            self.range_cache_engine_statistics.clone(),
+            self.region_cache_engine_statistics.clone(),
             self.core.config.rocksdb.titan.enabled.map_or(false, |v| v),
             self.engines.as_ref().unwrap().engines.raft.clone(),
             self.raft_statistics.clone(),
@@ -1625,17 +1625,17 @@ where
         let kv_engine = factory
             .create_shared_db(&self.core.store_path)
             .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
-        let mut range_cache_engine_config = self.core.config.range_cache_engine.clone();
-        let _ = range_cache_engine_config
+        let mut region_cache_engine_config = self.core.config.region_cache_engine.clone();
+        let _ = region_cache_engine_config
             .expected_region_size
             .get_or_insert(self.core.config.coprocessor.region_split_size());
-        let range_cache_engine_config = Arc::new(VersionTrack::new(range_cache_engine_config));
-        let range_cache_engine_context =
-            RangeCacheEngineContext::new(range_cache_engine_config.clone(), self.pd_client.clone());
-        let range_cache_engine_statistics = range_cache_engine_context.statistics();
-        if self.core.config.range_cache_engine.enabled {
+        let region_cache_engine_config = Arc::new(VersionTrack::new(region_cache_engine_config));
+        let region_cache_engine_context =
+            RegionCacheEngineContext::new(region_cache_engine_config.clone(), self.pd_client.clone());
+        let region_cache_engine_statistics = region_cache_engine_context.statistics();
+        if self.core.config.region_cache_engine.enabled {
             let in_memory_engine = build_hybrid_engine(
-                range_cache_engine_context,
+                region_cache_engine_context,
                 kv_engine.clone(),
                 Some(self.pd_client.clone()),
                 Some(Arc::new(self.region_info_accessor.clone())),
@@ -1646,15 +1646,15 @@ where
                 HybridEngineLoadEvictionObserver::new(Arc::new(in_memory_engine.clone()));
             eviction_observer.register_to(self.coprocessor_host.as_mut().unwrap());
             let write_batch_observer =
-                RegionCacheWriteBatchObserver::new(in_memory_engine.range_cache_engine().clone());
+                RegionCacheWriteBatchObserver::new(in_memory_engine.region_cache_engine().clone());
             write_batch_observer.register_to(self.coprocessor_host.as_mut().unwrap());
             let snapshot_observer =
-                HybridSnapshotObserver::new(in_memory_engine.range_cache_engine().clone());
+                HybridSnapshotObserver::new(in_memory_engine.region_cache_engine().clone());
             snapshot_observer.register_to(self.coprocessor_host.as_mut().unwrap());
         };
-        let range_cache_config_manager = RangeCacheConfigManager(range_cache_engine_config);
+        let region_cache_config_manager = RegionCacheConfigManager(region_cache_engine_config);
         self.kv_statistics = Some(factory.rocks_statistics());
-        self.range_cache_engine_statistics = Some(range_cache_engine_statistics);
+        self.region_cache_engine_statistics = Some(region_cache_engine_statistics);
         let engines = Engines::new(kv_engine.clone(), raft_engine);
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
@@ -1667,8 +1667,8 @@ where
             )),
         );
         cfg_controller.register(
-            tikv::config::Module::RangeCacheEngine,
-            Box::new(range_cache_config_manager),
+            tikv::config::Module::RegionCacheEngine,
+            Box::new(region_cache_config_manager),
         );
         let reg = TabletRegistry::new(
             Box::new(SingletonFactory::new(kv_engine)),

@@ -5,13 +5,13 @@ use std::{
     ops::Deref,
 };
 
-use engine_traits::{DbVector, KvEngine, Peekable, RangeCacheEngine, ReadOptions, Result};
+use engine_traits::{DbVector, KvEngine, Peekable, RegionCacheEngine, ReadOptions, Result};
 use tikv_util::Either;
 
 pub struct HybridDbVector<EK, EC>
 where
     EK: KvEngine,
-    EC: RangeCacheEngine,
+    EC: RegionCacheEngine,
 {
     db_vec: Either<<EK::Snapshot as Peekable>::DbVector, <EC::Snapshot as Peekable>::DbVector>,
 }
@@ -19,14 +19,14 @@ where
 impl<EK, EC> DbVector for HybridDbVector<EK, EC>
 where
     EK: KvEngine,
-    EC: RangeCacheEngine,
+    EC: RegionCacheEngine,
 {
 }
 
 impl<EK, EC> HybridDbVector<EK, EC>
 where
     EK: KvEngine,
-    EC: RangeCacheEngine,
+    EC: RegionCacheEngine,
 {
     pub fn try_from_disk_snap(
         snap: &EK::Snapshot,
@@ -58,7 +58,7 @@ where
 impl<EK, EC> Deref for HybridDbVector<EK, EC>
 where
     EK: KvEngine,
-    EC: RangeCacheEngine,
+    EC: RegionCacheEngine,
 {
     type Target = [u8];
 
@@ -73,7 +73,7 @@ where
 impl<EK, EC> Debug for HybridDbVector<EK, EC>
 where
     EK: KvEngine,
-    EC: RangeCacheEngine,
+    EC: RegionCacheEngine,
 {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         write!(formatter, "{:?}", &**self)
@@ -83,7 +83,7 @@ where
 impl<'a, EK, EC> PartialEq<&'a [u8]> for HybridDbVector<EK, EC>
 where
     EK: KvEngine,
-    EC: RangeCacheEngine,
+    EC: RegionCacheEngine,
 {
     fn eq(&self, rhs: &&[u8]) -> bool {
         **rhs == **self

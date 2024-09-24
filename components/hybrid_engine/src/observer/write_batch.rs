@@ -5,15 +5,15 @@ use raftstore::coprocessor::{
     dispatcher::BoxWriteBatchObserver, Coprocessor, CoprocessorHost, ObservableWriteBatch,
     WriteBatchObserver,
 };
-use range_cache_memory_engine::{RangeCacheMemoryEngine, RangeCacheWriteBatch};
+use region_cache_memory_engine::{RegionCacheMemoryEngine, RegionCacheWriteBatch};
 
 #[derive(Clone)]
 pub struct RegionCacheWriteBatchObserver {
-    cache_engine: RangeCacheMemoryEngine,
+    cache_engine: RegionCacheMemoryEngine,
 }
 
 impl RegionCacheWriteBatchObserver {
-    pub fn new(cache_engine: RangeCacheMemoryEngine) -> Self {
+    pub fn new(cache_engine: RegionCacheMemoryEngine) -> Self {
         RegionCacheWriteBatchObserver { cache_engine }
     }
 
@@ -29,13 +29,13 @@ impl Coprocessor for RegionCacheWriteBatchObserver {}
 impl WriteBatchObserver for RegionCacheWriteBatchObserver {
     fn create_observable_write_batch(&self) -> Box<dyn ObservableWriteBatch> {
         Box::new(HybridObservableWriteBatch {
-            cache_write_batch: RangeCacheWriteBatch::from(&self.cache_engine),
+            cache_write_batch: RegionCacheWriteBatch::from(&self.cache_engine),
         })
     }
 }
 
 struct HybridObservableWriteBatch {
-    cache_write_batch: RangeCacheWriteBatch,
+    cache_write_batch: RegionCacheWriteBatch,
 }
 
 impl ObservableWriteBatch for HybridObservableWriteBatch {

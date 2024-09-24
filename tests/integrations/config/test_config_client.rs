@@ -56,31 +56,31 @@ fn test_update_config() {
     cfg.raft_store.raft_log_gc_threshold = 2000;
     assert_eq!(cfg_controller.get_current(), cfg);
 
-    let mut range_cache_config_change = HashMap::new();
-    range_cache_config_change.insert("range_cache_engine.enabled".to_owned(), "true".to_owned());
-    range_cache_config_change.insert(
-        "range_cache_engine.stop-load-limit-threshold".to_owned(),
+    let mut region_cache_config_change = HashMap::new();
+    region_cache_config_change.insert("region_cache_engine.enabled".to_owned(), "true".to_owned());
+    region_cache_config_change.insert(
+        "region_cache_engine.stop-load-limit-threshold".to_owned(),
         "8GB".to_owned(),
     );
-    range_cache_config_change.insert(
-        "range_cache_engine.soft-limit-threshold".to_owned(),
+    region_cache_config_change.insert(
+        "region_cache_engine.soft-limit-threshold".to_owned(),
         "10GB".to_owned(),
     );
-    range_cache_config_change.insert(
-        "range_cache_engine.hard-limit-threshold".to_owned(),
+    region_cache_config_change.insert(
+        "region_cache_engine.hard-limit-threshold".to_owned(),
         "15GB".to_owned(),
     );
-    cfg_controller.update(range_cache_config_change).unwrap();
-    cfg.range_cache_engine.enabled = true;
-    cfg.range_cache_engine.stop_load_limit_threshold = Some(ReadableSize::gb(8));
-    cfg.range_cache_engine.soft_limit_threshold = Some(ReadableSize::gb(10));
-    cfg.range_cache_engine.hard_limit_threshold = Some(ReadableSize::gb(15));
+    cfg_controller.update(region_cache_config_change).unwrap();
+    cfg.region_cache_engine.enabled = true;
+    cfg.region_cache_engine.stop_load_limit_threshold = Some(ReadableSize::gb(8));
+    cfg.region_cache_engine.soft_limit_threshold = Some(ReadableSize::gb(10));
+    cfg.region_cache_engine.hard_limit_threshold = Some(ReadableSize::gb(15));
     assert_eq!(cfg_controller.get_current(), cfg);
 
     cfg_controller
-        .update(change("range_cache_engine.soft-limit-threshold", "11GB"))
+        .update(change("region_cache_engine.soft-limit-threshold", "11GB"))
         .unwrap();
-    cfg.range_cache_engine.soft_limit_threshold = Some(ReadableSize::gb(11));
+    cfg.region_cache_engine.soft_limit_threshold = Some(ReadableSize::gb(11));
     assert_eq!(cfg_controller.get_current(), cfg);
 
     // update not support config

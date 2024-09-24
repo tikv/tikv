@@ -58,7 +58,7 @@ use raftstore::{
     coprocessor::{Config as CopConfig, RegionInfoAccessor},
     store::{CompactionGuardGeneratorFactory, Config as RaftstoreConfig, SplitConfig},
 };
-use range_cache_memory_engine::RangeCacheEngineConfig;
+use region_cache_memory_engine::RegionCacheEngineConfig;
 use resource_control::Config as ResourceControlConfig;
 use resource_metering::Config as ResourceMeteringConfig;
 use security::SecurityConfig;
@@ -3545,7 +3545,7 @@ pub struct TikvConfig {
     pub resource_control: ResourceControlConfig,
 
     #[online_config(submodule)]
-    pub range_cache_engine: RangeCacheEngineConfig,
+    pub region_cache_engine: RegionCacheEngineConfig,
 }
 
 impl Default for TikvConfig {
@@ -3591,7 +3591,7 @@ impl Default for TikvConfig {
             log_backup: BackupStreamConfig::default(),
             causal_ts: CausalTsConfig::default(),
             resource_control: ResourceControlConfig::default(),
-            range_cache_engine: RangeCacheEngineConfig::default(),
+            region_cache_engine: RegionCacheEngineConfig::default(),
         }
     }
 }
@@ -3960,7 +3960,7 @@ impl TikvConfig {
         self.resource_metering.validate()?;
         self.quota.validate()?;
         self.causal_ts.validate()?;
-        self.range_cache_engine.validate()?;
+        self.region_cache_engine.validate()?;
 
         // Validate feature TTL with Titan configuration.
         if matches!(self.rocksdb.titan.enabled, Some(true)) && self.storage.enable_ttl {
@@ -4742,7 +4742,7 @@ pub enum Module {
     Rocksdb,
     Raftdb,
     RaftEngine,
-    RangeCacheEngine,
+    RegionCacheEngine,
     Storage,
     Security,
     Encryption,
@@ -4774,7 +4774,7 @@ impl From<&str> for Module {
             "rocksdb" => Module::Rocksdb,
             "raftdb" => Module::Raftdb,
             "raft_engine" => Module::RaftEngine,
-            "range_cache_engine" => Module::RangeCacheEngine,
+            "region_cache_engine" => Module::RegionCacheEngine,
             "storage" => Module::Storage,
             "security" => Module::Security,
             "import" => Module::Import,

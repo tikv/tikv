@@ -6,44 +6,44 @@ use std::{
 };
 
 use engine_traits::{
-    is_data_cf, CfNamesExt, IterOptions, Iterable, KvEngine, Peekable, RangeCacheEngine,
+    is_data_cf, CfNamesExt, IterOptions, Iterable, KvEngine, Peekable, RegionCacheEngine,
     ReadOptions, Result, Snapshot, SnapshotMiscExt, CF_DEFAULT,
 };
 use raftstore::coprocessor::ObservedSnapshot;
-use range_cache_memory_engine::RangeCacheMemoryEngine;
+use region_cache_memory_engine::RegionCacheMemoryEngine;
 
 use crate::{
     db_vector::HybridDbVector, engine_iterator::HybridEngineIterator,
-    observer::RangeCacheSnapshotPin,
+    observer::RegionCacheSnapshotPin,
 };
 
 pub struct HybridEngineSnapshot<EK, EC>
 where
     EK: KvEngine,
-    EC: RangeCacheEngine,
+    EC: RegionCacheEngine,
 {
     disk_snap: EK::Snapshot,
-    range_cache_snap: Option<EC::Snapshot>,
+    region_cache_snap: Option<EC::Snapshot>,
 }
 
 impl<EK, EC> HybridEngineSnapshot<EK, EC>
 where
     EK: KvEngine,
-    EC: RangeCacheEngine,
+    EC: RegionCacheEngine,
 {
-    pub fn new(disk_snap: EK::Snapshot, range_cache_snap: Option<EC::Snapshot>) -> Self {
+    pub fn new(disk_snap: EK::Snapshot, region_cache_snap: Option<EC::Snapshot>) -> Self {
         HybridEngineSnapshot {
             disk_snap,
-            range_cache_snap,
+            region_cache_snap,
         }
     }
 
-    pub fn range_cache_snapshot_available(&self) -> bool {
-        self.range_cache_snap.is_some()
+    pub fn region_cache_snapshot_available(&self) -> bool {
+        self.region_cache_snap.is_some()
     }
 
-    pub fn range_cache_snap(&self) -> Option<&EC::Snapshot> {
-        self.range_cache_snap.as_ref()
+    pub fn region_cache_snap(&self) -> Option<&EC::Snapshot> {
+        self.region_cache_snap.as_ref()
     }
 
     pub fn disk_snap(&self) -> &EK::Snapshot {
@@ -51,7 +51,7 @@ where
     }
 }
 
-impl<EK> HybridEngineSnapshot<EK, RangeCacheMemoryEngine>
+impl<EK> HybridEngineSnapshot<EK, RegionCacheMemoryEngine>
 where
     EK: KvEngine,
 {
@@ -59,15 +59,15 @@ where
         disk_snap: EK::Snapshot,
         snap_pin: Option<Box<dyn ObservedSnapshot>>,
     ) -> Self {
-        let mut range_cache_snap = None;
+        let mut region_cache_snap = None;
         if let Some(snap_pin) = snap_pin {
             let snap_any: Box<dyn Any> = snap_pin;
-            let range_cache_snap_pin: Box<RangeCacheSnapshotPin> = snap_any.downcast().unwrap();
-            range_cache_snap = range_cache_snap_pin.snap;
+            let region_cache_snap_pin: Box<RegionCacheSnapshotPin> = snap_any.downcast().unwrap();
+            region_cache_snap = region_cache_snap_pin.snap;
         }
         HybridEngineSnapshot {
             disk_snap,
-            range_cache_snap,
+            region_cache_snap,
         }
     }
 }
@@ -75,17 +75,17 @@ where
 impl<EK, EC> Snapshot for HybridEngineSnapshot<EK, EC>
 where
     EK: KvEngine,
-    EC: RangeCacheEngine,
+    EC: RegionCacheEngine,
 {
-    fn range_cache_engine_hit(&self) -> bool {
-        self.range_cache_snap.is_some()
+    fn region_cache_engine_hit(&self) -> bool {
+        self.region_cache_snap.is_some()
     }
 }
 
 impl<EK, EC> Debug for HybridEngineSnapshot<EK, EC>
 where
     EK: KvEngine,
-    EC: RangeCacheEngine,
+    EC: RegionCacheEngine,
 {
     fn fmt(&self, fmt: &mut Formatter<'_>) -> fmt::Result {
         write!(fmt, "Hybrid Engine Snapshot Impl")
@@ -95,15 +95,15 @@ where
 impl<EK, EC> Iterable for HybridEngineSnapshot<EK, EC>
 where
     EK: KvEngine,
-    EC: RangeCacheEngine,
+    EC: RegionCacheEngine,
 {
     type Iterator = HybridEngineIterator<EK, EC>;
 
     fn iterator_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
-        Ok(match self.range_cache_snap() {
-            Some(range_cache_snap) if is_data_cf(cf) => {
-                HybridEngineIterator::range_cache_engine_iterator(
-                    range_cache_snap.iterator_opt(cf, opts)?,
+        Ok(match self.region_cache_snap() {
+            Some(region_cache_snap) if is_data_cf(cf) => {
+                HybridEngineIterator::region_cache_engine_iterator(
+                    region_cache_snap.iterator_opt(cf, opts)?,
                 )
             }
             _ => HybridEngineIterator::disk_engine_iterator(self.disk_snap.iterator_opt(cf, opts)?),
@@ -114,7 +114,7 @@ where
 impl<EK, EC> Peekable for HybridEngineSnapshot<EK, EC>
 where
     EK: KvEngine,
-    EC: RangeCacheEngine,
+    EC: RegionCacheEngine,
 {
     type DbVector = HybridDbVector<EK, EC>;
 
@@ -128,9 +128,9 @@ where
         cf: &str,
         key: &[u8],
     ) -> Result<Option<Self::DbVector>> {
-        match self.range_cache_snap() {
-            Some(range_cache_snap) if is_data_cf(cf) => {
-                Self::DbVector::try_from_cache_snap(range_cache_snap, opts, cf, key)
+        match self.region_cache_snap() {
+            Some(region_cache_snap) if is_data_cf(cf) => {
+                Self::DbVector::try_from_cache_snap(region_cache_snap, opts, cf, key)
             }
             _ => Self::DbVector::try_from_disk_snap(&self.disk_snap, opts, cf, key),
         }
@@ -140,7 +140,7 @@ where
 impl<EK, EC> CfNamesExt for HybridEngineSnapshot<EK, EC>
 where
     EK: KvEngine,
-    EC: RangeCacheEngine,
+    EC: RegionCacheEngine,
 {
     fn cf_names(&self) -> Vec<&str> {
         self.disk_snap.cf_names()
@@ -150,7 +150,7 @@ where
 impl<EK, EC> SnapshotMiscExt for HybridEngineSnapshot<EK, EC>
 where
     EK: KvEngine,
-    EC: RangeCacheEngine,
+    EC: RegionCacheEngine,
 {
     fn sequence_number(&self) -> u64 {
         self.disk_snap.sequence_number()
@@ -164,8 +164,8 @@ mod tests {
         CacheRegion, IterOptions, Iterable, Iterator, Mutable, SnapshotContext, WriteBatch,
         WriteBatchExt, CF_DEFAULT,
     };
-    use range_cache_memory_engine::{
-        test_util::new_region, RangeCacheEngineConfig, RangeCacheStatus,
+    use region_cache_memory_engine::{
+        test_util::new_region, RegionCacheEngineConfig, RegionCacheStatus,
     };
 
     use crate::util::hybrid_engine_for_tests;
@@ -181,7 +181,7 @@ mod tests {
         let region_clone = region.clone();
         let (_path, hybrid_engine) = hybrid_engine_for_tests(
             "temp",
-            RangeCacheEngineConfig::config_for_test(),
+            RegionCacheEngineConfig::config_for_test(),
             move |memory_engine| {
                 memory_engine.new_region(region_clone);
                 memory_engine.core().region_manager().set_safe_point(1, 5);
@@ -197,7 +197,7 @@ mod tests {
         write_batch.prepare_for_region(cache_region.clone());
         write_batch
             .cache_write_batch
-            .set_range_cache_status(RangeCacheStatus::Cached);
+            .set_region_cache_status(RegionCacheStatus::Cached);
         write_batch.put(b"zhello", b"world").unwrap();
         let seq = write_batch.write().unwrap();
         assert!(seq > 0);

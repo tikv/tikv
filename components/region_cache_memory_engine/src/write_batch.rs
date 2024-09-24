@@ -8,7 +8,7 @@ use std::{
 use bytes::Bytes;
 use crossbeam::epoch;
 use engine_traits::{
-    CacheRegion, EvictReason, MiscExt, Mutable, RangeCacheEngine, Result, WriteBatch,
+    CacheRegion, EvictReason, MiscExt, Mutable, RegionCacheEngine, Result, WriteBatch,
     WriteBatchExt, WriteOptions, CF_DEFAULT,
 };
 use tikv_util::{box_err, config::ReadableSize, error, info, time::Instant, warn};
@@ -19,8 +19,8 @@ use crate::{
     keys::{encode_key, InternalBytes, ValueType, ENC_KEY_SEQ_LENGTH},
     memory_controller::{MemoryController, MemoryUsage},
     metrics::{RANGE_PREPARE_FOR_WRITE_DURATION_HISTOGRAM, WRITE_DURATION_HISTOGRAM},
-    range_manager::RangeCacheStatus,
-    RangeCacheMemoryEngine,
+    range_manager::RegionCacheStatus,
+    RegionCacheMemoryEngine,
 };
 
 // This is a bit of a hack. It's the overhead of a node in the skiplist with
@@ -42,17 +42,17 @@ const AMOUNT_TO_CLEAN_TOMBSTONE: u64 = ReadableSize::mb(16).0;
 const DELETE_ENTRY_VAL: &[u8] = b"";
 
 // `prepare_for_region` should be called before raft command apply for each peer
-// delegate. It sets `range_cache_status` which is used to determine whether the
+// delegate. It sets `region_cache_status` which is used to determine whether the
 // writes of this peer should be buffered.
-pub struct RangeCacheWriteBatch {
-    // `range_cache_status` indicates whether the range is cached, loading data, or not cached. If
+pub struct RegionCacheWriteBatch {
+    // `region_cache_status` indicates whether the range is cached, loading data, or not cached. If
     // it is cached, we should buffer the write in `buffer` which is consumed during the write
     // is written in the kv engine. If it is loading data, we should buffer the write in
     // `pending_range_in_loading_buffer` which is cached in the memory engine and will be consumed
     // after the snapshot has been loaded.
-    range_cache_status: RangeCacheStatus,
-    buffer: Vec<RangeCacheWriteBatchEntry>,
-    engine: RangeCacheMemoryEngine,
+    region_cache_status: RegionCacheStatus,
+    buffer: Vec<RegionCacheWriteBatchEntry>,
+    engine: RegionCacheMemoryEngine,
     save_points: Vec<usize>,
     sequence_number: Option<u64>,
     memory_controller: Arc<MemoryController>,
@@ -67,9 +67,9 @@ pub struct RangeCacheWriteBatch {
     prepare_for_write_duration: Duration,
 }
 
-impl std::fmt::Debug for RangeCacheWriteBatch {
+impl std::fmt::Debug for RegionCacheWriteBatch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RangeCacheWriteBatch")
+        f.debug_struct("RegionCacheWriteBatch")
             .field("buffer", &self.buffer)
             .field("save_points", &self.save_points)
             .field("sequence_number", &self.sequence_number)
@@ -77,10 +77,10 @@ impl std::fmt::Debug for RangeCacheWriteBatch {
     }
 }
 
-impl From<&RangeCacheMemoryEngine> for RangeCacheWriteBatch {
-    fn from(engine: &RangeCacheMemoryEngine) -> Self {
+impl From<&RegionCacheMemoryEngine> for RegionCacheWriteBatch {
+    fn from(engine: &RegionCacheMemoryEngine) -> Self {
         Self {
-            range_cache_status: RangeCacheStatus::NotInCache,
+            region_cache_status: RegionCacheStatus::NotInCache,
             buffer: Vec::new(),
             engine: engine.clone(),
             save_points: Vec::new(),
@@ -96,10 +96,10 @@ impl From<&RangeCacheMemoryEngine> for RangeCacheWriteBatch {
     }
 }
 
-impl RangeCacheWriteBatch {
-    pub fn with_capacity(engine: &RangeCacheMemoryEngine, cap: usize) -> Self {
+impl RegionCacheWriteBatch {
+    pub fn with_capacity(engine: &RegionCacheMemoryEngine, cap: usize) -> Self {
         Self {
-            range_cache_status: RangeCacheStatus::NotInCache,
+            region_cache_status: RegionCacheStatus::NotInCache,
             buffer: Vec::with_capacity(cap),
             // cache_buffer should need small capacity
             engine: engine.clone(),
@@ -173,7 +173,7 @@ impl RangeCacheWriteBatch {
         // record last region before flush.
         self.record_last_written_region();
 
-        fail::fail_point!("on_range_cache_write_batch_write_impl");
+        fail::fail_point!("on_region_cache_write_batch_write_impl");
         let guard = &epoch::pin();
         let start = Instant::now();
         let mut lock_modification: u64 = 0;
@@ -211,8 +211,8 @@ impl RangeCacheWriteBatch {
     }
 
     #[inline]
-    pub fn set_range_cache_status(&mut self, range_cache_status: RangeCacheStatus) {
-        self.range_cache_status = range_cache_status;
+    pub fn set_region_cache_status(&mut self, region_cache_status: RegionCacheStatus) {
+        self.region_cache_status = region_cache_status;
     }
 
     fn evict_current_region(&mut self, reason: EvictReason) {
@@ -238,9 +238,9 @@ impl RangeCacheWriteBatch {
     fn process_cf_operation<F1, F2>(&mut self, entry_size: F1, entry: F2)
     where
         F1: FnOnce() -> usize,
-        F2: FnOnce() -> RangeCacheWriteBatchEntry,
+        F2: FnOnce() -> RegionCacheWriteBatchEntry,
     {
-        if self.range_cache_status == RangeCacheStatus::NotInCache || self.current_region_evicted {
+        if self.region_cache_status == RegionCacheStatus::NotInCache || self.current_region_evicted {
             return;
         }
 
@@ -306,7 +306,7 @@ impl RangeCacheWriteBatch {
     fn record_last_written_region(&mut self) {
         // NOTE: event if the region is evcited due to memory limit, we still
         // need to track it because its "in written" flag has been set.
-        if self.range_cache_status != RangeCacheStatus::NotInCache {
+        if self.region_cache_status != RegionCacheStatus::NotInCache {
             let last_region = self.current_region.take().unwrap();
             self.written_regions.push(last_region);
         }
@@ -349,13 +349,13 @@ impl WriteBatchEntryInternal {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct RangeCacheWriteBatchEntry {
+pub(crate) struct RegionCacheWriteBatchEntry {
     cf: usize,
     key: Bytes,
     inner: WriteBatchEntryInternal,
 }
 
-impl RangeCacheWriteBatchEntry {
+impl RegionCacheWriteBatchEntry {
     pub fn put_value(cf: &str, key: &[u8], value: &[u8]) -> Self {
         Self {
             cf: cf_to_id(cf),
@@ -378,12 +378,12 @@ impl RangeCacheWriteBatchEntry {
     }
 
     pub fn calc_put_entry_size(key: &[u8], value: &[u8]) -> usize {
-        RangeCacheWriteBatchEntry::memory_size_required_for_key_value(key, value)
+        RegionCacheWriteBatchEntry::memory_size_required_for_key_value(key, value)
     }
 
     pub fn calc_delete_entry_size(key: &[u8]) -> usize {
         // delete also has value which is an empty bytes
-        RangeCacheWriteBatchEntry::memory_size_required_for_key_value(key, DELETE_ENTRY_VAL)
+        RegionCacheWriteBatchEntry::memory_size_required_for_key_value(key, DELETE_ENTRY_VAL)
     }
 
     fn memory_size_required_for_key_value(key: &[u8], value: &[u8]) -> usize {
@@ -418,21 +418,21 @@ impl RangeCacheWriteBatchEntry {
     }
 }
 
-impl WriteBatchExt for RangeCacheMemoryEngine {
-    type WriteBatch = RangeCacheWriteBatch;
+impl WriteBatchExt for RegionCacheMemoryEngine {
+    type WriteBatch = RegionCacheWriteBatch;
     // todo: adjust it
     const WRITE_BATCH_MAX_KEYS: usize = 256;
 
     fn write_batch(&self) -> Self::WriteBatch {
-        RangeCacheWriteBatch::from(self)
+        RegionCacheWriteBatch::from(self)
     }
 
     fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch {
-        RangeCacheWriteBatch::with_capacity(self, cap)
+        RegionCacheWriteBatch::with_capacity(self, cap)
     }
 }
 
-impl WriteBatch for RangeCacheWriteBatch {
+impl WriteBatch for RegionCacheWriteBatch {
     fn write_opt(&mut self, _: &WriteOptions) -> Result<u64> {
         self.sequence_number
             .map(|seq| self.write_impl(seq).map(|()| seq))
@@ -443,7 +443,7 @@ impl WriteBatch for RangeCacheWriteBatch {
     fn data_size(&self) -> usize {
         self.buffer
             .iter()
-            .map(RangeCacheWriteBatchEntry::data_size)
+            .map(RegionCacheWriteBatchEntry::data_size)
             .sum()
     }
 
@@ -460,7 +460,7 @@ impl WriteBatch for RangeCacheWriteBatch {
     }
 
     fn clear(&mut self) {
-        self.range_cache_status = RangeCacheStatus::NotInCache;
+        self.region_cache_status = RegionCacheStatus::NotInCache;
         self.buffer.clear();
         self.save_points.clear();
         self.sequence_number = None;
@@ -503,7 +503,7 @@ impl WriteBatch for RangeCacheWriteBatch {
         self.record_last_written_region();
 
         // TODO: remote range.
-        self.set_range_cache_status(self.engine.prepare_for_apply(&region));
+        self.set_region_cache_status(self.engine.prepare_for_apply(&region));
         self.current_region = Some(region);
         self.memory_usage_reach_hard_limit = false;
         self.region_save_point = self.buffer.len();
@@ -512,15 +512,15 @@ impl WriteBatch for RangeCacheWriteBatch {
     }
 }
 
-impl Mutable for RangeCacheWriteBatch {
+impl Mutable for RegionCacheWriteBatch {
     fn put(&mut self, key: &[u8], val: &[u8]) -> Result<()> {
         self.put_cf(CF_DEFAULT, key, val)
     }
 
     fn put_cf(&mut self, cf: &str, key: &[u8], val: &[u8]) -> Result<()> {
         self.process_cf_operation(
-            || RangeCacheWriteBatchEntry::calc_put_entry_size(key, val),
-            || RangeCacheWriteBatchEntry::put_value(cf, key, val),
+            || RegionCacheWriteBatchEntry::calc_put_entry_size(key, val),
+            || RegionCacheWriteBatchEntry::put_value(cf, key, val),
         );
         Ok(())
     }
@@ -531,8 +531,8 @@ impl Mutable for RangeCacheWriteBatch {
 
     fn delete_cf(&mut self, cf: &str, key: &[u8]) -> Result<()> {
         self.process_cf_operation(
-            || RangeCacheWriteBatchEntry::calc_delete_entry_size(key),
-            || RangeCacheWriteBatchEntry::deletion(cf, key),
+            || RegionCacheWriteBatchEntry::calc_delete_entry_size(key),
+            || RegionCacheWriteBatchEntry::deletion(cf, key),
         );
         Ok(())
     }
@@ -557,7 +557,7 @@ mod tests {
     use crossbeam_skiplist::SkipList;
     use engine_rocks::util::new_engine;
     use engine_traits::{
-        CacheRegion, FailedReason, Peekable, RangeCacheEngine, WriteBatch, DATA_CFS,
+        CacheRegion, FailedReason, Peekable, RegionCacheEngine, WriteBatch, DATA_CFS,
     };
     use online_config::{ConfigChange, ConfigManager, ConfigValue};
     use tempfile::Builder;
@@ -565,8 +565,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        background::flush_epoch, config::RangeCacheConfigManager, range_manager::RegionState,
-        test_util::new_region, RangeCacheEngineConfig, RangeCacheEngineContext,
+        background::flush_epoch, config::RegionCacheConfigManager, range_manager::RegionState,
+        test_util::new_region, RegionCacheEngineConfig, RegionCacheEngineContext,
     };
 
     // We should not use skiplist.get directly as we only cares keys without
@@ -586,14 +586,14 @@ mod tests {
 
     #[test]
     fn test_write_to_skiplist() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
-            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
+        let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(RegionCacheEngineConfig::config_for_test()),
         )));
         let r = new_region(1, b"", b"z");
         engine.new_region(r.clone());
         engine.core.region_manager().set_safe_point(r.id, 10);
 
-        let mut wb = RangeCacheWriteBatch::from(&engine);
+        let mut wb = RegionCacheWriteBatch::from(&engine);
         wb.prepare_for_region(CacheRegion::from_region(&r));
         wb.put(b"aaa", b"bbb").unwrap();
         wb.set_sequence_number(1).unwrap();
@@ -606,14 +606,14 @@ mod tests {
 
     #[test]
     fn test_savepoints() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
-            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
+        let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(RegionCacheEngineConfig::config_for_test()),
         )));
         let r = new_region(1, b"", b"z");
         engine.new_region(r.clone());
         engine.core.region_manager().set_safe_point(r.id, 10);
 
-        let mut wb = RangeCacheWriteBatch::from(&engine);
+        let mut wb = RegionCacheWriteBatch::from(&engine);
         wb.prepare_for_region(CacheRegion::from_region(&r));
         wb.put(b"aaa", b"bbb").unwrap();
         wb.set_save_point();
@@ -631,8 +631,8 @@ mod tests {
 
     #[test]
     fn test_put_write_clear_delete_put_write() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
-            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
+        let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(RegionCacheEngineConfig::config_for_test()),
         )));
         let r = new_region(1, b"", b"z");
         engine
@@ -641,7 +641,7 @@ mod tests {
             .new_region(CacheRegion::from_region(&r));
         engine.core.region_manager().set_safe_point(r.id, 10);
 
-        let mut wb = RangeCacheWriteBatch::from(&engine);
+        let mut wb = RegionCacheWriteBatch::from(&engine);
         wb.prepare_for_region(CacheRegion::from_region(&r));
         wb.put(b"zaaa", b"bbb").unwrap();
         wb.set_sequence_number(1).unwrap();
@@ -671,8 +671,8 @@ mod tests {
         let path_str = path.path().to_str().unwrap();
         let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
 
-        let mut engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(
-            Arc::new(VersionTrack::new(RangeCacheEngineConfig::config_for_test())),
+        let mut engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
+            Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test())),
         ));
         engine.set_disk_engine(rocks_engine.clone());
 
@@ -683,7 +683,7 @@ mod tests {
             engine.load_region(cache_r1).unwrap();
             let mut r1_new = new_region(1, b"k01".to_vec(), b"k06".to_vec());
             r1_new.mut_region_epoch().version = 2;
-            let mut wb = RangeCacheWriteBatch::from(&engine);
+            let mut wb = RegionCacheWriteBatch::from(&engine);
             wb.prepare_for_region(CacheRegion::from_region(&r1_new));
             assert!(
                 engine
@@ -711,7 +711,7 @@ mod tests {
         let mut r1_new = new_region(1, b"k01".to_vec(), b"k05".to_vec());
         r1_new.mut_region_epoch().version = 2;
         let cache_r1_new = CacheRegion::from_region(&r1_new);
-        let mut wb = RangeCacheWriteBatch::from(&engine);
+        let mut wb = RegionCacheWriteBatch::from(&engine);
         wb.prepare_for_region(cache_r1_new.clone());
         {
             let regions_map = engine.core.region_manager().regions_map.read();
@@ -743,7 +743,7 @@ mod tests {
         }
         assert_eq!(skip_engine.node_count(), 2);
 
-        let mut wb = RangeCacheWriteBatch::from(&engine);
+        let mut wb = RegionCacheWriteBatch::from(&engine);
         wb.prepare_for_region(cache_r1_new.clone());
         wb.put(b"zk01", b"val2").unwrap();
         wb.set_sequence_number(6).unwrap();
@@ -759,7 +759,7 @@ mod tests {
                 .unwrap()
                 .set_state(RegionState::PendingEvict);
         }
-        let mut wb = RangeCacheWriteBatch::from(&engine);
+        let mut wb = RegionCacheWriteBatch::from(&engine);
         wb.prepare_for_region(cache_r1_new.clone());
         wb.put(b"zk02", b"val2").unwrap();
         wb.set_sequence_number(7).unwrap();
@@ -768,7 +768,7 @@ mod tests {
         assert_eq!(skip_engine.node_count(), 3);
     }
 
-    fn wait_evict_done(engine: &RangeCacheMemoryEngine) {
+    fn wait_evict_done(engine: &RegionCacheMemoryEngine) {
         test_util::eventually(
             Duration::from_millis(100),
             Duration::from_millis(2000),
@@ -784,11 +784,11 @@ mod tests {
 
     #[test]
     fn test_write_batch_with_memory_controller() {
-        let mut config = RangeCacheEngineConfig::default();
+        let mut config = RegionCacheEngineConfig::default();
         config.soft_limit_threshold = Some(ReadableSize(500));
         config.hard_limit_threshold = Some(ReadableSize(1000));
         config.enabled = true;
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
+        let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(config),
         )));
         let regions = [
@@ -808,7 +808,7 @@ mod tests {
         let memory_controller = engine.memory_controller();
 
         let val1: Vec<u8> = vec![0; 150];
-        let mut wb = RangeCacheWriteBatch::from(&engine);
+        let mut wb = RegionCacheWriteBatch::from(&engine);
         wb.prepare_for_region(CacheRegion::from_region(&regions[0]));
         // memory required:
         // 4(key) + 8(sequencen number) + 150(value) + 16(2 Arc<MemoryController) = 178
@@ -897,13 +897,13 @@ mod tests {
 
     #[test]
     fn test_write_batch_with_config_change() {
-        let mut config = RangeCacheEngineConfig::default();
+        let mut config = RegionCacheEngineConfig::default();
         config.soft_limit_threshold = Some(ReadableSize(u64::MAX));
         config.hard_limit_threshold = Some(ReadableSize(u64::MAX));
         config.enabled = true;
         let config = Arc::new(VersionTrack::new(config));
         let engine =
-            RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(config.clone()));
+            RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(config.clone()));
         let r1 = new_region(1, b"kk00".to_vec(), b"kk10".to_vec());
         let r2 = new_region(2, b"kk10".to_vec(), b"kk20".to_vec());
         for r in [&r1, &r2] {
@@ -915,7 +915,7 @@ mod tests {
         }
 
         let val1: Vec<u8> = (0..150).map(|_| 0).collect();
-        let mut wb = RangeCacheWriteBatch::from(&engine);
+        let mut wb = RegionCacheWriteBatch::from(&engine);
         wb.prepare_for_region(CacheRegion::from_region(&r2));
         wb.put(b"zkk11", &val1).unwrap();
         let snap1 = engine
@@ -923,7 +923,7 @@ mod tests {
             .unwrap();
 
         // disable the range cache
-        let mut config_manager = RangeCacheConfigManager(config.clone());
+        let mut config_manager = RegionCacheConfigManager(config.clone());
         let mut config_change = ConfigChange::new();
         config_change.insert(String::from("enabled"), ConfigValue::Bool(false));
         config_manager.dispatch(config_change).unwrap();
@@ -933,7 +933,7 @@ mod tests {
         // snapshot will fail to create
         assert!(snap1.get_value(b"zkk00").unwrap().is_none());
 
-        let mut wb = RangeCacheWriteBatch::from(&engine);
+        let mut wb = RegionCacheWriteBatch::from(&engine);
         wb.prepare_for_region(CacheRegion::from_region(&r1));
         // put should trigger the evict and it won't write into range cache
         wb.put(b"zkk01", &val1).unwrap();
@@ -949,7 +949,7 @@ mod tests {
         assert_eq!(snap2.get_value(b"zkk11").unwrap().unwrap(), &val1);
 
         // enable the range cache again
-        let mut config_manager = RangeCacheConfigManager(config.clone());
+        let mut config_manager = RegionCacheConfigManager(config.clone());
         let mut config_change = ConfigChange::new();
         config_change.insert(String::from("enabled"), ConfigValue::Bool(true));
         config_manager.dispatch(config_change).unwrap();
@@ -971,8 +971,8 @@ mod tests {
         let path_str = path.path().to_str().unwrap();
         let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
 
-        let mut engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(
-            Arc::new(VersionTrack::new(RangeCacheEngineConfig::config_for_test())),
+        let mut engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
+            Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test())),
         ));
         engine.set_disk_engine(rocks_engine.clone());
 
@@ -982,7 +982,7 @@ mod tests {
 
         // load a region with a newer epoch and small range, should trigger replace.
         let r_new = CacheRegion::new(1, 1, b"k00", b"k05");
-        let mut wb = RangeCacheWriteBatch::from(&engine);
+        let mut wb = RegionCacheWriteBatch::from(&engine);
         wb.prepare_for_region(r_new.clone());
 
         {

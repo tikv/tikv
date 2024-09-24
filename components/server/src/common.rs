@@ -23,7 +23,7 @@ use engine_rocks::{
 };
 use engine_traits::{
     data_cf_offset, CachedTablet, CfOptions, CfOptionsExt, FlowControlFactorsExt, KvEngine,
-    RaftEngine, RangeCacheEngine, StatisticsReporter, TabletRegistry, CF_DEFAULT, DATA_CFS,
+    RaftEngine, RegionCacheEngine, StatisticsReporter, TabletRegistry, CF_DEFAULT, DATA_CFS,
 };
 use error_code::ErrorCodeExt;
 use file_system::{get_io_rate_limiter, set_io_rate_limiter, BytesFetcher, File, IoBudgetAdjustor};
@@ -32,9 +32,9 @@ use hybrid_engine::HybridEngine;
 use pd_client::{PdClient, RpcClient};
 use raft_log_engine::RaftLogEngine;
 use raftstore::coprocessor::RegionInfoProvider;
-use range_cache_memory_engine::{
-    flush_range_cache_engine_statistics, RangeCacheEngineContext, RangeCacheMemoryEngine,
-    RangeCacheMemoryEngineStatistics,
+use region_cache_memory_engine::{
+    flush_region_cache_engine_statistics, RegionCacheEngineContext, RegionCacheMemoryEngine,
+    RegionCacheMemoryEngineStatistics,
 };
 use security::SecurityManager;
 use tikv::{
@@ -696,20 +696,20 @@ impl<T: fmt::Display + Send + 'static> Stop for LazyWorker<T> {
 }
 
 pub fn build_hybrid_engine(
-    range_cache_engine_context: RangeCacheEngineContext,
+    region_cache_engine_context: RegionCacheEngineContext,
     disk_engine: RocksEngine,
     pd_client: Option<Arc<RpcClient>>,
     region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
-) -> HybridEngine<RocksEngine, RangeCacheMemoryEngine> {
+) -> HybridEngine<RocksEngine, RegionCacheMemoryEngine> {
     // todo(SpadeA): add config for it
-    let mut memory_engine = RangeCacheMemoryEngine::with_region_info_provider(
-        range_cache_engine_context,
+    let mut memory_engine = RegionCacheMemoryEngine::with_region_info_provider(
+        region_cache_engine_context,
         region_info_provider,
     );
     memory_engine.set_disk_engine(disk_engine.clone());
     if let Some(pd_client) = pd_client.as_ref() {
         memory_engine.start_hint_service(
-            <RangeCacheMemoryEngine as RangeCacheEngine>::RangeHintService::from(pd_client.clone()),
+            <RegionCacheMemoryEngine as RegionCacheEngine>::RangeHintService::from(pd_client.clone()),
         )
     }
     HybridEngine::new(disk_engine, memory_engine)
@@ -833,7 +833,7 @@ const DEFAULT_ENGINE_METRICS_RESET_INTERVAL: Duration = Duration::from_millis(60
 pub struct EngineMetricsManager<EK: KvEngine, ER: RaftEngine> {
     tablet_registry: TabletRegistry<EK>,
     kv_statistics: Option<Arc<RocksStatistics>>,
-    range_cache_engine_statistics: Option<Arc<RangeCacheMemoryEngineStatistics>>,
+    region_cache_engine_statistics: Option<Arc<RegionCacheMemoryEngineStatistics>>,
     kv_is_titan: bool,
     raft_engine: ER,
     raft_statistics: Option<Arc<RocksStatistics>>,
@@ -844,7 +844,7 @@ impl<EK: KvEngine, ER: RaftEngine> EngineMetricsManager<EK, ER> {
     pub fn new(
         tablet_registry: TabletRegistry<EK>,
         kv_statistics: Option<Arc<RocksStatistics>>,
-        range_cache_engine_statistics: Option<Arc<RangeCacheMemoryEngineStatistics>>,
+        region_cache_engine_statistics: Option<Arc<RegionCacheMemoryEngineStatistics>>,
         kv_is_titan: bool,
         raft_engine: ER,
         raft_statistics: Option<Arc<RocksStatistics>>,
@@ -852,7 +852,7 @@ impl<EK: KvEngine, ER: RaftEngine> EngineMetricsManager<EK, ER> {
         EngineMetricsManager {
             tablet_registry,
             kv_statistics,
-            range_cache_engine_statistics,
+            region_cache_engine_statistics,
             kv_is_titan,
             raft_engine,
             raft_statistics,
@@ -878,8 +878,8 @@ impl<EK: KvEngine, ER: RaftEngine> EngineMetricsManager<EK, ER> {
         if let Some(s) = self.raft_statistics.as_ref() {
             flush_engine_statistics(s, "raft", false);
         }
-        if let Some(s) = self.range_cache_engine_statistics.as_ref() {
-            flush_range_cache_engine_statistics(s);
+        if let Some(s) = self.region_cache_engine_statistics.as_ref() {
+            flush_region_cache_engine_statistics(s);
         }
         if now.saturating_duration_since(self.last_reset) >= DEFAULT_ENGINE_METRICS_RESET_INTERVAL {
             if let Some(s) = self.kv_statistics.as_ref() {

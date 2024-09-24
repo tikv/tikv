@@ -20,7 +20,7 @@ mod misc;
 mod mvcc_properties;
 pub mod observer;
 mod perf_context;
-mod range_cache_engine;
+mod region_cache_engine;
 mod range_properties;
 mod snapshot;
 mod sst;

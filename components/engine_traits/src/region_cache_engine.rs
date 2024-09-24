@@ -58,16 +58,16 @@ pub enum EvictReason {
     Manual,
 }
 
-/// RangeCacheEngine works as a range cache caching some ranges (in Memory or
+/// RegionCacheEngine works as a range cache caching some ranges (in Memory or
 /// NVME for instance) to improve the read performance.
-pub trait RangeCacheEngine:
-    RangeCacheEngineExt + WriteBatchExt + Iterable + Debug + Clone + Unpin + Send + Sync + 'static
+pub trait RegionCacheEngine:
+    RegionCacheEngineExt + WriteBatchExt + Iterable + Debug + Clone + Unpin + Send + Sync + 'static
 {
     type Snapshot: Snapshot;
 
-    // If None is returned, the RangeCacheEngine is currently not readable for this
+    // If None is returned, the RegionCacheEngine is currently not readable for this
     // region or read_ts.
-    // Sequence number is shared between RangeCacheEngine and disk KvEnigne to
+    // Sequence number is shared between RegionCacheEngine and disk KvEnigne to
     // provide atomic write
     fn snapshot(
         &self,
@@ -90,7 +90,7 @@ pub trait RangeCacheEngine:
     }
 }
 
-pub trait RangeCacheEngineExt {
+pub trait RegionCacheEngineExt {
     // TODO(SpadeA): try to find a better way to reduce coupling degree of range
     // cache engine and kv engine
     fn on_region_event(&self, event: RegionEvent);

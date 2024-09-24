@@ -14,7 +14,7 @@ use txn_types::{Key, TimeStamp};
 use super::engine::SkiplistHandle;
 use crate::{
     decode_key, engine::SkiplistEngine, keys::encode_key, memory_controller::MemoryController,
-    InternalBytes, RangeCacheEngineConfig,
+    InternalBytes, RegionCacheEngineConfig,
 };
 
 // This fixed mvcc suffix is used for CF_WRITE and CF_DEFAULT in prop test.
@@ -141,7 +141,7 @@ fn test_rocksdb_skiplist_basic_operations(cf: CfName, operations: Vec<Operation>
     )
     .unwrap();
 
-    let mut cfg = RangeCacheEngineConfig::default();
+    let mut cfg = RegionCacheEngineConfig::default();
     cfg.soft_limit_threshold = Some(ReadableSize::gb(1));
     cfg.hard_limit_threshold = Some(ReadableSize::gb(2));
     let controller = Arc::new(MemoryController::new(

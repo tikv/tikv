@@ -3,18 +3,18 @@ use std::sync::Arc;
 use online_config::{ConfigChange, ConfigManager, OnlineConfig};
 use tikv_util::{config::VersionTrack, info};
 
-use crate::RangeCacheEngineConfig;
+use crate::RegionCacheEngineConfig;
 
 #[derive(Clone)]
-pub struct RangeCacheConfigManager(pub Arc<VersionTrack<RangeCacheEngineConfig>>);
+pub struct RegionCacheConfigManager(pub Arc<VersionTrack<RegionCacheEngineConfig>>);
 
-impl RangeCacheConfigManager {
-    pub fn new(config: Arc<VersionTrack<RangeCacheEngineConfig>>) -> Self {
+impl RegionCacheConfigManager {
+    pub fn new(config: Arc<VersionTrack<RegionCacheEngineConfig>>) -> Self {
         Self(config)
     }
 }
 
-impl ConfigManager for RangeCacheConfigManager {
+impl ConfigManager for RegionCacheConfigManager {
     fn dispatch(
         &mut self,
         change: ConfigChange,
@@ -22,7 +22,7 @@ impl ConfigManager for RangeCacheConfigManager {
         {
             let change = change.clone();
             self.0
-                .update(move |cfg: &mut RangeCacheEngineConfig| cfg.update(change))?;
+                .update(move |cfg: &mut RegionCacheEngineConfig| cfg.update(change))?;
         }
         info!(
             "ime range cache config changed";
@@ -32,8 +32,8 @@ impl ConfigManager for RangeCacheConfigManager {
     }
 }
 
-impl std::ops::Deref for RangeCacheConfigManager {
-    type Target = Arc<VersionTrack<RangeCacheEngineConfig>>;
+impl std::ops::Deref for RegionCacheConfigManager {
+    type Target = Arc<VersionTrack<RegionCacheEngineConfig>>;
 
     fn deref(&self) -> &Self::Target {
         &self.0

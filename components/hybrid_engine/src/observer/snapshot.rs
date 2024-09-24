@@ -5,27 +5,27 @@ use kvproto::metapb::Region;
 use raftstore::coprocessor::{
     dispatcher::BoxSnapshotObserver, CoprocessorHost, ObservedSnapshot, SnapshotObserver,
 };
-use range_cache_memory_engine::{RangeCacheMemoryEngine, RangeCacheSnapshot};
+use region_cache_memory_engine::{RegionCacheMemoryEngine, RegionCacheSnapshot};
 
 use crate::new_in_memory_snapshot;
 
-/// RangeCacheSnapshotPin pins data of a RangeCacheMemoryEngine during taking
+/// RegionCacheSnapshotPin pins data of a RegionCacheMemoryEngine during taking
 /// snapshot. It prevents the data from being evicted or deleted from the cache.
 // TODO: Remove it, theoretically it can be remove if we don't need an
 // in-memory engine snapshot when a region is removed or splitted.
-pub struct RangeCacheSnapshotPin {
-    pub snap: Option<RangeCacheSnapshot>,
+pub struct RegionCacheSnapshotPin {
+    pub snap: Option<RegionCacheSnapshot>,
 }
 
-impl ObservedSnapshot for RangeCacheSnapshotPin {}
+impl ObservedSnapshot for RegionCacheSnapshotPin {}
 
 #[derive(Clone)]
 pub struct HybridSnapshotObserver {
-    cache_engine: RangeCacheMemoryEngine,
+    cache_engine: RegionCacheMemoryEngine,
 }
 
 impl HybridSnapshotObserver {
-    pub fn new(cache_engine: RangeCacheMemoryEngine) -> Self {
+    pub fn new(cache_engine: RegionCacheMemoryEngine) -> Self {
         HybridSnapshotObserver { cache_engine }
     }
 
@@ -48,6 +48,6 @@ impl SnapshotObserver for HybridSnapshotObserver {
         // The data should be released when the snapshot is dropped.
         let region = CacheRegion::from_region(region);
         let snap = new_in_memory_snapshot(&self.cache_engine, region, read_ts, sequence_number);
-        Box::new(RangeCacheSnapshotPin { snap })
+        Box::new(RegionCacheSnapshotPin { snap })
     }
 }
