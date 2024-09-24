@@ -244,6 +244,10 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
                                 .observe(elapse);
                         }
                     });
+                    // The observed snapshot duration is larger than the actual
+                    // snapshot duration, because it includes the waiting time
+                    // of this future.
+                    // TODO: Fix the inaccuracy, see #17581.
                     ASYNC_REQUESTS_DURATIONS_VEC.snapshot.observe(elapse);
                     ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
                     Ok(snap)
