@@ -38,7 +38,6 @@ pub(crate) struct RangeStatsManager {
     checking_top_regions: Arc<AtomicBool>,
     region_loaded_at: Arc<ShardedLock<BTreeMap<u64, Instant>>>,
     evict_min_duration: Duration,
-    pub(crate) expected_region_size: usize,
     // Moving average of amplification reduction. Amplification reduction is the reduced
     // multiple before and after the cache. When a new top region (of course, not cached) comes in,
     // this moving average number is used to estimate the mvcc amplification after cache so we can
@@ -62,7 +61,6 @@ impl RangeStatsManager {
         evict_min_duration: Duration,
         info_provider: Arc<dyn RegionInfoProvider>,
     ) -> Self {
-        let expected_region_size = config.value().expected_region_size();
         RangeStatsManager {
             config,
             info_provider,
@@ -71,9 +69,12 @@ impl RangeStatsManager {
             ma_mvcc_amplification_reduction: Arc::new(Mutex::new(Smoother::default())),
             mvcc_amplification_record: Arc::default(),
             evict_min_duration,
-            expected_region_size,
             last_load_evict_time: Arc::new(Mutex::new(Instant::now())),
         }
+    }
+
+    pub(crate) fn expected_region_size(&self) -> usize {
+        self.config.value().expected_region_size()
     }
 
     /// If false is returned, it is not ready to check.
@@ -175,7 +176,7 @@ impl RangeStatsManager {
         let expected_new_count = (memory_controller
             .soft_limit_threshold()
             .saturating_sub(memory_controller.mem_usage()))
-            / self.expected_region_size;
+            / self.expected_region_size();
         let expected_num_regions = current_region_count + expected_new_count;
         info!("ime collect_changed_ranges"; "num_regions" => expected_num_regions);
         let curr_top_regions = self
