@@ -73,7 +73,7 @@ impl BackupEncryptionManager {
     pub async fn is_master_key_backend_initialized(&self) -> bool {
         self.master_key_based_file_encryption_method != EncryptionMethod::Unknown
             && self.master_key_based_file_encryption_method != EncryptionMethod::Plaintext
-        && self.multi_master_key_backend.is_initialized().await
+            && self.multi_master_key_backend.is_initialized().await
     }
 
     pub fn generate_data_key(&self) -> Result<Vec<u8>, Error> {

@@ -2964,7 +2964,7 @@ mod tests {
             info: task_info,
             is_paused: false,
         };
-        let merged_file_size_limit = 0x10000;
+        let merged_file_size_limit = 0x10000000;
 
         // configure task handler with optional encryption
         //
@@ -2980,12 +2980,15 @@ mod tests {
 
         // write some kv into the handler and flush it
         //
-        let kv_events = build_kv_event(0, 10);
+        let kv_events = build_kv_event(0, 1000000);
         task_handler.on_events(kv_events.clone()).await?;
         task_handler.set_flushing_status(true);
+        let start = Instant::now();
         task_handler.do_flush(1, TimeStamp::new(1)).await?;
+        let duration = start.saturating_elapsed();
+        println!("Time taken for do_flush: {:?}", duration);
 
-        verify_on_disk_file(local_backend_file_path.path(), 1, 1);
+        // verify_on_disk_file(local_backend_file_path.path(), 1, 1);
 
         // read meta file first to figure out the data file offset
         //

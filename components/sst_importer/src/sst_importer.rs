@@ -2668,7 +2668,10 @@ mod tests {
         assert_eq!(sst_file_metadata.len(), meta.get_length());
 
         // verified the tmp files are correctly cleaned up
-        check_file_not_exists(importer.dir.join_for_read(&meta).unwrap().temp.as_path(), Some(&*key_manager));
+        check_file_not_exists(
+            importer.dir.join_for_read(&meta).unwrap().temp.as_path(),
+            Some(&*key_manager),
+        );
 
         // verifies the SST content is correct.
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), Some(env));

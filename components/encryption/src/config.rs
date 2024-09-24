@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use cloud::{
-    kms::{SubConfigAzure, SubConfigGcp, SubConfigAws},
+    kms::{SubConfigAws, SubConfigAzure, SubConfigGcp},
     Config as CloudConfig,
 };
 use kvproto::encryptionpb::{EncryptionMethod, MasterKey, MasterKeyKms, MasterKey_oneof_backend};
