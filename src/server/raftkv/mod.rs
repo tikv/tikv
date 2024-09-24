@@ -587,10 +587,7 @@ where
             tx.notify(res);
         }
         rx.inspect(move |ev| {
-            let WriteEvent::Finished(res) = ev else {
-                return;
-            };
-            if let Err(e) = res {
+            if let WriteEvent::Finished(Err(e)) = ev {
                 let status_kind = get_status_kind_from_engine_error(e);
                 ASYNC_REQUESTS_COUNTER_VEC.write.get(status_kind).inc();
             }
