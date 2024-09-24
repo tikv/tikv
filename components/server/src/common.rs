@@ -703,7 +703,7 @@ pub fn build_hybrid_engine(
 ) -> HybridEngine<RocksEngine, RangeCacheMemoryEngine> {
     // todo(SpadeA): add config for it
     let mut memory_engine = RangeCacheMemoryEngine::with_region_info_provider(
-        range_cache_engine_context,
+        range_cache_engine_context.clone(),
         region_info_provider,
     );
     memory_engine.set_disk_engine(disk_engine.clone());
@@ -712,6 +712,9 @@ pub fn build_hybrid_engine(
             <RangeCacheMemoryEngine as RangeCacheEngine>::RangeHintService::from(pd_client.clone()),
         )
     }
+
+    memory_engine.start_cross_check(disk_engine.clone(), range_cache_engine_context.pd_client());
+
     HybridEngine::new(disk_engine, memory_engine)
 }
 
