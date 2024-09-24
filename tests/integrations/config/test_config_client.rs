@@ -71,16 +71,16 @@ fn test_update_config() {
         "15GB".to_owned(),
     );
     cfg_controller.update(region_cache_config_change).unwrap();
-    cfg.region_cache_engine.enabled = true;
-    cfg.region_cache_engine.stop_load_limit_threshold = Some(ReadableSize::gb(8));
-    cfg.region_cache_engine.soft_limit_threshold = Some(ReadableSize::gb(10));
-    cfg.region_cache_engine.hard_limit_threshold = Some(ReadableSize::gb(15));
+    cfg.in_memory_engine.enabled = true;
+    cfg.in_memory_engine.stop_load_limit_threshold = Some(ReadableSize::gb(8));
+    cfg.in_memory_engine.soft_limit_threshold = Some(ReadableSize::gb(10));
+    cfg.in_memory_engine.hard_limit_threshold = Some(ReadableSize::gb(15));
     assert_eq!(cfg_controller.get_current(), cfg);
 
     cfg_controller
         .update(change("region_cache_engine.soft-limit-threshold", "11GB"))
         .unwrap();
-    cfg.region_cache_engine.soft_limit_threshold = Some(ReadableSize::gb(11));
+    cfg.in_memory_engine.soft_limit_threshold = Some(ReadableSize::gb(11));
     assert_eq!(cfg_controller.get_current(), cfg);
 
     // update not support config

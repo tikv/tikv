@@ -697,15 +697,15 @@ mod tests {
         region_manager::RegionState,
         statistics::Tickers,
         test_util::new_region,
-        RegionCacheEngineConfig, RegionCacheEngineContext, RegionCacheMemoryEngine,
+        InMemoryEngineConfig, InMemoryEngineContext, RegionCacheMemoryEngine,
         RegionCacheWriteBatch,
     };
 
     #[test]
     fn test_snapshot() {
-        let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-            Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test())),
-        ));
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(InMemoryEngineConfig::config_for_test()),
+        )));
         let region = new_region(1, b"k00", b"k10");
         engine.new_region(region.clone());
 
@@ -890,9 +890,9 @@ mod tests {
 
     #[test]
     fn test_seek() {
-        let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-            Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test())),
-        ));
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(InMemoryEngineConfig::config_for_test()),
+        )));
         let region = new_region(1, b"", b"z");
         let range = CacheRegion::from_region(&region);
         engine.new_region(region.clone());
@@ -925,9 +925,9 @@ mod tests {
 
     #[test]
     fn test_get_value() {
-        let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-            Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test())),
-        ));
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(InMemoryEngineConfig::config_for_test()),
+        )));
         let region = new_region(1, b"", b"z");
         let cache_region = CacheRegion::from_region(&region);
         engine.new_region(region.clone());
@@ -1003,9 +1003,9 @@ mod tests {
 
     #[test]
     fn test_iterator_forawrd() {
-        let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-            Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test())),
-        ));
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(InMemoryEngineConfig::config_for_test()),
+        )));
         let region = new_region(1, b"", b"z");
         let range = CacheRegion::from_region(&region);
         engine.new_region(region.clone());
@@ -1164,9 +1164,9 @@ mod tests {
 
     #[test]
     fn test_iterator_backward() {
-        let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-            Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test())),
-        ));
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(InMemoryEngineConfig::config_for_test()),
+        )));
         let region = new_region(1, b"", b"z");
         let range = CacheRegion::from_region(&region);
         engine.new_region(region.clone());
@@ -1232,9 +1232,9 @@ mod tests {
 
     #[test]
     fn test_seq_visibility() {
-        let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-            Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test())),
-        ));
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(InMemoryEngineConfig::config_for_test()),
+        )));
         let region = new_region(1, b"", b"z");
         let range = CacheRegion::from_region(&region);
         engine.new_region(region.clone());
@@ -1355,9 +1355,9 @@ mod tests {
 
     #[test]
     fn test_seq_visibility_backward() {
-        let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-            Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test())),
-        ));
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(InMemoryEngineConfig::config_for_test()),
+        )));
         let region = new_region(1, b"", b"z");
         let range = CacheRegion::from_region(&region);
         engine.new_region(region.clone());
@@ -1459,8 +1459,8 @@ mod tests {
 
         // backward, all put
         {
-            let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-                Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test())),
+            let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(
+                Arc::new(VersionTrack::new(InMemoryEngineConfig::config_for_test())),
             ));
             engine.new_region(region.clone());
             let sl = {
@@ -1496,8 +1496,8 @@ mod tests {
 
         // backward, all deletes
         {
-            let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-                Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test())),
+            let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(
+                Arc::new(VersionTrack::new(InMemoryEngineConfig::config_for_test())),
             ));
             engine.new_region(region.clone());
             let sl = {
@@ -1526,8 +1526,8 @@ mod tests {
 
         // backward, all deletes except for last put, last put's seq
         {
-            let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-                Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test())),
+            let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(
+                Arc::new(VersionTrack::new(InMemoryEngineConfig::config_for_test())),
             ));
             engine.new_region(region.clone());
             let sl = {
@@ -1558,8 +1558,8 @@ mod tests {
 
         // all deletes except for last put, deletions' seq
         {
-            let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-                Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test())),
+            let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(
+                Arc::new(VersionTrack::new(InMemoryEngineConfig::config_for_test())),
             ));
             engine.new_region(region.clone());
             let sl = {
@@ -1589,9 +1589,9 @@ mod tests {
 
     #[test]
     fn test_prefix_seek() {
-        let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-            Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test())),
-        ));
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(InMemoryEngineConfig::config_for_test()),
+        )));
         let region = new_region(1, b"k000", b"k100");
         let range = CacheRegion::from_region(&region);
         engine.new_region(region.clone());
@@ -1713,9 +1713,9 @@ mod tests {
 
     #[test]
     fn test_evict_region_without_snapshot() {
-        let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-            Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test())),
-        ));
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(InMemoryEngineConfig::config_for_test()),
+        )));
         let region = new_region(1, construct_region_key(0), construct_region_key(30));
         let range = CacheRegion::from_region(&region);
         engine.new_region(region.clone());
@@ -1783,9 +1783,9 @@ mod tests {
 
     #[test]
     fn test_evict_range_with_snapshot() {
-        let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-            Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test())),
-        ));
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(InMemoryEngineConfig::config_for_test()),
+        )));
         let region = new_region(1, construct_region_key(0), construct_region_key(30));
         engine.new_region(region.clone());
 
@@ -1872,9 +1872,9 @@ mod tests {
 
     #[test]
     fn test_tombstone_count_when_iterating() {
-        let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-            Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test())),
-        ));
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(InMemoryEngineConfig::config_for_test()),
+        )));
         let region = new_region(1, b"", b"z");
         let range = CacheRegion::from_region(&region);
         engine.new_region(region.clone());
@@ -1916,9 +1916,9 @@ mod tests {
 
     #[test]
     fn test_read_flow_metrics() {
-        let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-            Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test())),
-        ));
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(InMemoryEngineConfig::config_for_test()),
+        )));
         let region = new_region(1, b"", b"z");
         let range = CacheRegion::from_region(&region);
         engine.new_region(region.clone());
@@ -2040,9 +2040,9 @@ mod tests {
     where
         F: FnOnce(&mut RegionCacheWriteBatch),
     {
-        let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-            Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test())),
-        ));
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(InMemoryEngineConfig::config_for_test()),
+        )));
         let region = new_region(1, b"", b"z");
         let range = CacheRegion::from_region(&region);
         engine.new_region(region.clone());

@@ -4,9 +4,7 @@ use std::sync::Arc;
 
 use engine_rocks::{util::new_engine, RocksEngine};
 use engine_traits::{RegionCacheEngine, Result, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use in_memory_engine::{
-    RegionCacheEngineConfig, RegionCacheEngineContext, RegionCacheMemoryEngine,
-};
+use in_memory_engine::{InMemoryEngineConfig, InMemoryEngineContext, RegionCacheMemoryEngine};
 use tempfile::{Builder, TempDir};
 use tikv_util::config::VersionTrack;
 
@@ -30,7 +28,7 @@ use crate::HybridEngine;
 /// ```
 pub fn hybrid_engine_for_tests<F>(
     prefix: &str,
-    config: RegionCacheEngineConfig,
+    config: InMemoryEngineConfig,
     configure_memory_engine_fn: F,
 ) -> Result<(TempDir, HybridEngine<RocksEngine, RegionCacheMemoryEngine>)>
 where
@@ -41,7 +39,7 @@ where
         path.path().to_str().unwrap(),
         &[CF_DEFAULT, CF_LOCK, CF_WRITE],
     )?;
-    let mut memory_engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
+    let mut memory_engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(
         Arc::new(VersionTrack::new(config)),
     ));
     memory_engine.set_disk_engine(disk_engine.clone());

@@ -23,9 +23,7 @@ use health_controller::HealthController;
 use hybrid_engine::observer::{
     HybridSnapshotObserver, LoadEvictionObserver, RegionCacheWriteBatchObserver,
 };
-use in_memory_engine::{
-    RegionCacheEngineConfig, RegionCacheEngineContext, RegionCacheMemoryEngine,
-};
+use in_memory_engine::{InMemoryEngineConfig, InMemoryEngineContext, RegionCacheMemoryEngine};
 use kvproto::{
     deadlock::create_deadlock,
     debugpb::{create_debug, DebugClient},
@@ -309,7 +307,7 @@ impl ServerCluster {
 
         // Create coprocessor.
         let enable_region_stats_mgr_cb: Arc<dyn Fn() -> bool + Send + Sync> =
-            if cfg.region_cache_engine.enabled {
+            if cfg.in_memory_engine.enabled {
                 Arc::new(|| true)
             } else {
                 Arc::new(|| false)
@@ -323,20 +321,18 @@ impl ServerCluster {
         let region_info_accessor = RegionInfoAccessor::new(
             &mut coprocessor_host,
             enable_region_stats_mgr_cb,
-            cfg.region_cache_engine.mvcc_amplification_threshold,
+            cfg.in_memory_engine.mvcc_amplification_threshold,
         );
 
         // In-memory engine
-        let mut region_cache_engine_config = cfg.region_cache_engine.clone();
+        let mut region_cache_engine_config = cfg.in_memory_engine.clone();
         let _ = region_cache_engine_config
             .expected_region_size
             .get_or_insert(cfg.coprocessor.region_split_size());
         let region_cache_engine_config = Arc::new(VersionTrack::new(region_cache_engine_config));
-        let region_cache_engine_context = RegionCacheEngineContext::new(
-            region_cache_engine_config.clone(),
-            self.pd_client.clone(),
-        );
-        let in_memory_engine = if cfg.region_cache_engine.enabled {
+        let region_cache_engine_context =
+            InMemoryEngineContext::new(region_cache_engine_config.clone(), self.pd_client.clone());
+        let in_memory_engine = if cfg.in_memory_engine.enabled {
             let in_memory_engine = build_hybrid_engine(
                 region_cache_engine_context,
                 engines.kv.clone(),
@@ -950,7 +946,7 @@ pub fn new_server_cluster_with_hybrid_engine_with_no_region_cache(
     let pd_client = Arc::new(TestPdClient::new(id, false));
     let sim = Arc::new(RwLock::new(ServerCluster::new(Arc::clone(&pd_client))));
     let mut cluster = Cluster::new(id, count, sim, pd_client, ApiVersion::V1);
-    cluster.cfg.tikv.region_cache_engine = RegionCacheEngineConfig::config_for_test();
+    cluster.cfg.tikv.in_memory_engine = InMemoryEngineConfig::config_for_test();
     cluster
 }
 

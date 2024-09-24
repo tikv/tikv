@@ -9,7 +9,7 @@ use prometheus_static_metric::*;
 
 use crate::{
     statistics::{Tickers, ENGINE_TICKER_TYPES},
-    RegionCacheMemoryEngineStatistics,
+    InMemoryEngineStatistics,
 };
 
 make_auto_flush_static_metric! {
@@ -59,58 +59,58 @@ make_auto_flush_static_metric! {
 
 lazy_static! {
     pub static ref GC_FILTERED: IntCounterVec = register_int_counter_vec!(
-        "in_memory_engine_gc_filtered",
+        "tikv_in_memory_engine_gc_filtered",
         "Filtered version by GC",
         &["type"]
     )
     .unwrap();
     pub static ref IN_MEMORY_ENGINE_MEMORY_USAGE: IntGauge = register_int_gauge!(
-        "in_memory_engine_memory_usage_bytes",
+        "tikv_in_memory_engine_memory_usage_bytes",
         "The memory usage of the region cache engine",
     )
     .unwrap();
     pub static ref IN_MEMORY_ENGINE_LOAD_TIME_HISTOGRAM: Histogram = register_histogram!(
-        "in_memory_engine_load_duration_secs",
+        "tikv_in_memory_engine_load_duration_secs",
         "Bucketed histogram of region load time duration.",
         exponential_buckets(0.001, 2.0, 20).unwrap()
     )
     .unwrap();
     pub static ref IN_MEMORY_ENGINE_GC_TIME_HISTOGRAM: Histogram = register_histogram!(
-        "in_memory_engine_gc_duration_secs",
+        "tikv_in_memory_engine_gc_duration_secs",
         "Bucketed histogram of region gc time duration.",
         exponential_buckets(0.001, 2.0, 20).unwrap()
     )
     .unwrap();
     pub static ref IN_MEMORY_ENGINE_EVICTION_DURATION_HISTOGRAM: HistogramVec =
         register_histogram_vec!(
-            "in_memory_engine_eviction_duration_secs",
+            "tikv_in_memory_engine_eviction_duration_secs",
             "Bucketed histogram of region eviction time duration.",
             &["type"],
             exponential_buckets(0.001, 2.0, 20).unwrap()
         )
         .unwrap();
     pub static ref IN_MEMORY_ENGINE_WRITE_DURATION_HISTOGRAM: Histogram = register_histogram!(
-        "in_memory_engine_write_duration_seconds",
+        "tikv_in_memory_engine_write_duration_seconds",
         "Bucketed histogram of write duration in region cache engine.",
         exponential_buckets(0.00001, 2.0, 20).unwrap()
     )
     .unwrap();
     pub static ref IN_MEMORY_ENGINE_PREPARE_FOR_WRITE_DURATION_HISTOGRAM: Histogram =
         register_histogram!(
-            "in_memory_engine_prepare_for_write_duration_seconds",
+            "tikv_in_memory_engine_prepare_for_write_duration_seconds",
             "Bucketed histogram of prepare for write duration in region cache engine.",
             exponential_buckets(0.00001, 2.0, 20).unwrap()
         )
         .unwrap();
     pub static ref IN_MEMORY_ENGINE_CACHE_COUNT: IntGaugeVec = register_int_gauge_vec!(
-        "in_memory_engine_cache_count",
+        "tikv_in_memory_engine_cache_count",
         "The count of each type on region cache.",
         &["type"]
     )
     .unwrap();
     pub static ref IN_MEMORY_ENGINE_FLOW: IntCounterVec = register_int_counter_vec!(
         "tikv_in_memory_engine_flow",
-        "Bytes and keys of read/written of region cache memory engine",
+        "Bytes and keys of read/written of in-memory engine",
         &["type"]
     )
     .unwrap();
@@ -141,7 +141,7 @@ lazy_static! {
     );
 }
 
-pub fn flush_region_cache_engine_statistics(statistics: &Arc<RegionCacheMemoryEngineStatistics>) {
+pub fn flush_in_memory_engine_statistics(statistics: &Arc<InMemoryEngineStatistics>) {
     for t in ENGINE_TICKER_TYPES {
         let v = statistics.get_and_reset_ticker_count(*t);
         flush_engine_ticker_metrics(*t, v);

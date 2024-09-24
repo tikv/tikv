@@ -30,8 +30,8 @@ use file_system::{get_io_rate_limiter, set_io_rate_limiter, BytesFetcher, File, 
 use grpcio::Environment;
 use hybrid_engine::HybridEngine;
 use in_memory_engine::{
-    flush_region_cache_engine_statistics, RegionCacheEngineContext, RegionCacheMemoryEngine,
-    RegionCacheMemoryEngineStatistics,
+    flush_in_memory_engine_statistics, InMemoryEngineContext, InMemoryEngineStatistics,
+    RegionCacheMemoryEngine,
 };
 use pd_client::{PdClient, RpcClient};
 use raft_log_engine::RaftLogEngine;
@@ -696,7 +696,7 @@ impl<T: fmt::Display + Send + 'static> Stop for LazyWorker<T> {
 }
 
 pub fn build_hybrid_engine(
-    region_cache_engine_context: RegionCacheEngineContext,
+    region_cache_engine_context: InMemoryEngineContext,
     disk_engine: RocksEngine,
     pd_client: Option<Arc<RpcClient>>,
     region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
@@ -838,7 +838,7 @@ const DEFAULT_ENGINE_METRICS_RESET_INTERVAL: Duration = Duration::from_millis(60
 pub struct EngineMetricsManager<EK: KvEngine, ER: RaftEngine> {
     tablet_registry: TabletRegistry<EK>,
     kv_statistics: Option<Arc<RocksStatistics>>,
-    region_cache_engine_statistics: Option<Arc<RegionCacheMemoryEngineStatistics>>,
+    in_memory_engine_statistics: Option<Arc<InMemoryEngineStatistics>>,
     kv_is_titan: bool,
     raft_engine: ER,
     raft_statistics: Option<Arc<RocksStatistics>>,
@@ -849,7 +849,7 @@ impl<EK: KvEngine, ER: RaftEngine> EngineMetricsManager<EK, ER> {
     pub fn new(
         tablet_registry: TabletRegistry<EK>,
         kv_statistics: Option<Arc<RocksStatistics>>,
-        region_cache_engine_statistics: Option<Arc<RegionCacheMemoryEngineStatistics>>,
+        in_memory_engine_statistics: Option<Arc<InMemoryEngineStatistics>>,
         kv_is_titan: bool,
         raft_engine: ER,
         raft_statistics: Option<Arc<RocksStatistics>>,
@@ -857,7 +857,7 @@ impl<EK: KvEngine, ER: RaftEngine> EngineMetricsManager<EK, ER> {
         EngineMetricsManager {
             tablet_registry,
             kv_statistics,
-            region_cache_engine_statistics,
+            in_memory_engine_statistics,
             kv_is_titan,
             raft_engine,
             raft_statistics,
@@ -883,8 +883,8 @@ impl<EK: KvEngine, ER: RaftEngine> EngineMetricsManager<EK, ER> {
         if let Some(s) = self.raft_statistics.as_ref() {
             flush_engine_statistics(s, "raft", false);
         }
-        if let Some(s) = self.region_cache_engine_statistics.as_ref() {
-            flush_region_cache_engine_statistics(s);
+        if let Some(s) = self.in_memory_engine_statistics.as_ref() {
+            flush_in_memory_engine_statistics(s);
         }
         if now.saturating_duration_since(self.last_reset) >= DEFAULT_ENGINE_METRICS_RESET_INTERVAL {
             if let Some(s) = self.kv_statistics.as_ref() {

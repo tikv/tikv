@@ -47,7 +47,7 @@ use crate::{
     region_manager::{AsyncFnOnce, CacheRegionMeta, RegionState},
     region_stats::{RegionStatsManager, DEFAULT_EVICT_MIN_DURATION},
     write_batch::RegionCacheWriteBatchEntry,
-    RegionCacheEngineConfig, RegionCacheMemoryEngine,
+    InMemoryEngineConfig, RegionCacheMemoryEngine,
 };
 
 // 5 seconds should be long enough for getting a TSO from PD.
@@ -224,7 +224,7 @@ impl BgWorkManager {
     pub fn new(
         core: Arc<RegionCacheMemoryEngineCore>,
         pd_client: Arc<dyn PdClient>,
-        config: Arc<VersionTrack<RegionCacheEngineConfig>>,
+        config: Arc<VersionTrack<InMemoryEngineConfig>>,
         memory_controller: Arc<MemoryController>,
         region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
     ) -> Self {
@@ -781,7 +781,7 @@ impl BackgroundRunner {
         engine: Arc<RegionCacheMemoryEngineCore>,
         memory_controller: Arc<MemoryController>,
         region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
-        config: &Arc<VersionTrack<RegionCacheEngineConfig>>,
+        config: &Arc<VersionTrack<InMemoryEngineConfig>>,
         pd_client: Arc<dyn PdClient>,
     ) -> (Self, Scheduler<BackgroundTask>) {
         let config = config.value();
@@ -1601,7 +1601,7 @@ pub mod tests {
         region_manager::RegionState::*,
         test_util::{new_region, put_data, put_data_with_overwrite},
         write_batch::RegionCacheWriteBatchEntry,
-        RegionCacheEngineConfig, RegionCacheEngineContext, RegionCacheMemoryEngine,
+        InMemoryEngineConfig, InMemoryEngineContext, RegionCacheMemoryEngine,
     };
 
     fn delete_data(
@@ -1691,7 +1691,7 @@ pub mod tests {
     }
 
     fn dummy_controller(skip_engine: SkiplistEngine) -> Arc<MemoryController> {
-        let mut config = RegionCacheEngineConfig::config_for_test();
+        let mut config = InMemoryEngineConfig::config_for_test();
         config.soft_limit_threshold = Some(ReadableSize(u64::MAX));
         config.hard_limit_threshold = Some(ReadableSize(u64::MAX));
         let config = Arc::new(VersionTrack::new(config));
@@ -1841,9 +1841,9 @@ pub mod tests {
 
     #[test]
     fn test_filter_with_delete() {
-        let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-            Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test())),
-        ));
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(InMemoryEngineConfig::config_for_test()),
+        )));
         let memory_controller = engine.memory_controller();
         let region = new_region(1, b"", b"z");
         let cache_region = CacheRegion::from_region(&region);
@@ -1918,7 +1918,7 @@ pub mod tests {
         iter_opts.set_lower_bound(&cache_region.start, 0);
         iter_opts.set_upper_bound(&cache_region.end, 0);
 
-        let config = Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test()));
+        let config = Arc::new(VersionTrack::new(InMemoryEngineConfig::config_for_test()));
         let (worker, _) = BackgroundRunner::new(
             engine.core.clone(),
             memory_controller.clone(),
@@ -1939,9 +1939,9 @@ pub mod tests {
 
     #[test]
     fn test_gc() {
-        let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-            Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test())),
-        ));
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(InMemoryEngineConfig::config_for_test()),
+        )));
         let memory_controller = engine.memory_controller();
         let region = new_region(1, b"", b"z");
         engine.new_region(region.clone());
@@ -1992,7 +1992,7 @@ pub mod tests {
         assert_eq!(3, element_count(&default));
         assert_eq!(3, element_count(&write));
 
-        let config = Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test()));
+        let config = Arc::new(VersionTrack::new(InMemoryEngineConfig::config_for_test()));
         let (worker, _) = BackgroundRunner::new(
             engine.core.clone(),
             memory_controller.clone(),
@@ -2038,10 +2038,10 @@ pub mod tests {
     // The GC of one region should not impact other regions
     #[test]
     fn test_gc_one_region() {
-        let config = RegionCacheEngineConfig::config_for_test();
-        let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-            Arc::new(VersionTrack::new(config)),
-        ));
+        let config = InMemoryEngineConfig::config_for_test();
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(config),
+        )));
         let memory_controller = engine.memory_controller();
         let (write, default, region1, region2) = {
             let region1 = CacheRegion::new(1, 0, b"zk00", b"zk10");
@@ -2152,7 +2152,7 @@ pub mod tests {
         assert_eq!(6, element_count(&default));
         assert_eq!(6, element_count(&write));
 
-        let config = Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test()));
+        let config = Arc::new(VersionTrack::new(InMemoryEngineConfig::config_for_test()));
         let (worker, _) = BackgroundRunner::new(
             engine.core.clone(),
             memory_controller.clone(),
@@ -2169,7 +2169,7 @@ pub mod tests {
         assert_eq!(4, element_count(&default));
         assert_eq!(4, element_count(&write));
 
-        let config = Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test()));
+        let config = Arc::new(VersionTrack::new(InMemoryEngineConfig::config_for_test()));
         let (worker, _) = BackgroundRunner::new(
             engine.core.clone(),
             memory_controller.clone(),
@@ -2189,9 +2189,9 @@ pub mod tests {
 
     #[test]
     fn test_gc_for_overwrite_write() {
-        let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-            Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test())),
-        ));
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(InMemoryEngineConfig::config_for_test()),
+        )));
         let memory_controller = engine.memory_controller();
         let region = new_region(1, b"", b"z");
         engine.new_region(region.clone());
@@ -2215,7 +2215,7 @@ pub mod tests {
         assert_eq!(1, element_count(&default));
         assert_eq!(2, element_count(&write));
 
-        let config = Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test()));
+        let config = Arc::new(VersionTrack::new(InMemoryEngineConfig::config_for_test()));
         let (worker, _) = BackgroundRunner::new(
             engine.core.clone(),
             memory_controller.clone(),
@@ -2234,9 +2234,9 @@ pub mod tests {
 
     #[test]
     fn test_snapshot_block_gc() {
-        let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-            Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test())),
-        ));
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(InMemoryEngineConfig::config_for_test()),
+        )));
         let memory_controller = engine.memory_controller();
         let region = new_region(1, b"", b"z");
         engine.new_region(region.clone());
@@ -2313,7 +2313,7 @@ pub mod tests {
         assert_eq!(6, element_count(&default));
         assert_eq!(6, element_count(&write));
 
-        let config = Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test()));
+        let config = Arc::new(VersionTrack::new(InMemoryEngineConfig::config_for_test()));
         let (worker, _) = BackgroundRunner::new(
             engine.core.clone(),
             memory_controller,
@@ -2353,9 +2353,9 @@ pub mod tests {
 
     #[test]
     fn test_gc_region_contained_in_historical_region() {
-        let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-            Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test())),
-        ));
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(InMemoryEngineConfig::config_for_test()),
+        )));
         let memory_controller = engine.memory_controller();
         let region = new_region(1, b"", b"z");
         engine.new_region(region.clone());
@@ -2461,7 +2461,7 @@ pub mod tests {
         assert_eq!(6, element_count(&default));
         assert_eq!(6, element_count(&write));
 
-        let config = Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test()));
+        let config = Arc::new(VersionTrack::new(InMemoryEngineConfig::config_for_test()));
         let (worker, _) = BackgroundRunner::new(
             engine.core.clone(),
             memory_controller,
@@ -2515,8 +2515,8 @@ pub mod tests {
 
     #[test]
     fn test_background_worker_load() {
-        let mut engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-            Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test())),
+        let mut engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(
+            Arc::new(VersionTrack::new(InMemoryEngineConfig::config_for_test())),
         ));
         let path = Builder::new().prefix("test_load").tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();
@@ -2600,16 +2600,16 @@ pub mod tests {
 
     #[test]
     fn test_regions_for_gc() {
-        let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-            Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test())),
-        ));
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(InMemoryEngineConfig::config_for_test()),
+        )));
         let memory_controller = engine.memory_controller();
         let r1 = new_region(1, b"a", b"b");
         let r2 = new_region(2, b"b", b"c");
         engine.new_region(r1);
         engine.new_region(r2);
 
-        let config = Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test()));
+        let config = Arc::new(VersionTrack::new(InMemoryEngineConfig::config_for_test()));
         let (runner, _) = BackgroundRunner::new(
             engine.core.clone(),
             memory_controller,
@@ -2671,8 +2671,8 @@ pub mod tests {
         let region_info_provider = Arc::new(MockRegionInfoProvider::default());
 
         let mut engine = RegionCacheMemoryEngine::with_region_info_provider(
-            RegionCacheEngineContext::new_for_tests(Arc::new(VersionTrack::new(
-                RegionCacheEngineConfig::config_for_test(),
+            InMemoryEngineContext::new_for_tests(Arc::new(VersionTrack::new(
+                InMemoryEngineConfig::config_for_test(),
             ))),
             Some(region_info_provider.clone()),
         );
@@ -2800,13 +2800,12 @@ pub mod tests {
 
     #[test]
     fn test_snapshot_load_reaching_stop_limit() {
-        let mut config = RegionCacheEngineConfig::config_for_test();
+        let mut config = InMemoryEngineConfig::config_for_test();
         config.stop_load_limit_threshold = Some(ReadableSize(500));
         config.soft_limit_threshold = Some(ReadableSize(1000));
         config.hard_limit_threshold = Some(ReadableSize(1500));
         let config = Arc::new(VersionTrack::new(config));
-        let mut engine =
-            RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(config));
+        let mut engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(config));
         let path = Builder::new()
             .prefix("test_snapshot_load_reaching_limit")
             .tempdir()
@@ -2861,13 +2860,12 @@ pub mod tests {
 
     #[test]
     fn test_snapshot_load_reaching_hard_limit() {
-        let mut config = RegionCacheEngineConfig::config_for_test();
+        let mut config = InMemoryEngineConfig::config_for_test();
         config.stop_load_limit_threshold = Some(ReadableSize(1000));
         config.soft_limit_threshold = Some(ReadableSize(1000));
         config.hard_limit_threshold = Some(ReadableSize(1500));
         let config = Arc::new(VersionTrack::new(config));
-        let mut engine =
-            RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(config));
+        let mut engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(config));
         let path = Builder::new()
             .prefix("test_snapshot_load_reaching_limit")
             .tempdir()
@@ -2937,12 +2935,12 @@ pub mod tests {
 
     #[test]
     fn test_soft_hard_limit_change() {
-        let mut config = RegionCacheEngineConfig::config_for_test();
+        let mut config = InMemoryEngineConfig::config_for_test();
         config.soft_limit_threshold = Some(ReadableSize(1000));
         config.hard_limit_threshold = Some(ReadableSize(1500));
         let config = Arc::new(VersionTrack::new(config));
         let mut engine =
-            RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(config.clone()));
+            RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(config.clone()));
         let path = Builder::new()
             .prefix("test_snapshot_load_reaching_limit")
             .tempdir()

@@ -33,9 +33,9 @@ lazy_static! {
         &["type"],
     )
     .unwrap();
-    pub static ref REGION_CACHE_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_VEC: IntCounterVec =
+    pub static ref IN_MEMORY_ENGINE_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_VEC: IntCounterVec =
         register_int_counter_vec!(
-            "tikv_region_cache_snapshot_acquire_failed_reason_count",
+            "tikv_in_memory_engine_snapshot_acquire_failed_reason_count",
             "The reasons for why range cache snapshot is not acquired",
             &["type"],
         )
@@ -45,8 +45,8 @@ lazy_static! {
 lazy_static! {
     pub static ref SNAPSHOT_TYPE_COUNT_STATIC: SnapshotTypeCountVec =
         auto_flush_from!(SNAPSHOT_TYPE_COUNT_VEC, SnapshotTypeCountVec);
-    pub static ref REGION_CACHE_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC: FailedReasonCountVec = auto_flush_from!(
-        REGION_CACHE_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_VEC,
+    pub static ref IN_MEMORY_ENGINE_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC: FailedReasonCountVec = auto_flush_from!(
+        IN_MEMORY_ENGINE_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_VEC,
         FailedReasonCountVec
     );
 }

@@ -164,7 +164,7 @@ mod tests {
         CacheRegion, IterOptions, Iterable, Iterator, Mutable, SnapshotContext, WriteBatch,
         WriteBatchExt, CF_DEFAULT,
     };
-    use in_memory_engine::{test_util::new_region, RegionCacheEngineConfig, RegionCacheStatus};
+    use in_memory_engine::{test_util::new_region, InMemoryEngineConfig, RegionCacheStatus};
 
     use crate::util::hybrid_engine_for_tests;
 
@@ -179,7 +179,7 @@ mod tests {
         let region_clone = region.clone();
         let (_path, hybrid_engine) = hybrid_engine_for_tests(
             "temp",
-            RegionCacheEngineConfig::config_for_test(),
+            InMemoryEngineConfig::config_for_test(),
             move |memory_engine| {
                 memory_engine.new_region(region_clone);
                 memory_engine.core().region_manager().set_safe_point(1, 5);

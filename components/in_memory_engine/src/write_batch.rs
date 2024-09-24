@@ -570,7 +570,7 @@ mod tests {
     use super::*;
     use crate::{
         background::flush_epoch, config::RegionCacheConfigManager, region_manager::RegionState,
-        test_util::new_region, RegionCacheEngineConfig, RegionCacheEngineContext,
+        test_util::new_region, InMemoryEngineConfig, InMemoryEngineContext,
     };
 
     // We should not use skiplist.get directly as we only cares keys without
@@ -590,9 +590,9 @@ mod tests {
 
     #[test]
     fn test_write_to_skiplist() {
-        let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-            Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test())),
-        ));
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(InMemoryEngineConfig::config_for_test()),
+        )));
         let r = new_region(1, b"", b"z");
         engine.new_region(r.clone());
         engine.core.region_manager().set_safe_point(r.id, 10);
@@ -610,9 +610,9 @@ mod tests {
 
     #[test]
     fn test_savepoints() {
-        let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-            Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test())),
-        ));
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(InMemoryEngineConfig::config_for_test()),
+        )));
         let r = new_region(1, b"", b"z");
         engine.new_region(r.clone());
         engine.core.region_manager().set_safe_point(r.id, 10);
@@ -635,9 +635,9 @@ mod tests {
 
     #[test]
     fn test_put_write_clear_delete_put_write() {
-        let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-            Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test())),
-        ));
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(InMemoryEngineConfig::config_for_test()),
+        )));
         let r = new_region(1, b"", b"z");
         engine
             .core
@@ -675,8 +675,8 @@ mod tests {
         let path_str = path.path().to_str().unwrap();
         let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
 
-        let mut engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-            Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test())),
+        let mut engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(
+            Arc::new(VersionTrack::new(InMemoryEngineConfig::config_for_test())),
         ));
         engine.set_disk_engine(rocks_engine.clone());
 
@@ -788,13 +788,13 @@ mod tests {
 
     #[test]
     fn test_write_batch_with_memory_controller() {
-        let mut config = RegionCacheEngineConfig::default();
+        let mut config = InMemoryEngineConfig::default();
         config.soft_limit_threshold = Some(ReadableSize(500));
         config.hard_limit_threshold = Some(ReadableSize(1000));
         config.enabled = true;
-        let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-            Arc::new(VersionTrack::new(config)),
-        ));
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(config),
+        )));
         let regions = [
             new_region(1, b"k00", b"k10"),
             new_region(2, b"k10", b"k20"),
@@ -901,13 +901,13 @@ mod tests {
 
     #[test]
     fn test_write_batch_with_config_change() {
-        let mut config = RegionCacheEngineConfig::default();
+        let mut config = InMemoryEngineConfig::default();
         config.soft_limit_threshold = Some(ReadableSize(u64::MAX));
         config.hard_limit_threshold = Some(ReadableSize(u64::MAX));
         config.enabled = true;
         let config = Arc::new(VersionTrack::new(config));
         let engine =
-            RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(config.clone()));
+            RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(config.clone()));
         let r1 = new_region(1, b"kk00".to_vec(), b"kk10".to_vec());
         let r2 = new_region(2, b"kk10".to_vec(), b"kk20".to_vec());
         for r in [&r1, &r2] {
@@ -975,8 +975,8 @@ mod tests {
         let path_str = path.path().to_str().unwrap();
         let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
 
-        let mut engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-            Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test())),
+        let mut engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(
+            Arc::new(VersionTrack::new(InMemoryEngineConfig::config_for_test())),
         ));
         engine.set_disk_engine(rocks_engine.clone());
 

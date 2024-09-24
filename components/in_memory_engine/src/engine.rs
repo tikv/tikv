@@ -34,7 +34,7 @@ use crate::{
         AsyncFnOnce, LoadFailedReason, RegionCacheStatus, RegionManager, RegionState,
     },
     statistics::Statistics,
-    RegionCacheEngineConfig, RegionCacheEngineContext,
+    InMemoryEngineConfig, InMemoryEngineContext,
 };
 
 pub(crate) const CF_DEFAULT_USIZE: usize = 0;
@@ -234,7 +234,7 @@ pub struct RegionCacheMemoryEngine {
     pub(crate) rocks_engine: Option<RocksEngine>,
     memory_controller: Arc<MemoryController>,
     statistics: Arc<Statistics>,
-    config: Arc<VersionTrack<RegionCacheEngineConfig>>,
+    config: Arc<VersionTrack<InMemoryEngineConfig>>,
 
     // The increment amount of tombstones in the lock cf.
     // When reaching to the threshold, a CleanLockTombstone task will be scheduled to clean lock cf
@@ -243,23 +243,23 @@ pub struct RegionCacheMemoryEngine {
 }
 
 impl RegionCacheMemoryEngine {
-    pub fn new(region_cache_engine_context: RegionCacheEngineContext) -> Self {
-        RegionCacheMemoryEngine::with_region_info_provider(region_cache_engine_context, None)
+    pub fn new(in_memory_engine_context: InMemoryEngineContext) -> Self {
+        RegionCacheMemoryEngine::with_region_info_provider(in_memory_engine_context, None)
     }
 
     pub fn with_region_info_provider(
-        region_cache_engine_context: RegionCacheEngineContext,
+        in_memory_engine_context: InMemoryEngineContext,
         region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
     ) -> Self {
         info!("ime init region cache memory engine");
         let core = Arc::new(RegionCacheMemoryEngineCore::new());
         let skiplist_engine = core.engine().clone();
 
-        let RegionCacheEngineContext {
+        let InMemoryEngineContext {
             config,
             statistics,
             pd_client,
-        } = region_cache_engine_context;
+        } = in_memory_engine_context;
         assert!(config.value().enabled);
         let memory_controller = Arc::new(MemoryController::new(config.clone(), skiplist_engine));
 
@@ -618,7 +618,7 @@ pub mod tests {
         memory_controller::MemoryController,
         region_manager::{CacheRegionMeta, RegionManager, RegionState::*},
         test_util::new_region,
-        InternalBytes, RegionCacheEngineConfig, RegionCacheEngineContext, RegionCacheMemoryEngine,
+        InMemoryEngineConfig, InMemoryEngineContext, InternalBytes, RegionCacheMemoryEngine,
         ValueType,
     };
 
@@ -628,9 +628,9 @@ pub mod tests {
     }
     #[test]
     fn test_region_overlap_with_outdated_epoch() {
-        let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-            Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test())),
-        ));
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(InMemoryEngineConfig::config_for_test()),
+        )));
         let region1 = new_region(1, b"k1", b"k3");
         let cache_region1 = CacheRegion::from_region(&region1);
         engine.load_region(cache_region1).unwrap();
@@ -666,7 +666,7 @@ pub mod tests {
             let skiplist = SkiplistEngine::default();
             let handle = skiplist.cf_handle(cf);
 
-            let config = Arc::new(VersionTrack::new(RegionCacheEngineConfig {
+            let config = Arc::new(VersionTrack::new(InMemoryEngineConfig {
                 enabled: true,
                 gc_interval: Default::default(),
                 load_evict_interval: Default::default(),
@@ -724,7 +724,7 @@ pub mod tests {
         let skiplist = SkiplistEngine::default();
         let lock_handle = skiplist.cf_handle(CF_LOCK);
 
-        let config = Arc::new(VersionTrack::new(RegionCacheEngineConfig {
+        let config = Arc::new(VersionTrack::new(InMemoryEngineConfig {
             enabled: true,
             gc_interval: Default::default(),
             load_evict_interval: Default::default(),
@@ -771,8 +771,8 @@ pub mod tests {
 
     #[test]
     fn test_is_active() {
-        let mut engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-            Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test())),
+        let mut engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(
+            Arc::new(VersionTrack::new(InMemoryEngineConfig::config_for_test())),
         ));
         let path = tempfile::Builder::new()
             .prefix("test_is_active")
@@ -861,11 +861,11 @@ pub mod tests {
 
     #[test]
     fn test_cb_on_eviction_with_on_going_snapshot() {
-        let mut config = RegionCacheEngineConfig::config_for_test();
+        let mut config = InMemoryEngineConfig::config_for_test();
         config.gc_interval = ReadableDuration(Duration::from_secs(1));
-        let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-            Arc::new(VersionTrack::new(config)),
-        ));
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(config),
+        )));
 
         let region = new_region(1, b"", b"z");
         let cache_region = CacheRegion::from_region(&region);

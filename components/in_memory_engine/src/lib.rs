@@ -40,10 +40,10 @@ pub use keys::{
     decode_key, encode_key_for_boundary_without_mvcc, encoding_for_filter, InternalBytes,
     InternalKey, ValueType,
 };
-pub use metrics::flush_region_cache_engine_statistics;
+pub use metrics::flush_in_memory_engine_statistics;
 pub use read::RegionCacheSnapshot;
 pub use region_manager::{RegionCacheStatus, RegionState};
-pub use statistics::Statistics as RegionCacheMemoryEngineStatistics;
+pub use statistics::Statistics as InMemoryEngineStatistics;
 use txn_types::TimeStamp;
 pub use write_batch::RegionCacheWriteBatch;
 
@@ -55,7 +55,7 @@ pub enum Error {
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, OnlineConfig)]
 #[serde(default, rename_all = "kebab-case")]
-pub struct RegionCacheEngineConfig {
+pub struct InMemoryEngineConfig {
     pub enabled: bool,
     pub gc_interval: ReadableDuration,
     pub load_evict_interval: ReadableDuration,
@@ -75,7 +75,7 @@ pub struct RegionCacheEngineConfig {
     pub cross_check_interval: ReadableDuration,
 }
 
-impl Default for RegionCacheEngineConfig {
+impl Default for InMemoryEngineConfig {
     fn default() -> Self {
         Self {
             enabled: false,
@@ -92,7 +92,7 @@ impl Default for RegionCacheEngineConfig {
     }
 }
 
-impl RegionCacheEngineConfig {
+impl InMemoryEngineConfig {
     pub fn validate(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         if !self.enabled {
             return Ok(());
@@ -154,8 +154,8 @@ impl RegionCacheEngineConfig {
         )
     }
 
-    pub fn config_for_test() -> RegionCacheEngineConfig {
-        RegionCacheEngineConfig {
+    pub fn config_for_test() -> InMemoryEngineConfig {
+        InMemoryEngineConfig {
             enabled: true,
             gc_interval: ReadableDuration(Duration::from_secs(180)),
             load_evict_interval: ReadableDuration(Duration::from_secs(300)), /* Should run within
@@ -171,34 +171,32 @@ impl RegionCacheEngineConfig {
 }
 
 #[derive(Clone)]
-pub struct RegionCacheEngineContext {
-    config: Arc<VersionTrack<RegionCacheEngineConfig>>,
-    statistics: Arc<RegionCacheMemoryEngineStatistics>,
+pub struct InMemoryEngineContext {
+    config: Arc<VersionTrack<InMemoryEngineConfig>>,
+    statistics: Arc<InMemoryEngineStatistics>,
     pd_client: Arc<dyn PdClient>,
 }
 
-impl RegionCacheEngineContext {
+impl InMemoryEngineContext {
     pub fn new(
-        config: Arc<VersionTrack<RegionCacheEngineConfig>>,
+        config: Arc<VersionTrack<InMemoryEngineConfig>>,
         pd_client: Arc<dyn PdClient>,
-    ) -> RegionCacheEngineContext {
-        RegionCacheEngineContext {
+    ) -> InMemoryEngineContext {
+        InMemoryEngineContext {
             config,
             statistics: Arc::default(),
             pd_client,
         }
     }
 
-    pub fn new_for_tests(
-        config: Arc<VersionTrack<RegionCacheEngineConfig>>,
-    ) -> RegionCacheEngineContext {
+    pub fn new_for_tests(config: Arc<VersionTrack<InMemoryEngineConfig>>) -> InMemoryEngineContext {
         struct MockPdClient;
         impl PdClient for MockPdClient {
             fn get_tso(&self) -> pd_client::PdFuture<txn_types::TimeStamp> {
                 Box::pin(ready(Ok(TimeStamp::compose(TimeStamp::physical_now(), 0))))
             }
         }
-        RegionCacheEngineContext {
+        InMemoryEngineContext {
             config,
             statistics: Arc::default(),
             pd_client: Arc::new(MockPdClient),
@@ -209,11 +207,11 @@ impl RegionCacheEngineContext {
         self.pd_client.clone()
     }
 
-    pub fn config(&self) -> &Arc<VersionTrack<RegionCacheEngineConfig>> {
+    pub fn config(&self) -> &Arc<VersionTrack<InMemoryEngineConfig>> {
         &self.config
     }
 
-    pub fn statistics(&self) -> Arc<RegionCacheMemoryEngineStatistics> {
+    pub fn statistics(&self) -> Arc<InMemoryEngineStatistics> {
         self.statistics.clone()
     }
 }

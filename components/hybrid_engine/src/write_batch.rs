@@ -155,7 +155,7 @@ mod tests {
         CacheRegion, Mutable, Peekable, RegionCacheEngine, SnapshotContext, WriteBatch,
         WriteBatchExt,
     };
-    use in_memory_engine::{test_util::new_region, RegionCacheEngineConfig, RegionCacheStatus};
+    use in_memory_engine::{test_util::new_region, InMemoryEngineConfig, RegionCacheStatus};
 
     use crate::util::hybrid_engine_for_tests;
 
@@ -165,7 +165,7 @@ mod tests {
         let region_clone = region.clone();
         let (_path, hybrid_engine) = hybrid_engine_for_tests(
             "temp",
-            RegionCacheEngineConfig::config_for_test(),
+            InMemoryEngineConfig::config_for_test(),
             move |memory_engine| {
                 let id = region_clone.id;
                 memory_engine.new_region(region_clone);
@@ -206,7 +206,7 @@ mod tests {
     fn test_in_memory_engine() {
         let (_path, hybrid_engine) = hybrid_engine_for_tests(
             "temp",
-            RegionCacheEngineConfig::config_for_test(),
+            InMemoryEngineConfig::config_for_test(),
             |memory_engine| {
                 let region = new_region(1, b"k00", b"k10");
                 memory_engine.new_region(region);
@@ -239,7 +239,7 @@ mod tests {
         let region2_clone = region2.clone();
         let (_path, hybrid_engine) = hybrid_engine_for_tests(
             "temp",
-            RegionCacheEngineConfig::config_for_test(),
+            InMemoryEngineConfig::config_for_test(),
             move |memory_engine| {
                 memory_engine.new_region(region1_clone);
                 memory_engine.new_region(region2_clone);

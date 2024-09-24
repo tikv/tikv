@@ -3,13 +3,13 @@ use std::sync::Arc;
 use online_config::{ConfigChange, ConfigManager, OnlineConfig};
 use tikv_util::{config::VersionTrack, info};
 
-use crate::RegionCacheEngineConfig;
+use crate::InMemoryEngineConfig;
 
 #[derive(Clone)]
-pub struct RegionCacheConfigManager(pub Arc<VersionTrack<RegionCacheEngineConfig>>);
+pub struct RegionCacheConfigManager(pub Arc<VersionTrack<InMemoryEngineConfig>>);
 
 impl RegionCacheConfigManager {
-    pub fn new(config: Arc<VersionTrack<RegionCacheEngineConfig>>) -> Self {
+    pub fn new(config: Arc<VersionTrack<InMemoryEngineConfig>>) -> Self {
         Self(config)
     }
 }
@@ -22,7 +22,7 @@ impl ConfigManager for RegionCacheConfigManager {
         {
             let change = change.clone();
             self.0
-                .update(move |cfg: &mut RegionCacheEngineConfig| cfg.update(change))?;
+                .update(move |cfg: &mut InMemoryEngineConfig| cfg.update(change))?;
         }
         info!(
             "ime config changed";
@@ -33,7 +33,7 @@ impl ConfigManager for RegionCacheConfigManager {
 }
 
 impl std::ops::Deref for RegionCacheConfigManager {
-    type Target = Arc<VersionTrack<RegionCacheEngineConfig>>;
+    type Target = Arc<VersionTrack<InMemoryEngineConfig>>;
 
     fn deref(&self) -> &Self::Target {
         &self.0

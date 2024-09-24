@@ -14,7 +14,7 @@ use engine_traits::{
 use in_memory_engine::{
     decode_key, encode_key_for_boundary_without_mvcc, encoding_for_filter,
     test_util::{new_region, put_data, put_data_in_rocks},
-    BackgroundTask, InternalBytes, InternalKey, RegionCacheEngineConfig, RegionCacheEngineContext,
+    BackgroundTask, InMemoryEngineConfig, InMemoryEngineContext, InternalBytes, InternalKey,
     RegionCacheMemoryEngine, RegionState, SkiplistHandle, ValueType,
 };
 use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};
@@ -34,9 +34,9 @@ fn test_set_disk_engine() {
         let _ = tx.send(true);
     })
     .unwrap();
-    let mut engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-        Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test())),
-    ));
+    let mut engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+        VersionTrack::new(InMemoryEngineConfig::config_for_test()),
+    )));
     let path = Builder::new()
         .prefix("test_set_disk_engine")
         .tempdir()
@@ -60,9 +60,9 @@ fn key_exist(sl: &SkiplistHandle, key: &InternalBytes, guard: &epoch::Guard) -> 
 
 #[test]
 fn test_gc_worker() {
-    let mut config = RegionCacheEngineConfig::config_for_test();
+    let mut config = InMemoryEngineConfig::config_for_test();
     config.gc_interval = ReadableDuration(Duration::from_secs(1));
-    let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(Arc::new(
+    let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
         VersionTrack::new(config),
     )));
     let memory_controller = engine.memory_controller();
@@ -161,9 +161,8 @@ fn test_gc_worker() {
 
 #[test]
 fn test_clean_up_tombstone() {
-    let config = Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test()));
-    let engine =
-        RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(config.clone()));
+    let config = Arc::new(VersionTrack::new(InMemoryEngineConfig::config_for_test()));
+    let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(config.clone()));
     let region = new_region(1, b"".to_vec(), b"z".to_vec());
     let cache_region = CacheRegion::from_region(&region);
     let (tx, rx) = sync_channel(0);
@@ -244,10 +243,10 @@ fn test_evict_with_loading_range() {
     let path_str = path.path().to_str().unwrap();
     let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
 
-    let config = RegionCacheEngineConfig::config_for_test();
-    let mut engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-        Arc::new(VersionTrack::new(config)),
-    ));
+    let config = InMemoryEngineConfig::config_for_test();
+    let mut engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+        VersionTrack::new(config),
+    )));
     engine.set_disk_engine(rocks_engine);
 
     let r1 = new_region(1, b"k00".to_vec(), b"k10".to_vec());
@@ -308,13 +307,13 @@ fn test_cached_write_batch_cleared_when_load_failed() {
     let path_str = path.path().to_str().unwrap();
     let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
 
-    let mut config = RegionCacheEngineConfig::config_for_test();
+    let mut config = InMemoryEngineConfig::config_for_test();
     config.stop_load_limit_threshold = Some(ReadableSize(20));
     config.soft_limit_threshold = Some(ReadableSize(30));
     config.hard_limit_threshold = Some(ReadableSize(40));
     let config = Arc::new(VersionTrack::new(config));
     let mut engine =
-        RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(config.clone()));
+        RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(config.clone()));
     engine.set_disk_engine(rocks_engine);
 
     let (tx, rx) = sync_channel(0);
@@ -372,10 +371,10 @@ fn test_concurrency_between_delete_range_and_write_to_memory() {
     wb.put_cf(CF_LOCK, b"zk42", b"val").unwrap();
     wb.write().unwrap();
 
-    let config = RegionCacheEngineConfig::config_for_test();
-    let mut engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-        Arc::new(VersionTrack::new(config)),
-    ));
+    let config = InMemoryEngineConfig::config_for_test();
+    let mut engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+        VersionTrack::new(config),
+    )));
     engine.set_disk_engine(rocks_engine);
 
     let r1 = new_region(1, b"k00".to_vec(), b"k10".to_vec());
@@ -522,10 +521,10 @@ fn test_double_delete_range_schedule() {
     let path_str = path.path().to_str().unwrap();
     let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
 
-    let config = RegionCacheEngineConfig::config_for_test();
-    let mut engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-        Arc::new(VersionTrack::new(config)),
-    ));
+    let config = InMemoryEngineConfig::config_for_test();
+    let mut engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+        VersionTrack::new(config),
+    )));
     engine.set_disk_engine(rocks_engine);
 
     let r1 = new_region(1, b"k00", b"k10");
@@ -595,11 +594,11 @@ fn test_load_with_gc() {
     let path_str = path.path().to_str().unwrap();
     let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
 
-    let mut config = RegionCacheEngineConfig::config_for_test();
+    let mut config = InMemoryEngineConfig::config_for_test();
     config.gc_interval = ReadableDuration(Duration::from_secs(1));
-    let mut engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-        Arc::new(VersionTrack::new(config)),
-    ));
+    let mut engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+        VersionTrack::new(config),
+    )));
     engine.set_disk_engine(rocks_engine.clone());
 
     // safe_point: 6
@@ -663,11 +662,11 @@ fn test_region_split_before_batch_loading_start() {
     let path_str = path.path().to_str().unwrap();
     let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
 
-    let mut config = RegionCacheEngineConfig::config_for_test();
+    let mut config = InMemoryEngineConfig::config_for_test();
     config.gc_interval = ReadableDuration(Duration::from_secs(1));
-    let mut engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(
-        Arc::new(VersionTrack::new(config)),
-    ));
+    let mut engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+        VersionTrack::new(config),
+    )));
     engine.set_disk_engine(rocks_engine.clone());
 
     let (tx, rx) = sync_channel(0);
@@ -756,9 +755,9 @@ fn test_region_split_before_batch_loading_start() {
 
 #[test]
 fn test_cb_on_eviction() {
-    let mut config = RegionCacheEngineConfig::config_for_test();
+    let mut config = InMemoryEngineConfig::config_for_test();
     config.gc_interval = ReadableDuration(Duration::from_secs(1));
-    let engine = RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(Arc::new(
+    let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
         VersionTrack::new(config),
     )));
 

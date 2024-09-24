@@ -910,7 +910,7 @@ mod tests {
     use txn_types::{Key, TimeStamp, Write, WriteType};
 
     use crate::{
-        cross_check::CrossChecker, RegionCacheEngineConfig, RegionCacheEngineContext,
+        cross_check::CrossChecker, InMemoryEngineConfig, InMemoryEngineContext,
         RegionCacheMemoryEngine, RegionCacheWriteBatch,
     };
 
@@ -945,8 +945,8 @@ mod tests {
         F: FnOnce(&mut RegionCacheWriteBatch, &mut RocksWriteBatchVec),
     {
         let mut engine = RegionCacheMemoryEngine::with_region_info_provider(
-            RegionCacheEngineContext::new_for_tests(Arc::new(VersionTrack::new(
-                RegionCacheEngineConfig::config_for_test(),
+            InMemoryEngineContext::new_for_tests(Arc::new(VersionTrack::new(
+                InMemoryEngineConfig::config_for_test(),
             ))),
             Some(Arc::new(MockRegionInfoProvider {})),
         );

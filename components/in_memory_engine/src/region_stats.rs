@@ -438,7 +438,7 @@ pub mod tests {
     };
 
     use super::*;
-    use crate::{engine::SkiplistEngine, test_util::new_region, RegionCacheEngineConfig};
+    use crate::{engine::SkiplistEngine, test_util::new_region, InMemoryEngineConfig};
 
     struct RegionInfoSimulator {
         regions: Mutex<TopRegions>,
@@ -506,7 +506,7 @@ pub mod tests {
     #[test]
     fn test_collect_changed_regions() {
         let skiplist_engine = SkiplistEngine::new();
-        let mut config = RegionCacheEngineConfig::config_for_test();
+        let mut config = InMemoryEngineConfig::config_for_test();
         config.stop_load_limit_threshold = Some(ReadableSize::kb(1));
         let config = Arc::new(VersionTrack::new(config));
         let mc = MemoryController::new(config, skiplist_engine);
@@ -520,7 +520,7 @@ pub mod tests {
         // 10 ms min duration eviction for testing purposes.
         let rsm = RegionStatsManager::new(
             Duration::from_millis(10),
-            RegionCacheEngineConfig::config_for_test().expected_region_size(),
+            InMemoryEngineConfig::config_for_test().expected_region_size(),
             10,
             Duration::from_secs(100),
             sim.clone(),
@@ -601,7 +601,7 @@ pub mod tests {
     #[test]
     fn test_collect_candidates_for_eviction() {
         let skiplist_engine = SkiplistEngine::new();
-        let mut config = RegionCacheEngineConfig::config_for_test();
+        let mut config = InMemoryEngineConfig::config_for_test();
         config.stop_load_limit_threshold = Some(ReadableSize::kb(1));
         let config = Arc::new(VersionTrack::new(config));
         let mc = MemoryController::new(config, skiplist_engine);
@@ -649,7 +649,7 @@ pub mod tests {
         // 10 ms min duration eviction for testing purposes.
         let rsm = RegionStatsManager::new(
             Duration::from_millis(10),
-            RegionCacheEngineConfig::config_for_test().expected_region_size(),
+            InMemoryEngineConfig::config_for_test().expected_region_size(),
             10,
             Duration::from_secs(10),
             sim.clone(),

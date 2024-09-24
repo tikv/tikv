@@ -158,7 +158,7 @@ pub mod tests {
         CacheRegion, DeleteStrategy, MiscExt, Mutable, Range, RegionCacheEngine, WriteBatch,
         WriteBatchExt, WriteOptions, CF_DEFAULT,
     };
-    use in_memory_engine::{test_util::new_region, RegionCacheEngineConfig};
+    use in_memory_engine::{test_util::new_region, InMemoryEngineConfig};
 
     use crate::util::hybrid_engine_for_tests;
 
@@ -172,7 +172,7 @@ pub mod tests {
         let r3_clone = r3.clone();
         let (_path, hybrid_engine) = hybrid_engine_for_tests(
             "temp",
-            RegionCacheEngineConfig::config_for_test(),
+            InMemoryEngineConfig::config_for_test(),
             move |memory_engine| {
                 memory_engine.new_region(r1_clone);
                 memory_engine.new_region(r2_clone);

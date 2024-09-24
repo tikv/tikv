@@ -7,7 +7,7 @@ use engine_traits::{
 
 use crate::{
     metrics::{
-        REGION_CACHE_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC, SNAPSHOT_TYPE_COUNT_STATIC,
+        IN_MEMORY_ENGINE_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC, SNAPSHOT_TYPE_COUNT_STATIC,
     },
     snapshot::HybridEngineSnapshot,
 };
@@ -62,21 +62,21 @@ pub fn new_in_memory_snapshot<EC: RegionCacheEngine>(
             Some(snap)
         }
         Err(FailedReason::TooOldRead) => {
-            REGION_CACHE_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
+            IN_MEMORY_ENGINE_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
                 .too_old_read
                 .inc();
             SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
             None
         }
         Err(FailedReason::NotCached) => {
-            REGION_CACHE_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
+            IN_MEMORY_ENGINE_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
                 .not_cached
                 .inc();
             SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
             None
         }
         Err(FailedReason::EpochNotMatch) => {
-            REGION_CACHE_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
+            IN_MEMORY_ENGINE_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
                 .epoch_not_match
                 .inc();
             SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
@@ -224,8 +224,8 @@ mod tests {
     use engine_rocks::util::new_engine;
     use engine_traits::{CacheRegion, SnapshotContext, CF_DEFAULT, CF_LOCK, CF_WRITE};
     use in_memory_engine::{
-        config::RegionCacheConfigManager, test_util::new_region, RegionCacheEngineConfig,
-        RegionCacheEngineContext, RegionCacheMemoryEngine,
+        config::RegionCacheConfigManager, test_util::new_region, InMemoryEngineConfig,
+        InMemoryEngineContext, RegionCacheMemoryEngine,
     };
     use online_config::{ConfigChange, ConfigManager, ConfigValue};
     use tempfile::Builder;
@@ -241,9 +241,9 @@ mod tests {
             &[CF_DEFAULT, CF_LOCK, CF_WRITE],
         )
         .unwrap();
-        let config = Arc::new(VersionTrack::new(RegionCacheEngineConfig::config_for_test()));
+        let config = Arc::new(VersionTrack::new(InMemoryEngineConfig::config_for_test()));
         let memory_engine =
-            RegionCacheMemoryEngine::new(RegionCacheEngineContext::new_for_tests(config.clone()));
+            RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(config.clone()));
 
         let region = new_region(1, b"k00", b"k10");
         let range = CacheRegion::from_region(&region);

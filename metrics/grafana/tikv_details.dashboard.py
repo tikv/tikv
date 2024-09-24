@@ -320,7 +320,7 @@ def Cluster() -> RowPanel:
                             "tikv_in_memory_engine_flow",
                             label_selectors=['type=~"bytes_read|iter_bytes_read"'],
                         ),
-                        legend_format=r"{{instance}}-regio-cache-engine-read-",
+                        legend_format=r"{{instance}}-in-memory-engine-read",
                     ),
                 ],
             ),
@@ -4203,7 +4203,7 @@ def InMemoryEngine() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_sum_rate(
-                            "tikv_region_cache_snapshot_acquire_failed_reason_count",
+                            "tikv_in_memory_engine_snapshot_acquire_failed_reason_count",
                             by_labels=["type"],
                         ),
                         legend_format="{{type}}",
@@ -4216,7 +4216,7 @@ def InMemoryEngine() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_avg(
-                            "in_memory_engine_cache_count",
+                            "tikv_in_memory_engine_cache_count",
                             by_labels=["instance", "type"],
                         ),
                         legend_format="{{instance}}--{{type}}",
@@ -4234,7 +4234,7 @@ def InMemoryEngine() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_avg(
-                            "in_memory_engine_memory_usage_bytes",
+                            "tikv_in_memory_engine_memory_usage_bytes",
                             by_labels=["instance"],
                         ),
                     ),
@@ -4246,7 +4246,7 @@ def InMemoryEngine() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_sum_rate(
-                            "in_memory_engine_gc_filtered",
+                            "tikv_in_memory_engine_gc_filtered",
                             by_labels=["type"],
                         ),
                         legend_format="{{type}}",
@@ -4318,7 +4318,7 @@ def InMemoryEngine() -> RowPanel:
             graph_by_labels=["instance"],
             graph_hides=["count", "avg"],
             yaxis_format=UNITS.SECONDS,
-            metric="in_memory_engine_write_duration_seconds",
+            metric="tikv_in_memory_engine_write_duration_seconds",
         )
     )
     layout.row(
@@ -4330,7 +4330,7 @@ def InMemoryEngine() -> RowPanel:
             graph_by_labels=["instance"],
             graph_hides=["count", "avg"],
             yaxis_format=UNITS.SECONDS,
-            metric="in_memory_engine_prepare_for_write_duration_seconds",
+            metric="tikv_in_memory_engine_prepare_for_write_duration_seconds",
         )
     )
     layout.row(

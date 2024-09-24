@@ -47,7 +47,7 @@ use engine_traits::{
     CF_WRITE,
 };
 use file_system::IoRateLimiter;
-use in_memory_engine::RegionCacheEngineConfig;
+use in_memory_engine::InMemoryEngineConfig;
 use keys::region_raft_prefix_len;
 use kvproto::kvrpcpb::ApiVersion;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig, Result as CfgResult};
@@ -3545,7 +3545,7 @@ pub struct TikvConfig {
     pub resource_control: ResourceControlConfig,
 
     #[online_config(submodule)]
-    pub region_cache_engine: RegionCacheEngineConfig,
+    pub in_memory_engine: InMemoryEngineConfig,
 }
 
 impl Default for TikvConfig {
@@ -3591,7 +3591,7 @@ impl Default for TikvConfig {
             log_backup: BackupStreamConfig::default(),
             causal_ts: CausalTsConfig::default(),
             resource_control: ResourceControlConfig::default(),
-            region_cache_engine: RegionCacheEngineConfig::default(),
+            in_memory_engine: InMemoryEngineConfig::default(),
         }
     }
 }
@@ -3960,7 +3960,7 @@ impl TikvConfig {
         self.resource_metering.validate()?;
         self.quota.validate()?;
         self.causal_ts.validate()?;
-        self.region_cache_engine.validate()?;
+        self.in_memory_engine.validate()?;
 
         // Validate feature TTL with Titan configuration.
         if matches!(self.rocksdb.titan.enabled, Some(true)) && self.storage.enable_ttl {

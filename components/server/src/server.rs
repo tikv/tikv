@@ -46,7 +46,7 @@ use hybrid_engine::observer::{
     RegionCacheWriteBatchObserver,
 };
 use in_memory_engine::{
-    config::RegionCacheConfigManager, RegionCacheEngineContext, RegionCacheMemoryEngineStatistics,
+    config::RegionCacheConfigManager, InMemoryEngineContext, InMemoryEngineStatistics,
 };
 use kvproto::{
     brpb::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
@@ -254,7 +254,7 @@ where
     snap_mgr: Option<SnapManager>, // Will be filled in `init_servers`.
     engines: Option<TikvEngines<RocksEngine, ER>>,
     kv_statistics: Option<Arc<RocksStatistics>>,
-    region_cache_engine_statistics: Option<Arc<RegionCacheMemoryEngineStatistics>>,
+    in_memory_engine_statistics: Option<Arc<InMemoryEngineStatistics>>,
     raft_statistics: Option<Arc<RocksStatistics>>,
     servers: Option<Servers<RocksEngine, ER, F>>,
     region_info_accessor: RegionInfoAccessor,
@@ -397,12 +397,7 @@ where
         let region_stats_manager_enabled_cb: Arc<dyn Fn() -> bool + Send + Sync> =
             if cfg!(feature = "memory-engine") {
                 let cfg_controller_clone = cfg_controller.clone();
-                Arc::new(move || {
-                    cfg_controller_clone
-                        .get_current()
-                        .region_cache_engine
-                        .enabled
-                })
+                Arc::new(move || cfg_controller_clone.get_current().in_memory_engine.enabled)
             } else {
                 Arc::new(|| false)
             };
@@ -410,7 +405,7 @@ where
         let region_info_accessor = RegionInfoAccessor::new(
             coprocessor_host.as_mut().unwrap(),
             region_stats_manager_enabled_cb,
-            config.region_cache_engine.mvcc_amplification_threshold,
+            config.in_memory_engine.mvcc_amplification_threshold,
         );
 
         // Initialize concurrency manager
@@ -469,7 +464,7 @@ where
             snap_mgr: None,
             engines: None,
             kv_statistics: None,
-            region_cache_engine_statistics: None,
+            in_memory_engine_statistics: None,
             raft_statistics: None,
             servers: None,
             region_info_accessor,
@@ -1320,7 +1315,7 @@ where
         let mut engine_metrics = EngineMetricsManager::<RocksEngine, ER>::new(
             self.tablet_registry.clone().unwrap(),
             self.kv_statistics.clone(),
-            self.region_cache_engine_statistics.clone(),
+            self.in_memory_engine_statistics.clone(),
             self.core.config.rocksdb.titan.enabled.map_or(false, |v| v),
             self.engines.as_ref().unwrap().engines.raft.clone(),
             self.raft_statistics.clone(),
@@ -1625,17 +1620,15 @@ where
         let kv_engine = factory
             .create_shared_db(&self.core.store_path)
             .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
-        let mut region_cache_engine_config = self.core.config.region_cache_engine.clone();
+        let mut region_cache_engine_config = self.core.config.in_memory_engine.clone();
         let _ = region_cache_engine_config
             .expected_region_size
             .get_or_insert(self.core.config.coprocessor.region_split_size());
         let region_cache_engine_config = Arc::new(VersionTrack::new(region_cache_engine_config));
-        let region_cache_engine_context = RegionCacheEngineContext::new(
-            region_cache_engine_config.clone(),
-            self.pd_client.clone(),
-        );
+        let region_cache_engine_context =
+            InMemoryEngineContext::new(region_cache_engine_config.clone(), self.pd_client.clone());
         let region_cache_engine_statistics = region_cache_engine_context.statistics();
-        if self.core.config.region_cache_engine.enabled {
+        if self.core.config.in_memory_engine.enabled {
             let in_memory_engine = build_hybrid_engine(
                 region_cache_engine_context,
                 kv_engine.clone(),
@@ -1656,7 +1649,7 @@ where
         };
         let region_cache_config_manager = RegionCacheConfigManager(region_cache_engine_config);
         self.kv_statistics = Some(factory.rocks_statistics());
-        self.region_cache_engine_statistics = Some(region_cache_engine_statistics);
+        self.in_memory_engine_statistics = Some(region_cache_engine_statistics);
         let engines = Engines::new(kv_engine.clone(), raft_engine);
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
