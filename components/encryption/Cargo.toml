@@ -20,7 +20,6 @@ cloud = { workspace = true }
 crc32fast = "1.2"
 crossbeam = { workspace = true }
 crypto = { workspace = true }
-dashmap = "5.2.0"
 derive_more = "0.99.3"
 error_code = { workspace = true }
 fail = "0.5"
