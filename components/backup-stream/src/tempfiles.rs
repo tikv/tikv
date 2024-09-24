@@ -788,7 +788,7 @@ mod test {
     };
 
     use async_compression::tokio::bufread::ZstdDecoder;
-    use encryption::{BackupEncryptionManager, DataKeyManager};
+    use encryption::{BackupEncryptionManager, DataKeyManager, MultiMasterKeyBackend};
     use kvproto::{brpb::CompressionType, encryptionpb::EncryptionMethod};
     use tempfile::{tempdir, TempDir};
     use test_util::new_test_key_manager;
@@ -1118,11 +1118,30 @@ mod test {
 
     fn test_encryption(enc: DataKeyManager) {
         let method = enc.encryption_method();
-        let pool = test_pool_with_modify(|cfg| {
-            cfg.minimal_swap_out_file_size = 15;
-            cfg.write_buffer_size = 15;
-            cfg.cache_size = AtomicUsize::new(15);
-        });
+        let tmp = tempdir().unwrap();
+        let cfg = Config {
+            cache_size: AtomicUsize::new(15),
+            swap_files: tmp.path().to_owned(),
+            content_compression: CompressionType::Unknown,
+            minimal_swap_out_file_size: 15,
+            write_buffer_size: 15,
+        };
+        let pool = TestPool {
+            tmpdir: Arc::new(tmp),
+            pool: Arc::new(
+                TempFilePool::new(
+                    cfg,
+                    BackupEncryptionManager::new(
+                        None,
+                        EncryptionMethod::Plaintext,
+                        MultiMasterKeyBackend::default(),
+                        Some(Arc::new(enc)),
+                    ),
+                )
+                .unwrap(),
+            ),
+        };
+
         let rt = rt_for_test();
         let content_to_write: [&[u8]; 4] = [
             b"Now let's test the encryption.",
