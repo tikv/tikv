@@ -75,9 +75,7 @@ pub fn create_cloud_backend(config: &KmsConfig) -> Result<Box<KmsBackend>> {
         STORAGE_VENDOR_NAME_GCP => {
             // sanity check
             if cloud_config.gcp.is_none() {
-                return Err(Error::Other(box_err!(
-                    "invalid configurations for GCP KMS"
-                )));
+                return Err(Error::Other(box_err!("invalid configurations for GCP KMS")));
             }
             let kms_provider =
                 GcpKms::new(cloud_config).map_err(cloud_convert_error("new GCP KMS".to_owned()))?;
