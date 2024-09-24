@@ -933,13 +933,12 @@ fn build_add_sub_date_meta(expr: &mut Expr) -> Result<AddSubDateMeta> {
     };
     let unit = IntervalUnit::from_str(unit_str)?;
     let is_clock_unit = unit.is_clock_unit();
-    let (interval_unsigned, interval_decimal) = {
-        let accessor = children[1].get_field_type().as_accessor();
-        (
-            accessor.flag().contains(FieldTypeFlag::UNSIGNED),
-            accessor.decimal(),
-        )
-    };
+    let interval_unsigned = children[1]
+        .get_field_type()
+        .as_accessor()
+        .flag()
+        .contains(FieldTypeFlag::UNSIGNED);
+    let interval_decimal = children[1].get_field_type().decimal();
 
     Ok(AddSubDateMeta {
         unit,
@@ -1509,6 +1508,8 @@ pub fn sub_date_time_duration_interval_any_as_duration<
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use tidb_query_datatype::{
         builder::FieldTypeBuilder,
         codec::{
@@ -3264,41 +3265,359 @@ mod tests {
         }
     }
 
+    fn get_add_sub_date_expr_types(sig: ScalarFuncSig) -> (FieldTypeTp, FieldTypeTp, FieldTypeTp) {
+        use FieldTypeTp::*;
+        use ScalarFuncSig::*;
+        match sig {
+            AddDateStringString | SubDateStringString => (String, String, String),
+            AddDateStringInt | SubDateStringInt => (String, Long, String),
+            AddDateStringReal | SubDateStringReal => (String, Float, String),
+            AddDateStringDecimal | SubDateStringDecimal => (String, NewDecimal, String),
+            AddDateIntString | SubDateIntString => (Long, String, String),
+            AddDateRealString | SubDateRealString => (Float, String, String),
+            AddDateDecimalString | SubDateDecimalString => (NewDecimal, String, String),
+            AddDateIntInt | SubDateIntInt => (Long, Long, String),
+            AddDateIntReal | SubDateIntReal => (Long, Float, String),
+            AddDateIntDecimal | SubDateIntDecimal => (Long, NewDecimal, String),
+            AddDateRealInt | SubDateRealInt => (Float, Long, String),
+            AddDateRealReal | SubDateRealReal => (Float, Float, String),
+            AddDateRealDecimal | SubDateRealDecimal => (Float, NewDecimal, String),
+            AddDateDecimalInt | SubDateDecimalInt => (NewDecimal, Long, String),
+            AddDateDecimalReal | SubDateDecimalReal => (NewDecimal, Float, String),
+            AddDateDecimalDecimal | SubDateDecimalDecimal => (NewDecimal, NewDecimal, String),
+            AddDateDatetimeString | SubDateDatetimeString => (DateTime, String, DateTime),
+            AddDateDatetimeInt | SubDateDatetimeInt => (DateTime, Long, DateTime),
+            AddDateDatetimeReal | SubDateDatetimeReal => (DateTime, Float, DateTime),
+            AddDateDatetimeDecimal | SubDateDatetimeDecimal => (DateTime, NewDecimal, DateTime),
+            AddDateDurationString | SubDateDurationString => (Duration, String, Duration),
+            AddDateDurationInt | SubDateDurationInt => (Duration, Long, Duration),
+            AddDateDurationReal | SubDateDurationReal => (Duration, Float, Duration),
+            AddDateDurationDecimal | SubDateDurationDecimal => (Duration, NewDecimal, Duration),
+            AddDateDurationStringDatetime | SubDateDurationStringDatetime => {
+                (Duration, String, DateTime)
+            }
+            AddDateDurationIntDatetime | SubDateDurationIntDatetime => (Duration, Long, DateTime),
+            AddDateDurationRealDatetime | SubDateDurationRealDatetime => {
+                (Duration, Float, DateTime)
+            }
+            AddDateDurationDecimalDatetime | SubDateDurationDecimalDatetime => {
+                (Duration, NewDecimal, DateTime)
+            }
+            _ => panic!("unknown sig {:?}", sig),
+        }
+    }
+
     #[test]
-    fn test_add_sub_date_string_any() {
-        let cases = vec![
-            (
-                ScalarFuncSig::AddDateStringString,
-                Some("2008-04-01"),
-                Some("5"),
-                "day",
-                Some("2008-04-06"),
-                false,
-            ),
-            (
-                ScalarFuncSig::SubDateStringString,
-                Some("2008-04-01"),
-                Some("5"),
-                "day",
-                Some("2008-03-27"),
-                false,
-            ),
-        ];
-        // use std::str::FromStr;
-        // let x = Real::from_str("-10.2").unwrap();
+    fn test_add_sub_date() {
+        let cases = {
+            use ScalarFuncSig::*;
+            vec![
+                (
+                    AddDateStringString,
+                    Some("2008-04-01"),
+                    Some("5"),
+                    "day",
+                    Some("2008-04-06"),
+                    false,
+                ),
+                (
+                    SubDateStringString,
+                    Some("2008-04-01"),
+                    Some("5"),
+                    "day",
+                    Some("2008-03-27"),
+                    false,
+                ),
+                (
+                    AddDateStringInt,
+                    Some("2024-09-01 12:10:01"),
+                    Some("21"),
+                    "Minute",
+                    Some("2024-09-01 12:31:01"),
+                    false,
+                ),
+                (
+                    SubDateStringInt,
+                    Some("2024-09-01 12:10:01"),
+                    Some("21"),
+                    "Minute",
+                    Some("2024-09-01 11:49:01"),
+                    false,
+                ),
+                (
+                    AddDateStringReal,
+                    Some("2024-09-01 12:10:01"),
+                    Some("21.1239"),
+                    "Minute_microsecond",
+                    Some("2024-09-01 12:10:22.123900"),
+                    false,
+                ),
+                (
+                    SubDateStringReal,
+                    Some("2024-09-01 12:10:01"),
+                    Some("10.22"),
+                    "minute_microsecond",
+                    Some("2024-09-01 12:09:50.780000"),
+                    false,
+                ),
+                (
+                    AddDateStringDecimal,
+                    Some("2024-09-01 12:10:01"),
+                    Some("10.200"),
+                    "Day_Minute",
+                    Some("2024-09-02 01:30:01"),
+                    false,
+                ),
+                (
+                    SubDateStringDecimal,
+                    Some("2024-09-01 12:10:01"),
+                    Some("-10.22"),
+                    "Day_Minute",
+                    Some("2024-09-01 22:32:01"),
+                    false,
+                ),
+                (
+                    AddDateIntString,
+                    Some("20240901"),
+                    Some("2e3"),
+                    "second",
+                    Some("2024-09-01 00:33:20"),
+                    false,
+                ),
+                (
+                    SubDateIntString,
+                    Some("20240901"),
+                    Some("2e3"),
+                    "second",
+                    Some("2024-08-31 23:26:40"),
+                    false,
+                ),
+                (
+                    AddDateRealString,
+                    Some("070118"),
+                    Some("-1e4"),
+                    "SECOND",
+                    Some("2007-01-17 21:13:20"),
+                    false,
+                ),
+                (
+                    SubDateRealString,
+                    Some("121231113045.123"),
+                    Some("2-20"),
+                    "year_month",
+                    Some("2009-04-30 11:30:45.123001"),
+                    false,
+                ),
+                (
+                    AddDateDecimalString,
+                    Some("1203"),
+                    Some("-22"),
+                    "quarter",
+                    Some("1995-06-03"),
+                    false,
+                ),
+                (
+                    SubDateDecimalString,
+                    Some("170105084059.575601"),
+                    Some("123.221456"),
+                    "second_microsecond",
+                    Some("2017-01-05 08:38:56.354145"),
+                    false,
+                ),
+                (
+                    AddDateIntInt,
+                    Some("691231235959"),
+                    Some("123"),
+                    "Minute_Second",
+                    Some("2070-01-01 00:02:02"),
+                    false,
+                ),
+                (
+                    SubDateIntInt,
+                    Some("691231235959"),
+                    Some("321"),
+                    "Hour_Second",
+                    Some("2069-12-31 23:54:38"),
+                    false,
+                ),
+                (
+                    AddDateIntReal,
+                    Some("591231"),
+                    Some("-1.678"),
+                    "Week",
+                    Some("2059-12-17"),
+                    false,
+                ),
+                (
+                    SubDateIntReal,
+                    Some("591231"),
+                    Some("6.678"),
+                    "MONTH",
+                    Some("2059-05-31"),
+                    false,
+                ),
+                (
+                    AddDateIntDecimal,
+                    Some("19990101000000"),
+                    Some("238.12390"),
+                    "Day_Microsecond",
+                    Some("1999-01-01 00:03:58.123900"),
+                    false,
+                ),
+                (
+                    SubDateIntDecimal,
+                    Some("991231235959"),
+                    Some("238.12390"),
+                    "Day_Microsecond",
+                    Some("1999-12-31 23:56:00.876100"),
+                    false,
+                ),
+                (
+                    AddDateRealInt,
+                    Some("121231113045.9999999"),
+                    Some("1234"),
+                    "MICROSECOND",
+                    Some("2012-12-31 11:30:46.001234"),
+                    false,
+                ),
+                (
+                    SubDateRealInt,
+                    Some("121231113045.9999999"),
+                    Some("8912"),
+                    "day",
+                    Some("1988-08-07 11:30:46"),
+                    false,
+                ),
+                (
+                    AddDateRealReal,
+                    Some("170105084059.575601"),
+                    Some("-98.123"),
+                    "second",
+                    Some("2017-01-05 08:39:21.452592"),
+                    false,
+                ),
+                (
+                    SubDateRealReal,
+                    Some("170105084059.575601"),
+                    Some("-98.123"),
+                    "HOUR",
+                    Some("2017-01-09 10:40:59.575592"),
+                    false,
+                ),
+                (
+                    AddDateRealDecimal,
+                    Some("1210"),
+                    Some("9876.1234"),
+                    "Minute_Microsecond",
+                    Some("2000-12-10 02:44:36.123400"),
+                    false,
+                ),
+                (
+                    SubDateRealDecimal,
+                    Some("1210"),
+                    Some("9876.1234"),
+                    "Minute_Microsecond",
+                    Some("2000-12-09 21:15:23.876600"),
+                    false,
+                ),
+                (
+                    AddDateDecimalInt,
+                    Some("121231113045.999999"),
+                    Some("1234"),
+                    "MICROSECOND",
+                    Some("2012-12-31 11:30:46.001233"),
+                    false,
+                ),
+                (
+                    SubDateDecimalInt,
+                    Some("240924"),
+                    Some("1234"),
+                    "WEEK",
+                    Some("2001-01-30"),
+                    false,
+                ),
+                (
+                    AddDateDecimalReal,
+                    Some("121231113045.999999"),
+                    Some("1234.892"),
+                    "MICROSECOND",
+                    Some("2012-12-31 11:30:46.001234"),
+                    false,
+                ),
+                (
+                    SubDateDecimalReal,
+                    Some("240924"),
+                    Some("1234.99"),
+                    "Hour_Microsecond",
+                    Some("2024-09-23 23:39:25.010000"),
+                    false,
+                ),
+                (
+                    AddDateDecimalDecimal,
+                    Some("121231113045.999999"),
+                    Some("1234.892"),
+                    "MICROSECOND",
+                    Some("2012-12-31 11:30:46.001234"),
+                    false,
+                ),
+                (
+                    SubDateDecimalDecimal,
+                    Some("240924"),
+                    Some("1234.99"),
+                    "minute_microsecond",
+                    Some("2024-09-23 23:39:25.010000"),
+                    false,
+                ),
+            ]
+        };
+        let builder_push_param = |ctx: &mut EvalContext,
+                                  mut builder: ExprDefBuilder,
+                                  param: Option<&str>,
+                                  field_type: FieldTypeTp|
+         -> ExprDefBuilder {
+            if param.is_none() {
+                builder = builder.push_child(ExprDefBuilder::constant_null(field_type));
+                return builder;
+            }
+            let param = param.unwrap();
+            match field_type {
+                FieldTypeTp::String => {
+                    builder = builder
+                        .push_child(ExprDefBuilder::constant_bytes(param.as_bytes().to_vec()))
+                }
+                FieldTypeTp::Long => {
+                    let p = i64::from_str(param).unwrap();
+                    builder = builder.push_child(ExprDefBuilder::constant_int(p));
+                }
+                FieldTypeTp::Float => {
+                    let p = f64::from_str(param).unwrap();
+                    builder = builder.push_child(ExprDefBuilder::constant_real(p));
+                }
+                FieldTypeTp::NewDecimal => {
+                    let p = Decimal::from_str(param).unwrap();
+                    builder = builder.push_child(ExprDefBuilder::constant_decimal(p));
+                }
+                FieldTypeTp::DateTime => {
+                    let p = Time::parse_without_type(ctx, param, MAX_FSP, true).unwrap();
+                    builder =
+                        builder.push_child(ExprDefBuilder::constant_time(p, p.get_time_type()));
+                }
+                FieldTypeTp::Duration => {
+                    let p = Duration::parse(ctx, param, MAX_FSP).unwrap();
+                    builder = builder.push_child(ExprDefBuilder::constant_duration(p));
+                }
+                _ => panic!("unknown field type {:?}", field_type),
+            }
+            builder
+        };
+
         for (func_sig, time, interval, unit, expected, error) in cases {
             let mut ctx = EvalContext::default();
-            let mut builder = ExprDefBuilder::scalar_func(func_sig, FieldTypeTp::String);
-            if let Some(t) = time {
-                builder = builder.push_child(ExprDefBuilder::constant_bytes(t.as_bytes().to_vec()));
-            } else {
-                builder = builder.push_child(ExprDefBuilder::constant_null(FieldTypeTp::String));
-            }
-            if let Some(i) = interval {
-                builder = builder.push_child(ExprDefBuilder::constant_bytes(i.as_bytes().to_vec()));
-            } else {
-                builder = builder.push_child(ExprDefBuilder::constant_null(FieldTypeTp::String));
-            }
+            let (time_type, interval_type, result_type) = get_add_sub_date_expr_types(func_sig);
+            let mut builder = ExprDefBuilder::scalar_func(func_sig, result_type);
+
+            builder = builder_push_param(&mut ctx, builder, time, time_type);
+            builder = builder_push_param(&mut ctx, builder, interval, interval_type);
             builder = builder.push_child(ExprDefBuilder::constant_bytes(unit.as_bytes().to_vec()));
             let node = builder.build();
             let exp = RpnExpressionBuilder::build_from_expr_tree(node, &mut ctx, 1).unwrap();
@@ -3310,17 +3629,51 @@ mod tests {
             match val {
                 Ok(val) => {
                     assert!(val.is_vector());
-                    let v = val.vector_value().unwrap().as_ref().to_bytes_vec();
-                    assert_eq!(v.len(), 1);
-                    assert_eq!(
-                        v[0].as_deref().and_then(|s| std::str::from_utf8(s).ok()),
-                        expected,
-                        "{:?} {:?} {:?} {:?}",
-                        func_sig,
-                        time,
-                        interval,
-                        unit
-                    );
+                    let value = val.vector_value().unwrap().as_ref();
+                    assert_eq!(value.len(), 1);
+                    match result_type {
+                        FieldTypeTp::String => {
+                            let v = value.to_bytes_vec();
+                            assert_eq!(
+                                v[0].as_deref().and_then(|s| std::str::from_utf8(s).ok()),
+                                expected,
+                                "{:?} {:?} {:?} {:?}",
+                                func_sig,
+                                time,
+                                interval,
+                                unit
+                            );
+                        }
+                        FieldTypeTp::DateTime => {
+                            let v = value.to_date_time_vec();
+                            assert_eq!(
+                                v[0].map(|s| s.to_numeric_string())
+                                    .as_ref()
+                                    .map(|s| s.as_str()),
+                                expected,
+                                "{:?} {:?} {:?} {:?}",
+                                func_sig,
+                                time,
+                                interval,
+                                unit
+                            );
+                        }
+                        FieldTypeTp::Duration => {
+                            let v = value.to_duration_vec();
+                            assert_eq!(
+                                v[0].map(|s| s.to_numeric_string())
+                                    .as_ref()
+                                    .map(|s| s.as_str()),
+                                expected,
+                                "{:?} {:?} {:?} {:?}",
+                                func_sig,
+                                time,
+                                interval,
+                                unit
+                            );
+                        }
+                        _ => panic!("unknown field type {:?}", result_type),
+                    }
                 }
                 Err(e) => {
                     assert!(error, "val has error {:?}", e);
