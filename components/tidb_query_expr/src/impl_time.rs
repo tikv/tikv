@@ -1512,15 +1512,18 @@ mod tests {
     use tidb_query_datatype::{
         builder::FieldTypeBuilder,
         codec::{
+            batch::LazyBatchColumnVec,
+            data_type::*,
             error::ERR_TRUNCATE_WRONG_VALUE,
             mysql::{Time, MAX_FSP},
         },
         FieldTypeTp,
     };
     use tipb::ScalarFuncSig;
+    use tipb_helper::ExprDefBuilder;
 
     use super::*;
-    use crate::types::test_util::RpnFnScalarEvaluator;
+    use crate::{types::test_util::RpnFnScalarEvaluator, RpnExpressionBuilder};
 
     #[test]
     fn test_add_duration_and_duration() {
@@ -3258,6 +3261,71 @@ mod tests {
                 .evaluate::<Int>(ScalarFuncSig::Quarter)
                 .unwrap();
             assert_eq!(output, expected, "got {}", output.unwrap());
+        }
+    }
+
+    #[test]
+    fn test_add_sub_date_string_any() {
+        let cases = vec![
+            (
+                ScalarFuncSig::AddDateStringString,
+                Some("2008-04-01"),
+                Some("5"),
+                "day",
+                Some("2008-04-06"),
+                false,
+            ),
+            (
+                ScalarFuncSig::SubDateStringString,
+                Some("2008-04-01"),
+                Some("5"),
+                "day",
+                Some("2008-03-27"),
+                false,
+            ),
+        ];
+        // use std::str::FromStr;
+        // let x = Real::from_str("-10.2").unwrap();
+        for (func_sig, time, interval, unit, expected, error) in cases {
+            let mut ctx = EvalContext::default();
+            let mut builder = ExprDefBuilder::scalar_func(func_sig, FieldTypeTp::String);
+            if let Some(t) = time {
+                builder = builder.push_child(ExprDefBuilder::constant_bytes(t.as_bytes().to_vec()));
+            } else {
+                builder = builder.push_child(ExprDefBuilder::constant_null(FieldTypeTp::String));
+            }
+            if let Some(i) = interval {
+                builder = builder.push_child(ExprDefBuilder::constant_bytes(i.as_bytes().to_vec()));
+            } else {
+                builder = builder.push_child(ExprDefBuilder::constant_null(FieldTypeTp::String));
+            }
+            builder = builder.push_child(ExprDefBuilder::constant_bytes(unit.as_bytes().to_vec()));
+            let node = builder.build();
+            let exp = RpnExpressionBuilder::build_from_expr_tree(node, &mut ctx, 1).unwrap();
+
+            let schema = &[];
+            let mut columns = LazyBatchColumnVec::empty();
+            let val = exp.eval(&mut ctx, schema, &mut columns, &[0], 1);
+
+            match val {
+                Ok(val) => {
+                    assert!(val.is_vector());
+                    let v = val.vector_value().unwrap().as_ref().to_bytes_vec();
+                    assert_eq!(v.len(), 1);
+                    assert_eq!(
+                        v[0].as_deref().and_then(|s| std::str::from_utf8(s).ok()),
+                        expected,
+                        "{:?} {:?} {:?} {:?}",
+                        func_sig,
+                        time,
+                        interval,
+                        unit
+                    );
+                }
+                Err(e) => {
+                    assert!(error, "val has error {:?}", e);
+                }
+            }
         }
     }
 }

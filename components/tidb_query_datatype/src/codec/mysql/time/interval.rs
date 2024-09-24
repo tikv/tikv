@@ -63,7 +63,7 @@ impl IntervalUnit {
             "DAY_MINUTE" => Ok(DayMinute),
             "DAY_HOUR" => Ok(DayHour),
             "YEAR_MONTH" => Ok(YearMonth),
-            _ => Err(box_err!("unknown unit str")),
+            _ => Err(box_err!("unknown unit str {}", unit)),
         }
     }
 
@@ -663,7 +663,9 @@ mod tests {
         let mut ctx = EvalContext::default();
         let err_cases = vec![(b"abc" as &[u8], Day), (b"a6", Month), (b"-24a", Quarter)];
         for (input, unit) in err_cases {
-            assert!(input.to_interval_string(&mut ctx, unit, false, 0).is_err());
+            input
+                .to_interval_string(&mut ctx, unit, false, 0)
+                .unwrap_err();
         }
     }
 
@@ -1705,12 +1707,8 @@ mod tests {
             ("-30", Day, Duration::from_nanos(-30 * NANOS_PER_DAY, 0)),
             ("2", Week, Duration::from_nanos(2 * NANOS_PER_DAY * 7, 0)),
             ("-2", Week, Duration::from_nanos(-2 * NANOS_PER_DAY * 7, 0)),
-            ("1", Month, Duration::from_nanos(1 * 30 * NANOS_PER_DAY, 0)),
-            (
-                "-1",
-                Month,
-                Duration::from_nanos(-1 * 30 * NANOS_PER_DAY, 0),
-            ),
+            ("1", Month, Duration::from_nanos(30 * NANOS_PER_DAY, 0)),
+            ("-1", Month, Duration::from_nanos(-30 * NANOS_PER_DAY, 0)),
             (
                 "29 12:23:36.1234",
                 DayMicrosecond,
@@ -1764,7 +1762,7 @@ mod tests {
         ];
         for (input, unit) in err_cases {
             let result = Interval::extract_duration(&mut ctx, &unit, input);
-            assert!(result.is_err());
+            result.unwrap_err();
         }
     }
 }

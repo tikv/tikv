@@ -3581,7 +3581,7 @@ mod tests {
             ),
             (
                 "2023-01-01 00:00:00",
-                -1 * NANOS_PER_SEC,
+                -NANOS_PER_SEC,
                 "2022-12-31 23:59:59.000000",
                 false,
             ),
@@ -3638,7 +3638,7 @@ mod tests {
                     result.is_err(),
                     "Test case with input: {:?} should have error, result {}",
                     case,
-                    result.unwrap().to_string()
+                    result.unwrap()
                 );
             } else {
                 assert!(
