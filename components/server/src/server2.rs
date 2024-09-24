@@ -724,11 +724,9 @@ where
             );
 
             // build stream backup encryption manager
-            let backup_encryption_manager = block_on(utils::build_backup_encryption_manager(
-                self.core.config.clone(),
-                self.core.encryption_key_manager.clone(),
-            ))
-            .expect("failed to build backup encryption manager in server");
+            let backup_encryption_manager =
+                utils::build_backup_encryption_manager(self.core.encryption_key_manager.clone())
+                    .expect("failed to build backup encryption manager in server");
 
             let backup_stream_endpoint = backup_stream::Endpoint::new(
                 self.node.as_ref().unwrap().id(),

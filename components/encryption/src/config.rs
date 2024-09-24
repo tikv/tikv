@@ -43,26 +43,6 @@ impl Default for EncryptionConfig {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
-#[serde(default)]
-#[serde(rename_all = "kebab-case")]
-pub struct BackupEncryptionConfig {
-    #[serde(with = "encryption_method_serde")]
-    #[online_config(skip)]
-    pub data_encryption_method: EncryptionMethod,
-    #[online_config(skip)]
-    pub master_keys: Vec<MasterKeyConfig>,
-}
-
-impl Default for BackupEncryptionConfig {
-    fn default() -> BackupEncryptionConfig {
-        BackupEncryptionConfig {
-            data_encryption_method: EncryptionMethod::Plaintext,
-            master_keys: Vec::new(),
-        }
-    }
-}
-
 #[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]

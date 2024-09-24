@@ -5,8 +5,8 @@ use aws::{AwsKms, STORAGE_VENDOR_NAME_AWS};
 use azure::{AzureKms, STORAGE_VENDOR_NAME_AZURE};
 pub use encryption::{
     clean_up_dir, clean_up_trash, trash_dir_all, AsyncBackend, AzureConfig, Backend,
-    BackupEncryptionConfig, DataKeyImporter, DataKeyManager, DataKeyManagerArgs, DecrypterReader,
-    EncryptionConfig, Error, FileConfig, Iv, KmsBackend, KmsConfig, MasterKeyConfig, Result,
+    DataKeyImporter, DataKeyManager, DataKeyManagerArgs, DecrypterReader, EncryptionConfig, Error,
+    FileConfig, Iv, KmsBackend, KmsConfig, MasterKeyConfig, Result,
 };
 use encryption::{cloud_convert_error, FileBackend, PlaintextBackend};
 use gcp::{GcpKms, STORAGE_VENDOR_NAME_GCP};
