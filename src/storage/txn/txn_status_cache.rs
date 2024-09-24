@@ -451,7 +451,10 @@ impl TxnStatusCache {
                 previous_allocated = normal_cache.internal_allocated_capacity();
                 if let Some(existing_entry) = normal_cache.get_mut(&start_ts) {
                     // don't update committed or rolled back txns.
-                    if let TxnState::Ongoing { .. } = existing_entry.state {
+                    if let TxnState::Ongoing { min_commit_ts } = existing_entry.state {
+                        if let TxnState::Committed { commit_ts } = state {
+                            assert!(min_commit_ts <= commit_ts);
+                        }
                         existing_entry.state = state;
                         existing_entry.update_time = update_time;
                     }
@@ -464,7 +467,10 @@ impl TxnStatusCache {
                 let mut large_cache = self.large_txn_cache[slot_index].lock();
                 if let Some(existing_entry) = large_cache.get_mut(&start_ts) {
                     // don't update committed or rolled back txns.
-                    if let TxnState::Ongoing { .. } = existing_entry.state {
+                    if let TxnState::Ongoing { min_commit_ts } = existing_entry.state {
+                        if let TxnState::Committed { commit_ts } = state {
+                            assert!(min_commit_ts <= commit_ts);
+                        }
                         existing_entry.state = state;
                         existing_entry.update_time = update_time;
                     }
