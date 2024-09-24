@@ -4180,8 +4180,8 @@ def CoprocessorDetail() -> RowPanel:
     return layout.row_panel
 
 
-def RegionCacheMemoryEngine() -> RowPanel:
-    layout = Layout(title="Range Cache Memory Engine")
+def InMemoryEngine() -> RowPanel:
+    layout = Layout(title="In Memory Engine")
     layout.row(
         [
             graph_panel(
@@ -4211,8 +4211,8 @@ def RegionCacheMemoryEngine() -> RowPanel:
                 ],
             ),
             graph_panel(
-                title="Range Count",
-                description="The count of different types of range",
+                title="Region Count",
+                description="The count of different types of region",
                 targets=[
                     target(
                         expr=expr_avg(
@@ -4229,7 +4229,7 @@ def RegionCacheMemoryEngine() -> RowPanel:
         [
             graph_panel(
                 title="Memory Usage",
-                description="The memory usage of the range cache memory engine",
+                description="The memory usage of the in-memory engine",
                 yaxes=yaxes(left_format=UNITS.BYTES_IEC),
                 targets=[
                     target(
@@ -4254,8 +4254,8 @@ def RegionCacheMemoryEngine() -> RowPanel:
                 ],
             ),
             heatmap_panel(
-                title="Range GC Duration",
-                description="The handle duration of range gc",
+                title="Region GC Duration",
+                description="The handle duration of region gc",
                 yaxis=yaxis(format=UNITS.SECONDS),
                 metric="in_memory_engine_gc_duration_secs_bucket",
             ),
@@ -4264,14 +4264,14 @@ def RegionCacheMemoryEngine() -> RowPanel:
     layout.row(
         [
             heatmap_panel(
-                title="Range Load Duration",
-                description="The handle duration of range load",
+                title="Region Load Duration",
+                description="The handle duration of region load",
                 yaxis=yaxis(format=UNITS.SECONDS),
                 metric="in_memory_engine_load_duration_secs_bucket",
             ),
             graph_panel(
-                title="Range Load Count",
-                description="The count of range loading per seconds",
+                title="Region Load Count",
+                description="The count of region loading per seconds",
                 yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
                 targets=[
                     target(
@@ -4288,14 +4288,14 @@ def RegionCacheMemoryEngine() -> RowPanel:
     layout.row(
         [
             heatmap_panel(
-                title="Range Eviction Duration",
-                description="The handle duration of range eviction",
+                title="Region Eviction Duration",
+                description="The handle duration of region eviction",
                 yaxis=yaxis(format=UNITS.SECONDS),
                 metric="in_memory_engine_eviction_duration_secs_bucket",
             ),
             graph_panel(
-                title="Range Eviction Count",
-                description="The count of range eviction per seconds",
+                title="Region Eviction Count",
+                description="The count of region eviction per seconds",
                 yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
                 targets=[
                     target(
@@ -4312,9 +4312,9 @@ def RegionCacheMemoryEngine() -> RowPanel:
     layout.row(
         heatmap_panel_graph_panel_histogram_quantile_pairs(
             heatmap_title="Write duration",
-            heatmap_description="The time consumed of write in range cache engine",
-            graph_title="99% Range cache engine write duration per server",
-            graph_description="The time consumed of write in range cache engine per TiKV instance",
+            heatmap_description="The time consumed of write in region cache engine",
+            graph_title="99% In-memory engine write duration per server",
+            graph_description="The time consumed of write in region cache engine per TiKV instance",
             graph_by_labels=["instance"],
             graph_hides=["count", "avg"],
             yaxis_format=UNITS.SECONDS,
@@ -4324,9 +4324,9 @@ def RegionCacheMemoryEngine() -> RowPanel:
     layout.row(
         heatmap_panel_graph_panel_histogram_quantile_pairs(
             heatmap_title="Prepare for write duration",
-            heatmap_description="The time consumed of prepare for write in range cache engine",
-            graph_title="99% Range cache engine prepare for write duration per server",
-            graph_description="The time consumed of prepare for write in range cache engine per TiKV instance",
+            heatmap_description="The time consumed of prepare for write in the in-memory engine",
+            graph_title="99% In-memory engine prepare for write duration per server",
+            graph_description="The time consumed of prepare for write in the in-memory engine per TiKV instance",
             graph_by_labels=["instance"],
             graph_hides=["count", "avg"],
             yaxis_format=UNITS.SECONDS,
@@ -9276,7 +9276,7 @@ dashboard = Dashboard(
         RaftEngine(),
         RocksDB(),
         Titan(),
-        RegionCacheMemoryEngine(),
+        InMemoryEngine(),
         # Scheduler and Read Pools
         FlowControl(),
         Scheduler(),

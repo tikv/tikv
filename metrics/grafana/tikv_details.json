@@ -37433,7 +37433,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The count of different types of range",
+          "description": "The count of different types of region",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -37520,7 +37520,7 @@
           "thresholds": [],
           "timeFrom": null,
           "timeShift": null,
-          "title": "Range Count",
+          "title": "Region Count",
           "tooltip": {
             "msResolution": true,
             "shared": true,
@@ -37566,7 +37566,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The memory usage of the range cache memory engine",
+          "description": "The memory usage of the in-memory engine",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -37844,7 +37844,7 @@
           },
           "dataFormat": "tsbuckets",
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The handle duration of range gc",
+          "description": "The handle duration of region gc",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -37899,7 +37899,7 @@
           ],
           "timeFrom": null,
           "timeShift": null,
-          "title": "Range GC Duration",
+          "title": "Region GC Duration",
           "tooltip": {
             "msResolution": true,
             "shared": true,
@@ -37948,7 +37948,7 @@
           },
           "dataFormat": "tsbuckets",
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The handle duration of range load",
+          "description": "The handle duration of region load",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -38003,7 +38003,7 @@
           ],
           "timeFrom": null,
           "timeShift": null,
-          "title": "Range Load Duration",
+          "title": "Region Load Duration",
           "tooltip": {
             "msResolution": true,
             "shared": true,
@@ -38040,7 +38040,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The count of range loading per seconds",
+          "description": "The count of region loading per seconds",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -38127,7 +38127,7 @@
           "thresholds": [],
           "timeFrom": null,
           "timeShift": null,
-          "title": "Range Load Count",
+          "title": "Region Load Count",
           "tooltip": {
             "msResolution": true,
             "shared": true,
@@ -38185,7 +38185,7 @@
           },
           "dataFormat": "tsbuckets",
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The handle duration of range eviction",
+          "description": "The handle duration of region eviction",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -38240,7 +38240,7 @@
           ],
           "timeFrom": null,
           "timeShift": null,
-          "title": "Range Eviction Duration",
+          "title": "Region Eviction Duration",
           "tooltip": {
             "msResolution": true,
             "shared": true,
@@ -38277,7 +38277,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The count of range eviction per seconds",
+          "description": "The count of region eviction per seconds",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -38364,7 +38364,7 @@
           "thresholds": [],
           "timeFrom": null,
           "timeShift": null,
-          "title": "Range Eviction Count",
+          "title": "Region Eviction Count",
           "tooltip": {
             "msResolution": true,
             "shared": true,
@@ -38422,7 +38422,7 @@
           },
           "dataFormat": "tsbuckets",
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The time consumed of write in range cache engine",
+          "description": "The time consumed of write in region cache engine",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -38514,7 +38514,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The time consumed of write in range cache engine per TiKV instance",
+          "description": "The time consumed of write in region cache engine per TiKV instance",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -38669,7 +38669,7 @@
           "thresholds": [],
           "timeFrom": null,
           "timeShift": null,
-          "title": "99% Range cache engine write duration per server",
+          "title": "99% In-memory engine write duration per server",
           "tooltip": {
             "msResolution": true,
             "shared": true,
@@ -38727,7 +38727,7 @@
           },
           "dataFormat": "tsbuckets",
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The time consumed of prepare for write in range cache engine",
+          "description": "The time consumed of prepare for write in the in-memory engine",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -38819,7 +38819,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The time consumed of prepare for write in range cache engine per TiKV instance",
+          "description": "The time consumed of prepare for write in the in-memory engine per TiKV instance",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -38974,7 +38974,7 @@
           "thresholds": [],
           "timeFrom": null,
           "timeShift": null,
-          "title": "99% Range cache engine prepare for write duration per server",
+          "title": "99% In-memory engine prepare for write duration per server",
           "tooltip": {
             "msResolution": true,
             "shared": true,
@@ -39408,7 +39408,7 @@
       "targets": [],
       "timeFrom": null,
       "timeShift": null,
-      "title": "Range Cache Memory Engine",
+      "title": "In Memory Engine",
       "transformations": [],
       "transparent": false,
       "type": "row"
