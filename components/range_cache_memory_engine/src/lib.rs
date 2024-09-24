@@ -5,6 +5,7 @@
 #![allow(internal_features)]
 #![feature(core_intrinsics)]
 #![feature(slice_pattern)]
+#![feature(trait_alias)]
 
 use std::{sync::Arc, time::Duration};
 
@@ -40,6 +41,7 @@ pub use keys::{
 };
 pub use metrics::flush_range_cache_engine_statistics;
 pub use range_manager::{RangeCacheStatus, RegionState};
+pub use read::RangeCacheSnapshot;
 pub use statistics::Statistics as RangeCacheMemoryEngineStatistics;
 use txn_types::TimeStamp;
 pub use write_batch::RangeCacheWriteBatch;
@@ -56,6 +58,10 @@ pub struct RangeCacheEngineConfig {
     pub enabled: bool,
     pub gc_interval: ReadableDuration,
     pub load_evict_interval: ReadableDuration,
+    // TODO(SpadeA): ultimately we only expose one memory limit to user.
+    // When memory usage reaches this amount, no further load will be performed.
+    pub stop_load_limit_threshold: Option<ReadableSize>,
+    // When memory usage reaches this amount, we start to pick some ranges to evict.
     pub soft_limit_threshold: Option<ReadableSize>,
     pub hard_limit_threshold: Option<ReadableSize>,
     pub expected_region_size: Option<ReadableSize>,
@@ -69,12 +75,13 @@ impl Default for RangeCacheEngineConfig {
         Self {
             enabled: false,
             gc_interval: ReadableDuration(Duration::from_secs(180)),
+            stop_load_limit_threshold: None,
             // Each load/evict operation should run within five minutes.
             load_evict_interval: ReadableDuration(Duration::from_secs(300)),
             soft_limit_threshold: None,
             hard_limit_threshold: None,
             expected_region_size: None,
-            mvcc_amplification_threshold: 10,
+            mvcc_amplification_threshold: 100,
         }
     }
 }
@@ -95,6 +102,20 @@ impl RangeCacheEngineConfig {
             ));
         }
 
+        if self.stop_load_limit_threshold.is_none() {
+            self.stop_load_limit_threshold = self.soft_limit_threshold;
+        }
+
+        if self.stop_load_limit_threshold.as_ref().unwrap()
+            > self.soft_limit_threshold.as_ref().unwrap()
+        {
+            return Err(Error::InvalidArgument(format!(
+                "stop-load-limit-threshold {:?} is larger to soft-limit-threshold {:?}",
+                self.stop_load_limit_threshold.as_ref().unwrap(),
+                self.soft_limit_threshold.as_ref().unwrap()
+            )));
+        }
+
         if self.soft_limit_threshold.as_ref().unwrap()
             >= self.hard_limit_threshold.as_ref().unwrap()
         {
@@ -106,6 +127,10 @@ impl RangeCacheEngineConfig {
         }
 
         Ok(())
+    }
+
+    pub fn stop_load_limit_threshold(&self) -> usize {
+        self.stop_load_limit_threshold.map_or(0, |r| r.0 as usize)
     }
 
     pub fn soft_limit_threshold(&self) -> usize {
@@ -129,6 +154,7 @@ impl RangeCacheEngineConfig {
             gc_interval: ReadableDuration(Duration::from_secs(180)),
             load_evict_interval: ReadableDuration(Duration::from_secs(300)), /* Should run within
                                                                               * five minutes */
+            stop_load_limit_threshold: Some(ReadableSize::gb(1)),
             soft_limit_threshold: Some(ReadableSize::gb(1)),
             hard_limit_threshold: Some(ReadableSize::gb(2)),
             expected_region_size: Some(ReadableSize::mb(20)),
