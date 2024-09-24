@@ -37,6 +37,8 @@ macro_rules! match_template_collator {
                 Latin1Bin => CollatorLatin1Bin,
                 GbkBin => CollatorGbkBin,
                 GbkChineseCi => CollatorGbkChineseCi,
+                Gb18030Bin => CollatorGb18030Bin,
+                Gb18030ChineseCi => CollatorGb18030ChineseCi,
             ],
             $($tail)*
          }
@@ -81,6 +83,7 @@ macro_rules! match_template_charset {
                  Utf8Mb4 => EncodingUtf8Mb4,
                  Latin1 => EncodingLatin1,
                  Gbk => EncodingGbk,
+                 Gb18030 => EncodingGb18030,
                  Binary => EncodingBinary,
                  Ascii => EncodingAscii,
             ],

@@ -1,10 +1,9 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{
-    cmp,
     collections::{BTreeMap, HashSet},
     num::NonZeroUsize,
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, Ordering},
         Arc,
     },
     time::{Duration, Instant},
@@ -12,12 +11,15 @@ use std::{
 
 use collections::HashMap;
 use crossbeam::sync::ShardedLock;
+use engine_traits::{CacheRegion, EvictReason};
 use kvproto::metapb::Region;
 use parking_lot::Mutex;
 use raftstore::coprocessor::RegionInfoProvider;
-use tikv_util::{info, smoother::Smoother};
+use slog_global::error;
+use tikv_util::{info, smoother::Smoother, worker::Scheduler};
+use tokio::sync::mpsc;
 
-use crate::memory_controller::MemoryController;
+use crate::{memory_controller::MemoryController, range_manager::AsyncFnOnce, BackgroundTask};
 
 /// Do not evict a region if has been cached for less than this duration.
 pub const DEFAULT_EVICT_MIN_DURATION: Duration = Duration::from_secs(60 * 5);
@@ -28,12 +30,11 @@ const ITERATED_COUNT_FILTER_FACTOR: usize = 20;
 
 #[derive(Clone)]
 pub(crate) struct RangeStatsManager {
-    num_regions: Arc<AtomicUsize>,
     info_provider: Arc<dyn RegionInfoProvider>,
     checking_top_regions: Arc<AtomicBool>,
     region_loaded_at: Arc<ShardedLock<BTreeMap<u64, Instant>>>,
     evict_min_duration: Duration,
-    expected_region_size: usize,
+    pub(crate) expected_region_size: usize,
     // Moving average of amplification reduction. Amplification reduction is the reduced
     // multiple before and after the cache. When a new top region (of course, not cached) comes in,
     // this moving average number is used to estimate the mvcc amplification after cache so we can
@@ -42,6 +43,9 @@ pub(crate) struct RangeStatsManager {
     mvcc_amplification_threshold: usize,
 
     mvcc_amplification_record: Arc<Mutex<HashMap<u64, f64>>>,
+
+    load_evict_interval: Duration,
+    last_load_evict_time: Arc<Mutex<Instant>>,
 }
 
 impl RangeStatsManager {
@@ -53,14 +57,13 @@ impl RangeStatsManager {
     /// * `evict_min_duration` - do not evict regions that have been loaded for
     ///   less than this duration.
     pub fn new(
-        num_regions: usize,
         evict_min_duration: Duration,
         expected_region_size: usize,
         mvcc_amplification_threshold: usize,
+        load_evict_interval: Duration,
         info_provider: Arc<dyn RegionInfoProvider>,
     ) -> Self {
         RangeStatsManager {
-            num_regions: Arc::new(AtomicUsize::new(num_regions)),
             info_provider,
             checking_top_regions: Arc::new(AtomicBool::new(false)),
             region_loaded_at: Arc::new(ShardedLock::new(BTreeMap::new())),
@@ -69,71 +72,33 @@ impl RangeStatsManager {
             evict_min_duration,
             expected_region_size,
             mvcc_amplification_threshold,
+            load_evict_interval,
+            last_load_evict_time: Arc::new(Mutex::new(Instant::now())),
         }
+    }
+
+    /// If false is returned, it is not ready to check.
+    pub fn ready_for_auto_load_and_evict(&self) -> bool {
+        // The auto load and evict process can block for some time (mainly waiting for
+        // eviction). To avoid too check after check immediately, we check the elapsed
+        // time after the last check.
+        // Region stats update duration is one minute by default, to avoid two checks
+        // using the same region stats as much as possible, we set a min check interval
+        // of 1.5 minutes(considers there are not just one region for stat collection).
+        self.last_load_evict_time.lock().elapsed()
+            > Duration::max(self.load_evict_interval / 2, Duration::from_secs(90))
+            && !self.set_checking_top_regions(true)
+    }
+
+    pub fn complete_auto_load_and_evict(&self) {
+        *self.last_load_evict_time.lock() = Instant::now();
+        self.set_checking_top_regions(false);
     }
 
     /// Prevents two instances of this from running concurrently.
     /// Return the previous checking status.
-    pub fn set_checking_top_regions(&self, v: bool) -> bool {
+    fn set_checking_top_regions(&self, v: bool) -> bool {
         self.checking_top_regions.swap(v, Ordering::Relaxed)
-    }
-
-    fn set_max_num_regions(&self, v: usize) {
-        self.num_regions.store(v, Ordering::Relaxed);
-    }
-
-    /// Returns the maximum number of regions that can be cached.
-    ///
-    /// See also `adjust_max_num_regions` below.
-    pub fn max_num_regions(&self) -> usize {
-        self.num_regions.load(Ordering::Relaxed)
-    }
-
-    /// Collect candidates for eviction sorted by activity in creasing order:
-    ///
-    /// 1. Get all the regions sorted (decreasing) by region activity using
-    ///    [raftstore::coprocessor::RegionCollector::handle_get_top_regions].
-    /// 2. Remove all regions where `is_cached_pred` returns false when passed
-    ///    the region's range or those that have been loaded for less than
-    ///    `self.evict_min_duration`.
-    /// 3. Reverse the list so that it is now sorted in the order of increasing
-    ///    activity.
-    /// 4. Store the results in `ranges_out` using [Vec::extend].
-    pub fn collect_candidates_for_eviction<F>(
-        &self,
-        regions_out: &mut Vec<(Region, u64)>,
-        is_cached_pred: F,
-    ) where
-        F: Fn(&Region) -> bool,
-    {
-        // Gets all of the regions, sorted by activity.
-        let all_regions = self.info_provider.get_top_regions(None).unwrap();
-        let regions_loaded = self.region_loaded_at.read().unwrap();
-        regions_out.extend(
-            all_regions
-                .iter()
-                .filter_map(|(region, approx_size)| {
-                    is_cached_pred(region)
-                        .then(|| {
-                            match regions_loaded.get(&region.get_id()) {
-                                // Do not evict ranges that were loaded less than
-                                // `EVICT_MIN_DURATION` ago.
-                                Some(&time_loaded)
-                                    if Instant::now() - time_loaded < self.evict_min_duration =>
-                                {
-                                    None
-                                }
-                                Some(_) | None =>
-                                // None indicates range loaded from a hint, not by this manager.
-                                {
-                                    Some((region.clone(), approx_size.approximate_size))
-                                }
-                            }
-                        })
-                        .flatten()
-                })
-                .rev(),
-        );
     }
 
     /// This method should be called when `evicted_range` is succesfully evicted
@@ -147,48 +112,6 @@ impl RangeStatsManager {
     /// find another way to avoid calling `find_region_by_key` in a loop.
     pub fn handle_region_evicted(&self, region: &Region) {
         self.region_loaded_at.write().unwrap().remove(&region.id);
-    }
-
-    /// Attempt to adjust the maximum number of cached regions based on memory
-    /// usage:
-    ///
-    /// If `curr_memory_usage` is LESS THAN `threshold` by 3 *
-    /// self.expected_region_size bytes, *increase* the maximum
-    /// by `threshold - curr_memory_usage / 3 * self.expected_region_size`.
-    ///
-    /// If `curr_memory_usage` is GREATER THAN `threshold`, *decrease* the
-    /// maximum by `(curr_memory_usage - threshold) /
-    /// self.expected_region_size`.
-    pub fn adjust_max_num_regions(&self, curr_memory_usage: usize, threshold: usize) {
-        match curr_memory_usage.cmp(&threshold) {
-            cmp::Ordering::Less => {
-                let room_to_grow = threshold - curr_memory_usage;
-                if room_to_grow > self.expected_region_size * 3 {
-                    let curr_num_regions = self.max_num_regions();
-                    let next_num_regions =
-                        curr_num_regions + room_to_grow / (self.expected_region_size * 3);
-                    info!("ime increasing number of top regions to cache";
-                        "from" => curr_num_regions,
-                        "to" => next_num_regions,
-                    );
-                    self.set_max_num_regions(next_num_regions);
-                }
-            }
-            cmp::Ordering::Greater => {
-                let to_shrink_by = curr_memory_usage - threshold;
-                let curr_num_regions = self.max_num_regions();
-                let next_num_regions = curr_num_regions
-                    .checked_sub(1.max(to_shrink_by / self.expected_region_size))
-                    .unwrap_or(1)
-                    .max(1);
-                info!("ime decreasing number of top regions to cache";
-                    "from" => curr_num_regions,
-                    "to" => next_num_regions,
-                );
-                self.set_max_num_regions(next_num_regions);
-            }
-            _ => (),
-        };
     }
 
     /// Collects regions to load and evict based on region stat, mvcc
@@ -206,6 +129,7 @@ impl RangeStatsManager {
     /// (Regions to load, Regions to evict)
     pub fn collect_regions_to_load_and_evict(
         &self,
+        current_region_count: usize,
         cached_region_ids: Vec<u64>,
         memory_controller: &MemoryController,
     ) -> (Vec<Region>, Vec<Region>) {
@@ -244,10 +168,17 @@ impl RangeStatsManager {
             "ma_mvcc_amplification_reduction" => ma_mvcc_amplification_reduction,
         );
 
-        info!("ime collect_changed_ranges"; "num_regions" => self.max_num_regions());
+        // Use soft-limit-threshold rather than stop-load-limit-threshold as there might
+        // be some regions to be evicted.
+        let expected_new_count = (memory_controller
+            .soft_limit_threshold()
+            .saturating_sub(memory_controller.mem_usage()))
+            / self.expected_region_size;
+        let expected_num_regions = current_region_count + expected_new_count;
+        info!("ime collect_changed_ranges"; "num_regions" => expected_num_regions);
         let curr_top_regions = self
             .info_provider
-            .get_top_regions(Some(NonZeroUsize::try_from(self.max_num_regions()).unwrap()))
+            .get_top_regions(Some(NonZeroUsize::try_from(expected_num_regions).unwrap()))
             .unwrap() // TODO (afeinberg): Potentially custom error handling here.
             .iter()
             .map(|(r, region_stats)| (r.id, (r.clone(), region_stats.clone())))
@@ -381,15 +312,129 @@ impl RangeStatsManager {
         };
         (regions_to_load, regions_to_evict)
     }
+
+    // Evict regions with less read flow until the memory usage is below the soft
+    // limit threshold.
+    pub(crate) async fn evict_on_soft_limit_reached<F>(
+        &self,
+        mut evict_region: F,
+        delete_range_scheduler: &Scheduler<BackgroundTask>,
+        cached_region_ids: Vec<u64>,
+        memory_controller: &MemoryController,
+    ) where
+        F: FnMut(
+            &CacheRegion,
+            EvictReason,
+            Option<Box<dyn AsyncFnOnce + Send + Sync>>,
+        ) -> Vec<CacheRegion>,
+    {
+        // Get regions' stat of the cached region and sort them by next + prev in
+        // descending order.
+        let regions_activity = self
+            .info_provider
+            .get_regions_stat(cached_region_ids.clone())
+            .unwrap();
+        if regions_activity.is_empty() {
+            return;
+        }
+
+        // Use the average mvcc amplification to filter the regions with high mvcc
+        // amplification
+        let avg_mvcc_amplification = regions_activity
+            .iter()
+            .map(|(_, ra)| ra.cop_detail.mvcc_amplification())
+            .sum::<f64>()
+            / regions_activity.len() as f64;
+
+        let evict_candidates: Vec<_> = {
+            let mut evict_candidates = regions_activity;
+            info!(
+                "ime evict candidate count before filter";
+                "count" => evict_candidates.len(),
+            );
+            let mut filter_by_mvcc_amplification = 0;
+            evict_candidates.retain(|(_, ra)| {
+                // Do not evict regions with high mvcc amplification
+                if ra.cop_detail.mvcc_amplification() > avg_mvcc_amplification {
+                    filter_by_mvcc_amplification += 1;
+                    return false;
+                }
+                true
+            });
+            evict_candidates.sort_by(|a, b| {
+                let next_prev_a = a.1.cop_detail.iterated_count();
+                let next_prev_b = b.1.cop_detail.iterated_count();
+                next_prev_a.cmp(&next_prev_b)
+            });
+
+            info!(
+                "ime evict candidate count after filter";
+                "count" => evict_candidates.len(),
+                "filter_by_mvcc_amplification" => filter_by_mvcc_amplification,
+            );
+
+            evict_candidates.into_iter().map(|(r, _)| r).collect()
+        };
+        // Evict two regions each time to reduce the probability that an un-dropped
+        // ongoing snapshot blocks the process
+        for regions in evict_candidates.chunks(2) {
+            let mut deleteable_regions = vec![];
+
+            let (tx, mut rx) = mpsc::channel(3);
+            for r in regions {
+                info!(
+                    "ime evict on soft limit reached";
+                    "region_to_evict" => ?r,
+                );
+
+                let tx_clone = tx.clone();
+                deleteable_regions.extend(evict_region(
+                    &CacheRegion::from_region(r),
+                    EvictReason::MemoryLimitReached,
+                    // This callback will be executed when eviction finishes at `on_delete_regions`
+                    // and when the reletive rx.recv() returns, we know some memory are freed.
+                    Some(Box::new(move || {
+                        Box::pin(async move {
+                            let _ = tx_clone.send(()).await;
+                        })
+                    })),
+                ));
+                self.handle_region_evicted(r);
+            }
+            if !deleteable_regions.is_empty() {
+                if let Err(e) = delete_range_scheduler
+                    .schedule_force(BackgroundTask::DeleteRegions(deleteable_regions))
+                {
+                    error!(
+                        "ime schedule deletet range failed";
+                        "err" => ?e,
+                    );
+                    assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
+                }
+            }
+            for _ in 0..regions.len() {
+                // It's better to use `timeout(Duration, rx.recv())` but which needs to use
+                // tokio runtime with timer enabled while yatp does not.
+                if rx.recv().await.is_none() {
+                    break;
+                }
+            }
+            if !memory_controller.reached_stop_load_limit() {
+                return;
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 pub mod tests {
+    use futures::executor::block_on;
     use pd_client::{RegionStat, RegionWriteCfCopDetail};
     use raftstore::coprocessor::{self, region_info_accessor::TopRegions, RegionInfoProvider};
     use tikv_util::{
         box_err,
         config::{ReadableSize, VersionTrack},
+        worker::dummy_scheduler,
     };
 
     use super::*;
@@ -474,20 +519,20 @@ pub mod tests {
         });
         // 10 ms min duration eviction for testing purposes.
         let rsm = RangeStatsManager::new(
-            10,
             Duration::from_millis(10),
             RangeCacheEngineConfig::config_for_test().expected_region_size(),
             10,
+            Duration::from_secs(100),
             sim.clone(),
         );
-        let (added, removed) = rsm.collect_regions_to_load_and_evict(vec![], &mc);
+        let (added, removed) = rsm.collect_regions_to_load_and_evict(0, vec![], &mc);
         assert_eq!(&added, &[region_1.clone()]);
         assert!(removed.is_empty());
         let top_regions = vec![(region_2.clone(), new_region_stat(1000, 8))];
         let region_stats = vec![(region_1.clone(), new_region_stat(20, 10))];
         sim.set_top_regions(&top_regions);
         sim.set_region_stats(&region_stats);
-        let (added, removed) = rsm.collect_regions_to_load_and_evict(vec![1], &mc);
+        let (added, removed) = rsm.collect_regions_to_load_and_evict(0, vec![1], &mc);
         assert_eq!(&added, &[region_2.clone()]);
         assert!(removed.is_empty());
         let region_3 = new_region(3, b"k05", b"k06");
@@ -509,7 +554,7 @@ pub mod tests {
         ];
         sim.set_top_regions(&top_regions);
         sim.set_region_stats(&region_stats);
-        let (added, removed) = rsm.collect_regions_to_load_and_evict(vec![1, 2], &mc);
+        let (added, removed) = rsm.collect_regions_to_load_and_evict(0, vec![1, 2], &mc);
         assert!(removed.is_empty());
         assert_eq!(
             &added,
@@ -533,7 +578,7 @@ pub mod tests {
         ];
         sim.set_top_regions(&vec![]);
         sim.set_region_stats(&region_stats);
-        let (_, removed) = rsm.collect_regions_to_load_and_evict(vec![1, 2, 3, 4, 5, 6, 7], &mc);
+        let (_, removed) = rsm.collect_regions_to_load_and_evict(0, vec![1, 2, 3, 4, 5, 6, 7], &mc);
         // `region_1` is no longer needed to cached, but since it was loaded less
         // than 10 ms ago, it should not be included in the removed ranges.
         assert!(removed.is_empty());
@@ -542,79 +587,140 @@ pub mod tests {
 
         sim.set_top_regions(&vec![]);
         sim.set_region_stats(&region_stats);
-        let (_, removed) = rsm.collect_regions_to_load_and_evict(vec![1, 2, 3, 4, 5, 6, 7], &mc);
+        let (_, removed) = rsm.collect_regions_to_load_and_evict(0, vec![1, 2, 3, 4, 5, 6, 7], &mc);
         assert_eq!(&removed, &[region_1.clone()]);
 
         let top_regions = vec![(region_8.clone(), new_region_stat(4000, 10))];
         sim.set_top_regions(&top_regions);
         sim.set_region_stats(&region_stats);
         mc.acquire(2000);
-        let (_, removed) = rsm.collect_regions_to_load_and_evict(vec![2, 3, 4, 5, 6, 7], &mc);
+        let (_, removed) = rsm.collect_regions_to_load_and_evict(0, vec![2, 3, 4, 5, 6, 7], &mc);
         assert_eq!(&removed, &[region_3.clone()]);
     }
 
-    // todo(SpadeA): fix this in the next PR (optimize eviction when soft
-    // limit reached)
-    // #[test]
-    // fn test_collect_candidates_for_eviction() {
-    //     let skiplist_engine = SkiplistEngine::new();
-    //     let mut config = RangeCacheEngineConfig::config_for_test();
-    //     config.stop_load_limit_threshold = Some(ReadableSize::kb(1));
-    //     let config = Arc::new(VersionTrack::new(config));
-    //     let mc = MemoryController::new(config, skiplist_engine);
+    #[test]
+    fn test_collect_candidates_for_eviction() {
+        let skiplist_engine = SkiplistEngine::new();
+        let mut config = RangeCacheEngineConfig::config_for_test();
+        config.stop_load_limit_threshold = Some(ReadableSize::kb(1));
+        let config = Arc::new(VersionTrack::new(config));
+        let mc = MemoryController::new(config, skiplist_engine);
+        let (scheduler, _rx) = dummy_scheduler();
 
-    //     fn make_region_vec(rs: &[&Region]) -> TopRegions {
-    //         let mut stat = RegionStat::default();
-    //         stat.approximate_size = 42;
-    //         rs.iter().map(|&r| (r.clone(), stat)).collect::<Vec<_>>()
-    //     }
+        fn make_region_vec(rs: &[Region], stats: &[RegionStat]) -> TopRegions {
+            rs.iter()
+                .zip(stats.iter())
+                .map(|(r, stat)| (r.clone(), stat.clone()))
+                .collect::<Vec<_>>()
+        }
 
-    //     let region_1 = new_region(1, b"k1", b"k2");
-    //     let region_2 = new_region(2, b"k3", b"k4");
-    //     let region_3 = new_region(3, b"k5", b"k6");
-    //     let region_4 = new_region(4, b"k7", b"k8");
-    //     let region_5 = new_region(5, b"k9", b"k10");
-    //     let region_6 = new_region(6, b"k11", b"k12");
+        let region_1 = new_region(1, b"k01", b"k02");
+        let region_2 = new_region(2, b"k03", b"k04");
+        let region_3 = new_region(3, b"k05", b"k06");
+        let region_4 = new_region(4, b"k07", b"k08");
+        let region_5 = new_region(5, b"k09", b"k10");
+        let region_6 = new_region(6, b"k11", b"k12");
+        let regions = vec![region_1, region_2, region_3, region_4, region_5, region_6];
 
-    //     let all_regions = make_region_vec(&[
-    //         &region_1, &region_2, &region_3, &region_4, &region_5, &region_6,
-    //     ]);
+        let region_stats = vec![
+            new_region_stat(100, 6),
+            new_region_stat(10000, 1000),
+            new_region_stat(100000, 100000),
+            new_region_stat(100, 50), // will be evicted
+            new_region_stat(1000, 120),
+            new_region_stat(200, 120), // will be evicted
+        ];
 
-    //     let sim = Arc::new(RegionInfoSimulator {
-    //         regions: Mutex::new(all_regions.clone()),
-    //         region_stats: Mutex::default(),
-    //     });
-    //     // 10 ms min duration eviction for testing purposes.
-    //     let rsm = RangeStatsManager::new(
-    //         5,
-    //         Duration::from_millis(10),
-    //         RangeCacheEngineConfig::config_for_test().expected_region_size(),
-    //         10,
-    //         sim.clone(),
-    //     );
-    //     let r_i_p: Arc<dyn RegionInfoProvider> = sim.clone();
-    //     let check_is_cached = move |r: &Region| -> bool {
-    //         r_i_p.find_region_by_key(&r.start_key).unwrap().get_id() <= 5
-    //     };
-    //     let mut _added = Vec::new();
-    //     let mut _removed = Vec::new();
-    //     rsm.collect_regions_to_load_and_evict(&mut _added, vec![], &mc);
-    //     let mut candidates_for_eviction = Vec::new();
-    //     rsm.collect_candidates_for_eviction(&mut candidates_for_eviction,
-    // &check_is_cached);     assert!(candidates_for_eviction.is_empty());
-    //     std::thread::sleep(Duration::from_millis(100));
-    //     rsm.collect_candidates_for_eviction(&mut candidates_for_eviction,
-    // &check_is_cached);     let expected_candidates_for_eviction =
-    // all_regions         .iter()
-    //         .rev()
-    //         .filter_map(|(r, s)| {
-    //             if r.get_id() <= 5 {
-    //                 Some((r.clone(), *s))
-    //             } else {
-    //                 None
-    //             }
-    //         })
-    //         .collect::<Vec<_>>();
-    //     assert_eq!(expected_candidates_for_eviction,
-    // candidates_for_eviction); }
+        let all_regions = make_region_vec(&regions, &region_stats);
+        let region_stats: HashMap<u64, (Region, RegionStat)> = all_regions
+            .iter()
+            .map(|top_region| {
+                (
+                    top_region.0.id,
+                    (top_region.0.clone(), top_region.1.clone()),
+                )
+            })
+            .collect();
+
+        let sim = Arc::new(RegionInfoSimulator {
+            regions: Mutex::new(all_regions),
+            region_stats: Mutex::new(region_stats),
+        });
+        // 10 ms min duration eviction for testing purposes.
+        let rsm = RangeStatsManager::new(
+            Duration::from_millis(10),
+            RangeCacheEngineConfig::config_for_test().expected_region_size(),
+            10,
+            Duration::from_secs(10),
+            sim.clone(),
+        );
+        rsm.collect_regions_to_load_and_evict(0, vec![], &mc);
+        std::thread::sleep(Duration::from_millis(100));
+
+        let evicted_regions = Arc::new(Mutex::new(vec![]));
+        let cbs = Arc::new(Mutex::new(vec![]));
+
+        let evicted_regions2 = evicted_regions.clone();
+        let cbs2 = cbs.clone();
+        let evict_fn = move |evict_region: &CacheRegion,
+                             _: EvictReason,
+                             cb: Option<Box<dyn AsyncFnOnce + Send + Sync>>|
+              -> Vec<CacheRegion> {
+            evicted_regions2.lock().push(evict_region.id);
+            cbs2.lock().push(cb.unwrap());
+            vec![]
+        };
+
+        let handle = std::thread::spawn(move || {
+            block_on(async {
+                rsm.evict_on_soft_limit_reached(evict_fn, &scheduler, vec![1, 2, 3, 4, 5, 6], &mc)
+                    .await
+            });
+        });
+
+        let t = Instant::now();
+        while t.elapsed() < Duration::from_secs(2) {
+            std::thread::sleep(Duration::from_millis(100));
+            let mut cb_lock = cbs.lock();
+            if cb_lock.len() == 2 {
+                let evicted_regions_lock = evicted_regions.lock();
+                assert_eq!(*evicted_regions_lock, vec![4, 6]);
+                block_on(async {
+                    cb_lock.pop().unwrap()().await;
+                    cb_lock.pop().unwrap()().await;
+                });
+                break;
+            }
+        }
+
+        let _ = handle.join();
+    }
+
+    #[test]
+    fn test_check_after_check() {
+        let sim = Arc::new(RegionInfoSimulator {
+            regions: Mutex::new(vec![]),
+            region_stats: Mutex::new(HashMap::default()),
+        });
+        let mgr = RangeStatsManager::new(
+            Duration::from_secs(120),
+            100,
+            10,
+            Duration::from_secs(120),
+            sim,
+        );
+
+        // Interval is not enough
+        assert!(!mgr.ready_for_auto_load_and_evict());
+        *mgr.last_load_evict_time.lock() = Instant::now() - Duration::from_secs(120);
+        assert!(mgr.ready_for_auto_load_and_evict());
+        // Checking
+        assert!(!mgr.ready_for_auto_load_and_evict());
+
+        mgr.complete_auto_load_and_evict();
+        // Interval is not enough
+        assert!(!mgr.ready_for_auto_load_and_evict());
+        *mgr.last_load_evict_time.lock() = Instant::now() - Duration::from_secs(120);
+        assert!(mgr.ready_for_auto_load_and_evict());
+    }
 }

@@ -1,6 +1,6 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::HashMap, fmt::Display, sync::Arc, time::Duration};
+use std::{fmt::Display, sync::Arc, time::Duration};
 
 use bytes::Bytes;
 use crossbeam::{
@@ -12,17 +12,19 @@ use engine_traits::{
     CacheRegion, EvictReason, IterOptions, Iterable, Iterator, MiscExt, RangeHintService,
     SnapshotMiscExt, CF_DEFAULT, CF_WRITE, DATA_CFS,
 };
-use hex::FromHexError;
+use keys::{origin_end_key, origin_key};
 use pd_client::{PdClient, RpcClient};
 use raftstore::coprocessor::RegionInfoProvider;
 use slog_global::{error, info, warn};
+use strum::EnumCount;
 use tikv_util::{
-    config::ReadableSize,
+    config::{ReadableSize, VersionTrack},
     future::block_on_timeout,
     keybuilder::KeyBuilder,
     time::Instant,
     worker::{Builder, Runnable, RunnableWithTimer, ScheduleError, Scheduler, Worker},
 };
+use tokio::sync::mpsc;
 use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 use yatp::Remote;
 
@@ -37,13 +39,13 @@ use crate::{
         GC_FILTERED_STATIC, RANGE_CACHE_COUNT, RANGE_CACHE_MEMORY_USAGE, RANGE_GC_TIME_HISTOGRAM,
         RANGE_LOAD_TIME_HISTOGRAM,
     },
-    range_manager::{CacheRegionMeta, RegionState},
+    range_manager::{AsyncFnOnce, CacheRegionMeta, RegionState},
     range_stats::{RangeStatsManager, DEFAULT_EVICT_MIN_DURATION},
     region_label::{
-        KeyRangeRule, LabelRule, RegionLabelAddedCb, RegionLabelRulesManager,
-        RegionLabelServiceBuilder,
+        LabelRule, RegionLabelChangedCallback, RegionLabelRulesManager, RegionLabelServiceBuilder,
     },
     write_batch::RangeCacheWriteBatchEntry,
+    RangeCacheEngineConfig,
 };
 
 // 5 seconds should be long enough for getting a TSO from PD.
@@ -162,46 +164,41 @@ impl PdRangeHintService {
     /// label is removed or no longer set to always.
     pub fn start<F>(&self, remote: Remote<yatp::task::future::TaskCell>, range_manager_load_cb: F)
     where
-        F: Fn(&[u8], &[u8]) + Send + Sync + 'static,
+        F: Fn(&CacheRegion, bool) + Send + Sync + 'static,
     {
-        let parse_range = |key_range: &KeyRangeRule| {
-            let start = hex::decode(&key_range.start_key)?;
-            let end = hex::decode(&key_range.end_key)?;
-            Ok::<_, FromHexError>((start, end))
-        };
-
         let pd_client = self.0.clone();
-        let region_label_added_cb: RegionLabelAddedCb = Arc::new(move |label_rule: &LabelRule| {
-            if !label_rule
-                .labels
-                .iter()
-                .any(|e| e.key == CACHE_LABEL_RULE_KEY && e.value == CACHE_LABEL_RULE_ALWAYS)
-            {
-                // not related to caching, skip.
-                return;
-            }
-            for key_range in &label_rule.data {
-                match parse_range(key_range) {
-                    Ok((start, end)) => {
-                        info!("ime requested to cache range";
-                            "start" => ?log_wrappers::Value(&start),
-                            "end" => ?log_wrappers::Value(&end));
-                        range_manager_load_cb(&start, &end);
-                    }
-                    Err(e) => {
-                        error!("ime unable to convert key_range rule to cache range"; "err" => ?e);
+        let region_label_changed_cb: RegionLabelChangedCallback = Arc::new(
+            move |label_rule: &LabelRule, is_add: bool| {
+                if !label_rule
+                    .labels
+                    .iter()
+                    .any(|e| e.key == CACHE_LABEL_RULE_KEY && e.value == CACHE_LABEL_RULE_ALWAYS)
+                {
+                    // not related to caching, skip.
+                    return;
+                }
+                for key_range in &label_rule.data {
+                    match CacheRegion::try_from(key_range) {
+                        Ok(cache_range) => {
+                            info!("ime requested to cache range"; "range" => ?&cache_range);
+                            range_manager_load_cb(&cache_range, is_add);
+                        }
+                        Err(e) => {
+                            error!("ime unable to convert key_range rule to cache range"; "error" => ?e);
+                        }
                     }
                 }
-            }
-        });
+            },
+        );
         let mut region_label_svc = RegionLabelServiceBuilder::new(
             Arc::new(RegionLabelRulesManager {
-                region_label_added_cb: Some(region_label_added_cb),
+                region_label_change_cb: Some(region_label_changed_cb),
                 ..RegionLabelRulesManager::default()
             }),
             pd_client,
         )
         .rule_filter_fn(|label_rule| {
+            info!("dbg rule"; "rule" => ?label_rule);
             label_rule
                 .labels
                 .iter()
@@ -217,10 +214,7 @@ impl BgWorkManager {
     pub fn new(
         core: Arc<RangeCacheMemoryEngineCore>,
         pd_client: Arc<dyn PdClient>,
-        gc_interval: Duration,
-        load_evict_interval: Duration,
-        expected_region_size: usize,
-        mvcc_amplification_threshold: usize,
+        config: Arc<VersionTrack<RangeCacheEngineConfig>>,
         memory_controller: Arc<MemoryController>,
         region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
     ) -> Self {
@@ -229,18 +223,17 @@ impl BgWorkManager {
             core.clone(),
             memory_controller,
             region_info_provider.clone(),
-            expected_region_size,
-            mvcc_amplification_threshold,
-            gc_interval,
+            &config,
             pd_client.clone(),
         );
+        let config = config.value();
         let scheduler = worker.start_with_timer("ime-bg-runner", runner);
 
         let (ticker, tx) = BgWorkManager::start_tick(
             scheduler.clone(),
             pd_client,
-            gc_interval,
-            load_evict_interval,
+            config.gc_interval.0,
+            config.load_evict_interval.0,
         );
 
         Self {
@@ -265,39 +258,65 @@ impl BgWorkManager {
     pub fn start_bg_hint_service(&self, range_hint_service: PdRangeHintService) {
         let core = self.core.clone();
         let region_info_provider = self.region_info_provider.clone();
-        range_hint_service.start(self.worker.remote(), move |start: &[u8], end: &[u8]| {
-            let Some(ref info_provider) = region_info_provider else {
-                warn!("ime region info provider is none, skip load pinned range.");
-                return;
-            };
-
-            let regions = match info_provider.get_regions_in_range(start, end) {
-                Ok(r) => r,
-                Err(e) => {
-                    warn!(
-                        "ime get regions in range failed"; "err" => ?e,
-                        "start" => ?log_wrappers::Value(start),
-                        "end" => ?log_wrappers::Value(end)
-                    );
+        range_hint_service.start(
+            self.worker.remote(),
+            move |cache_range: &CacheRegion, is_add: bool| {
+                let region_manager = core.region_manager();
+                if !is_add {
+                    region_manager
+                        .regions_map()
+                        .write()
+                        .remove_manual_load_range(cache_range.clone());
+                    region_manager.evict_region(cache_range, EvictReason::Manual, None);
                     return;
                 }
-            };
 
-            if regions.is_empty() {
-                return;
-            }
+                region_manager
+                    .regions_map()
+                    .write()
+                    .add_manual_load_range(cache_range.clone());
 
-            for r in regions {
-                let cache_region = CacheRegion::from_region(&r);
-                if let Err(e) = core.region_manager().load_region(cache_region) {
-                    warn!("ime load region by label failed"; "err" => ?e, "region" => ?r);
+                let Some(ref info_provider) = region_info_provider else {
+                    warn!("ime region info provider is none, skip manual load range.");
+                    return;
+                };
+
+                let start = origin_key(&cache_range.start);
+                let end = origin_end_key(&cache_range.end);
+                let regions = match info_provider.get_regions_in_range(start, end) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        warn!(
+                            "ime get regions in range failed"; "err" => ?e,
+                            "start" => ?log_wrappers::Value(start),
+                            "end" => ?log_wrappers::Value(end)
+                        );
+                        return;
+                    }
+                };
+
+                let total = regions.len();
+                let mut failed = 0;
+                for r in regions {
+                    // TODO: Only load region leaders.
+                    let cache_region = CacheRegion::from_region(&r);
+                    if let Err(e) = region_manager.load_region(cache_region) {
+                        failed += 1;
+                        warn!("ime load region failed"; "err" => ?e, "region" => ?r);
+                    }
                 }
-            }
-            // TODO (afeinberg): This does not actually load the range. The load
-            // happens the apply thread begins to apply raft
-            // entries. To force this (for read-only use-cases) we
-            // should propose a No-Op command.
-        });
+                info!(
+                    "ime manual load summary";
+                    "range" => ?cache_range,
+                    "success" => total - failed,
+                    "failed" => failed,
+                );
+                // TODO (afeinberg): This does not actually load the range. The
+                // load happens the apply thread begins to apply
+                // raft entries. To force this (for read-only
+                // use-cases) we should propose a No-Op command.
+            },
+        );
     }
 
     fn start_tick(
@@ -596,74 +615,6 @@ impl BackgroundRunnerCore {
         }
     }
 
-    /// Eviction on soft limit reached:
-    ///
-    /// When soft limit is reached, collect the candidates for eviction, and
-    /// keep evicting until either all candidates are evicted, or the total
-    /// approximated size of evicted regions is equal to or greater than the
-    /// excess memory usage.
-    fn evict_on_soft_limit_reached(&self, delete_range_scheduler: &Scheduler<BackgroundTask>) {
-        if self.range_stats_manager.is_none() {
-            warn!("ime range stats manager is not initialized, cannot evict on soft limit reached");
-            return;
-        }
-        let range_stats_manager = self.range_stats_manager.as_ref().unwrap();
-        let mut remaining = self
-            .memory_controller
-            .mem_usage()
-            .saturating_sub(self.memory_controller.soft_limit_threshold());
-        if remaining == 0 {
-            return;
-        }
-
-        let mut regions_to_evict = Vec::with_capacity(256);
-
-        // TODO (afeinberg, low): consider returning just an iterator and using scan
-        // below for cleaner code.
-        range_stats_manager.collect_candidates_for_eviction(&mut regions_to_evict, |region| {
-            self.engine.region_manager().contains_region(region.id)
-        });
-
-        let mut regions_to_delete = vec![];
-        // TODO (afeinberg): approximate size may differ from size in in-memory cache,
-        // consider taking the actual size into account.
-        for (region, approx_size) in regions_to_evict {
-            if remaining == 0 {
-                break;
-            }
-            let cache_region = CacheRegion::from_region(&region);
-            let deleteable_regions = self.engine.region_manager().evict_region(
-                &cache_region,
-                EvictReason::MemoryLimitReached,
-                None,
-            );
-            if !deleteable_regions.is_empty() {
-                info!(
-                    "ime evict on soft limit reached";
-                    "region_to_evict" => ?cache_region,
-                    "regions_evicted" => ?&deleteable_regions,
-                    "approx_size" => approx_size,
-                    "remaining" => remaining
-                );
-                remaining = remaining.saturating_sub(approx_size as usize);
-                range_stats_manager.handle_region_evicted(&region);
-                regions_to_delete.extend(deleteable_regions);
-            }
-        }
-
-        if !regions_to_delete.is_empty() {
-            if let Err(e) = delete_range_scheduler
-                .schedule_force(BackgroundTask::DeleteRegions(regions_to_delete))
-            {
-                error!(
-                    "ime schedule deletet range failed";
-                    "err" => ?e,
-                );
-                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
-            }
-        }
-    }
-
     /// Periodically load top regions.
     ///
     /// If the soft limit is exceeded, evict (some) regions no longer considered
@@ -671,38 +622,44 @@ impl BackgroundRunnerCore {
     ///
     /// See: [`RangeStatsManager::collect_changes_ranges`] for
     /// algorithm details.
-    fn top_regions_load_evict(&self, delete_range_scheduler: &Scheduler<BackgroundTask>) {
+    async fn top_regions_load_evict(&self, delete_range_scheduler: &Scheduler<BackgroundTask>) {
         let range_stats_manager = match &self.range_stats_manager {
             Some(m) => m,
             None => {
                 return;
             }
         };
-        if range_stats_manager.set_checking_top_regions(true) {
+        if !range_stats_manager.ready_for_auto_load_and_evict() {
             return;
         }
 
-        let curr_memory_usage = self.memory_controller.mem_usage();
-        let threshold = self.memory_controller.stop_load_limit_threshold();
-        range_stats_manager.adjust_max_num_regions(curr_memory_usage, threshold);
-
-        let cached_regions = self
-            .engine
-            .region_manager()
-            .regions_map()
-            .read()
-            .cached_regions();
+        let (current_region_count, cached_regions) = {
+            let region_map = self.engine.region_manager().regions_map().read();
+            (region_map.regions().len(), region_map.cached_regions())
+        };
         let (regions_to_load, regions_to_evict) = range_stats_manager
-            .collect_regions_to_load_and_evict(cached_regions, &self.memory_controller);
+            .collect_regions_to_load_and_evict(
+                current_region_count,
+                cached_regions,
+                &self.memory_controller,
+            );
 
-        let mut regions_to_delete = Vec::with_capacity(regions_to_evict.len());
+        let evict_count = regions_to_evict.len();
+        let mut regions_to_delete = Vec::with_capacity(evict_count);
         info!("ime load_evict"; "regions_to_load" => ?&regions_to_load, "regions_to_evict" => ?&regions_to_evict);
+        let (tx, mut rx) = mpsc::channel(evict_count + 1);
         for evict_region in regions_to_evict {
             let cache_region = CacheRegion::from_region(&evict_region);
+            let tx_clone = tx.clone();
+            // Bound is set to 1 so that the sender side will not be blocked
             let deleteable_regions = self.engine.region_manager().evict_region(
                 &cache_region,
                 EvictReason::AutoEvict,
-                None,
+                Some(Box::new(move || {
+                    Box::pin(async move {
+                        let _ = tx_clone.send(()).await;
+                    })
+                })),
             );
             info!(
                 "ime load_evict: auto evict";
@@ -723,14 +680,27 @@ impl BackgroundRunnerCore {
                 assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
             }
         }
-        let mut regions_map = self.engine.region_manager().regions_map.write();
-        for region in regions_to_load {
-            let cache_region = CacheRegion::from_region(&region);
-            if let Err(e) = regions_map.load_region(cache_region) {
-                error!("ime error loading range"; "cache_range" => ?region, "err" => ?e);
+        for _ in 0..evict_count {
+            if rx.recv().await.is_none() {
+                break;
             }
         }
-        range_stats_manager.set_checking_top_regions(false);
+        if !self.memory_controller.reached_stop_load_limit() {
+            let expected_new_count = (self
+                .memory_controller
+                .soft_limit_threshold()
+                .saturating_sub(self.memory_controller.mem_usage()))
+                / range_stats_manager.expected_region_size;
+            let expected_new_count = usize::max(expected_new_count, 1);
+            let mut regions_map = self.engine.region_manager().regions_map.write();
+            for region in regions_to_load.into_iter().take(expected_new_count) {
+                let cache_region = CacheRegion::from_region(&region);
+                if let Err(e) = regions_map.load_region(cache_region) {
+                    warn!("ime error loading range"; "cache_range" => ?region, "err" => ?e);
+                }
+            }
+        }
+        range_stats_manager.complete_auto_load_and_evict();
         info!("ime load_evict complete");
     }
 }
@@ -796,11 +766,10 @@ impl BackgroundRunner {
         engine: Arc<RangeCacheMemoryEngineCore>,
         memory_controller: Arc<MemoryController>,
         region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
-        expected_region_size: usize,
-        mvcc_amplification_threshold: usize,
-        gc_interval: Duration,
+        config: &Arc<VersionTrack<RangeCacheEngineConfig>>,
         pd_client: Arc<dyn PdClient>,
     ) -> (Self, Scheduler<BackgroundTask>) {
+        let config = config.value();
         let range_load_worker = Builder::new("ime-load")
             // Range load now is implemented sequentially, so we must use exactly one thread to handle it.
             // todo(SpadeA): if the load speed is a bottleneck, we may consider to use multiple threads to load ranges.
@@ -825,13 +794,13 @@ impl BackgroundRunner {
         let load_evict_worker = Worker::new("ime-evict");
         let load_evict_remote = load_evict_worker.remote();
 
-        let num_regions_to_cache = memory_controller.soft_limit_threshold() / expected_region_size;
+        let expected_region_size = config.expected_region_size();
         let range_stats_manager = region_info_provider.map(|region_info_provider| {
             RangeStatsManager::new(
-                num_regions_to_cache,
                 DEFAULT_EVICT_MIN_DURATION,
                 expected_region_size,
-                mvcc_amplification_threshold,
+                config.mvcc_amplification_threshold,
+                config.load_evict_interval.0,
                 region_info_provider,
             )
         });
@@ -843,7 +812,7 @@ impl BackgroundRunner {
                     range_stats_manager,
                 },
                 pd_client,
-                gc_interval,
+                gc_interval: config.gc_interval.0,
                 range_load_worker,
                 range_load_remote,
                 delete_range_worker,
@@ -1072,17 +1041,50 @@ impl Runnable for BackgroundRunner {
                 self.range_load_remote.spawn(f);
             }
             BackgroundTask::MemoryCheckAndEvict => {
-                let mem_usage = self.core.memory_controller.mem_usage();
+                let mem_usage_before_check = self.core.memory_controller.mem_usage();
                 info!(
                     "ime start memory usage check and evict";
-                    "mem_usage(MB)" => ReadableSize(mem_usage as u64).as_mb()
+                    "mem_usage(MB)" => ReadableSize(mem_usage_before_check as u64).as_mb()
                 );
-                if mem_usage > self.core.memory_controller.soft_limit_threshold() {
+                if mem_usage_before_check > self.core.memory_controller.soft_limit_threshold() {
                     let delete_range_scheduler = self.delete_range_scheduler.clone();
                     let core = self.core.clone();
                     let task = async move {
-                        core.evict_on_soft_limit_reached(&delete_range_scheduler);
+                        if let Some(range_stats_manager) = &core.range_stats_manager {
+                            let cached_region_ids = core
+                                .engine
+                                .region_manager
+                                .regions_map
+                                .read()
+                                .cached_regions();
+
+                            let evict_fn = |evict_region: &CacheRegion,
+                                            evict_reason: EvictReason,
+                                            cb: Option<Box<dyn AsyncFnOnce + Send + Sync>>|
+                             -> Vec<CacheRegion> {
+                                core.engine.region_manager.evict_region(
+                                    evict_region,
+                                    evict_reason,
+                                    cb,
+                                )
+                            };
+
+                            range_stats_manager
+                                .evict_on_soft_limit_reached(
+                                    evict_fn,
+                                    &delete_range_scheduler,
+                                    cached_region_ids,
+                                    &core.memory_controller,
+                                )
+                                .await;
+                        }
                         core.memory_controller.set_memory_checking(false);
+                        let mem_usage = core.memory_controller.mem_usage();
+                        info!(
+                            "ime memory usage check and evict completes";
+                            "mem_usage(MB)" => ReadableSize(mem_usage as u64).as_mb(),
+                            "mem_usage_before_check(MB)" => ReadableSize(mem_usage_before_check as u64).as_mb()
+                        );
                     };
                     self.load_evict_remote.spawn(task);
                 } else {
@@ -1095,7 +1097,8 @@ impl Runnable for BackgroundRunner {
             BackgroundTask::TopRegionsLoadEvict => {
                 let delete_range_scheduler = self.delete_range_scheduler.clone();
                 let core = self.core.clone();
-                let task = async move { core.top_regions_load_evict(&delete_range_scheduler) };
+                let task =
+                    async move { core.top_regions_load_evict(&delete_range_scheduler).await };
                 self.load_evict_remote.spawn(task);
             }
             BackgroundTask::CleanLockTombstone(snapshot_seqno) => {
@@ -1185,13 +1188,16 @@ impl RunnableWithTimer for BackgroundRunner {
         let mem_usage = self.core.memory_controller.mem_usage();
         RANGE_CACHE_MEMORY_USAGE.set(mem_usage as i64);
 
-        let regions_map = self.core.engine.region_manager().regions_map.read();
-        let mut count_by_state = HashMap::new();
-        for m in regions_map.regions().values() {
-            *count_by_state.entry(m.get_state()).or_default() += 1;
+        let mut count_by_state = [0; RegionState::COUNT];
+        {
+            let regions_map = self.core.engine.region_manager().regions_map.read();
+            for m in regions_map.regions().values() {
+                count_by_state[m.get_state() as usize] += 1;
+            }
         }
-        drop(regions_map);
-        for (state, count) in count_by_state {
+
+        for (i, count) in count_by_state.into_iter().enumerate() {
+            let state = RegionState::from_usize(i);
             RANGE_CACHE_COUNT
                 .with_label_values(&[state.as_str()])
                 .set(count);
@@ -1535,8 +1541,8 @@ pub mod tests {
     use crossbeam::epoch;
     use engine_rocks::util::new_engine;
     use engine_traits::{
-        CacheRegion, IterOptions, Iterable, Iterator, RangeCacheEngine, RegionEvent, SyncMutable,
-        CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
+        CacheRegion, IterOptions, Iterable, Iterator, RangeCacheEngine, RangeCacheEngineExt,
+        RegionEvent, SyncMutable, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
     };
     use futures::future::ready;
     use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};
@@ -1884,13 +1890,12 @@ pub mod tests {
         iter_opts.set_lower_bound(&cache_region.start, 0);
         iter_opts.set_upper_bound(&cache_region.end, 0);
 
+        let config = Arc::new(VersionTrack::new(RangeCacheEngineConfig::config_for_test()));
         let (worker, _) = BackgroundRunner::new(
             engine.core.clone(),
             memory_controller.clone(),
             None,
-            engine.expected_region_size(),
-            0,
-            Duration::from_secs(100),
+            &config,
             Arc::new(MockPdClient {}),
         );
         worker.core.gc_region(&cache_region, 40, 100);
@@ -1959,13 +1964,12 @@ pub mod tests {
         assert_eq!(3, element_count(&default));
         assert_eq!(3, element_count(&write));
 
+        let config = Arc::new(VersionTrack::new(RangeCacheEngineConfig::config_for_test()));
         let (worker, _) = BackgroundRunner::new(
             engine.core.clone(),
             memory_controller.clone(),
             None,
-            engine.expected_region_size(),
-            0,
-            Duration::from_secs(100),
+            &config,
             Arc::new(MockPdClient {}),
         );
 
@@ -2120,13 +2124,12 @@ pub mod tests {
         assert_eq!(6, element_count(&default));
         assert_eq!(6, element_count(&write));
 
+        let config = Arc::new(VersionTrack::new(RangeCacheEngineConfig::config_for_test()));
         let (worker, _) = BackgroundRunner::new(
             engine.core.clone(),
             memory_controller.clone(),
             None,
-            engine.expected_region_size(),
-            0,
-            Duration::from_secs(100),
+            &config,
             Arc::new(MockPdClient {}),
         );
         let filter = worker.core.gc_region(&region1, 100, 100);
@@ -2138,13 +2141,12 @@ pub mod tests {
         assert_eq!(4, element_count(&default));
         assert_eq!(4, element_count(&write));
 
+        let config = Arc::new(VersionTrack::new(RangeCacheEngineConfig::config_for_test()));
         let (worker, _) = BackgroundRunner::new(
             engine.core.clone(),
             memory_controller.clone(),
             None,
-            engine.expected_region_size(),
-            0,
-            Duration::from_secs(100),
+            &config,
             Arc::new(MockPdClient {}),
         );
         worker.core.gc_region(&region2, 100, 100);
@@ -2185,13 +2187,12 @@ pub mod tests {
         assert_eq!(1, element_count(&default));
         assert_eq!(2, element_count(&write));
 
+        let config = Arc::new(VersionTrack::new(RangeCacheEngineConfig::config_for_test()));
         let (worker, _) = BackgroundRunner::new(
             engine.core.clone(),
             memory_controller.clone(),
             None,
-            engine.expected_region_size(),
-            0,
-            Duration::from_secs(100),
+            &config,
             Arc::new(MockPdClient {}),
         );
 
@@ -2284,13 +2285,12 @@ pub mod tests {
         assert_eq!(6, element_count(&default));
         assert_eq!(6, element_count(&write));
 
+        let config = Arc::new(VersionTrack::new(RangeCacheEngineConfig::config_for_test()));
         let (worker, _) = BackgroundRunner::new(
             engine.core.clone(),
             memory_controller,
             None,
-            engine.expected_region_size(),
-            0,
-            Duration::from_secs(100),
+            &config,
             Arc::new(MockPdClient {}),
         );
         let cache_region = CacheRegion::from_region(&region);
@@ -2433,13 +2433,12 @@ pub mod tests {
         assert_eq!(6, element_count(&default));
         assert_eq!(6, element_count(&write));
 
+        let config = Arc::new(VersionTrack::new(RangeCacheEngineConfig::config_for_test()));
         let (worker, _) = BackgroundRunner::new(
             engine.core.clone(),
             memory_controller,
             None,
-            engine.expected_region_size(),
-            0,
-            Duration::from_secs(100),
+            &config,
             Arc::new(MockPdClient {}),
         );
 
@@ -2582,13 +2581,12 @@ pub mod tests {
         engine.new_region(r1);
         engine.new_region(r2);
 
+        let config = Arc::new(VersionTrack::new(RangeCacheEngineConfig::config_for_test()));
         let (runner, _) = BackgroundRunner::new(
             engine.core.clone(),
             memory_controller,
             None,
-            engine.expected_region_size(),
-            0,
-            Duration::from_secs(100),
+            &config,
             Arc::new(MockPdClient {}),
         );
         let regions = runner.core.regions_for_gc();
@@ -2811,8 +2809,9 @@ pub mod tests {
         rocks_engine.put_cf(CF_WRITE, &key, b"val").unwrap();
 
         for r in [&region1, &region2] {
-            engine.load_region(r.clone()).unwrap();
-            engine.prepare_for_apply(&CacheRegion::from_region(r));
+            let cache_region = CacheRegion::from_region(r);
+            engine.load_region(cache_region.clone()).unwrap();
+            engine.prepare_for_apply(&cache_region);
         }
 
         // ensure all ranges are finshed
@@ -2888,8 +2887,9 @@ pub mod tests {
         rocks_engine.put_cf(CF_WRITE, &key, b"val").unwrap();
 
         for r in [&region1, &region2, &region3] {
-            engine.load_region(r.clone()).unwrap();
-            engine.prepare_for_apply(&CacheRegion::from_region(r));
+            let cache_region = CacheRegion::from_region(r);
+            engine.load_region(cache_region.clone()).unwrap();
+            engine.prepare_for_apply(&cache_region);
         }
 
         // ensure all ranges are finshed
@@ -2925,6 +2925,7 @@ pub mod tests {
         let mem_controller = engine.memory_controller();
 
         let region1 = new_region(1, construct_region_key(1), construct_region_key(3));
+        let cache_region1 = CacheRegion::from_region(&region1);
         // Memory for one put is 17(key) + 3(val) + 8(Seqno) + 16(Memory controller in
         // key and val) + 96(Node overhead) = 140
         let key = construct_key(1, 10);
@@ -2937,8 +2938,8 @@ pub mod tests {
         rocks_engine.put_cf(CF_LOCK, &key, b"val").unwrap();
         rocks_engine.put_cf(CF_WRITE, &key, b"val").unwrap();
         // After loading range1, the memory usage should be 140*6=840
-        engine.load_region(region1.clone()).unwrap();
-        engine.prepare_for_apply(&CacheRegion::from_region(&region1));
+        engine.load_region(cache_region1.clone()).unwrap();
+        engine.prepare_for_apply(&cache_region1);
 
         let region2 = new_region(2, construct_region_key(3), construct_region_key(5));
         let key = construct_key(3, 10);
@@ -2962,8 +2963,9 @@ pub mod tests {
         config_manager.dispatch(config_change).unwrap();
         assert_eq!(config.value().hard_limit_threshold(), 2000);
 
-        engine.load_region(region2.clone()).unwrap();
-        engine.prepare_for_apply(&CacheRegion::from_region(&region2));
+        let cache_region2 = CacheRegion::from_region(&region2);
+        engine.load_region(cache_region2.clone()).unwrap();
+        engine.prepare_for_apply(&cache_region2);
 
         // ensure all ranges are finshed
         test_util::eventually(Duration::from_millis(100), Duration::from_secs(2), || {

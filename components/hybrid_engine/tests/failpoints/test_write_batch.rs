@@ -35,9 +35,10 @@ fn test_sequence_number_unique() {
     // during the load
     let r2 = new_region(2, b"k5", b"k7");
     let r3 = new_region(3, b"k7", b"k9");
-
-    engine.load_region(r2.clone()).unwrap();
-    engine.load_region(r3.clone()).unwrap();
+    let cache_region2 = CacheRegion::from_region(&r2);
+    let cache_region3 = CacheRegion::from_region(&r3);
+    engine.load_region(cache_region2.clone()).unwrap();
+    engine.load_region(cache_region3.clone()).unwrap();
 
     // The sequence number of write batch should be increased one by one, otherwise
     // if a delete and a put of the same key occurs in the same write batch,

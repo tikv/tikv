@@ -91,11 +91,6 @@ impl MemoryController {
     }
 
     #[inline]
-    pub(crate) fn stop_load_limit_threshold(&self) -> usize {
-        self.config.value().stop_load_limit_threshold()
-    }
-
-    #[inline]
     pub(crate) fn soft_limit_threshold(&self) -> usize {
         self.config.value().soft_limit_threshold()
     }

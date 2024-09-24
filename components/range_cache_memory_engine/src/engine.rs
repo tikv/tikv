@@ -15,12 +15,12 @@ use crossbeam_skiplist::{
 use engine_rocks::RocksEngine;
 use engine_traits::{
     CacheRegion, EvictReason, FailedReason, IterOptions, Iterable, KvEngine, RangeCacheEngine,
-    RegionEvent, Result, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
+    RangeCacheEngineExt, RegionEvent, Result, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
 use kvproto::metapb::Region;
 use raftstore::coprocessor::RegionInfoProvider;
 use slog_global::error;
-use tikv_util::{config::VersionTrack, info};
+use tikv_util::{config::VersionTrack, info, warn};
 
 use crate::{
     background::{BackgroundTask, BgWorkManager, PdRangeHintService},
@@ -28,7 +28,7 @@ use crate::{
         encode_key_for_boundary_with_mvcc, encode_key_for_boundary_without_mvcc, InternalBytes,
     },
     memory_controller::MemoryController,
-    range_manager::{LoadFailedReason, RangeCacheStatus, RegionManager, RegionState},
+    range_manager::{AsyncFnOnce, LoadFailedReason, RangeCacheStatus, RegionManager, RegionState},
     read::{RangeCacheIterator, RangeCacheSnapshot},
     statistics::Statistics,
     RangeCacheEngineConfig, RangeCacheEngineContext,
@@ -263,10 +263,7 @@ impl RangeCacheMemoryEngine {
         let bg_work_manager = Arc::new(BgWorkManager::new(
             core.clone(),
             pd_client,
-            config.value().gc_interval.0,
-            config.value().load_evict_interval.0,
-            config.value().expected_region_size(),
-            config.value().mvcc_amplification_threshold,
+            config.clone(),
             memory_controller.clone(),
             region_info_provider,
         ));
@@ -291,8 +288,7 @@ impl RangeCacheMemoryEngine {
         self.core.region_manager.new_region(cache_region);
     }
 
-    pub fn load_region(&self, region: Region) -> result::Result<(), LoadFailedReason> {
-        let cache_region = CacheRegion::from_region(&region);
+    pub fn load_region(&self, cache_region: CacheRegion) -> result::Result<(), LoadFailedReason> {
         self.core.region_manager().load_region(cache_region)
     }
 
@@ -303,7 +299,7 @@ impl RangeCacheMemoryEngine {
         &self,
         region: &CacheRegion,
         evict_reason: EvictReason,
-        cb: Option<Box<dyn FnOnce() + Send + Sync>>,
+        cb: Option<Box<dyn AsyncFnOnce + Send + Sync>>,
     ) {
         let deleteable_regions = self
             .core
@@ -403,7 +399,7 @@ impl RangeCacheMemoryEngine {
         // get snapshot and schedule loading task at last to avoid locking IME for too
         // long.
         if schedule_load {
-            let rocks_snap = Arc::new(self.rocks_engine.as_ref().unwrap().snapshot(None));
+            let rocks_snap = Arc::new(self.rocks_engine.as_ref().unwrap().snapshot());
             if let Err(e) = self
                 .bg_work_manager
                 .schedule_task(BackgroundTask::LoadRegion(region.clone(), rocks_snap))
@@ -485,11 +481,45 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
     fn enabled(&self) -> bool {
         self.config.value().enabled
     }
+}
 
+impl RangeCacheEngineExt for RangeCacheMemoryEngine {
     fn on_region_event(&self, event: RegionEvent) {
         match event {
             RegionEvent::Eviction { region, reason } => {
                 self.evict_region(&region, reason, None);
+            }
+            RegionEvent::TryLoad {
+                region,
+                for_manual_range,
+            } => {
+                if for_manual_range {
+                    if self
+                        .core
+                        .region_manager()
+                        .regions_map()
+                        .read()
+                        .overlap_with_manual_load_range(&region)
+                    {
+                        info!(
+                            "try to load region in manual load range";
+                            "region" => ?region,
+                        );
+                        if let Err(e) = self.load_region(region.clone()) {
+                            warn!(
+                                "ime load region failed";
+                                "err" => ?e,
+                                "region" => ?region,
+                            );
+                        }
+                    }
+                } else if let Err(e) = self.core.region_manager().load_region(region.clone()) {
+                    warn!(
+                        "ime load region failed";
+                        "error" => ?e,
+                        "region" => ?region,
+                    );
+                }
             }
             RegionEvent::Split {
                 source,
@@ -514,6 +544,22 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
             }
         }
     }
+
+    fn region_cached(&self, region: &Region) -> bool {
+        let regions_map = self.core.region_manager().regions_map().read();
+        if let Some(meta) = regions_map.region_meta(region.get_id()) {
+            matches!(meta.get_state(), RegionState::Active | RegionState::Loading)
+        } else {
+            false
+        }
+    }
+
+    fn load_region(&self, region: &Region) {
+        self.on_region_event(RegionEvent::TryLoad {
+            region: CacheRegion::from_region(region),
+            for_manual_range: false,
+        });
+    }
 }
 
 impl Iterable for RangeCacheMemoryEngine {
@@ -527,18 +573,20 @@ impl Iterable for RangeCacheMemoryEngine {
 
 #[cfg(test)]
 pub mod tests {
-    use std::{
-        sync::{mpsc::sync_channel, Arc},
-        time::Duration,
-    };
+    use std::{sync::Arc, time::Duration};
 
     use crossbeam::epoch;
     use engine_rocks::util::new_engine;
     use engine_traits::{
-        CacheRegion, EvictReason, Mutable, RangeCacheEngine, RegionEvent, WriteBatch,
-        WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
+        CacheRegion, EvictReason, Mutable, RangeCacheEngine, RangeCacheEngineExt, RegionEvent,
+        WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
     };
     use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
+    use tokio::{
+        runtime::Builder,
+        sync::{mpsc, Mutex},
+        time::timeout,
+    };
 
     use super::SkiplistEngine;
     use crate::{
@@ -560,7 +608,8 @@ pub mod tests {
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let region1 = new_region(1, b"k1", b"k3");
-        engine.load_region(region1).unwrap();
+        let cache_region1 = CacheRegion::from_region(&region1);
+        engine.load_region(cache_region1).unwrap();
 
         let mut region2 = new_region(1, b"k1", b"k5");
         region2.mut_region_epoch().version = 2;
@@ -573,7 +622,8 @@ pub mod tests {
         );
 
         let region1 = new_region(1, b"k1", b"k3");
-        engine.load_region(region1).unwrap();
+        let cache_region1 = CacheRegion::from_region(&region1);
+        engine.load_region(cache_region1).unwrap();
 
         let mut region2 = new_region(1, b"k2", b"k5");
         region2.mut_region_epoch().version = 2;
@@ -708,7 +758,7 @@ pub mod tests {
 
         let region = new_region(1, b"k00", b"k30");
         let cache_region = CacheRegion::from_region(&region);
-        engine.load_region(region).unwrap();
+        engine.load_region(cache_region.clone()).unwrap();
         assert!(engine.core.region_manager.is_active());
 
         let mut wb = engine.write_batch();
@@ -805,18 +855,27 @@ pub mod tests {
 
         let snap = engine.snapshot(cache_region.clone(), 100, 100).unwrap();
 
-        let (tx, rx) = sync_channel(0);
+        let (tx, rx) = mpsc::channel(1);
         engine.evict_region(
             &cache_region,
             EvictReason::BecomeFollower,
             Some(Box::new(move || {
-                let _ = tx.send(true);
+                Box::pin(async move {
+                    let _ = tx.send(()).await;
+                })
             })),
         );
 
-        rx.recv_timeout(Duration::from_secs(1)).unwrap_err();
+        let rt = Builder::new_current_thread().enable_all().build().unwrap();
+        let rx = Arc::new(Mutex::new(rx));
+        let rx_clone = rx.clone();
+        rt.block_on(async move {
+            timeout(Duration::from_secs(1), rx_clone.lock().await.recv())
+                .await
+                .unwrap_err()
+        });
         drop(snap);
-        let _ = rx.recv();
+        rt.block_on(async move { rx.lock().await.recv().await.unwrap() });
 
         {
             let regions_map = engine.core().region_manager().regions_map().read();
