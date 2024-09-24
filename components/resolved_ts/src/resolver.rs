@@ -432,10 +432,10 @@ impl Resolver {
         // Find the min start ts.
         let min_lock = self.oldest_transaction();
         let has_lock = min_lock.is_some();
-        let min_start_ts = min_lock.as_ref().map(|(ts, _)| *ts).unwrap_or(min_ts);
+        let min_txn_ts = min_lock.as_ref().map(|(ts, _)| *ts).unwrap_or(min_ts);
 
         // No more commit happens before the ts.
-        let new_resolved_ts = cmp::min(min_start_ts, min_ts);
+        let new_resolved_ts = cmp::min(min_txn_ts, min_ts);
         // reason is the min source of the new resolved ts.
         let reason = match (min_lock, min_ts) {
             (Some((lock_ts, txn_locks)), min_ts) if lock_ts < min_ts => TsSource::Lock(txn_locks),
@@ -556,6 +556,8 @@ impl Resolver {
         self.read_progress.as_ref()
     }
 
+    // Return the transaction with the smallest min_commit_ts. When min_commit_ts
+    // is unknown, use start_ts instead.
     pub(crate) fn oldest_transaction(&self) -> Option<(TimeStamp, TxnLocks)> {
         let oldest_normal_txn = self
             .lock_ts_heap
