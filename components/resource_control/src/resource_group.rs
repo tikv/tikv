@@ -12,9 +12,7 @@ use std::{
 };
 
 use collections::HashMap;
-#[cfg(test)]
-use dashmap::mapref::one::Ref;
-use dashmap::DashMap;
+use dashmap::{mapref::one::Ref, DashMap};
 use fail::fail_point;
 use kvproto::{
     kvrpcpb::{CommandPri, ResourceControlContext},
@@ -217,7 +215,6 @@ impl ResourceGroupManager {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn get_resource_group(&self, name: &str) -> Option<Ref<'_, String, ResourceGroup>> {
         self.resource_groups.get(&name.to_ascii_lowercase())
     }

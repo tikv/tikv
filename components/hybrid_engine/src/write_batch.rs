@@ -152,7 +152,7 @@ mod tests {
     use std::time::Duration;
 
     use engine_traits::{
-        CacheRegion, KvEngine, Mutable, Peekable, RangeCacheEngine, SnapshotContext, WriteBatch,
+        CacheRegion, Mutable, Peekable, RangeCacheEngine, SnapshotContext, WriteBatch,
         WriteBatchExt,
     };
     use range_cache_memory_engine::{
@@ -171,11 +171,7 @@ mod tests {
             move |memory_engine| {
                 let id = region_clone.id;
                 memory_engine.new_region(region_clone);
-                memory_engine
-                    .core()
-                    .write()
-                    .mut_range_manager()
-                    .set_safe_point(id, 5);
+                memory_engine.core().region_manager().set_safe_point(id, 5);
             },
         )
         .unwrap();
@@ -194,7 +190,7 @@ mod tests {
             region: Some(cache_region.clone()),
             read_ts: 10,
         };
-        let snap = hybrid_engine.snapshot(Some(ctx));
+        let snap = hybrid_engine.new_snapshot(Some(ctx));
         let actual: &[u8] = &snap.get_value(b"zhello").unwrap().unwrap();
         assert_eq!(b"world", &actual);
         let actual: &[u8] = &snap.disk_snap().get_value(b"zhello").unwrap().unwrap();
@@ -216,10 +212,7 @@ mod tests {
             |memory_engine| {
                 let region = new_region(1, b"k00", b"k10");
                 memory_engine.new_region(region);
-                {
-                    let mut core = memory_engine.core().write();
-                    core.mut_range_manager().set_safe_point(1, 10);
-                }
+                memory_engine.core().region_manager().set_safe_point(1, 10);
             },
         )
         .unwrap();
@@ -260,7 +253,7 @@ mod tests {
         wb.prepare_for_region(cache_region1.clone());
         wb.put(b"zk05", b"val").unwrap();
         wb.put(b"zk08", b"val2").unwrap();
-        wb.prepare_for_region(cache_region1.clone());
+        wb.prepare_for_region(cache_region2.clone());
         wb.put(b"zk25", b"val3").unwrap();
         wb.put(b"zk27", b"val4").unwrap();
         wb.write().unwrap();
@@ -278,7 +271,6 @@ mod tests {
             hybrid_engine
                 .range_cache_engine()
                 .core()
-                .read()
                 .engine()
                 .cf_handle("default")
                 .len()
@@ -305,14 +297,7 @@ mod tests {
         test_util::eventually(
             Duration::from_millis(100),
             Duration::from_millis(2000),
-            || {
-                m_engine
-                    .core()
-                    .read()
-                    .engine()
-                    .cf_handle("default")
-                    .is_empty()
-            },
+            || m_engine.core().engine().cf_handle("default").is_empty(),
         );
     }
 }

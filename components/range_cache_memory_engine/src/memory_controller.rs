@@ -91,11 +91,6 @@ impl MemoryController {
     }
 
     #[inline]
-    pub(crate) fn stop_load_limit_threshold(&self) -> usize {
-        self.config.value().stop_load_limit_threshold()
-    }
-
-    #[inline]
     pub(crate) fn soft_limit_threshold(&self) -> usize {
         self.config.value().soft_limit_threshold()
     }
@@ -137,6 +132,7 @@ mod tests {
             soft_limit_threshold: Some(ReadableSize(300)),
             hard_limit_threshold: Some(ReadableSize(500)),
             expected_region_size: Default::default(),
+            cross_check_interval: Default::default(),
             mvcc_amplification_threshold: 10,
         }));
         let mc = MemoryController::new(config, skiplist_engine.clone());

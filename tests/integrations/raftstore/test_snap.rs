@@ -619,7 +619,7 @@ fn test_gen_during_heavy_recv() {
     let snap = do_snapshot(
         snap_mgr.clone(),
         &engine,
-        engine.snapshot(None),
+        engine.snapshot(),
         r2,
         snap_term,
         snap_apply_state,
@@ -1186,4 +1186,77 @@ fn test_leader_step_down_after_requesting_snapshot() {
     let election_timeout = base_tick_interval * election_ticks;
     std::thread::sleep(election_timeout);
     send_rx.try_recv().unwrap_err();
+}
+
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore::new_server_cluster)]
+fn test_node_apply_snapshot_by_or_without_ingest() {
+    let validate_sst_files = |dir: &std::path::Path| -> bool {
+        let mut sst_file_count = 0_usize;
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_file() && path.ends_with(".sst") {
+                sst_file_count += 1;
+            }
+        }
+        sst_file_count > 0
+    };
+    let check_snap_count = |snap_dir: &str| -> usize {
+        let mut valid_snap_count = 0_usize;
+        for entry in fs::read_dir(snap_dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() && validate_sst_files(&path) {
+                valid_snap_count += 1;
+            }
+        }
+        valid_snap_count
+    };
+    for snap_min_ingest_size in [ReadableSize::mb(1), ReadableSize::default()] {
+        let mut cluster = new_cluster(0, 4);
+        cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
+        cluster.cfg.raft_store.raft_log_gc_count_limit = Some(2);
+        cluster.cfg.raft_store.merge_max_log_gap = 1;
+        cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
+        cluster.cfg.server.snap_min_ingest_size = snap_min_ingest_size;
+
+        let pd_client = Arc::clone(&cluster.pd_client);
+        // Disable default max peer count check.
+        pd_client.disable_default_operator();
+        cluster.run();
+
+        // In case of removing leader, let's transfer leader to some node first.
+        cluster.must_transfer_leader(1, new_peer(1, 1));
+        cluster.must_put(b"k1", b"v1");
+        cluster.must_put(b"k2", b"v2");
+        pd_client.must_remove_peer(1, new_peer(4, 4));
+        pd_client.add_peer(1, new_peer(4, 5));
+        let snap_dir = cluster.get_snap_dir(4);
+        // Verify that the snap has been received.
+        for _ in 0..10 {
+            if check_snap_count(&snap_dir) > 0 {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let engine4 = cluster.get_engine(4);
+        must_get_equal(&engine4, b"k1", b"v1");
+        must_get_equal(&engine4, b"k2", b"v2");
+
+        pd_client.must_remove_peer(1, new_peer(3, 3));
+        pd_client.must_remove_peer(1, new_peer(4, 5));
+        cluster.must_put(b"k3", b"v3");
+        cluster.must_put(b"k3", b"v3");
+        pd_client.add_peer(1, new_peer(3, 6));
+        let engine3 = cluster.get_engine(3);
+        must_get_equal(&engine3, b"k3", b"v3");
+        must_get_equal(&engine3, b"k3", b"v3");
+        // Verify that the snap will be gced.
+        let snap_dir = cluster.get_snap_dir(3);
+        for _ in 0..10 {
+            if check_snap_count(&snap_dir) == 0 {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
 }

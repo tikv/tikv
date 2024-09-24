@@ -765,10 +765,9 @@ pub fn get_entry_header(entry: &Entry) -> RaftRequestHeader {
     if entry.get_entry_type() != EntryType::EntryNormal {
         return RaftRequestHeader::default();
     }
-    let logger = slog_global::get_global().new(slog::o!());
     match SimpleWriteReqDecoder::new(
         |_, _, _| RaftCmdRequest::default(),
-        &logger,
+        None,
         entry.get_data(),
         entry.get_index(),
         entry.get_term(),
@@ -818,10 +817,9 @@ pub enum RaftCmd<'a> {
 }
 
 pub fn parse_raft_cmd_request<'a>(data: &'a [u8], index: u64, term: u64, tag: &str) -> RaftCmd<'a> {
-    let logger = slog_global::get_global().new(slog::o!());
     match SimpleWriteReqDecoder::new(
         |_, _, _| parse_data_at(data, index, tag),
-        &logger,
+        None,
         data,
         index,
         term,
