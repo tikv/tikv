@@ -113,7 +113,10 @@ use tikv::{
         config_manager::StorageConfigManger,
         kv::LocalTablets,
         mvcc::MvccConsistencyCheckObserver,
-        txn::flow_controller::{EngineFlowController, FlowController},
+        txn::{
+            flow_controller::{EngineFlowController, FlowController},
+            txn_status_cache::TxnStatusCache,
+        },
         Engine, Storage,
     },
 };
@@ -684,6 +687,9 @@ where
             ));
             storage_read_pools.handle()
         };
+        let txn_status_cache = Arc::new(TxnStatusCache::new(
+            self.core.config.storage.txn_status_cache_capacity,
+        ));
 
         let storage = Storage::<_, _, F>::from_engine(
             engines.engine.clone(),
@@ -702,6 +708,7 @@ where
                 .as_ref()
                 .map(|m| m.derive_controller("scheduler-worker-pool".to_owned(), true)),
             self.resource_manager.clone(),
+            txn_status_cache.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
         cfg_controller.register(
@@ -947,6 +954,7 @@ where
                 self.concurrency_manager.clone(),
                 BackupStreamResolver::V1(leadership_resolver),
                 backup_encryption_manager,
+                txn_status_cache.clone(),
             );
             backup_stream_worker.start(backup_stream_endpoint);
             self.core.to_stop.push(backup_stream_worker);
@@ -1111,6 +1119,7 @@ where
                 self.concurrency_manager.clone(),
                 server.env(),
                 self.security_mgr.clone(),
+                storage.get_scheduler().get_txn_status_cache(),
             );
             self.resolved_ts_scheduler = Some(rts_worker.scheduler());
             rts_worker.start_with_timer(rts_endpoint);
