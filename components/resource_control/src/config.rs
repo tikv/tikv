@@ -23,12 +23,20 @@ impl Default for Config {
     }
 }
 
+/// PriorityCtlStrategy controls how  resource quota is granted  to low-priority
+/// tasks.
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PriorityCtlStrategy {
+    /// Prioritize the performance of high-priority tasks, low-priority tasks
+    /// will run slower.
     Aggressive,
     #[default]
+    /// Balance the latency of high-prioirty tasks and throughput of
+    /// low-priority tasks.
     Moderate,
+    /// Prioritize of overall throughput, the latency of high-priority tasks may
+    /// be significantly impacted when the overall load is high.
     Conservative,
 }
 

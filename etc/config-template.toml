@@ -161,6 +161,22 @@
 # max-tasks-per-worker-normal = 2000
 # max-tasks-per-worker-low = 2000
 
+[resource-control]
+## Whether to enable resource control.
+## When set to true, TiKV will use the priority queue to schedule the queued read/write requests from
+## foreground users. The scheduling priority of a request is inversely related to the amount of resources
+## already consumed by the resource group that receives this request, and positively related to the quota
+## of the corresponding resource group.
+# enabled = true
+
+## Configures the control strategy of low-priority tasks.
+## Value options:
+## - "aggressive". Prioritize the performance of high-priority tasks, low-priority tasks will run slower.
+## - "moderate". Balance the latency of high-prioirty tasks and throughput of low-priority tasks.
+## - "conservative". Prioritize of overall throughput, the latency of high-priority tasks may be significantly
+##                   impacted when the overall load is high.
+priority-ctl-strategy = "moderate"
+
 [server]
 ## Listening address.
 # addr = "127.0.0.1:20160"
