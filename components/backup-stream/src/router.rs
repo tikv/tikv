@@ -1461,7 +1461,7 @@ impl StreamTaskHandler {
                 .collect::<Vec<_>>();
 
             // flush meta file to storage.
-            self.fill_region_info(cx, &mut metadata_info);
+            self.fill_region_info(cx, &mut backup_metadata);
             // flush backup metadata to external storage.
             self.flush_backup_metadata(backup_metadata).await?;
             crate::metrics::FLUSH_DURATION
@@ -3047,7 +3047,13 @@ mod tests {
         task_handler.on_events(kv_events.clone()).await?;
         task_handler.set_flushing_status(true);
         let start = Instant::now();
-        task_handler.do_flush(1, TimeStamp::new(1)).await?;
+        let cx = FlushContext {
+            task_name: &task_handler.task.info.name,
+            store_id: 1,
+            resolved_regions: &EMPTY_RESOLVE,
+            resolved_ts: TimeStamp::new(1),
+        };
+        task_handler.do_flush(cx).await?;
         let duration = start.saturating_elapsed();
         println!("Time taken for do_flush: {:?}", duration);
 
