@@ -11427,7 +11427,7 @@ mod tests {
             storage
                 .sched
                 .get_txn_status_cache()
-                .get_no_promote(10.into())
+                .get_committed_no_promote(10.into())
                 .unwrap(),
             21.into()
         );
@@ -11515,7 +11515,7 @@ mod tests {
             storage
                 .sched
                 .get_txn_status_cache()
-                .get_no_promote(10.into())
+                .get_committed_no_promote(10.into())
                 .is_none()
         );
 
@@ -11535,7 +11535,7 @@ mod tests {
             storage
                 .sched
                 .get_txn_status_cache()
-                .get_no_promote(10.into())
+                .get_committed_no_promote(10.into())
                 .unwrap(),
             20.into()
         );
@@ -11557,7 +11557,7 @@ mod tests {
             storage
                 .sched
                 .get_txn_status_cache()
-                .get_no_promote(30.into())
+                .get_committed_no_promote(30.into())
                 .is_none()
         );
 
@@ -11591,7 +11591,7 @@ mod tests {
             storage
                 .sched
                 .get_txn_status_cache()
-                .get_no_promote(50.into())
+                .get_committed_no_promote(50.into())
                 .unwrap(),
             60.into()
         );
@@ -11636,7 +11636,7 @@ mod tests {
             storage
                 .sched
                 .get_txn_status_cache()
-                .get_no_promote(70.into())
+                .get_committed_no_promote(70.into())
                 .unwrap(),
             80.into()
         );
@@ -11679,7 +11679,7 @@ mod tests {
             storage
                 .sched
                 .get_txn_status_cache()
-                .get_no_promote(90.into())
+                .get_committed_no_promote(90.into())
                 .unwrap(),
             100.into()
         );
@@ -11706,12 +11706,15 @@ mod tests {
             storage
                 .sched
                 .get_txn_status_cache()
-                .get_no_promote(9.into())
+                .get_committed_no_promote(9.into())
                 .is_none()
         );
 
         // CheckTxnStatus: committed transaction
-        storage.sched.get_txn_status_cache().remove(10.into());
+        storage
+            .sched
+            .get_txn_status_cache()
+            .remove_normal(10.into());
         storage
             .sched_txn_command(
                 commands::CheckTxnStatus::new(
@@ -11733,7 +11736,7 @@ mod tests {
             storage
                 .sched
                 .get_txn_status_cache()
-                .get_no_promote(10.into())
+                .get_committed_no_promote(10.into())
                 .unwrap(),
             20.into()
         );
@@ -11776,7 +11779,7 @@ mod tests {
             storage
                 .sched
                 .get_txn_status_cache()
-                .get_no_promote(120.into())
+                .get_committed_no_promote(120.into())
                 .is_none()
         );
 
@@ -11796,7 +11799,7 @@ mod tests {
             storage
                 .sched
                 .get_txn_status_cache()
-                .get_no_promote(120.into())
+                .get_committed_no_promote(120.into())
                 .is_none()
         );
 
@@ -11841,7 +11844,7 @@ mod tests {
             storage
                 .sched
                 .get_txn_status_cache()
-                .remove(130.into())
+                .remove_normal(130.into())
                 .unwrap(),
             140.into()
         );
@@ -11861,7 +11864,7 @@ mod tests {
             storage
                 .sched
                 .get_txn_status_cache()
-                .get_no_promote(130.into())
+                .get_committed_no_promote(130.into())
                 .unwrap(),
             140.into()
         );

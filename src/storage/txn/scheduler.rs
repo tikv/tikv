@@ -899,7 +899,9 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             // remain not updated after receiving signal from the callback.
             let now = std::time::SystemTime::now();
             for (start_ts, commit_ts) in known_txn_status {
-                self.inner.txn_status_cache.insert(start_ts, commit_ts, now);
+                self.inner
+                    .txn_status_cache
+                    .insert_committed(start_ts, commit_ts, now);
             }
         }
 

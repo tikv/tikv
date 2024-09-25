@@ -18,6 +18,7 @@ use engine_traits::{
     RangeCacheEngineExt, RegionEvent, Result, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
 use kvproto::metapb::Region;
+use pd_client::PdClient;
 use raftstore::coprocessor::RegionInfoProvider;
 use slog_global::error;
 use tikv_util::{config::VersionTrack, info, warn};
@@ -427,6 +428,27 @@ impl RangeCacheMemoryEngine {
     pub fn statistics(&self) -> Arc<Statistics> {
         self.statistics.clone()
     }
+
+    pub fn start_cross_check(&self, rocks_engine: RocksEngine, pd_client: Arc<dyn PdClient>) {
+        let cross_check_interval = self.config.value().cross_check_interval;
+        if !cross_check_interval.is_zero() {
+            if let Err(e) =
+                self.bg_worker_manager()
+                    .schedule_task(BackgroundTask::TurnOnCrossCheck((
+                        self.clone(),
+                        rocks_engine,
+                        pd_client,
+                        cross_check_interval.0,
+                    )))
+            {
+                error!(
+                    "schedule TurnOnCrossCheck failed";
+                    "err" => ?e,
+                );
+                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
+            }
+        }
+    }
 }
 
 impl RangeCacheMemoryEngine {
@@ -650,6 +672,7 @@ pub mod tests {
                 soft_limit_threshold: Some(ReadableSize(300)),
                 hard_limit_threshold: Some(ReadableSize(500)),
                 expected_region_size: Some(ReadableSize::mb(20)),
+                cross_check_interval: Default::default(),
                 mvcc_amplification_threshold: 10,
             }));
             let mem_controller = Arc::new(MemoryController::new(config.clone(), skiplist.clone()));
@@ -707,6 +730,7 @@ pub mod tests {
             soft_limit_threshold: Some(ReadableSize(300)),
             hard_limit_threshold: Some(ReadableSize(500)),
             expected_region_size: Some(ReadableSize::mb(20)),
+            cross_check_interval: Default::default(),
             mvcc_amplification_threshold: 10,
         }));
         let mem_controller = Arc::new(MemoryController::new(config.clone(), skiplist.clone()));
