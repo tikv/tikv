@@ -86,8 +86,8 @@ pub struct Resolver {
     large_txn_ts: HashSet<TimeStamp>,
     // each large transaction tracked by this resolver has a representative key tracked. So that
     // when the large transaction is rolled back, we can rely on this key to guarantee that
-    // eventually there will be no dangling locks.
-    large_txn_key_representative: HashMap<Arc<[u8]>, TimeStamp>,
+    // eventually there will be orphaned transactions.
+    large_txn_key_representative: HashMap<Vec<u8>, TimeStamp>,
     // The last shrink time.
     last_aggressive_shrink_time: Instant,
     // The timestamps that guarantees no more commit will happen before.
@@ -208,7 +208,7 @@ impl Resolver {
             locks_by_key: HashMap::default(),
             lock_ts_heap: BTreeMap::new(),
             large_txn_ts: HashSet::<TimeStamp>::default(),
-            large_txn_key_representative: HashMap::<Arc<[u8]>, TimeStamp>::default(),
+            large_txn_key_representative: HashMap::<Vec<u8>, TimeStamp>::default(),
             last_aggressive_shrink_time: Instant::now_coarse(),
             read_progress,
             tracked_index: 0,
@@ -606,7 +606,6 @@ impl Resolver {
     ) -> Result<(), MemoryQuotaExceeded> {
         let is_new = self.large_txn_ts.insert(start_ts);
         if is_new {
-            let key: Arc<[u8]> = key.into_boxed_slice().into();
             self.large_txn_key_representative.insert(key, start_ts);
         }
         Ok(())
@@ -866,24 +865,37 @@ mod tests {
         let txn_status_cache = Arc::new(TxnStatusCache::new(100));
         let mut resolver = Resolver::new(1, memory_quota, txn_status_cache.clone());
         let key: Vec<u8> = vec![1, 2, 3, 4];
+        let key2: Vec<u8> = vec![5, 6, 7, 8];
 
-        // track a large txn lock
+        // track 2 large txns
         resolver.track_lock(1.into(), key.clone(), None, 1).unwrap();
-        assert_eq!(resolver.num_locks(), 1);
-        assert_eq!(resolver.num_transactions(), 1);
+        resolver
+            .track_lock(2.into(), key2.clone(), None, 1)
+            .unwrap();
+        assert_eq!(resolver.num_locks(), 2);
+        assert_eq!(resolver.num_transactions(), 2);
         assert_eq!(resolver.locks_by_key.len(), 0);
-        assert_eq!(resolver.large_txn_ts.len(), 1);
-        assert_eq!(resolver.large_txn_key_representative.len(), 1);
+        assert_eq!(resolver.large_txn_ts.len(), 2);
+        assert_eq!(resolver.large_txn_key_representative.len(), 2);
         assert_eq!(resolver.resolved_ts(), TimeStamp::zero());
 
-        assert_eq!(resolver.resolve(10.into(), None, TsSource::PdTso), 1.into());
+        assert_eq!(resolver.resolve(20.into(), None, TsSource::PdTso), 1.into());
+
         txn_status_cache.upsert(
             1.into(),
+            TxnState::Ongoing {
+                min_commit_ts: 10.into(),
+            },
+            SystemTime::now(),
+        );
+        txn_status_cache.upsert(
+            2.into(),
             TxnState::Ongoing {
                 min_commit_ts: 5.into(),
             },
             SystemTime::now(),
         );
-        assert_eq!(resolver.resolve(10.into(), None, TsSource::PdTso), 5.into());
+
+        assert_eq!(resolver.resolve(20.into(), None, TsSource::PdTso), 5.into());
     }
 }
