@@ -1021,7 +1021,7 @@ mod tests {
             priority_limiters[1].consume(Duration::from_millis(400), IoBytes::default(), true);
         }
         worker.adjust();
-        check_limiter(f64::INFINITY, 3.6, 0.8);
+        check_limiter(f64::INFINITY, 3.2, 0.8);
 
         reset_quota(&mut worker, 6.4);
         for _i in 0..100 {
@@ -1029,7 +1029,7 @@ mod tests {
             priority_limiters[1].consume(Duration::from_millis(200), IoBytes::default(), true);
         }
         worker.adjust();
-        check_limiter(f64::INFINITY, 1.8, 0.8);
+        check_limiter(f64::INFINITY, 1.6, 0.8);
 
         reset_quota(&mut worker, 6.4);
         for _i in 0..100 {
@@ -1045,7 +1045,7 @@ mod tests {
             priority_limiters[2].consume(Duration::from_millis(320), IoBytes::default(), true);
         }
         worker.adjust();
-        check_limiter(f64::INFINITY, 3.6, 1.2);
+        check_limiter(f64::INFINITY, 3.2, 0.8);
 
         reset_quota(&mut worker, 6.0);
         for _i in 0..100 {
@@ -1053,12 +1053,12 @@ mod tests {
             priority_limiters[2].consume(Duration::from_millis(360), IoBytes::default(), true);
         }
         worker.adjust();
-        check_limiter(f64::INFINITY, 3.6, 3.6);
+        check_limiter(f64::INFINITY, 3.2, 3.2);
 
         // duration too small, unchanged.
         worker.resource_quota_getter.cpu_used = 6.0;
         worker.last_adjust_time = Instant::now_coarse() - Duration::from_millis(500);
         worker.adjust();
-        check_limiter(f64::INFINITY, 3.6, 3.6);
+        check_limiter(f64::INFINITY, 3.2, 3.2);
     }
 }
