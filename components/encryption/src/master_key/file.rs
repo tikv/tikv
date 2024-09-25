@@ -2,11 +2,12 @@
 
 use std::{io::Read, path::Path};
 
+use async_trait::async_trait;
 use file_system::File;
 use kvproto::encryptionpb::EncryptedContent;
 use tikv_util::box_err;
 
-use super::{Backend, MemAesGcmBackend};
+use super::{AsyncBackend, Backend, MemAesGcmBackend};
 use crate::{AesGcmCrypter, Error, Iv, Result};
 
 #[derive(Debug)]
@@ -61,25 +62,24 @@ impl Backend for FileBackend {
         true
     }
 }
+#[async_trait]
+impl AsyncBackend for FileBackend {
+    async fn encrypt_async(&self, plaintext: &[u8]) -> Result<EncryptedContent> {
+        self.encrypt(plaintext)
+    }
+
+    async fn decrypt_async(&self, content: &EncryptedContent) -> Result<Vec<u8>> {
+        self.decrypt(content)
+    }
+}
 
 #[cfg(test)]
 mod tests {
-    use std::{fs::File, io::Write, path::PathBuf};
-
     use hex::FromHex;
     use matches::assert_matches;
-    use tempfile::TempDir;
 
     use super::{super::metadata::MetadataKey, *};
     use crate::*;
-
-    fn create_key_file(val: &str) -> (PathBuf, TempDir) {
-        let tmp_dir = TempDir::new().unwrap();
-        let path = tmp_dir.path().join("key");
-        let mut file = File::create(path.clone()).unwrap();
-        file.write_all(format!("{}\n", val).as_bytes()).unwrap();
-        (path, tmp_dir)
-    }
 
     #[test]
     fn test_file_backend_ase_256_gcm() {
@@ -90,8 +90,9 @@ mod tests {
             .unwrap();
         let iv = Vec::from_hex("cafabd9672ca6c79a2fbdc22").unwrap();
 
-        let (key_path, _tmp_key_dir) =
-            create_key_file("c3d99825f2181f4808acd2068eac7441a65bd428f14d2aab43fefc0129091139");
+        let (key_path, _tmp_key_dir) = test_utils::create_master_key_file_test_only(
+            "c3d99825f2181f4808acd2068eac7441a65bd428f14d2aab43fefc0129091139",
+        );
         let backend = FileBackend::new(&key_path).unwrap();
 
         let iv = Iv::from_slice(iv.as_slice()).unwrap();
@@ -105,8 +106,9 @@ mod tests {
     fn test_file_backend_authenticate() {
         let pt = vec![1u8, 2, 3];
 
-        let (key_path, _tmp_key_dir) =
-            create_key_file("c3d99825f2181f4808acd2068eac7441a65bd428f14d2aab43fefc0129091139");
+        let (key_path, _tmp_key_dir) = test_utils::create_master_key_file_test_only(
+            "c3d99825f2181f4808acd2068eac7441a65bd428f14d2aab43fefc0129091139",
+        );
         let backend = FileBackend::new(&key_path).unwrap();
 
         let encrypted_content = backend.encrypt(&pt).unwrap();

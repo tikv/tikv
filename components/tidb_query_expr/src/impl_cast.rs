@@ -4481,6 +4481,8 @@ mod tests {
                 Some(vec![0xe4, 0xb8, 0x80]),
             ),
             ("一".as_bytes().to_vec(), "gbk", Some(vec![0xd2, 0xbb])),
+            ("一".as_bytes().to_vec(), "gb18030", Some(vec![0xd2, 0xbb])),
+            ("€".as_bytes().to_vec(), "gb18030", Some(vec![0xa2, 0xe3])),
         ];
 
         for (v, charset, expected) in cases {
@@ -4509,6 +4511,8 @@ mod tests {
                 Some("一".as_bytes().to_vec()),
             ),
             (vec![0xd2, 0xbb], "gbk", Some("一".as_bytes().to_vec())),
+            (vec![0xd2, 0xbb], "gb18030", Some("一".as_bytes().to_vec())),
+            (vec![0xa2, 0xe3], "gb18030", Some("€".as_bytes().to_vec())),
         ];
 
         for (v, charset, expected) in cases {

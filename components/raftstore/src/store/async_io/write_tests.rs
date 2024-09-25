@@ -361,7 +361,7 @@ fn test_worker() {
 
     t.worker.write_to_db(true);
 
-    let snapshot = engines.kv.snapshot(None);
+    let snapshot = engines.kv.snapshot();
     assert_eq!(snapshot.get_value(b"kv_k1").unwrap().unwrap(), b"kv_v1");
     assert_eq!(snapshot.get_value(b"kv_k2").unwrap().unwrap(), b"kv_v2");
     assert_eq!(snapshot.get_value(b"kv_k3").unwrap().unwrap(), b"kv_v3");
@@ -567,7 +567,7 @@ fn test_basic_flow() {
 
     must_wait_same_notifies(vec![(region_1, (1, 15)), (region_2, (2, 20))], &t.notify_rx);
 
-    let snapshot = engines.kv.snapshot(None);
+    let snapshot = engines.kv.snapshot();
     assert!(snapshot.get_value(b"kv_k1").unwrap().is_none());
     assert_eq!(snapshot.get_value(b"kv_k2").unwrap().unwrap(), b"kv_v2");
     assert_eq!(snapshot.get_value(b"kv_k3").unwrap().unwrap(), b"kv_v3");

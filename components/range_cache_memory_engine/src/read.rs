@@ -4,7 +4,7 @@ use core::slice::SlicePattern;
 use std::{fmt::Debug, ops::Deref, result, sync::Arc};
 
 use bytes::Bytes;
-use crossbeam::epoch::{self};
+use crossbeam::epoch;
 use crossbeam_skiplist::{base::OwnedIter, SkipList};
 use engine_rocks::{raw::SliceTransform, util::FixedSuffixSliceTransform};
 use engine_traits::{
@@ -74,25 +74,30 @@ impl RangeCacheSnapshot {
         read_ts: u64,
         seq_num: u64,
     ) -> result::Result<Self, FailedReason> {
-        let mut core = engine.core.write();
-        core.range_manager
+        engine
+            .core
+            .region_manager
             .region_snapshot(region.id, region.epoch_version, read_ts)?;
         Ok(RangeCacheSnapshot {
             snapshot_meta: RangeCacheSnapshotMeta::new(region, read_ts, seq_num),
-            skiplist_engine: core.engine.clone(),
+            skiplist_engine: engine.core.engine.clone(),
             engine: engine.clone(),
         })
+    }
+
+    pub(crate) fn snapshot_meta(&self) -> &RangeCacheSnapshotMeta {
+        &self.snapshot_meta
     }
 }
 
 impl Drop for RangeCacheSnapshot {
     fn drop(&mut self) {
-        let mut core = self.engine.core.write();
-        let regions_removable = core
-            .range_manager
+        let regions_removable = self
+            .engine
+            .core
+            .region_manager
             .remove_region_snapshot(&self.snapshot_meta);
         if !regions_removable.is_empty() {
-            drop(core);
             if let Err(e) = self
                 .engine
                 .bg_worker_manager()
@@ -154,6 +159,7 @@ impl Iterable for RangeCacheSnapshot {
             prefix_extractor,
             local_stats: LocalStatistics::default(),
             seek_duration: IN_MEMORY_ENGINE_SEEK_DURATION.local(),
+            snapshot_read_ts: self.snapshot_meta.snapshot_ts,
         })
     }
 }
@@ -224,11 +230,11 @@ pub struct RangeCacheIterator {
     iter: OwnedIter<Arc<SkipList<InternalBytes, InternalBytes>>, InternalBytes, InternalBytes>,
     // The lower bound is inclusive while the upper bound is exclusive if set
     // Note: bounds (region boundaries) have no mvcc versions
-    lower_bound: Vec<u8>,
-    upper_bound: Vec<u8>,
+    pub(crate) lower_bound: Vec<u8>,
+    pub(crate) upper_bound: Vec<u8>,
     // A snapshot sequence number passed from RocksEngine Snapshot to guarantee suitable
     // visibility.
-    sequence_number: u64,
+    pub(crate) sequence_number: u64,
 
     saved_user_key: Vec<u8>,
     // This is only used by backwawrd iteration where the value we want may not be pointed by the
@@ -245,6 +251,8 @@ pub struct RangeCacheIterator {
     statistics: Arc<Statistics>,
     local_stats: LocalStatistics,
     seek_duration: LocalHistogram,
+
+    pub(crate) snapshot_read_ts: u64,
 }
 
 impl Drop for RangeCacheIterator {
@@ -524,6 +532,7 @@ impl Iterator for RangeCacheIterator {
     }
 
     fn seek(&mut self, key: &[u8]) -> Result<bool> {
+        fail::fail_point!("on_range_cache_iterator_seek");
         let begin = Instant::now();
         self.direction = Direction::Forward;
         if let Some(ref mut extractor) = self.prefix_extractor {
@@ -669,8 +678,8 @@ mod tests {
     };
     use engine_traits::{
         CacheRegion, EvictReason, FailedReason, IterMetricsCollector, IterOptions, Iterable,
-        Iterator, MetricsExt, Mutable, Peekable, RangeCacheEngine, ReadOptions, RegionEvent,
-        WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_WRITE,
+        Iterator, MetricsExt, Mutable, Peekable, RangeCacheEngine, RangeCacheEngineExt,
+        ReadOptions, RegionEvent, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_WRITE,
     };
     use keys::DATA_PREFIX_KEY;
     use tempfile::Builder;
@@ -700,11 +709,13 @@ mod tests {
         engine.new_region(region.clone());
 
         let verify_snapshot_count = |snapshot_ts, count| {
-            let core = engine.core.read();
+            let regions_map = engine.core.region_manager.regions_map.read();
             if count > 0 {
                 assert_eq!(
-                    *core.range_manager.regions()[&region.id]
+                    *regions_map.regions()[&region.id]
                         .region_snapshot_list()
+                        .lock()
+                        .unwrap()
                         .0
                         .get(&snapshot_ts)
                         .unwrap(),
@@ -712,8 +723,10 @@ mod tests {
                 );
             } else {
                 assert!(
-                    core.range_manager.regions()[&region.id]
+                    regions_map.regions()[&region.id]
                         .region_snapshot_list()
+                        .lock()
+                        .unwrap()
                         .0
                         .get(&snapshot_ts)
                         .is_none()
@@ -724,10 +737,7 @@ mod tests {
         let cache_region = CacheRegion::from_region(&region);
         let s1 = engine.snapshot(cache_region.clone(), 5, u64::MAX).unwrap();
 
-        {
-            let mut core = engine.core.write();
-            assert!(core.range_manager.set_safe_point(region.id, 5));
-        }
+        assert!(engine.core.region_manager.set_safe_point(region.id, 5));
         assert_eq!(
             engine
                 .snapshot(cache_region.clone(), 5, u64::MAX)
@@ -751,10 +761,14 @@ mod tests {
         verify_snapshot_count(10, 1);
         drop(s3);
         {
-            let core = engine.core.write();
+            let regions_map = engine.core.region_manager.regions_map.read();
             assert!(
-                core.range_manager.regions()[&region.id]
+                regions_map
+                    .region_meta(region.id)
+                    .unwrap()
                     .region_snapshot_list()
+                    .lock()
+                    .unwrap()
                     .is_empty()
             );
         }
@@ -882,14 +896,10 @@ mod tests {
         let range = CacheRegion::from_region(&region);
         engine.new_region(region.clone());
 
-        {
-            let mut core = engine.core.write();
-            core.range_manager.set_safe_point(region.id, 5);
-            let sl = core.engine.data[cf_to_id("write")].clone();
-
-            put_key_val(&sl, "b", "val", 10, 5);
-            put_key_val(&sl, "c", "vall", 10, 5);
-        }
+        engine.core.region_manager().set_safe_point(region.id, 5);
+        let sl = engine.core.engine.data[cf_to_id("write")].clone();
+        put_key_val(&sl, "b", "val", 10, 5);
+        put_key_val(&sl, "c", "vall", 10, 5);
 
         let snapshot = engine.snapshot(range.clone(), u64::MAX, 100).unwrap();
         let mut iter_opt = IterOptions::default();
@@ -921,14 +931,11 @@ mod tests {
         let cache_region = CacheRegion::from_region(&region);
         engine.new_region(region.clone());
 
-        {
-            let mut core = engine.core.write();
-            core.range_manager.set_safe_point(region.id, 5);
-            let sl = core.engine.data[cf_to_id("write")].clone();
-            fill_data_in_skiplist(sl.clone(), (1..10).step_by(1), 1..50, 1);
-            // k1 is deleted at seq_num 150 while k49 is deleted at seq num 101
-            delete_data_in_skiplist(sl, (1..10).step_by(1), 1..50, 100);
-        }
+        engine.core.region_manager.set_safe_point(region.id, 5);
+        let sl = engine.core.engine.data[cf_to_id("write")].clone();
+        fill_data_in_skiplist(sl.clone(), (1..10).step_by(1), 1..50, 1);
+        // k1 is deleted at seq_num 150 while k49 is deleted at seq num 101
+        delete_data_in_skiplist(sl, (1..10).step_by(1), 1..50, 100);
 
         let opts = ReadOptions::default();
         {
@@ -1002,14 +1009,11 @@ mod tests {
         let range = CacheRegion::from_region(&region);
         engine.new_region(region.clone());
 
-        let step: i32 = 2;
-        {
-            let mut core = engine.core.write();
-            core.range_manager.set_safe_point(region.id, 5);
-            let sl = core.engine.data[cf_to_id("write")].clone();
-            fill_data_in_skiplist(sl.clone(), (1..100).step_by(step as usize), 1..10, 1);
-            delete_data_in_skiplist(sl, (1..100).step_by(step as usize), 1..10, 200);
-        }
+        let step = 2;
+        engine.core.region_manager.set_safe_point(region.id, 5);
+        let sl = engine.core.engine.data[cf_to_id("write")].clone();
+        fill_data_in_skiplist(sl.clone(), (1..100).step_by(step), 1..10, 1);
+        delete_data_in_skiplist(sl, (1..100).step_by(step), 1..10, 200);
 
         let mut iter_opt = IterOptions::default();
         let snapshot = engine.snapshot(range.clone(), 10, u64::MAX).unwrap();
@@ -1032,20 +1036,14 @@ mod tests {
             let snapshot = engine.snapshot(range.clone(), 100, 150).unwrap();
             let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
             iter.seek_to_first().unwrap();
-            verify_key_values(
-                &mut iter,
-                (1..100).step_by(step as usize),
-                (1..10).rev(),
-                true,
-                true,
-            );
+            verify_key_values(&mut iter, (1..100).step_by(step), (1..10).rev(), true, true);
 
             // seek key that is in the skiplist
             let seek_key = construct_key(11, u64::MAX);
             iter.seek(&seek_key).unwrap();
             verify_key_values(
                 &mut iter,
-                (11..100).step_by(step as usize),
+                (11..100).step_by(step),
                 (1..10).rev(),
                 true,
                 true,
@@ -1056,7 +1054,7 @@ mod tests {
             iter.seek(&seek_key).unwrap();
             verify_key_values(
                 &mut iter,
-                (13..100).step_by(step as usize),
+                (13..100).step_by(step),
                 (1..10).rev(),
                 true,
                 true,
@@ -1070,7 +1068,7 @@ mod tests {
             iter.seek_to_first().unwrap();
             verify_key_values(
                 &mut iter,
-                (63..100).step_by(step as usize),
+                (63..100).step_by(step),
                 (1..10).rev(),
                 true,
                 true,
@@ -1113,24 +1111,12 @@ mod tests {
             let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
 
             assert!(iter.seek_to_first().unwrap());
-            verify_key_values(
-                &mut iter,
-                (21..40).step_by(step as usize),
-                (1..10).rev(),
-                true,
-                true,
-            );
+            verify_key_values(&mut iter, (21..40).step_by(step), (1..10).rev(), true, true);
 
             // seek a key that is below the lower bound is the same with seek_to_first
             let seek_key = construct_key(19, u64::MAX);
             assert!(iter.seek(&seek_key).unwrap());
-            verify_key_values(
-                &mut iter,
-                (21..40).step_by(step as usize),
-                (1..10).rev(),
-                true,
-                true,
-            );
+            verify_key_values(&mut iter, (21..40).step_by(step), (1..10).rev(), true, true);
 
             // seek a key that is larger or equal to upper bound won't get any key
             let seek_key = construct_key(41, u64::MAX);
@@ -1139,13 +1125,7 @@ mod tests {
 
             let seek_key = construct_key(32, u64::MAX);
             assert!(iter.seek(&seek_key).unwrap());
-            verify_key_values(
-                &mut iter,
-                (33..40).step_by(step as usize),
-                (1..10).rev(),
-                true,
-                true,
-            );
+            verify_key_values(&mut iter, (33..40).step_by(step), (1..10).rev(), true, true);
         }
 
         // with bounds, some deletions (seq_num 215)
@@ -1189,14 +1169,13 @@ mod tests {
         let region = new_region(1, b"", b"z");
         let range = CacheRegion::from_region(&region);
         engine.new_region(region.clone());
-        let step: i32 = 2;
+        let step = 2;
 
         {
-            let mut core = engine.core.write();
-            core.range_manager.set_safe_point(region.id, 5);
-            let sl = core.engine.data[cf_to_id("write")].clone();
-            fill_data_in_skiplist(sl.clone(), (1..100).step_by(step as usize), 1..10, 1);
-            delete_data_in_skiplist(sl, (1..100).step_by(step as usize), 1..10, 200);
+            engine.core.region_manager.set_safe_point(region.id, 5);
+            let sl = engine.core.engine.data[cf_to_id("write")].clone();
+            fill_data_in_skiplist(sl.clone(), (1..100).step_by(step), 1..10, 1);
+            delete_data_in_skiplist(sl, (1..100).step_by(step), 1..10, 200);
         }
 
         let mut iter_opt = IterOptions::default();
@@ -1210,35 +1189,17 @@ mod tests {
             let snapshot = engine.snapshot(range.clone(), 10, 150).unwrap();
             let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
             assert!(iter.seek_to_last().unwrap());
-            verify_key_values(
-                &mut iter,
-                (1..100).step_by(step as usize).rev(),
-                1..10,
-                false,
-                true,
-            );
+            verify_key_values(&mut iter, (1..100).step_by(step).rev(), 1..10, false, true);
 
             // seek key that is in the skiplist
             let seek_key = construct_key(81, 0);
             assert!(iter.seek_for_prev(&seek_key).unwrap());
-            verify_key_values(
-                &mut iter,
-                (1..82).step_by(step as usize).rev(),
-                1..10,
-                false,
-                true,
-            );
+            verify_key_values(&mut iter, (1..82).step_by(step).rev(), 1..10, false, true);
 
             // seek key that is in the skiplist
             let seek_key = construct_key(80, 0);
             assert!(iter.seek_for_prev(&seek_key).unwrap());
-            verify_key_values(
-                &mut iter,
-                (1..80).step_by(step as usize).rev(),
-                1..10,
-                false,
-                true,
-            );
+            verify_key_values(&mut iter, (1..80).step_by(step).rev(), 1..10, false, true);
         }
 
         let lower_bound = construct_user_key(21);
@@ -1250,24 +1211,12 @@ mod tests {
             let mut iter = snapshot.iterator_opt("write", iter_opt).unwrap();
 
             assert!(iter.seek_to_last().unwrap());
-            verify_key_values(
-                &mut iter,
-                (21..38).step_by(step as usize).rev(),
-                1..10,
-                false,
-                true,
-            );
+            verify_key_values(&mut iter, (21..38).step_by(step).rev(), 1..10, false, true);
 
             // seek a key that is above the upper bound is the same with seek_to_last
             let seek_key = construct_key(40, 0);
             assert!(iter.seek_for_prev(&seek_key).unwrap());
-            verify_key_values(
-                &mut iter,
-                (21..38).step_by(step as usize).rev(),
-                1..10,
-                false,
-                true,
-            );
+            verify_key_values(&mut iter, (21..38).step_by(step).rev(), 1..10, false, true);
 
             // seek a key that is less than the lower bound won't get any key
             let seek_key = construct_key(20, u64::MAX);
@@ -1276,13 +1225,7 @@ mod tests {
 
             let seek_key = construct_key(26, 0);
             assert!(iter.seek_for_prev(&seek_key).unwrap());
-            verify_key_values(
-                &mut iter,
-                (21..26).step_by(step as usize).rev(),
-                1..10,
-                false,
-                true,
-            );
+            verify_key_values(&mut iter, (21..26).step_by(step).rev(), 1..10, false, true);
         }
     }
 
@@ -1296,9 +1239,8 @@ mod tests {
         engine.new_region(region.clone());
 
         {
-            let mut core = engine.core.write();
-            core.range_manager.set_safe_point(region.id, 5);
-            let sl = core.engine.data[cf_to_id("write")].clone();
+            engine.core.region_manager.set_safe_point(region.id, 5);
+            let sl = engine.core.engine.data[cf_to_id("write")].clone();
 
             put_key_val(&sl, "aaa", "va1", 10, 1);
             put_key_val(&sl, "aaa", "va2", 10, 3);
@@ -1420,9 +1362,8 @@ mod tests {
         engine.new_region(region.clone());
 
         {
-            let mut core = engine.core.write();
-            core.range_manager.set_safe_point(region.id, 5);
-            let sl = core.engine.data[cf_to_id("write")].clone();
+            engine.core.region_manager.set_safe_point(region.id, 5);
+            let sl = engine.core.engine.data[cf_to_id("write")].clone();
 
             put_key_val(&sl, "aaa", "va1", 10, 2);
             put_key_val(&sl, "aaa", "va2", 10, 4);
@@ -1522,9 +1463,8 @@ mod tests {
             ));
             engine.new_region(region.clone());
             let sl = {
-                let mut core = engine.core.write();
-                core.range_manager.set_safe_point(region.id, 5);
-                core.engine.data[cf_to_id("write")].clone()
+                engine.core.region_manager.set_safe_point(region.id, 5);
+                engine.core.engine.data[cf_to_id("write")].clone()
             };
 
             let mut s = 1;
@@ -1560,9 +1500,8 @@ mod tests {
             ));
             engine.new_region(region.clone());
             let sl = {
-                let mut core = engine.core.write();
-                core.range_manager.set_safe_point(region.id, 5);
-                core.engine.data[cf_to_id("write")].clone()
+                engine.core.region_manager.set_safe_point(region.id, 5);
+                engine.core.engine.data[cf_to_id("write")].clone()
             };
 
             let mut s = 1;
@@ -1591,9 +1530,8 @@ mod tests {
             ));
             engine.new_region(region.clone());
             let sl = {
-                let mut core = engine.core.write();
-                core.range_manager.set_safe_point(region.id, 5);
-                core.engine.data[cf_to_id("write")].clone()
+                engine.core.region_manager.set_safe_point(region.id, 5);
+                engine.core.engine.data[cf_to_id("write")].clone()
             };
             put_key_val(&sl, "a", "val", 10, 1);
             for i in 2..50 {
@@ -1624,9 +1562,8 @@ mod tests {
             ));
             engine.new_region(region.clone());
             let sl = {
-                let mut core = engine.core.write();
-                core.range_manager.set_safe_point(region.id, 5);
-                core.engine.data[cf_to_id("write")].clone()
+                engine.core.region_manager.set_safe_point(region.id, 5);
+                engine.core.engine.data[cf_to_id("write")].clone()
             };
             let mut s = 1;
             for seq in 2..50 {
@@ -1659,9 +1596,8 @@ mod tests {
         engine.new_region(region.clone());
 
         {
-            let mut core = engine.core.write();
-            core.range_manager.set_safe_point(region.id, 5);
-            let sl = core.engine.data[cf_to_id("write")].clone();
+            engine.core.region_manager.set_safe_point(region.id, 5);
+            let sl = engine.core.engine.data[cf_to_id("write")].clone();
 
             let guard = &epoch::pin();
             for i in 1..5 {
@@ -1756,14 +1692,15 @@ mod tests {
             || {
                 !engine
                     .core
+                    .region_manager()
+                    .regions_map
                     .read()
-                    .range_manager()
                     .regions()
                     .values()
                     .any(|m| m.get_state().is_evict())
             },
         );
-        let write_handle = engine.core.read().engine.cf_handle("write");
+        let write_handle = engine.core.engine.cf_handle("write");
         let start_key = encode_seek_key(&region.start, u64::MAX);
         let mut iter = write_handle.iterator();
 
@@ -1784,9 +1721,8 @@ mod tests {
 
         let guard = &epoch::pin();
         {
-            let mut core = engine.core.write();
-            core.range_manager.set_safe_point(region.id, 5);
-            let sl = core.engine.data[cf_to_id("write")].clone();
+            engine.core.region_manager.set_safe_point(region.id, 5);
+            let sl = engine.core.engine.data[cf_to_id("write")].clone();
             for i in 0..30 {
                 let user_key = construct_key(i, 10);
                 let internal_key = encode_key(&user_key, 10, ValueType::Value);
@@ -1808,7 +1744,7 @@ mod tests {
         });
 
         let evict_region = new_regions[1].clone();
-        engine.evict_region(&evict_region, EvictReason::AutoEvict);
+        engine.evict_region(&evict_region, EvictReason::AutoEvict, None);
         assert_eq!(
             engine.snapshot(range.clone(), 10, 200).unwrap_err(),
             FailedReason::EpochNotMatch
@@ -1854,9 +1790,8 @@ mod tests {
 
         let guard = &epoch::pin();
         {
-            let mut core = engine.core.write();
-            core.range_manager.set_safe_point(region.id, 5);
-            let sl = core.engine.data[cf_to_id("write")].clone();
+            engine.core.region_manager.set_safe_point(region.id, 5);
+            let sl = engine.core.engine.data[cf_to_id("write")].clone();
             for i in 0..30 {
                 let user_key = construct_key(i, 10);
                 let internal_key = encode_key(&user_key, 10, ValueType::Value);
@@ -1885,7 +1820,7 @@ mod tests {
         });
 
         let evict_region = new_regions[1].clone();
-        engine.evict_region(&evict_region, EvictReason::AutoEvict);
+        engine.evict_region(&evict_region, EvictReason::AutoEvict, None);
 
         let r_left = new_regions[0].clone();
         let s3 = engine.snapshot(r_left.clone(), 20, 20).unwrap();
@@ -1893,7 +1828,7 @@ mod tests {
         let s4 = engine.snapshot(r_right, 20, 20).unwrap();
 
         drop(s3);
-        engine.evict_region(&r_left, EvictReason::AutoEvict);
+        engine.evict_region(&r_left, EvictReason::AutoEvict, None);
 
         // todo(SpadeA): memory limiter
         {
@@ -1901,8 +1836,9 @@ mod tests {
             assert_eq!(
                 engine
                     .core
+                    .region_manager()
+                    .regions_map
                     .read()
-                    .range_manager()
                     .region_meta(evict_region.id)
                     .unwrap()
                     .get_state(),
@@ -1916,8 +1852,9 @@ mod tests {
             assert_eq!(
                 engine
                     .core
+                    .region_manager()
+                    .regions_map
                     .read()
-                    .range_manager()
                     .region_meta(evict_region.id)
                     .unwrap()
                     .get_state(),
@@ -1942,9 +1879,8 @@ mod tests {
         engine.new_region(region.clone());
 
         {
-            let mut core = engine.core.write();
-            core.range_manager.set_safe_point(region.id, 5);
-            let sl = core.engine.data[cf_to_id("write")].clone();
+            engine.core.region_manager.set_safe_point(region.id, 5);
+            let sl = engine.core.engine.data[cf_to_id("write")].clone();
 
             delete_key(&sl, "a", 10, 5);
             delete_key(&sl, "b", 10, 5);
@@ -1987,9 +1923,8 @@ mod tests {
         engine.new_region(region.clone());
 
         {
-            let mut core = engine.core.write();
-            core.range_manager.set_safe_point(region.id, 5);
-            let sl = core.engine.data[cf_to_id("write")].clone();
+            engine.core.region_manager.set_safe_point(region.id, 5);
+            let sl = engine.core.engine.data[cf_to_id("write")].clone();
 
             put_key_val(&sl, "a", "val", 10, 5);
             put_key_val(&sl, "b", "vall", 10, 5);

@@ -13,6 +13,8 @@ pub const CHARSET_ASCII: &str = "ascii";
 pub const CHARSET_LATIN1: &str = "latin1";
 /// `CHARSET_GBK` is Chinese character set.
 pub const CHARSET_GBK: &str = "gbk";
+/// `CHARSET_GB18030` is another Chinese character set containing GBK.
+pub const CHARSET_GB18030: &str = "gb18030";
 
 /// All utf8 charsets.
 pub const UTF8_CHARSETS: &[&str] = &[CHARSET_UTF8, CHARSET_UTF8MB4, CHARSET_ASCII];

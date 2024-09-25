@@ -86,25 +86,21 @@ impl ResolvedRegions {
     /// Note: Maybe we can compute the global checkpoint internal and getting
     /// the interface clear. However we must take the `min_ts` or we cannot
     /// provide valid global checkpoint if there isn't any region checkpoint.
-    pub fn new(checkpoint: TimeStamp, checkpoints: Vec<ResolveResult>) -> Self {
+    pub const fn new(checkpoint: TimeStamp, checkpoints: Vec<ResolveResult>) -> Self {
         Self {
             items: checkpoints,
             checkpoint,
         }
     }
 
-    /// take the region checkpoints from the structure.
-    #[deprecated = "please use `take_resolve_result` instead."]
-    pub fn take_region_checkpoints(&mut self) -> Vec<(Region, TimeStamp)> {
-        std::mem::take(&mut self.items)
-            .into_iter()
-            .map(|x| (x.region, x.checkpoint))
-            .collect()
-    }
-
     /// take the resolve result from this struct.
     pub fn take_resolve_result(&mut self) -> Vec<ResolveResult> {
         std::mem::take(&mut self.items)
+    }
+
+    /// Get the resolve results.
+    pub fn resolve_results(&self) -> &[ResolveResult] {
+        &self.items
     }
 
     /// get the global checkpoint.
@@ -835,6 +831,7 @@ mod test {
         time::Duration,
     };
 
+    use encryption::BackupEncryptionManager;
     use engine_test::{kv::KvTestEngine, raft::RaftTestEngine};
     use kvproto::{
         brpb::{Noop, StorageBackend, StreamBackupTaskInfo},
@@ -1037,7 +1034,11 @@ mod test {
             let subs = SubscriptionTracer::default();
             let memory_manager = Arc::new(MemoryQuota::new(1024));
             let (tx, mut rx) = tokio::sync::mpsc::channel(8);
-            let router = RouterInner::new(scheduler.clone(), BackupStreamConfig::default().into());
+            let router = RouterInner::new(
+                scheduler.clone(),
+                BackupStreamConfig::default().into(),
+                BackupEncryptionManager::default(),
+            );
             let mut task = StreamBackupTaskInfo::new();
             task.set_name(task_name.to_owned());
             task.set_storage({

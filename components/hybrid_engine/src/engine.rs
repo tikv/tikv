@@ -1,7 +1,7 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{
-    FailedReason, KvEngine, Mutable, Peekable, RangeCacheEngine, ReadOptions, Result,
+    CacheRegion, FailedReason, KvEngine, Mutable, Peekable, RangeCacheEngine, ReadOptions, Result,
     SnapshotContext, SnapshotMiscExt, SyncMutable, WriteBatch, WriteBatchExt,
 };
 
@@ -50,6 +50,41 @@ where
     }
 }
 
+pub fn new_in_memory_snapshot<EC: RangeCacheEngine>(
+    range_cache_engine: &EC,
+    region: CacheRegion,
+    read_ts: u64,
+    sequence_number: u64,
+) -> Option<EC::Snapshot> {
+    match range_cache_engine.snapshot(region, read_ts, sequence_number) {
+        Ok(snap) => {
+            SNAPSHOT_TYPE_COUNT_STATIC.range_cache_engine.inc();
+            Some(snap)
+        }
+        Err(FailedReason::TooOldRead) => {
+            RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
+                .too_old_read
+                .inc();
+            SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
+            None
+        }
+        Err(FailedReason::NotCached) => {
+            RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
+                .not_cached
+                .inc();
+            SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
+            None
+        }
+        Err(FailedReason::EpochNotMatch) => {
+            RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
+                .epoch_not_match
+                .inc();
+            SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
+            None
+        }
+    }
+}
+
 impl<EK, EC> HybridEngine<EK, EC>
 where
     EK: KvEngine,
@@ -60,6 +95,23 @@ where
             disk_engine,
             range_cache_engine,
         }
+    }
+
+    pub fn new_snapshot(&self, ctx: Option<SnapshotContext>) -> HybridEngineSnapshot<EK, EC> {
+        let disk_snap = self.disk_engine.snapshot();
+        let range_cache_snap = if !self.range_cache_engine.enabled() {
+            None
+        } else if let Some(ctx) = ctx {
+            new_in_memory_snapshot(
+                &self.range_cache_engine,
+                ctx.region.unwrap(),
+                ctx.read_ts,
+                disk_snap.sequence_number(),
+            )
+        } else {
+            None
+        };
+        HybridEngineSnapshot::new(disk_snap, range_cache_snap)
     }
 }
 
@@ -92,49 +144,8 @@ where
 {
     type Snapshot = HybridEngineSnapshot<EK, EC>;
 
-    fn snapshot(&self, ctx: Option<SnapshotContext>) -> Self::Snapshot {
-        let disk_snap = self.disk_engine.snapshot(ctx.clone());
-        let range_cache_snap = if !self.range_cache_engine.enabled() {
-            None
-        } else if let Some(ctx) = ctx {
-            match self.range_cache_engine.snapshot(
-                ctx.region.unwrap(),
-                ctx.read_ts,
-                disk_snap.sequence_number(),
-            ) {
-                Ok(snap) => {
-                    SNAPSHOT_TYPE_COUNT_STATIC.range_cache_engine.inc();
-                    Some(snap)
-                }
-                Err(FailedReason::TooOldRead) => {
-                    RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
-                        .too_old_read
-                        .inc();
-                    None
-                }
-                Err(FailedReason::NotCached) => {
-                    RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
-                        .not_cached
-                        .inc();
-                    None
-                }
-                Err(FailedReason::EpochNotMatch) => {
-                    RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
-                        .epoch_not_match
-                        .inc();
-                    None
-                }
-            }
-        } else {
-            RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
-                .no_read_ts
-                .inc();
-            None
-        };
-        if range_cache_snap.is_none() {
-            SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
-        }
-        HybridEngineSnapshot::new(disk_snap, range_cache_snap)
+    fn snapshot(&self) -> Self::Snapshot {
+        unreachable!()
     }
 
     fn sync(&self) -> engine_traits::Result<()> {
@@ -211,7 +222,7 @@ mod tests {
     use std::sync::Arc;
 
     use engine_rocks::util::new_engine;
-    use engine_traits::{CacheRegion, KvEngine, SnapshotContext, CF_DEFAULT, CF_LOCK, CF_WRITE};
+    use engine_traits::{CacheRegion, SnapshotContext, CF_DEFAULT, CF_LOCK, CF_WRITE};
     use online_config::{ConfigChange, ConfigManager, ConfigValue};
     use range_cache_memory_engine::{
         config::RangeCacheConfigManager, test_util::new_region, RangeCacheEngineConfig,
@@ -237,24 +248,24 @@ mod tests {
         let region = new_region(1, b"k00", b"k10");
         let range = CacheRegion::from_region(&region);
         memory_engine.new_region(region.clone());
-        {
-            let mut core = memory_engine.core().write();
-            core.mut_range_manager().set_safe_point(region.id, 10);
-        }
+        memory_engine
+            .core()
+            .region_manager()
+            .set_safe_point(region.id, 10);
 
         let hybrid_engine = HybridEngine::new(disk_engine, memory_engine.clone());
-        let s = hybrid_engine.snapshot(None);
+        let s = hybrid_engine.new_snapshot(None);
         assert!(!s.range_cache_snapshot_available());
 
         let mut snap_ctx = SnapshotContext {
             read_ts: 15,
             region: Some(range.clone()),
         };
-        let s = hybrid_engine.snapshot(Some(snap_ctx.clone()));
+        let s = hybrid_engine.new_snapshot(Some(snap_ctx.clone()));
         assert!(s.range_cache_snapshot_available());
 
         snap_ctx.read_ts = 5;
-        let s = hybrid_engine.snapshot(Some(snap_ctx.clone()));
+        let s = hybrid_engine.new_snapshot(Some(snap_ctx.clone()));
         assert!(!s.range_cache_snapshot_available());
 
         let mut config_manager = RangeCacheConfigManager(config.clone());
@@ -263,7 +274,7 @@ mod tests {
         config_manager.dispatch(config_change).unwrap();
         assert!(!config.value().enabled);
         snap_ctx.read_ts = 15;
-        let s = hybrid_engine.snapshot(Some(snap_ctx));
+        let s = hybrid_engine.new_snapshot(Some(snap_ctx));
         assert!(!s.range_cache_snapshot_available());
     }
 }
