@@ -388,7 +388,7 @@ impl<E: Engine> ImportSstService<E> {
         }
     }
 
-    async fn apply_imp(
+    async fn do_apply(
         mut req: ApplyRequest,
         importer: Arc<SstImporter<E::Local>>,
         writer: raft_writer::ThrottledTlsEngineWriter,
@@ -406,10 +406,9 @@ impl<E: Engine> ImportSstService<E> {
             metas.push(req.take_meta());
             rules.push(req.take_rewrite_rule());
         }
-        let ext_storage = importer.wrap_kms(
+        let ext_storage = importer.auto_encrypt_local_file_if_needed(
             importer
                 .external_storage_or_cache(req.get_storage_backend(), req.get_storage_cache_id())?,
-            false,
         );
 
         let mut inflight_futures = VecDeque::new();
@@ -417,11 +416,13 @@ impl<E: Engine> ImportSstService<E> {
         let mut tasks = metas.iter().zip(rules.iter()).peekable();
         while let Some((meta, rule)) = tasks.next() {
             let buff = importer
-                .read_from_kv_file(
+                .download_kv_file(
                     meta,
                     ext_storage.clone(),
                     req.get_storage_backend(),
                     &limiter,
+                    req.cipher_info.clone().take(),
+                    req.master_keys.clone().to_vec(),
                 )
                 .await?;
             if let Some(mut r) = importer.do_apply_kv_file(
@@ -834,17 +835,17 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             let mut resp = ApplyResponse::default();
             if get_disk_status(0) != DiskUsage::Normal {
                 resp.set_error(Error::DiskSpaceNotEnough.into());
-                return crate::send_rpc_response!(Ok(resp), sink, label, start);
+                return send_rpc_response!(Ok(resp), sink, label, start);
             }
 
-            match Self::apply_imp(req, importer, applier, limiter, max_raft_size).await {
+            match Self::do_apply(req, importer, applier, limiter, max_raft_size).await {
                 Ok(Some(r)) => resp.set_range(r),
                 Err(e) => resp.set_error(e),
                 _ => {}
             }
 
             debug!("finished apply kv file with {:?}", resp);
-            crate::send_rpc_response!(Ok(resp), sink, label, start);
+            send_rpc_response!(Ok(resp), sink, label, start);
         };
         self.threads.spawn(handle_task);
     }

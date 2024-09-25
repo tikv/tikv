@@ -287,6 +287,9 @@ struct TxnSchedulerInner<L: LockManager> {
     txn_status_cache: TxnStatusCache,
 
     memory_quota: Arc<MemoryQuota>,
+
+    in_memory_peer_size_limit: Arc<AtomicU64>,
+    in_memory_instance_size_limit: Arc<AtomicU64>,
 }
 
 #[inline]
@@ -481,6 +484,8 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             feature_gate,
             txn_status_cache: TxnStatusCache::new(config.txn_status_cache_capacity),
             memory_quota: Arc::new(MemoryQuota::new(config.memory_quota.0 as _)),
+            in_memory_peer_size_limit: dynamic_configs.in_memory_peer_size_limit,
+            in_memory_instance_size_limit: dynamic_configs.in_memory_instance_size_limit,
         });
 
         SCHED_TXN_MEMORY_QUOTA
@@ -894,7 +899,9 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             // remain not updated after receiving signal from the callback.
             let now = std::time::SystemTime::now();
             for (start_ts, commit_ts) in known_txn_status {
-                self.inner.txn_status_cache.insert(start_ts, commit_ts, now);
+                self.inner
+                    .txn_status_cache
+                    .insert_committed(start_ts, commit_ts, now);
             }
         }
 
@@ -1901,7 +1908,13 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         {
             return false;
         }
-        match pessimistic_locks.insert(mem::take(&mut to_be_write.modifies)) {
+        match pessimistic_locks.insert(
+            mem::take(&mut to_be_write.modifies),
+            self.inner.in_memory_peer_size_limit.load(Ordering::Relaxed) as usize,
+            self.inner
+                .in_memory_instance_size_limit
+                .load(Ordering::Relaxed) as usize,
+        ) {
             Ok(()) => {
                 IN_MEMORY_PESSIMISTIC_LOCKING_COUNTER_STATIC.success.inc();
                 true
@@ -2231,6 +2244,8 @@ mod tests {
                     pipelined_pessimistic_lock: Arc::new(AtomicBool::new(true)),
                     in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
                     wake_up_delay_duration_ms: Arc::new(AtomicU64::new(0)),
+                    in_memory_peer_size_limit: Arc::new(AtomicU64::new(512 << 10)),
+                    in_memory_instance_size_limit: Arc::new(AtomicU64::new(100 << 20)),
                 },
                 Arc::new(FlowController::Singleton(EngineFlowController::empty())),
                 None,
@@ -2581,6 +2596,8 @@ mod tests {
                 pipelined_pessimistic_lock: Arc::new(AtomicBool::new(false)),
                 in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
                 wake_up_delay_duration_ms: Arc::new(AtomicU64::new(0)),
+                in_memory_peer_size_limit: Arc::new(AtomicU64::new(512 << 10)),
+                in_memory_instance_size_limit: Arc::new(AtomicU64::new(100 << 20)),
             },
             Arc::new(FlowController::Singleton(EngineFlowController::empty())),
             None,

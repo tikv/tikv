@@ -2,6 +2,7 @@
 
 use std::{sync::Mutex, time::Duration};
 
+use async_trait::async_trait;
 use cloud::kms::{CryptographyType, DataKeyPair, EncryptedKey, KmsProvider, PlainKey};
 use kvproto::encryptionpb::EncryptedContent;
 use tikv_util::{
@@ -11,7 +12,7 @@ use tikv_util::{
 };
 use tokio::runtime::{Builder, Runtime};
 
-use super::{metadata::MetadataKey, Backend, MemAesGcmBackend};
+use super::{metadata::MetadataKey, AsyncBackend, Backend, MemAesGcmBackend};
 use crate::{crypter::Iv, errors::cloud_convert_error, Error, Result};
 
 #[derive(Debug)]
@@ -38,7 +39,7 @@ impl State {
 #[derive(Debug)]
 pub struct KmsBackend {
     timeout_duration: Duration,
-    state: Mutex<Option<State>>,
+    state: tokio::sync::Mutex<Option<State>>,
     kms_provider: Box<dyn KmsProvider>,
     // This mutex allows the decrypt_content API to be reference based
     runtime: Mutex<Runtime>,
@@ -57,21 +58,25 @@ impl KmsBackend {
 
         Ok(KmsBackend {
             timeout_duration: Duration::from_secs(10),
-            state: Mutex::new(None),
+            state: tokio::sync::Mutex::new(None),
             runtime,
             kms_provider,
         })
     }
 
     pub fn encrypt_content(&self, plaintext: &[u8], iv: Iv) -> Result<EncryptedContent> {
-        let mut opt_state = self.state.lock().unwrap();
+        let runtime = self.runtime.lock().unwrap();
+        runtime.block_on(self.encrypt_content_async(plaintext, iv))
+    }
+
+    async fn encrypt_content_async(&self, plaintext: &[u8], iv: Iv) -> Result<EncryptedContent> {
+        let mut opt_state = self.state.lock().await;
         if opt_state.is_none() {
-            let runtime = self.runtime.lock().unwrap();
-            let data_key = runtime
-                .block_on(retry(|| {
-                    with_timeout(self.timeout_duration, self.kms_provider.generate_data_key())
-                }))
-                .map_err(cloud_convert_error("get data key failed".into()))?;
+            let data_key = retry(|| {
+                with_timeout(self.timeout_duration, self.kms_provider.generate_data_key())
+            })
+            .await
+            .map_err(cloud_convert_error("get data key failed".into()))?;
             *opt_state = Some(State::new_from_datakey(DataKeyPair {
                 plaintext: PlainKey::new(data_key.plaintext.clone(), CryptographyType::AesGcm256)
                     .map_err(cloud_convert_error("invalid plain key".into()))?,
@@ -96,9 +101,14 @@ impl KmsBackend {
         Ok(content)
     }
 
+    pub fn decrypt_content(&self, content: &EncryptedContent) -> Result<Vec<u8>> {
+        let runtime = self.runtime.lock().unwrap();
+        runtime.block_on(self.decrypt_content_async(content))
+    }
+
     // On decrypt failure, the rule is to return WrongMasterKey error in case it is
     // possible that a wrong master key has been used, or other error otherwise.
-    pub fn decrypt_content(&self, content: &EncryptedContent) -> Result<Vec<u8>> {
+    async fn decrypt_content_async(&self, content: &EncryptedContent) -> Result<Vec<u8>> {
         let vendor_name = self.kms_provider.name();
         match content.metadata.get(MetadataKey::KmsVendor.as_str()) {
             Some(val) if val.as_slice() == vendor_name.as_bytes() => (),
@@ -126,26 +136,25 @@ impl KmsBackend {
         };
 
         {
-            let mut opt_state = self.state.lock().unwrap();
+            let mut opt_state = self.state.lock().await;
             if let Some(state) = &*opt_state {
                 if state.cached(&ciphertext_key) {
                     return state.encryption_backend.decrypt_content(content);
                 }
             }
             {
-                let runtime = self.runtime.lock().unwrap();
-                let plaintext = runtime
-                    .block_on(retry(|| {
-                        with_timeout(
-                            self.timeout_duration,
-                            self.kms_provider.decrypt_data_key(&ciphertext_key),
-                        )
-                    }))
-                    .map_err(|e| {
-                        Error::WrongMasterKey(box_err!(cloud_convert_error(
-                            "decrypt encrypted key failed".into(),
-                        )(e)))
-                    })?;
+                let plaintext = retry(|| {
+                    with_timeout(
+                        self.timeout_duration,
+                        self.kms_provider.decrypt_data_key(&ciphertext_key),
+                    )
+                })
+                .await
+                .map_err(|e| {
+                    Error::WrongMasterKey(box_err!(cloud_convert_error(
+                        "decrypt encrypted key failed".into(),
+                    )(e)))
+                })?;
                 let data_key = DataKeyPair {
                     encrypted: ciphertext_key,
                     plaintext: PlainKey::new(plaintext, CryptographyType::AesGcm256)
@@ -164,7 +173,8 @@ impl KmsBackend {
     // KmsProvider::decrypt_data_key() function.
     #[cfg(any(test, feature = "testexport"))]
     pub fn clear_state(&mut self) {
-        let mut opt_state = self.state.lock().unwrap();
+        let runtime = self.runtime.lock().unwrap();
+        let mut opt_state = runtime.block_on(self.state.lock());
         *opt_state = None;
     }
 }
@@ -180,6 +190,16 @@ impl Backend for KmsBackend {
 
     fn is_secure(&self) -> bool {
         true
+    }
+}
+#[async_trait]
+impl AsyncBackend for KmsBackend {
+    async fn encrypt_async(&self, plaintext: &[u8]) -> Result<EncryptedContent> {
+        self.encrypt_content_async(plaintext, Iv::new_gcm()?).await
+    }
+
+    async fn decrypt_async(&self, content: &EncryptedContent) -> Result<Vec<u8>> {
+        self.decrypt_content_async(content).await
     }
 }
 

@@ -41,12 +41,9 @@ use file_system::{get_io_rate_limiter, BytesFetcher, MetricsManager as IoMetrics
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
 use health_controller::HealthController;
-use hybrid_engine::{
-    observer::{
-        HybridSnapshotObserver, LoadEvictionObserver as HybridEngineLoadEvictionObserver,
-        RegionCacheWriteBatchObserver,
-    },
-    HybridEngine,
+use hybrid_engine::observer::{
+    HybridSnapshotObserver, LoadEvictionObserver as HybridEngineLoadEvictionObserver,
+    RegionCacheWriteBatchObserver,
 };
 use kvproto::{
     brpb::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
@@ -79,8 +76,7 @@ use raftstore::{
     RaftRouterCompactedEventSender,
 };
 use range_cache_memory_engine::{
-    config::RangeCacheConfigManager, RangeCacheEngineContext, RangeCacheMemoryEngine,
-    RangeCacheMemoryEngineStatistics,
+    config::RangeCacheConfigManager, RangeCacheEngineContext, RangeCacheMemoryEngineStatistics,
 };
 use resolved_ts::{LeadershipResolver, Task};
 use resource_control::{config::ResourceContrlCfgMgr, ResourceGroupManager};
@@ -146,6 +142,7 @@ use crate::{
     setup::*,
     signal_handler,
     tikv_util::sys::thread::ThreadBuildWrapper,
+    utils,
 };
 
 #[inline]
@@ -169,8 +166,8 @@ fn run_impl<CER, F>(
     tikv.core.init_encryption();
     let fetcher = tikv.core.init_io_utility();
     let listener = tikv.core.init_flow_receiver();
-    let (engines, engines_info, in_memory_engine) = tikv.init_raw_engines(listener);
-    tikv.init_engines(engines.clone(), in_memory_engine);
+    let (engines, engines_info) = tikv.init_raw_engines(listener);
+    tikv.init_engines(engines.clone());
     let server_config = tikv.init_servers();
     tikv.register_services();
     tikv.init_metrics_flusher(fetcher, engines_info);
@@ -493,11 +490,7 @@ where
         }
     }
 
-    fn init_engines(
-        &mut self,
-        engines: Engines<RocksEngine, ER>,
-        in_memory_engine: Option<HybridEngine<RocksEngine, RangeCacheMemoryEngine>>,
-    ) {
+    fn init_engines(&mut self, engines: Engines<RocksEngine, ER>) {
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
         let engine = RaftKv::new(
             ServerRaftStoreRouter::new(
@@ -510,7 +503,6 @@ where
                 ),
             ),
             engines.kv.clone(),
-            in_memory_engine.clone(),
             self.region_info_accessor.region_leaders(),
         );
 
@@ -758,6 +750,7 @@ where
             .enable_receive_tablet_snapshot(
                 self.core.config.raft_store.enable_v2_compatible_learner,
             )
+            .min_ingest_snapshot_limit(self.core.config.server.snap_min_ingest_size)
             .build(snap_path);
 
         // Create coprocessor endpoint.
@@ -932,6 +925,12 @@ where
                 Duration::from_secs(60),
             );
 
+            // build stream backup encryption manager
+            let backup_encryption_manager =
+                utils::build_backup_encryption_manager(self.core.encryption_key_manager.clone())
+                    .expect("failed to build backup encryption manager in server");
+
+            // build stream backup endpoint
             let backup_stream_endpoint = backup_stream::Endpoint::new(
                 raft_server.id(),
                 PdStore::new(Checked::new(Sourced::new(
@@ -947,7 +946,7 @@ where
                 self.pd_client.clone(),
                 self.concurrency_manager.clone(),
                 BackupStreamResolver::V1(leadership_resolver),
-                self.core.encryption_key_manager.clone(),
+                backup_encryption_manager,
             );
             backup_stream_worker.start(backup_stream_endpoint);
             self.core.to_stop.push(backup_stream_worker);
@@ -1603,11 +1602,7 @@ where
     fn init_raw_engines(
         &mut self,
         flow_listener: engine_rocks::FlowListener,
-    ) -> (
-        Engines<RocksEngine, CER>,
-        Arc<EnginesResourceInfo>,
-        Option<HybridEngine<RocksEngine, RangeCacheMemoryEngine>>,
-    ) {
+    ) -> (Engines<RocksEngine, CER>, Arc<EnginesResourceInfo>) {
         let block_cache = self.core.config.storage.block_cache.build_shared_cache();
         let env = self
             .core
@@ -1652,7 +1647,7 @@ where
         let range_cache_engine_context =
             RangeCacheEngineContext::new(range_cache_engine_config.clone(), self.pd_client.clone());
         let range_cache_engine_statistics = range_cache_engine_context.statistics();
-        let in_memory_engine = if self.core.config.range_cache_engine.enabled {
+        if self.core.config.range_cache_engine.enabled {
             let in_memory_engine = build_hybrid_engine(
                 range_cache_engine_context,
                 kv_engine.clone(),
@@ -1670,10 +1665,6 @@ where
             let snapshot_observer =
                 HybridSnapshotObserver::new(in_memory_engine.range_cache_engine().clone());
             snapshot_observer.register_to(self.coprocessor_host.as_mut().unwrap());
-
-            Some(in_memory_engine)
-        } else {
-            None
         };
         let range_cache_config_manager = RangeCacheConfigManager(range_cache_engine_config);
         self.kv_statistics = Some(factory.rocks_statistics());
@@ -1711,7 +1702,7 @@ where
             180, // max_samples_to_preserve
         ));
 
-        (engines, engines_info, in_memory_engine)
+        (engines, engines_info)
     }
 }
 

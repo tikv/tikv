@@ -161,8 +161,8 @@ where
 mod tests {
 
     use engine_traits::{
-        CacheRegion, IterOptions, Iterable, Iterator, KvEngine, Mutable, SnapshotContext,
-        WriteBatch, WriteBatchExt, CF_DEFAULT,
+        CacheRegion, IterOptions, Iterable, Iterator, Mutable, SnapshotContext, WriteBatch,
+        WriteBatchExt, CF_DEFAULT,
     };
     use range_cache_memory_engine::{
         test_util::new_region, RangeCacheEngineConfig, RangeCacheStatus,
@@ -188,7 +188,7 @@ mod tests {
             },
         )
         .unwrap();
-        let snap = hybrid_engine.snapshot(None);
+        let snap = hybrid_engine.new_snapshot(None);
         {
             let mut iter = snap.iterator_opt(CF_DEFAULT, iter_opt.clone()).unwrap();
             assert!(!iter.seek_to_first().unwrap());
@@ -205,7 +205,7 @@ mod tests {
             region: Some(cache_region.clone()),
             read_ts: 10,
         };
-        let snap = hybrid_engine.snapshot(Some(ctx));
+        let snap = hybrid_engine.new_snapshot(Some(ctx));
         {
             let mut iter = snap.iterator_opt(CF_DEFAULT, iter_opt).unwrap();
             assert!(iter.seek_to_first().unwrap());

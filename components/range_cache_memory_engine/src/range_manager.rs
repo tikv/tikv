@@ -291,8 +291,10 @@ impl RegionMetaMap {
         assert!(!self.overlaps_with(&meta.region));
         let id = meta.region.id;
         let data_end_key = meta.region.end.clone();
-        self.regions.insert(id, meta);
-        self.regions_by_range.insert(data_end_key, id);
+        let old_meta = self.regions.insert(id, meta);
+        assert!(old_meta.is_none(), "old_meta: {:?}", old_meta.unwrap());
+        let old_id = self.regions_by_range.insert(data_end_key, id);
+        assert!(old_id.is_none(), "old_region_id: {}", old_id.unwrap());
         if self.regions.len() == 1 {
             assert!(!self.is_active.load(Ordering::Relaxed));
             self.is_active.store(true, Ordering::Relaxed);
@@ -312,6 +314,7 @@ impl RegionMetaMap {
             };
             return Err(reason);
         }
+        info!("ime load new region"; "region" => ?cache_region);
         let meta = CacheRegionMeta::new(cache_region);
         self.new_region_meta(meta);
         Ok(())
@@ -376,7 +379,24 @@ impl RegionMetaMap {
         for id in removed_regions {
             self.remove_region(id);
         }
-        overlapped_region_state
+        if overlapped_region_state.is_some() {
+            return overlapped_region_state;
+        }
+
+        // check region with same id. It is possible that there is a cached region with
+        // outdated epoch that is still in the (pending_)evicting state, and a new load
+        // is triggered after the region is merged and split for multiple times.
+        // Thus, the new pending region's range may not overlap with the old
+        // cached region but their region ids are the same.
+        // While in theory we should keep the new region as it doesn't overlap with any
+        // other region, but because we use region_id as the unique identifier, we do
+        // not load it for implementation simplicity as this kind of scenario
+        // should be very rare.
+        if let Some(region) = self.regions.get(&region.id) {
+            return Some(region.state);
+        }
+
+        None
     }
 
     fn on_all_overlapped_regions(&self, region: &CacheRegion, mut f: impl FnMut(&CacheRegionMeta)) {
@@ -913,6 +933,7 @@ impl RegionManager {
             for r in regions {
                 let meta = regions_map.remove_region(r.id);
                 assert_eq!(meta.region.epoch_version, r.epoch_version);
+                info!("ime remove evicted region"; "meta" => ?meta);
 
                 let evict_info = meta.evict_info.unwrap();
                 observe_eviction_duration(
@@ -1186,6 +1207,13 @@ mod tests {
         assert_eq!(
             range_mgr.load_region(r).unwrap_err(),
             LoadFailedReason::PendingRange
+        );
+
+        // test range overlap but id overlap
+        let r = CacheRegion::new(1, 2, b"k20", b"k30");
+        assert_eq!(
+            range_mgr.load_region(r).unwrap_err(),
+            LoadFailedReason::Evicting
         );
     }
 

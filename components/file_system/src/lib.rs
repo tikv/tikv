@@ -29,8 +29,10 @@ pub use std::{
 use std::{
     io::{self, ErrorKind, Read, Write},
     path::Path,
+    pin::Pin,
     str::FromStr,
     sync::{Arc, Mutex},
+    task::{ready, Context, Poll},
 };
 
 pub use file::{File, OpenOptions};
@@ -50,6 +52,7 @@ pub use rate_limiter::{
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use strum::{EnumCount, EnumIter};
+use tokio::io::{AsyncRead, ReadBuf};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum IoOp {
@@ -428,6 +431,34 @@ impl<R: Read> Read for Sha256Reader<R> {
         let len = self.reader.read(buf)?;
         self.hasher.lock().unwrap().update(&buf[..len])?;
         Ok(len)
+    }
+}
+
+impl<R: AsyncRead + Unpin> AsyncRead for Sha256Reader<R> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let initial_filled_len = buf.filled().len();
+        ready!(Pin::new(&mut self.reader).poll_read(cx, buf))?;
+
+        let filled_len = buf.filled().len();
+        if initial_filled_len == filled_len {
+            return Poll::Ready(Ok(()));
+        }
+        let new_data = &buf.filled()[initial_filled_len..filled_len];
+
+        // Update the hasher with the read data
+        let mut hasher = self
+            .hasher
+            .lock()
+            .expect("failed to lock hasher in Sha256Reader async read");
+        if let Err(e) = hasher.update(new_data) {
+            return Poll::Ready(Err(io::Error::new(ErrorKind::Other, e)));
+        }
+
+        Poll::Ready(Ok(()))
     }
 }
 

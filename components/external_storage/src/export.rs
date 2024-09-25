@@ -15,8 +15,8 @@ use tikv_util::time::{Instant, Limiter};
 
 use crate::{
     compression_reader_dispatcher, encrypt_wrap_reader, read_external_storage_into_file,
-    record_storage_create, BackendConfig, ExternalData, ExternalStorage, HdfsStorage, LocalStorage,
-    NoopStorage, RestoreConfig, UnpinReader,
+    record_storage_create, wrap_with_checksum_reader_if_needed, BackendConfig, ExternalData,
+    ExternalStorage, HdfsStorage, LocalStorage, NoopStorage, RestoreConfig, UnpinReader,
 };
 
 pub fn create_storage(
@@ -136,13 +136,13 @@ impl<Blob: BlobStorage> std::ops::Deref for BlobStore<Blob> {
     }
 }
 
-pub struct EncryptedExternalStorage<S> {
+pub struct AutoEncryptLocalRestoredFileExternalStorage<S> {
     pub key_manager: Arc<DataKeyManager>,
     pub storage: S,
 }
 
 #[async_trait]
-impl<S: ExternalStorage> ExternalStorage for EncryptedExternalStorage<S> {
+impl<S: ExternalStorage> ExternalStorage for AutoEncryptLocalRestoredFileExternalStorage<S> {
     fn name(&self) -> &'static str {
         self.storage.name()
     }
@@ -169,30 +169,43 @@ impl<S: ExternalStorage> ExternalStorage for EncryptedExternalStorage<S> {
         let RestoreConfig {
             range,
             compression_type,
-            expected_sha256,
+            expected_plaintext_file_checksum: expected_sha256,
             file_crypter,
+            opt_encrypted_file_checksum,
         } = restore_config;
 
-        let reader = {
+        let (mut reader, opt_hasher) = {
             let inner = if let Some((off, len)) = range {
                 self.read_part(storage_name, off, len)
             } else {
                 self.read(storage_name)
             };
 
-            compression_reader_dispatcher(compression_type, inner)?
+            // wrap with checksum reader if needed
+            //
+            let (checksum_reader, opt_hasher) =
+                wrap_with_checksum_reader_if_needed(opt_encrypted_file_checksum.is_some(), inner)?;
+
+            // wrap with decrypter if needed
+            //
+            let encrypted_reader = encrypt_wrap_reader(file_crypter, checksum_reader)?;
+
+            (
+                compression_reader_dispatcher(compression_type, encrypted_reader)?,
+                opt_hasher,
+            )
         };
         let file_writer = self.key_manager.create_file_for_write(&restore_name)?;
         let min_read_speed: usize = 8192;
-        let mut input = encrypt_wrap_reader(file_crypter, reader)?;
-
         read_external_storage_into_file(
-            &mut input,
+            &mut reader,
             file_writer,
             speed_limiter,
             expected_length,
             expected_sha256,
             min_read_speed,
+            opt_encrypted_file_checksum,
+            opt_hasher,
         )
         .await
     }

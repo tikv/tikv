@@ -64,7 +64,7 @@ impl Runnable for Runner {
         match t {
             Task::Write(modifies, cb) => cb(write_modifies(&self.0.kv, modifies)),
             Task::Snapshot(sender) => {
-                let _ = sender.send(Arc::new(self.0.kv.snapshot(None)));
+                let _ = sender.send(Arc::new(self.0.kv.snapshot()));
             }
             Task::Pause(dur) => std::thread::sleep(dur),
         }

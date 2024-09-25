@@ -52,7 +52,7 @@ fn test_witness_update_region_in_local_reader() {
     request.mut_header().set_replica_read(true);
 
     let resp = cluster
-        .read(None, None, request.clone(), Duration::from_millis(100))
+        .read(None, request.clone(), Duration::from_millis(100))
         .unwrap();
     assert_eq!(
         resp.get_header().get_error().get_is_witness(),
@@ -104,7 +104,7 @@ fn test_witness_not_reported_while_disabled() {
     request.mut_header().set_replica_read(true);
 
     let resp = cluster
-        .read(None, None, request.clone(), Duration::from_millis(100))
+        .read(None, request.clone(), Duration::from_millis(100))
         .unwrap();
     assert!(resp.get_header().has_error());
     assert!(!resp.get_header().get_error().has_is_witness());
@@ -491,7 +491,7 @@ fn test_non_witness_replica_read() {
     request.mut_header().set_replica_read(true);
 
     let resp = cluster
-        .read(None, None, request, Duration::from_millis(100))
+        .read(None, request, Duration::from_millis(100))
         .unwrap();
     assert_eq!(
         resp.get_header().get_error().get_is_witness(),
@@ -516,7 +516,7 @@ fn test_non_witness_replica_read() {
     request.mut_header().set_replica_read(true);
 
     let resp = cluster
-        .read(None, None, request, Duration::from_millis(100))
+        .read(None, request, Duration::from_millis(100))
         .unwrap();
     assert_eq!(resp.get_header().has_error(), false);
 }

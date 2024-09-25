@@ -21,10 +21,12 @@ use backup_stream::{
     utils, BackupStreamGrpcService, BackupStreamResolver, Endpoint, GetCheckpointResult,
     RegionCheckpointOperation, RegionSet, Task,
 };
+use encryption::{BackupEncryptionManager, MultiMasterKeyBackend};
 use futures::{executor::block_on, AsyncWriteExt, Future, Stream, StreamExt};
 use grpcio::{ChannelBuilder, Server, ServerBuilder};
 use kvproto::{
     brpb::{CompressionType, Local, Metadata, StorageBackend},
+    encryptionpb::EncryptionMethod,
     kvrpcpb::*,
     logbackuppb::{SubscribeFlushEventRequest, SubscribeFlushEventResponse},
     logbackuppb_grpc::{create_log_backup, LogBackupClient},
@@ -404,7 +406,12 @@ impl Suite {
             cluster.pd_client.clone(),
             cm,
             BackupStreamResolver::V1(resolver),
-            sim.encryption.clone(),
+            BackupEncryptionManager::new(
+                None,
+                EncryptionMethod::Plaintext,
+                MultiMasterKeyBackend::default(),
+                sim.encryption.clone(),
+            ),
         );
         worker.start(endpoint);
     }

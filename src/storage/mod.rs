@@ -3290,6 +3290,8 @@ pub struct DynamicConfigs {
     pub pipelined_pessimistic_lock: Arc<AtomicBool>,
     pub in_memory_pessimistic_lock: Arc<AtomicBool>,
     pub wake_up_delay_duration_ms: Arc<AtomicU64>,
+    pub in_memory_peer_size_limit: Arc<AtomicU64>,
+    pub in_memory_instance_size_limit: Arc<AtomicU64>,
 }
 
 fn get_priority_tag(priority: CommandPri) -> CommandPriority {
@@ -3389,6 +3391,8 @@ pub struct TestStorageBuilder<E: Engine, L: LockManager, F: KvFormat> {
     lock_mgr: L,
     resource_tag_factory: ResourceTagFactory,
     _phantom: PhantomData<F>,
+    in_memory_peer_size_limit: Arc<AtomicU64>,
+    in_memory_instance_size_limit: Arc<AtomicU64>,
 }
 
 /// TestStorageBuilder for Api V1
@@ -3527,6 +3531,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             lock_mgr,
             resource_tag_factory: ResourceTagFactory::new_for_test(),
             _phantom: PhantomData,
+            in_memory_peer_size_limit: Arc::new(AtomicU64::new(512 << 10)),
+            in_memory_instance_size_limit: Arc::new(AtomicU64::new(100 << 20)),
         }
     }
 
@@ -3596,6 +3602,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
                 pipelined_pessimistic_lock: self.pipelined_pessimistic_lock,
                 in_memory_pessimistic_lock: self.in_memory_pessimistic_lock,
                 wake_up_delay_duration_ms: self.wake_up_delay_duration_ms,
+                in_memory_peer_size_limit: self.in_memory_peer_size_limit,
+                in_memory_instance_size_limit: self.in_memory_instance_size_limit,
             },
             Arc::new(FlowController::Singleton(EngineFlowController::empty())),
             DummyReporter,
@@ -3629,6 +3637,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
                 pipelined_pessimistic_lock: self.pipelined_pessimistic_lock,
                 in_memory_pessimistic_lock: self.in_memory_pessimistic_lock,
                 wake_up_delay_duration_ms: self.wake_up_delay_duration_ms,
+                in_memory_peer_size_limit: self.in_memory_peer_size_limit,
+                in_memory_instance_size_limit: self.in_memory_instance_size_limit,
             },
             Arc::new(FlowController::Singleton(EngineFlowController::empty())),
             DummyReporter,
@@ -3665,6 +3675,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
                 pipelined_pessimistic_lock: self.pipelined_pessimistic_lock,
                 in_memory_pessimistic_lock: self.in_memory_pessimistic_lock,
                 wake_up_delay_duration_ms: self.wake_up_delay_duration_ms,
+                in_memory_peer_size_limit: self.in_memory_peer_size_limit,
+                in_memory_instance_size_limit: self.in_memory_instance_size_limit,
             },
             Arc::new(FlowController::Singleton(EngineFlowController::empty())),
             DummyReporter,
@@ -11415,7 +11427,7 @@ mod tests {
             storage
                 .sched
                 .get_txn_status_cache()
-                .get_no_promote(10.into())
+                .get_committed_no_promote(10.into())
                 .unwrap(),
             21.into()
         );
@@ -11503,7 +11515,7 @@ mod tests {
             storage
                 .sched
                 .get_txn_status_cache()
-                .get_no_promote(10.into())
+                .get_committed_no_promote(10.into())
                 .is_none()
         );
 
@@ -11523,7 +11535,7 @@ mod tests {
             storage
                 .sched
                 .get_txn_status_cache()
-                .get_no_promote(10.into())
+                .get_committed_no_promote(10.into())
                 .unwrap(),
             20.into()
         );
@@ -11545,7 +11557,7 @@ mod tests {
             storage
                 .sched
                 .get_txn_status_cache()
-                .get_no_promote(30.into())
+                .get_committed_no_promote(30.into())
                 .is_none()
         );
 
@@ -11579,7 +11591,7 @@ mod tests {
             storage
                 .sched
                 .get_txn_status_cache()
-                .get_no_promote(50.into())
+                .get_committed_no_promote(50.into())
                 .unwrap(),
             60.into()
         );
@@ -11624,7 +11636,7 @@ mod tests {
             storage
                 .sched
                 .get_txn_status_cache()
-                .get_no_promote(70.into())
+                .get_committed_no_promote(70.into())
                 .unwrap(),
             80.into()
         );
@@ -11667,7 +11679,7 @@ mod tests {
             storage
                 .sched
                 .get_txn_status_cache()
-                .get_no_promote(90.into())
+                .get_committed_no_promote(90.into())
                 .unwrap(),
             100.into()
         );
@@ -11694,12 +11706,15 @@ mod tests {
             storage
                 .sched
                 .get_txn_status_cache()
-                .get_no_promote(9.into())
+                .get_committed_no_promote(9.into())
                 .is_none()
         );
 
         // CheckTxnStatus: committed transaction
-        storage.sched.get_txn_status_cache().remove(10.into());
+        storage
+            .sched
+            .get_txn_status_cache()
+            .remove_normal(10.into());
         storage
             .sched_txn_command(
                 commands::CheckTxnStatus::new(
@@ -11721,7 +11736,7 @@ mod tests {
             storage
                 .sched
                 .get_txn_status_cache()
-                .get_no_promote(10.into())
+                .get_committed_no_promote(10.into())
                 .unwrap(),
             20.into()
         );
@@ -11764,7 +11779,7 @@ mod tests {
             storage
                 .sched
                 .get_txn_status_cache()
-                .get_no_promote(120.into())
+                .get_committed_no_promote(120.into())
                 .is_none()
         );
 
@@ -11784,7 +11799,7 @@ mod tests {
             storage
                 .sched
                 .get_txn_status_cache()
-                .get_no_promote(120.into())
+                .get_committed_no_promote(120.into())
                 .is_none()
         );
 
@@ -11829,7 +11844,7 @@ mod tests {
             storage
                 .sched
                 .get_txn_status_cache()
-                .remove(130.into())
+                .remove_normal(130.into())
                 .unwrap(),
             140.into()
         );
@@ -11849,7 +11864,7 @@ mod tests {
             storage
                 .sched
                 .get_txn_status_cache()
-                .get_no_promote(130.into())
+                .get_committed_no_promote(130.into())
                 .unwrap(),
             140.into()
         );
