@@ -2,13 +2,12 @@
 
 // #[PerformanceCriticalPath]: TiKV gRPC APIs implementation
 use std::{
-    assert_matches::assert_matches,
     mem,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
     },
-    time::{Duration, SystemTime},
+    time::Duration,
 };
 
 use api_version::KvFormat;
@@ -64,7 +63,6 @@ use crate::{
         },
         kv::Engine,
         lock_manager::LockManager,
-        txn::txn_status_cache::TxnState,
         SecondaryLocksStatus, Storage, TxnStatus,
     },
 };
@@ -2277,26 +2275,20 @@ fn future_raw_coprocessor<E: Engine, L: LockManager, F: KvFormat>(
 
 fn future_broadcast_txn_status<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
-    req: BroadcastTxnStatusRequest,
+    mut req: BroadcastTxnStatusRequest,
 ) -> impl Future<Output = ServerResult<BroadcastTxnStatusResponse>> {
-    let cache = storage.get_scheduler().get_txn_status_cache();
+    let (cb, f) = paired_future_callback();
+    let res = storage.update_txn_status_cache(
+        req.take_context(),
+        req.take_txn_status().into_iter().collect(),
+        cb,
+    );
+
     async move {
-        let now = SystemTime::now();
-        for txn_status in req.txn_status.iter() {
-            let txn_state = TxnState::from_ts(
-                txn_status.start_ts.into(),
-                txn_status.min_commit_ts.into(),
-                txn_status.commit_ts.into(),
-                txn_status.rolled_back,
-            );
-            if txn_status.is_completed {
-                // large_txn_cache is only for **ongoing** large txns, so remove it when
-                // completed.
-                assert_matches!(txn_state, TxnState::Committed { .. } | TxnState::RolledBack);
-                cache.remove_large_txn(txn_status.start_ts.into());
-            }
-            cache.upsert(txn_status.start_ts.into(), txn_state, now);
-        }
+        let _ = match res {
+            Err(e) => Err(e),
+            Ok(_) => f.await?,
+        };
         Ok(BroadcastTxnStatusResponse::default())
     }
 }

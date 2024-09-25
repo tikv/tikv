@@ -61,6 +61,7 @@ mod read_pool;
 mod types;
 
 use std::{
+    assert_matches::assert_matches,
     borrow::Cow,
     iter,
     marker::PhantomData,
@@ -69,7 +70,7 @@ use std::{
         atomic::{self, AtomicBool, AtomicU64, Ordering},
         Arc,
     },
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 use api_version::{ApiV1, ApiV2, KeyMode, KvFormat, RawValue};
@@ -81,6 +82,7 @@ use engine_traits::{
 };
 use futures::{future::Either, prelude::*};
 use kvproto::{
+    kvrpcpb,
     kvrpcpb::{
         ApiVersion, ChecksumAlgorithm, CommandPri, Context, GetRequest, IsolationLevel, KeyRange,
         LockInfo, RawGetRequest,
@@ -133,7 +135,7 @@ use crate::{
             commands::{RawAtomicStore, RawCompareAndSwap, TypedCommand},
             flow_controller::{EngineFlowController, FlowController},
             scheduler::TxnScheduler,
-            txn_status_cache::TxnStatusCache,
+            txn_status_cache::{TxnState, TxnStatusCache},
             Command, Error as TxnError, ErrorInner as TxnErrorInner,
         },
         types::StorageCallbackType,
@@ -3248,6 +3250,38 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 .map_err(|_| Error::from(ErrorInner::SchedTooBusy))
                 .and_then(|res| future::ready(res)),
         )
+    }
+
+    pub fn update_txn_status_cache(
+        &self,
+        ctx: Context,
+        txn_statuses: Vec<kvrpcpb::TxnStatus>,
+        callback: Callback<()>,
+    ) -> Result<()> {
+        const CMD: CommandKind = CommandKind::update_txn_status_cache;
+        let priority = ctx.get_priority();
+        let metadata = TaskMetadata::from_ctx(ctx.get_resource_control_context());
+        let cache = self.get_scheduler().get_txn_status_cache();
+        let f = async move {
+            let now = SystemTime::now();
+            for txn_status in txn_statuses {
+                let txn_state = TxnState::from_ts(
+                    txn_status.start_ts.into(),
+                    txn_status.min_commit_ts.into(),
+                    txn_status.commit_ts.into(),
+                    txn_status.rolled_back,
+                );
+                if txn_status.is_completed {
+                    // large_txn_cache is only for **ongoing** large txns, so remove it when
+                    // completed.
+                    assert_matches!(txn_state, TxnState::Committed { .. } | TxnState::RolledBack);
+                    cache.remove_large_txn(txn_status.start_ts.into());
+                }
+                cache.upsert(txn_status.start_ts.into(), txn_state, now);
+            }
+            callback(Ok(()));
+        };
+        self.sched_raw_command(metadata, priority, CMD, f)
     }
 }
 
