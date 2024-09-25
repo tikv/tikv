@@ -32,8 +32,8 @@ pub enum PriorityCtlStrategy {
     /// low-priority tasks running much slower.
     Aggressive,
     #[default]
-    /// Try to balance between the latency of high-prioirty tasks and throughput of
-    /// low-priority tasks.
+    /// Try to balance between the latency of high-prioirty tasks and throughput
+    /// of low-priority tasks.
     Moderate,
     /// Prioritize of overall throughput, the latency of high-priority tasks may
     /// be significantly impacted when the overall load is high.
