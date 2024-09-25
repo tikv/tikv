@@ -502,7 +502,10 @@ impl<K: PrewriteKind> Prewriter<K> {
         // Handle special cases about retried prewrite requests for pessimistic
         // transactions.
         if let TransactionKind::Pessimistic(_) = self.kind.txn_kind() {
-            if let Some(commit_ts) = context.txn_status_cache.get_no_promote(self.start_ts) {
+            if let Some(commit_ts) = context
+                .txn_status_cache
+                .get_committed_no_promote(self.start_ts)
+            {
                 fail_point!("before_prewrite_txn_status_cache_hit");
                 if self.ctx.is_retry_request {
                     MVCC_PREWRITE_REQUEST_AFTER_COMMIT_COUNTER_VEC
