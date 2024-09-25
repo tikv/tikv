@@ -24,7 +24,7 @@ use raftstore::{
     coprocessor::{Config as CopConfig, ConsistencyCheckMethod},
     store::Config as RaftstoreConfig,
 };
-use resource_control::Config as ResourceControlConfig;
+use resource_control::config::{Config as ResourceControlConfig, PriorityCtlStrategy};
 use security::SecurityConfig;
 use slog::Level;
 use test_util::assert_eq_debug;
@@ -893,7 +893,10 @@ fn test_serde_custom_tikv_config() {
     value
         .split
         .optimize_for(value.coprocessor.region_max_size());
-    value.resource_control = ResourceControlConfig { enabled: false };
+    value.resource_control = ResourceControlConfig {
+        enabled: false,
+        priority_ctl_strategy: PriorityCtlStrategy::Aggressive,
+    };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");
     let mut load: TikvConfig = toml::from_str(&custom).unwrap();
