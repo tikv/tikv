@@ -2705,6 +2705,7 @@ def UnifiedReadPool() -> RowPanel:
         title="Unified Read Pool",
         pool_name_prefix="unified-read",
         running_task_metric="tikv_unified_read_pool_running_tasks",
+        running_task_metric_label="priority",
     )
 
 
@@ -2712,6 +2713,7 @@ def YatpPool(
     title: str,
     pool_name_prefix: str,
     running_task_metric: str,
+    running_task_metric_label: str,
 ) -> RowPanel:
     layout = Layout(title)
     layout.row(
@@ -2740,7 +2742,7 @@ def YatpPool(
                             "tikv_multilevel_level0_chance",
                             label_selectors=[f'name=~"{pool_name_prefix}.*"'],
                         ),
-                        legend_format="{{type}}",
+                        legend_format="{{instance}}",
                     ),
                 ],
             ),
@@ -2757,9 +2759,8 @@ def YatpPool(
                             running_task_metric,
                             "avg",
                             "1m",
-                            by_labels=["priority"],
+                            by_labels=[running_task_metric_label],
                         ),
-                        legend_format="{{priority}}",
                     ),
                 ],
             ),
@@ -3401,6 +3402,7 @@ def SchedulerWorkerPool() -> RowPanel:
         title="Scheduler Worker Pool",
         pool_name_prefix="sched-worker",
         running_task_metric="tikv_scheduler_running_commands",
+        running_task_metric_label="instance",
     )
 
 
