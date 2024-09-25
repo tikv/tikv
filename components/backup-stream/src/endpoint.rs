@@ -10,6 +10,7 @@ use std::{
 };
 
 use concurrency_manager::ConcurrencyManager;
+use dashmap::DashMap;
 use encryption::BackupEncryptionManager;
 use engine_traits::KvEngine;
 use error_code::ErrorCodeExt;
@@ -25,7 +26,10 @@ use raftstore::{
     router::CdcHandle,
 };
 use resolved_ts::{resolve_by_raft, LeadershipResolver};
-use tikv::config::{BackupStreamConfig, ResolvedTsConfig};
+use tikv::{
+    config::{BackupStreamConfig, ResolvedTsConfig},
+    storage::txn::txn_status_cache::TxnStatusCache,
+};
 use tikv_util::{
     box_err,
     config::ReadableDuration,
@@ -60,7 +64,7 @@ use crate::{
     metadata::{store::MetaStore, MetadataClient, MetadataEvent, StreamTask},
     metrics::{self, TaskStatus},
     observer::BackupStreamObserver,
-    router::{self, ApplyEvents, Router, TaskSelector},
+    router::{self, ApplyEvents, FlushContext, Router, TaskSelector},
     subscription_manager::{RegionSubscriptionManager, ResolvedRegions},
     subscription_track::{Ref, RefMut, ResolveResult, SubscriptionTracer},
     try_send,
@@ -85,7 +89,7 @@ pub struct Endpoint<S, R, E: KvEngine, PDC> {
     pub(crate) subs: SubscriptionTracer,
     pub(crate) concurrency_manager: ConcurrencyManager,
 
-    // Note: some of fields are public so test cases are able to access them.
+    // Note: some of the fields are public so test cases are able to access them.
     pub range_router: Router,
     observer: BackupStreamObserver,
     pool: Runtime,
@@ -122,6 +126,7 @@ where
         concurrency_manager: ConcurrencyManager,
         resolver: BackupStreamResolver<RT, E>,
         backup_encryption_manager: BackupEncryptionManager,
+        txn_status_cache: Arc<TxnStatusCache>,
     ) -> Self {
         crate::metrics::STREAM_ENABLED.inc();
         let pool = create_tokio_runtime((config.num_threads / 2).max(1), "backup-stream")
@@ -154,7 +159,7 @@ where
         };
         let initial_scan_throughput_quota = Limiter::new(limit);
         info!("the endpoint of stream backup started"; "path" => %config.temp_path);
-        let subs = SubscriptionTracer::default();
+        let subs = SubscriptionTracer(Arc::new(DashMap::new()), txn_status_cache.clone());
 
         let initial_scan_semaphore = Arc::new(Semaphore::new(config.initial_scan_concurrency));
         let (region_operator, op_loop) = RegionSubscriptionManager::start(
@@ -819,19 +824,25 @@ where
         }
     }
 
-    fn do_flush(&self, task: String, mut resolved: ResolvedRegions) -> future![Result<()>] {
+    fn do_flush(&self, task: String, resolved: ResolvedRegions) -> future![Result<()>] {
         let router = self.range_router.clone();
         let store_id = self.store_id;
         let mut flush_ob = self.flush_observer();
         async move {
             let mut new_rts = resolved.global_checkpoint();
             fail::fail_point!("delay_on_flush");
-            flush_ob.before(resolved.take_resolve_result()).await;
+            flush_ob.before(resolved.resolve_results().to_vec()).await;
             if let Some(rewritten_rts) = flush_ob.rewrite_resolved_ts(&task).await {
                 info!("rewriting resolved ts"; "old" => %new_rts, "new" => %rewritten_rts);
                 new_rts = rewritten_rts.min(new_rts);
             }
-            if let Some(rts) = router.do_flush(&task, store_id, new_rts).await {
+            let cx = FlushContext {
+                task_name: &task,
+                store_id,
+                resolved_regions: &resolved,
+                resolved_ts: new_rts,
+            };
+            if let Some(rts) = router.do_flush(cx).await {
                 info!("flushing and refreshing checkpoint ts.";
                     "checkpoint_ts" => %rts,
                     "task" => %task,
