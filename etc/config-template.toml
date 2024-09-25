@@ -175,7 +175,7 @@
 ## - "moderate". Balance the latency of high-prioirty tasks and throughput of low-priority tasks.
 ## - "conservative". Prioritize of overall throughput, the latency of high-priority tasks may be significantly
 ##                   impacted when the overall load is high.
-priority-ctl-strategy = "moderate"
+# priority-ctl-strategy = "moderate"
 
 [server]
 ## Listening address.

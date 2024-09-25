@@ -28,11 +28,11 @@ impl Default for Config {
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PriorityCtlStrategy {
-    /// Prioritize the performance of high-priority tasks, low-priority tasks
-    /// will run slower.
+    /// Prioritize the throughput and latency of high-priority tasks, result in
+    /// low-priority tasks running much slower.
     Aggressive,
     #[default]
-    /// Balance the latency of high-prioirty tasks and throughput of
+    /// Try to balance between the latency of high-prioirty tasks and throughput of
     /// low-priority tasks.
     Moderate,
     /// Prioritize of overall throughput, the latency of high-priority tasks may
