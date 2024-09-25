@@ -36,7 +36,7 @@ impl PriorityCtlStrategy {
     pub fn to_resource_util_percentage(self) -> f64 {
         match self {
             Self::Aggressive => 0.5,
-            Self::Moderate => 0.75,
+            Self::Moderate => 0.7,
             Self::Conservative => 0.9,
         }
     }
