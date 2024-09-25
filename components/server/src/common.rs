@@ -33,8 +33,8 @@ use pd_client::{PdClient, RpcClient};
 use raft_log_engine::RaftLogEngine;
 use raftstore::coprocessor::RegionInfoProvider;
 use range_cache_memory_engine::{
-    flush_range_cache_engine_statistics, RangeCacheEngineConfig, RangeCacheEngineContext,
-    RangeCacheMemoryEngine, RangeCacheMemoryEngineStatistics,
+    flush_range_cache_engine_statistics, RangeCacheEngineContext, RangeCacheMemoryEngine,
+    RangeCacheMemoryEngineStatistics,
 };
 use security::SecurityManager;
 use tikv::{
@@ -42,7 +42,7 @@ use tikv::{
     server::{status_server::StatusServer, DEFAULT_CLUSTER_ID},
 };
 use tikv_util::{
-    config::{ensure_dir_exist, RaftDataStateMachine, VersionTrack},
+    config::{ensure_dir_exist, RaftDataStateMachine},
     math::MovingAvgU32,
     metrics::INSTANCE_BACKEND_CPU_QUOTA,
     quota_limiter::QuotaLimiter,
@@ -76,7 +76,6 @@ const DEFAULT_QUOTA_LIMITER_TUNE_INTERVAL: Duration = Duration::from_secs(5);
 // some services into `to_stop`.
 pub struct TikvServerCore {
     pub config: TikvConfig,
-    pub ime_config: Arc<VersionTrack<RangeCacheEngineConfig>>,
     pub store_path: PathBuf,
     pub lock_files: Vec<File>,
     pub encryption_key_manager: Option<Arc<DataKeyManager>>,

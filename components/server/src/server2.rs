@@ -367,8 +367,7 @@ where
 
         TikvServer {
             core: TikvServerCore {
-                config: config.clone(),
-                ime_config: Arc::new(VersionTrack::new(config.range_cache_engine)),
+                config,
                 store_path,
                 lock_files: vec![],
                 encryption_key_manager: None,
