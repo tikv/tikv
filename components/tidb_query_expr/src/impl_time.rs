@@ -1511,7 +1511,7 @@ pub fn sub_date_time_duration_interval_any_as_duration<
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
+    use std::{str::FromStr, sync::Arc};
 
     use tidb_query_datatype::{
         builder::FieldTypeBuilder,
@@ -1521,6 +1521,7 @@ mod tests {
             error::ERR_TRUNCATE_WRONG_VALUE,
             mysql::{Time, MAX_FSP},
         },
+        expr::EvalConfig,
         FieldTypeTp,
     };
     use tipb::{FieldType, ScalarFuncSig};
@@ -3707,6 +3708,94 @@ mod tests {
                     Some("-36:00:01.234500"),
                     false,
                 ),
+                (
+                    AddDateDurationStringDatetime,
+                    Some("12:26:12.212"),
+                    Some("29 12:23:36"),
+                    "DAY_SECOND",
+                    Some("2020-03-03 00:49:48.212000"),
+                    false,
+                ),
+                (
+                    SubDateDurationStringDatetime,
+                    Some("12:26:12.212"),
+                    Some("29 12:23:36"),
+                    "DAY_SECOND",
+                    Some("2020-01-04 00:02:36.212000"),
+                    false,
+                ),
+                (
+                    AddDateDurationIntDatetime,
+                    Some("1 10:11:12.1234565"),
+                    Some("123"),
+                    "QUARTER",
+                    Some("2050-11-03 10:11:12.123457"),
+                    false,
+                ),
+                (
+                    SubDateDurationIntDatetime,
+                    Some("1 10:11:12.1234565"),
+                    Some("123"),
+                    "QUARTER",
+                    Some("1989-05-03 10:11:12.123457"),
+                    false,
+                ),
+                (
+                    AddDateDurationRealDatetime,
+                    Some("1112"),
+                    Some("-41.12"),
+                    "DAY_HOUR",
+                    Some("2019-12-22 12:11:12.000000"),
+                    false,
+                ),
+                (
+                    SubDateDurationRealDatetime,
+                    Some("1112"),
+                    Some("-41.12"),
+                    "DAY_HOUR",
+                    Some("2020-03-14 12:11:12.000000"),
+                    false,
+                ),
+                (
+                    AddDateDurationDecimalDatetime,
+                    Some("-35:30:46"),
+                    Some("12.99"),
+                    "Year",
+                    Some("2033-01-31 12:29:14.000000"),
+                    false,
+                ),
+                (
+                    SubDateDurationDecimalDatetime,
+                    Some("-35:30:46"),
+                    Some("12.99"),
+                    "year_month",
+                    Some("1999-10-31 12:29:14.000000"),
+                    false,
+                ),
+                (
+                    SubDateDurationDecimalDatetime,
+                    Some("-35:30:46"),
+                    Some("12.99000"),
+                    "year_month",
+                    None,
+                    false,
+                ),
+                (
+                    AddDateDecimalInt,
+                    None,
+                    Some("1234"),
+                    "MICROSECOND",
+                    None,
+                    false,
+                ),
+                (
+                    SubDateIntString,
+                    Some("20240901"),
+                    None,
+                    "second",
+                    None,
+                    false,
+                ),
             ]
         };
         let builder_push_param = |ctx: &mut EvalContext,
@@ -3752,8 +3841,10 @@ mod tests {
             builder
         };
 
-        for (func_sig, time, interval, unit, expected, error) in cases {
-            let mut ctx = EvalContext::default();
+        for (func_sig, time, interval, unit, expected) in cases {
+            let mut cfg = EvalConfig::default();
+            cfg.is_test = true;
+            let mut ctx = EvalContext::new(Arc::new(cfg));
             let (time_type, interval_type, result_type) = get_add_sub_date_expr_types(func_sig);
             let mut result_field_type: FieldType = result_type.into();
             result_field_type.set_decimal(MAX_FSP as i32);
@@ -3767,56 +3858,49 @@ mod tests {
 
             let schema = &[];
             let mut columns = LazyBatchColumnVec::empty();
-            let val = exp.eval(&mut ctx, schema, &mut columns, &[0], 1);
+            let val = exp.eval(&mut ctx, schema, &mut columns, &[0], 1).unwrap();
 
-            match val {
-                Ok(val) => {
-                    assert!(val.is_vector());
-                    let value = val.vector_value().unwrap().as_ref();
-                    assert_eq!(value.len(), 1);
-                    match result_type {
-                        FieldTypeTp::String => {
-                            let v = value.to_bytes_vec();
-                            assert_eq!(
-                                v[0].as_deref().and_then(|s| std::str::from_utf8(s).ok()),
-                                expected,
-                                "{:?} {:?} {:?} {:?}",
-                                func_sig,
-                                time,
-                                interval,
-                                unit
-                            );
-                        }
-                        FieldTypeTp::DateTime => {
-                            let v = value.to_date_time_vec();
-                            assert_eq!(
-                                v[0].map(|s| s.to_string()).as_deref(),
-                                expected,
-                                "{:?} {:?} {:?} {:?}",
-                                func_sig,
-                                time,
-                                interval,
-                                unit
-                            );
-                        }
-                        FieldTypeTp::Duration => {
-                            let v = value.to_duration_vec();
-                            assert_eq!(
-                                v[0].map(|s| s.to_string()).as_deref(),
-                                expected,
-                                "{:?} {:?} {:?} {:?}",
-                                func_sig,
-                                time,
-                                interval,
-                                unit
-                            );
-                        }
-                        _ => panic!("unknown field type {:?}", result_type),
-                    }
+            assert!(val.is_vector());
+            let value = val.vector_value().unwrap().as_ref();
+            assert_eq!(value.len(), 1);
+            match result_type {
+                FieldTypeTp::String => {
+                    let v = value.to_bytes_vec();
+                    assert_eq!(
+                        v[0].as_deref().and_then(|s| std::str::from_utf8(s).ok()),
+                        expected,
+                        "{:?} {:?} {:?} {:?}",
+                        func_sig,
+                        time,
+                        interval,
+                        unit
+                    );
                 }
-                Err(e) => {
-                    assert!(error, "val has error {:?}", e);
+                FieldTypeTp::DateTime => {
+                    let v = value.to_date_time_vec();
+                    assert_eq!(
+                        v[0].map(|s| s.to_string()).as_deref(),
+                        expected,
+                        "{:?} {:?} {:?} {:?}",
+                        func_sig,
+                        time,
+                        interval,
+                        unit
+                    );
                 }
+                FieldTypeTp::Duration => {
+                    let v = value.to_duration_vec();
+                    assert_eq!(
+                        v[0].map(|s| s.to_string()).as_deref(),
+                        expected,
+                        "{:?} {:?} {:?} {:?}",
+                        func_sig,
+                        time,
+                        interval,
+                        unit
+                    );
+                }
+                _ => panic!("unknown field type {:?}", result_type),
             }
         }
     }

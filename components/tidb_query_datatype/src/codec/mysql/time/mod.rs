@@ -10,6 +10,7 @@ use std::{
     convert::{TryFrom, TryInto},
     fmt::Write,
     hash::{Hash, Hasher},
+    intrinsics::unlikely,
 };
 
 use bitfield::bitfield;
@@ -1465,7 +1466,11 @@ impl Time {
     ) -> Result<Self> {
         let dur = chrono::Duration::nanoseconds(duration.to_nanos());
 
-        let time = Utc::today().and_hms(0, 0, 0).checked_add_signed(dur);
+        let time = if unlikely(ctx.cfg.is_test) {
+            Utc.ymd(2020, 2, 2).and_hms(0, 0, 0).checked_add_signed(dur)
+        } else {
+            Utc::today().and_hms(0, 0, 0).checked_add_signed(dur)
+        };
 
         let time = time.ok_or::<Error>(box_err!("parse from duration {} overflows", duration))?;
 
@@ -3148,24 +3153,19 @@ mod tests {
 
     #[test]
     fn test_from_duration() -> Result<()> {
-        let cases = vec!["11:30:45.123456", "-35:30:46"];
-        for case in cases {
-            let mut ctx = EvalContext::default();
+        let cases = vec![
+            ("11:30:45.123456", "2020-02-02 11:30:45.123456"),
+            ("-35:30:46", "2020-01-31 12:29:14.000000"),
+            ("25:59:59.999999", "2020-02-03 01:59:59.999999"),
+        ];
+        let mut cfg = EvalConfig::default();
+        cfg.is_test = true;
+        let mut ctx = EvalContext::new(Arc::new(cfg));
+        for (case, expected) in cases {
             let duration = Duration::parse(&mut ctx, case, MAX_FSP)?;
 
             let actual = Time::from_duration(&mut ctx, duration, TimeType::DateTime)?;
-            let today = actual
-                .try_into_chrono_datetime(&mut ctx)?
-                .checked_sub_signed(chrono::Duration::nanoseconds(duration.to_nanos()))
-                .unwrap();
-
-            let now = Utc::now();
-            assert_eq!(today.year(), now.year());
-            assert_eq!(today.month(), now.month());
-            assert_eq!(today.day(), now.day());
-            assert_eq!(today.hour(), 0);
-            assert_eq!(today.minute(), 0);
-            assert_eq!(today.second(), 0);
+            assert_eq!(actual.to_string(), expected);
         }
         Ok(())
     }
