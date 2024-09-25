@@ -39,7 +39,9 @@ use range_cache_memory_engine::{
 use security::SecurityManager;
 use tikv::{
     config::{ConfigController, DbConfigManger, DbType, TikvConfig},
-    server::{status_server::StatusServer, DEFAULT_CLUSTER_ID},
+    server::{
+        gc_worker::compaction_filter::GC_CONTEXT, status_server::StatusServer, DEFAULT_CLUSTER_ID,
+    },
 };
 use tikv_util::{
     config::{ensure_dir_exist, RaftDataStateMachine},
@@ -713,7 +715,14 @@ pub fn build_hybrid_engine(
         )
     }
 
-    memory_engine.start_cross_check(disk_engine.clone(), range_cache_engine_context.pd_client());
+    memory_engine.start_cross_check(
+        disk_engine.clone(),
+        range_cache_engine_context.pd_client(),
+        Box::new(|| {
+            let ctx = GC_CONTEXT.lock().unwrap();
+            ctx.as_ref().map(|ctx| ctx.safe_point())
+        }),
+    );
 
     HybridEngine::new(disk_engine, memory_engine)
 }

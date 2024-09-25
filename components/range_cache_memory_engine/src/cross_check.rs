@@ -44,6 +44,7 @@ pub(crate) struct CrossChecker {
     memory_engine: RangeCacheMemoryEngine,
     rocks_engine: RocksEngine,
     interval: Duration,
+    get_tikv_safe_point: Box<dyn Fn() -> Option<u64> + Send>,
 }
 
 impl CrossChecker {
@@ -52,12 +53,14 @@ impl CrossChecker {
         memory_engine: RangeCacheMemoryEngine,
         rocks_engine: RocksEngine,
         interval: Duration,
+        get_tikv_safe_point: Box<dyn Fn() -> Option<u64> + Send>,
     ) -> CrossChecker {
         CrossChecker {
             pd_client,
             memory_engine,
             rocks_engine,
             interval,
+            get_tikv_safe_point,
         }
     }
 
@@ -113,6 +116,21 @@ impl CrossChecker {
             }
 
             if !disk_valid {
+                let Some(tikv_safe_point) = (self.get_tikv_safe_point)() else {
+                    return;
+                };
+                // The keys in rocksdb may have been gced, so keys in ime should have mvcc
+                // versions less or equal to the safe point of tikv.
+                loop {
+                    let (_, mvcc) = split_ts(mem_iter.key()).unwrap();
+                    if mvcc > tikv_safe_point {
+                        break;
+                    }
+                    mem_iter.next().unwrap();
+                    if !mem_iter.valid().unwrap() {
+                        return;
+                    }
+                }
                 panic!(
                     "cross check fail(key should not exist): {:?} cf not match when seek_to_first;
                     cache_region={:?}; cache_key={:?}; sequence_numer={};",
@@ -214,7 +232,7 @@ impl CrossChecker {
                 cur_key_info.user_key = user_key.to_vec();
             }
 
-            CrossChecker::check_with_key_in_disk_iter(
+            if !CrossChecker::check_with_key_in_disk_iter(
                 cf,
                 &mem_iter,
                 &mut disk_iter,
@@ -226,7 +244,10 @@ impl CrossChecker {
                 &mut cur_key_info,
                 &mut last_disk_user_key_delete,
                 &mut last_disk_user_key,
-            );
+                &self.get_tikv_safe_point,
+            ) {
+                return;
+            }
 
             if *cf == CF_WRITE {
                 check_default(&mem_iter);
@@ -266,7 +287,7 @@ impl CrossChecker {
                     }
                 }
 
-                CrossChecker::check_with_key_in_disk_iter(
+                if !CrossChecker::check_with_key_in_disk_iter(
                     cf,
                     &mem_iter,
                     &mut disk_iter,
@@ -278,7 +299,10 @@ impl CrossChecker {
                     &mut cur_key_info,
                     &mut last_disk_user_key_delete,
                     &mut last_disk_user_key,
-                );
+                    &self.get_tikv_safe_point,
+                ) {
+                    return;
+                }
 
                 if *cf == CF_WRITE {
                     check_default(&mem_iter);
@@ -312,6 +336,7 @@ impl CrossChecker {
     // After each call of disk_iter, we will check whether the key missed in the
     // in-memory engine will not make it compromise data consistency.
     // `next_first` denotes whether disk_iter should call next before comparison.
+    // Return false means break the check.
     #[allow(clippy::collapsible_if)]
     fn check_with_key_in_disk_iter(
         cf: &str,
@@ -325,6 +350,7 @@ impl CrossChecker {
         cur_key_info: &mut KeyCheckingInfo,
         last_disk_user_key_delete: &mut bool,
         last_disk_user_key: &mut Vec<u8>,
+        get_tikv_safe_point: &Box<dyn Fn() -> Option<u64> + Send>,
     ) -> bool {
         let read_ts = mem_iter.snapshot_read_ts;
         let mem_key = mem_iter.key();
@@ -527,6 +553,13 @@ impl CrossChecker {
             }
 
             if disk_key > mem_key {
+                // The keys in rocksdb may have been gced. Check the mvcc version of `mem_key`,
+                // and if it has mvcc less or equal to the safe point of tikv, for simplicity,
+                // break the check in such cases.
+                if mem_mvcc <= get_tikv_safe_point().unwrap() {
+                    return false;
+                }
+
                 panic!(
                     "cross check fail(key should not exist): write cf not match;
                     cache_region={:?}; cache_key={:?}, disk_key={:?}; sequence_numer={}; read_ts={}, safe_point={}",
