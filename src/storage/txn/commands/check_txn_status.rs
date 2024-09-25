@@ -163,6 +163,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
 
 #[cfg(test)]
 pub mod tests {
+    use std::sync::Arc;
+
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::{
         self, Context, LockInfo, PrewriteRequestPessimisticAction::*, WriteConflictReason,
@@ -226,7 +228,7 @@ pub mod tests {
                     statistics: &mut Default::default(),
                     async_apply_prewrite: false,
                     raw_ext: None,
-                    txn_status_cache: &TxnStatusCache::new_for_test(),
+                    txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
                 },
             )
             .unwrap();
@@ -280,7 +282,7 @@ pub mod tests {
                     statistics: &mut Default::default(),
                     async_apply_prewrite: false,
                     raw_ext: None,
-                    txn_status_cache: &TxnStatusCache::new_for_test(),
+                    txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
                 },
             )
             .map(|r| {
