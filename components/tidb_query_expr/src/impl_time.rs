@@ -3322,7 +3322,6 @@ mod tests {
                     Some("5"),
                     "day",
                     Some("2008-04-06"),
-                    false,
                 ),
                 (
                     SubDateStringString,
@@ -3330,7 +3329,6 @@ mod tests {
                     Some("5"),
                     "day",
                     Some("2008-03-27"),
-                    false,
                 ),
                 (
                     AddDateStringInt,
@@ -3338,7 +3336,6 @@ mod tests {
                     Some("21"),
                     "Minute",
                     Some("2024-09-01 12:31:01"),
-                    false,
                 ),
                 (
                     SubDateStringInt,
@@ -3346,7 +3343,6 @@ mod tests {
                     Some("21"),
                     "Minute",
                     Some("2024-09-01 11:49:01"),
-                    false,
                 ),
                 (
                     AddDateStringReal,
@@ -3354,7 +3350,6 @@ mod tests {
                     Some("21.1239"),
                     "Minute_microsecond",
                     Some("2024-09-01 12:10:22.123900"),
-                    false,
                 ),
                 (
                     SubDateStringReal,
@@ -3362,7 +3357,6 @@ mod tests {
                     Some("10.22"),
                     "minute_microsecond",
                     Some("2024-09-01 12:09:50.780000"),
-                    false,
                 ),
                 (
                     AddDateStringDecimal,
@@ -3370,7 +3364,6 @@ mod tests {
                     Some("10.200"),
                     "Day_Minute",
                     Some("2024-09-02 01:30:01"),
-                    false,
                 ),
                 (
                     SubDateStringDecimal,
@@ -3378,7 +3371,6 @@ mod tests {
                     Some("-10.22"),
                     "Day_Minute",
                     Some("2024-09-01 22:32:01"),
-                    false,
                 ),
                 (
                     AddDateIntString,
@@ -3386,7 +3378,6 @@ mod tests {
                     Some("2e3"),
                     "second",
                     Some("2024-09-01 00:33:20"),
-                    false,
                 ),
                 (
                     SubDateIntString,
@@ -3394,7 +3385,6 @@ mod tests {
                     Some("2e3"),
                     "second",
                     Some("2024-08-31 23:26:40"),
-                    false,
                 ),
                 (
                     AddDateRealString,
@@ -3402,7 +3392,6 @@ mod tests {
                     Some("-1e4"),
                     "SECOND",
                     Some("2007-01-17 21:13:20"),
-                    false,
                 ),
                 (
                     SubDateRealString,
@@ -3410,7 +3399,6 @@ mod tests {
                     Some("2-20"),
                     "year_month",
                     Some("2009-04-30 11:30:45.123001"),
-                    false,
                 ),
                 (
                     AddDateDecimalString,
@@ -3418,7 +3406,6 @@ mod tests {
                     Some("-22"),
                     "quarter",
                     Some("1995-06-03"),
-                    false,
                 ),
                 (
                     SubDateDecimalString,
@@ -3426,7 +3413,6 @@ mod tests {
                     Some("123.221456"),
                     "second_microsecond",
                     Some("2017-01-05 08:38:56.354145"),
-                    false,
                 ),
                 (
                     AddDateIntInt,
@@ -3434,7 +3420,6 @@ mod tests {
                     Some("123"),
                     "Minute_Second",
                     Some("2070-01-01 00:02:02"),
-                    false,
                 ),
                 (
                     SubDateIntInt,
@@ -3442,7 +3427,6 @@ mod tests {
                     Some("321"),
                     "Hour_Second",
                     Some("2069-12-31 23:54:38"),
-                    false,
                 ),
                 (
                     AddDateIntReal,
@@ -3450,7 +3434,6 @@ mod tests {
                     Some("-1.678"),
                     "Week",
                     Some("2059-12-17"),
-                    false,
                 ),
                 (
                     SubDateIntReal,
@@ -3458,7 +3441,6 @@ mod tests {
                     Some("6.678"),
                     "MONTH",
                     Some("2059-05-31"),
-                    false,
                 ),
                 (
                     AddDateIntDecimal,
@@ -3466,7 +3448,6 @@ mod tests {
                     Some("238.12390"),
                     "Day_Microsecond",
                     Some("1999-01-01 00:03:58.123900"),
-                    false,
                 ),
                 (
                     SubDateIntDecimal,
@@ -3474,7 +3455,6 @@ mod tests {
                     Some("238.12390"),
                     "Day_Microsecond",
                     Some("1999-12-31 23:56:00.876100"),
-                    false,
                 ),
                 (
                     AddDateRealInt,
@@ -3482,7 +3462,6 @@ mod tests {
                     Some("1234"),
                     "MICROSECOND",
                     Some("2012-12-31 11:30:46.001234"),
-                    false,
                 ),
                 (
                     SubDateRealInt,
@@ -3490,7 +3469,6 @@ mod tests {
                     Some("8912"),
                     "day",
                     Some("1988-08-07 11:30:46"),
-                    false,
                 ),
                 (
                     AddDateRealReal,
@@ -3498,7 +3476,6 @@ mod tests {
                     Some("-98.123"),
                     "second",
                     Some("2017-01-05 08:39:21.452592"),
-                    false,
                 ),
                 (
                     SubDateRealReal,
@@ -3506,7 +3483,6 @@ mod tests {
                     Some("-98.123"),
                     "HOUR",
                     Some("2017-01-09 10:40:59.575592"),
-                    false,
                 ),
                 (
                     AddDateRealDecimal,
@@ -3514,7 +3490,6 @@ mod tests {
                     Some("9876.1234"),
                     "Minute_Microsecond",
                     Some("2000-12-10 02:44:36.123400"),
-                    false,
                 ),
                 (
                     SubDateRealDecimal,
@@ -3522,7 +3497,6 @@ mod tests {
                     Some("9876.1234"),
                     "Minute_Microsecond",
                     Some("2000-12-09 21:15:23.876600"),
-                    false,
                 ),
                 (
                     AddDateDecimalInt,
@@ -3530,7 +3504,6 @@ mod tests {
                     Some("1234"),
                     "MICROSECOND",
                     Some("2012-12-31 11:30:46.001233"),
-                    false,
                 ),
                 (
                     SubDateDecimalInt,
@@ -3538,7 +3511,6 @@ mod tests {
                     Some("1234"),
                     "WEEK",
                     Some("2001-01-30"),
-                    false,
                 ),
                 (
                     AddDateDecimalReal,
@@ -3546,7 +3518,6 @@ mod tests {
                     Some("1234.892"),
                     "MICROSECOND",
                     Some("2012-12-31 11:30:46.001234"),
-                    false,
                 ),
                 (
                     SubDateDecimalReal,
@@ -3554,7 +3525,6 @@ mod tests {
                     Some("1234.99"),
                     "Hour_Microsecond",
                     Some("2024-09-23 23:39:25.010000"),
-                    false,
                 ),
                 (
                     AddDateDecimalDecimal,
@@ -3562,7 +3532,6 @@ mod tests {
                     Some("1234.892"),
                     "MICROSECOND",
                     Some("2012-12-31 11:30:46.001234"),
-                    false,
                 ),
                 (
                     SubDateDecimalDecimal,
@@ -3570,7 +3539,6 @@ mod tests {
                     Some("1234.99"),
                     "minute_microsecond",
                     Some("2024-09-23 23:39:25.010000"),
-                    false,
                 ),
                 (
                     AddDateDatetimeString,
@@ -3578,7 +3546,6 @@ mod tests {
                     Some("8"),
                     "DaY",
                     Some("2024-01-09"),
-                    false,
                 ),
                 (
                     SubDateDatetimeString,
@@ -3586,7 +3553,6 @@ mod tests {
                     Some("8 12:60:128.9123"),
                     "day_mIcroseconD",
                     Some("2023-12-23 10:57:51.087700"),
-                    false,
                 ),
                 (
                     SubDateDatetimeString,
@@ -3594,7 +3560,6 @@ mod tests {
                     Some("-7 55:03:09.629"),
                     "day_mIcroseconD",
                     Some("2024-01-10 19:25:21.950000"),
-                    false,
                 ),
                 (
                     AddDateDatetimeInt,
@@ -3602,7 +3567,6 @@ mod tests {
                     Some("782"),
                     "minUte",
                     Some("2001-02-03 13:02:00.000000"),
-                    false,
                 ),
                 (
                     SubDateDatetimeInt,
@@ -3610,7 +3574,6 @@ mod tests {
                     Some("782"),
                     "minUte",
                     Some("2001-02-02 10:58:00.000000"),
-                    false,
                 ),
                 (
                     AddDateDatetimeReal,
@@ -3618,7 +3581,6 @@ mod tests {
                     Some("1.678"),
                     "Minute_Second",
                     Some("2002-03-01 00:11:40.222000"),
-                    false,
                 ),
                 (
                     SubDateDatetimeReal,
@@ -3626,7 +3588,6 @@ mod tests {
                     Some("1238123.123489"),
                     "Minute_Second",
                     Some("1999-10-21 18:18:13.222000"),
-                    false,
                 ),
                 (
                     AddDateDatetimeDecimal,
@@ -3634,7 +3595,6 @@ mod tests {
                     Some("-98264.678"),
                     "Second",
                     Some("2024-12-28 20:42:15.322000"),
-                    false,
                 ),
                 (
                     SubDateDatetimeDecimal,
@@ -3642,7 +3602,6 @@ mod tests {
                     Some("778.12348"),
                     "Day_Hour",
                     Some("2021-06-17 12:00:00.000000"),
-                    false,
                 ),
                 (
                     AddDateDurationString,
@@ -3650,7 +3609,6 @@ mod tests {
                     Some("29 12:23:36.1234"),
                     "day_microsecond",
                     Some("720:49:48.335400"),
-                    false,
                 ),
                 (
                     SubDateDurationString,
@@ -3658,7 +3616,6 @@ mod tests {
                     Some("29 12:23:36.1234"),
                     "day_microsecond",
                     Some("-695:57:23.911400"),
-                    false,
                 ),
                 (
                     AddDateDurationInt,
@@ -3666,7 +3623,6 @@ mod tests {
                     Some("123"),
                     "minute",
                     Some("36:14:12.123457"),
-                    false,
                 ),
                 (
                     SubDateDurationInt,
@@ -3674,7 +3630,6 @@ mod tests {
                     Some("123"),
                     "minute",
                     Some("32:08:12.123457"),
-                    false,
                 ),
                 (
                     AddDateDurationReal,
@@ -3682,7 +3637,6 @@ mod tests {
                     Some("-234.889"),
                     "MINUTE_SECOND",
                     Some("-03:57:37.000000"),
-                    false,
                 ),
                 (
                     SubDateDurationReal,
@@ -3690,7 +3644,6 @@ mod tests {
                     Some("-234.889"),
                     "MINUTE_SECOND",
                     Some("04:20:01.000000"),
-                    false,
                 ),
                 (
                     AddDateDurationDecimal,
@@ -3698,7 +3651,6 @@ mod tests {
                     Some("1.2345"),
                     "MINUTE_MICROSECOND",
                     Some("36:00:01.234500"),
-                    false,
                 ),
                 (
                     SubDateDurationDecimal,
@@ -3706,7 +3658,6 @@ mod tests {
                     Some("1.2345"),
                     "second_MICROSECOND",
                     Some("-36:00:01.234500"),
-                    false,
                 ),
                 (
                     AddDateDurationStringDatetime,
@@ -3714,7 +3665,6 @@ mod tests {
                     Some("29 12:23:36"),
                     "DAY_SECOND",
                     Some("2020-03-03 00:49:48.212000"),
-                    false,
                 ),
                 (
                     SubDateDurationStringDatetime,
@@ -3722,7 +3672,6 @@ mod tests {
                     Some("29 12:23:36"),
                     "DAY_SECOND",
                     Some("2020-01-04 00:02:36.212000"),
-                    false,
                 ),
                 (
                     AddDateDurationIntDatetime,
@@ -3730,7 +3679,6 @@ mod tests {
                     Some("123"),
                     "QUARTER",
                     Some("2050-11-03 10:11:12.123457"),
-                    false,
                 ),
                 (
                     SubDateDurationIntDatetime,
@@ -3738,7 +3686,6 @@ mod tests {
                     Some("123"),
                     "QUARTER",
                     Some("1989-05-03 10:11:12.123457"),
-                    false,
                 ),
                 (
                     AddDateDurationRealDatetime,
@@ -3746,7 +3693,6 @@ mod tests {
                     Some("-41.12"),
                     "DAY_HOUR",
                     Some("2019-12-22 12:11:12.000000"),
-                    false,
                 ),
                 (
                     SubDateDurationRealDatetime,
@@ -3754,7 +3700,6 @@ mod tests {
                     Some("-41.12"),
                     "DAY_HOUR",
                     Some("2020-03-14 12:11:12.000000"),
-                    false,
                 ),
                 (
                     AddDateDurationDecimalDatetime,
@@ -3762,7 +3707,6 @@ mod tests {
                     Some("12.99"),
                     "Year",
                     Some("2033-01-31 12:29:14.000000"),
-                    false,
                 ),
                 (
                     SubDateDurationDecimalDatetime,
@@ -3770,7 +3714,6 @@ mod tests {
                     Some("12.99"),
                     "year_month",
                     Some("1999-10-31 12:29:14.000000"),
-                    false,
                 ),
                 (
                     SubDateDurationDecimalDatetime,
@@ -3778,24 +3721,9 @@ mod tests {
                     Some("12.99000"),
                     "year_month",
                     None,
-                    false,
                 ),
-                (
-                    AddDateDecimalInt,
-                    None,
-                    Some("1234"),
-                    "MICROSECOND",
-                    None,
-                    false,
-                ),
-                (
-                    SubDateIntString,
-                    Some("20240901"),
-                    None,
-                    "second",
-                    None,
-                    false,
-                ),
+                (AddDateDecimalInt, None, Some("1234"), "MICROSECOND", None),
+                (SubDateIntString, Some("20240901"), None, "second", None),
             ]
         };
         let builder_push_param = |ctx: &mut EvalContext,
