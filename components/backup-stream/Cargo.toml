@@ -26,7 +26,7 @@ test = true
 harness = true
 
 [dependencies]
-async-compression = { version = "0.3.14", features = ["tokio", "zstd"] }
+async-compression = { version = "0.4.12", features = ["tokio", "zstd"] }
 async-trait = { version = "0.1" }
 bytes = "1"
 chrono = { workspace = true }
@@ -36,6 +36,7 @@ crossbeam = { workspace = true }
 crossbeam-channel = { workspace = true }
 dashmap = "5"
 encryption = { workspace = true }
+encryption_export = { workspace = true }
 engine_rocks = { workspace = true }
 engine_traits = { workspace = true }
 error_code = { workspace = true }

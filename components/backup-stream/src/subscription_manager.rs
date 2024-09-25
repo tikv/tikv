@@ -831,6 +831,7 @@ mod test {
         time::Duration,
     };
 
+    use encryption::BackupEncryptionManager;
     use engine_test::{kv::KvTestEngine, raft::RaftTestEngine};
     use kvproto::{
         brpb::{Noop, StorageBackend, StreamBackupTaskInfo},
@@ -1033,7 +1034,11 @@ mod test {
             let subs = SubscriptionTracer::default();
             let memory_manager = Arc::new(MemoryQuota::new(1024));
             let (tx, mut rx) = tokio::sync::mpsc::channel(8);
-            let router = RouterInner::new(scheduler.clone(), BackupStreamConfig::default().into());
+            let router = RouterInner::new(
+                scheduler.clone(),
+                BackupStreamConfig::default().into(),
+                BackupEncryptionManager::default(),
+            );
             let mut task = StreamBackupTaskInfo::new();
             task.set_name(task_name.to_owned());
             task.set_storage({
