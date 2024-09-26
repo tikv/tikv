@@ -1472,6 +1472,28 @@ def ThreadCPU() -> RowPanel:
             ),
         ]
     )
+    layout.row(
+        [
+            graph_panel(
+                title="Busy Threads (>80%)",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_topk(
+                            20,
+                            "%s"
+                            % expr_sum_rate(
+                                "tikv_thread_cpu_seconds_total",
+                                label_selectors=['name!~"rocksdb.*"'],
+                                by_labels=["instance", "name"],
+                            ).extra(extra_expr="> 0.8"),
+                        ),
+                        legend_format="{{name}}-{{instance}}",
+                    ),
+                ],
+            ),
+        ]
+    )
     return layout.row_panel
 
 
