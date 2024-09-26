@@ -10,7 +10,7 @@ failpoints = ["fail/failpoints"]
 test-cgroup = []
 
 [dependencies]
-async-speed-limit = "0.4.0"
+async-speed-limit = { git = "https://github.com/glorv/async-speed-limit", branch = "min_wait" }
 backtrace = "0.3.9"
 byteorder = "1.2"
 bytes = "1.0"

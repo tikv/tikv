@@ -147,7 +147,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             background_util_limit = 100;
         }
 
-        BACKGROUND_TASK_RESOURCE_UTILITATION_VEC
+        BACKGROUND_TASK_RESOURCE_UTILIZATION_VEC
             .with_label_values(&["limit"])
             .set(background_util_limit as i64);
 
@@ -236,6 +236,12 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             BACKGROUND_RESOURCE_CONSUMPTION
                 .with_label_values(&[&g.name, resource_type.as_str()])
                 .inc_by(stats_delta.total_consumed);
+            if resource_type == ResourceType::Cpu {
+                BACKGROUND_TASKS_WAIT_DURATION
+                    .with_label_values(&[&g.name])
+                    .inc_by(stats_delta.total_wait_dur_us);
+            }
+
             let stats_per_sec = stats_delta / dur_secs;
             background_consumed_total += stats_per_sec.total_consumed as f64;
             g.stats_per_sec = stats_per_sec;
@@ -246,7 +252,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
 
         let background_util =
             (background_consumed_total / resource_stats.total_quota * 100.0) as u64;
-        BACKGROUND_TASK_RESOURCE_UTILITATION_VEC
+        BACKGROUND_TASK_RESOURCE_UTILIZATION_VEC
             .with_label_values(&[resource_type.as_str()])
             .set(background_util as i64);
 
@@ -560,17 +566,23 @@ impl PriorityLimiterStatsTracker {
 
     fn get_and_update_last_stats(&mut self, dur_secs: f64) -> LimiterStats {
         let cur_stats = self.limiter.get_limit_statistics(ResourceType::Cpu);
-        let stats_delta = (cur_stats - self.last_stats) / dur_secs;
+        let stats_delta = cur_stats - self.last_stats;
         self.last_stats = cur_stats;
+        PRIORITY_CPU_TIME_VEC
+            .with_label_values(&[self.priority])
+            .inc_by(stats_delta.total_consumed);
+        let stats_per_sec = stats_delta / dur_secs;
+
         let wait_stats: [_; 2] =
             array::from_fn(|i| self.task_wait_dur_trakcers[i].get_and_upate_statistics());
         let schedule_wait_dur_secs = wait_stats.iter().map(|s| s.0).sum::<f64>() / dur_secs;
-        let expected_wait_dur_secs = stats_delta.request_count as f64 * MINIMAL_SCHEDULE_WAIT_SECS;
+        let expected_wait_dur_secs =
+            stats_per_sec.request_count as f64 * MINIMAL_SCHEDULE_WAIT_SECS;
         let normed_schedule_wait_dur_secs =
             (schedule_wait_dur_secs - expected_wait_dur_secs).max(0.0);
         LimiterStats {
-            cpu_secs: stats_delta.total_consumed as f64 / MICROS_PER_SEC,
-            wait_secs: stats_delta.total_wait_dur_us as f64 / MICROS_PER_SEC
+            cpu_secs: stats_per_sec.total_consumed as f64 / MICROS_PER_SEC,
+            wait_secs: stats_per_sec.total_wait_dur_us as f64 / MICROS_PER_SEC
                 + normed_schedule_wait_dur_secs,
         }
     }
