@@ -429,7 +429,12 @@ impl RangeCacheMemoryEngine {
         self.statistics.clone()
     }
 
-    pub fn start_cross_check(&self, rocks_engine: RocksEngine, pd_client: Arc<dyn PdClient>, get_tikv_safe_point: Box<dyn Fn() -> Option<u64> + Send>) {
+    pub fn start_cross_check(
+        &self,
+        rocks_engine: RocksEngine,
+        pd_client: Arc<dyn PdClient>,
+        get_tikv_safe_point: Box<dyn Fn() -> Option<u64> + Send>,
+    ) {
         let cross_check_interval = self.config.value().cross_check_interval;
         if !cross_check_interval.is_zero() {
             if let Err(e) =
