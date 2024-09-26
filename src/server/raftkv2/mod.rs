@@ -348,24 +348,9 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
             early_err: res.err(),
         })
         .inspect(move |ev| {
-<<<<<<< HEAD
-            let WriteEvent::Finished(res) = ev else { return };
-            match res {
-                Ok(()) => {
-                    ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();
-                    ASYNC_REQUESTS_DURATIONS_VEC
-                        .write
-                        .observe(begin_instant.saturating_elapsed_secs());
-                }
-                Err(e) => {
-                    let status_kind = get_status_kind_from_engine_error(e);
-                    ASYNC_REQUESTS_COUNTER_VEC.write.get(status_kind).inc();
-                }
-=======
             if let WriteEvent::Finished(Err(e)) = ev {
                 let status_kind = get_status_kind_from_engine_error(e);
                 ASYNC_REQUESTS_COUNTER_VEC.write.get(status_kind).inc();
->>>>>>> b88b86b60a (raftkv: fix inaccurate async write duration metric (#17581))
             }
         })
     }
