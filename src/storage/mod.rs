@@ -61,6 +61,7 @@ mod read_pool;
 mod types;
 
 use std::{
+    assert_matches::assert_matches,
     borrow::Cow,
     iter,
     marker::PhantomData,
@@ -69,7 +70,7 @@ use std::{
         atomic::{self, AtomicBool, AtomicU64, Ordering},
         Arc,
     },
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 use api_version::{ApiV1, ApiV2, KeyMode, KvFormat, RawValue};
@@ -81,6 +82,7 @@ use engine_traits::{
 };
 use futures::{future::Either, prelude::*};
 use kvproto::{
+    kvrpcpb,
     kvrpcpb::{
         ApiVersion, ChecksumAlgorithm, CommandPri, Context, GetRequest, IsolationLevel, KeyRange,
         LockInfo, RawGetRequest,
@@ -104,6 +106,7 @@ use tracker::{
 };
 use txn_types::{Key, KvPair, Lock, LockType, TimeStamp, TsSet, Value};
 
+use self::kv::SnapContext;
 pub use self::{
     errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},
     kv::{
@@ -118,7 +121,6 @@ pub use self::{
         StorageCallback, TxnStatus,
     },
 };
-use self::{kv::SnapContext, test_util::latest_feature_gate};
 use crate::{
     read_pool::{ReadPool, ReadPoolHandle},
     server::{lock_manager::waiter_manager, metrics::ResourcePriority},
@@ -128,10 +130,12 @@ use crate::{
         lock_manager::{LockManager, MockLockManager},
         metrics::{CommandKind, *},
         mvcc::{metrics::ScanLockReadTimeSource::resolve_lock, MvccReader, PointGetterBuilder},
+        test_util::latest_feature_gate,
         txn::{
             commands::{RawAtomicStore, RawCompareAndSwap, TypedCommand},
             flow_controller::{EngineFlowController, FlowController},
             scheduler::TxnScheduler,
+            txn_status_cache::{TxnState, TxnStatusCache},
             Command, Error as TxnError, ErrorInner as TxnErrorInner,
         },
         types::StorageCallbackType,
@@ -219,7 +223,7 @@ pub struct Storage<E: Engine, L: LockManager, F: KvFormat> {
 impl<E: Engine, L: LockManager, F: KvFormat> Clone for Storage<E, L, F> {
     #[inline]
     fn clone(&self) -> Self {
-        let refs = self.refs.fetch_add(1, atomic::Ordering::SeqCst);
+        let refs = self.refs.fetch_add(1, Ordering::SeqCst);
 
         trace!(
             "Storage referenced"; "original_ref" => refs
@@ -245,7 +249,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Clone for Storage<E, L, F> {
 impl<E: Engine, L: LockManager, F: KvFormat> Drop for Storage<E, L, F> {
     #[inline]
     fn drop(&mut self) {
-        let refs = self.refs.fetch_sub(1, atomic::Ordering::SeqCst);
+        let refs = self.refs.fetch_sub(1, Ordering::SeqCst);
 
         trace!(
             "Storage de-referenced"; "original_ref" => refs
@@ -276,6 +280,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
         resource_ctl: Option<Arc<ResourceController>>,
         resource_manager: Option<Arc<ResourceGroupManager>>,
+        txn_status_cache: Arc<TxnStatusCache>,
     ) -> Result<Self> {
         assert_eq!(config.api_version(), F::TAG, "Api version not match");
 
@@ -293,6 +298,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             feature_gate,
             resource_ctl,
             resource_manager.clone(),
+            txn_status_cache,
         );
 
         info!("Storage started.");
@@ -3245,6 +3251,38 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 .and_then(|res| future::ready(res)),
         )
     }
+
+    pub fn update_txn_status_cache(
+        &self,
+        ctx: Context,
+        txn_statuses: Vec<kvrpcpb::TxnStatus>,
+        callback: Callback<()>,
+    ) -> Result<()> {
+        const CMD: CommandKind = CommandKind::update_txn_status_cache;
+        let priority = ctx.get_priority();
+        let metadata = TaskMetadata::from_ctx(ctx.get_resource_control_context());
+        let cache = self.get_scheduler().get_txn_status_cache();
+        let f = async move {
+            let now = SystemTime::now();
+            for txn_status in txn_statuses {
+                let txn_state = TxnState::from_ts(
+                    txn_status.start_ts.into(),
+                    txn_status.min_commit_ts.into(),
+                    txn_status.commit_ts.into(),
+                    txn_status.rolled_back,
+                );
+                if txn_status.is_completed {
+                    // large_txn_cache is only for **ongoing** large txns, so remove it when
+                    // completed.
+                    assert_matches!(txn_state, TxnState::Committed { .. } | TxnState::RolledBack);
+                    cache.remove_large_txn(txn_status.start_ts.into());
+                }
+                cache.upsert(txn_status.start_ts.into(), txn_state, now);
+            }
+            callback(Ok(()));
+        };
+        self.sched_raw_command(metadata, priority, CMD, f)
+    }
 }
 
 pub async fn get_raw_key_guard(
@@ -3546,7 +3584,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
 
     pub fn pipelined_pessimistic_lock(self, enabled: bool) -> Self {
         self.pipelined_pessimistic_lock
-            .store(enabled, atomic::Ordering::Relaxed);
+            .store(enabled, Ordering::Relaxed);
         self
     }
 
@@ -3557,7 +3595,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
 
     pub fn in_memory_pessimistic_lock(self, enabled: bool) -> Self {
         self.in_memory_pessimistic_lock
-            .store(enabled, atomic::Ordering::Relaxed);
+            .store(enabled, Ordering::Relaxed);
         self
     }
 
@@ -3613,6 +3651,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             ts_provider,
             Some(resource_ctl),
             Some(manager),
+            Arc::new(TxnStatusCache::new_for_test()),
         )
     }
 
@@ -3648,6 +3687,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             None,
             Some(resource_ctl),
             Some(manager),
+            Arc::new(TxnStatusCache::new_for_test()),
         )
     }
 
@@ -3686,6 +3726,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             None,
             Some(resource_controller),
             Some(resource_manager),
+            Arc::new(TxnStatusCache::new_for_test()),
         )
     }
 }
@@ -4255,7 +4296,7 @@ mod tests {
                     statistics: &mut Statistics::default(),
                     async_apply_prewrite: false,
                     raw_ext: None,
-                    txn_status_cache: &TxnStatusCache::new_for_test(),
+                    txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
                 },
             )
             .unwrap();
@@ -8376,7 +8417,7 @@ mod tests {
         // No lock.
         storage
             .sched_txn_command(
-                commands::TxnHeartBeat::new(k.clone(), 10.into(), 100, Context::default()),
+                commands::TxnHeartBeat::new(k.clone(), 10.into(), 100, 0, Context::default()),
                 expect_fail_callback(tx.clone(), 0, |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
                         box mvcc::ErrorInner::TxnNotFound { .. },
@@ -8418,7 +8459,7 @@ mod tests {
         // remains 100.
         storage
             .sched_txn_command(
-                commands::TxnHeartBeat::new(k.clone(), 10.into(), 90, Context::default()),
+                commands::TxnHeartBeat::new(k.clone(), 10.into(), 90, 0, Context::default()),
                 expect_value_callback(tx.clone(), 0, uncommitted(lock_with_ttl(100), false)),
             )
             .unwrap();
@@ -8428,7 +8469,7 @@ mod tests {
         // updated to 110.
         storage
             .sched_txn_command(
-                commands::TxnHeartBeat::new(k.clone(), 10.into(), 110, Context::default()),
+                commands::TxnHeartBeat::new(k.clone(), 10.into(), 110, 0, Context::default()),
                 expect_value_callback(tx.clone(), 0, uncommitted(lock_with_ttl(110), false)),
             )
             .unwrap();
@@ -8437,7 +8478,7 @@ mod tests {
         // Lock not match. Nothing happens except throwing an error.
         storage
             .sched_txn_command(
-                commands::TxnHeartBeat::new(k, 11.into(), 150, Context::default()),
+                commands::TxnHeartBeat::new(k, 11.into(), 150, 0, Context::default()),
                 expect_fail_callback(tx, 0, |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
                         box mvcc::ErrorInner::TxnNotFound { .. },

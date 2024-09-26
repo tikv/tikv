@@ -68,7 +68,10 @@ use tikv::{
     storage::{
         self,
         kv::{FakeExtension, LocalTablets, RaftExtension, SnapContext},
-        txn::flow_controller::{EngineFlowController, FlowController},
+        txn::{
+            flow_controller::{EngineFlowController, FlowController},
+            txn_status_cache::TxnStatusCache,
+        },
         Engine, Storage,
     },
 };
@@ -428,7 +431,10 @@ impl<EK: KvEngine> ServerCluster<EK> {
         let region_info_accessor = RegionInfoAccessor::new(
             &mut coprocessor_host,
             Arc::new(|| false), // Not applicable to v2
-            cfg.range_cache_engine.mvcc_amplification_threshold,
+            Box::new(|| {
+                // v2 does not support ime
+                unreachable!()
+            }),
         );
 
         let sim_router = SimulateTransport::new(raft_router.clone());
@@ -467,6 +473,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
         );
         gc_worker.start(node_id).unwrap();
 
+        let txn_status_cache = Arc::new(TxnStatusCache::new_for_test());
         let rts_worker = if cfg.resolved_ts.enable {
             // Resolved ts worker
             let mut rts_worker = LazyWorker::new("resolved-ts");
@@ -484,6 +491,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
                 concurrency_manager.clone(),
                 self.env.clone(),
                 self.security_mgr.clone(),
+                txn_status_cache.clone(),
             );
             // Start the worker
             rts_worker.start(rts_endpoint);
@@ -545,6 +553,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
                 .as_ref()
                 .map(|m| m.derive_controller("scheduler-worker-pool".to_owned(), true)),
             resource_manager.clone(),
+            txn_status_cache,
         )?;
         self.storages.insert(node_id, raft_kv_v2.clone());
 
