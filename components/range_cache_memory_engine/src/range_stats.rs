@@ -436,7 +436,7 @@ pub mod tests {
     use raftstore::coprocessor::{self, region_info_accessor::TopRegions, RegionInfoProvider};
     use tikv_util::{
         box_err,
-        config::{ReadableSize, VersionTrack},
+        config::{ReadableDuration, ReadableSize, VersionTrack},
         worker::dummy_scheduler,
     };
 
@@ -696,7 +696,7 @@ pub mod tests {
             region_stats: Mutex::new(HashMap::default()),
         });
         let mut config = RangeCacheEngineConfig::config_for_test();
-        config.mvcc_amplification_threshold = 10;
+        config.load_evict_interval = ReadableDuration(Duration::from_secs(120));
         let config = Arc::new(VersionTrack::new(config));
         let mgr = RangeStatsManager::new(config, Duration::from_secs(120), sim);
 
