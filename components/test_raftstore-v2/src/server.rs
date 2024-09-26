@@ -431,7 +431,10 @@ impl<EK: KvEngine> ServerCluster<EK> {
         let region_info_accessor = RegionInfoAccessor::new(
             &mut coprocessor_host,
             Arc::new(|| false), // Not applicable to v2
-            cfg.in_memory_engine.mvcc_amplification_threshold,
+            Box::new(|| {
+                // v2 does not support ime
+                unreachable!()
+            }),
         );
 
         let sim_router = SimulateTransport::new(raft_router.clone());

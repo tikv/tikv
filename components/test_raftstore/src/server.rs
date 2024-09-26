@@ -321,23 +321,30 @@ impl ServerCluster {
                 hook(&mut coprocessor_host);
             }
         }
+
+        // In-memory engine
+        let mut in_memory_engine_config = cfg.in_memory_engine.clone();
+        let _ = in_memory_engine_config
+            .expected_region_size
+            .get_or_insert(cfg.coprocessor.region_split_size());
+        let in_memory_engine_config = Arc::new(VersionTrack::new(in_memory_engine_config));
+        let in_memory_engine_config_clone = in_memory_engine_config.clone();
+
         let region_info_accessor = RegionInfoAccessor::new(
             &mut coprocessor_host,
             enable_region_stats_mgr_cb,
-            cfg.in_memory_engine.mvcc_amplification_threshold,
+            Box::new(move || {
+                in_memory_engine_config_clone
+                    .value()
+                    .mvcc_amplification_threshold
+            }),
         );
 
-        // In-memory engine
-        let mut region_cache_engine_config = cfg.in_memory_engine.clone();
-        let _ = region_cache_engine_config
-            .expected_region_size
-            .get_or_insert(cfg.coprocessor.region_split_size());
-        let region_cache_engine_config = Arc::new(VersionTrack::new(region_cache_engine_config));
-        let region_cache_engine_context =
-            InMemoryEngineContext::new(region_cache_engine_config.clone(), self.pd_client.clone());
+        let in_memory_engine_context =
+            InMemoryEngineContext::new(in_memory_engine_config.clone(), self.pd_client.clone());
         let in_memory_engine = if cfg.in_memory_engine.enabled {
             let in_memory_engine = build_hybrid_engine(
-                region_cache_engine_context,
+                in_memory_engine_context,
                 engines.kv.clone(),
                 None,
                 Some(Arc::new(region_info_accessor.clone())),

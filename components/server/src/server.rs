@@ -261,7 +261,7 @@ where
     in_memory_engine_statistics: Option<Arc<InMemoryEngineStatistics>>,
     raft_statistics: Option<Arc<RocksStatistics>>,
     servers: Option<Servers<RocksEngine, ER, F>>,
-    region_info_accessor: RegionInfoAccessor,
+    region_info_accessor: Option<RegionInfoAccessor>,
     coprocessor_host: Option<CoprocessorHost<RocksEngine>>,
     concurrency_manager: ConcurrencyManager,
     env: Arc<Environment>,
@@ -392,25 +392,10 @@ where
         // Initialize raftstore channels.
         let (router, system) = fsm::create_raft_batch_system(&config.raft_store, &resource_manager);
 
-        let mut coprocessor_host = Some(CoprocessorHost::new(
+        let coprocessor_host = Some(CoprocessorHost::new(
             router.clone(),
             config.coprocessor.clone(),
         ));
-
-        // Region stats manager collects region heartbeat for use by in-memory engine.
-        let region_stats_manager_enabled_cb: Arc<dyn Fn() -> bool + Send + Sync> =
-            if cfg!(feature = "memory-engine") {
-                let cfg_controller_clone = cfg_controller.clone();
-                Arc::new(move || cfg_controller_clone.get_current().in_memory_engine.enabled)
-            } else {
-                Arc::new(|| false)
-            };
-
-        let region_info_accessor = RegionInfoAccessor::new(
-            coprocessor_host.as_mut().unwrap(),
-            region_stats_manager_enabled_cb,
-            config.in_memory_engine.mvcc_amplification_threshold,
-        );
 
         // Initialize concurrency manager
         let latest_ts = block_on(pd_client.get_tso()).expect("failed to get timestamp from PD");
@@ -471,7 +456,7 @@ where
             in_memory_engine_statistics: None,
             raft_statistics: None,
             servers: None,
-            region_info_accessor,
+            region_info_accessor: None,
             coprocessor_host,
             concurrency_manager,
             env,
@@ -501,7 +486,7 @@ where
                 ),
             ),
             engines.kv.clone(),
-            self.region_info_accessor.region_leaders(),
+            self.region_info_accessor.as_ref().unwrap().region_leaders(),
         );
 
         self.engines = Some(TikvEngines {
@@ -520,7 +505,7 @@ where
             self.core.flow_info_sender.take().unwrap(),
             self.core.config.gc.clone(),
             self.pd_client.feature_gate().clone(),
-            Arc::new(self.region_info_accessor.clone()),
+            Arc::new(self.region_info_accessor.clone().unwrap()),
         );
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
@@ -943,7 +928,7 @@ where
                 self.core.config.resolved_ts.clone(),
                 backup_stream_scheduler.clone(),
                 backup_stream_ob,
-                self.region_info_accessor.clone(),
+                self.region_info_accessor.clone().unwrap(),
                 CdcRaftRouter(self.router.clone()),
                 self.pd_client.clone(),
                 self.concurrency_manager.clone(),
@@ -1058,7 +1043,7 @@ where
         assert!(raft_server.id() > 0); // MultiRaftServer id should never be 0.
         let auto_gc_config = AutoGcConfig::new(
             self.pd_client.clone(),
-            self.region_info_accessor.clone(),
+            self.region_info_accessor.clone().unwrap(),
             raft_server.id(),
         );
         gc_worker
@@ -1072,7 +1057,7 @@ where
         if self.core.config.storage.enable_ttl {
             ttl_checker.start_with_timer(TtlChecker::new(
                 self.engines.as_ref().unwrap().engine.kv_engine().unwrap(),
-                self.region_info_accessor.clone(),
+                self.region_info_accessor.clone().unwrap(),
                 self.core.config.storage.ttl_check_poll_interval.into(),
             ));
             self.core.to_stop.push(ttl_checker);
@@ -1166,7 +1151,7 @@ where
             servers.importer.clone(),
             None,
             self.resource_manager.clone(),
-            Arc::new(self.region_info_accessor.clone()),
+            Arc::new(self.region_info_accessor.clone().unwrap()),
         );
         let import_cfg_mgr = import_service.get_config_manager();
 
@@ -1255,7 +1240,7 @@ where
         let backup_endpoint = backup::Endpoint::new(
             servers.raft_server.id(),
             engines.engine.clone(),
-            self.region_info_accessor.clone(),
+            self.region_info_accessor.clone().unwrap(),
             LocalTablets::Singleton(engines.engines.kv.clone()),
             self.core.config.backup.clone(),
             self.concurrency_manager.clone(),
@@ -1565,7 +1550,7 @@ where
             .unwrap_or_else(|e| fatal!("failed to stop server: {}", e));
 
         servers.raft_server.stop();
-        self.region_info_accessor.stop();
+        self.region_info_accessor.as_ref().unwrap().stop();
 
         servers.lock_mgr.stop();
 
@@ -1626,6 +1611,32 @@ where
         );
         self.raft_statistics = raft_statistics;
 
+        // Region stats manager collects region heartbeat for use by in-memory engine.
+        let region_stats_manager_enabled_cb: Arc<dyn Fn() -> bool + Send + Sync> =
+            if cfg!(feature = "memory-engine") {
+                let cfg_controller_clone = self.cfg_controller.clone().unwrap();
+                Arc::new(move || cfg_controller_clone.get_current().in_memory_engine.enabled)
+            } else {
+                Arc::new(|| false)
+            };
+
+        let mut in_memory_engine_config = self.core.config.in_memory_engine.clone();
+        let _ = in_memory_engine_config
+            .expected_region_size
+            .get_or_insert(self.core.config.coprocessor.region_split_size());
+        let in_memory_engine_config = Arc::new(VersionTrack::new(in_memory_engine_config));
+        let in_memory_engine_config_clone = in_memory_engine_config.clone();
+        let region_info_accessor = RegionInfoAccessor::new(
+            self.coprocessor_host.as_mut().unwrap(),
+            region_stats_manager_enabled_cb,
+            Box::new(move || {
+                in_memory_engine_config_clone
+                    .value()
+                    .mvcc_amplification_threshold
+            }),
+        );
+        self.region_info_accessor = Some(region_info_accessor);
+
         // Create kv engine.
         let builder = KvEngineFactoryBuilder::new(
             env,
@@ -1636,7 +1647,7 @@ where
         .compaction_event_sender(Arc::new(RaftRouterCompactedEventSender {
             router: Mutex::new(self.router.clone()),
         }))
-        .region_info_accessor(self.region_info_accessor.clone())
+        .region_info_accessor(self.region_info_accessor.clone().unwrap())
         .sst_recovery_sender(self.init_sst_recovery_sender())
         .flow_listener(flow_listener);
         let factory = Box::new(builder.build());
@@ -1656,7 +1667,7 @@ where
                 region_cache_engine_context,
                 kv_engine.clone(),
                 Some(self.pd_client.clone()),
-                Some(Arc::new(self.region_info_accessor.clone())),
+                Some(Arc::new(self.region_info_accessor.clone().unwrap())),
             );
 
             // Hybrid engine observer.
