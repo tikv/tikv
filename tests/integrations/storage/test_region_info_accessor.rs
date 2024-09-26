@@ -78,7 +78,7 @@ fn test_region_collection_seek_region() {
         .sim
         .wl()
         .post_create_coprocessor_host(Box::new(move |id, host| {
-            let p = RegionInfoAccessor::new(host, Arc::new(|| false), 0);
+            let p = RegionInfoAccessor::new(host, Arc::new(|| false), Box::new(|| 0));
             tx.send((id, p)).unwrap()
         }));
 
@@ -152,7 +152,7 @@ fn test_region_collection_get_regions_in_range() {
         .sim
         .wl()
         .post_create_coprocessor_host(Box::new(move |id, host| {
-            let p = RegionInfoAccessor::new(host, Arc::new(|| false), 0);
+            let p = RegionInfoAccessor::new(host, Arc::new(|| false), Box::new(|| 0));
             tx.send((id, p)).unwrap()
         }));
 
@@ -197,7 +197,7 @@ fn test_region_collection_get_top_regions() {
         .sim
         .wl()
         .post_create_coprocessor_host(Box::new(move |id, host| {
-            let p = RegionInfoAccessor::new(host, Arc::new(|| true), 0);
+            let p = RegionInfoAccessor::new(host, Arc::new(|| true), Box::new(|| 0));
             tx.send((id, p)).unwrap()
         }));
     cluster.run();
@@ -261,7 +261,7 @@ fn test_region_collection_find_region_by_key() {
         .sim
         .wl()
         .post_create_coprocessor_host(Box::new(move |id, host| {
-            let p = RegionInfoAccessor::new(host, Arc::new(|| false), 0);
+            let p = RegionInfoAccessor::new(host, Arc::new(|| false), Box::new(|| 0));
             tx.send((id, p)).unwrap()
         }));
 

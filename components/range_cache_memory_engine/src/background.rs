@@ -232,18 +232,12 @@ impl BgWorkManager {
             core.clone(),
             memory_controller,
             region_info_provider.clone(),
-            &config,
+            config.clone(),
             pd_client.clone(),
         );
-        let config = config.value();
         let scheduler = worker.start_with_timer("ime-bg-runner", runner);
 
-        let (ticker, tx) = BgWorkManager::start_tick(
-            scheduler.clone(),
-            pd_client,
-            config.gc_interval.0,
-            config.load_evict_interval.0,
-        );
+        let (ticker, tx) = BgWorkManager::start_tick(scheduler.clone(), pd_client, config.clone());
 
         Self {
             worker,
@@ -331,8 +325,7 @@ impl BgWorkManager {
     fn start_tick(
         scheduler: Scheduler<BackgroundTask>,
         pd_client: Arc<dyn PdClient>,
-        gc_interval: Duration,
-        load_evict_interval: Duration,
+        config: Arc<VersionTrack<RangeCacheEngineConfig>>,
     ) -> (Worker, Sender<bool>) {
         let (tx, rx) = bounded(0);
         // TODO: Instead of spawning a new thread, we should run this task
@@ -344,9 +337,11 @@ impl BgWorkManager {
         // TODO: Spawn non-blocking tasks and make full use of the ticker.
         let interval = Duration::from_millis(100);
         ticker.spawn_interval_task(interval, move || {
-            let gc_ticker = tick(gc_interval);
-            let load_evict_ticker = tick(load_evict_interval); // TODO (afeinberg): Use a real value.
-            let tso_timeout = std::cmp::min(gc_interval, TIMTOUT_FOR_TSO);
+            let mut gc_interval = config.value().gc_interval.0;
+            let mut gc_ticker = tick(gc_interval);
+            let mut load_evict_interval = config.value().load_evict_interval.0;
+            let mut load_evict_ticker = tick(load_evict_interval);
+            let mut tso_timeout = std::cmp::min(gc_interval, TIMTOUT_FOR_TSO);
             'LOOP: loop {
                 select! {
                     recv(gc_ticker) -> _ => {
@@ -369,6 +364,17 @@ impl BgWorkManager {
                                 "err" => ?e,
                             );
                         }
+                        let cur_gc_interval = config.value().gc_interval.0;
+                        if cur_gc_interval != gc_interval {
+                            tso_timeout = std::cmp::min(gc_interval, TIMTOUT_FOR_TSO);
+                            info!(
+                                "ime gc-interval changed";
+                                "from" => ?gc_interval,
+                                "to" => ?cur_gc_interval,
+                            );
+                            gc_interval = cur_gc_interval;
+                            gc_ticker = tick(gc_interval);
+                        }
                     },
                     recv(load_evict_ticker) -> _ => {
                         if let Err(e) = scheduler.schedule(BackgroundTask::TopRegionsLoadEvict) {
@@ -376,6 +382,16 @@ impl BgWorkManager {
                                 "ime schedule load evict failed";
                                 "err" => ?e,
                             );
+                        }
+                        let cur_load_evict_interval = config.value().load_evict_interval.0;
+                        if cur_load_evict_interval != load_evict_interval {
+                            info!(
+                                "ime load-evict-interval changed";
+                                "from" => ?load_evict_interval,
+                                "to" => ?cur_load_evict_interval,
+                            );
+                            load_evict_interval = cur_load_evict_interval;
+                            load_evict_ticker = tick(load_evict_interval);
                         }
                     },
                     recv(rx) -> r => {
@@ -699,7 +715,7 @@ impl BackgroundRunnerCore {
                 .memory_controller
                 .soft_limit_threshold()
                 .saturating_sub(self.memory_controller.mem_usage()))
-                / range_stats_manager.expected_region_size;
+                / range_stats_manager.expected_region_size();
             let expected_new_count = usize::max(expected_new_count, 1);
             let mut regions_map = self.engine.region_manager().regions_map.write();
             for region in regions_to_load.into_iter().take(expected_new_count) {
@@ -732,8 +748,8 @@ pub(crate) fn flush_epoch() {
 pub struct BackgroundRunner {
     core: BackgroundRunnerCore,
 
+    config: Arc<VersionTrack<RangeCacheEngineConfig>>,
     pd_client: Arc<dyn PdClient>,
-    gc_interval: Duration,
 
     // We have following four separate workers so that each type of task would not block each
     // others
@@ -780,10 +796,9 @@ impl BackgroundRunner {
         engine: Arc<RangeCacheMemoryEngineCore>,
         memory_controller: Arc<MemoryController>,
         region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
-        config: &Arc<VersionTrack<RangeCacheEngineConfig>>,
+        config: Arc<VersionTrack<RangeCacheEngineConfig>>,
         pd_client: Arc<dyn PdClient>,
     ) -> (Self, Scheduler<BackgroundTask>) {
-        let config = config.value();
         let range_load_worker = Builder::new("ime-load")
             // Range load now is implemented sequentially, so we must use exactly one thread to handle it.
             // todo(SpadeA): if the load speed is a bottleneck, we may consider to use multiple threads to load ranges.
@@ -808,13 +823,10 @@ impl BackgroundRunner {
         let load_evict_worker = Worker::new("ime-evict");
         let load_evict_remote = load_evict_worker.remote();
 
-        let expected_region_size = config.expected_region_size();
         let range_stats_manager = region_info_provider.map(|region_info_provider| {
             RangeStatsManager::new(
+                config.clone(),
                 DEFAULT_EVICT_MIN_DURATION,
-                expected_region_size,
-                config.mvcc_amplification_threshold,
-                config.load_evict_interval.0,
                 region_info_provider,
             )
         });
@@ -826,7 +838,7 @@ impl BackgroundRunner {
                     range_stats_manager,
                 },
                 pd_client,
-                gc_interval: config.gc_interval.0,
+                config,
                 range_load_worker,
                 range_load_remote,
                 delete_range_worker,
@@ -903,7 +915,7 @@ impl Runnable for BackgroundRunner {
                 let core = self.core.clone();
                 let delete_range_scheduler = self.delete_range_scheduler.clone();
                 let pd_client = self.pd_client.clone();
-                let gc_interval = self.gc_interval;
+                let gc_interval = self.config.value().gc_interval.0;
                 let f = async move {
                     fail::fail_point!("before_start_loading_region");
                     fail::fail_point!("on_start_loading_region");
@@ -1918,7 +1930,7 @@ pub mod tests {
             engine.core.clone(),
             memory_controller.clone(),
             None,
-            &config,
+            config,
             Arc::new(MockPdClient {}),
         );
         worker.core.gc_region(&cache_region, 40, 100);
@@ -1992,7 +2004,7 @@ pub mod tests {
             engine.core.clone(),
             memory_controller.clone(),
             None,
-            &config,
+            config,
             Arc::new(MockPdClient {}),
         );
 
@@ -2152,7 +2164,7 @@ pub mod tests {
             engine.core.clone(),
             memory_controller.clone(),
             None,
-            &config,
+            config,
             Arc::new(MockPdClient {}),
         );
         let filter = worker.core.gc_region(&region1, 100, 100);
@@ -2169,7 +2181,7 @@ pub mod tests {
             engine.core.clone(),
             memory_controller.clone(),
             None,
-            &config,
+            config,
             Arc::new(MockPdClient {}),
         );
         worker.core.gc_region(&region2, 100, 100);
@@ -2215,7 +2227,7 @@ pub mod tests {
             engine.core.clone(),
             memory_controller.clone(),
             None,
-            &config,
+            config,
             Arc::new(MockPdClient {}),
         );
 
@@ -2313,7 +2325,7 @@ pub mod tests {
             engine.core.clone(),
             memory_controller,
             None,
-            &config,
+            config,
             Arc::new(MockPdClient {}),
         );
         let cache_region = CacheRegion::from_region(&region);
@@ -2461,7 +2473,7 @@ pub mod tests {
             engine.core.clone(),
             memory_controller,
             None,
-            &config,
+            config,
             Arc::new(MockPdClient {}),
         );
 
@@ -2609,7 +2621,7 @@ pub mod tests {
             engine.core.clone(),
             memory_controller,
             None,
-            &config,
+            config,
             Arc::new(MockPdClient {}),
         );
         let regions = runner.core.regions_for_gc();
@@ -3042,17 +3054,18 @@ pub mod tests {
             }
         }
 
+        let mut config = RangeCacheEngineConfig::config_for_test();
+        config.gc_interval = ReadableDuration(Duration::from_millis(100));
+        config.load_evict_interval = ReadableDuration(Duration::from_millis(200));
+        let config = Arc::new(VersionTrack::new(config));
         let start_time = TimeStamp::compose(TimeStamp::physical_now(), 0);
         let (tx, pd_client_rx) = channel();
         let pd_client = Arc::new(MockPdClient { tx: Mutex::new(tx) });
-        let gc_interval = Duration::from_millis(100);
-        let load_evict_interval = Duration::from_millis(200);
         let (scheduler, mut rx) = dummy_scheduler();
-        let (ticker, stop) =
-            BgWorkManager::start_tick(scheduler, pd_client, gc_interval, load_evict_interval);
+        let (ticker, stop) = BgWorkManager::start_tick(scheduler, pd_client, config.clone());
 
         let Some(BackgroundTask::Gc(GcTask { safe_point })) =
-            rx.recv_timeout(10 * gc_interval).unwrap()
+            rx.recv_timeout(10 * config.value().gc_interval.0).unwrap()
         else {
             panic!("must be a GcTask");
         };
