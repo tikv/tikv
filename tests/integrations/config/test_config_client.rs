@@ -56,21 +56,23 @@ fn test_update_config() {
     cfg.raft_store.raft_log_gc_threshold = 2000;
     assert_eq!(cfg_controller.get_current(), cfg);
 
-    let mut region_cache_config_change = HashMap::new();
-    region_cache_config_change.insert("region_cache_engine.enabled".to_owned(), "true".to_owned());
-    region_cache_config_change.insert(
-        "region_cache_engine.stop-load-limit-threshold".to_owned(),
+    let mut in_memory_engine_config_change = HashMap::new();
+    in_memory_engine_config_change.insert("in_memory_engine.enabled".to_owned(), "true".to_owned());
+    in_memory_engine_config_change.insert(
+        "in_memory_engine.stop-load-limit-threshold".to_owned(),
         "8GB".to_owned(),
     );
-    region_cache_config_change.insert(
-        "region_cache_engine.soft-limit-threshold".to_owned(),
+    in_memory_engine_config_change.insert(
+        "in_memory_engine.soft-limit-threshold".to_owned(),
         "10GB".to_owned(),
     );
-    region_cache_config_change.insert(
-        "region_cache_engine.hard-limit-threshold".to_owned(),
+    in_memory_engine_config_change.insert(
+        "in_memory_engine.hard-limit-threshold".to_owned(),
         "15GB".to_owned(),
     );
-    cfg_controller.update(region_cache_config_change).unwrap();
+    cfg_controller
+        .update(in_memory_engine_config_change)
+        .unwrap();
     cfg.in_memory_engine.enabled = true;
     cfg.in_memory_engine.stop_load_limit_threshold = Some(ReadableSize::gb(8));
     cfg.in_memory_engine.soft_limit_threshold = Some(ReadableSize::gb(10));
@@ -78,7 +80,7 @@ fn test_update_config() {
     assert_eq!(cfg_controller.get_current(), cfg);
 
     cfg_controller
-        .update(change("region_cache_engine.soft-limit-threshold", "11GB"))
+        .update(change("in_memory_engine.soft-limit-threshold", "11GB"))
         .unwrap();
     cfg.in_memory_engine.soft_limit_threshold = Some(ReadableSize::gb(11));
     assert_eq!(cfg_controller.get_current(), cfg);
