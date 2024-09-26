@@ -45,7 +45,7 @@ use raftstore::{
     router::{LocalReadRouter, RaftStoreRouter},
     store::{
         self, util::encode_start_ts_into_flag_data, Callback as StoreCallback, RaftCmdExtraOpts,
-        ReadCallback, ReadIndexContext, ReadResponse, RegionSnapshot, StoreMsg, WriteResponse,
+        ReadIndexContext, ReadResponse, RegionSnapshot, StoreMsg, WriteResponse,
     },
 };
 use thiserror::Error;
@@ -55,7 +55,7 @@ use tikv_util::{
     future::{paired_future_callback, paired_must_called_future_callback},
     time::Instant,
 };
-use tracker::GLOBAL_TRACKERS;
+use tracker::{get_tls_tracker_token, GLOBAL_TRACKERS};
 use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, WriteBatchFlags};
 
 use super::metrics::*;
@@ -548,6 +548,10 @@ where
                     });
                     let mut res = match on_write_result::<E::Snapshot>(resp) {
                         Ok(CmdRes::Resp(_)) => {
+                            ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();
+                            ASYNC_REQUESTS_DURATIONS_VEC
+                                .write
+                                .observe(begin_instant.saturating_elapsed_secs());
                             fail_point!("raftkv_async_write_finish");
                             Ok(())
                         }
@@ -581,18 +585,9 @@ where
             tx.notify(res);
         }
         rx.inspect(move |ev| {
-            let WriteEvent::Finished(res) = ev else { return };
-            match res {
-                Ok(()) => {
-                    ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();
-                    ASYNC_REQUESTS_DURATIONS_VEC
-                        .write
-                        .observe(begin_instant.saturating_elapsed_secs());
-                }
-                Err(e) => {
-                    let status_kind = get_status_kind_from_engine_error(e);
-                    ASYNC_REQUESTS_COUNTER_VEC.write.get(status_kind).inc();
-                }
+            if let WriteEvent::Finished(Err(e)) = ev {
+                let status_kind = get_status_kind_from_engine_error(e);
+                ASYNC_REQUESTS_COUNTER_VEC.write.get(status_kind).inc();
             }
         })
     }
@@ -639,10 +634,39 @@ where
         let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);
         cmd.set_requests(vec![req].into());
+        let tracker = get_tls_tracker_token();
         let store_cb = StoreCallback::read(Box::new(move |resp| {
-            cb(on_read_result(resp).map_err(Error::into));
+            let res = on_read_result(resp).map_err(Error::into);
+            if res.is_ok() {
+                let elapse = begin_instant.saturating_elapsed_secs();
+                GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
+                    if tracker.metrics.read_index_propose_wait_nanos > 0 {
+                        ASYNC_REQUESTS_DURATIONS_VEC
+                            .snapshot_read_index_propose_wait
+                            .observe(
+                                tracker.metrics.read_index_propose_wait_nanos as f64
+                                    / 1_000_000_000.0,
+                            );
+                        // snapshot may be handled by lease read in raftstore
+                        if tracker.metrics.read_index_confirm_wait_nanos > 0 {
+                            ASYNC_REQUESTS_DURATIONS_VEC
+                                .snapshot_read_index_confirm
+                                .observe(
+                                    tracker.metrics.read_index_confirm_wait_nanos as f64
+                                        / 1_000_000_000.0,
+                                );
+                        }
+                    } else if tracker.metrics.local_read {
+                        ASYNC_REQUESTS_DURATIONS_VEC
+                            .snapshot_local_read
+                            .observe(elapse);
+                    }
+                });
+                ASYNC_REQUESTS_DURATIONS_VEC.snapshot.observe(elapse);
+                ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
+            }
+            cb(res);
         }));
-        let tracker = store_cb.read_tracker().unwrap();
 
         if res.is_ok() {
             res = self
@@ -673,35 +697,7 @@ where
                     };
                     Err(e)
                 }
-                Ok(CmdRes::Snap(s)) => {
-                    let elapse = begin_instant.saturating_elapsed_secs();
-                    GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
-                        if tracker.metrics.read_index_propose_wait_nanos > 0 {
-                            ASYNC_REQUESTS_DURATIONS_VEC
-                                .snapshot_read_index_propose_wait
-                                .observe(
-                                    tracker.metrics.read_index_propose_wait_nanos as f64
-                                        / 1_000_000_000.0,
-                                );
-                            // snapshot may be handled by lease read in raftstore
-                            if tracker.metrics.read_index_confirm_wait_nanos > 0 {
-                                ASYNC_REQUESTS_DURATIONS_VEC
-                                    .snapshot_read_index_confirm
-                                    .observe(
-                                        tracker.metrics.read_index_confirm_wait_nanos as f64
-                                            / 1_000_000_000.0,
-                                    );
-                            }
-                        } else if tracker.metrics.local_read {
-                            ASYNC_REQUESTS_DURATIONS_VEC
-                                .snapshot_local_read
-                                .observe(elapse);
-                        }
-                    });
-                    ASYNC_REQUESTS_DURATIONS_VEC.snapshot.observe(elapse);
-                    ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
-                    Ok(s)
-                }
+                Ok(CmdRes::Snap(s)) => Ok(s),
                 Err(e) => {
                     let status_kind = get_status_kind_from_engine_error(&e);
                     ASYNC_REQUESTS_COUNTER_VEC.snapshot.get(status_kind).inc();
