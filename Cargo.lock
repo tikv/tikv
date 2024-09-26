@@ -145,9 +145,9 @@ dependencies = [
 
 [[package]]
 name = "async-compression"
-version = "0.3.14"
+version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "345fd392ab01f746c717b1357165b76f0b67a60192007b234058c9045fdcf695"
+checksum = "fec134f64e2bc57411226dfc4e52dec859ddfc7e711fc5e07b612584f000e4aa"
 dependencies = [
  "futures-core",
  "futures-io",
@@ -482,10 +482,12 @@ dependencies = [
  "bytes",
  "chrono",
  "concurrency_manager",
+ "crc64fast",
  "crossbeam",
  "crossbeam-channel",
  "dashmap",
  "encryption",
+ "encryption_export",
  "engine_panic",
  "engine_rocks",
  "engine_test",
@@ -1488,6 +1490,7 @@ dependencies = [
  "openssl",
  "prometheus",
  "protobuf",
+ "rand 0.8.5",
  "serde",
  "serde_derive",
  "slog",
@@ -2890,7 +2893,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#199f352dc2b3bdfdc3b96e01bc3bca81148b0171"
+source = "git+https://github.com/pingcap/kvproto.git#4a3e17f5e62dc3999e2c0f63293fdeffced80626"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -5579,10 +5582,12 @@ name = "sst_importer"
 version = "0.1.0"
 dependencies = [
  "api_version",
+ "async-compression",
  "collections",
  "crc32fast",
  "dashmap",
  "encryption",
+ "encryption_export",
  "engine_rocks",
  "engine_test",
  "engine_traits",
@@ -5612,6 +5617,7 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "tokio",
+ "tokio-util",
  "txn_types",
  "uuid 0.8.2",
 ]
@@ -6864,7 +6870,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#87f5b80908ab561fb7875c88114488cad15727b1"
+source = "git+https://github.com/pingcap/tipb.git#cf70966bef25e205cb845c19265301542d1238d1"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -7769,29 +7775,28 @@ dependencies = [
 
 [[package]]
 name = "zstd"
-version = "0.11.2+zstd.1.5.2"
+version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "20cc960326ece64f010d2d2107537f26dc589a6573a316bd5b1dba685fa5fde4"
+checksum = "fcf2b778a664581e31e389454a7072dab1647606d44f7feea22cd5abb9c9f3f9"
 dependencies = [
  "zstd-safe",
 ]
 
 [[package]]
 name = "zstd-safe"
-version = "5.0.2+zstd.1.5.2"
+version = "7.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d2a5585e04f9eea4b2a3d1eca508c4dee9592a89ef6f450c11719da0726f4db"
+checksum = "54a3ab4db68cea366acc5c897c7b4d4d1b8994a9cd6e6f841f8964566a419059"
 dependencies = [
- "libc 0.2.151",
  "zstd-sys",
 ]
 
 [[package]]
 name = "zstd-sys"
-version = "2.0.1+zstd.1.5.2"
+version = "2.0.13+zstd.1.5.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9fd07cbbc53846d9145dbffdf6dd09a7a0aa52be46741825f5c97bdd4f73f12b"
+checksum = "38ff0f21cfee8f97d94cef41359e0c89aa6113028ab0291aa8ca0038995a95aa"
 dependencies = [
  "cc",
- "libc 0.2.151",
+ "pkg-config",
 ]

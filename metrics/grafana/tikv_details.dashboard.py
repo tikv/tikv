@@ -2701,18 +2701,32 @@ def LocalReader() -> RowPanel:
 
 
 def UnifiedReadPool() -> RowPanel:
-    layout = Layout(title="Unified Read Pool")
+    return YatpPool(
+        title="Unified Read Pool",
+        pool_name_prefix="unified-read",
+        running_task_metric="tikv_unified_read_pool_running_tasks",
+        running_task_metric_label="priority",
+    )
+
+
+def YatpPool(
+    title: str,
+    pool_name_prefix: str,
+    running_task_metric: str,
+    running_task_metric_label: str,
+) -> RowPanel:
+    layout = Layout(title)
     layout.row(
         [
             graph_panel(
                 title="Time used by level",
-                description="The time used by each level in the unified read pool per second. Level 0 refers to small queries.",
+                description="The time used by each level in the yatp thread pool per second. Level 0 refers to small queries.",
                 yaxes=yaxes(left_format=UNITS.MICRO_SECONDS),
                 targets=[
                     target(
                         expr=expr_sum_rate(
                             "tikv_multilevel_level_elapsed",
-                            label_selectors=['name="unified-read-pool"'],
+                            label_selectors=[f'name=~"{pool_name_prefix}.*"'],
                             by_labels=["level"],
                         ),
                     ),
@@ -2720,15 +2734,15 @@ def UnifiedReadPool() -> RowPanel:
             ),
             graph_panel(
                 title="Level 0 chance",
-                description="The chance that level 0 (small) tasks are scheduled in the unified read pool.",
+                description="The chance that level 0 (small) tasks are scheduled in the yatp thread pool.",
                 yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
                 targets=[
                     target(
                         expr=expr_simple(
                             "tikv_multilevel_level0_chance",
-                            label_selectors=['name="unified-read-pool"'],
+                            label_selectors=[f'name=~"{pool_name_prefix}.*"'],
                         ),
-                        legend_format="{{type}}",
+                        legend_format="{{instance}}",
                     ),
                 ],
             ),
@@ -2738,24 +2752,23 @@ def UnifiedReadPool() -> RowPanel:
         [
             graph_panel(
                 title="Running tasks",
-                description="The number of concurrently running tasks in the unified read pool.",
+                description="The number of concurrently running tasks in the yatp thread pool.",
                 targets=[
                     target(
                         expr=expr_sum_aggr_over_time(
-                            "tikv_unified_read_pool_running_tasks",
+                            running_task_metric,
                             "avg",
                             "1m",
-                            by_labels=["priority"],
+                            by_labels=[running_task_metric_label],
                         ),
-                        legend_format="{{priority}}",
                     ),
                 ],
             ),
             heatmap_panel(
-                title="Unified Read Pool Wait Duration",
+                title="Wait Duration",
                 yaxis=yaxis(format=UNITS.SECONDS),
                 metric="tikv_yatp_pool_schedule_wait_duration_bucket",
-                label_selectors=['name=~"unified-read.*"'],
+                label_selectors=[f'name=~"{pool_name_prefix}.*"'],
             ),
         ]
     )
@@ -2763,16 +2776,18 @@ def UnifiedReadPool() -> RowPanel:
         [
             graph_panel_histogram_quantiles(
                 title="Duration of One Time Slice",
-                description="Unified read pool task execution time during one schedule.",
+                description="Task execution time during one schedule.",
                 yaxes=yaxes(left_format=UNITS.SECONDS, log_base=2),
                 metric="tikv_yatp_task_poll_duration",
+                label_selectors=[f'name=~"{pool_name_prefix}.*"'],
                 hide_count=True,
             ),
             graph_panel_histogram_quantiles(
                 title="Task Execute Duration",
-                description="Unified read pool task total execution duration.",
+                description="Task total execution duration.",
                 yaxes=yaxes(left_format=UNITS.SECONDS, log_base=2),
                 metric="tikv_yatp_task_exec_duration",
+                label_selectors=[f'name=~"{pool_name_prefix}.*"'],
                 hide_count=True,
             ),
         ]
@@ -2784,6 +2799,7 @@ def UnifiedReadPool() -> RowPanel:
                 description="Task schedule number of times.",
                 yaxes=yaxes(left_format=UNITS.NONE_FORMAT, log_base=2),
                 metric="tikv_yatp_task_execute_times",
+                label_selectors=[f'name=~"{pool_name_prefix}.*"'],
                 hide_count=True,
             ),
         ]
@@ -3379,6 +3395,15 @@ def Scheduler() -> RowPanel:
         ]
     )
     return layout.row_panel
+
+
+def SchedulerWorkerPool() -> RowPanel:
+    return YatpPool(
+        title="Scheduler Worker Pool",
+        pool_name_prefix="sched-worker",
+        running_task_metric="tikv_scheduler_running_commands",
+        running_task_metric_label="instance",
+    )
 
 
 def GC() -> RowPanel:
@@ -9280,6 +9305,7 @@ dashboard = Dashboard(
         # Scheduler and Read Pools
         FlowControl(),
         Scheduler(),
+        SchedulerWorkerPool(),
         SchedulerCommands(),
         CoprocessorOverview(),
         CoprocessorDetail(),

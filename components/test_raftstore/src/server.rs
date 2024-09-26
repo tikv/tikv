@@ -74,7 +74,10 @@ use tikv::{
     storage::{
         self,
         kv::{FakeExtension, LocalTablets, SnapContext},
-        txn::flow_controller::{EngineFlowController, FlowController},
+        txn::{
+            flow_controller::{EngineFlowController, FlowController},
+            txn_status_cache::TxnStatusCache,
+        },
         Engine, Storage,
     },
 };
@@ -398,6 +401,7 @@ impl ServerCluster {
         );
         gc_worker.start(node_id).unwrap();
 
+        let txn_status_cache = Arc::new(TxnStatusCache::new_for_test());
         let rts_worker = if cfg.resolved_ts.enable {
             // Resolved ts worker
             let mut rts_worker = LazyWorker::new("resolved-ts");
@@ -415,6 +419,7 @@ impl ServerCluster {
                 concurrency_manager.clone(),
                 self.env.clone(),
                 self.security_mgr.clone(),
+                txn_status_cache.clone(),
             );
             // Start the worker
             rts_worker.start(rts_endpoint);
@@ -475,6 +480,7 @@ impl ServerCluster {
                 .as_ref()
                 .map(|m| m.derive_controller("scheduler-worker-pool".to_owned(), true)),
             resource_manager.clone(),
+            txn_status_cache,
         )?;
         self.storages.insert(node_id, raft_kv.clone());
 

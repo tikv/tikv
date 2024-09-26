@@ -41870,6 +41870,1154 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The time used by each level in the yatp thread pool per second. Level 0 refers to small queries.",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 0,
+            "y": 0
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 296,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(rate(\n    tikv_multilevel_level_elapsed\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n)) by (level) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{level}}",
+              "metric": "",
+              "query": "sum(rate(\n    tikv_multilevel_level_elapsed\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n)) by (level) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Time used by level",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "\u00b5s",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The chance that level 0 (small) tasks are scheduled in the yatp thread pool.",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 12,
+            "y": 0
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 297,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "((\n    tikv_multilevel_level0_chance\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    \n))  ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{instance}}",
+              "metric": "",
+              "query": "((\n    tikv_multilevel_level0_chance\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Level 0 chance",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "percentunit",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The number of concurrently running tasks in the yatp thread pool.",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 0,
+            "y": 7
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 298,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(avg_over_time(\n    tikv_scheduler_running_commands\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [1m]\n)) by (instance) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{instance}}",
+              "metric": "",
+              "query": "sum(avg_over_time(\n    tikv_scheduler_running_commands\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [1m]\n)) by (instance) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Running tasks",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "none",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "cacheTimeout": null,
+          "cards": {
+            "cardPadding": null,
+            "cardRound": null
+          },
+          "color": {
+            "cardColor": "#b4ff00",
+            "colorScale": "sqrt",
+            "colorScheme": "interpolateSpectral",
+            "exponent": 0.5,
+            "max": null,
+            "min": null,
+            "mode": "spectrum"
+          },
+          "dataFormat": "tsbuckets",
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": null,
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 12,
+            "y": 7
+          },
+          "heatmap": {},
+          "height": null,
+          "hideTimeOverride": false,
+          "hideZeroBuckets": true,
+          "highlightCards": true,
+          "id": 299,
+          "interval": null,
+          "legend": {
+            "show": false
+          },
+          "links": [],
+          "maxDataPoints": 512,
+          "maxPerRow": null,
+          "minSpan": null,
+          "options": {},
+          "repeat": null,
+          "repeatDirection": null,
+          "reverseYBuckets": false,
+          "span": null,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(rate(\n    tikv_yatp_pool_schedule_wait_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n)) by (le) ",
+              "format": "heatmap",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{le}}",
+              "metric": "",
+              "query": "sum(rate(\n    tikv_yatp_pool_schedule_wait_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n)) by (le) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Wait Duration",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "showHistogram": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "heatmap",
+          "xAxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "xBucketNumber": null,
+          "xBucketSize": null,
+          "yAxis": {
+            "decimals": 1,
+            "format": "s",
+            "label": null,
+            "logBase": 1,
+            "max": null,
+            "min": null,
+            "show": true
+          },
+          "yBucketBound": "upper",
+          "yBucketNumber": null,
+          "yBucketSize": null
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "Task execution time during one schedule.",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 0,
+            "y": 14
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 300,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [
+            {
+              "alias": "count",
+              "bars": false,
+              "dashLength": 1,
+              "dashes": true,
+              "fill": 2,
+              "fillBelowTo": null,
+              "lines": true,
+              "spaceLength": 1,
+              "transform": "negative-Y",
+              "yaxis": 2,
+              "zindex": -3
+            },
+            {
+              "alias": "avg",
+              "bars": false,
+              "fill": 7,
+              "fillBelowTo": null,
+              "lines": true,
+              "yaxis": 1,
+              "zindex": 0
+            }
+          ],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_yatp_task_poll_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "99.99%",
+              "metric": "",
+              "query": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_yatp_task_poll_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_yatp_task_poll_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "99%",
+              "metric": "",
+              "query": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_yatp_task_poll_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "(sum(rate(\n    tikv_yatp_task_poll_duration_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n))   / sum(rate(\n    tikv_yatp_task_poll_duration_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n))  )",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "avg",
+              "metric": "",
+              "query": "(sum(rate(\n    tikv_yatp_task_poll_duration_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n))   / sum(rate(\n    tikv_yatp_task_poll_duration_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n))  )",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(rate(\n    tikv_yatp_task_poll_duration_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n))  ",
+              "format": "time_series",
+              "hide": true,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "count",
+              "metric": "",
+              "query": "sum(rate(\n    tikv_yatp_task_poll_duration_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Duration of One Time Slice",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "s",
+              "label": null,
+              "logBase": 2,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "Task total execution duration.",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 12,
+            "y": 14
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 301,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [
+            {
+              "alias": "count",
+              "bars": false,
+              "dashLength": 1,
+              "dashes": true,
+              "fill": 2,
+              "fillBelowTo": null,
+              "lines": true,
+              "spaceLength": 1,
+              "transform": "negative-Y",
+              "yaxis": 2,
+              "zindex": -3
+            },
+            {
+              "alias": "avg",
+              "bars": false,
+              "fill": 7,
+              "fillBelowTo": null,
+              "lines": true,
+              "yaxis": 1,
+              "zindex": 0
+            }
+          ],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_yatp_task_exec_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "99.99%",
+              "metric": "",
+              "query": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_yatp_task_exec_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_yatp_task_exec_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "99%",
+              "metric": "",
+              "query": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_yatp_task_exec_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "(sum(rate(\n    tikv_yatp_task_exec_duration_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n))   / sum(rate(\n    tikv_yatp_task_exec_duration_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n))  )",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "avg",
+              "metric": "",
+              "query": "(sum(rate(\n    tikv_yatp_task_exec_duration_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n))   / sum(rate(\n    tikv_yatp_task_exec_duration_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n))  )",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(rate(\n    tikv_yatp_task_exec_duration_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n))  ",
+              "format": "time_series",
+              "hide": true,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "count",
+              "metric": "",
+              "query": "sum(rate(\n    tikv_yatp_task_exec_duration_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Task Execute Duration",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "s",
+              "label": null,
+              "logBase": 2,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "Task schedule number of times.",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 24,
+            "x": 0,
+            "y": 21
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 302,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [
+            {
+              "alias": "count",
+              "bars": false,
+              "dashLength": 1,
+              "dashes": true,
+              "fill": 2,
+              "fillBelowTo": null,
+              "lines": true,
+              "spaceLength": 1,
+              "transform": "negative-Y",
+              "yaxis": 2,
+              "zindex": -3
+            },
+            {
+              "alias": "avg",
+              "bars": false,
+              "fill": 7,
+              "fillBelowTo": null,
+              "lines": true,
+              "yaxis": 1,
+              "zindex": 0
+            }
+          ],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_yatp_task_execute_times_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "99.99%",
+              "metric": "",
+              "query": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_yatp_task_execute_times_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_yatp_task_execute_times_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "99%",
+              "metric": "",
+              "query": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_yatp_task_execute_times_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "(sum(rate(\n    tikv_yatp_task_execute_times_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n))   / sum(rate(\n    tikv_yatp_task_execute_times_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n))  )",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "avg",
+              "metric": "",
+              "query": "(sum(rate(\n    tikv_yatp_task_execute_times_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n))   / sum(rate(\n    tikv_yatp_task_execute_times_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n))  )",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(rate(\n    tikv_yatp_task_execute_times_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n))  ",
+              "format": "time_series",
+              "hide": true,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "count",
+              "metric": "",
+              "query": "sum(rate(\n    tikv_yatp_task_execute_times_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Task Schedule Times",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "none",
+              "label": null,
+              "logBase": 2,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        }
+      ],
+      "repeat": null,
+      "repeatDirection": null,
+      "span": null,
+      "targets": [],
+      "timeFrom": null,
+      "timeShift": null,
+      "title": "Scheduler Worker Pool",
+      "transformations": [],
+      "transparent": false,
+      "type": "row"
+    },
+    {
+      "cacheTimeout": null,
+      "collapsed": true,
+      "datasource": null,
+      "description": null,
+      "editable": true,
+      "error": false,
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": []
+          }
+        }
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "height": null,
+      "hideTimeOverride": false,
+      "id": 303,
+      "interval": null,
+      "links": [],
+      "maxDataPoints": 100,
+      "maxPerRow": null,
+      "minSpan": null,
+      "panels": [
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
           "description": "The total number of commands on each stage in commit command",
           "editable": true,
           "error": false,
@@ -41897,7 +43045,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 296,
+          "id": 304,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -42045,7 +43193,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 297,
+          "id": 305,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -42246,7 +43394,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 298,
+          "id": 306,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -42447,7 +43595,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 299,
+          "id": 307,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -42648,7 +43796,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 300,
+          "id": 308,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -42849,7 +43997,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 301,
+          "id": 309,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -42982,7 +44130,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 302,
+          "id": 310,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -43115,7 +44263,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 303,
+          "id": 311,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -43248,7 +44396,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 304,
+          "id": 312,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -43381,7 +44529,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 305,
+          "id": 313,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -43589,7 +44737,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 306,
+          "id": 314,
           "interval": null,
           "legend": {
             "show": false
@@ -43689,7 +44837,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 307,
+      "id": 315,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -43735,7 +44883,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 308,
+          "id": 316,
           "interval": null,
           "legend": {
             "show": false
@@ -43832,7 +44980,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 309,
+          "id": 317,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -44033,7 +45181,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 310,
+          "id": 318,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -44166,7 +45314,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 311,
+          "id": 319,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -44299,7 +45447,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 312,
+          "id": 320,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -44432,7 +45580,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 313,
+          "id": 321,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -44633,7 +45781,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 314,
+          "id": 322,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -44766,7 +45914,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 315,
+          "id": 323,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -44899,7 +46047,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 316,
+          "id": 324,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -45035,7 +46183,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 317,
+      "id": 325,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -45074,7 +46222,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 318,
+          "id": 326,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -45275,7 +46423,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 319,
+          "id": 327,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -45476,7 +46624,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 320,
+          "id": 328,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -45677,7 +46825,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 321,
+          "id": 329,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -45878,7 +47026,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 322,
+          "id": 330,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -46011,7 +47159,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 323,
+          "id": 331,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -46144,7 +47292,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 324,
+          "id": 332,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -46277,7 +47425,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 325,
+          "id": 333,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -46410,7 +47558,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 326,
+          "id": 334,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -46543,7 +47691,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 327,
+          "id": 335,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -46683,7 +47831,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 328,
+          "id": 336,
           "interval": null,
           "legend": {
             "show": false
@@ -46780,7 +47928,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 329,
+          "id": 337,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -46984,7 +48132,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 330,
+      "id": 338,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -46996,7 +48144,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The time used by each level in the unified read pool per second. Level 0 refers to small queries.",
+          "description": "The time used by each level in the yatp thread pool per second. Level 0 refers to small queries.",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -47023,7 +48171,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 331,
+          "id": 339,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -47066,7 +48214,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_multilevel_level_elapsed\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=\"unified-read-pool\"}\n    [$__rate_interval]\n)) by (level) ",
+              "expr": "sum(rate(\n    tikv_multilevel_level_elapsed\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"unified-read.*\"}\n    [$__rate_interval]\n)) by (level) ",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -47074,7 +48222,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{level}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_multilevel_level_elapsed\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=\"unified-read-pool\"}\n    [$__rate_interval]\n)) by (level) ",
+              "query": "sum(rate(\n    tikv_multilevel_level_elapsed\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"unified-read.*\"}\n    [$__rate_interval]\n)) by (level) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -47129,7 +48277,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The chance that level 0 (small) tasks are scheduled in the unified read pool.",
+          "description": "The chance that level 0 (small) tasks are scheduled in the yatp thread pool.",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -47156,7 +48304,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 332,
+          "id": 340,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -47199,15 +48347,15 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_multilevel_level0_chance\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=\"unified-read-pool\"}\n    \n))  ",
+              "expr": "((\n    tikv_multilevel_level0_chance\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"unified-read.*\"}\n    \n))  ",
               "format": "time_series",
               "hide": false,
               "instant": false,
               "interval": "",
               "intervalFactor": 1,
-              "legendFormat": "{{type}}",
+              "legendFormat": "{{instance}}",
               "metric": "",
-              "query": "((\n    tikv_multilevel_level0_chance\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=\"unified-read-pool\"}\n    \n))  ",
+              "query": "((\n    tikv_multilevel_level0_chance\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"unified-read.*\"}\n    \n))  ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -47262,7 +48410,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The number of concurrently running tasks in the unified read pool.",
+          "description": "The number of concurrently running tasks in the yatp thread pool.",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -47289,7 +48437,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 333,
+          "id": 341,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -47429,7 +48577,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 334,
+          "id": 342,
           "interval": null,
           "legend": {
             "show": false
@@ -47462,7 +48610,7 @@
           ],
           "timeFrom": null,
           "timeShift": null,
-          "title": "Unified Read Pool Wait Duration",
+          "title": "Wait Duration",
           "tooltip": {
             "msResolution": true,
             "shared": true,
@@ -47499,7 +48647,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Unified read pool task execution time during one schedule.",
+          "description": "Task execution time during one schedule.",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -47526,7 +48674,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 335,
+          "id": 343,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -47592,7 +48740,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_yatp_task_poll_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
+              "expr": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_yatp_task_poll_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"unified-read.*\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -47600,14 +48748,14 @@
               "intervalFactor": 1,
               "legendFormat": "99.99%",
               "metric": "",
-              "query": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_yatp_task_poll_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
+              "query": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_yatp_task_poll_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"unified-read.*\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
               "refId": "",
               "step": 10,
               "target": ""
             },
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_yatp_task_poll_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
+              "expr": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_yatp_task_poll_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"unified-read.*\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -47615,14 +48763,14 @@
               "intervalFactor": 1,
               "legendFormat": "99%",
               "metric": "",
-              "query": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_yatp_task_poll_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
+              "query": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_yatp_task_poll_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"unified-read.*\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
               "refId": "",
               "step": 10,
               "target": ""
             },
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "(sum(rate(\n    tikv_yatp_task_poll_duration_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n))   / sum(rate(\n    tikv_yatp_task_poll_duration_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n))  )",
+              "expr": "(sum(rate(\n    tikv_yatp_task_poll_duration_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"unified-read.*\"}\n    [$__rate_interval]\n))   / sum(rate(\n    tikv_yatp_task_poll_duration_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"unified-read.*\"}\n    [$__rate_interval]\n))  )",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -47630,14 +48778,14 @@
               "intervalFactor": 1,
               "legendFormat": "avg",
               "metric": "",
-              "query": "(sum(rate(\n    tikv_yatp_task_poll_duration_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n))   / sum(rate(\n    tikv_yatp_task_poll_duration_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n))  )",
+              "query": "(sum(rate(\n    tikv_yatp_task_poll_duration_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"unified-read.*\"}\n    [$__rate_interval]\n))   / sum(rate(\n    tikv_yatp_task_poll_duration_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"unified-read.*\"}\n    [$__rate_interval]\n))  )",
               "refId": "",
               "step": 10,
               "target": ""
             },
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_yatp_task_poll_duration_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n))  ",
+              "expr": "sum(rate(\n    tikv_yatp_task_poll_duration_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"unified-read.*\"}\n    [$__rate_interval]\n))  ",
               "format": "time_series",
               "hide": true,
               "instant": false,
@@ -47645,7 +48793,7 @@
               "intervalFactor": 1,
               "legendFormat": "count",
               "metric": "",
-              "query": "sum(rate(\n    tikv_yatp_task_poll_duration_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n))  ",
+              "query": "sum(rate(\n    tikv_yatp_task_poll_duration_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"unified-read.*\"}\n    [$__rate_interval]\n))  ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -47700,7 +48848,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Unified read pool task total execution duration.",
+          "description": "Task total execution duration.",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -47727,7 +48875,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 336,
+          "id": 344,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -47793,7 +48941,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_yatp_task_exec_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
+              "expr": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_yatp_task_exec_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"unified-read.*\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -47801,14 +48949,14 @@
               "intervalFactor": 1,
               "legendFormat": "99.99%",
               "metric": "",
-              "query": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_yatp_task_exec_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
+              "query": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_yatp_task_exec_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"unified-read.*\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
               "refId": "",
               "step": 10,
               "target": ""
             },
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_yatp_task_exec_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
+              "expr": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_yatp_task_exec_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"unified-read.*\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -47816,14 +48964,14 @@
               "intervalFactor": 1,
               "legendFormat": "99%",
               "metric": "",
-              "query": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_yatp_task_exec_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
+              "query": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_yatp_task_exec_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"unified-read.*\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
               "refId": "",
               "step": 10,
               "target": ""
             },
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "(sum(rate(\n    tikv_yatp_task_exec_duration_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n))   / sum(rate(\n    tikv_yatp_task_exec_duration_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n))  )",
+              "expr": "(sum(rate(\n    tikv_yatp_task_exec_duration_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"unified-read.*\"}\n    [$__rate_interval]\n))   / sum(rate(\n    tikv_yatp_task_exec_duration_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"unified-read.*\"}\n    [$__rate_interval]\n))  )",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -47831,14 +48979,14 @@
               "intervalFactor": 1,
               "legendFormat": "avg",
               "metric": "",
-              "query": "(sum(rate(\n    tikv_yatp_task_exec_duration_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n))   / sum(rate(\n    tikv_yatp_task_exec_duration_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n))  )",
+              "query": "(sum(rate(\n    tikv_yatp_task_exec_duration_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"unified-read.*\"}\n    [$__rate_interval]\n))   / sum(rate(\n    tikv_yatp_task_exec_duration_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"unified-read.*\"}\n    [$__rate_interval]\n))  )",
               "refId": "",
               "step": 10,
               "target": ""
             },
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_yatp_task_exec_duration_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n))  ",
+              "expr": "sum(rate(\n    tikv_yatp_task_exec_duration_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"unified-read.*\"}\n    [$__rate_interval]\n))  ",
               "format": "time_series",
               "hide": true,
               "instant": false,
@@ -47846,7 +48994,7 @@
               "intervalFactor": 1,
               "legendFormat": "count",
               "metric": "",
-              "query": "sum(rate(\n    tikv_yatp_task_exec_duration_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n))  ",
+              "query": "sum(rate(\n    tikv_yatp_task_exec_duration_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"unified-read.*\"}\n    [$__rate_interval]\n))  ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -47928,7 +49076,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 337,
+          "id": 345,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -47994,7 +49142,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_yatp_task_execute_times_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
+              "expr": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_yatp_task_execute_times_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"unified-read.*\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -48002,14 +49150,14 @@
               "intervalFactor": 1,
               "legendFormat": "99.99%",
               "metric": "",
-              "query": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_yatp_task_execute_times_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
+              "query": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_yatp_task_execute_times_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"unified-read.*\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
               "refId": "",
               "step": 10,
               "target": ""
             },
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_yatp_task_execute_times_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
+              "expr": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_yatp_task_execute_times_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"unified-read.*\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -48017,14 +49165,14 @@
               "intervalFactor": 1,
               "legendFormat": "99%",
               "metric": "",
-              "query": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_yatp_task_execute_times_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
+              "query": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_yatp_task_execute_times_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"unified-read.*\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
               "refId": "",
               "step": 10,
               "target": ""
             },
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "(sum(rate(\n    tikv_yatp_task_execute_times_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n))   / sum(rate(\n    tikv_yatp_task_execute_times_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n))  )",
+              "expr": "(sum(rate(\n    tikv_yatp_task_execute_times_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"unified-read.*\"}\n    [$__rate_interval]\n))   / sum(rate(\n    tikv_yatp_task_execute_times_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"unified-read.*\"}\n    [$__rate_interval]\n))  )",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -48032,14 +49180,14 @@
               "intervalFactor": 1,
               "legendFormat": "avg",
               "metric": "",
-              "query": "(sum(rate(\n    tikv_yatp_task_execute_times_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n))   / sum(rate(\n    tikv_yatp_task_execute_times_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n))  )",
+              "query": "(sum(rate(\n    tikv_yatp_task_execute_times_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"unified-read.*\"}\n    [$__rate_interval]\n))   / sum(rate(\n    tikv_yatp_task_execute_times_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"unified-read.*\"}\n    [$__rate_interval]\n))  )",
               "refId": "",
               "step": 10,
               "target": ""
             },
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_yatp_task_execute_times_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n))  ",
+              "expr": "sum(rate(\n    tikv_yatp_task_execute_times_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"unified-read.*\"}\n    [$__rate_interval]\n))  ",
               "format": "time_series",
               "hide": true,
               "instant": false,
@@ -48047,7 +49195,7 @@
               "intervalFactor": 1,
               "legendFormat": "count",
               "metric": "",
-              "query": "sum(rate(\n    tikv_yatp_task_execute_times_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n))  ",
+              "query": "sum(rate(\n    tikv_yatp_task_execute_times_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"unified-read.*\"}\n    [$__rate_interval]\n))  ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -48132,7 +49280,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 338,
+      "id": 346,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -48171,7 +49319,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 339,
+          "id": 347,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -48349,7 +49497,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 340,
+          "id": 348,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -48550,7 +49698,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 341,
+          "id": 349,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -48683,7 +49831,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 342,
+          "id": 350,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -48816,7 +49964,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 343,
+          "id": 351,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -48949,7 +50097,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 344,
+          "id": 352,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -49082,7 +50230,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 345,
+          "id": 353,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -49215,7 +50363,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 346,
+          "id": 354,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -49344,7 +50492,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 347,
+          "id": 355,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -49419,7 +50567,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 348,
+          "id": 356,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -49498,7 +50646,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 349,
+          "id": 357,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -49751,7 +50899,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 350,
+          "id": 358,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -49884,7 +51032,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 351,
+          "id": 359,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -50020,7 +51168,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 352,
+      "id": 360,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -50059,7 +51207,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 353,
+          "id": 361,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -50207,7 +51355,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 354,
+          "id": 362,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -50340,7 +51488,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 355,
+          "id": 363,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -50541,7 +51689,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 356,
+          "id": 364,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -50689,7 +51837,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 357,
+          "id": 365,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -50890,7 +52038,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 358,
+          "id": 366,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -51023,7 +52171,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 359,
+          "id": 367,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -51156,7 +52304,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 360,
+          "id": 368,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -51289,7 +52437,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 361,
+          "id": 369,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -51422,7 +52570,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 362,
+          "id": 370,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -51562,7 +52710,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 363,
+          "id": 371,
           "interval": null,
           "legend": {
             "show": false
@@ -51659,7 +52807,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 364,
+          "id": 372,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -51863,7 +53011,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 365,
+      "id": 373,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -51902,7 +53050,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 366,
+          "id": 374,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -52035,7 +53183,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 367,
+          "id": 375,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -52168,7 +53316,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 368,
+          "id": 376,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -52301,7 +53449,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 369,
+          "id": 377,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -52437,7 +53585,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 370,
+      "id": 378,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -52476,7 +53624,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 371,
+          "id": 379,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -52609,7 +53757,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 372,
+          "id": 380,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -52742,7 +53890,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 373,
+          "id": 381,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -52890,7 +54038,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 374,
+          "id": 382,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53023,7 +54171,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 375,
+          "id": 383,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53156,7 +54304,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 376,
+          "id": 384,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53289,7 +54437,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 377,
+          "id": 385,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53425,7 +54573,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 378,
+      "id": 386,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -53464,7 +54612,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 379,
+          "id": 387,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53597,7 +54745,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 380,
+          "id": 388,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53730,7 +54878,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 381,
+          "id": 389,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53863,7 +55011,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 382,
+          "id": 390,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53996,7 +55144,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 383,
+          "id": 391,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54129,7 +55277,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 384,
+          "id": 392,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54265,7 +55413,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 385,
+      "id": 393,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -54304,7 +55452,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 386,
+          "id": 394,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54437,7 +55585,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 387,
+          "id": 395,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54570,7 +55718,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 388,
+          "id": 396,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54718,7 +55866,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 389,
+          "id": 397,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54881,7 +56029,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 390,
+          "id": 398,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -55014,7 +56162,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 391,
+          "id": 399,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -55147,7 +56295,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 392,
+          "id": 400,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -55295,7 +56443,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 393,
+          "id": 401,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -55443,7 +56591,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 394,
+          "id": 402,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -55579,7 +56727,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 395,
+      "id": 403,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -55618,7 +56766,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 396,
+          "id": 404,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -55751,7 +56899,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 397,
+          "id": 405,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -55884,7 +57032,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 398,
+          "id": 406,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -56017,7 +57165,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 399,
+          "id": 407,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -56150,7 +57298,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 400,
+          "id": 408,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -56283,7 +57431,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 401,
+          "id": 409,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -56416,7 +57564,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 402,
+          "id": 410,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -56549,7 +57697,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 403,
+          "id": 411,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -56682,7 +57830,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 404,
+          "id": 412,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -56822,7 +57970,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 405,
+          "id": 413,
           "interval": null,
           "legend": {
             "show": false
@@ -56919,7 +58067,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 406,
+          "id": 414,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -57052,7 +58200,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 407,
+          "id": 415,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -57200,7 +58348,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 408,
+          "id": 416,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -57348,7 +58496,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 409,
+          "id": 417,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -57488,7 +58636,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 410,
+          "id": 418,
           "interval": null,
           "legend": {
             "show": false
@@ -57585,7 +58733,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 411,
+          "id": 419,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -57718,7 +58866,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 412,
+          "id": 420,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -57854,7 +59002,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 413,
+      "id": 421,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -57893,7 +59041,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 414,
+          "id": 422,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -58026,7 +59174,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 415,
+          "id": 423,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -58189,7 +59337,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 416,
+          "id": 424,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -58337,7 +59485,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 417,
+          "id": 425,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -58470,7 +59618,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 418,
+          "id": 426,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -58610,7 +59758,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 419,
+          "id": 427,
           "interval": null,
           "legend": {
             "show": false
@@ -58714,7 +59862,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 420,
+          "id": 428,
           "interval": null,
           "legend": {
             "show": false
@@ -58818,7 +59966,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 421,
+          "id": 429,
           "interval": null,
           "legend": {
             "show": false
@@ -58915,7 +60063,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 422,
+          "id": 430,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59055,7 +60203,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 423,
+          "id": 431,
           "interval": null,
           "legend": {
             "show": false
@@ -59159,7 +60307,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 424,
+          "id": 432,
           "interval": null,
           "legend": {
             "show": false
@@ -59263,7 +60411,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 425,
+          "id": 433,
           "interval": null,
           "legend": {
             "show": false
@@ -59360,7 +60508,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 426,
+          "id": 434,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59493,7 +60641,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 427,
+          "id": 435,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59626,7 +60774,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 428,
+          "id": 436,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59766,7 +60914,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 429,
+          "id": 437,
           "interval": null,
           "legend": {
             "show": false
@@ -59863,7 +61011,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 430,
+          "id": 438,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59999,7 +61147,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 431,
+      "id": 439,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -60038,7 +61186,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 432,
+          "id": 440,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -60201,7 +61349,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 433,
+          "id": 441,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -60334,7 +61482,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 434,
+          "id": 442,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -60474,7 +61622,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 435,
+          "id": 443,
           "interval": null,
           "legend": {
             "show": false
@@ -60578,7 +61726,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 436,
+          "id": 444,
           "interval": null,
           "legend": {
             "show": false
@@ -60675,7 +61823,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 437,
+          "id": 445,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -60830,7 +61978,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 438,
+          "id": 446,
           "interval": null,
           "legend": {
             "show": false
@@ -60934,7 +62082,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 439,
+          "id": 447,
           "interval": null,
           "legend": {
             "show": false
@@ -61038,7 +62186,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 440,
+          "id": 448,
           "interval": null,
           "legend": {
             "show": false
@@ -61135,7 +62283,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 441,
+          "id": 449,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61305,7 +62453,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 442,
+          "id": 450,
           "interval": null,
           "legend": {
             "show": false
@@ -61402,7 +62550,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 443,
+          "id": 451,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61603,7 +62751,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 444,
+          "id": 452,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61804,7 +62952,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 445,
+          "id": 453,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61937,7 +63085,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 446,
+          "id": 454,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62100,7 +63248,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 447,
+          "id": 455,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62233,7 +63381,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 448,
+          "id": 456,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62366,7 +63514,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 449,
+          "id": 457,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62567,7 +63715,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 450,
+          "id": 458,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62700,7 +63848,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 451,
+          "id": 459,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62840,7 +63988,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 452,
+          "id": 460,
           "interval": null,
           "legend": {
             "show": false
@@ -62944,7 +64092,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 453,
+          "id": 461,
           "interval": null,
           "legend": {
             "show": false
@@ -63048,7 +64196,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 454,
+          "id": 462,
           "interval": null,
           "legend": {
             "show": false
@@ -63152,7 +64300,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 455,
+          "id": 463,
           "interval": null,
           "legend": {
             "show": false
@@ -63256,7 +64404,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 456,
+          "id": 464,
           "interval": null,
           "legend": {
             "show": false
@@ -63360,7 +64508,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 457,
+          "id": 465,
           "interval": null,
           "legend": {
             "show": false
@@ -63464,7 +64612,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 458,
+          "id": 466,
           "interval": null,
           "legend": {
             "show": false
@@ -63561,7 +64709,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 459,
+          "id": 467,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63709,7 +64857,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 460,
+          "id": 468,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63842,7 +64990,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 461,
+          "id": 469,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63975,7 +65123,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 462,
+          "id": 470,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64123,7 +65271,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 463,
+          "id": 471,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64259,7 +65407,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 464,
+      "id": 472,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -64310,7 +65458,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 465,
+          "id": 473,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -64406,7 +65554,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 466,
+          "id": 474,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -64481,7 +65629,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 467,
+          "id": 475,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -64556,7 +65704,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 468,
+          "id": 476,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -64631,7 +65779,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 469,
+          "id": 477,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -64706,7 +65854,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 470,
+          "id": 478,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -64781,7 +65929,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 471,
+          "id": 479,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -64856,7 +66004,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 472,
+          "id": 480,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -64935,7 +66083,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 473,
+          "id": 481,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65068,7 +66216,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 474,
+          "id": 482,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65201,7 +66349,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 475,
+          "id": 483,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65334,7 +66482,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 476,
+          "id": 484,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65467,7 +66615,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 477,
+          "id": 485,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65600,7 +66748,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 478,
+          "id": 486,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65748,7 +66896,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 479,
+          "id": 487,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65881,7 +67029,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 480,
+          "id": 488,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66014,7 +67162,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 481,
+          "id": 489,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66180,7 +67328,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 482,
+          "id": 490,
           "interval": null,
           "legend": {
             "show": false
@@ -66284,7 +67432,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 483,
+          "id": 491,
           "interval": null,
           "legend": {
             "show": false
@@ -66388,7 +67536,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 484,
+          "id": 492,
           "interval": null,
           "legend": {
             "show": false
@@ -66492,7 +67640,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 485,
+          "id": 493,
           "interval": null,
           "legend": {
             "show": false
@@ -66596,7 +67744,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 486,
+          "id": 494,
           "interval": null,
           "legend": {
             "show": false
@@ -66700,7 +67848,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 487,
+          "id": 495,
           "interval": null,
           "legend": {
             "show": false
@@ -66804,7 +67952,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 488,
+          "id": 496,
           "interval": null,
           "legend": {
             "show": false
@@ -66908,7 +68056,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 489,
+          "id": 497,
           "interval": null,
           "legend": {
             "show": false
@@ -67005,7 +68153,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 490,
+          "id": 498,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67138,7 +68286,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 491,
+          "id": 499,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67271,7 +68419,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 492,
+          "id": 500,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67404,7 +68552,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 493,
+          "id": 501,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67537,7 +68685,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 494,
+          "id": 502,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67670,7 +68818,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 495,
+          "id": 503,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67803,7 +68951,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 496,
+          "id": 504,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67936,7 +69084,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 497,
+          "id": 505,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68076,7 +69224,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 498,
+          "id": 506,
           "interval": null,
           "legend": {
             "show": false
@@ -68180,7 +69328,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 499,
+          "id": 507,
           "interval": null,
           "legend": {
             "show": false
@@ -68277,7 +69425,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 500,
+          "id": 508,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68410,7 +69558,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 501,
+          "id": 509,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68543,7 +69691,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 502,
+          "id": 510,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68676,7 +69824,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 503,
+          "id": 511,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68809,7 +69957,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 504,
+          "id": 512,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68942,7 +70090,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 505,
+          "id": 513,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69078,7 +70226,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 506,
+      "id": 514,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -69117,7 +70265,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 507,
+          "id": 515,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69265,7 +70413,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 508,
+          "id": 516,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69398,7 +70546,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 509,
+          "id": 517,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69531,7 +70679,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 510,
+          "id": 518,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69667,7 +70815,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 511,
+      "id": 519,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -69706,7 +70854,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 512,
+          "id": 520,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69839,7 +70987,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 513,
+          "id": 521,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69972,7 +71120,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 514,
+          "id": 522,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -70105,7 +71253,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 515,
+          "id": 523,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -70238,7 +71386,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 516,
+          "id": 524,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -70371,7 +71519,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 517,
+          "id": 525,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -70507,7 +71655,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 518,
+      "id": 526,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -70546,7 +71694,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 519,
+          "id": 527,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -70747,7 +71895,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 520,
+          "id": 528,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -70883,7 +72031,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 521,
+      "id": 529,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -70922,7 +72070,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 522,
+          "id": 530,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -71055,7 +72203,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 523,
+          "id": 531,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -71188,7 +72336,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 524,
+          "id": 532,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -71321,7 +72469,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 525,
+          "id": 533,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -71454,7 +72602,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 526,
+          "id": 534,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -71602,7 +72750,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 527,
+          "id": 535,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -71806,7 +72954,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 528,
+      "id": 536,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -71845,7 +72993,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 529,
+          "id": 537,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -71978,7 +73126,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 530,
+          "id": 538,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -72111,7 +73259,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 531,
+          "id": 539,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -72244,7 +73392,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 532,
+          "id": 540,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -72377,7 +73525,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 533,
+          "id": 541,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -72574,7 +73722,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 534,
+          "id": 542,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
