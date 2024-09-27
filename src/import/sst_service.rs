@@ -46,7 +46,10 @@ use tikv_kv::{
 use tikv_util::{
     config::ReadableSize,
     future::{create_stream_with_buffer, paired_future_callback},
-    sys::thread::ThreadBuildWrapper,
+    sys::{
+        disk::{get_disk_status, DiskUsage},
+        thread::ThreadBuildWrapper,
+    },
     time::{Instant, Limiter},
     HandyRwLock,
 };

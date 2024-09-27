@@ -2,11 +2,8 @@ use engine_traits::CF_DEFAULT;
 use external_storage_export::LocalStorage;
 use kvproto::import_sstpb::ApplyRequest;
 use tempfile::TempDir;
-<<<<<<< HEAD
-=======
 use test_sst_importer::*;
 use tikv_util::sys::disk::{self, DiskUsage};
->>>>>>> 485c434512 (br: pre-check TiKV disk space before download (#17238))
 
 use crate::import::util;
 
