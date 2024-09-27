@@ -71800,7 +71800,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The 99 quantile durtion of status server API requests",
+          "description": null,
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -71828,6 +71828,314 @@
           "height": null,
           "hideTimeOverride": false,
           "id": 528,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(rate(\n    tikv_resource_control_background_task_wait_duration\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{resource_group}}",
+              "metric": "",
+              "query": "sum(rate(\n    tikv_resource_control_background_task_wait_duration\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (resource_group) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Background Task Total Wait Duration",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "\u00b5s",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The memory usage of the resource control module.",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 12,
+            "y": 0
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 529,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum((\n    tikv_resource_control_priority_quota_limit\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (priority) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{priority}}",
+              "metric": "",
+              "query": "sum((\n    tikv_resource_control_priority_quota_limit\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (priority) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Priority Quota Limit",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "\u00b5s",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        }
+      ],
+      "repeat": null,
+      "repeatDirection": null,
+      "span": null,
+      "targets": [],
+      "timeFrom": null,
+      "timeShift": null,
+      "title": "Resource Control",
+      "transformations": [],
+      "transparent": false,
+      "type": "row"
+    },
+    {
+      "cacheTimeout": null,
+      "collapsed": true,
+      "datasource": null,
+      "description": null,
+      "editable": true,
+      "error": false,
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": []
+          }
+        }
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "height": null,
+      "hideTimeOverride": false,
+      "id": 530,
+      "interval": null,
+      "links": [],
+      "maxDataPoints": 100,
+      "maxPerRow": null,
+      "minSpan": null,
+      "panels": [
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The 99 quantile durtion of status server API requests",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 0,
+            "y": 0
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 531,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -72028,7 +72336,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 529,
+          "id": 532,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -72164,7 +72472,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 530,
+      "id": 533,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -72203,7 +72511,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 531,
+          "id": 534,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -72336,7 +72644,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 532,
+          "id": 535,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -72469,7 +72777,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 533,
+          "id": 536,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -72602,7 +72910,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 534,
+          "id": 537,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -72735,7 +73043,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 535,
+          "id": 538,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -72883,7 +73191,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 536,
+          "id": 539,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -73087,7 +73395,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 537,
+      "id": 540,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -73126,7 +73434,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 538,
+          "id": 541,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -73259,7 +73567,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 539,
+          "id": 542,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -73392,7 +73700,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 540,
+          "id": 543,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -73525,7 +73833,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 541,
+          "id": 544,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -73658,7 +73966,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 542,
+          "id": 545,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -73855,7 +74163,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 543,
+          "id": 546,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
