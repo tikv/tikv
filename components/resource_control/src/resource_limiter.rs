@@ -37,7 +37,7 @@ impl fmt::Debug for ResourceType {
 }
 
 pub struct ResourceLimiter {
-    name: String,
+    _name: String,
     version: u64,
     limiters: [QuotaLimiter; ResourceType::COUNT],
     // whether the resource limiter is a background limiter or priority limiter.
@@ -64,7 +64,7 @@ impl ResourceLimiter {
         let io_limiter = QuotaLimiter::new(io_limit);
         // high priority tasks does not triggers wait, so no need to generate an empty
         // metrics.
-        let wait_histogram = if !is_background && &name != TaskPriority::High.as_str() {
+        let wait_histogram = if !is_background && name != TaskPriority::High.as_str() {
             Some(
                 PRIORITY_WAIT_DURATION_VEC
                     .get_metric_with_label_values(&[&name])
@@ -74,7 +74,7 @@ impl ResourceLimiter {
             None
         };
         Self {
-            name,
+            _name: name,
             version,
             limiters: [cpu_limiter, io_limiter],
             is_background,
