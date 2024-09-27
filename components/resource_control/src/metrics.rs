@@ -28,6 +28,29 @@ lazy_static! {
         &["priority"]
     )
     .unwrap();
+<<<<<<< HEAD
+=======
+    pub static ref PRIORITY_CPU_TIME_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_resource_control_priority_task_exec_duration",
+        "Total execution duration of tasks per-priority",
+        &["priority"]
+    )
+    .unwrap();
+    pub static ref PRIORITY_WAIT_DURATION_VEC: HistogramVec = register_histogram_vec!(
+        "tikv_resource_control_priority_wait_duration",
+        "Histogram of wait duration cause by priority quota limiter",
+        &["priority"],
+        exponential_buckets(1e-5, 2.0, 18).unwrap() // 10us ~ 2.5s
+    )
+    .unwrap();
+
+    pub static ref BACKGROUND_TASK_RESOURCE_UTILIZATION_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_resource_control_bg_resource_utilization",
+        "The total resource utilization percentage of background tasks",
+        &["type"]
+    )
+    .unwrap();
+>>>>>>> 7b49098667 (resource_control: add metrics for priority resource limiter (#17590))
 }
 
 pub fn deregister_metrics(name: &str) {

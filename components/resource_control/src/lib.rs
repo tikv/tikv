@@ -1,7 +1,11 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 #![feature(test)]
+<<<<<<< HEAD
 #![feature(local_key_cell_methods)]
 #![feature(array_zip)]
+=======
+#![feature(let_chains)]
+>>>>>>> 7b49098667 (resource_control: add metrics for priority resource limiter (#17590))
 
 use std::sync::Arc;
 
