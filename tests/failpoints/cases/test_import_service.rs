@@ -107,7 +107,7 @@ fn test_download_to_full_disk() {
     // Now perform a proper download.
     let mut download = DownloadRequest::default();
     download.set_sst(meta.clone());
-    download.set_storage_backend(external_storage::make_local_backend(temp_dir.path()));
+    download.set_storage_backend(external_storage_export::make_local_backend(temp_dir.path()));
     download.set_name("test.sst".to_owned());
     download.mut_sst().mut_range().set_start(vec![sst_range.1]);
     download
