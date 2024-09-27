@@ -256,6 +256,8 @@ pub fn jeprof_heap_profile(path: &str) -> Result<Vec<u8>, String> {
             "--svg",
         ])
         .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("spawn jeprof fail: {}", e))?;
     jeprof
