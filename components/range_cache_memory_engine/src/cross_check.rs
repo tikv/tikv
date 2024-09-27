@@ -949,6 +949,7 @@ mod tests {
                 RangeCacheEngineConfig::config_for_test(),
             ))),
             Some(Arc::new(MockRegionInfoProvider {})),
+            None,
         );
         let mut region = Region::default();
         region.set_peers(vec![new_peer(1, 1)].into());
