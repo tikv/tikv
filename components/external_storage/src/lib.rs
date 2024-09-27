@@ -294,7 +294,7 @@ where
             break;
         }
         let elapsed = start.saturating_elapsed().as_millis();
-        if bytes_read < 64 * elapsed {
+        if bytes_read < (32 * elapsed).try_into().unwrap() {
             warn!("the speed is too slow"; "elapsed" => elapsed, "bytes_read" => bytes_read);
         }
 
