@@ -141,9 +141,10 @@ pub(crate) struct QuotaLimiter {
 impl QuotaLimiter {
     fn new(limit: f64) -> Self {
         Self {
-            // we use 1s refill and 1ms min_wait duration to avoid trigger wait too frequently.
-            // NOTE: the parameter `refill` mainly impact the capacity of token bucket but not
-            // refill interval.
+            // we use 1s refill and 1ms min_wait duration to avoid trigger
+            // wait too frequently or waiting too long.
+            // NOTE: the parameter `refill` mainly impact the capacity
+            // of token bucket but not refill interval.
             limiter: Limiter::builder(limit)
                 .refill(Duration::from_millis(1000))
                 .min_wait(Duration::from_millis(1))

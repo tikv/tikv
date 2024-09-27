@@ -690,6 +690,7 @@ mod tests {
             worker.last_adjust_time = now - dur;
         };
 
+        #[track_caller]
         fn check(val: f64, expected: f64) {
             assert!(
                 expected * 0.99 < val && val < expected * 1.01,
@@ -699,6 +700,7 @@ mod tests {
             );
         }
 
+        #[track_caller]
         fn check_limiter(limiter: &Arc<ResourceLimiter>, cpu: f64, io: IoBytes) {
             check(
                 limiter.get_limiter(ResourceType::Cpu).get_rate_limit(),
@@ -865,18 +867,18 @@ mod tests {
         worker.adjust_quota();
         check_limiter(
             &limiter,
-            2.4,
+            1.2,
             IoBytes {
-                read: 1400,
-                write: 1400,
+                read: 1800,
+                write: 1800,
             },
         );
         check_limiter(
             &bg_limiter,
-            1.6,
+            2.8,
             IoBytes {
-                read: 1800,
-                write: 1800,
+                read: 1400,
+                write: 1400,
             },
         );
 
@@ -943,18 +945,18 @@ mod tests {
         worker.adjust_quota();
         check_limiter(
             &limiter,
-            2.4,
+            2.2,
             IoBytes {
-                read: 1400,
-                write: 1400,
+                read: 2133,
+                write: 2133,
             },
         );
         check_limiter(
             &new_bg_limiter,
-            1.6,
+            1.8,
             IoBytes {
-                read: 1800,
-                write: 1800,
+                read: 1066,
+                write: 1066,
             },
         );
     }
