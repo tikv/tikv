@@ -58,7 +58,7 @@ use tikv_util::{
 };
 use txn_types::WriteBatchFlags;
 
-use self::range_cache_engine::RangCacheEngineExt;
+use self::region_cache_engine::RangCacheEngineExt;
 use super::*;
 use crate::Config;
 // We simulate 3 or 5 nodes, each has a store.
@@ -181,7 +181,7 @@ pub struct Cluster<T: Simulator> {
     // When this is set, the `HybridEngineImpl` will be used as the underlying KvEngine. In
     // addition, it atomaticaly load the whole range when start. When we want to do something
     // specific, for example, only load ranges of some regions, we may not set this.
-    range_cache_engine_enabled_with_whole_range: bool,
+    region_cache_engine_enabled_with_whole_range: bool,
 }
 
 impl<T: Simulator> Cluster<T> {
@@ -215,7 +215,7 @@ impl<T: Simulator> Cluster<T> {
             resource_manager: Some(Arc::new(ResourceGroupManager::default())),
             kv_statistics: vec![],
             raft_statistics: vec![],
-            range_cache_engine_enabled_with_whole_range: false,
+            region_cache_engine_enabled_with_whole_range: false,
         }
     }
 
@@ -345,7 +345,7 @@ impl<T: Simulator> Cluster<T> {
         self.create_engines();
         self.bootstrap_region().unwrap();
         self.start().unwrap();
-        if self.range_cache_engine_enabled_with_whole_range {
+        if self.region_cache_engine_enabled_with_whole_range {
             let pd_regions = self.pd_client.scan_regions(&[], &[], i32::MAX).unwrap();
             let regions: Vec<_> = pd_regions
                 .into_iter()
@@ -2016,8 +2016,8 @@ impl<T: Simulator> Cluster<T> {
         Ok(())
     }
 
-    pub fn range_cache_engine_enabled_with_whole_range(&mut self, v: bool) {
-        self.range_cache_engine_enabled_with_whole_range = v;
+    pub fn region_cache_engine_enabled_with_whole_range(&mut self, v: bool) {
+        self.region_cache_engine_enabled_with_whole_range = v;
     }
 }
 
@@ -2031,7 +2031,7 @@ impl<T: Simulator> Drop for Cluster<T> {
 pub trait RawEngine<EK: engine_traits::KvEngine>:
     Peekable<DbVector = EK::DbVector> + SyncMutable
 {
-    fn range_cache_engine(&self) -> bool {
+    fn region_cache_engine(&self) -> bool {
         false
     }
 
@@ -2061,7 +2061,7 @@ impl RawEngine<RocksEngine> for RocksEngine {
 }
 
 impl RawEngine<RocksEngine> for HybridEngineImpl {
-    fn range_cache_engine(&self) -> bool {
+    fn region_cache_engine(&self) -> bool {
         true
     }
 

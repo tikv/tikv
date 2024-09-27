@@ -40,6 +40,7 @@ use file_system::{get_io_rate_limiter, BytesFetcher, MetricsManager as IoMetrics
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
 use health_controller::HealthController;
+use in_memory_engine::InMemoryEngineStatistics;
 use kvproto::{
     brpb::create_backup, cdcpb_grpc::create_change_data, deadlock::create_deadlock,
     debugpb_grpc::create_debug, diagnosticspb::create_diagnostics,
@@ -66,7 +67,6 @@ use raftstore_v2::{
     router::{DiskSnapBackupHandle, PeerMsg, RaftRouter},
     StateStorage,
 };
-use range_cache_memory_engine::RangeCacheMemoryEngineStatistics;
 use resolved_ts::Task;
 use resource_control::{config::ResourceContrlCfgMgr, ResourceGroupManager};
 use security::SecurityManager;
@@ -239,7 +239,7 @@ struct TikvServer<ER: RaftEngine> {
     snap_mgr: Option<TabletSnapManager>, // Will be filled in `init_servers`.
     engines: Option<TikvEngines<RocksEngine, ER>>,
     kv_statistics: Option<Arc<RocksStatistics>>,
-    range_cache_engine_statistics: Option<Arc<RangeCacheMemoryEngineStatistics>>,
+    in_memory_engine_statistics: Option<Arc<InMemoryEngineStatistics>>,
     raft_statistics: Option<Arc<RocksStatistics>>,
     servers: Option<Servers<RocksEngine, ER>>,
     region_info_accessor: Option<RegionInfoAccessor>,
@@ -388,7 +388,7 @@ where
             snap_mgr: None,
             engines: None,
             kv_statistics: None,
-            range_cache_engine_statistics: None,
+            in_memory_engine_statistics: None,
             raft_statistics: None,
             servers: None,
             region_info_accessor: None,
@@ -1126,7 +1126,7 @@ where
         let mut engine_metrics = EngineMetricsManager::<RocksEngine, ER>::new(
             self.tablet_registry.clone().unwrap(),
             self.kv_statistics.clone(),
-            self.range_cache_engine_statistics.clone(),
+            self.in_memory_engine_statistics.clone(),
             self.core.config.rocksdb.titan.enabled.map_or(false, |v| v),
             self.engines.as_ref().unwrap().raft_engine.clone(),
             self.raft_statistics.clone(),

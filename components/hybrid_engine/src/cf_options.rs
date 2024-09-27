@@ -1,13 +1,13 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{CfOptionsExt, KvEngine, RangeCacheEngine, Result};
+use engine_traits::{CfOptionsExt, KvEngine, RegionCacheEngine, Result};
 
 use crate::engine::HybridEngine;
 
 impl<EK, EC> CfOptionsExt for HybridEngine<EK, EC>
 where
     EK: KvEngine,
-    EC: RangeCacheEngine,
+    EC: RegionCacheEngine,
 {
     type CfOptions = EK::CfOptions;
 

@@ -230,20 +230,20 @@ pub fn encode_seek_for_prev_key(key: &[u8], seq: u64) -> InternalBytes {
     encode_internal_bytes(key, seq, VALUE_TYPE_FOR_SEEK_FOR_PREV)
 }
 
-// range keys deos not contain mvcc version and sequence number
+// region keys deos not contain mvcc version and sequence number
 #[inline]
-pub fn encode_key_for_boundary_with_mvcc(range: &CacheRegion) -> (InternalBytes, InternalBytes) {
+pub fn encode_key_for_boundary_with_mvcc(region: &CacheRegion) -> (InternalBytes, InternalBytes) {
     // Both encoded_start and encoded_end should be the smallest key in the
     // respective of user key (with mvcc version), so that the iterations cover all
-    // versions of the range start and covers nothing of range end.
+    // versions of the region start and covers nothing of region end.
 
     // TODO: can we avoid one clone
-    let start_mvcc_key = Key::from_encoded(range.start.to_vec())
+    let start_mvcc_key = Key::from_encoded(region.start.to_vec())
         .append_ts(TimeStamp::max())
         .into_encoded();
     let encoded_start = encode_key(&start_mvcc_key, u64::MAX, VALUE_TYPE_FOR_SEEK);
 
-    let end_mvcc_key = Key::from_encoded(range.end.to_vec())
+    let end_mvcc_key = Key::from_encoded(region.end.to_vec())
         .append_ts(TimeStamp::max())
         .into_encoded();
     let encoded_end = encode_key(&end_mvcc_key, u64::MAX, VALUE_TYPE_FOR_SEEK);
@@ -252,14 +252,16 @@ pub fn encode_key_for_boundary_with_mvcc(range: &CacheRegion) -> (InternalBytes,
 }
 
 #[inline]
-pub fn encode_key_for_boundary_without_mvcc(range: &CacheRegion) -> (InternalBytes, InternalBytes) {
+pub fn encode_key_for_boundary_without_mvcc(
+    region: &CacheRegion,
+) -> (InternalBytes, InternalBytes) {
     // Both encoded_start and encoded_end should be the smallest key in the
     // respective of user key (without mvcc version), so that the iterations cover
-    // all versions of the range start and covers nothing of range end.
+    // all versions of the region start and covers nothing of region end.
 
     // TODO: can we avoid one clone
-    let encoded_start = encode_key(&range.start, u64::MAX, VALUE_TYPE_FOR_SEEK);
-    let encoded_end = encode_key(&range.end, u64::MAX, VALUE_TYPE_FOR_SEEK);
+    let encoded_start = encode_key(&region.start, u64::MAX, VALUE_TYPE_FOR_SEEK);
+    let encoded_end = encode_key(&region.end, u64::MAX, VALUE_TYPE_FOR_SEEK);
 
     (encoded_start, encoded_end)
 }

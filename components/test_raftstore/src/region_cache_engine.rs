@@ -12,7 +12,7 @@ pub trait RangCacheEngineExt {
 impl RangCacheEngineExt for HybridEngineImpl {
     fn cache_regions(&self, regions: &[Region]) {
         for r in regions {
-            self.range_cache_engine().new_region(r.clone());
+            self.region_cache_engine().new_region(r.clone());
         }
     }
 }
