@@ -137,23 +137,6 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         }
         self.last_adjust_time = now;
 
-<<<<<<< HEAD
-=======
-        let mut background_util_limit = self
-            .resource_ctl
-            .get_resource_group(DEFAULT_RESOURCE_GROUP_NAME)
-            .map_or(0, |r| {
-                r.group.get_background_settings().get_utilization_limit()
-            });
-        if background_util_limit == 0 {
-            background_util_limit = 100;
-        }
-
-        BACKGROUND_TASK_RESOURCE_UTILIZATION_VEC
-            .with_label_values(&["limit"])
-            .set(background_util_limit as i64);
-
->>>>>>> 7b49098667 (resource_control: add metrics for priority resource limiter (#17590))
         let mut background_groups: Vec<_> = self
             .resource_ctl
             .resource_groups
@@ -242,15 +225,6 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             }
         }
 
-<<<<<<< HEAD
-=======
-        let background_util =
-            (background_consumed_total / resource_stats.total_quota * 100.0) as u64;
-        BACKGROUND_TASK_RESOURCE_UTILIZATION_VEC
-            .with_label_values(&[resource_type.as_str()])
-            .set(background_util as i64);
-
->>>>>>> 7b49098667 (resource_control: add metrics for priority resource limiter (#17590))
         // fast path if process cpu is low
         let is_low_load = resource_stats.current_used <= (resource_stats.total_quota * 0.1);
         if is_low_load && !has_wait && self.is_last_time_low_load[resource_type as usize] {
