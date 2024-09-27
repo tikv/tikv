@@ -286,12 +286,18 @@ where
     loop {
         // separate the speed limiting from actual reading so it won't
         // affect the timeout calculation.
+        let start = Instant::now();
         let bytes_read = timeout(dur, input.read(&mut buffer))
             .await
             .map_err(|_| io::ErrorKind::TimedOut)??;
         if bytes_read == 0 {
             break;
         }
+        let elapsed = start.saturating_elapsed().as_millis();
+        if bytes_read < 64 * elapsed {
+            warn!("the speed is too slow"; "elapsed" => elapsed, "bytes_read" => bytes_read);
+        }
+
         speed_limiter.consume(bytes_read).await;
         output.write_all(&buffer[..bytes_read])?;
         if expected_sha256.is_some() {
