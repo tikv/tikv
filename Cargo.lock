@@ -170,7 +170,7 @@ dependencies = [
 [[package]]
 name = "async-speed-limit"
 version = "0.4.1"
-source = "git+https://github.com/glorv/async-speed-limit?branch=min_wait#e9a2deb2b5ac036931df33cbaa34e2b80aa88539"
+source = "git+https://github.com/tikv/async-speed-limit?branch=master#a113aef3cc24bf7fa5faf2b7025abaf02fc53fe3"
 dependencies = [
  "futures-core",
  "futures-io",
