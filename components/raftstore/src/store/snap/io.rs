@@ -238,6 +238,9 @@ where
 
 /// Apply the given snapshot file into a column family. `callback` will be
 /// invoked after each batch of key value pairs written to db.
+///
+/// Attention, callers should manually flush the column family after applying
+/// all sst files to make sure the data is visible to the following operations.
 pub fn apply_plain_cf_file<E, F>(
     path: &str,
     key_mgr: Option<&Arc<DataKeyManager>>,
@@ -363,6 +366,12 @@ where
     Ok(())
 }
 
+/// Apply the given snapshot file into a column family by directly writing kv
+/// pairs to db, without ingesting them. `callback` will be invoked after each
+/// batch of key value pairs written to db.
+///
+/// Attention, callers should manually flush the column family after applying
+/// all sst files to make sure the data is visible to the following operations.
 pub fn apply_sst_cf_files_without_ingest<E, F>(
     files: &[&str],
     db: &E,
