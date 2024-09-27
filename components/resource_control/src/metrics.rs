@@ -28,8 +28,6 @@ lazy_static! {
         &["priority"]
     )
     .unwrap();
-<<<<<<< HEAD
-=======
     pub static ref PRIORITY_CPU_TIME_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_resource_control_priority_task_exec_duration",
         "Total execution duration of tasks per-priority",
@@ -50,7 +48,6 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
->>>>>>> 7b49098667 (resource_control: add metrics for priority resource limiter (#17590))
 }
 
 pub fn deregister_metrics(name: &str) {

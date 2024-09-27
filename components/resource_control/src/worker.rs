@@ -132,23 +132,6 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         }
         self.last_adjust_time = now;
 
-<<<<<<< HEAD
-=======
-        let mut background_util_limit = self
-            .resource_ctl
-            .get_resource_group(DEFAULT_RESOURCE_GROUP_NAME)
-            .map_or(0, |r| {
-                r.group.get_background_settings().get_utilization_limit()
-            });
-        if background_util_limit == 0 {
-            background_util_limit = 100;
-        }
-
-        BACKGROUND_TASK_RESOURCE_UTILIZATION_VEC
-            .with_label_values(&["limit"])
-            .set(background_util_limit as i64);
-
->>>>>>> 7b49098667 (resource_control: add metrics for priority resource limiter (#17590))
         let mut background_groups: Vec<_> = self
             .resource_ctl
             .resource_groups
@@ -237,15 +220,6 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             }
         }
 
-<<<<<<< HEAD
-=======
-        let background_util =
-            (background_consumed_total / resource_stats.total_quota * 100.0) as u64;
-        BACKGROUND_TASK_RESOURCE_UTILIZATION_VEC
-            .with_label_values(&[resource_type.as_str()])
-            .set(background_util as i64);
-
->>>>>>> 7b49098667 (resource_control: add metrics for priority resource limiter (#17590))
         // fast path if process cpu is low
         let is_low_load = resource_stats.current_used <= (resource_stats.total_quota * 0.1);
         if is_low_load && !has_wait && self.is_last_time_low_load[resource_type as usize] {
@@ -555,22 +529,11 @@ impl PriorityLimiterStatsTracker {
         let wait_stats: [_; 2] =
             std::array::from_fn(|i| self.task_wait_dur_trakcers[i].get_and_upate_statistics());
         let schedule_wait_dur_secs = wait_stats.iter().map(|s| s.0).sum::<f64>() / dur_secs;
-<<<<<<< HEAD
-        LimiterStats {
-            cpu_secs: stats_delta.total_consumed as f64 / MICROS_PER_SEC,
-            wait_secs: stats_delta.total_wait_dur_us as f64 / MICROS_PER_SEC
-                + schedule_wait_dur_secs,
-            req_count: stats_delta.request_count,
-=======
-        let expected_wait_dur_secs =
-            stats_per_sec.request_count as f64 * MINIMAL_SCHEDULE_WAIT_SECS;
-        let normed_schedule_wait_dur_secs =
-            (schedule_wait_dur_secs - expected_wait_dur_secs).max(0.0);
         LimiterStats {
             cpu_secs: stats_per_sec.total_consumed as f64 / MICROS_PER_SEC,
             wait_secs: stats_per_sec.total_wait_dur_us as f64 / MICROS_PER_SEC
-                + normed_schedule_wait_dur_secs,
->>>>>>> 7b49098667 (resource_control: add metrics for priority resource limiter (#17590))
+                + schedule_wait_dur_secs,
+            req_count: stats_per_sec.request_count,
         }
     }
 }

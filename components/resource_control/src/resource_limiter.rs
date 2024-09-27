@@ -10,9 +10,9 @@ use file_system::IoBytes;
 use futures::compat::Future01CompatExt;
 use prometheus::Histogram;
 use strum::EnumCount;
-use tikv_util::{resource_control::TaskPriority, time::Limiter, timer::GLOBAL_TIMER_HANDLE};
+use tikv_util::{time::Limiter, timer::GLOBAL_TIMER_HANDLE};
 
-use crate::metrics::PRIORITY_WAIT_DURATION_VEC;
+use crate::{metrics::PRIORITY_WAIT_DURATION_VEC, resource_group::TaskPriority};
 
 #[derive(Clone, Copy, Eq, PartialEq, EnumCount)]
 #[repr(usize)]
