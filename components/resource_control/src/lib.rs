@@ -3,9 +3,7 @@
 
 use std::sync::Arc;
 
-use online_config::OnlineConfig;
 use pd_client::RpcClient;
-use serde::{Deserialize, Serialize};
 
 mod resource_group;
 pub use resource_group::{
@@ -25,6 +23,8 @@ pub use service::ResourceManagerService;
 pub mod channel;
 pub use channel::ResourceMetered;
 
+pub mod config;
+
 mod resource_limiter;
 pub use resource_limiter::ResourceLimiter;
 use tikv_util::worker::Worker;
@@ -34,20 +34,6 @@ use worker::{
 
 mod metrics;
 pub mod worker;
-
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
-#[serde(default)]
-#[serde(rename_all = "kebab-case")]
-pub struct Config {
-    #[online_config(skip)]
-    pub enabled: bool,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self { enabled: true }
-    }
-}
 
 pub fn start_periodic_tasks(
     mgr: &Arc<ResourceGroupManager>,

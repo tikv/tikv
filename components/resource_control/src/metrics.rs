@@ -28,6 +28,12 @@ lazy_static! {
         &["priority"]
     )
     .unwrap();
+    pub static ref BACKGROUND_TASK_RESOURCE_UTILITATION_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_resource_control_bg_resource_utilization",
+        "The total resource utilization percentage of background tasks",
+        &["type"]
+    )
+    .unwrap();
 }
 
 pub fn deregister_metrics(name: &str) {

@@ -1350,7 +1350,7 @@ pub mod tests {
             MockRegionInfoProvider {
                 regions: Arc::new(Mutex::new(RegionCollector::new(
                     Arc::new(RwLock::new(HashSet::default())),
-                    0,
+                    Box::new(|| 0),
                 ))),
                 cancel: None,
                 need_encode_key: encode_key,

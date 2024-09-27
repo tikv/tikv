@@ -3,6 +3,7 @@
 #![feature(let_chains)]
 #![feature(noop_waker)]
 
+mod backup;
 mod config;
 mod crypter;
 mod encrypted_file;
@@ -15,9 +16,12 @@ mod master_key;
 pub use master_key::fake;
 mod metrics;
 
+pub mod test_utils;
+
 use std::{io::ErrorKind, path::Path};
 
 pub use self::{
+    backup::backup_encryption::*,
     config::*,
     crypter::{verify_encryption_config, AesGcmCrypter, FileEncryptionInfo, Iv},
     encrypted_file::EncryptedFile,
@@ -27,7 +31,9 @@ pub use self::{
         create_aes_ctr_crypter, DecrypterReader, DecrypterWriter, EncrypterReader, EncrypterWriter,
     },
     manager::{DataKeyImporter, DataKeyManager, DataKeyManagerArgs},
-    master_key::{Backend, FileBackend, KmsBackend, PlaintextBackend},
+    master_key::{
+        AsyncBackend, Backend, FileBackend, KmsBackend, MultiMasterKeyBackend, PlaintextBackend,
+    },
 };
 
 const TRASH_PREFIX: &str = "TRASH-";

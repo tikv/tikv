@@ -33,6 +33,7 @@ use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 use yatp::Remote;
 
 use crate::{
+    cross_check::CrossChecker,
     engine::{RangeCacheMemoryEngineCore, SkiplistHandle},
     keys::{
         decode_key, encode_key, encode_key_for_boundary_with_mvcc, encoding_for_filter,
@@ -49,7 +50,7 @@ use crate::{
         LabelRule, RegionLabelChangedCallback, RegionLabelRulesManager, RegionLabelServiceBuilder,
     },
     write_batch::RangeCacheWriteBatchEntry,
-    RangeCacheEngineConfig,
+    RangeCacheEngineConfig, RangeCacheMemoryEngine,
 };
 
 // 5 seconds should be long enough for getting a TSO from PD.
@@ -58,7 +59,7 @@ const TIMTOUT_FOR_TSO: Duration = Duration::from_secs(5);
 /// Try to extract the key and `u64` timestamp from `encoded_key`.
 ///
 /// See also: [`txn_types::Key::split_on_ts_for`]
-fn split_ts(key: &[u8]) -> Result<(&[u8], u64), String> {
+pub(crate) fn split_ts(key: &[u8]) -> Result<(&[u8], u64), String> {
     match Key::split_on_ts_for(key) {
         Ok((key, ts)) => Ok((key, ts.into_inner())),
         Err(_) => Err(format!(
@@ -68,7 +69,7 @@ fn split_ts(key: &[u8]) -> Result<(&[u8], u64), String> {
     }
 }
 
-fn parse_write(value: &[u8]) -> Result<WriteRef<'_>, String> {
+pub(crate) fn parse_write(value: &[u8]) -> Result<WriteRef<'_>, String> {
     match WriteRef::parse(value) {
         Ok(write) => Ok(write),
         Err(_) => Err(format!(
@@ -85,6 +86,14 @@ pub enum BackgroundTask {
     DeleteRegions(Vec<CacheRegion>),
     TopRegionsLoadEvict,
     CleanLockTombstone(u64),
+    TurnOnCrossCheck(
+        (
+            RangeCacheMemoryEngine,
+            RocksEngine,
+            Arc<dyn PdClient>,
+            Duration,
+        ),
+    ),
     SetRocksEngine(RocksEngine),
     CheckLoadPendingRegions(Scheduler<BackgroundTask>),
 }
@@ -103,6 +112,7 @@ impl fmt::Display for BackgroundTask {
                 .debug_struct("CleanLockTombstone")
                 .field("seqno", r)
                 .finish(),
+            BackgroundTask::TurnOnCrossCheck(_) => f.debug_struct("TurnOnCrossCheck").finish(),
             BackgroundTask::SetRocksEngine(_) => f.debug_struct("SetDiskEngine").finish(),
             BackgroundTask::CheckLoadPendingRegions(_) => {
                 f.debug_struct("CheckLoadPendingRegions").finish()
@@ -237,19 +247,13 @@ impl BgWorkManager {
             core.clone(),
             memory_controller,
             region_info_provider.clone(),
-            &config,
+            config.clone(),
             pd_client.clone(),
             raft_casual_router,
         );
-        let config = config.value();
         let scheduler = worker.start_with_timer("ime-bg-runner", runner);
 
-        let (ticker, tx) = BgWorkManager::start_tick(
-            scheduler.clone(),
-            pd_client,
-            config.gc_interval.0,
-            config.load_evict_interval.0,
-        );
+        let (ticker, tx) = BgWorkManager::start_tick(scheduler.clone(), pd_client, config.clone());
 
         Self {
             worker,
@@ -341,8 +345,7 @@ impl BgWorkManager {
     fn start_tick(
         scheduler: Scheduler<BackgroundTask>,
         pd_client: Arc<dyn PdClient>,
-        gc_interval: Duration,
-        load_evict_interval: Duration,
+        config: Arc<VersionTrack<RangeCacheEngineConfig>>,
     ) -> (Worker, Sender<bool>) {
         let (tx, rx) = bounded(0);
         // TODO: Instead of spawning a new thread, we should run this task
@@ -361,9 +364,11 @@ impl BgWorkManager {
             Duration::from_secs(5)
         })();
         ticker.spawn_interval_task(interval, move || {
-            let gc_ticker = tick(gc_interval);
-            let load_evict_ticker = tick(load_evict_interval); // TODO (afeinberg): Use a real value.
-            let tso_timeout = std::cmp::min(gc_interval, TIMTOUT_FOR_TSO);
+            let mut gc_interval = config.value().gc_interval.0;
+            let mut gc_ticker = tick(gc_interval);
+            let mut load_evict_interval = config.value().load_evict_interval.0;
+            let mut load_evict_ticker = tick(load_evict_interval);
+            let mut tso_timeout = std::cmp::min(gc_interval, TIMTOUT_FOR_TSO);
             let check_pending_region_ticker = tick(check_load_pending_interval);
             'LOOP: loop {
                 select! {
@@ -387,6 +392,17 @@ impl BgWorkManager {
                                 "err" => ?e,
                             );
                         }
+                        let cur_gc_interval = config.value().gc_interval.0;
+                        if cur_gc_interval != gc_interval {
+                            tso_timeout = std::cmp::min(gc_interval, TIMTOUT_FOR_TSO);
+                            info!(
+                                "ime gc-interval changed";
+                                "from" => ?gc_interval,
+                                "to" => ?cur_gc_interval,
+                            );
+                            gc_interval = cur_gc_interval;
+                            gc_ticker = tick(gc_interval);
+                        }
                     },
                     recv(load_evict_ticker) -> _ => {
                         if let Err(e) = scheduler.schedule(BackgroundTask::TopRegionsLoadEvict) {
@@ -394,6 +410,16 @@ impl BgWorkManager {
                                 "ime schedule load evict failed";
                                 "err" => ?e,
                             );
+                        }
+                        let cur_load_evict_interval = config.value().load_evict_interval.0;
+                        if cur_load_evict_interval != load_evict_interval {
+                            info!(
+                                "ime load-evict-interval changed";
+                                "from" => ?load_evict_interval,
+                                "to" => ?cur_load_evict_interval,
+                            );
+                            load_evict_interval = cur_load_evict_interval;
+                            load_evict_ticker = tick(load_evict_interval);
                         }
                     },
                     recv(check_pending_region_ticker) -> _ => {
@@ -726,7 +752,7 @@ impl BackgroundRunnerCore {
                 .memory_controller
                 .soft_limit_threshold()
                 .saturating_sub(self.memory_controller.mem_usage()))
-                / range_stats_manager.expected_region_size;
+                / range_stats_manager.expected_region_size();
             let expected_new_count = usize::max(expected_new_count, 1);
             let mut regions_map = self.engine.region_manager().regions_map.write();
             for region in regions_to_load.into_iter().take(expected_new_count) {
@@ -759,8 +785,8 @@ pub(crate) fn flush_epoch() {
 pub struct BackgroundRunner {
     core: BackgroundRunnerCore,
 
+    config: Arc<VersionTrack<RangeCacheEngineConfig>>,
     pd_client: Arc<dyn PdClient>,
-    gc_interval: Duration,
 
     // We have following four separate workers so that each type of task would not block each
     // others
@@ -781,6 +807,8 @@ pub struct BackgroundRunner {
     lock_cleanup_remote: Remote<yatp::task::future::TaskCell>,
     lock_cleanup_worker: Worker,
 
+    cross_check_worker: Option<Worker>,
+
     // The last sequence number for the lock cf tombstone cleanup
     last_seqno: u64,
     // RocksEngine is used to get the oldest snapshot sequence number.
@@ -795,6 +823,9 @@ impl Drop for BackgroundRunner {
         self.gc_range_worker.stop();
         self.load_evict_worker.stop();
         self.lock_cleanup_worker.stop();
+        if let Some(cross_check_worker) = self.cross_check_worker.take() {
+            cross_check_worker.stop()
+        };
     }
 }
 
@@ -803,11 +834,10 @@ impl BackgroundRunner {
         engine: Arc<RangeCacheMemoryEngineCore>,
         memory_controller: Arc<MemoryController>,
         region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
-        config: &Arc<VersionTrack<RangeCacheEngineConfig>>,
+        config: Arc<VersionTrack<RangeCacheEngineConfig>>,
         pd_client: Arc<dyn PdClient>,
         raft_casual_router: Option<Box<dyn CasualRouter<RocksEngine>>>,
     ) -> (Self, Scheduler<BackgroundTask>) {
-        let config = config.value();
         let range_load_worker = Builder::new("ime-load")
             // Range load now is implemented sequentially, so we must use exactly one thread to handle it.
             // todo(SpadeA): if the load speed is a bottleneck, we may consider to use multiple threads to load ranges.
@@ -832,13 +862,10 @@ impl BackgroundRunner {
         let load_evict_worker = Worker::new("ime-evict");
         let load_evict_remote = load_evict_worker.remote();
 
-        let expected_region_size = config.expected_region_size();
         let range_stats_manager = region_info_provider.map(|region_info_provider| {
             RangeStatsManager::new(
+                config.clone(),
                 DEFAULT_EVICT_MIN_DURATION,
-                expected_region_size,
-                config.mvcc_amplification_threshold,
-                config.load_evict_interval.0,
                 region_info_provider,
             )
         });
@@ -850,7 +877,7 @@ impl BackgroundRunner {
                     range_stats_manager,
                 },
                 pd_client,
-                gc_interval: config.gc_interval.0,
+                config,
                 range_load_worker,
                 range_load_remote,
                 delete_range_worker,
@@ -861,6 +888,7 @@ impl BackgroundRunner {
                 load_evict_remote,
                 lock_cleanup_remote,
                 lock_cleanup_worker,
+                cross_check_worker: None,
                 last_seqno: 0,
                 rocks_engine: None,
                 raft_casual_router,
@@ -927,7 +955,7 @@ impl Runnable for BackgroundRunner {
                 let core = self.core.clone();
                 let delete_range_scheduler = self.delete_range_scheduler.clone();
                 let pd_client = self.pd_client.clone();
-                let gc_interval = self.gc_interval;
+                let gc_interval = self.config.value().gc_interval.0;
                 let f = async move {
                     fail::fail_point!("before_start_loading_region");
                     fail::fail_point!("on_start_loading_region");
@@ -1217,6 +1245,14 @@ impl Runnable for BackgroundRunner {
                 };
 
                 self.lock_cleanup_remote.spawn(f);
+            }
+            BackgroundTask::TurnOnCrossCheck((engine, rocks_engine, pd_client, check_interval)) => {
+                let cross_check_worker = Worker::new("cross-check-worker");
+                let cross_check_runner =
+                    CrossChecker::new(pd_client, engine, rocks_engine, check_interval);
+                let _ =
+                    cross_check_worker.start_with_timer("cross-check-runner", cross_check_runner);
+                self.cross_check_worker = Some(cross_check_worker);
             }
             BackgroundTask::CheckLoadPendingRegions(s) => {
                 if let Some(router) = &self.raft_casual_router
@@ -1979,7 +2015,7 @@ pub mod tests {
             engine.core.clone(),
             memory_controller.clone(),
             None,
-            &config,
+            config,
             Arc::new(MockPdClient {}),
             None,
         );
@@ -2054,7 +2090,7 @@ pub mod tests {
             engine.core.clone(),
             memory_controller.clone(),
             None,
-            &config,
+            config,
             Arc::new(MockPdClient {}),
             None,
         );
@@ -2215,7 +2251,7 @@ pub mod tests {
             engine.core.clone(),
             memory_controller.clone(),
             None,
-            &config,
+            config,
             Arc::new(MockPdClient {}),
             None,
         );
@@ -2233,7 +2269,7 @@ pub mod tests {
             engine.core.clone(),
             memory_controller.clone(),
             None,
-            &config,
+            config,
             Arc::new(MockPdClient {}),
             None,
         );
@@ -2280,7 +2316,7 @@ pub mod tests {
             engine.core.clone(),
             memory_controller.clone(),
             None,
-            &config,
+            config,
             Arc::new(MockPdClient {}),
             None,
         );
@@ -2379,7 +2415,7 @@ pub mod tests {
             engine.core.clone(),
             memory_controller,
             None,
-            &config,
+            config,
             Arc::new(MockPdClient {}),
             None,
         );
@@ -2528,7 +2564,7 @@ pub mod tests {
             engine.core.clone(),
             memory_controller,
             None,
-            &config,
+            config,
             Arc::new(MockPdClient {}),
             None,
         );
@@ -2677,7 +2713,7 @@ pub mod tests {
             engine.core.clone(),
             memory_controller,
             None,
-            &config,
+            config,
             Arc::new(MockPdClient {}),
             None,
         );
@@ -3112,17 +3148,18 @@ pub mod tests {
             }
         }
 
+        let mut config = RangeCacheEngineConfig::config_for_test();
+        config.gc_interval = ReadableDuration(Duration::from_millis(100));
+        config.load_evict_interval = ReadableDuration(Duration::from_millis(200));
+        let config = Arc::new(VersionTrack::new(config));
         let start_time = TimeStamp::compose(TimeStamp::physical_now(), 0);
         let (tx, pd_client_rx) = channel();
         let pd_client = Arc::new(MockPdClient { tx: Mutex::new(tx) });
-        let gc_interval = Duration::from_millis(100);
-        let load_evict_interval = Duration::from_millis(200);
         let (scheduler, mut rx) = dummy_scheduler();
-        let (ticker, stop) =
-            BgWorkManager::start_tick(scheduler, pd_client, gc_interval, load_evict_interval);
+        let (ticker, stop) = BgWorkManager::start_tick(scheduler, pd_client, config.clone());
 
         let Some(BackgroundTask::Gc(GcTask { safe_point })) =
-            rx.recv_timeout(10 * gc_interval).unwrap()
+            rx.recv_timeout(10 * config.value().gc_interval.0).unwrap()
         else {
             panic!("must be a GcTask");
         };

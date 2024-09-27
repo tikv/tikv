@@ -13,7 +13,7 @@ use prometheus::Histogram;
 use strum::EnumCount;
 use tikv_util::{
     debug,
-    resource_control::TaskPriority,
+    resource_control::{TaskPriority, DEFAULT_RESOURCE_GROUP_NAME},
     sys::{cpu_time::ProcessStat, SysQuota},
     time::Instant,
     warn,
@@ -137,6 +137,20 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         }
         self.last_adjust_time = now;
 
+        let mut background_util_limit = self
+            .resource_ctl
+            .get_resource_group(DEFAULT_RESOURCE_GROUP_NAME)
+            .map_or(0, |r| {
+                r.group.get_background_settings().get_utilization_limit()
+            });
+        if background_util_limit == 0 {
+            background_util_limit = 100;
+        }
+
+        BACKGROUND_TASK_RESOURCE_UTILITATION_VEC
+            .with_label_values(&["limit"])
+            .set(background_util_limit as i64);
+
         let mut background_groups: Vec<_> = self
             .resource_ctl
             .resource_groups
@@ -156,8 +170,18 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             return;
         }
 
-        self.do_adjust(ResourceType::Cpu, dur_secs, &mut background_groups);
-        self.do_adjust(ResourceType::Io, dur_secs, &mut background_groups);
+        self.do_adjust(
+            ResourceType::Cpu,
+            dur_secs,
+            background_util_limit,
+            &mut background_groups,
+        );
+        self.do_adjust(
+            ResourceType::Io,
+            dur_secs,
+            background_util_limit,
+            &mut background_groups,
+        );
 
         // clean up deleted group stats
         if self.prev_stats_by_group[0].len() != background_groups.len() {
@@ -173,6 +197,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         &mut self,
         resource_type: ResourceType,
         dur_secs: f64,
+        utilization_limit: u64,
         bg_group_stats: &mut [GroupStats],
     ) {
         let resource_stats = match self.resource_quota_getter.get_current_stats(resource_type) {
@@ -219,6 +244,12 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             }
         }
 
+        let background_util =
+            (background_consumed_total / resource_stats.total_quota * 100.0) as u64;
+        BACKGROUND_TASK_RESOURCE_UTILITATION_VEC
+            .with_label_values(&[resource_type.as_str()])
+            .set(background_util as i64);
+
         // fast path if process cpu is low
         let is_low_load = resource_stats.current_used <= (resource_stats.total_quota * 0.1);
         if is_low_load && !has_wait && self.is_last_time_low_load[resource_type as usize] {
@@ -226,6 +257,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         }
         self.is_last_time_low_load[resource_type as usize] = is_low_load;
 
+        let util_limit_percent = (utilization_limit as f64 / 100.0).min(1.0);
         // the available resource for background tasks is defined as:
         // (total_resource_quota - foreground_task_used). foreground_task_used
         // resource is calculated by: (resource_current_total_used -
@@ -235,6 +267,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             - resource_stats.current_used
             + background_consumed_total)
             * 0.8)
+            .min(resource_stats.total_quota * util_limit_percent)
             .max(resource_stats.total_quota * 0.1);
         let mut total_expected_cost = 0.0;
         for g in bg_group_stats.iter_mut() {
@@ -386,7 +419,7 @@ impl<R: ResourceStatsProvider> PriorityLimiterAdjustWorker<R> {
             }
         };
 
-        if process_cpu_stats.current_used < process_cpu_stats.total_quota * 0.5 {
+        if process_cpu_stats.current_used < process_cpu_stats.total_quota * 0.3 {
             if self.is_last_low_cpu {
                 return;
             }
@@ -405,10 +438,10 @@ impl<R: ResourceStatsProvider> PriorityLimiterAdjustWorker<R> {
         }
         self.is_last_low_cpu = false;
 
-        let total_reqs: u64 = stats.iter().map(|s| s.req_count).sum();
-        let max_reqs = stats.iter().map(|s| s.req_count).max().unwrap();
+        let total_cpus: f64 = stats.iter().map(|s| s.cpu_secs).sum();
+        let max_cpus = stats.iter().map(|s| s.cpu_secs).fold(0.0, f64::max);
         // there is only 1 active priority, do not restrict.
-        if total_reqs * 99 / 100 <= max_reqs {
+        if total_cpus * 0.99 <= max_cpus {
             self.trackers
                 .iter()
                 .skip(1)
@@ -422,7 +455,15 @@ impl<R: ResourceStatsProvider> PriorityLimiterAdjustWorker<R> {
 
         let cpu_duration: [_; TaskPriority::PRIORITY_COUNT] = array::from_fn(|i| stats[i].cpu_secs);
         let real_cpu_total: f64 = cpu_duration.iter().sum();
-        let expect_pool_cpu_total = real_cpu_total * (process_cpu_stats.total_quota * 0.95)
+
+        let available_quota_percentage = self
+            .resource_ctl
+            .get_config()
+            .value()
+            .priority_ctl_strategy
+            .to_resource_util_percentage();
+        let expect_pool_cpu_total = real_cpu_total
+            * (process_cpu_stats.total_quota * available_quota_percentage)
             / process_cpu_stats.current_used;
         let mut limits = [0.0; 2];
         let level_expected: [_; TaskPriority::PRIORITY_COUNT] =
@@ -431,7 +472,7 @@ impl<R: ResourceStatsProvider> PriorityLimiterAdjustWorker<R> {
         let mut expect_cpu_time_total = expect_pool_cpu_total - level_expected[0];
 
         // still reserve a minimal cpu quota
-        let minimal_quota = process_cpu_stats.total_quota / MICROS_PER_SEC * 0.05;
+        let minimal_quota = process_cpu_stats.total_quota / MICROS_PER_SEC * 0.1;
         for i in 1..self.trackers.len() {
             if expect_cpu_time_total < minimal_quota {
                 expect_cpu_time_total = minimal_quota;
@@ -461,8 +502,6 @@ struct LimiterStats {
     cpu_secs: f64,
     // QuotaLimiter waited secs in total.
     wait_secs: f64,
-    // the total number of tasks that are scheduled.
-    req_count: u64,
 }
 
 struct HistogramTracker {
@@ -533,7 +572,6 @@ impl PriorityLimiterStatsTracker {
             cpu_secs: stats_delta.total_consumed as f64 / MICROS_PER_SEC,
             wait_secs: stats_delta.total_wait_dur_us as f64 / MICROS_PER_SEC
                 + normed_schedule_wait_dur_secs,
-            req_count: stats_delta.request_count,
         }
     }
 }
@@ -929,6 +967,7 @@ mod tests {
                 .set_rate_limit(f64::INFINITY);
         };
 
+        #[track_caller]
         fn check(val: f64, expected: f64) {
             assert!(
                 (val.is_infinite() && expected.is_infinite())
@@ -982,7 +1021,7 @@ mod tests {
             priority_limiters[1].consume(Duration::from_millis(400), IoBytes::default(), true);
         }
         worker.adjust();
-        check_limiter(f64::INFINITY, 5.2, 1.2);
+        check_limiter(f64::INFINITY, 3.2, 0.8);
 
         reset_quota(&mut worker, 6.4);
         for _i in 0..100 {
@@ -990,7 +1029,7 @@ mod tests {
             priority_limiters[1].consume(Duration::from_millis(200), IoBytes::default(), true);
         }
         worker.adjust();
-        check_limiter(f64::INFINITY, 2.6, 0.6);
+        check_limiter(f64::INFINITY, 1.6, 0.8);
 
         reset_quota(&mut worker, 6.4);
         for _i in 0..100 {
@@ -1006,7 +1045,7 @@ mod tests {
             priority_limiters[2].consume(Duration::from_millis(320), IoBytes::default(), true);
         }
         worker.adjust();
-        check_limiter(f64::INFINITY, 5.2, 2.8);
+        check_limiter(f64::INFINITY, 3.2, 0.8);
 
         reset_quota(&mut worker, 6.0);
         for _i in 0..100 {
@@ -1014,12 +1053,12 @@ mod tests {
             priority_limiters[2].consume(Duration::from_millis(360), IoBytes::default(), true);
         }
         worker.adjust();
-        check_limiter(f64::INFINITY, 5.2, 5.2);
+        check_limiter(f64::INFINITY, 3.2, 3.2);
 
         // duration too small, unchanged.
         worker.resource_quota_getter.cpu_used = 6.0;
         worker.last_adjust_time = Instant::now_coarse() - Duration::from_millis(500);
         worker.adjust();
-        check_limiter(f64::INFINITY, 5.2, 5.2);
+        check_limiter(f64::INFINITY, 3.2, 3.2);
     }
 }
