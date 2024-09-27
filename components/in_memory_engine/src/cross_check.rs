@@ -4,7 +4,7 @@ use std::{fmt::Display, sync::Arc, time::Duration};
 
 use engine_rocks::{RocksEngine, RocksEngineIterator, RocksSnapshot};
 use engine_traits::{
-    iter_option, CacheRegion, Iterable, Iterator, KvEngine, Peekable, RangeCacheEngine,
+    iter_option, CacheRegion, Iterable, Iterator, KvEngine, Peekable, RegionCacheEngine,
     SnapshotMiscExt, CF_LOCK, CF_WRITE,
 };
 use pd_client::PdClient;
@@ -18,8 +18,8 @@ use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 
 use crate::{
     background::{parse_write, split_ts},
-    read::{RangeCacheIterator, RangeCacheSnapshot},
-    RangeCacheMemoryEngine, RegionState,
+    read::{RegionCacheIterator, RegionCacheSnapshot},
+    RegionCacheMemoryEngine, RegionState,
 };
 
 #[derive(Debug)]
@@ -41,7 +41,7 @@ impl Display for CrossCheckTask {
 // in the in-memory engine, check the validity.
 pub(crate) struct CrossChecker {
     pd_client: Arc<dyn PdClient>,
-    memory_engine: RangeCacheMemoryEngine,
+    memory_engine: RegionCacheMemoryEngine,
     rocks_engine: RocksEngine,
     interval: Duration,
 }
@@ -49,7 +49,7 @@ pub(crate) struct CrossChecker {
 impl CrossChecker {
     pub(crate) fn new(
         pd_client: Arc<dyn PdClient>,
-        memory_engine: RangeCacheMemoryEngine,
+        memory_engine: RegionCacheMemoryEngine,
         rocks_engine: RocksEngine,
         interval: Duration,
     ) -> CrossChecker {
@@ -61,7 +61,7 @@ impl CrossChecker {
         }
     }
 
-    fn cross_check_range(&self, range_snap: &RangeCacheSnapshot, rocks_snap: &RocksSnapshot) {
+    fn cross_check_range(&self, range_snap: &RegionCacheSnapshot, rocks_snap: &RocksSnapshot) {
         info!(
             "cross check region";
             "region" => ?range_snap.snapshot_meta().region,
@@ -123,7 +123,7 @@ impl CrossChecker {
                 );
             }
 
-            let check_default = |iter: &RangeCacheIterator| {
+            let check_default = |iter: &RegionCacheIterator| {
                 let write = WriteRef::parse(iter.value()).unwrap();
                 if write.write_type == WriteType::Put && write.short_value.is_none() {
                     let start_ts = write.start_ts;
@@ -315,11 +315,11 @@ impl CrossChecker {
     #[allow(clippy::collapsible_if)]
     fn check_with_key_in_disk_iter(
         cf: &str,
-        mem_iter: &RangeCacheIterator,
+        mem_iter: &RegionCacheIterator,
         disk_iter: &mut RocksEngineIterator,
         next_fisrt: bool,
         safe_point: &mut u64,
-        engine: &RangeCacheMemoryEngine,
+        engine: &RegionCacheMemoryEngine,
         cached_region: &CacheRegion,
         prev_key_info: &mut KeyCheckingInfo,
         cur_key_info: &mut KeyCheckingInfo,
@@ -553,12 +553,12 @@ impl CrossChecker {
         cf: &&str,
         cached_region: &CacheRegion,
         safe_point: &mut u64,
-        mem_iter: &RangeCacheIterator,
+        mem_iter: &RegionCacheIterator,
         disk_iter: &mut RocksEngineIterator,
         prev_key_info: &mut KeyCheckingInfo,
         last_disk_user_key: &mut Vec<u8>,
         last_disk_user_key_delete: &mut bool,
-        engine: &RangeCacheMemoryEngine,
+        engine: &RegionCacheMemoryEngine,
     ) -> bool {
         while disk_iter.valid().unwrap() {
             // IME and rocks enigne should have the same data view for CF_LOCK
@@ -644,7 +644,7 @@ impl CrossChecker {
     fn check_duplicated_mvcc_version_for_last_user_key(
         cf: &str,
         cached_region: &CacheRegion,
-        mem_iter: &RangeCacheIterator,
+        mem_iter: &RegionCacheIterator,
         write: &WriteRef<'_>,
         safe_point: &mut u64,
         disk_key: &[u8],
@@ -653,7 +653,7 @@ impl CrossChecker {
         prev_key_info: &mut KeyCheckingInfo,
         last_disk_user_key: &mut Vec<u8>,
         last_disk_user_key_delete: &mut bool,
-        engine: &RangeCacheMemoryEngine,
+        engine: &RegionCacheMemoryEngine,
     ) -> bool {
         if write.write_type == WriteType::Rollback || write.write_type == WriteType::Lock {
             info!(
@@ -894,7 +894,7 @@ mod tests {
 
     use engine_rocks::{util::new_engine_opt, RocksDbOptions, RocksWriteBatchVec};
     use engine_traits::{
-        CacheRegion, KvEngine, Mutable, RangeCacheEngine, WriteBatch, WriteBatchExt, CF_DEFAULT,
+        CacheRegion, KvEngine, Mutable, RegionCacheEngine, WriteBatch, WriteBatchExt, CF_DEFAULT,
         CF_LOCK, CF_WRITE,
     };
     use futures::future::ready;
@@ -910,8 +910,8 @@ mod tests {
     use txn_types::{Key, TimeStamp, Write, WriteType};
 
     use crate::{
-        cross_check::CrossChecker, RangeCacheEngineConfig, RangeCacheEngineContext,
-        RangeCacheMemoryEngine, RangeCacheWriteBatch,
+        cross_check::CrossChecker, InMemoryEngineConfig, InMemoryEngineContext,
+        RegionCacheMemoryEngine, RegionCacheWriteBatch,
     };
 
     #[derive(Clone)]
@@ -942,11 +942,11 @@ mod tests {
 
     fn cross_check<F>(prepare_data: F)
     where
-        F: FnOnce(&mut RangeCacheWriteBatch, &mut RocksWriteBatchVec),
+        F: FnOnce(&mut RegionCacheWriteBatch, &mut RocksWriteBatchVec),
     {
-        let mut engine = RangeCacheMemoryEngine::with_region_info_provider(
-            RangeCacheEngineContext::new_for_tests(Arc::new(VersionTrack::new(
-                RangeCacheEngineConfig::config_for_test(),
+        let mut engine = RegionCacheMemoryEngine::with_region_info_provider(
+            InMemoryEngineContext::new_for_tests(Arc::new(VersionTrack::new(
+                InMemoryEngineConfig::config_for_test(),
             ))),
             Some(Arc::new(MockRegionInfoProvider {})),
             None,

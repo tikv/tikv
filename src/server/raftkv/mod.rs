@@ -25,6 +25,7 @@ use concurrency_manager::ConcurrencyManager;
 use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot};
 use futures::{future::BoxFuture, task::AtomicWaker, Future, Stream, StreamExt, TryFutureExt};
 use hybrid_engine::HybridEngineSnapshot;
+use in_memory_engine::RegionCacheMemoryEngine;
 use kvproto::{
     errorpb,
     kvrpcpb::{Context, IsolationLevel},
@@ -49,7 +50,6 @@ use raftstore::{
         ReadIndexContext, ReadResponse, RegionSnapshot, StoreMsg, WriteResponse,
     },
 };
-use range_cache_memory_engine::RangeCacheMemoryEngine;
 use thiserror::Error;
 use tikv_kv::{write_modifies, OnAppliedCb, WriteEvent};
 use tikv_util::{
@@ -603,14 +603,14 @@ where
         self.router.release_snapshot_cache();
     }
 
-    type IMSnap = RegionSnapshot<HybridEngineSnapshot<E, RangeCacheMemoryEngine>>;
+    type IMSnap = RegionSnapshot<HybridEngineSnapshot<E, RegionCacheMemoryEngine>>;
     type IMSnapshotRes = impl Future<Output = kv::Result<Self::IMSnap>> + Send;
     fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes {
         async_snapshot(&mut self.router, ctx).map_ok(|region_snap| {
             // TODO: Remove replace_snapshot. Taking a snapshot and replacing it
             // with a new one is a bit confusing.
             // A better way to build an in-memory snapshot is to return
-            // `HybridEngineSnapshot<RegionSnapshot<E>, RangeCacheMemoryEngine>>;`
+            // `HybridEngineSnapshot<RegionSnapshot<E>, RegionCacheMemoryEngine>>;`
             // so the `replace_snapshot` can be removed.
             region_snap.replace_snapshot(move |disk_snap, pinned| {
                 HybridEngineSnapshot::from_observed_snapshot(disk_snap, pinned)
