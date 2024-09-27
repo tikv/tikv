@@ -20,8 +20,8 @@ use tikv_util::{config::VersionTrack, info, smoother::Smoother, worker::Schedule
 use tokio::sync::mpsc;
 
 use crate::{
-    memory_controller::MemoryController, range_manager::AsyncFnOnce, BackgroundTask,
-    RangeCacheEngineConfig,
+    memory_controller::MemoryController, region_manager::AsyncFnOnce, BackgroundTask,
+    InMemoryEngineConfig,
 };
 
 /// Do not evict a region if has been cached for less than this duration.
@@ -32,8 +32,8 @@ const MVCC_AMPLIFICATION_FILTER_FACTOR: f64 = 10.0;
 const ITERATED_COUNT_FILTER_FACTOR: usize = 20;
 
 #[derive(Clone)]
-pub(crate) struct RangeStatsManager {
-    config: Arc<VersionTrack<RangeCacheEngineConfig>>,
+pub(crate) struct RegionStatsManager {
+    config: Arc<VersionTrack<InMemoryEngineConfig>>,
     info_provider: Arc<dyn RegionInfoProvider>,
     checking_top_regions: Arc<AtomicBool>,
     region_loaded_at: Arc<ShardedLock<BTreeMap<u64, Instant>>>,
@@ -48,7 +48,7 @@ pub(crate) struct RangeStatsManager {
     last_load_evict_time: Arc<Mutex<Instant>>,
 }
 
-impl RangeStatsManager {
+impl RegionStatsManager {
     /// Creates a new RangeStatsManager that retrieves state from
     /// `info_provider`.
     ///
@@ -57,11 +57,11 @@ impl RangeStatsManager {
     /// * `evict_min_duration` - do not evict regions that have been loaded for
     ///   less than this duration.
     pub fn new(
-        config: Arc<VersionTrack<RangeCacheEngineConfig>>,
+        config: Arc<VersionTrack<InMemoryEngineConfig>>,
         evict_min_duration: Duration,
         info_provider: Arc<dyn RegionInfoProvider>,
     ) -> Self {
-        RangeStatsManager {
+        RegionStatsManager {
             config,
             info_provider,
             checking_top_regions: Arc::new(AtomicBool::new(false)),
@@ -441,7 +441,7 @@ pub mod tests {
     };
 
     use super::*;
-    use crate::{engine::SkiplistEngine, test_util::new_region, RangeCacheEngineConfig};
+    use crate::{engine::SkiplistEngine, test_util::new_region, InMemoryEngineConfig};
 
     struct RegionInfoSimulator {
         regions: Mutex<TopRegions>,
@@ -509,7 +509,7 @@ pub mod tests {
     #[test]
     fn test_collect_changed_regions() {
         let skiplist_engine = SkiplistEngine::new();
-        let mut config = RangeCacheEngineConfig::config_for_test();
+        let mut config = InMemoryEngineConfig::config_for_test();
         config.stop_load_limit_threshold = Some(ReadableSize::kb(1));
         config.mvcc_amplification_threshold = 10;
         let config = Arc::new(VersionTrack::new(config));
@@ -522,7 +522,7 @@ pub mod tests {
             region_stats: Mutex::default(),
         });
         // 10 ms min duration eviction for testing purposes.
-        let rsm = RangeStatsManager::new(config, Duration::from_millis(10), sim.clone());
+        let rsm = RegionStatsManager::new(config, Duration::from_millis(10), sim.clone());
         let (added, removed) = rsm.collect_regions_to_load_and_evict(0, vec![], &mc);
         assert_eq!(&added, &[region_1.clone()]);
         assert!(removed.is_empty());
@@ -599,7 +599,7 @@ pub mod tests {
     #[test]
     fn test_collect_candidates_for_eviction() {
         let skiplist_engine = SkiplistEngine::new();
-        let mut config = RangeCacheEngineConfig::config_for_test();
+        let mut config = InMemoryEngineConfig::config_for_test();
         config.stop_load_limit_threshold = Some(ReadableSize::kb(1));
         config.mvcc_amplification_threshold = 10;
         let config = Arc::new(VersionTrack::new(config));
@@ -646,7 +646,7 @@ pub mod tests {
             region_stats: Mutex::new(region_stats),
         });
         // 10 ms min duration eviction for testing purposes.
-        let rsm = RangeStatsManager::new(config.clone(), Duration::from_millis(10), sim.clone());
+        let rsm = RegionStatsManager::new(config.clone(), Duration::from_millis(10), sim.clone());
         rsm.collect_regions_to_load_and_evict(0, vec![], &mc);
         std::thread::sleep(Duration::from_millis(100));
 
@@ -695,10 +695,10 @@ pub mod tests {
             regions: Mutex::new(vec![]),
             region_stats: Mutex::new(HashMap::default()),
         });
-        let mut config = RangeCacheEngineConfig::config_for_test();
+        let mut config = InMemoryEngineConfig::config_for_test();
         config.load_evict_interval = ReadableDuration(Duration::from_secs(120));
         let config = Arc::new(VersionTrack::new(config));
-        let mgr = RangeStatsManager::new(config, Duration::from_secs(120), sim);
+        let mgr = RegionStatsManager::new(config, Duration::from_secs(120), sim);
 
         // Interval is not enough
         assert!(!mgr.ready_for_auto_load_and_evict());

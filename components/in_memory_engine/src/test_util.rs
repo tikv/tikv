@@ -13,7 +13,7 @@ use crate::{
     engine::SkiplistHandle,
     keys::{encode_key, InternalBytes, ValueType},
     memory_controller::MemoryController,
-    write_batch::RangeCacheWriteBatchEntry,
+    write_batch::RegionCacheWriteBatchEntry,
 };
 
 // Put data with write cf and related start cf
@@ -100,7 +100,7 @@ fn put_data_impl(
     let mut val = InternalBytes::from_vec(write_v.as_ref().to_bytes());
     val.set_memory_controller(mem_controller.clone());
     let guard = &epoch::pin();
-    let _ = mem_controller.acquire(RangeCacheWriteBatchEntry::calc_put_entry_size(
+    let _ = mem_controller.acquire(RegionCacheWriteBatchEntry::calc_put_entry_size(
         &raw_write_k,
         val.as_bytes(),
     ));
@@ -122,7 +122,7 @@ fn put_data_impl(
         default_k.set_memory_controller(mem_controller.clone());
         let mut val = InternalBytes::from_vec(value.to_vec());
         val.set_memory_controller(mem_controller.clone());
-        let _ = mem_controller.acquire(RangeCacheWriteBatchEntry::calc_put_entry_size(
+        let _ = mem_controller.acquire(RegionCacheWriteBatchEntry::calc_put_entry_size(
             &raw_default_k,
             val.as_bytes(),
         ));

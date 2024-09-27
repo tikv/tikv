@@ -5,16 +5,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use engine_traits::{
     is_data_cf, CacheRegion, KvEngine, Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions,
 };
-use range_cache_memory_engine::{RangeCacheMemoryEngine, RangeCacheWriteBatch};
+use in_memory_engine::{RegionCacheMemoryEngine, RegionCacheWriteBatch};
 
 use crate::engine::HybridEngine;
 
 pub struct HybridEngineWriteBatch<EK: KvEngine> {
     disk_write_batch: EK::WriteBatch,
-    pub(crate) cache_write_batch: RangeCacheWriteBatch,
+    pub(crate) cache_write_batch: RegionCacheWriteBatch,
 }
 
-impl<EK> WriteBatchExt for HybridEngine<EK, RangeCacheMemoryEngine>
+impl<EK> WriteBatchExt for HybridEngine<EK, RegionCacheMemoryEngine>
 where
     EK: KvEngine,
 {
@@ -24,14 +24,14 @@ where
     fn write_batch(&self) -> Self::WriteBatch {
         HybridEngineWriteBatch {
             disk_write_batch: self.disk_engine().write_batch(),
-            cache_write_batch: self.range_cache_engine().write_batch(),
+            cache_write_batch: self.region_cache_engine().write_batch(),
         }
     }
 
     fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch {
         HybridEngineWriteBatch {
             disk_write_batch: self.disk_engine().write_batch_with_cap(cap),
-            cache_write_batch: self.range_cache_engine().write_batch_with_cap(cap),
+            cache_write_batch: self.region_cache_engine().write_batch_with_cap(cap),
         }
     }
 }
@@ -152,12 +152,10 @@ mod tests {
     use std::time::Duration;
 
     use engine_traits::{
-        CacheRegion, Mutable, Peekable, RangeCacheEngine, SnapshotContext, WriteBatch,
+        CacheRegion, Mutable, Peekable, RegionCacheEngine, SnapshotContext, WriteBatch,
         WriteBatchExt,
     };
-    use range_cache_memory_engine::{
-        test_util::new_region, RangeCacheEngineConfig, RangeCacheStatus,
-    };
+    use in_memory_engine::{test_util::new_region, InMemoryEngineConfig, RegionCacheStatus};
 
     use crate::util::hybrid_engine_for_tests;
 
@@ -167,7 +165,7 @@ mod tests {
         let region_clone = region.clone();
         let (_path, hybrid_engine) = hybrid_engine_for_tests(
             "temp",
-            RangeCacheEngineConfig::config_for_test(),
+            InMemoryEngineConfig::config_for_test(),
             move |memory_engine| {
                 let id = region_clone.id;
                 memory_engine.new_region(region_clone);
@@ -180,7 +178,7 @@ mod tests {
         write_batch.prepare_for_region(cache_region.clone());
         write_batch
             .cache_write_batch
-            .set_range_cache_status(RangeCacheStatus::Cached);
+            .set_region_cache_status(RegionCacheStatus::Cached);
         write_batch.put(b"zhello", b"world").unwrap();
         let seq = write_batch.write().unwrap();
         assert!(seq > 0);
@@ -196,7 +194,7 @@ mod tests {
         let actual: &[u8] = &snap.disk_snap().get_value(b"zhello").unwrap().unwrap();
         assert_eq!(b"world", &actual);
         let actual: &[u8] = &snap
-            .range_cache_snap()
+            .region_cache_snap()
             .unwrap()
             .get_value(b"zhello")
             .unwrap()
@@ -205,10 +203,10 @@ mod tests {
     }
 
     #[test]
-    fn test_range_cache_memory_engine() {
+    fn test_in_memory_engine() {
         let (_path, hybrid_engine) = hybrid_engine_for_tests(
             "temp",
-            RangeCacheEngineConfig::config_for_test(),
+            InMemoryEngineConfig::config_for_test(),
             |memory_engine| {
                 let region = new_region(1, b"k00", b"k10");
                 memory_engine.new_region(region);
@@ -241,7 +239,7 @@ mod tests {
         let region2_clone = region2.clone();
         let (_path, hybrid_engine) = hybrid_engine_for_tests(
             "temp",
-            RangeCacheEngineConfig::config_for_test(),
+            InMemoryEngineConfig::config_for_test(),
             move |memory_engine| {
                 memory_engine.new_region(region1_clone);
                 memory_engine.new_region(region2_clone);
@@ -259,17 +257,17 @@ mod tests {
         wb.write().unwrap();
 
         hybrid_engine
-            .range_cache_engine()
+            .region_cache_engine()
             .snapshot(cache_region1.clone(), 1000, 1000)
             .unwrap();
         hybrid_engine
-            .range_cache_engine()
+            .region_cache_engine()
             .snapshot(cache_region2.clone(), 1000, 1000)
             .unwrap();
         assert_eq!(
             4,
             hybrid_engine
-                .range_cache_engine()
+                .region_cache_engine()
                 .core()
                 .engine()
                 .cf_handle("default")
@@ -285,14 +283,14 @@ mod tests {
         wb.write().unwrap();
 
         hybrid_engine
-            .range_cache_engine()
+            .region_cache_engine()
             .snapshot(cache_region1.clone(), 1000, 1000)
             .unwrap_err();
         hybrid_engine
-            .range_cache_engine()
+            .region_cache_engine()
             .snapshot(cache_region2.clone(), 1000, 1000)
             .unwrap_err();
-        let m_engine = hybrid_engine.range_cache_engine();
+        let m_engine = hybrid_engine.region_cache_engine();
 
         test_util::eventually(
             Duration::from_millis(100),
