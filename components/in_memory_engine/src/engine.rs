@@ -14,8 +14,8 @@ use crossbeam_skiplist::{
 };
 use engine_rocks::RocksEngine;
 use engine_traits::{
-    CacheRegion, EvictReason, FailedReason, IterOptions, Iterable, KvEngine, RangeCacheEngine,
-    RangeCacheEngineExt, RegionEvent, Result, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
+    CacheRegion, EvictReason, FailedReason, IterOptions, Iterable, KvEngine, RegionCacheEngine,
+    RegionCacheEngineExt, RegionEvent, Result, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
 use kvproto::metapb::Region;
 use pd_client::PdClient;
@@ -29,10 +29,12 @@ use crate::{
         encode_key_for_boundary_with_mvcc, encode_key_for_boundary_without_mvcc, InternalBytes,
     },
     memory_controller::MemoryController,
-    range_manager::{AsyncFnOnce, LoadFailedReason, RangeCacheStatus, RegionManager, RegionState},
-    read::{RangeCacheIterator, RangeCacheSnapshot},
+    read::{RegionCacheIterator, RegionCacheSnapshot},
+    region_manager::{
+        AsyncFnOnce, LoadFailedReason, RegionCacheStatus, RegionManager, RegionState,
+    },
     statistics::Statistics,
-    RangeCacheEngineConfig, RangeCacheEngineContext,
+    InMemoryEngineConfig, InMemoryEngineContext,
 };
 
 pub(crate) const CF_DEFAULT_USIZE: usize = 0;
@@ -114,7 +116,7 @@ impl SkiplistHandle {
     }
 }
 
-/// A single global set of skiplists shared by all cached ranges
+/// A single global set of skiplists shared by all cached regions
 #[derive(Clone)]
 pub struct SkiplistEngine {
     pub(crate) data: [Arc<SkipList<InternalBytes, InternalBytes>>; 3],
@@ -176,24 +178,24 @@ impl SkiplistEngine {
 
 impl Debug for SkiplistEngine {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Range Memory Engine")
+        write!(f, "Region Memory Engine")
     }
 }
 
-pub struct RangeCacheMemoryEngineCore {
+pub struct RegionCacheMemoryEngineCore {
     pub(crate) engine: SkiplistEngine,
     pub(crate) region_manager: RegionManager,
 }
 
-impl Default for RangeCacheMemoryEngineCore {
+impl Default for RegionCacheMemoryEngineCore {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl RangeCacheMemoryEngineCore {
-    pub fn new() -> RangeCacheMemoryEngineCore {
-        RangeCacheMemoryEngineCore {
+impl RegionCacheMemoryEngineCore {
+    pub fn new() -> RegionCacheMemoryEngineCore {
+        RegionCacheMemoryEngineCore {
             engine: SkiplistEngine::new(),
             region_manager: RegionManager::default(),
         }
@@ -208,31 +210,31 @@ impl RangeCacheMemoryEngineCore {
     }
 }
 
-/// The RangeCacheMemoryEngine serves as a range cache, storing hot ranges in
+/// The RegionCacheMemoryEngine serves as a region cache, storing hot regions in
 /// the leaders' store. Incoming writes that are written to disk engine (now,
-/// RocksDB) are also written to the RangeCacheMemoryEngine, leading to a
-/// mirrored data set in the cached ranges with the disk engine.
+/// RocksDB) are also written to the RegionCacheMemoryEngine, leading to a
+/// mirrored data set in the cached regions with the disk engine.
 ///
-/// A load/evict unit manages the memory, deciding which ranges should be
-/// evicted when the memory used by the RangeCacheMemoryEngine reaches a
-/// certain limit, and determining which ranges should be loaded when there is
+/// A load/evict unit manages the memory, deciding which regions should be
+/// evicted when the memory used by the RegionCacheMemoryEngine reaches a
+/// certain limit, and determining which regions should be loaded when there is
 /// spare memory capacity.
 ///
-/// The safe point lifetime differs between RangeCacheMemoryEngine and the disk
-/// engine, often being much shorter in RangeCacheMemoryEngine. This means that
-/// RangeCacheMemoryEngine may filter out some keys that still exist in the
+/// The safe point lifetime differs between RegionCacheMemoryEngine and the disk
+/// engine, often being much shorter in RegionCacheMemoryEngine. This means that
+/// RegionCacheMemoryEngine may filter out some keys that still exist in the
 /// disk engine, thereby improving read performance as fewer duplicated keys
 /// will be read. If there's a need to read keys that may have been filtered by
-/// RangeCacheMemoryEngine (as indicated by read_ts and safe_point of the
+/// RegionCacheMemoryEngine (as indicated by read_ts and safe_point of the
 /// cached region), we resort to using a the disk engine's snapshot instead.
 #[derive(Clone)]
-pub struct RangeCacheMemoryEngine {
+pub struct RegionCacheMemoryEngine {
     bg_work_manager: Arc<BgWorkManager>,
-    pub(crate) core: Arc<RangeCacheMemoryEngineCore>,
+    pub(crate) core: Arc<RegionCacheMemoryEngineCore>,
     pub(crate) rocks_engine: Option<RocksEngine>,
     memory_controller: Arc<MemoryController>,
     statistics: Arc<Statistics>,
-    config: Arc<VersionTrack<RangeCacheEngineConfig>>,
+    config: Arc<VersionTrack<InMemoryEngineConfig>>,
 
     // The increment amount of tombstones in the lock cf.
     // When reaching to the threshold, a CleanLockTombstone task will be scheduled to clean lock cf
@@ -240,24 +242,24 @@ pub struct RangeCacheMemoryEngine {
     pub(crate) lock_modification_bytes: Arc<AtomicU64>,
 }
 
-impl RangeCacheMemoryEngine {
-    pub fn new(range_cache_engine_context: RangeCacheEngineContext) -> Self {
-        RangeCacheMemoryEngine::with_region_info_provider(range_cache_engine_context, None)
+impl RegionCacheMemoryEngine {
+    pub fn new(in_memory_engine_context: InMemoryEngineContext) -> Self {
+        RegionCacheMemoryEngine::with_region_info_provider(in_memory_engine_context, None)
     }
 
     pub fn with_region_info_provider(
-        range_cache_engine_context: RangeCacheEngineContext,
+        in_memory_engine_context: InMemoryEngineContext,
         region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
     ) -> Self {
-        info!("ime init range cache memory engine");
-        let core = Arc::new(RangeCacheMemoryEngineCore::new());
+        info!("ime init region cache memory engine");
+        let core = Arc::new(RegionCacheMemoryEngineCore::new());
         let skiplist_engine = core.engine().clone();
 
-        let RangeCacheEngineContext {
+        let InMemoryEngineContext {
             config,
             statistics,
             pd_client,
-        } = range_cache_engine_context;
+        } = in_memory_engine_context;
         assert!(config.value().enabled);
         let memory_controller = Arc::new(MemoryController::new(config.clone(), skiplist_engine));
 
@@ -307,7 +309,7 @@ impl RangeCacheMemoryEngine {
             .region_manager
             .evict_region(region, evict_reason, cb);
         if !deleteable_regions.is_empty() {
-            // The range can be deleted directly.
+            // The region can be deleted directly.
             if let Err(e) = self
                 .bg_worker_manager()
                 .schedule_task(BackgroundTask::DeleteRegions(deleteable_regions))
@@ -321,29 +323,29 @@ impl RangeCacheMemoryEngine {
         }
     }
 
-    // It handles the pending range and check whether to buffer write for this
-    // range.
-    pub(crate) fn prepare_for_apply(&self, region: &CacheRegion) -> RangeCacheStatus {
+    // It handles the pending region and check whether to buffer write for this
+    // region.
+    pub(crate) fn prepare_for_apply(&self, region: &CacheRegion) -> RegionCacheStatus {
         let manager = self.core.region_manager();
         if !manager.is_active() {
-            return RangeCacheStatus::NotInCache;
+            return RegionCacheStatus::NotInCache;
         }
 
         // fast path, only need to hold the read lock.
         {
             let regions_map = manager.regions_map.read();
             let Some(region_meta) = regions_map.region_meta(region.id) else {
-                return RangeCacheStatus::NotInCache;
+                return RegionCacheStatus::NotInCache;
             };
             let state = region_meta.get_state();
             if state == RegionState::Active {
                 region_meta.set_being_written();
-                return RangeCacheStatus::Cached;
+                return RegionCacheStatus::Cached;
             } else if state.is_evict() {
-                return RangeCacheStatus::NotInCache;
+                return RegionCacheStatus::NotInCache;
             } else if state == RegionState::Loading {
                 region_meta.set_being_written();
-                return RangeCacheStatus::Loading;
+                return RegionCacheStatus::Loading;
             }
         }
 
@@ -351,7 +353,7 @@ impl RangeCacheMemoryEngine {
         let mut regions_map = manager.regions_map.write();
         let cached_count = regions_map.regions().len();
         let Some(mut region_meta) = regions_map.mut_region_meta(region.id) else {
-            return RangeCacheStatus::NotInCache;
+            return RegionCacheStatus::NotInCache;
         };
 
         if region_meta.get_region().epoch_version < region.epoch_version {
@@ -370,7 +372,7 @@ impl RangeCacheMemoryEngine {
                 info!("ime remove outdated pending region";
                     "pending_region" => ?meta.get_region(),
                     "new_region" => ?region);
-                return RangeCacheStatus::NotInCache;
+                return RegionCacheStatus::NotInCache;
             }
         }
 
@@ -386,13 +388,13 @@ impl RangeCacheMemoryEngine {
             region_state = RegionState::Loading;
         }
 
-        let mut result = RangeCacheStatus::NotInCache;
+        let mut result = RegionCacheStatus::NotInCache;
         if region_state == RegionState::Loading || region_state == RegionState::Active {
             region_meta.set_being_written();
             if region_state == RegionState::Active {
-                result = RangeCacheStatus::Cached;
+                result = RegionCacheStatus::Cached;
             } else {
-                result = RangeCacheStatus::Loading;
+                result = RegionCacheStatus::Loading;
             }
         }
         drop(regions_map);
@@ -457,20 +459,20 @@ impl RangeCacheMemoryEngine {
     }
 }
 
-impl RangeCacheMemoryEngine {
-    pub fn core(&self) -> &Arc<RangeCacheMemoryEngineCore> {
+impl RegionCacheMemoryEngine {
+    pub fn core(&self) -> &Arc<RegionCacheMemoryEngineCore> {
         &self.core
     }
 }
 
-impl Debug for RangeCacheMemoryEngine {
+impl Debug for RegionCacheMemoryEngine {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Range Cache Memory Engine")
+        write!(f, "Region Cache Memory Engine")
     }
 }
 
-impl RangeCacheEngine for RangeCacheMemoryEngine {
-    type Snapshot = RangeCacheSnapshot;
+impl RegionCacheEngine for RegionCacheMemoryEngine {
+    type Snapshot = RegionCacheSnapshot;
 
     fn snapshot(
         &self,
@@ -478,7 +480,7 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
         read_ts: u64,
         seq_num: u64,
     ) -> result::Result<Self::Snapshot, FailedReason> {
-        RangeCacheSnapshot::new(self.clone(), region, read_ts, seq_num)
+        RegionCacheSnapshot::new(self.clone(), region, read_ts, seq_num)
     }
 
     type DiskEngine = RocksEngine;
@@ -511,7 +513,7 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
     }
 }
 
-impl RangeCacheEngineExt for RangeCacheMemoryEngine {
+impl RegionCacheEngineExt for RegionCacheMemoryEngine {
     fn on_region_event(&self, event: RegionEvent) {
         match event {
             RegionEvent::Eviction { region, reason } => {
@@ -590,12 +592,12 @@ impl RangeCacheEngineExt for RangeCacheMemoryEngine {
     }
 }
 
-impl Iterable for RangeCacheMemoryEngine {
-    type Iterator = RangeCacheIterator;
+impl Iterable for RegionCacheMemoryEngine {
+    type Iterator = RegionCacheIterator;
 
     fn iterator_opt(&self, _: &str, _: IterOptions) -> Result<Self::Iterator> {
         // This engine does not support creating iterators directly by the engine.
-        panic!("iterator_opt is not supported on creating by RangeCacheMemoryEngine directly")
+        panic!("iterator_opt is not supported on creating by RegionCacheMemoryEngine directly")
     }
 }
 
@@ -606,7 +608,7 @@ pub mod tests {
     use crossbeam::epoch;
     use engine_rocks::util::new_engine;
     use engine_traits::{
-        CacheRegion, EvictReason, Mutable, RangeCacheEngine, RangeCacheEngineExt, RegionEvent,
+        CacheRegion, EvictReason, Mutable, RegionCacheEngine, RegionCacheEngineExt, RegionEvent,
         WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
     };
     use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
@@ -620,9 +622,9 @@ pub mod tests {
     use crate::{
         keys::{construct_key, construct_user_key, encode_key},
         memory_controller::MemoryController,
-        range_manager::{CacheRegionMeta, RegionManager, RegionState::*},
+        region_manager::{CacheRegionMeta, RegionManager, RegionState::*},
         test_util::new_region,
-        InternalBytes, RangeCacheEngineConfig, RangeCacheEngineContext, RangeCacheMemoryEngine,
+        InMemoryEngineConfig, InMemoryEngineContext, InternalBytes, RegionCacheMemoryEngine,
         ValueType,
     };
 
@@ -632,8 +634,8 @@ pub mod tests {
     }
     #[test]
     fn test_region_overlap_with_outdated_epoch() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
-            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(InMemoryEngineConfig::config_for_test()),
         )));
         let region1 = new_region(1, b"k1", b"k3");
         let cache_region1 = CacheRegion::from_region(&region1);
@@ -670,7 +672,7 @@ pub mod tests {
             let skiplist = SkiplistEngine::default();
             let handle = skiplist.cf_handle(cf);
 
-            let config = Arc::new(VersionTrack::new(RangeCacheEngineConfig {
+            let config = Arc::new(VersionTrack::new(InMemoryEngineConfig {
                 enabled: true,
                 gc_interval: Default::default(),
                 load_evict_interval: Default::default(),
@@ -728,7 +730,7 @@ pub mod tests {
         let skiplist = SkiplistEngine::default();
         let lock_handle = skiplist.cf_handle(CF_LOCK);
 
-        let config = Arc::new(VersionTrack::new(RangeCacheEngineConfig {
+        let config = Arc::new(VersionTrack::new(InMemoryEngineConfig {
             enabled: true,
             gc_interval: Default::default(),
             load_evict_interval: Default::default(),
@@ -775,8 +777,8 @@ pub mod tests {
 
     #[test]
     fn test_is_active() {
-        let mut engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(
-            Arc::new(VersionTrack::new(RangeCacheEngineConfig::config_for_test())),
+        let mut engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(
+            Arc::new(VersionTrack::new(InMemoryEngineConfig::config_for_test())),
         ));
         let path = tempfile::Builder::new()
             .prefix("test_is_active")
@@ -865,9 +867,9 @@ pub mod tests {
 
     #[test]
     fn test_cb_on_eviction_with_on_going_snapshot() {
-        let mut config = RangeCacheEngineConfig::config_for_test();
+        let mut config = InMemoryEngineConfig::config_for_test();
         config.gc_interval = ReadableDuration(Duration::from_secs(1));
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(config),
         )));
 

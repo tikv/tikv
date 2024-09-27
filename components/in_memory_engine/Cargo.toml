@@ -1,5 +1,5 @@
 [package]
-name = "range_cache_memory_engine"
+name = "in_memory_engine"
 version = "0.0.1"
 edition = "2021"
 publish = false

@@ -21,7 +21,7 @@ tikv_util = { workspace = true }
 engine_rocks = { workspace = true }
 log_wrappers = { workspace = true }
 online_config = { workspace = true }
-range_cache_memory_engine = { workspace = true }
+in_memory_engine = { workspace = true }
 slog = { workspace = true }
 slog-global = { workspace = true }
 tempfile = "3.0"
