@@ -26,26 +26,26 @@ mod metrics;
 mod perf_context;
 #[cfg(test)]
 mod prop_test;
-mod range_manager;
-mod range_stats;
 mod read;
 mod region_label;
+mod region_manager;
+mod region_stats;
 mod statistics;
 pub mod test_util;
 mod write_batch;
 
 pub use background::{BackgroundRunner, BackgroundTask, GcTask};
-pub use engine::{RangeCacheMemoryEngine, SkiplistHandle};
+pub use engine::{RegionCacheMemoryEngine, SkiplistHandle};
 pub use keys::{
     decode_key, encode_key_for_boundary_without_mvcc, encoding_for_filter, InternalBytes,
     InternalKey, ValueType,
 };
-pub use metrics::flush_range_cache_engine_statistics;
-pub use range_manager::{RangeCacheStatus, RegionState};
-pub use read::RangeCacheSnapshot;
-pub use statistics::Statistics as RangeCacheMemoryEngineStatistics;
+pub use metrics::flush_in_memory_engine_statistics;
+pub use read::RegionCacheSnapshot;
+pub use region_manager::{RegionCacheStatus, RegionState};
+pub use statistics::Statistics as InMemoryEngineStatistics;
 use txn_types::TimeStamp;
-pub use write_batch::RangeCacheWriteBatch;
+pub use write_batch::RegionCacheWriteBatch;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -55,14 +55,14 @@ pub enum Error {
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, OnlineConfig)]
 #[serde(default, rename_all = "kebab-case")]
-pub struct RangeCacheEngineConfig {
+pub struct InMemoryEngineConfig {
     pub enabled: bool,
     pub gc_interval: ReadableDuration,
     pub load_evict_interval: ReadableDuration,
     // TODO(SpadeA): ultimately we only expose one memory limit to user.
     // When memory usage reaches this amount, no further load will be performed.
     pub stop_load_limit_threshold: Option<ReadableSize>,
-    // When memory usage reaches this amount, we start to pick some ranges to evict.
+    // When memory usage reaches this amount, we start to pick some regions to evict.
     pub soft_limit_threshold: Option<ReadableSize>,
     pub hard_limit_threshold: Option<ReadableSize>,
     pub expected_region_size: Option<ReadableSize>,
@@ -75,7 +75,7 @@ pub struct RangeCacheEngineConfig {
     pub cross_check_interval: ReadableDuration,
 }
 
-impl Default for RangeCacheEngineConfig {
+impl Default for InMemoryEngineConfig {
     fn default() -> Self {
         Self {
             enabled: false,
@@ -92,7 +92,7 @@ impl Default for RangeCacheEngineConfig {
     }
 }
 
-impl RangeCacheEngineConfig {
+impl InMemoryEngineConfig {
     pub fn validate(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         if !self.enabled {
             return Ok(());
@@ -154,8 +154,8 @@ impl RangeCacheEngineConfig {
         )
     }
 
-    pub fn config_for_test() -> RangeCacheEngineConfig {
-        RangeCacheEngineConfig {
+    pub fn config_for_test() -> InMemoryEngineConfig {
+        InMemoryEngineConfig {
             enabled: true,
             gc_interval: ReadableDuration(Duration::from_secs(180)),
             load_evict_interval: ReadableDuration(Duration::from_secs(300)), /* Should run within
@@ -171,34 +171,32 @@ impl RangeCacheEngineConfig {
 }
 
 #[derive(Clone)]
-pub struct RangeCacheEngineContext {
-    config: Arc<VersionTrack<RangeCacheEngineConfig>>,
-    statistics: Arc<RangeCacheMemoryEngineStatistics>,
+pub struct InMemoryEngineContext {
+    config: Arc<VersionTrack<InMemoryEngineConfig>>,
+    statistics: Arc<InMemoryEngineStatistics>,
     pd_client: Arc<dyn PdClient>,
 }
 
-impl RangeCacheEngineContext {
+impl InMemoryEngineContext {
     pub fn new(
-        config: Arc<VersionTrack<RangeCacheEngineConfig>>,
+        config: Arc<VersionTrack<InMemoryEngineConfig>>,
         pd_client: Arc<dyn PdClient>,
-    ) -> RangeCacheEngineContext {
-        RangeCacheEngineContext {
+    ) -> InMemoryEngineContext {
+        InMemoryEngineContext {
             config,
             statistics: Arc::default(),
             pd_client,
         }
     }
 
-    pub fn new_for_tests(
-        config: Arc<VersionTrack<RangeCacheEngineConfig>>,
-    ) -> RangeCacheEngineContext {
+    pub fn new_for_tests(config: Arc<VersionTrack<InMemoryEngineConfig>>) -> InMemoryEngineContext {
         struct MockPdClient;
         impl PdClient for MockPdClient {
             fn get_tso(&self) -> pd_client::PdFuture<txn_types::TimeStamp> {
                 Box::pin(ready(Ok(TimeStamp::compose(TimeStamp::physical_now(), 0))))
             }
         }
-        RangeCacheEngineContext {
+        InMemoryEngineContext {
             config,
             statistics: Arc::default(),
             pd_client: Arc::new(MockPdClient),
@@ -209,11 +207,11 @@ impl RangeCacheEngineContext {
         self.pd_client.clone()
     }
 
-    pub fn config(&self) -> &Arc<VersionTrack<RangeCacheEngineConfig>> {
+    pub fn config(&self) -> &Arc<VersionTrack<InMemoryEngineConfig>> {
         &self.config
     }
 
-    pub fn statistics(&self) -> Arc<RangeCacheMemoryEngineStatistics> {
+    pub fn statistics(&self) -> Arc<InMemoryEngineStatistics> {
         self.statistics.clone()
     }
 }

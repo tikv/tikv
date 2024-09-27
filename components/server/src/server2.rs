@@ -40,6 +40,7 @@ use file_system::{get_io_rate_limiter, BytesFetcher, MetricsManager as IoMetrics
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
 use health_controller::HealthController;
+use in_memory_engine::InMemoryEngineStatistics;
 use kvproto::{
     brpb::create_backup, cdcpb_grpc::create_change_data, deadlock::create_deadlock,
     debugpb_grpc::create_debug, diagnosticspb::create_diagnostics,
@@ -66,7 +67,6 @@ use raftstore_v2::{
     router::{DiskSnapBackupHandle, PeerMsg, RaftRouter},
     StateStorage,
 };
-use range_cache_memory_engine::RangeCacheMemoryEngineStatistics;
 use resolved_ts::Task;
 use resource_control::{config::ResourceContrlCfgMgr, ResourceGroupManager};
 use security::SecurityManager;
@@ -101,7 +101,10 @@ use tikv::{
         config_manager::StorageConfigManger,
         kv::LocalTablets,
         mvcc::MvccConsistencyCheckObserver,
-        txn::flow_controller::{FlowController, TabletFlowController},
+        txn::{
+            flow_controller::{FlowController, TabletFlowController},
+            txn_status_cache::TxnStatusCache,
+        },
         Engine, Storage,
     },
 };
@@ -236,7 +239,7 @@ struct TikvServer<ER: RaftEngine> {
     snap_mgr: Option<TabletSnapManager>, // Will be filled in `init_servers`.
     engines: Option<TikvEngines<RocksEngine, ER>>,
     kv_statistics: Option<Arc<RocksStatistics>>,
-    range_cache_engine_statistics: Option<Arc<RangeCacheMemoryEngineStatistics>>,
+    in_memory_engine_statistics: Option<Arc<InMemoryEngineStatistics>>,
     raft_statistics: Option<Arc<RocksStatistics>>,
     servers: Option<Servers<RocksEngine, ER>>,
     region_info_accessor: Option<RegionInfoAccessor>,
@@ -385,7 +388,7 @@ where
             snap_mgr: None,
             engines: None,
             kv_statistics: None,
-            range_cache_engine_statistics: None,
+            in_memory_engine_statistics: None,
             raft_statistics: None,
             servers: None,
             region_info_accessor: None,
@@ -551,6 +554,9 @@ where
             ));
             storage_read_pools.handle()
         };
+        let txn_status_cache = Arc::new(TxnStatusCache::new(
+            self.core.config.storage.txn_status_cache_capacity,
+        ));
 
         let storage = Storage::<_, _, F>::from_engine(
             engines.engine.clone(),
@@ -569,6 +575,7 @@ where
                 .as_ref()
                 .map(|m| m.derive_controller("scheduler-worker-pool".to_owned(), true)),
             self.resource_manager.clone(),
+            txn_status_cache.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
         cfg_controller.register(
@@ -705,6 +712,7 @@ where
                 self.concurrency_manager.clone(),
                 self.env.clone(),
                 self.security_mgr.clone(),
+                storage.get_scheduler().get_txn_status_cache(),
             );
             self.resolved_ts_scheduler = Some(rts_worker.scheduler());
             rts_worker.start_with_timer(rts_endpoint);
@@ -750,6 +758,7 @@ where
                 self.concurrency_manager.clone(),
                 BackupStreamResolver::V2(self.router.clone().unwrap(), PhantomData),
                 backup_encryption_manager.clone(),
+                txn_status_cache.clone(),
             );
             backup_stream_worker.start(backup_stream_endpoint);
             self.core.to_stop.push(backup_stream_worker);
@@ -1117,7 +1126,7 @@ where
         let mut engine_metrics = EngineMetricsManager::<RocksEngine, ER>::new(
             self.tablet_registry.clone().unwrap(),
             self.kv_statistics.clone(),
-            self.range_cache_engine_statistics.clone(),
+            self.in_memory_engine_statistics.clone(),
             self.core.config.rocksdb.titan.enabled.map_or(false, |v| v),
             self.engines.as_ref().unwrap().raft_engine.clone(),
             self.raft_statistics.clone(),
@@ -1530,10 +1539,10 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
         let region_info_accessor = RegionInfoAccessor::new(
             &mut coprocessor_host,
             Arc::new(|| false), // Not applicable to v2.
-            self.core
-                .config
-                .range_cache_engine
-                .mvcc_amplification_threshold,
+            Box::new(|| {
+                // v2 does not support ime
+                unreachable!()
+            }),
         );
 
         let cdc_worker = Box::new(LazyWorker::new("cdc"));

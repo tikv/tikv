@@ -831,6 +831,7 @@ mod test {
         time::Duration,
     };
 
+    use dashmap::DashMap;
     use encryption::BackupEncryptionManager;
     use engine_test::{kv::KvTestEngine, raft::RaftTestEngine};
     use kvproto::{
@@ -842,7 +843,10 @@ mod test {
         router::{CdcRaftRouter, ServerRaftStoreRouter},
         RegionInfo,
     };
-    use tikv::{config::BackupStreamConfig, storage::Statistics};
+    use tikv::{
+        config::BackupStreamConfig,
+        storage::{txn::txn_status_cache::TxnStatusCache, Statistics},
+    };
     use tikv_util::{box_err, info, memory::MemoryQuota, worker::dummy_scheduler};
     use tokio::{sync::mpsc::Sender, task::JoinHandle};
     use txn_types::TimeStamp;
@@ -1031,7 +1035,10 @@ mod test {
             let meta_cli = SlashEtcStore::default();
             let meta_cli = MetadataClient::new(meta_cli, 1);
             let (scheduler, mut output) = dummy_scheduler();
-            let subs = SubscriptionTracer::default();
+            let subs = SubscriptionTracer(
+                Arc::new(DashMap::new()),
+                Arc::new(TxnStatusCache::new_for_test()),
+            );
             let memory_manager = Arc::new(MemoryQuota::new(1024));
             let (tx, mut rx) = tokio::sync::mpsc::channel(8);
             let router = RouterInner::new(

@@ -2542,6 +2542,7 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "fail",
+ "in_memory_engine",
  "kvproto",
  "lazy_static",
  "log_wrappers",
@@ -2550,7 +2551,6 @@ dependencies = [
  "prometheus-static-metric",
  "raft",
  "raftstore",
- "range_cache_memory_engine",
  "slog",
  "slog-global",
  "tempfile",
@@ -2636,6 +2636,51 @@ name = "if_chain"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb56e1aa765b4b4f3aadfab769793b7087bb03a4ea4920644a6d238e2df5b9ed"
+
+[[package]]
+name = "in_memory_engine"
+version = "0.0.1"
+dependencies = [
+ "bytes",
+ "collections",
+ "crossbeam",
+ "crossbeam-skiplist 0.1.3",
+ "dashmap",
+ "engine_rocks",
+ "engine_traits",
+ "fail",
+ "futures 0.3.15",
+ "hex 0.4.2",
+ "keys",
+ "kvproto",
+ "lazy_static",
+ "libc 0.2.151",
+ "log_wrappers",
+ "online_config",
+ "parking_lot 0.12.1",
+ "pd_client",
+ "prometheus",
+ "prometheus-static-metric",
+ "proptest",
+ "raftstore",
+ "rand 0.8.5",
+ "security",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "slog",
+ "slog-global",
+ "strum 0.20.0",
+ "tempfile",
+ "test_pd",
+ "test_pd_client",
+ "test_util",
+ "thiserror",
+ "tikv_util",
+ "tokio",
+ "txn_types",
+ "yatp",
+]
 
 [[package]]
 name = "indexmap"
@@ -2847,7 +2892,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#199f352dc2b3bdfdc3b96e01bc3bca81148b0171"
+source = "git+https://github.com/pingcap/kvproto.git#4a3e17f5e62dc3999e2c0f63293fdeffced80626"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -4485,51 +4530,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "range_cache_memory_engine"
-version = "0.0.1"
-dependencies = [
- "bytes",
- "collections",
- "crossbeam",
- "crossbeam-skiplist 0.1.3",
- "dashmap",
- "engine_rocks",
- "engine_traits",
- "fail",
- "futures 0.3.15",
- "hex 0.4.2",
- "keys",
- "kvproto",
- "lazy_static",
- "libc 0.2.151",
- "log_wrappers",
- "online_config",
- "parking_lot 0.12.1",
- "pd_client",
- "prometheus",
- "prometheus-static-metric",
- "proptest",
- "raftstore",
- "rand 0.8.5",
- "security",
- "serde",
- "serde_derive",
- "serde_json",
- "slog",
- "slog-global",
- "strum 0.20.0",
- "tempfile",
- "test_pd",
- "test_pd_client",
- "test_util",
- "thiserror",
- "tikv_util",
- "tokio",
- "txn_types",
- "yatp",
-]
-
-[[package]]
 name = "raw-cpuid"
 version = "10.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5314,6 +5314,7 @@ dependencies = [
  "health_controller",
  "hex 0.4.2",
  "hybrid_engine",
+ "in_memory_engine",
  "keys",
  "kvproto",
  "libc 0.2.151",
@@ -5326,7 +5327,6 @@ dependencies = [
  "raft_log_engine",
  "raftstore",
  "raftstore-v2",
- "range_cache_memory_engine",
  "resolved_ts",
  "resource_control",
  "resource_metering",
@@ -6015,6 +6015,7 @@ dependencies = [
  "grpcio-health",
  "health_controller",
  "hybrid_engine",
+ "in_memory_engine",
  "keys",
  "kvproto",
  "lazy_static",
@@ -6024,7 +6025,6 @@ dependencies = [
  "raft",
  "raftstore",
  "rand 0.8.5",
- "range_cache_memory_engine",
  "resolved_ts",
  "resource_control",
  "resource_metering",
@@ -6192,6 +6192,7 @@ dependencies = [
  "grpcio-health",
  "health_controller",
  "hyper",
+ "in_memory_engine",
  "keys",
  "kvproto",
  "libc 0.2.151",
@@ -6211,7 +6212,6 @@ dependencies = [
  "raftstore-v2",
  "rand 0.8.5",
  "rand_xorshift",
- "range_cache_memory_engine",
  "resource_control",
  "resource_metering",
  "security",
@@ -6502,6 +6502,7 @@ dependencies = [
  "hyper",
  "hyper-openssl",
  "hyper-tls",
+ "in_memory_engine",
  "into_other",
  "itertools",
  "keyed_priority_queue",
@@ -6539,7 +6540,6 @@ dependencies = [
  "raftstore",
  "raftstore-v2",
  "rand 0.7.3",
- "range_cache_memory_engine",
  "regex",
  "reqwest",
  "resource_control",
@@ -6869,7 +6869,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#87f5b80908ab561fb7875c88114488cad15727b1"
+source = "git+https://github.com/pingcap/tipb.git#cf70966bef25e205cb845c19265301542d1238d1"
 dependencies = [
  "futures 0.3.15",
  "grpcio",

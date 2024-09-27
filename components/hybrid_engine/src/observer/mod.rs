@@ -5,5 +5,5 @@ mod snapshot;
 mod write_batch;
 
 pub use load_eviction::LoadEvictionObserver;
-pub use snapshot::{HybridSnapshotObserver, RangeCacheSnapshotPin};
+pub use snapshot::{HybridSnapshotObserver, RegionCacheSnapshotPin};
 pub use write_batch::RegionCacheWriteBatchObserver;

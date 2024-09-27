@@ -308,13 +308,13 @@ pub struct RegionCollector {
     region_activity: RegionActivityMap,
     region_leaders: Arc<RwLock<HashSet<u64>>>,
     // It is calculated as '(next + prev) / processed_keys'
-    mvcc_amplification_threshold: usize,
+    mvcc_amplification_threshold: Box<dyn Fn() -> usize + Send>,
 }
 
 impl RegionCollector {
     pub fn new(
         region_leaders: Arc<RwLock<HashSet<u64>>>,
-        mvcc_amplification_threshold: usize,
+        mvcc_amplification_threshold: Box<dyn Fn() -> usize + Send>,
     ) -> Self {
         Self {
             region_leaders,
@@ -690,7 +690,7 @@ impl RegionCollector {
             s.cop_detail.iterated_count() >= iterated_count_to_filter
                 // plus processed_keys by 1 to make it not 0
                 && s.cop_detail.mvcc_amplification()
-                    >= self.mvcc_amplification_threshold as f64
+                    >= (self.mvcc_amplification_threshold)() as f64
         });
 
         // TODO(SpadeA): remove it when auto load/evict is stable
@@ -897,7 +897,7 @@ impl RegionInfoAccessor {
     pub fn new(
         host: &mut CoprocessorHost<impl KvEngine>,
         region_stats_manager_enabled_cb: RegionStatsManagerEnabledCb,
-        mvcc_amplification_threshold: usize,
+        mvcc_amplification_threshold: Box<dyn Fn() -> usize + Send>,
     ) -> Self {
         let region_leaders = Arc::new(RwLock::new(HashSet::default()));
         let worker = WorkerBuilder::new("region-collector-worker").create();
@@ -1197,7 +1197,7 @@ mod tests {
     use super::*;
 
     fn new_region_collector() -> RegionCollector {
-        RegionCollector::new(Arc::new(RwLock::new(HashSet::default())), 0)
+        RegionCollector::new(Arc::new(RwLock::new(HashSet::default())), Box::new(|| 0))
     }
 
     fn new_region(id: u64, start_key: &[u8], end_key: &[u8], version: u64) -> Region {

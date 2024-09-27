@@ -1,19 +1,19 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{is_data_cf, CacheRegion, KvEngine, Mutable, Result, WriteBatch, WriteOptions};
+use in_memory_engine::{RegionCacheMemoryEngine, RegionCacheWriteBatch};
 use raftstore::coprocessor::{
     dispatcher::BoxWriteBatchObserver, Coprocessor, CoprocessorHost, ObservableWriteBatch,
     WriteBatchObserver,
 };
-use range_cache_memory_engine::{RangeCacheMemoryEngine, RangeCacheWriteBatch};
 
 #[derive(Clone)]
 pub struct RegionCacheWriteBatchObserver {
-    cache_engine: RangeCacheMemoryEngine,
+    cache_engine: RegionCacheMemoryEngine,
 }
 
 impl RegionCacheWriteBatchObserver {
-    pub fn new(cache_engine: RangeCacheMemoryEngine) -> Self {
+    pub fn new(cache_engine: RegionCacheMemoryEngine) -> Self {
         RegionCacheWriteBatchObserver { cache_engine }
     }
 
@@ -29,13 +29,13 @@ impl Coprocessor for RegionCacheWriteBatchObserver {}
 impl WriteBatchObserver for RegionCacheWriteBatchObserver {
     fn create_observable_write_batch(&self) -> Box<dyn ObservableWriteBatch> {
         Box::new(HybridObservableWriteBatch {
-            cache_write_batch: RangeCacheWriteBatch::from(&self.cache_engine),
+            cache_write_batch: RegionCacheWriteBatch::from(&self.cache_engine),
         })
     }
 }
 
 struct HybridObservableWriteBatch {
-    cache_write_batch: RangeCacheWriteBatch,
+    cache_write_batch: RegionCacheWriteBatch,
 }
 
 impl ObservableWriteBatch for HybridObservableWriteBatch {

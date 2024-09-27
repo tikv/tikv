@@ -996,6 +996,8 @@ pub(in crate::storage::txn) fn fallback_1pc_locks(txn: &mut MvccTxn) {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use concurrency_manager::ConcurrencyManager;
     use engine_rocks::ReadPerfInstant;
     use engine_traits::CF_WRITE;
@@ -1670,7 +1672,7 @@ mod tests {
                     statistics: &mut Statistics::default(),
                     async_apply_prewrite: false,
                     raw_ext: None,
-                    txn_status_cache: &TxnStatusCache::new_for_test(),
+                    txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
                 }
             };
         }
@@ -1842,7 +1844,7 @@ mod tests {
                 statistics: &mut statistics,
                 async_apply_prewrite: case.async_apply_prewrite,
                 raw_ext: None,
-                txn_status_cache: &TxnStatusCache::new_for_test(),
+                txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
             };
             let mut engine = TestEngineBuilder::new().build().unwrap();
             let snap = engine.snapshot(Default::default()).unwrap();
@@ -1953,7 +1955,7 @@ mod tests {
             statistics: &mut statistics,
             async_apply_prewrite: false,
             raw_ext: None,
-            txn_status_cache: &TxnStatusCache::new_for_test(),
+            txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         let result = cmd.cmd.process_write(snap, context).unwrap();
@@ -1982,7 +1984,7 @@ mod tests {
             statistics: &mut statistics,
             async_apply_prewrite: false,
             raw_ext: None,
-            txn_status_cache: &TxnStatusCache::new_for_test(),
+            txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         let result = cmd.cmd.process_write(snap, context).unwrap();
@@ -2066,7 +2068,7 @@ mod tests {
             statistics: &mut statistics,
             async_apply_prewrite: false,
             raw_ext: None,
-            txn_status_cache: &TxnStatusCache::new_for_test(),
+            txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         let result = cmd.cmd.process_write(snap, context).unwrap();
@@ -2099,7 +2101,7 @@ mod tests {
             statistics: &mut statistics,
             async_apply_prewrite: false,
             raw_ext: None,
-            txn_status_cache: &TxnStatusCache::new_for_test(),
+            txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         let result = cmd.cmd.process_write(snap, context).unwrap();
@@ -2370,7 +2372,7 @@ mod tests {
             statistics: &mut statistics,
             async_apply_prewrite: false,
             raw_ext: None,
-            txn_status_cache: &TxnStatusCache::new_for_test(),
+            txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         assert!(prewrite_cmd.cmd.process_write(snap, context).is_err());
@@ -2395,7 +2397,7 @@ mod tests {
             statistics: &mut statistics,
             async_apply_prewrite: false,
             raw_ext: None,
-            txn_status_cache: &TxnStatusCache::new_for_test(),
+            txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         assert!(prewrite_cmd.cmd.process_write(snap, context).is_err());
@@ -2602,7 +2604,7 @@ mod tests {
             statistics: &mut statistics,
             async_apply_prewrite: false,
             raw_ext: None,
-            txn_status_cache: &TxnStatusCache::new_for_test(),
+            txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         let res = prewrite_cmd.cmd.process_write(snap, context).unwrap();
