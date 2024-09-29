@@ -77,7 +77,7 @@ batch-system = { workspace = true }
 cdc = { workspace = true }
 collections = { workspace = true }
 crc64fast = "0.1"
-crossbeam = "0.8"
+crossbeam = { workspace = true }
 encryption = { workspace = true }
 engine_rocks_helper = { workspace = true }
 error_code = { workspace = true }
@@ -87,6 +87,7 @@ futures = "0.3"
 grpcio = { workspace = true }
 grpcio-health = { workspace = true }
 health_controller = { workspace = true }
+in_memory_engine = { workspace = true }
 kvproto = { workspace = true }
 libc = "0.2"
 log_wrappers = { workspace = true }

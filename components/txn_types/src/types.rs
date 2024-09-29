@@ -335,12 +335,12 @@ impl Debug for Mutation {
 impl Display for Mutation {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Mutation::Put((key, value), assertion) => write!(
+            // TODO: find a proper way to print values, debug printing them in the log
+            //       may result in large files.
+            Mutation::Put((key, _), assertion) => write!(
                 f,
-                "Put key:{:?} value:{:?} assertion:{:?}",
-                key,
-                &log_wrappers::Value::value(value),
-                assertion
+                "Put key:{:?} value:skipped assertion:{:?}",
+                key, assertion
             ),
             Mutation::Delete(key, assertion) => {
                 write!(f, "Delete key:{:?} assertion:{:?}", key, assertion)
@@ -348,12 +348,12 @@ impl Display for Mutation {
             Mutation::Lock(key, assertion) => {
                 write!(f, "Lock key:{:?} assertion:{:?}", key, assertion)
             }
-            Mutation::Insert((key, value), assertion) => write!(
+            // TODO: find a proper way to print values, debug printing them in the log
+            //       may result in large files.
+            Mutation::Insert((key, _), assertion) => write!(
                 f,
-                "Put key:{:?} value:{:?} assertion:{:?}",
-                key,
-                &log_wrappers::Value::value(value),
-                assertion
+                "Put key:{:?} value:skipped assertion:{:?}",
+                key, assertion
             ),
             Mutation::CheckNotExists(key, assertion) => {
                 write!(f, "CheckNotExists key:{:?} assertion:{:?}", key, assertion)

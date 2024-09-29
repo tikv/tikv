@@ -19,8 +19,8 @@ use bytes::Bytes;
 use collections::{HashMap, HashSet};
 use crossbeam::{atomic::AtomicCell, channel::TrySendError};
 use engine_traits::{
-    CacheRange, Engines, KvEngine, PerfContext, RaftEngine, Snapshot, SnapshotContext, WriteBatch,
-    WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    Engines, KvEngine, PerfContext, RaftEngine, Snapshot, WriteBatch, WriteOptions, CF_DEFAULT,
+    CF_LOCK, CF_WRITE,
 };
 use error_code::ErrorCodeExt;
 use fail::fail_point;
@@ -51,13 +51,14 @@ use raft::{
     GetEntriesContext, LightReady, ProgressState, RawNode, Ready, SnapshotStatus, StateRole,
     INVALID_INDEX, NO_LIMIT,
 };
-use rand::{seq::SliceRandom, Rng};
+use rand::seq::SliceRandom;
 use smallvec::SmallVec;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
     box_err,
     codec::number::decode_u64,
     debug, error, info,
+    store::find_peer_by_id,
     sys::disk::DiskUsage,
     time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant, InstantExt},
     warn,
@@ -65,7 +66,7 @@ use tikv_util::{
     Either,
 };
 use time::{Duration as TimeDuration, Timespec};
-use tracker::GLOBAL_TRACKERS;
+use tracker::{TrackerTokenArray, GLOBAL_TRACKERS};
 use txn_types::{TimeStamp, WriteBatchFlags};
 use uuid::Uuid;
 
@@ -89,7 +90,7 @@ use crate::{
         RoleChange,
     },
     errors::RAFTSTORE_IS_BUSY,
-    router::RaftStoreRouter,
+    router::{RaftStoreRouter, ReadContext},
     store::{
         async_io::{read::ReadTask, write::WriteMsg, write_router::WriteRouter},
         fsm::{
@@ -121,9 +122,6 @@ const MIN_BCAST_WAKE_UP_INTERVAL: u64 = 1_000;
 const REGION_READ_PROGRESS_CAP: usize = 128;
 
 const SNAP_GEN_PRECHECK_FEATURE: Feature = Feature::require(8, 2, 0);
-// The maximum tick interval between precheck requests. The tick interval helps
-// prevent sending the precheck requests too aggressively.
-const SNAP_GEN_PRECHECK_MAX_TICK_INTERVAL: usize = 5;
 
 #[doc(hidden)]
 pub const MAX_COMMITTED_SIZE_PER_READY: u64 = 16 * 1024 * 1024;
@@ -1702,6 +1700,26 @@ where
         self.raft_group.mut_store()
     }
 
+    #[inline]
+    pub fn approximate_size(&self) -> Option<u64> {
+        self.split_check_trigger.approximate_size
+    }
+
+    #[inline]
+    pub fn approximate_keys(&self) -> Option<u64> {
+        self.split_check_trigger.approximate_keys
+    }
+
+    #[inline]
+    pub fn set_approximate_size(&mut self, approximate_size: Option<u64>) {
+        self.split_check_trigger.approximate_size = approximate_size;
+    }
+
+    #[inline]
+    pub fn set_approximate_keys(&mut self, approximate_keys: Option<u64>) {
+        self.split_check_trigger.approximate_keys = approximate_keys;
+    }
+
     /// Whether the snapshot is handling.
     /// See the comments of `check_snap_status` for more details.
     #[inline]
@@ -1792,7 +1810,7 @@ where
                 "send raft msg";
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
-                "msg_type" => ?msg_type,
+                "msg_type" => %util::MsgType(&msg),
                 "msg_size" => msg.get_message().compute_size(),
                 "to" => to_peer_id,
                 "disk_usage" => ?msg.get_disk_usage(),
@@ -1945,9 +1963,7 @@ where
             }
         }
         if for_balance {
-            if let Some(gen_task) = self.mut_store().mut_gen_snap_task() {
-                gen_task.set_for_balance();
-            }
+            self.get_store().set_gen_snap_task_for_balance();
         }
         Ok(())
     }
@@ -2316,11 +2332,6 @@ where
                         let _ = self.get_store().clear_data();
                         self.delay_clean_data = false;
                     }
-                    // only evict when region is initialized
-                    if !self.region().get_peers().is_empty() {
-                        let range = CacheRange::from_region(self.region());
-                        ctx.engines.kv.evict_range(&range);
-                    }
                 }
                 _ => {}
             }
@@ -2655,26 +2666,49 @@ where
         }
     }
 
+    /// Cancel the snapshot generation task under the following conditions:
+    ///
+    /// 1. The requesting peer is removed by a configuration change.
+    /// 2. The requesting peer becomes unreachable, e.g., TiKV goes down or a
+    ///    network partition occurs.
+    pub fn maybe_cancel_gen_snap_task(&self, unreachable_store_id: Option<u64>) {
+        let to_peer = match self.get_store().get_gen_snap_task().as_ref() {
+            Some(task) => task.to_peer.clone(),
+            None => return,
+        };
+        let cancel_by_unreachable_store =
+            unreachable_store_id.map_or(false, |s| to_peer.get_store_id() == s);
+        let cancel_by_peer_not_found = find_peer_by_id(self.region(), to_peer.get_id()).is_none();
+        if cancel_by_unreachable_store || cancel_by_peer_not_found {
+            self.get_store().cancel_generating_snap(None);
+            warn!(
+                "cancel generate snap task";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer_id(),
+                "to_peer" => ?to_peer,
+                "cancel_by_peer_not_found" => cancel_by_peer_not_found,
+                "cancel_by_unreachable_store" => cancel_by_unreachable_store,
+            );
+        }
+    }
+
     pub fn handle_gen_snap_task<T: Transport>(&mut self, ctx: &mut PollContext<EK, ER, T>) {
-        if let Some(mut gen_task) = self.mut_store().take_gen_snap_task() {
+        // Check if gen snap task need to be cancelled, otherwise it will block
+        // snapshot and subsequent conf changes.
+        self.maybe_cancel_gen_snap_task(None);
+
+        if self.get_store().has_gen_snap_task() {
             // If the snapshot gen precheck feature is enabled, the leader needs
             // to complete a precheck with the target follower before the
             // snapshot generation.
             if ctx.feature_gate.can_enable(SNAP_GEN_PRECHECK_FEATURE) {
                 // Continuously send snap gen precheck requests to the follower
-                // until an approval is received. Use random tick counts to
-                // space out the requests.
-                if gen_task.precheck_remaining_ticks == 0 {
-                    let to_peer = gen_task.to_peer.clone();
+                // until an approval is received.
+                if let Some(to_peer) = self.get_store().need_gen_snap_precheck() {
                     self.send_snap_gen_precheck_request(ctx, &to_peer);
-                    gen_task.precheck_remaining_ticks =
-                        rand::thread_rng().gen_range(1..=SNAP_GEN_PRECHECK_MAX_TICK_INTERVAL);
-                } else {
-                    gen_task.precheck_remaining_ticks -= 1;
                 }
-                // Put the gen snap task back since we haven't scheduled it yet.
-                self.get_store().set_gen_snap_task(gen_task);
             } else {
+                let gen_task = self.mut_store().take_gen_snap_task().unwrap();
                 self.pending_request_snapshot_count
                     .fetch_add(1, Ordering::SeqCst);
                 ctx.apply_router
@@ -3071,6 +3105,13 @@ where
                             // In this case the apply can be guaranteed to be successful. Invoke the
                             // on_committed callback if necessary.
                             p.cb.invoke_committed();
+
+                            debug!("raft log is committed";
+                                "req_info" => TrackerTokenArray::new(p.cb.write_trackers()
+                                    .into_iter()
+                                    .filter_map(|time_tracker| time_tracker.as_tracker_token())
+                                    .collect::<Vec<_>>().as_slice())
+                            );
                         }
                         p
                     })
@@ -3874,7 +3915,12 @@ where
         self.should_wake_up = true;
     }
 
-    fn pre_transfer_leader(&mut self, peer: &metapb::Peer) -> bool {
+    fn pre_transfer_leader<T: Transport>(
+        &mut self,
+        peer: &metapb::Peer,
+        extra_msgs: Vec<ExtraMessage>,
+        ctx: &mut PollContext<EK, ER, T>,
+    ) -> bool {
         // Checks if safe to transfer leader.
         if self.raft_group.raft.has_pending_conf() {
             info!(
@@ -3900,6 +3946,17 @@ where
         // forbids setting it for MsgTransferLeader messages.
         msg.set_log_term(self.term());
         self.raft_group.raft.msgs.push(msg);
+
+        extra_msgs.into_iter().for_each(|extra_msg| {
+            let mut msg = RaftMessage::default();
+            msg.set_region_id(self.region_id);
+            msg.set_from_peer(self.peer.clone());
+            msg.set_to_peer(peer.clone());
+            msg.set_region_epoch(self.region().get_region_epoch().clone());
+            msg.set_extra_msg(extra_msg);
+            self.send_raft_messages(ctx, vec![msg]);
+        });
+
         true
     }
 
@@ -4753,27 +4810,29 @@ where
     ///    to do the remaining work.
     ///
     /// See also: tikv/rfcs#37.
-    fn propose_transfer_leader<T>(
+    fn propose_transfer_leader<T: Transport>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
         req: RaftCmdRequest,
         cb: Callback<EK::Snapshot>,
     ) -> bool {
         let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
-        if let Err(err) = ctx
+        let extra_msgs = match ctx
             .coprocessor_host
             .pre_transfer_leader(self.region(), transfer_leader)
         {
-            warn!("Coprocessor rejected transfer leader."; "err" => ?err,
+            Err(err) => {
+                warn!("Coprocessor rejected transfer leader."; "err" => ?err,
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
                 "transferee" => transfer_leader.get_peer().get_id());
-            let mut resp = RaftCmdResponse::new();
-            *resp.mut_header().mut_error() = Error::from(err).into();
-            cb.invoke_with_response(resp);
-            return false;
-        }
-
+                let mut resp = RaftCmdResponse::new();
+                *resp.mut_header().mut_error() = Error::from(err).into();
+                cb.invoke_with_response(resp);
+                return false;
+            }
+            Ok(msgs) => msgs,
+        };
         ctx.raft_metrics.propose.transfer_leader.inc();
 
         let prs = self.raft_group.raft.prs();
@@ -4805,7 +4864,7 @@ where
         let transferred = if peer.id == self.peer.id {
             false
         } else {
-            self.pre_transfer_leader(peer)
+            self.pre_transfer_leader(peer, extra_msgs, ctx)
         };
 
         // transfer leader command doesn't need to replicate log and apply, so we
@@ -4942,9 +5001,9 @@ where
         Ok(propose_index)
     }
 
-    fn handle_read<E: ReadExecutor<Tablet = EK>>(
+    fn handle_read<T>(
         &self,
-        reader: &mut E,
+        ctx: &mut PollContext<EK, ER, T>,
         req: RaftCmdRequest,
         check_epoch: bool,
         read_index: Option<u64>,
@@ -4992,16 +5051,23 @@ where
             }
         }
 
-        let snap_ctx = if let Ok(read_ts) = decode_u64(&mut req.get_header().get_flag_data()) {
-            Some(SnapshotContext {
-                range: Some(CacheRange::from_region(&region)),
-                read_ts,
-            })
+        let read_ctx = if let Ok(read_ts) = decode_u64(&mut req.get_header().get_flag_data()) {
+            ReadContext::new(None, Some(read_ts))
         } else {
-            None
+            ReadContext::new(None, None)
         };
 
-        let mut resp = reader.execute(&req, &Arc::new(region), read_index, snap_ctx, None);
+        let mut reader = PollContextReader {
+            engines: &ctx.engines,
+        };
+        let mut resp = reader.execute(
+            &read_ctx,
+            &req,
+            &Arc::new(region),
+            read_index,
+            None,
+            &ctx.coprocessor_host,
+        );
         if let Some(snap) = resp.snapshot.as_mut() {
             snap.txn_ext = Some(self.txn_ext.clone());
             snap.bucket_meta = self
@@ -5188,7 +5254,7 @@ where
 
     // Check disk usages for the peer itself and other peers in the raft group.
     // The return value indicates whether the proposal is allowed or not.
-    fn check_normal_proposal_with_disk_full_opt<T>(
+    fn check_normal_proposal_with_disk_full_opt<T: Transport>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
         disk_full_opt: DiskFullOpt,
@@ -5224,7 +5290,7 @@ where
                         "peer_id" => self.peer.get_id(),
                         "target_peer_id" => p.get_id(),
                     );
-                    self.pre_transfer_leader(&p);
+                    self.pre_transfer_leader(&p, vec![], ctx);
                 }
             }
         } else {
@@ -5548,8 +5614,8 @@ where
             pending_peers: self.collect_pending_peers(ctx),
             written_bytes: self.peer_stat.written_bytes,
             written_keys: self.peer_stat.written_keys,
-            approximate_size: self.split_check_trigger.approximate_size,
-            approximate_keys: self.split_check_trigger.approximate_keys,
+            approximate_size: self.approximate_size(),
+            approximate_keys: self.approximate_keys(),
             replication_status: self.region_replication_status(ctx),
             wait_data_peers: self.wait_data_peers.clone(),
         });
@@ -5586,7 +5652,7 @@ where
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
             "msg_type" => ?ty,
-            "to" => to.get_id()
+            "to" => ?to
         );
         send_msg.set_extra_msg(msg);
         send_msg.set_to_peer(to.clone());
@@ -5713,7 +5779,7 @@ where
     }
 
     pub fn send_snap_gen_precheck_request<T: Transport>(
-        &self,
+        &mut self,
         ctx: &mut PollContext<EK, ER, T>,
         to_peer: &metapb::Peer,
     ) {
@@ -5723,7 +5789,7 @@ where
     }
 
     pub fn send_snap_gen_precheck_response<T: Transport>(
-        &self,
+        &mut self,
         ctx: &mut PollContext<EK, ER, T>,
         to_peer: &metapb::Peer,
         passed: bool,
@@ -5735,7 +5801,7 @@ where
     }
 
     pub fn send_want_rollback_merge<T: Transport>(
-        &self,
+        &mut self,
         premerge_commit: u64,
         ctx: &mut PollContext<EK, ER, T>,
     ) {
@@ -5986,7 +6052,11 @@ where
     }
 }
 
-impl<EK, ER, T> ReadExecutor for PollContext<EK, ER, T>
+struct PollContextReader<'a, EK, ER> {
+    engines: &'a Engines<EK, ER>,
+}
+
+impl<'a, EK, ER> ReadExecutor for PollContextReader<'a, EK, ER>
 where
     EK: KvEngine,
     ER: RaftEngine,
@@ -5997,12 +6067,8 @@ where
         &self.engines.kv
     }
 
-    fn get_snapshot(
-        &mut self,
-        snap_ctx: Option<SnapshotContext>,
-        _: &Option<LocalReadContext<'_, EK>>,
-    ) -> Arc<EK::Snapshot> {
-        Arc::new(self.engines.kv.snapshot(snap_ctx))
+    fn get_snapshot(&mut self, _: &Option<LocalReadContext<'_, EK>>) -> Arc<EK::Snapshot> {
+        Arc::new(self.engines.kv.snapshot())
     }
 }
 

@@ -109,6 +109,16 @@ impl<E: Engine> Tracker<E> {
         }
     }
 
+    pub fn adjust_snapshot_type(&mut self, region_cache_engine: bool) {
+        if region_cache_engine {
+            if self.req_ctx.tag == ReqTag::select {
+                self.req_ctx.tag = ReqTag::select_by_in_memory_engine;
+            } else if self.req_ctx.tag == ReqTag::index {
+                self.req_ctx.tag = ReqTag::index_by_region_cache;
+            }
+        }
+    }
+
     pub fn on_scheduled(&mut self) {
         assert_eq!(self.current_stage, TrackerState::Initialized);
         let now = Instant::now();
@@ -365,7 +375,11 @@ impl<E: Engine> Tracker<E> {
 
         // only collect metrics for select and index, exclude transient read flow such
         // like analyze and checksum.
-        if self.req_ctx.tag == ReqTag::select || self.req_ctx.tag == ReqTag::index {
+        if self.req_ctx.tag == ReqTag::select
+            || self.req_ctx.tag == ReqTag::index
+            || self.req_ctx.tag == ReqTag::select_by_in_memory_engine
+            || self.req_ctx.tag == ReqTag::index_by_region_cache
+        {
             tls_collect_query(
                 region_id,
                 peer,
@@ -390,7 +404,9 @@ impl<E: Engine> Tracker<E> {
     {
         thread_local! {
             static SELECT: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
+            static SELECT_BY_IN_MEMORY_ENGINE: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
             static INDEX: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
+            static INDEX_BY_REGION_CACHE: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
             static ANALYZE_TABLE: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
             static ANALYZE_INDEX: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
             static ANALYZE_FULL_SAMPLING: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
@@ -400,7 +416,9 @@ impl<E: Engine> Tracker<E> {
         }
         let tls_cell = match self.req_ctx.tag {
             ReqTag::select => &SELECT,
+            ReqTag::select_by_in_memory_engine => &SELECT_BY_IN_MEMORY_ENGINE,
             ReqTag::index => &INDEX,
+            ReqTag::index_by_region_cache => &INDEX_BY_REGION_CACHE,
             ReqTag::analyze_table => &ANALYZE_TABLE,
             ReqTag::analyze_index => &ANALYZE_INDEX,
             ReqTag::analyze_full_sampling => &ANALYZE_FULL_SAMPLING,
@@ -410,7 +428,7 @@ impl<E: Engine> Tracker<E> {
         };
         tls_cell.with(|c| {
             let mut c = c.borrow_mut();
-            let perf_context = c.get_or_insert_with(|| {
+            let perf_context: &mut Box<dyn PerfContext> = c.get_or_insert_with(|| {
                 Box::new(E::Local::get_perf_context(
                     PerfLevel::Uninitialized,
                     PerfContextKind::Coprocessor(self.req_ctx.tag.get_str()),

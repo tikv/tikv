@@ -303,7 +303,7 @@ pub struct Config {
     #[doc(hidden)]
     #[online_config(skip)]
     /// Disable this feature by set to 0, logic will be removed in other pr.
-    /// When TiKV memory usage reaches `memory_usage_high_water` it will try to
+    /// When TiKV memory usage is near `memory_usage_high_water` it will try to
     /// limit memory increasing. For raftstore layer entries will be evicted
     /// from entry cache, if they utilize memory more than
     /// `evict_cache_on_memory_ratio` * total.
@@ -326,6 +326,19 @@ pub struct Config {
     /// When the size of raft db writebatch exceeds this value, write will be
     /// triggered.
     pub raft_write_size_limit: ReadableSize,
+
+    /// When the size of raft db writebatch is smaller than this value, write
+    /// will wait for a while to make the writebatch larger, which will reduce
+    /// the write amplification.
+    #[doc(hidden)]
+    pub raft_write_batch_size_hint: ReadableSize,
+
+    /// When the size of raft db writebatch is smaller than this value, write
+    /// will wait for a while. This is used to reduce the write amplification.
+    /// It should be smaller than 1ms. Invalid to use too long duration because
+    /// it will make the write request wait too long.
+    #[doc(hidden)]
+    pub raft_write_wait_duration: ReadableDuration,
 
     pub waterfall_metrics: bool,
 
@@ -516,6 +529,8 @@ impl Default for Config {
             cmd_batch: true,
             cmd_batch_concurrent_ready_max_count: 1,
             raft_write_size_limit: ReadableSize::mb(1),
+            raft_write_batch_size_hint: ReadableSize::kb(8),
+            raft_write_wait_duration: ReadableDuration::micros(20),
             waterfall_metrics: true,
             io_reschedule_concurrent_max_count: 4,
             io_reschedule_hotpot_duration: ReadableDuration::secs(5),
@@ -825,6 +840,13 @@ impl Config {
 
         if self.local_read_batch_size == 0 {
             return Err(box_err!("local-read-batch-size must be greater than 0"));
+        }
+
+        if self.raft_write_wait_duration.as_micros() > 1000 {
+            return Err(box_err!(
+                "raft-write-wait-duration should be less than 1ms, current value is {}ms",
+                self.raft_write_wait_duration.as_millis()
+            ));
         }
 
         // Since the following configuration supports online update, in order to
@@ -1186,6 +1208,12 @@ impl Config {
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_write_size_limit"])
             .set(self.raft_write_size_limit.0 as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["raft_write_batch_size_hint"])
+            .set(self.raft_write_batch_size_hint.0 as f64);
+        CONFIG_RAFTSTORE_GAUGE
+            .with_label_values(&["raft_write_wait_duration"])
+            .set(self.raft_write_wait_duration.as_micros() as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["waterfall_metrics"])
             .set((self.waterfall_metrics as i32).into());
@@ -1595,5 +1623,11 @@ mod tests {
             cfg.raft_log_gc_count_limit(),
             split_size * 3 / 4 / ReadableSize::kb(1)
         );
+
+        cfg = Config::new();
+        cfg.optimize_for(false);
+        cfg.raft_write_wait_duration = ReadableDuration::micros(1001);
+        cfg.validate(split_size, true, split_size / 20, false)
+            .unwrap_err();
     }
 }

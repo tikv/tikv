@@ -1,13 +1,5 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-#[cfg(target_os = "linux")]
-mod cgroup;
-pub mod cpu_time;
-pub mod disk;
-pub mod inspector;
-pub mod ioload;
-pub mod thread;
-
 // re-export some traits for ease of use
 use std::{
     path::Path,
@@ -22,11 +14,26 @@ pub use sysinfo::{CpuExt, DiskExt, NetworkExt, ProcessExt, SystemExt};
 
 use crate::config::ReadableSize;
 
+#[cfg(target_os = "linux")]
+mod cgroup;
+pub mod cpu_time;
+pub mod disk;
+pub mod inspector;
+pub mod ioload;
+pub mod thread;
+
 pub const HIGH_PRI: i32 = -1;
 const CPU_CORES_QUOTA_ENV_VAR_KEY: &str = "TIKV_CPU_CORES_QUOTA";
 
 static GLOBAL_MEMORY_USAGE: AtomicU64 = AtomicU64::new(0);
 static MEMORY_USAGE_HIGH_WATER: AtomicU64 = AtomicU64::new(u64::MAX);
+
+// MEMORY_HIGH_WATER_MARGIN_SPLIT_POINT is used to decide whether to use a fixed
+// margin or a percentage-based margin, ensuring a reasonable margin value on
+// both large and small memory machines.
+const MEMORY_HIGH_WATER_MARGIN_SPLIT_POINT: u64 = 10 * 1024 * 1024 * 1024; // 10GB
+const MEMORY_HIGH_WATER_FIXED_MARGIN: u64 = 1024 * 1024 * 1024; // 1GB
+const MEMORY_HIGH_WATER_PERCENTAGE_MARGIN: f64 = 0.9; // Empirical value.
 
 #[cfg(target_os = "linux")]
 lazy_static! {
@@ -138,6 +145,9 @@ impl SysQuota {
 /// Get the current global memory usage in bytes. Users need to call
 /// `record_global_memory_usage` to refresh it periodically.
 pub fn get_global_memory_usage() -> u64 {
+    fail_point!("mock_memory_usage", |t| {
+        t.unwrap().parse::<u64>().unwrap()
+    });
     GLOBAL_MEMORY_USAGE.load(Ordering::Acquire)
 }
 
@@ -160,10 +170,36 @@ pub fn register_memory_usage_high_water(mark: u64) {
     MEMORY_USAGE_HIGH_WATER.store(mark, Ordering::Release);
 }
 
+fn get_memory_usage_high_water() -> u64 {
+    fail_point!("mock_memory_usage_high_water", |t| {
+        t.unwrap().parse::<u64>().unwrap()
+    });
+    MEMORY_USAGE_HIGH_WATER.load(Ordering::Acquire)
+}
+
 pub fn memory_usage_reaches_high_water(usage: &mut u64) -> bool {
     fail_point!("memory_usage_reaches_high_water", |_| true);
+
     *usage = get_global_memory_usage();
-    *usage >= MEMORY_USAGE_HIGH_WATER.load(Ordering::Acquire)
+    let high_water = get_memory_usage_high_water();
+
+    *usage >= high_water
+}
+
+pub fn memory_usage_reaches_near_high_water(usage: &mut u64) -> bool {
+    *usage = get_global_memory_usage();
+    let high_water = get_memory_usage_high_water();
+
+    memory_usage_reaches_near_high_water_internal(*usage, high_water)
+}
+
+// Internal function for easier testing.
+fn memory_usage_reaches_near_high_water_internal(usage: u64, high_water: u64) -> bool {
+    if usage > MEMORY_HIGH_WATER_MARGIN_SPLIT_POINT {
+        usage >= high_water - MEMORY_HIGH_WATER_FIXED_MARGIN
+    } else {
+        (usage as f64) >= (high_water as f64) * MEMORY_HIGH_WATER_PERCENTAGE_MARGIN
+    }
 }
 
 fn limit_cpu_cores_quota_by_env_var(quota: f64) -> f64 {
@@ -281,10 +317,11 @@ pub fn path_in_diff_mount_point(_path1: impl AsRef<Path>, _path2: impl AsRef<Pat
     false
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn test_path_in_diff_mount_point() {
         let (empty_path1, path2) = ("", "/");
@@ -304,6 +341,7 @@ mod tests {
         assert_eq!(result, false);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn test_get_path_mount_point() {
         let mounts = "
@@ -347,5 +385,48 @@ mqueue /dev/mqueue mqueue rw,relatime 0 0
         check("/data/nvme0n1", Some("/dev/vda3 / ext4"));
         check("/home", Some("/dev/vda3 / ext4"));
         check("unknown/path", None);
+    }
+
+    #[test]
+    fn test_get_disk_space_stats() {
+        let (capacity, available) = disk::get_disk_space_stats("./").unwrap();
+        assert!(capacity > 0);
+        assert!(available > 0);
+        assert!(capacity >= available);
+
+        disk::get_disk_space_stats("/non-exist-path").unwrap_err();
+    }
+    #[test]
+    fn test_near_high_water() {
+        // Below MEMORY_HIGH_WATER_MARGIN_SPLIT_POINT.
+        let is_near = memory_usage_reaches_near_high_water_internal(
+            8500 * 1024 * 1024,
+            9 * 1024 * 1024 * 1024,
+        );
+        assert!(is_near);
+
+        // Above MEMORY_HIGH_WATER_MARGIN_SPLIT_POINT.
+        let is_near = memory_usage_reaches_near_high_water_internal(
+            11 * 1024 * 1024 * 1024,
+            12 * 1024 * 1024 * 1024,
+        );
+        assert!(is_near);
+    }
+
+    #[test]
+    fn test_not_near_high_water() {
+        // Below MEMORY_HIGH_WATER_MARGIN_SPLIT_POINT.
+        let is_near = memory_usage_reaches_near_high_water_internal(
+            8 * 1024 * 1024 * 1024,
+            9 * 1024 * 1024 * 1024,
+        );
+        assert!(!is_near);
+
+        // Above MEMORY_HIGH_WATER_MARGIN_SPLIT_POINT.
+        let is_near = memory_usage_reaches_near_high_water_internal(
+            10 * 1024 * 1024 * 1024,
+            12 * 1024 * 1024 * 1024,
+        );
+        assert!(!is_near);
     }
 }

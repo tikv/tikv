@@ -733,12 +733,26 @@ pub struct RaftCmdExtraOpts {
 
 /// Raft command is the command that is expected to be proposed by the
 /// leader of the target raft group.
-#[derive(Debug)]
 pub struct RaftCommand<S: Snapshot> {
     pub send_time: Instant,
     pub request: RaftCmdRequest,
     pub callback: Callback<S>,
     pub extra_opts: RaftCmdExtraOpts,
+}
+
+impl<S: Snapshot> fmt::Debug for RaftCommand<S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RaftCommand")
+            .field("send_time", &self.send_time)
+            .field("request", &self.request.get_requests().len())
+            .field(
+                "admin_request",
+                &self.request.get_admin_request().get_cmd_type(),
+            )
+            .field("callback", &self.callback)
+            .field("extra_opts", &self.extra_opts)
+            .finish()
+    }
 }
 
 impl<S: Snapshot> RaftCommand<S> {
@@ -774,29 +788,46 @@ pub struct InspectedRaftMessage {
     pub msg: RaftMessage,
 }
 
+impl fmt::Debug for InspectedRaftMessage {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.msg.has_extra_msg() {
+            write!(
+                fmt,
+                "[{}] Raft Message with extra message {:?}",
+                self.msg.get_region_id(),
+                self.msg.get_extra_msg().get_type()
+            )
+        } else {
+            write!(
+                fmt,
+                "[{}] Raft Message {:?}",
+                self.msg.get_region_id(),
+                self.msg.get_message().get_msg_type()
+            )
+        }
+    }
+}
+
 /// Message that can be sent to a peer.
-#[allow(clippy::large_enum_variant)]
 #[derive(EnumCount, EnumVariantNames)]
 pub enum PeerMsg<EK: KvEngine> {
     /// Raft message is the message sent between raft nodes in the same
     /// raft group. Messages need to be redirected to raftstore if target
     /// peer doesn't exist.
-    RaftMessage(InspectedRaftMessage, Option<Instant>),
+    RaftMessage(Box<InspectedRaftMessage>, Option<Instant>),
     /// Raft command is the command that is expected to be proposed by the
     /// leader of the target raft group. If it's failed to be sent, callback
     /// usually needs to be called before dropping in case of resource leak.
-    RaftCommand(RaftCommand<EK::Snapshot>),
+    RaftCommand(Box<RaftCommand<EK::Snapshot>>),
     /// Tick is periodical task. If target peer doesn't exist there is a
     /// potential that the raft node will not work anymore.
     Tick(PeerTick),
     /// Result of applying committed entries. The message can't be lost.
-    ApplyRes {
-        res: ApplyTaskRes<EK::Snapshot>,
-    },
+    ApplyRes(Box<ApplyTaskRes<EK::Snapshot>>),
     /// Message that can't be lost but rarely created. If they are lost, real
     /// bad things happen like some peers will be considered dead in the
     /// group.
-    SignificantMsg(SignificantMsg<EK::Snapshot>),
+    SignificantMsg(Box<SignificantMsg<EK::Snapshot>>),
     /// Start the FSM.
     Start,
     /// A message only used to notify a peer.
@@ -806,7 +837,7 @@ pub enum PeerMsg<EK: KvEngine> {
         ready_number: u64,
     },
     /// Message that is not important and can be dropped occasionally.
-    CasualMessage(CasualMessage<EK>),
+    CasualMessage(Box<CasualMessage<EK>>),
     /// Ask region to report a heartbeat to PD.
     HeartbeatPd,
     /// Asks region to change replication mode.
@@ -819,7 +850,9 @@ impl<EK: KvEngine> ResourceMetered for PeerMsg<EK> {}
 impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            PeerMsg::RaftMessage(..) => write!(fmt, "Raft Message"),
+            PeerMsg::RaftMessage(m, _) => {
+                write!(fmt, "{:?}", m)
+            }
             PeerMsg::RaftCommand(_) => write!(fmt, "Raft Command"),
             PeerMsg::Tick(tick) => write! {
                 fmt,
@@ -827,7 +860,7 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
                 tick
             },
             PeerMsg::SignificantMsg(msg) => write!(fmt, "{:?}", msg),
-            PeerMsg::ApplyRes { res } => write!(fmt, "ApplyRes {:?}", res),
+            PeerMsg::ApplyRes(res) => write!(fmt, "ApplyRes {:?}", res),
             PeerMsg::Start => write!(fmt, "Startup"),
             PeerMsg::Noop => write!(fmt, "Noop"),
             PeerMsg::Persisted {
@@ -852,8 +885,8 @@ impl<EK: KvEngine> PeerMsg<EK> {
             PeerMsg::RaftMessage(..) => 0,
             PeerMsg::RaftCommand(_) => 1,
             PeerMsg::Tick(_) => 2,
-            PeerMsg::SignificantMsg(_) => 3,
-            PeerMsg::ApplyRes { .. } => 4,
+            PeerMsg::ApplyRes { .. } => 3,
+            PeerMsg::SignificantMsg(_) => 4,
             PeerMsg::Start => 5,
             PeerMsg::Noop => 6,
             PeerMsg::Persisted { .. } => 7,
@@ -870,7 +903,7 @@ impl<EK: KvEngine> PeerMsg<EK> {
     pub fn is_send_failure_ignorable(&self) -> bool {
         matches!(
             self,
-            PeerMsg::SignificantMsg(SignificantMsg::CaptureChange { .. })
+            PeerMsg::SignificantMsg(box SignificantMsg::CaptureChange { .. })
         )
     }
 }
@@ -880,7 +913,7 @@ pub enum StoreMsg<EK>
 where
     EK: KvEngine,
 {
-    RaftMessage(InspectedRaftMessage),
+    RaftMessage(Box<InspectedRaftMessage>),
 
     // Clear region size and keys for all regions in the range, so we can force them to
     // re-calculate their size later.
@@ -932,22 +965,21 @@ where
     EK: KvEngine,
 {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match *self {
-            StoreMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
+        match self {
+            StoreMsg::RaftMessage(m) => {
+                write!(fmt, "{:?}", m)
+            }
             StoreMsg::StoreUnreachable { store_id } => {
                 write!(fmt, "Store {}  is unreachable", store_id)
             }
-            StoreMsg::CompactedEvent(ref event) => write!(fmt, "CompactedEvent cf {}", event.cf()),
-            StoreMsg::ClearRegionSizeInRange {
-                ref start_key,
-                ref end_key,
-            } => write!(
+            StoreMsg::CompactedEvent(event) => write!(fmt, "CompactedEvent cf {}", event.cf()),
+            StoreMsg::ClearRegionSizeInRange { start_key, end_key } => write!(
                 fmt,
                 "Clear Region size in range {:?} to {:?}",
                 start_key, end_key
             ),
             StoreMsg::Tick(tick) => write!(fmt, "StoreTick {:?}", tick),
-            StoreMsg::Start { ref store } => write!(fmt, "Start store {:?}", store),
+            StoreMsg::Start { store } => write!(fmt, "Start store {:?}", store),
             StoreMsg::UpdateReplicationMode(_) => write!(fmt, "UpdateReplicationMode"),
             StoreMsg::LatencyInspect { .. } => write!(fmt, "LatencyInspect"),
             StoreMsg::UnsafeRecoveryReport(..) => write!(fmt, "UnsafeRecoveryReport"),
@@ -980,5 +1012,20 @@ impl<EK: KvEngine> StoreMsg<EK> {
             #[cfg(any(test, feature = "testexport"))]
             StoreMsg::Validate(_) => 12, // Please keep this always be the last one.
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_msg_size() {
+        use std::mem;
+
+        use engine_rocks::RocksEngine;
+
+        use super::*;
+
+        // make sure the msg is small enough
+        assert_eq!(mem::size_of::<PeerMsg<RocksEngine>>(), 32);
     }
 }

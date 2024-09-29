@@ -4,7 +4,7 @@ use std::{cell::RefCell, mem, sync::Arc};
 
 use collections::HashMap;
 use kvproto::{metapb, pdpb::QueryKind};
-use pd_client::BucketMeta;
+use pd_client::{BucketMeta, RegionWriteCfCopDetail};
 use prometheus::*;
 use prometheus_static_metric::*;
 use raftstore::store::{util::build_key_range, ReadStats};
@@ -18,7 +18,9 @@ use crate::{
 make_auto_flush_static_metric! {
     pub label_enum ReqTag {
         select,
+        select_by_in_memory_engine,
         index,
+        index_by_region_cache,
         // For AnalyzeType::{TypeColumn,TypeMixed}.
         analyze_table,
         // For AnalyzeType::{TypeIndex,TypeCommonHandle}.
@@ -307,6 +309,11 @@ pub fn tls_collect_read_flow(
             end,
             &statistics.write.flow_stats,
             &statistics.data.flow_stats,
+            &RegionWriteCfCopDetail::new(
+                statistics.write.next,
+                statistics.write.prev,
+                statistics.write.processed_keys,
+            ),
         );
     });
 }

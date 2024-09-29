@@ -1,13 +1,13 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{KvEngine, RangeCacheEngine, Result, TtlProperties, TtlPropertiesExt};
+use engine_traits::{KvEngine, RegionCacheEngine, Result, TtlProperties, TtlPropertiesExt};
 
 use crate::engine::HybridEngine;
 
 impl<EK, EC> TtlPropertiesExt for HybridEngine<EK, EC>
 where
     EK: KvEngine,
-    EC: RangeCacheEngine,
+    EC: RegionCacheEngine,
 {
     fn get_range_ttl_properties_cf(
         &self,

@@ -156,9 +156,9 @@ dependencies = [
 
 [[package]]
 name = "async-compression"
-version = "0.3.14"
+version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "345fd392ab01f746c717b1357165b76f0b67a60192007b234058c9045fdcf695"
+checksum = "fec134f64e2bc57411226dfc4e52dec859ddfc7e711fc5e07b612584f000e4aa"
 dependencies = [
  "futures-core",
  "futures-io",
@@ -180,9 +180,8 @@ dependencies = [
 
 [[package]]
 name = "async-speed-limit"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "481ce9cb6a828f4679495f7376cb6779978d925dd9790b99b48d1bbde6d0f00b"
+version = "0.4.1"
+source = "git+https://github.com/tikv/async-speed-limit?branch=master#a113aef3cc24bf7fa5faf2b7025abaf02fc53fe3"
 dependencies = [
  "futures-core",
  "futures-io",
@@ -851,10 +850,12 @@ dependencies = [
  "bytes",
  "chrono",
  "concurrency_manager",
+ "crc64fast",
  "crossbeam",
  "crossbeam-channel",
  "dashmap",
  "encryption",
+ "encryption_export",
  "engine_panic",
  "engine_rocks",
  "engine_test",
@@ -1103,9 +1104,9 @@ checksum = "7f30e7476521f6f8af1a1c4c0b8cc94f0bee37d91763d0ca2665f299b6cd8aec"
 
 [[package]]
 name = "bytemuck"
-version = "1.9.1"
+version = "1.16.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cdead85bdec19c194affaeeb670c0e41fe23de31459efd1c174d049269cf02cc"
+checksum = "102087e286b4677862ea56cf8fc58bb2cdfa8725c40ffb80fe3a008eb7f2fc83"
 
 [[package]]
 name = "byteorder"
@@ -1443,7 +1444,7 @@ name = "concurrency_manager"
 version = "0.0.1"
 dependencies = [
  "criterion",
- "crossbeam-skiplist",
+ "crossbeam-skiplist 0.1.3",
  "fail",
  "futures 0.3.15",
  "kvproto",
@@ -1616,9 +1617,9 @@ dependencies = [
 
 [[package]]
 name = "crossbeam"
-version = "0.8.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ae5588f6b3c3cb05239e90bd110f257254aecd01e4635400391aeae07497845"
+checksum = "2801af0d36612ae591caa9568261fddce32ce6e08a7275ea334a06a4ad021a2c"
 dependencies = [
  "cfg-if 1.0.0",
  "crossbeam-channel",
@@ -1630,9 +1631,9 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-channel"
-version = "0.5.11"
+version = "0.5.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "176dc175b78f56c0f321911d9c8eb2b77a78a4860b9c19db83835fea1a46649b"
+checksum = "33480d6946193aa8033910124896ca395333cae7e2d1113d1fef6c3272217df2"
 dependencies = [
  "crossbeam-utils",
 ]
@@ -1650,16 +1651,11 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-epoch"
-version = "0.9.8"
+version = "0.9.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1145cf131a2c6ba0615079ab6a638f7e1973ac9c2634fcbeaaad6114246efe8c"
+checksum = "5b82ac4a3c2ca9c3460964f020e1402edd5753411d7737aa39c3714ad1b5420e"
 dependencies = [
- "autocfg",
- "cfg-if 1.0.0",
  "crossbeam-utils",
- "lazy_static",
- "memoffset 0.6.4",
- "scopeguard",
 ]
 
 [[package]]
@@ -1674,21 +1670,28 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-skiplist"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "883a5821d7d079fcf34ac55f27a833ee61678110f6b97637cc74513c0d0b42fc"
+version = "0.1.3"
 dependencies = [
- "cfg-if 1.0.0",
  "crossbeam-epoch",
  "crossbeam-utils",
- "scopeguard",
+ "rand 0.8.5",
+]
+
+[[package]]
+name = "crossbeam-skiplist"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df29de440c58ca2cc6e587ec3d22347551a32435fbde9d2bff64e78a9ffa151b"
+dependencies = [
+ "crossbeam-epoch",
+ "crossbeam-utils",
 ]
 
 [[package]]
 name = "crossbeam-utils"
-version = "0.8.19"
+version = "0.8.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "248e3bacc7dc6baa3b21e405ee045c3047101a49145e7e9eca583ab4c2ca5345"
+checksum = "22ec99545bb0ed0ea7bb9b8e1e9122ea386ff8a48c0922e43f36d45ab09e0e80"
 
 [[package]]
 name = "crypto"
@@ -1916,6 +1919,7 @@ dependencies = [
  "openssl",
  "prometheus",
  "protobuf",
+ "rand 0.8.5",
  "serde",
  "serde_derive",
  "slog",
@@ -3017,14 +3021,19 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "fail",
+ "in_memory_engine",
+ "kvproto",
  "lazy_static",
+ "log_wrappers",
  "online_config",
  "prometheus",
  "prometheus-static-metric",
- "region_cache_memory_engine",
+ "raft",
+ "raftstore",
  "slog",
  "slog-global",
  "tempfile",
+ "test_util",
  "tikv_util",
  "txn_types",
 ]
@@ -3105,6 +3114,51 @@ name = "if_chain"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb56e1aa765b4b4f3aadfab769793b7087bb03a4ea4920644a6d238e2df5b9ed"
+
+[[package]]
+name = "in_memory_engine"
+version = "0.0.1"
+dependencies = [
+ "bytes",
+ "collections",
+ "crossbeam",
+ "crossbeam-skiplist 0.1.3",
+ "dashmap",
+ "engine_rocks",
+ "engine_traits",
+ "fail",
+ "futures 0.3.15",
+ "hex 0.4.2",
+ "keys",
+ "kvproto",
+ "lazy_static",
+ "libc 0.2.151",
+ "log_wrappers",
+ "online_config",
+ "parking_lot 0.12.1",
+ "pd_client",
+ "prometheus",
+ "prometheus-static-metric",
+ "proptest",
+ "raftstore",
+ "rand 0.8.5",
+ "security",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "slog",
+ "slog-global",
+ "strum 0.20.0",
+ "tempfile",
+ "test_pd",
+ "test_pd_client",
+ "test_util",
+ "thiserror",
+ "tikv_util",
+ "tokio",
+ "txn_types",
+ "yatp",
+]
 
 [[package]]
 name = "indexmap"
@@ -3317,7 +3371,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#0ad602a429126e39bd4a87c687be64f9ae173c02"
+source = "git+https://github.com/pingcap/kvproto.git#4a3e17f5e62dc3999e2c0f63293fdeffced80626"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -3388,7 +3442,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#224bed6ffa29ba3bbe9a91ef6bda7186200c59a8"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c92c467a3ab0b60484a0db83fcf89366791716cd"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -3407,7 +3461,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#224bed6ffa29ba3bbe9a91ef6bda7186200c59a8"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c92c467a3ab0b60484a0db83fcf89366791716cd"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3478,10 +3532,13 @@ name = "log_wrappers"
 version = "0.0.1"
 dependencies = [
  "hex 0.4.3",
+ "atomic",
  "protobuf",
+ "serde",
  "slog",
  "slog-term",
  "tikv_alloc",
+ "toml",
 ]
 
 [[package]]
@@ -4570,8 +4627,9 @@ dependencies = [
 [[package]]
 name = "protobuf"
 version = "2.8.0"
-source = "git+https://github.com/pingcap/rust-protobuf?branch=v2.8#6642ebaae4352ea01bf00e160480d8da966d3109"
+source = "git+https://github.com/pingcap/rust-protobuf?branch=v2.8#6d445fe5ff4e99621a800be0f2c54dc96f056bac"
 dependencies = [
+ "atomic",
  "bytes",
  "heck 0.3.1",
  "hex 0.3.2",
@@ -4594,7 +4652,7 @@ dependencies = [
 [[package]]
 name = "protobuf-codegen"
 version = "2.8.0"
-source = "git+https://github.com/pingcap/rust-protobuf?branch=v2.8#6642ebaae4352ea01bf00e160480d8da966d3109"
+source = "git+https://github.com/pingcap/rust-protobuf?branch=v2.8#6d445fe5ff4e99621a800be0f2c54dc96f056bac"
 dependencies = [
  "heck 0.3.1",
  "protobuf",
@@ -4776,7 +4834,6 @@ dependencies = [
  "getset",
  "grpcio-health",
  "health_controller",
- "hybrid_engine",
  "into_other",
  "itertools",
  "keys",
@@ -4797,7 +4854,6 @@ dependencies = [
  "raft",
  "raft-proto",
  "rand 0.8.5",
- "region_cache_memory_engine",
  "resource_control",
  "resource_metering",
  "serde",
@@ -5114,48 +5170,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08c74e62047bb2de4ff487b251e4a92e24f48745648451635cec7d591162d9f"
 
 [[package]]
-name = "region_cache_memory_engine"
-version = "0.0.1"
-dependencies = [
- "bytes",
- "collections",
- "crossbeam",
- "dashmap",
- "engine_rocks",
- "engine_traits",
- "fail",
- "futures 0.3.15",
- "hex 0.4.3",
- "keys",
- "kvproto",
- "lazy_static",
- "libc 0.2.151",
- "log_wrappers",
- "online_config",
- "parking_lot 0.12.1",
- "pd_client",
- "prometheus",
- "prometheus-static-metric",
- "raftstore",
- "rand 0.8.5",
- "security",
- "serde",
- "serde_derive",
- "serde_json",
- "skiplist-rs",
- "slog",
- "slog-global",
- "tempfile",
- "test_pd",
- "test_pd_client",
- "test_util",
- "thiserror",
- "tikv_util",
- "txn_types",
- "yatp",
-]
-
-[[package]]
 name = "remove_dir_all"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5243,7 +5257,7 @@ dependencies = [
  "byteorder",
  "collections",
  "crossbeam",
- "crossbeam-skiplist",
+ "crossbeam-skiplist 0.1.3",
  "dashmap",
  "fail",
  "file_system",
@@ -5338,7 +5352,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#224bed6ffa29ba3bbe9a91ef6bda7186200c59a8"
+source = "git+https://github.com/tikv/rust-rocksdb.git#c92c467a3ab0b60484a0db83fcf89366791716cd"
 dependencies = [
  "libc 0.2.151",
  "librocksdb_sys",
@@ -5500,6 +5514,7 @@ dependencies = [
  "encryption",
  "grpcio",
  "kvproto",
+ "log_wrappers",
  "serde",
  "serde_derive",
  "serde_json",
@@ -5716,13 +5731,13 @@ dependencies = [
  "error_code",
  "fail",
  "file_system",
- "fs2",
  "futures 0.3.15",
  "grpcio",
  "grpcio-health",
  "health_controller",
  "hex 0.4.3",
  "hybrid_engine",
+ "in_memory_engine",
  "keys",
  "kvproto",
  "libc 0.2.151",
@@ -5735,7 +5750,6 @@ dependencies = [
  "raft_log_engine",
  "raftstore",
  "raftstore-v2",
- "region_cache_memory_engine",
  "resolved_ts",
  "resource_control",
  "resource_metering",
@@ -5839,15 +5853,6 @@ name = "siphasher"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fa8f3741c7372e75519bd9346068370c9cdaabcc1f9599cbcf2a2719352286b7"
-
-[[package]]
-name = "skiplist-rs"
-version = "0.1.0"
-source = "git+https://github.com/tikv/skiplist-rs.git?branch=main#d158a040783715612b80785e03d239ba5deb8960"
-dependencies = [
- "crossbeam-epoch",
- "crossbeam-utils",
-]
 
 [[package]]
 name = "slab"
@@ -6015,10 +6020,12 @@ name = "sst_importer"
 version = "0.1.0"
 dependencies = [
  "api_version",
+ "async-compression",
  "collections",
  "crc32fast",
  "dashmap",
  "encryption",
+ "encryption_export",
  "engine_rocks",
  "engine_test",
  "engine_traits",
@@ -6048,6 +6055,7 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "tokio",
+ "tokio-util",
  "txn_types",
  "uuid 0.8.2",
 ]
@@ -6372,11 +6380,13 @@ name = "test_coprocessor"
 version = "0.0.1"
 dependencies = [
  "api_version",
+ "codec",
  "collections",
  "concurrency_manager",
  "engine_rocks",
  "futures 0.3.15",
  "kvproto",
+ "pd_client",
  "protobuf",
  "resource_metering",
  "test_storage",
@@ -6450,6 +6460,7 @@ dependencies = [
  "grpcio-health",
  "health_controller",
  "hybrid_engine",
+ "in_memory_engine",
  "keys",
  "kvproto",
  "lazy_static",
@@ -6459,7 +6470,6 @@ dependencies = [
  "raft",
  "raftstore",
  "rand 0.8.5",
- "region_cache_memory_engine",
  "resolved_ts",
  "resource_control",
  "resource_metering",
@@ -6585,6 +6595,7 @@ dependencies = [
  "fail",
  "grpcio",
  "kvproto",
+ "log_wrappers",
  "rand 0.8.5",
  "rand_isaac",
  "security",
@@ -6626,6 +6637,7 @@ dependencies = [
  "grpcio-health",
  "health_controller",
  "hyper",
+ "in_memory_engine",
  "keys",
  "kvproto",
  "libc 0.2.151",
@@ -6786,11 +6798,13 @@ dependencies = [
  "bitflags 1.3.2",
  "boolinator",
  "bstr",
+ "bytemuck",
  "chrono",
  "chrono-tz",
  "codec",
  "collections",
  "crc32fast",
+ "criterion",
  "encoding_rs 0.8.29",
  "error_code",
  "hex 0.4.3",
@@ -6886,7 +6900,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "8.2.0-alpha"
+version = "8.4.0-alpha"
 dependencies = [
  "anyhow",
  "api_version",
@@ -6906,6 +6920,7 @@ dependencies = [
  "crossbeam",
  "crypto",
  "dashmap",
+ "encryption",
  "encryption_export",
  "engine_panic",
  "engine_rocks",
@@ -6932,6 +6947,7 @@ dependencies = [
  "hyper",
  "hyper-openssl",
  "hyper-tls",
+ "in_memory_engine",
  "into_other",
  "itertools",
  "keyed_priority_queue",
@@ -6970,7 +6986,6 @@ dependencies = [
  "raftstore-v2",
  "rand 0.7.3",
  "regex",
- "region_cache_memory_engine",
  "reqwest",
  "resource_control",
  "resource_metering",
@@ -7191,10 +7206,11 @@ dependencies = [
  "cpu-time",
  "crc32fast",
  "crossbeam",
- "crossbeam-skiplist",
+ "crossbeam-skiplist 0.1.3",
  "derive_more",
  "error_code",
  "fail",
+ "fs2",
  "futures 0.3.15",
  "futures-util",
  "gag",
@@ -7312,7 +7328,7 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/pingcap/tipb.git#87f5b80908ab561fb7875c88114488cad15727b1"
+source = "git+https://github.com/pingcap/tipb.git#cf70966bef25e205cb845c19265301542d1238d1"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -7548,6 +7564,7 @@ dependencies = [
  "pin-project",
  "prometheus",
  "slab",
+ "slog",
 ]
 
 [[package]]
@@ -8225,7 +8242,7 @@ version = "0.0.1"
 source = "git+https://github.com/tikv/yatp.git?branch=master#793be4d789d4bd15292fe4d06e38063b4ec9d48e"
 dependencies = [
  "crossbeam-deque",
- "crossbeam-skiplist",
+ "crossbeam-skiplist 0.1.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "crossbeam-utils",
  "dashmap",
  "fail",
@@ -8273,31 +8290,30 @@ dependencies = [
 
 [[package]]
 name = "zstd"
-version = "0.11.2+zstd.1.5.2"
+version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "20cc960326ece64f010d2d2107537f26dc589a6573a316bd5b1dba685fa5fde4"
+checksum = "fcf2b778a664581e31e389454a7072dab1647606d44f7feea22cd5abb9c9f3f9"
 dependencies = [
  "zstd-safe",
 ]
 
 [[package]]
 name = "zstd-safe"
-version = "5.0.2+zstd.1.5.2"
+version = "7.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d2a5585e04f9eea4b2a3d1eca508c4dee9592a89ef6f450c11719da0726f4db"
+checksum = "54a3ab4db68cea366acc5c897c7b4d4d1b8994a9cd6e6f841f8964566a419059"
 dependencies = [
- "libc 0.2.151",
  "zstd-sys",
 ]
 
 [[package]]
 name = "zstd-sys"
-version = "2.0.1+zstd.1.5.2"
+version = "2.0.13+zstd.1.5.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9fd07cbbc53846d9145dbffdf6dd09a7a0aa52be46741825f5c97bdd4f73f12b"
+checksum = "38ff0f21cfee8f97d94cef41359e0c89aa6113028ab0291aa8ca0038995a95aa"
 dependencies = [
  "cc",
- "libc 0.2.151",
+ "pkg-config",
 ]
 
 [[patch.unused]]

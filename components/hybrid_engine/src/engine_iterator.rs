@@ -1,14 +1,14 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{
-    IterMetricsCollector, Iterable, Iterator, KvEngine, MetricsExt, RangeCacheEngine, Result,
+    IterMetricsCollector, Iterable, Iterator, KvEngine, MetricsExt, RegionCacheEngine, Result,
 };
 use tikv_util::Either;
 
 pub struct HybridEngineIterator<EK, EC>
 where
     EK: KvEngine,
-    EC: RangeCacheEngine,
+    EC: RegionCacheEngine,
 {
     iter: Either<<EK::Snapshot as Iterable>::Iterator, <EC::Snapshot as Iterable>::Iterator>,
 }
@@ -16,7 +16,7 @@ where
 impl<EK, EC> HybridEngineIterator<EK, EC>
 where
     EK: KvEngine,
-    EC: RangeCacheEngine,
+    EC: RegionCacheEngine,
 {
     pub fn disk_engine_iterator(iter: <EK::Snapshot as Iterable>::Iterator) -> Self {
         Self {
@@ -34,7 +34,7 @@ where
 impl<EK, EC> Iterator for HybridEngineIterator<EK, EC>
 where
     EK: KvEngine,
-    EC: RangeCacheEngine,
+    EC: RegionCacheEngine,
 {
     fn seek(&mut self, key: &[u8]) -> Result<bool> {
         match self.iter {
@@ -103,7 +103,7 @@ where
 pub struct HybridEngineIterMetricsCollector<EK, EC>
 where
     EK: KvEngine,
-    EC: RangeCacheEngine,
+    EC: RegionCacheEngine,
 {
     collector: Either<
         <<EK::Snapshot as Iterable>::Iterator as MetricsExt>::Collector,
@@ -114,7 +114,7 @@ where
 impl<EK, EC> IterMetricsCollector for HybridEngineIterMetricsCollector<EK, EC>
 where
     EK: KvEngine,
-    EC: RangeCacheEngine,
+    EC: RegionCacheEngine,
 {
     fn internal_delete_skipped_count(&self) -> u64 {
         match &self.collector {
@@ -134,7 +134,7 @@ where
 impl<EK, EC> MetricsExt for HybridEngineIterator<EK, EC>
 where
     EK: KvEngine,
-    EC: RangeCacheEngine,
+    EC: RegionCacheEngine,
 {
     type Collector = HybridEngineIterMetricsCollector<EK, EC>;
 

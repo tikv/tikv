@@ -7,10 +7,11 @@ license = "Apache-2.0"
 
 [dependencies]
 collections = { workspace = true }
-crossbeam-utils = "0.8"
+crossbeam-utils = { workspace = true }
 kvproto = { workspace = true }
 lazy_static = "1"
 parking_lot = "0.12"
 pin-project = "1"
 prometheus = "0.13"
 slab = "0.4"
+slog = { workspace = true }

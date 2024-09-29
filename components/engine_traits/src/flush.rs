@@ -217,7 +217,7 @@ impl PersistenceListener {
             })
         })();
         // The correctness relies on the assumption that there will be only one
-        // thread writting to the DB and increasing apply index.
+        // thread writing to the DB and increasing apply index.
         // Apply index will be set within DB lock, so it's correct even with manual
         // flush.
         let offset = data_cf_offset(&cf);
