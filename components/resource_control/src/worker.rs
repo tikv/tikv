@@ -206,6 +206,12 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
             BACKGROUND_RESOURCE_CONSUMPTION
                 .with_label_values(&[&g.name, resource_type.as_str()])
                 .inc_by(stats_delta.total_consumed);
+            if resource_type == ResourceType::Cpu {
+                BACKGROUND_TASKS_WAIT_DURATION
+                    .with_label_values(&[&g.name])
+                    .inc_by(stats_delta.total_wait_dur_us);
+            }
+
             let stats_per_sec = stats_delta / dur_secs;
             background_consumed_total += stats_per_sec.total_consumed as f64;
             g.stats_per_sec = stats_per_sec;
@@ -513,16 +519,21 @@ impl PriorityLimiterStatsTracker {
 
     fn get_and_update_last_stats(&mut self, dur_secs: f64) -> LimiterStats {
         let cur_stats = self.limiter.get_limit_statistics(ResourceType::Cpu);
-        let stats_delta = (cur_stats - self.last_stats) / dur_secs;
+        let stats_delta = cur_stats - self.last_stats;
         self.last_stats = cur_stats;
+        PRIORITY_CPU_TIME_VEC
+            .with_label_values(&[self.priority])
+            .inc_by(stats_delta.total_consumed);
+        let stats_per_sec = stats_delta / dur_secs;
+
         let wait_stats: [_; 2] =
             std::array::from_fn(|i| self.task_wait_dur_trakcers[i].get_and_upate_statistics());
         let schedule_wait_dur_secs = wait_stats.iter().map(|s| s.0).sum::<f64>() / dur_secs;
         LimiterStats {
-            cpu_secs: stats_delta.total_consumed as f64 / MICROS_PER_SEC,
-            wait_secs: stats_delta.total_wait_dur_us as f64 / MICROS_PER_SEC
+            cpu_secs: stats_per_sec.total_consumed as f64 / MICROS_PER_SEC,
+            wait_secs: stats_per_sec.total_wait_dur_us as f64 / MICROS_PER_SEC
                 + schedule_wait_dur_secs,
-            req_count: stats_delta.request_count,
+            req_count: stats_per_sec.request_count,
         }
     }
 }
@@ -629,6 +640,7 @@ mod tests {
             worker.last_adjust_time = now - dur;
         };
 
+        #[track_caller]
         fn check(val: f64, expected: f64) {
             assert!(
                 expected * 0.99 < val && val < expected * 1.01,
@@ -638,6 +650,7 @@ mod tests {
             );
         }
 
+        #[track_caller]
         fn check_limiter(limiter: &Arc<ResourceLimiter>, cpu: f64, io: IoBytes) {
             check(
                 limiter.get_limiter(ResourceType::Cpu).get_rate_limit(),
@@ -804,18 +817,18 @@ mod tests {
         worker.adjust_quota();
         check_limiter(
             &limiter,
-            2.4,
+            1.2,
             IoBytes {
-                read: 1400,
-                write: 1400,
+                read: 1800,
+                write: 1800,
             },
         );
         check_limiter(
             &bg_limiter,
-            1.6,
+            2.8,
             IoBytes {
-                read: 1800,
-                write: 1800,
+                read: 1400,
+                write: 1400,
             },
         );
 
@@ -882,18 +895,18 @@ mod tests {
         worker.adjust_quota();
         check_limiter(
             &limiter,
-            2.4,
+            2.2,
             IoBytes {
-                read: 1400,
-                write: 1400,
+                read: 2133,
+                write: 2133,
             },
         );
         check_limiter(
             &new_bg_limiter,
-            1.6,
+            1.8,
             IoBytes {
-                read: 1800,
-                write: 1800,
+                read: 1066,
+                write: 1066,
             },
         );
     }
