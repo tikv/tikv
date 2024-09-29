@@ -2,6 +2,7 @@
 #![feature(test)]
 #![feature(local_key_cell_methods)]
 #![feature(array_zip)]
+#![feature(let_chains)]
 
 use std::sync::Arc;
 
