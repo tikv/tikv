@@ -670,7 +670,7 @@ fn test_pre_load_when_transfer_ledaer() {
 fn test_background_loading_pending_region() {
     fail::cfg("background_check_load_pending_interval", "return(1000)").unwrap();
 
-    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
+    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
     cluster.run();
 
     let r = cluster.get_region(b"");
