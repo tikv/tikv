@@ -69,7 +69,7 @@ use tikv_util::{
     time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant, SlowTimer},
     timer::SteadyTimer,
     warn,
-    worker::{LazyWorker, Scheduler, Worker},
+    worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
     yatp_pool::FuturePool,
     Either, RingQueue,
 };
@@ -122,6 +122,7 @@ type Key = Vec<u8>;
 pub const PENDING_MSG_CAP: usize = 100;
 pub const ENTRY_CACHE_EVICT_TICK_DURATION: Duration = Duration::from_secs(1);
 pub const MULTI_FILES_SNAPSHOT_FEATURE: Feature = Feature::require(6, 1, 0); // it only makes sense for large region
+const SNAP_GENERATOR_MAX_POOL_SIZE: usize = 16;
 
 // Every 30 minutes, check if we can run full compaction. This allows the config
 // setting `periodic_full_compact_start_times` to be changed dynamically.
@@ -1695,11 +1696,15 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             None
         };
         let bgworker_remote = background_worker.remote();
+        let snap_gen_worker = WorkerBuilder::new("snap-gen-worker")
+            .thread_count(cfg.value().snap_generator_pool_size)
+            .thread_count_limits(1, SNAP_GENERATOR_MAX_POOL_SIZE)
+            .create();
         let workers = Workers {
             pd_worker,
             background_worker,
             cleanup_worker: Worker::new("cleanup-worker"),
-            snap_gen_worker: Worker::new("snap-gen-worker"),
+            snap_gen_worker,
             region_worker: Worker::new("region-worker"),
             purge_worker,
             raftlog_fetch_worker: Worker::new("raftlog-fetch-worker"),
@@ -1711,9 +1716,9 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let snap_gen_runner = SnapGenRunner::new(
             engines.kv.clone(),
             mgr.clone(),
-            cfg.clone(),
             self.router(),
             Some(Arc::clone(&pd_client)),
+            workers.snap_gen_worker.pool(), // Reuse the worker's FuturePool
         );
 
         let region_runner = RegionRunner::new(
@@ -1723,8 +1728,8 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             workers.coprocessor_host.clone(),
             self.router(),
         );
-        let snap_generator_pool = snap_gen_runner.snap_generator_pool();
-        let snap_gen_scheduler = workers
+        let snap_generator_pool = workers.snap_gen_worker.pool();
+        let snap_gen_scheduler: Scheduler<SnapGenTask<<EK as KvEngine>::Snapshot>> = workers
             .snap_gen_worker
             .start("snap-gen-worker", snap_gen_runner);
         let region_scheduler = workers

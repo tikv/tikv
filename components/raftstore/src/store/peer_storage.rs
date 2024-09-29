@@ -1274,7 +1274,7 @@ pub mod tests {
         entry_storage::tests::validate_cache,
         fsm::apply::compact_raft_log,
         initial_region, prepare_bootstrap_cluster,
-        worker::{make_region_worker_raftstore_cfg, RegionTask, SnapGenRunner, SnapGenTask},
+        worker::{RegionTask, SnapGenRunner, SnapGenTask},
         AsyncReadNotifier, FetchedLogs, GenSnapRes,
     };
 
@@ -1688,16 +1688,15 @@ pub mod tests {
         let (dummy_scheduler, _) = dummy_scheduler();
         let mut s = new_storage_from_ents(sched.clone(), dummy_scheduler, &td, &ents);
         let (router, _) = mpsc::sync_channel(100);
-        let cfg = make_region_worker_raftstore_cfg(true);
 
         let mut snap_gen_worker = LazyWorker::new("snap-gen-worker");
         let snap_gen_sched = snap_gen_worker.scheduler();
         let snap_gen_runner = SnapGenRunner::new(
             s.engines.kv.clone(),
             mgr,
-            cfg,
             router,
             Option::<Arc<TestPdClient>>::None,
+            snap_gen_worker.pool(),
         );
         snap_gen_worker.start(snap_gen_runner);
 
@@ -1854,12 +1853,16 @@ pub mod tests {
         let store = new_store(1, labels);
         pd_client.add_store(store);
         let pd_mock = Arc::new(pd_client);
-        let cfg = make_region_worker_raftstore_cfg(true);
 
         let mut snap_gen_worker = LazyWorker::new("snap-gen-worker");
         let snap_gen_sched = snap_gen_worker.scheduler();
-        let snap_gen_runner =
-            SnapGenRunner::new(s.engines.kv.clone(), mgr, cfg, router, Some(pd_mock));
+        let snap_gen_runner = SnapGenRunner::new(
+            s.engines.kv.clone(),
+            mgr,
+            router,
+            Some(pd_mock),
+            snap_gen_worker.pool(),
+        );
         snap_gen_worker.start(snap_gen_runner);
 
         let snap = s.snapshot(0, 1);
@@ -1912,7 +1915,6 @@ pub mod tests {
         let (sched, _) = dummy_scheduler();
         let (dummy_scheduler, _) = dummy_scheduler();
         let mut s = new_storage_from_ents(sched, dummy_scheduler, &td, &ents);
-        let cfg = make_region_worker_raftstore_cfg(true);
         let (router, _) = mpsc::sync_channel(100);
 
         let mut snap_gen_worker = LazyWorker::new("snap-gen-worker");
@@ -1920,9 +1922,9 @@ pub mod tests {
         let snap_gen_runner = SnapGenRunner::new(
             s.engines.kv.clone(),
             mgr,
-            cfg,
             router,
             Option::<Arc<TestPdClient>>::None,
+            snap_gen_worker.pool(),
         );
         snap_gen_worker.start(snap_gen_runner);
 
@@ -1994,16 +1996,15 @@ pub mod tests {
         let (dummy_scheduler, _) = dummy_scheduler();
         let s1 = new_storage_from_ents(sched.clone(), dummy_scheduler.clone(), &td1, &ents);
         let (router, _) = mpsc::sync_channel(100);
-        let cfg = make_region_worker_raftstore_cfg(true);
 
         let mut snap_gen_worker = LazyWorker::new("snap-gen-worker");
         let snap_gen_sched = snap_gen_worker.scheduler();
         let snap_gen_runner = SnapGenRunner::new(
             s1.engines.kv.clone(),
             mgr,
-            cfg,
             router,
             Option::<Arc<TestPdClient>>::None,
+            snap_gen_worker.pool(),
         );
         snap_gen_worker.start(snap_gen_runner);
 

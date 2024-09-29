@@ -1028,9 +1028,9 @@ pub(crate) mod tests {
         let snap_gen_runner = SnapGenRunner::new(
             engine.kv.clone(),
             mgr,
-            cfg,
             router,
             Option::<Arc<RpcClient>>::None,
+            snap_gen_worker.pool(),
         );
         snap_gen_worker.start(snap_gen_runner);
 
