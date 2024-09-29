@@ -87,24 +87,24 @@ impl AwsKms {
                     aws_config.secret_access_key.clone(),
                 ) {
                     // Use provided AWS credentials
-                    let credentials = AwsCredentials::new(
+                    let credentials = aws_credential_types::Credentials::new(
                         access_key,
                         secret_access_key,
                         None, // session token
                         None, // expiration
+                        "user-provided",
                     );
-                    let static_provider = StaticProvider::from(credentials);
-                    Self::new_with_creds_client(config, dispatcher, static_provider)
+                    let static_provider =
+                        aws_credential_types::provider::SharedCredentialsProvider::new(credentials);
+                    Self::new_with_creds_client(config, client, static_provider)
                 } else {
                     // Fall back to default credentials provider
-                    let provider = util::CredentialsProvider::new()?;
-                    Self::new_with_creds_client(config, dispatcher, provider)
+                    Self::new_with_creds_client(config, client, creds)
                 }
             }
             None => {
                 // No AWS config provided, use default credentials provider
-                let provider = util::CredentialsProvider::new()?;
-                Self::new_with_creds_client(config, dispatcher, provider)
+                Self::new_with_creds_client(config, client, creds)
             }
         }
     }

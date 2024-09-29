@@ -381,7 +381,7 @@ impl RetryError for UploadError {
 
 impl<T: 'static + StdError> From<SdkError<T>> for UploadError {
     fn from(err: SdkError<T>) -> Self {
-        let msg = format!("{}", err);
+        let msg = format!("{:?}", err);
         Self::Sdk {
             msg,
             retryable: util::is_retryable(&err),
@@ -452,7 +452,7 @@ impl<'client> S3Uploader<'client> {
             // For short files, execute one put_object to upload the entire thing.
             let mut data = Vec::with_capacity(est_len as usize);
             reader.read_to_end(&mut data).await?;
-            retry_and_count(|| self.upload(&data), "upload_small_file").await?;
+            Box::pin(retry_and_count(|| self.upload(&data), "upload_small_file")).await?;
             Ok(())
         } else {
             // Otherwise, use multipart upload to improve robustness.
@@ -642,38 +642,41 @@ impl<'client> S3Uploader<'client> {
                 .map(|_| ())
                 .map_err(|err| err.into())
         };
-        timeout(Self::get_timeout(), async {
-            #[cfg(feature = "failpoints")]
-            let delay_duration = (|| {
-                fail_point!("s3_sleep_injected", |t| {
-                    let t = t.unwrap().parse::<u64>().unwrap();
-                    Duration::from_millis(t)
+        timeout(
+            Self::get_timeout(),
+            Box::pin(async {
+                #[cfg(feature = "failpoints")]
+                let delay_duration = (|| {
+                    fail_point!("s3_sleep_injected", |t| {
+                        let t = t.unwrap().parse::<u64>().unwrap();
+                        Duration::from_millis(t)
+                    });
+                    Duration::from_millis(0)
+                })();
+                #[cfg(not(feature = "failpoints"))]
+                let delay_duration = Duration::from_millis(0);
+
+                if delay_duration > Duration::from_millis(0) {
+                    sleep(delay_duration).await;
+                }
+
+                fail_point!("s3_put_obj_err", |_| {
+                    Err(UploadError::Sdk {
+                        msg: "failed to put object".to_owned(),
+                        retryable: false,
+                    })
                 });
-                Duration::from_millis(0)
-            })();
-            #[cfg(not(feature = "failpoints"))]
-            let delay_duration = Duration::from_millis(0);
 
-            if delay_duration > Duration::from_millis(0) {
-                sleep(delay_duration).await;
-            }
+                let start = Instant::now();
 
-            fail_point!("s3_put_obj_err", |_| {
-                Err(UploadError::Sdk {
-                    msg: "failed to put object".to_owned(),
-                    retryable: false,
-                })
-            });
+                let result = request.await;
 
-            let start = Instant::now();
-
-            let result = request.await;
-
-            CLOUD_REQUEST_HISTOGRAM_VEC
-                .with_label_values(&["s3", "put_object"])
-                .observe(start.saturating_elapsed().as_secs_f64());
-            result
-        })
+                CLOUD_REQUEST_HISTOGRAM_VEC
+                    .with_label_values(&["s3", "put_object"])
+                    .observe(start.saturating_elapsed().as_secs_f64());
+                result
+            }),
+        )
         .await
         .map_err(|_| UploadError::Sdk {
             msg: "timeout after 15mins for upload in s3 storage".to_owned(),
@@ -708,7 +711,7 @@ impl BlobStorage for S3Storage {
         debug!("save file to s3 storage"; "key" => %key);
 
         let uploader = S3Uploader::new(&self.client, &self.config, key);
-        let result = uploader.run(&mut reader, content_length).await;
+        let result = Box::pin(uploader.run(&mut reader, content_length)).await;
         result.map_err(|e| {
             let error_code = if let UploadError::Io(ref io_error) = e {
                 io_error.kind()

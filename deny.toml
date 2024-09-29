@@ -12,7 +12,7 @@ deny = [
     { name = "sha1", wrappers = ["aws-smithy-checksums"]},
     { name = "sha-1" },
     # We allow sha2 for oauth2 crate, because it does use sha2 in TiKV use case.
-    { name = "sha2", wrappers = ["oauth2", "aws-sigv4", "rusoto_signature", "aws-smithy-checksums"] },
+    { name = "sha2", wrappers = ["oauth2", "aws-sigv4", "aws-smithy-checksums"] },
     { name = "sha3" },
     # Symmetric encryption
     { name = "aes" },

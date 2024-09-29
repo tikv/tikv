@@ -276,7 +276,6 @@ dependencies = [
  "grpcio",
  "http 0.2.12",
  "hyper",
- "hyper-openssl",
  "hyper-tls",
  "kvproto",
  "lazy_static",
@@ -1116,9 +1115,9 @@ checksum = "14c189c53d098945499cdfa7ecc63567cf3886b3332b312a5b4585d8d3a6a610"
 
 [[package]]
 name = "bytes"
-version = "1.6.0"
+version = "1.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "514de17de45fdb8dc022b1a7975556c53c86f9f0aa5f534b98977b171857c2c9"
+checksum = "428d9aa8fbc0670b7b8d6030a7fadd0f86151cae55e4dbbece15f3780a3dfaf3"
 
 [[package]]
 name = "bytes-utils"
@@ -3128,7 +3127,7 @@ dependencies = [
  "engine_traits",
  "fail",
  "futures 0.3.15",
- "hex 0.4.2",
+ "hex 0.4.3",
  "keys",
  "kvproto",
  "lazy_static",
@@ -3531,8 +3530,8 @@ checksum = "b5e6163cb8c49088c2c36f57875e58ccd8c87c7427f7fbd50ea6710b2f3f2e8f"
 name = "log_wrappers"
 version = "0.0.1"
 dependencies = [
- "hex 0.4.3",
  "atomic",
+ "hex 0.4.3",
  "protobuf",
  "serde",
  "slog",
@@ -5927,9 +5926,9 @@ dependencies = [
 
 [[package]]
 name = "smallvec"
-version = "1.11.1"
+version = "1.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "942b4a808e05215192e39f4ab80813e599068285906cc91aa64f923db842bd5a"
+checksum = "3c5e1a9a646d36c3599cd173a41282daf47c44583ad367b8e6837255952e5c67"
 
 [[package]]
 name = "smartstring"

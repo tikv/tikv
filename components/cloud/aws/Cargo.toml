@@ -31,7 +31,7 @@ futures-util = { version = "0.3", default-features = false, features = ["io"] }
 grpcio = { workspace = true }
 http = "0.2.0"
 hyper = "0.14"
-hyper-tls = "0.5"
+hyper-tls = { version = "0.5" }
 kvproto = { workspace = true }
 lazy_static = "1.3"
 md5 = "0.7.0"
@@ -46,7 +46,6 @@ tokio-util = { version = "0.7" }
 url = "2.0"
 uuid = { version = "0.8", features = ["v4"] }
 
-hyper-openssl = "0.9"
 
 [dev-dependencies]
 aws-smithy-runtime = { version = "1.4.0", features = ["test-util", "client"] }
