@@ -674,7 +674,7 @@ fn test_background_loading_pending_region() {
     cluster.run();
 
     let r = cluster.get_region(b"");
-    let range_cache_engine = cluster.sim.rl().get_range_cache_engine(1);
+    let range_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
     range_cache_engine
         .load_region(CacheRegion::from_region(&r))
         .unwrap();

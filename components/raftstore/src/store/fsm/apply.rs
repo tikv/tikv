@@ -3810,7 +3810,7 @@ where
         term: u64,
         compact_index: u64,
     },
-    // Trigger loading pending region for range_cache_memory_engine,
+    // Trigger loading pending region for in_memory_engine,
     InMemoryEngineLoadRegion {
         region_id: u64,
         cb: Box<dyn FnOnce(&Region) + Send + 'static>,
