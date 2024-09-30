@@ -19,19 +19,23 @@ engine_traits = { workspace = true }
 txn_types = { workspace = true }
 tikv_util = { workspace = true }
 engine_rocks = { workspace = true }
+log_wrappers = { workspace = true }
 online_config = { workspace = true }
-range_cache_memory_engine = { workspace = true }
+in_memory_engine = { workspace = true }
 slog = { workspace = true }
 slog-global = { workspace = true }
 tempfile = "3.0"
-prometheus = { version = "0.13", default-features = false, features = ["nightly"] }
+prometheus = { version = "0.13", default-features = false, features = [
+    "nightly",
+] }
 prometheus-static-metric = "0.5"
 lazy_static = "1.4.0"
 crossbeam = { workspace = true }
 fail = "0.5"
-raftstore = { workspace = true }
+raftstore = { workspace = true, features = ["testexport"] }
 raft = { workspace = true }
 kvproto = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3.0"
+test_util = { workspace = true }

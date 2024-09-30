@@ -15,18 +15,10 @@ sse = ["tikv/sse"]
 memory-engine = []
 mem-profiling = ["tikv/mem-profiling"]
 failpoints = ["tikv/failpoints"]
-test-engine-kv-rocksdb = [
-  "tikv/test-engine-kv-rocksdb"
-]
-test-engine-raft-raft-engine = [
-  "tikv/test-engine-raft-raft-engine"
-]
-test-engines-rocksdb = [
-  "tikv/test-engines-rocksdb",
-]
-test-engines-panic = [
-  "tikv/test-engines-panic",
-]
+test-engine-kv-rocksdb = ["tikv/test-engine-kv-rocksdb"]
+test-engine-raft-raft-engine = ["tikv/test-engine-raft-raft-engine"]
+test-engines-rocksdb = ["tikv/test-engines-rocksdb"]
+test-engines-panic = ["tikv/test-engines-panic"]
 nortcheck = ["engine_rocks/nortcheck"]
 backup-stream-debug = ["backup-stream/backup-stream-debug"]
 
@@ -49,17 +41,20 @@ engine_traits = { workspace = true }
 error_code = { workspace = true }
 fail = "0.5"
 file_system = { workspace = true }
-fs2 = "0.4"
 futures = "0.3"
 grpcio = { workspace = true }
 grpcio-health = { workspace = true }
 health_controller = { workspace = true }
 hex = "0.4"
 hybrid_engine = { workspace = true }
+in_memory_engine = { workspace = true }
 keys = { workspace = true }
 kvproto = { workspace = true }
 libc = "0.2"
-log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
+log = { version = "0.4", features = [
+  "max_level_trace",
+  "release_max_level_debug",
+] }
 log_wrappers = { workspace = true }
 pd_client = { workspace = true }
 prometheus = { version = "0.13", features = ["nightly"] }
@@ -68,7 +63,6 @@ raft = { workspace = true }
 raft_log_engine = { workspace = true }
 raftstore = { workspace = true, features = ["engine_rocks"] }
 raftstore-v2 = { workspace = true }
-range_cache_memory_engine = { workspace = true }
 resolved_ts = { workspace = true }
 resource_control = { workspace = true }
 resource_metering = { workspace = true }

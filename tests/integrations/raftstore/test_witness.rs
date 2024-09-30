@@ -7,7 +7,6 @@ use std::{
 };
 
 use collections::HashMap;
-use engine_rocks::RocksEngine;
 use futures::executor::block_on;
 use kvproto::{
     metapb,
@@ -474,7 +473,7 @@ fn test_witness_replica_read() {
     request.mut_header().set_replica_read(true);
 
     let resp = cluster
-        .read(None, None, request, Duration::from_millis(100))
+        .read(None, request, Duration::from_millis(100))
         .unwrap();
     assert_eq!(
         resp.get_header().get_error().get_is_witness(),
@@ -485,8 +484,8 @@ fn test_witness_replica_read() {
     );
 }
 
-fn must_get_error_is_witness<T: Simulator<RocksEngine>>(
-    cluster: &mut Cluster<RocksEngine, T>,
+fn must_get_error_is_witness<T: Simulator>(
+    cluster: &mut Cluster<T>,
     region: &metapb::Region,
     cmd: kvproto::raft_cmdpb::Request,
 ) {

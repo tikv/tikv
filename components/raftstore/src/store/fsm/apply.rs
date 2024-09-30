@@ -29,7 +29,7 @@ use batch_system::{
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::{
-    util::SequenceNumber, CacheRange, DeleteStrategy, KvEngine, Mutable, PerfContext,
+    util::SequenceNumber, CacheRegion, DeleteStrategy, KvEngine, Mutable, PerfContext,
     PerfContextKind, RaftEngine, RaftEngineReadOnly, Range as EngineRange, Snapshot, SstMetaInfo,
     WriteBatch, WriteOptions, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
@@ -70,7 +70,7 @@ use tikv_util::{
     Either, MustConsumeVec,
 };
 use time::Timespec;
-use tracker::GLOBAL_TRACKERS;
+use tracker::{TrackerToken, TrackerTokenArray, GLOBAL_TRACKERS};
 use uuid::Builder as UuidBuilder;
 
 use self::memtrace::*;
@@ -79,7 +79,7 @@ use crate::{
     bytes_capacity,
     coprocessor::{
         ApplyCtxInfo, Cmd, CmdBatch, CmdObserveInfo, CoprocessorHost, ObserveHandle, ObserveLevel,
-        RegionState,
+        RegionState, WriteBatchWrapper,
     },
     store::{
         cmd_resp,
@@ -406,7 +406,7 @@ where
     exec_log_index: u64,
     exec_log_term: u64,
 
-    kv_wb: EK::WriteBatch,
+    kv_wb: WriteBatchWrapper<EK::WriteBatch>,
     kv_wb_last_bytes: u64,
     kv_wb_last_keys: u64,
 
@@ -492,6 +492,7 @@ where
         priority: Priority,
     ) -> ApplyContext<EK> {
         let kv_wb = engine.write_batch_with_cap(DEFAULT_APPLY_WB_SIZE);
+        let kv_wb = host.on_create_apply_write_batch(kv_wb);
 
         ApplyContext {
             tag,
@@ -542,8 +543,8 @@ where
     pub fn prepare_for(&mut self, delegate: &mut ApplyDelegate<EK>) {
         self.applied_batch
             .push_batch(&delegate.observe_info, delegate.region.get_id());
-        let range = CacheRange::from_region(&delegate.region);
-        self.kv_wb.prepare_for_range(range);
+        let cache_region = CacheRegion::from_region(&delegate.region);
+        self.kv_wb.prepare_for_region(cache_region);
     }
 
     /// Commits all changes have done for delegate. `persistent` indicates
@@ -619,7 +620,9 @@ where
             let data_size = self.kv_wb().data_size();
             if data_size > APPLY_WB_SHRINK_SIZE {
                 // Control the memory usage for the WriteBatch.
-                self.kv_wb = self.engine.write_batch_with_cap(DEFAULT_APPLY_WB_SIZE);
+                let kv_wb = self.engine.write_batch_with_cap(DEFAULT_APPLY_WB_SIZE);
+                let kv_wb = self.host.on_create_apply_write_batch(kv_wb);
+                self.kv_wb = kv_wb;
             } else {
                 // Clear data, reuse the WriteBatch, this can reduce memory allocations and
                 // deallocations.
@@ -644,6 +647,19 @@ where
         } = mem::replace(&mut self.applied_batch, ApplyCallbackBatch::new());
         // Call it before invoking callback for preventing Commit is executed before
         // Prewrite is observed.
+        debug!("raft log is applied to the kv db";
+            "req_info" => TrackerTokenArray::new(
+                &cb_batch.iter().fold(vec![], |mut acc: Vec<TrackerToken>, cb| {
+                    acc.extend(
+                        cb.0.write_trackers().into_iter().
+                        filter_map(|time_tracker| time_tracker.as_tracker_token())
+                        .collect::<Vec<_>>().as_slice()
+                    );
+                    acc
+                })
+            ),
+            "cmd_batch" => ?cmd_batch.len(),
+        );
         self.host
             .on_flush_applied_cmd_batch(batch_max_level, cmd_batch, &self.engine);
         // Invoke callbacks
@@ -708,12 +724,12 @@ where
     }
 
     #[inline]
-    pub fn kv_wb(&self) -> &EK::WriteBatch {
+    pub fn kv_wb(&self) -> &WriteBatchWrapper<EK::WriteBatch> {
         &self.kv_wb
     }
 
     #[inline]
-    pub fn kv_wb_mut(&mut self) -> &mut EK::WriteBatch {
+    pub fn kv_wb_mut(&mut self) -> &mut WriteBatchWrapper<EK::WriteBatch> {
         &mut self.kv_wb
     }
 
@@ -1191,7 +1207,7 @@ where
         self.metrics.written_keys += apply_ctx.delta_keys();
     }
 
-    fn write_apply_state(&self, wb: &mut EK::WriteBatch) {
+    fn write_apply_state(&self, wb: &mut WriteBatchWrapper<EK::WriteBatch>) {
         wb.put_msg_cf(
             CF_RAFT,
             &keys::apply_state_key(self.region.get_id()),
@@ -1249,7 +1265,7 @@ where
                     // just return Yield
                     return ApplyResult::Yield;
                 }
-                let mut has_unflushed_data =
+                let has_unflushed_data =
                     self.last_flush_applied_index != self.apply_state.get_applied_index();
                 if (has_unflushed_data
                     && should_write_to_engine(!apply_ctx.kv_wb().is_empty(), &cmd)
@@ -1266,12 +1282,8 @@ where
                     {
                         return ApplyResult::Yield;
                     }
-                    has_unflushed_data = false;
                 }
                 if self.priority != apply_ctx.priority {
-                    if has_unflushed_data {
-                        apply_ctx.commit(self);
-                    }
                     return ApplyResult::Yield;
                 }
 
@@ -1511,17 +1523,19 @@ where
         self.apply_state.set_applied_index(index);
         self.applied_term = term;
 
-        let (modified_region, mut pending_handle_ssts) = match exec_result {
-            ApplyResult::Res(ref e) => match e {
-                ExecResult::SplitRegion { ref derived, .. } => (Some(derived.clone()), None),
-                ExecResult::PrepareMerge { ref region, .. } => (Some(region.clone()), None),
-                ExecResult::CommitMerge { ref region, .. } => (Some(region.clone()), None),
-                ExecResult::RollbackMerge { ref region, .. } => (Some(region.clone()), None),
-                ExecResult::IngestSst { ref ssts } => (None, Some(ssts.clone())),
-                ExecResult::Flashback { ref region } => (Some(region.clone()), None),
-                _ => (None, None),
+        let (modified_region, new_regions, mut pending_handle_ssts) = match &exec_result {
+            ApplyResult::Res(e) => match e {
+                ExecResult::SplitRegion { regions, .. } => {
+                    (Some(self.region.clone()), regions.clone(), None)
+                }
+                ExecResult::PrepareMerge { region, .. } => (Some(region.clone()), vec![], None),
+                ExecResult::CommitMerge { region, .. } => (Some(region.clone()), vec![], None),
+                ExecResult::RollbackMerge { region, .. } => (Some(region.clone()), vec![], None),
+                ExecResult::IngestSst { ssts } => (None, vec![], Some(ssts.clone())),
+                ExecResult::Flashback { region } => (Some(region.clone()), vec![], None),
+                _ => (None, vec![], None),
             },
-            _ => (None, None),
+            _ => (None, vec![], None),
         };
         let mut apply_ctx_info = ApplyCtxInfo {
             pending_handle_ssts: &mut pending_handle_ssts,
@@ -1536,9 +1550,11 @@ where
                 peer_id: self.id(),
                 pending_remove: self.pending_remove,
                 modified_region,
+                new_regions,
             },
             &mut apply_ctx_info,
         );
+
         match pending_handle_ssts {
             None => (),
             Some(mut v) => {
@@ -3271,7 +3287,7 @@ where
                     // open files in rocksdb.
                     // TODO: figure out another way to do consistency check without snapshot
                     // or short life snapshot.
-                    snap: ctx.engine.snapshot(None),
+                    snap: ctx.engine.snapshot(),
                 })
             },
         ))
@@ -4247,7 +4263,7 @@ where
         }
 
         if let Err(e) = snap_task.generate_and_schedule_snapshot::<EK>(
-            apply_ctx.engine.snapshot(None),
+            apply_ctx.engine.snapshot(),
             self.delegate.applied_term,
             self.delegate.apply_state.clone(),
             &apply_ctx.region_scheduler,
@@ -4319,7 +4335,7 @@ where
                 ReadResponse {
                     response: Default::default(),
                     snapshot: Some(RegionSnapshot::from_snapshot(
-                        Arc::new(apply_ctx.engine.snapshot(None)),
+                        Arc::new(apply_ctx.engine.snapshot()),
                         Arc::new(self.delegate.region.clone()),
                     )),
                     txn_extra_op: TxnExtraOp::Noop,
@@ -7420,7 +7436,7 @@ mod tests {
         let cmd_batch = cmdbatch_rx.recv_timeout(Duration::from_secs(3)).unwrap();
         assert_eq!(2, cmd_batch.len());
 
-        // Stop observer regoin 1.
+        // Stop observer region 1.
         observe_handle.stop_observing();
 
         let observe_handle = ObserveHandle::new();

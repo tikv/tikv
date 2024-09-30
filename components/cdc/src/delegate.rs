@@ -290,16 +290,18 @@ impl fmt::Debug for LockTracker {
 pub struct MiniLock {
     pub ts: TimeStamp,
     pub txn_source: u64,
+    pub generation: u64,
 }
 
 impl MiniLock {
-    pub fn new<T>(ts: T, txn_source: u64) -> Self
+    pub fn new<T>(ts: T, txn_source: u64, generation: u64) -> Self
     where
         TimeStamp: From<T>,
     {
         MiniLock {
             ts: TimeStamp::from(ts),
             txn_source,
+            generation,
         }
     }
 
@@ -311,6 +313,7 @@ impl MiniLock {
         MiniLock {
             ts: TimeStamp::from(ts),
             txn_source: 0,
+            generation: 0,
         }
     }
 }
@@ -368,13 +371,19 @@ impl Delegate {
                 CDC_PENDING_BYTES_GAUGE.add(bytes as _);
                 locks.push(PendingLock::Track { key, start_ts });
             }
-            LockTracker::Prepared { locks, .. } => {
-                if locks.insert(key, start_ts).is_none() {
+            LockTracker::Prepared { locks, .. } => match locks.entry(key) {
+                BTreeMapEntry::Occupied(mut x) => {
+                    assert_eq!(x.get().ts, start_ts.ts);
+                    assert!(x.get().generation <= start_ts.generation);
+                    x.get_mut().generation = start_ts.generation;
+                }
+                BTreeMapEntry::Vacant(x) => {
+                    x.insert(start_ts);
                     self.memory_quota.alloc(bytes)?;
                     CDC_PENDING_BYTES_GAUGE.add(bytes as _);
                     lock_count_modify = 1;
                 }
-            }
+            },
         }
         Ok(lock_count_modify)
     }
@@ -428,7 +437,8 @@ impl Delegate {
                         x.insert(start_ts);
                     }
                     BTreeMapEntry::Occupied(x) => {
-                        assert_eq!(*x.get(), start_ts);
+                        assert_eq!(x.get().ts, start_ts.ts);
+                        assert!(x.get().generation <= start_ts.generation);
                     }
                 },
                 PendingLock::Untrack { key } => match locks.entry(key.clone()) {
@@ -769,7 +779,7 @@ impl Delegate {
                     }
                     decode_default(default.1, &mut row, &mut _has_value);
                     row.old_value = old_value.finalized().unwrap_or_default();
-                    row_size = row.key.len() + row.value.len();
+                    row_size = row.key.len() + row.value.len() + row.old_value.len();
                 }
                 Some(KvEntry::TxnEntry(TxnEntry::Commit {
                     default,
@@ -797,7 +807,7 @@ impl Delegate {
                     }
                     set_event_row_type(&mut row, EventLogType::Committed);
                     row.old_value = old_value.finalized().unwrap_or_default();
-                    row_size = row.key.len() + row.value.len();
+                    row_size = row.key.len() + row.value.len() + row.old_value.len();
                 }
                 None => {
                     // This type means scan has finished.
@@ -1027,6 +1037,7 @@ impl Delegate {
                 let lock = Lock::parse(put.get_value()).unwrap();
                 let for_update_ts = lock.for_update_ts;
                 let txn_source = lock.txn_source;
+                let generation = lock.generation;
 
                 let key = Key::from_encoded_slice(&put.key);
                 let row = rows.txns_by_key.entry(key.clone()).or_default();
@@ -1035,7 +1046,7 @@ impl Delegate {
                 }
 
                 assert_eq!(row.lock_count_modify, 0);
-                let mini_lock = MiniLock::new(row.v.start_ts, txn_source);
+                let mini_lock = MiniLock::new(row.v.start_ts, txn_source, generation);
                 row.lock_count_modify = self.push_lock(key, mini_lock)?;
 
                 let read_old_ts = std::cmp::max(for_update_ts, row.v.start_ts.into());
@@ -1265,6 +1276,7 @@ fn decode_lock(key: Vec<u8>, mut lock: Lock, row: &mut EventRow, has_value: &mut
     };
 
     row.start_ts = lock.ts.into_inner();
+    row.generation = lock.generation;
     row.key = key.into_raw().unwrap();
     row.op_type = op_type as _;
     row.txn_source = lock.txn_source;
@@ -1433,7 +1445,7 @@ mod tests {
         let region_epoch = region.get_region_epoch().clone();
 
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
-        let (sink, mut drain) = crate::channel::channel(1, quota.clone());
+        let (sink, mut drain) = channel(ConnId::default(), 1, quota.clone());
         let rx = drain.drain();
         let request_id = RequestId(123);
         let mut downstream = Downstream::new(
@@ -1487,6 +1499,10 @@ mod tests {
         delegate.stop(Error::request(err_header));
         let err = receive_error();
         assert!(err.has_region_not_found());
+
+        delegate.stop(Error::Sink(SendError::Congested));
+        let err = receive_error();
+        assert!(err.has_congested());
 
         let mut err_header = ErrorHeader::default();
         err_header.set_epoch_not_match(Default::default());
@@ -1725,7 +1741,7 @@ mod tests {
         }
         assert_eq!(rows_builder.txns_by_key.len(), 5);
 
-        let (sink, mut drain) = channel(1, Arc::new(MemoryQuota::new(1024)));
+        let (sink, mut drain) = channel(ConnId::default(), 1, Arc::new(MemoryQuota::new(1024)));
         let mut downstream = Downstream::new(
             "peer".to_owned(),
             RegionEpoch::default(),
@@ -1792,7 +1808,7 @@ mod tests {
         }
         assert_eq!(rows_builder.txns_by_key.len(), 5);
 
-        let (sink, mut drain) = channel(1, Arc::new(MemoryQuota::new(1024)));
+        let (sink, mut drain) = channel(ConnId::default(), 1, Arc::new(MemoryQuota::new(1024)));
         let mut downstream = Downstream::new(
             "peer".to_owned(),
             RegionEpoch::default(),

@@ -35,7 +35,7 @@ use kvproto::{
     raft_serverpb::RaftMessage,
     replication_modepb::{RegionReplicationStatus, StoreDrAutoSyncStatus},
 };
-use pd_client::{metrics::*, BucketStat, Error, PdClient, RegionStat};
+use pd_client::{metrics::*, BucketStat, Error, PdClient, RegionStat, RegionWriteCfCopDetail};
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
 use resource_metering::{Collector, CollectorGuard, CollectorRegHandle, RawRecords};
@@ -44,7 +44,7 @@ use tikv_util::{
     box_err, debug, error, info,
     metrics::ThreadInfoStatistics,
     store::QueryStats,
-    sys::{thread::StdThreadBuildWrapper, SysQuota},
+    sys::{disk::get_disk_space_stats, thread::StdThreadBuildWrapper, SysQuota},
     thd_name,
     time::{Instant as TiInstant, UnixSecs},
     timer::GLOBAL_TIMER_HANDLE,
@@ -291,10 +291,12 @@ pub struct PeerStat {
     pub read_bytes: u64,
     pub read_keys: u64,
     pub query_stats: QueryStats,
+    pub cop_detail: RegionWriteCfCopDetail,
     // last_region_report_attributes records the state of the last region heartbeat
     pub last_region_report_read_bytes: u64,
     pub last_region_report_read_keys: u64,
     pub last_region_report_query_stats: QueryStats,
+    pub last_region_report_cop_detail: RegionWriteCfCopDetail,
     pub last_region_report_written_bytes: u64,
     pub last_region_report_written_keys: u64,
     pub last_region_report_ts: UnixSecs,
@@ -1601,6 +1603,7 @@ where
             peer_stat
                 .query_stats
                 .add_query_stats(&region_info.query_stats.0);
+            peer_stat.cop_detail.add(&region_info.cop_detail);
             self.store_stat
                 .engine_total_query_num
                 .add_query_stats(&region_info.query_stats.0);
@@ -2031,6 +2034,7 @@ where
                     written_keys_delta,
                     last_report_ts,
                     query_stats,
+                    cop_detail,
                     cpu_usage,
                 ) = {
                     let region_id = hb_task.region.get_id();
@@ -2049,12 +2053,16 @@ where
                     let query_stats = peer_stat
                         .query_stats
                         .sub_query_stats(&peer_stat.last_region_report_query_stats);
+                    let cop_detail = peer_stat
+                        .cop_detail
+                        .sub(&peer_stat.last_region_report_cop_detail);
                     let mut last_report_ts = peer_stat.last_region_report_ts;
                     peer_stat.last_region_report_written_bytes = hb_task.written_bytes;
                     peer_stat.last_region_report_written_keys = hb_task.written_keys;
                     peer_stat.last_region_report_read_bytes = peer_stat.read_bytes;
                     peer_stat.last_region_report_read_keys = peer_stat.read_keys;
                     peer_stat.last_region_report_query_stats = peer_stat.query_stats.clone();
+                    peer_stat.last_region_report_cop_detail = peer_stat.cop_detail.clone();
                     let unix_secs_now = UnixSecs::now();
                     peer_stat.last_region_report_ts = unix_secs_now;
 
@@ -2085,6 +2093,7 @@ where
                         written_keys_delta,
                         last_report_ts,
                         query_stats.0,
+                        cop_detail,
                         cpu_usage,
                     )
                 };
@@ -2100,6 +2109,7 @@ where
                         read_bytes: read_bytes_delta,
                         read_keys: read_keys_delta,
                         query_stats,
+                        cop_detail,
                         approximate_size,
                         approximate_keys,
                         last_report_ts,
@@ -2433,7 +2443,7 @@ fn collect_engine_size<EK: KvEngine, ER: RaftEngine>(
         return Some((engine_size.capacity, engine_size.used, engine_size.avail));
     }
     let store_info = store_info.unwrap();
-    let disk_stats = match fs2::statvfs(store_info.kv_engine.path()) {
+    let (disk_cap, disk_avail) = match get_disk_space_stats(store_info.kv_engine.path()) {
         Err(e) => {
             error!(
                 "get disk stat for rocksdb failed";
@@ -2442,9 +2452,8 @@ fn collect_engine_size<EK: KvEngine, ER: RaftEngine>(
             );
             return None;
         }
-        Ok(stats) => stats,
+        Ok((total_size, available_size)) => (total_size, available_size),
     };
-    let disk_cap = disk_stats.total_space();
     let capacity = if store_info.capacity == 0 || disk_cap < store_info.capacity {
         disk_cap
     } else {
@@ -2468,7 +2477,7 @@ fn collect_engine_size<EK: KvEngine, ER: RaftEngine>(
     let mut available = capacity.checked_sub(used_size).unwrap_or_default();
     // We only care about rocksdb SST file size, so we should check disk available
     // here.
-    available = cmp::min(available, disk_stats.available_space());
+    available = cmp::min(available, disk_avail);
     Some((capacity, used_size, available))
 }
 

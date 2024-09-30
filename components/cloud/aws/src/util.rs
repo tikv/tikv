@@ -87,7 +87,7 @@ where
     retry_ext(
         action,
         RetryExt::default().with_fail_hook(move |err: &E| {
-            warn!("aws request meet error."; "err" => %err, "retry?" => %err.is_retryable(), "context" => %name, "uuid" => %id);
+            warn!("aws request fails"; "err" => %err, "retry?" => %err.is_retryable(), "context" => %name, "uuid" => %id);
             metrics::CLOUD_ERROR_VEC.with_label_values(&["aws", name]).inc();
         }),
     ).await

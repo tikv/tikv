@@ -145,6 +145,7 @@ fn get_cast_fn_rpn_meta(
         (EvalType::Duration, EvalType::Bytes) => cast_any_as_string_fn_meta::<Duration>(),
         (EvalType::Json, EvalType::Bytes) => cast_json_as_bytes_fn_meta(),
         (EvalType::Enum, EvalType::Bytes) => cast_enum_as_bytes_fn_meta(),
+        (EvalType::VectorFloat32, EvalType::Bytes) => cast_vector_float32_as_bytes_fn_meta(),
 
         // any as decimal
         (EvalType::Int, EvalType::Decimal) => {
@@ -218,6 +219,11 @@ fn get_cast_fn_rpn_meta(
         (EvalType::Duration, EvalType::Json) => cast_any_as_json_fn_meta::<Duration>(),
         (EvalType::Json, EvalType::Json) => cast_json_as_json_fn_meta(),
         (EvalType::Enum, EvalType::Json) => cast_enum_as_json_fn_meta(),
+
+        // any as VectorFloat32
+        (EvalType::VectorFloat32, EvalType::VectorFloat32) => {
+            cast_vector_float32_as_vector_float32_fn_meta()
+        }
 
         _ => return Err(other_err!("Unsupported cast from {} to {}", from, to)),
     };
@@ -1421,6 +1427,12 @@ fn cast_json_as_json(val: Option<JsonRef>) -> Result<Option<Json>> {
     }
 }
 
+#[rpn_fn]
+#[inline]
+fn cast_vector_float32_as_vector_float32(val: VectorFloat32Ref) -> Result<Option<VectorFloat32>> {
+    Ok(Some(val.to_owned()))
+}
+
 #[rpn_fn(nullable, capture = [ctx])]
 #[inline]
 fn cast_any_as_any<From: ConvertTo<To> + Evaluable + EvaluableRet, To: Evaluable + EvaluableRet>(
@@ -1491,6 +1503,12 @@ fn cast_json_as_bytes(ctx: &mut EvalContext, val: Option<JsonRef>) -> Result<Opt
             Ok(Some(val))
         }
     }
+}
+
+#[rpn_fn]
+#[inline]
+fn cast_vector_float32_as_bytes(val: VectorFloat32Ref) -> Result<Option<Bytes>> {
+    Ok(Some(val.to_string().into_bytes()))
 }
 
 #[rpn_fn(nullable, capture = [ctx])]
@@ -2932,11 +2950,13 @@ mod tests {
 
     #[test]
     fn test_cast_duration_as_time() {
-        use chrono::Datelike;
+        let cases = vec![
+            ("11:30:45.123456", "2020-02-02 11:30:45.123456"),
+            ("-35:30:46", "2020-01-31 12:29:14.000000"),
+            ("25:59:59.999999", "2020-02-03 01:59:59.999999"),
+        ];
 
-        let cases = vec!["11:30:45.123456", "-35:30:46", "25:59:59.999999"];
-
-        for case in cases {
+        for (case, expected) in cases {
             let mut cfg = EvalConfig::default();
             cfg.tz = Tz::from_tz_name("America/New_York").unwrap();
             let mut ctx = EvalContext::new(Arc::new(cfg));
@@ -2944,6 +2964,7 @@ mod tests {
 
             let mut cfg2 = EvalConfig::default();
             cfg2.tz = Tz::from_tz_name("Asia/Tokyo").unwrap();
+            cfg2.is_test = true;
             let ctx2 = EvalContext::new(Arc::new(cfg2));
 
             let now = RpnFnScalarEvaluator::new()
@@ -2958,16 +2979,7 @@ mod tests {
                 .evaluate::<Time>(ScalarFuncSig::CastDurationAsTime)
                 .unwrap()
                 .unwrap();
-            let chrono_today = chrono::Utc::now();
-            let today = now.checked_sub(&mut ctx, duration).unwrap();
-
-            assert_eq!(today.year(), chrono_today.year() as u32);
-            assert_eq!(today.month(), chrono_today.month());
-            assert_eq!(today.day(), chrono_today.day());
-            assert_eq!(today.hour(), 0);
-            assert_eq!(today.minute(), 0);
-            assert_eq!(today.second(), 0);
-            assert_eq!(today.micro(), 0);
+            assert_eq!(now.to_string(), expected);
         }
     }
 
@@ -4469,6 +4481,8 @@ mod tests {
                 Some(vec![0xe4, 0xb8, 0x80]),
             ),
             ("一".as_bytes().to_vec(), "gbk", Some(vec![0xd2, 0xbb])),
+            ("一".as_bytes().to_vec(), "gb18030", Some(vec![0xd2, 0xbb])),
+            ("€".as_bytes().to_vec(), "gb18030", Some(vec![0xa2, 0xe3])),
         ];
 
         for (v, charset, expected) in cases {
@@ -4497,6 +4511,8 @@ mod tests {
                 Some("一".as_bytes().to_vec()),
             ),
             (vec![0xd2, 0xbb], "gbk", Some("一".as_bytes().to_vec())),
+            (vec![0xd2, 0xbb], "gb18030", Some("一".as_bytes().to_vec())),
+            (vec![0xa2, 0xe3], "gb18030", Some("€".as_bytes().to_vec())),
         ];
 
         for (v, charset, expected) in cases {

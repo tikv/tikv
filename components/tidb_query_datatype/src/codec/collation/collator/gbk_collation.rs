@@ -2,9 +2,9 @@
 
 use super::*;
 
-pub trait GbkCollator: 'static + std::marker::Send + std::marker::Sync + std::fmt::Debug {
+trait GbkCollator: 'static + Send + Sync + std::fmt::Debug {
     const IS_CASE_INSENSITIVE: bool;
-    const WEIGHT_TABLE: &'static [u8; (0xffff + 1) * 2];
+    const WEIGHT_TABLE: &'static [u8; TABLE_SIZE_FOR_GBK];
 }
 
 impl<T: GbkCollator> Collator for T {
@@ -43,9 +43,13 @@ impl<T: GbkCollator> Collator for T {
     }
 
     #[inline]
-    fn sort_compare(a: &[u8], b: &[u8]) -> Result<Ordering> {
-        let sa = str::from_utf8(a)?.trim_end_matches(PADDING_SPACE);
-        let sb = str::from_utf8(b)?.trim_end_matches(PADDING_SPACE);
+    fn sort_compare(a: &[u8], b: &[u8], force_no_pad: bool) -> Result<Ordering> {
+        let mut sa = str::from_utf8(a)?;
+        let mut sb = str::from_utf8(b)?;
+        if !force_no_pad {
+            sa = sa.trim_end_matches(PADDING_SPACE);
+            sb = sb.trim_end_matches(PADDING_SPACE);
+        }
         Ok(sa
             .chars()
             .map(Self::char_weight)
@@ -68,7 +72,7 @@ pub struct CollatorGbkBin;
 
 impl GbkCollator for CollatorGbkBin {
     const IS_CASE_INSENSITIVE: bool = false;
-    const WEIGHT_TABLE: &'static [u8; (0xffff + 1) * 2] = GBK_BIN_TABLE;
+    const WEIGHT_TABLE: &'static [u8; TABLE_SIZE_FOR_GBK] = GBK_BIN_TABLE;
 }
 
 /// Collator for `gbk_chinese_ci` collation with padding behavior (trims right
@@ -78,15 +82,17 @@ pub struct CollatorGbkChineseCi;
 
 impl GbkCollator for CollatorGbkChineseCi {
     const IS_CASE_INSENSITIVE: bool = true;
-    const WEIGHT_TABLE: &'static [u8; (0xffff + 1) * 2] = GBK_CHINESE_CI_TABLE;
+    const WEIGHT_TABLE: &'static [u8; TABLE_SIZE_FOR_GBK] = GBK_CHINESE_CI_TABLE;
 }
+
+const TABLE_SIZE_FOR_GBK: usize = (0xffff + 1) * 2;
 
 // GBK_BIN_TABLE are the encoding tables from Unicode to GBK code, it is totally
 // the same with golang's GBK encoding. If there is no mapping code in GBK, use
 // 0x3F(?) instead. It should not happened.
-const GBK_BIN_TABLE: &[u8; (0xffff + 1) * 2] = include_bytes!("gbk_bin.data");
+const GBK_BIN_TABLE: &[u8; TABLE_SIZE_FOR_GBK] = include_bytes!("gbk_bin.data");
 
 // GBK_CHINESE_CI_TABLE are the sort key tables for GBK codepoint.
 // If there is no mapping code in GBK, use 0x3F(?) instead. It should not
 // happened.
-const GBK_CHINESE_CI_TABLE: &[u8; (0xffff + 1) * 2] = include_bytes!("gbk_chinese_ci.data");
+const GBK_CHINESE_CI_TABLE: &[u8; TABLE_SIZE_FOR_GBK] = include_bytes!("gbk_chinese_ci.data");

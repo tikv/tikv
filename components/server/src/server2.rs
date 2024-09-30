@@ -12,7 +12,6 @@
 //! explicitly stopped. We keep these components in the `TikvServer` struct.
 
 use std::{
-    cmp,
     collections::HashMap,
     marker::PhantomData,
     path::{Path, PathBuf},
@@ -41,6 +40,7 @@ use file_system::{get_io_rate_limiter, BytesFetcher, MetricsManager as IoMetrics
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
 use health_controller::HealthController;
+use in_memory_engine::InMemoryEngineStatistics;
 use kvproto::{
     brpb::create_backup, cdcpb_grpc::create_change_data, deadlock::create_deadlock,
     debugpb_grpc::create_debug, diagnosticspb::create_diagnostics,
@@ -67,9 +67,8 @@ use raftstore_v2::{
     router::{DiskSnapBackupHandle, PeerMsg, RaftRouter},
     StateStorage,
 };
-use range_cache_memory_engine::RangeCacheMemoryEngineStatistics;
 use resolved_ts::Task;
-use resource_control::ResourceGroupManager;
+use resource_control::{config::ResourceContrlCfgMgr, ResourceGroupManager};
 use security::SecurityManager;
 use service::{service_event::ServiceEvent, service_manager::GrpcServiceManager};
 use tikv::{
@@ -102,7 +101,10 @@ use tikv::{
         config_manager::StorageConfigManger,
         kv::LocalTablets,
         mvcc::MvccConsistencyCheckObserver,
-        txn::flow_controller::{FlowController, TabletFlowController},
+        txn::{
+            flow_controller::{FlowController, TabletFlowController},
+            txn_status_cache::TxnStatusCache,
+        },
         Engine, Storage,
     },
 };
@@ -123,11 +125,15 @@ use tikv_util::{
 use tokio::runtime::Builder;
 
 use crate::{
-    common::{ConfiguredRaftEngine, EngineMetricsManager, EnginesResourceInfo, TikvServerCore},
+    common::{
+        ConfiguredRaftEngine, DiskUsageChecker, EngineMetricsManager, EnginesResourceInfo,
+        TikvServerCore,
+    },
     memory::*,
     setup::*,
     signal_handler,
     tikv_util::sys::thread::ThreadBuildWrapper,
+    utils,
 };
 
 #[inline]
@@ -233,7 +239,7 @@ struct TikvServer<ER: RaftEngine> {
     snap_mgr: Option<TabletSnapManager>, // Will be filled in `init_servers`.
     engines: Option<TikvEngines<RocksEngine, ER>>,
     kv_statistics: Option<Arc<RocksStatistics>>,
-    range_cache_engine_statistics: Option<Arc<RangeCacheMemoryEngineStatistics>>,
+    in_memory_engine_statistics: Option<Arc<InMemoryEngineStatistics>>,
     raft_statistics: Option<Arc<RocksStatistics>>,
     servers: Option<Servers<RocksEngine, ER>>,
     region_info_accessor: Option<RegionInfoAccessor>,
@@ -333,7 +339,7 @@ where
         ));
 
         let resource_manager = if config.resource_control.enabled {
-            let mgr = Arc::new(ResourceGroupManager::default());
+            let mgr = Arc::new(ResourceGroupManager::new(config.resource_control.clone()));
             let io_bandwidth = config.storage.io_rate_limit.max_bytes_per_sec.0;
             resource_control::start_periodic_tasks(
                 &mgr,
@@ -382,7 +388,7 @@ where
             snap_mgr: None,
             engines: None,
             kv_statistics: None,
-            range_cache_engine_statistics: None,
+            in_memory_engine_statistics: None,
             raft_statistics: None,
             servers: None,
             region_info_accessor: None,
@@ -531,6 +537,12 @@ where
             tikv::config::Module::ResourceMetering,
             Box::new(cfg_manager),
         );
+        if let Some(resource_ctl) = &self.resource_manager {
+            cfg_controller.register(
+                tikv::config::Module::ResourceControl,
+                Box::new(ResourceContrlCfgMgr::new(resource_ctl.get_config().clone())),
+            );
+        }
 
         let storage_read_pool_handle = if self.core.config.readpool.storage.use_unified_pool() {
             unified_read_pool.as_ref().unwrap().handle()
@@ -542,6 +554,9 @@ where
             ));
             storage_read_pools.handle()
         };
+        let txn_status_cache = Arc::new(TxnStatusCache::new(
+            self.core.config.storage.txn_status_cache_capacity,
+        ));
 
         let storage = Storage::<_, _, F>::from_engine(
             engines.engine.clone(),
@@ -560,6 +575,7 @@ where
                 .as_ref()
                 .map(|m| m.derive_controller("scheduler-worker-pool".to_owned(), true)),
             self.resource_manager.clone(),
+            txn_status_cache.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
         cfg_controller.register(
@@ -696,6 +712,7 @@ where
                 self.concurrency_manager.clone(),
                 self.env.clone(),
                 self.security_mgr.clone(),
+                storage.get_scheduler().get_txn_status_cache(),
             );
             self.resolved_ts_scheduler = Some(rts_worker.scheduler());
             rts_worker.start_with_timer(rts_endpoint);
@@ -720,6 +737,11 @@ where
                 )),
             );
 
+            // build stream backup encryption manager
+            let backup_encryption_manager =
+                utils::build_backup_encryption_manager(self.core.encryption_key_manager.clone())
+                    .expect("failed to build backup encryption manager in server");
+
             let backup_stream_endpoint = backup_stream::Endpoint::new(
                 self.node.as_ref().unwrap().id(),
                 PdStore::new(Checked::new(Sourced::new(
@@ -735,7 +757,8 @@ where
                 self.pd_client.clone(),
                 self.concurrency_manager.clone(),
                 BackupStreamResolver::V2(self.router.clone().unwrap(), PhantomData),
-                self.core.encryption_key_manager.clone(),
+                backup_encryption_manager.clone(),
+                txn_status_cache.clone(),
             );
             backup_stream_worker.start(backup_stream_endpoint);
             self.core.to_stop.push(backup_stream_worker);
@@ -984,7 +1007,7 @@ where
         }
 
         if let Some(sched) = self.backup_stream_scheduler.take() {
-            let pitr_service = backup_stream::Service::new(sched);
+            let pitr_service = backup_stream::BackupStreamGrpcService::new(sched);
             if servers
                 .server
                 .register_service(create_log_backup(pitr_service))
@@ -1103,7 +1126,7 @@ where
         let mut engine_metrics = EngineMetricsManager::<RocksEngine, ER>::new(
             self.tablet_registry.clone().unwrap(),
             self.kv_statistics.clone(),
-            self.range_cache_engine_statistics.clone(),
+            self.in_memory_engine_statistics.clone(),
             self.core.config.rocksdb.titan.enabled.map_or(false, |v| v),
             self.engines.as_ref().unwrap().raft_engine.clone(),
             self.raft_statistics.clone(),
@@ -1158,36 +1181,42 @@ where
         let raft_path = raft_engine.get_engine_path().to_string();
         let separated_raft_mount_path =
             path_in_diff_mount_point(raft_path.as_str(), tablet_registry.tablet_root());
-        let raft_almost_full_threshold = reserve_raft_space;
-        let raft_already_full_threshold = reserve_raft_space / 2;
-
-        let almost_full_threshold = reserve_space;
-        let already_full_threshold = reserve_space / 2;
-        fn calculate_disk_usage(a: disk::DiskUsage, b: disk::DiskUsage) -> disk::DiskUsage {
-            match (a, b) {
-                (disk::DiskUsage::AlreadyFull, _) => disk::DiskUsage::AlreadyFull,
-                (_, disk::DiskUsage::AlreadyFull) => disk::DiskUsage::AlreadyFull,
-                (disk::DiskUsage::AlmostFull, _) => disk::DiskUsage::AlmostFull,
-                (_, disk::DiskUsage::AlmostFull) => disk::DiskUsage::AlmostFull,
-                (disk::DiskUsage::Normal, disk::DiskUsage::Normal) => disk::DiskUsage::Normal,
-            }
-        }
+        // If the auxiliary directory of raft engine is specified, it's needed to be
+        // checked. Otherwise, it's not needed to be checked. And as the configuration
+        // is static, it's safe to check it only once.
+        let raft_auxiliay_path = if self.core.config.raft_engine.enable {
+            self.core.config.raft_engine.config().spill_dir.clone()
+        } else {
+            None
+        };
+        let (separated_raft_auxillay_mount_path, separated_raft_auxiliary_with_kvdb) =
+            raft_auxiliay_path
+                .as_ref()
+                .map(|path| {
+                    let seperated_with_kvdb =
+                        path_in_diff_mount_point(path.as_str(), tablet_registry.tablet_root());
+                    let seperated_with_raft =
+                        path_in_diff_mount_point(path.as_str(), raft_path.as_str());
+                    (
+                        seperated_with_kvdb && seperated_with_raft,
+                        seperated_with_kvdb,
+                    )
+                })
+                .unwrap_or((false, false));
+        let disk_usage_checker = DiskUsageChecker::new(
+            store_path.as_path().to_str().unwrap().to_string(),
+            raft_path,
+            raft_auxiliay_path,
+            separated_raft_mount_path,
+            separated_raft_auxillay_mount_path,
+            separated_raft_auxiliary_with_kvdb,
+            reserve_space,
+            reserve_raft_space,
+            config_disk_capacity,
+        );
         self.core.background_worker
             .spawn_interval_task(DEFAULT_STORAGE_STATS_INTERVAL, move || {
-                let disk_stats = match fs2::statvfs(&store_path) {
-                    Err(e) => {
-                        error!(
-                            "get disk stat for kv store failed";
-                            "kv_path" => store_path.to_str(),
-                            "err" => ?e
-                        );
-                        return;
-                    }
-                    Ok(stats) => stats,
-                };
-                let disk_cap = disk_stats.total_space();
                 let snap_size = snap_mgr.total_snap_size().unwrap();
-
                 let mut kv_size = 0;
                 tablet_registry.for_each_opened_tablet(|_, cached| {
                     if let Some(tablet) = cached.latest() {
@@ -1195,42 +1224,12 @@ where
                     }
                     true
                 });
-
                 let raft_size = raft_engine
                     .get_engine_size()
                     .expect("get raft engine size");
-
-                let mut raft_disk_status = disk::DiskUsage::Normal;
-                if separated_raft_mount_path && reserve_raft_space != 0 {
-                    let raft_disk_stats = match fs2::statvfs(&raft_path) {
-                        Err(e) => {
-                            error!(
-                                "get disk stat for raft engine failed";
-                                "raft_engine_path" => raft_path.clone(),
-                                "err" => ?e
-                            );
-                            return;
-                        }
-                        Ok(stats) => stats,
-                    };
-                    let raft_disk_cap = raft_disk_stats.total_space();
-                    let mut raft_disk_available =
-                        raft_disk_cap.checked_sub(raft_size).unwrap_or_default();
-                    raft_disk_available = cmp::min(raft_disk_available, raft_disk_stats.available_space());
-                    raft_disk_status = if raft_disk_available <= raft_already_full_threshold
-                    {
-                        disk::DiskUsage::AlreadyFull
-                    } else if raft_disk_available <= raft_almost_full_threshold
-                    {
-                        disk::DiskUsage::AlmostFull
-                    } else {
-                        disk::DiskUsage::Normal
-                    };
-                }
                 let placeholer_file_path = PathBuf::from_str(&data_dir)
                     .unwrap()
                     .join(Path::new(file_system::SPACE_PLACEHOLDER_FILE));
-
                 let placeholder_size: u64 =
                     file_system::get_file_size(placeholer_file_path).unwrap_or(0);
 
@@ -1239,24 +1238,9 @@ where
                 } else {
                     snap_size + kv_size + placeholder_size
                 };
-                let capacity = if config_disk_capacity == 0 || disk_cap < config_disk_capacity {
-                    disk_cap
-                } else {
-                    config_disk_capacity
-                };
-
-                let mut available = capacity.checked_sub(used_size).unwrap_or_default();
-                available = cmp::min(available, disk_stats.available_space());
-
+                // Check the disk usage and update the disk usage status.
+                let (cur_disk_status, cur_kv_disk_status, raft_disk_status, capacity, available) = disk_usage_checker.inspect(used_size, raft_size);
                 let prev_disk_status = disk::get_disk_status(0); //0 no need care about failpoint.
-                let cur_kv_disk_status = if available <= already_full_threshold {
-                    disk::DiskUsage::AlreadyFull
-                } else if available <= almost_full_threshold {
-                    disk::DiskUsage::AlmostFull
-                } else {
-                    disk::DiskUsage::Normal
-                };
-                let cur_disk_status = calculate_disk_usage(raft_disk_status, cur_kv_disk_status);
                 if prev_disk_status != cur_disk_status {
                     warn!(
                         "disk usage {:?}->{:?} (raft engine usage: {:?}, kv engine usage: {:?}), seperated raft mount={}, kv available={}, snap={}, kv={}, raft={}, capacity={}",
@@ -1555,6 +1539,10 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
         let region_info_accessor = RegionInfoAccessor::new(
             &mut coprocessor_host,
             Arc::new(|| false), // Not applicable to v2.
+            Box::new(|| {
+                // v2 does not support ime
+                unreachable!()
+            }),
         );
 
         let cdc_worker = Box::new(LazyWorker::new("cdc"));

@@ -18,14 +18,15 @@ use backup_stream::{
     },
     observer::BackupStreamObserver,
     router::{Router, TaskSelector},
-    utils, BackupStreamResolver, Endpoint, GetCheckpointResult, RegionCheckpointOperation,
-    RegionSet, Service, Task,
+    utils, BackupStreamGrpcService, BackupStreamResolver, Endpoint, GetCheckpointResult,
+    RegionCheckpointOperation, RegionSet, Task,
 };
-use engine_rocks::RocksEngine;
+use encryption::{BackupEncryptionManager, MultiMasterKeyBackend};
 use futures::{executor::block_on, AsyncWriteExt, Future, Stream, StreamExt};
 use grpcio::{ChannelBuilder, Server, ServerBuilder};
 use kvproto::{
     brpb::{CompressionType, Local, Metadata, StorageBackend},
+    encryptionpb::EncryptionMethod,
     kvrpcpb::*,
     logbackuppb::{SubscribeFlushEventRequest, SubscribeFlushEventResponse},
     logbackuppb_grpc::{create_log_backup, LogBackupClient},
@@ -38,7 +39,10 @@ use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use test_raftstore::{new_server_cluster, Cluster, Config, ServerCluster};
 use test_util::retry;
-use tikv::config::{BackupStreamConfig, ResolvedTsConfig};
+use tikv::{
+    config::{BackupStreamConfig, ResolvedTsConfig},
+    storage::txn::txn_status_cache::TxnStatusCache,
+};
 use tikv_util::{
     codec::{
         number::NumberEncoder,
@@ -264,7 +268,7 @@ impl<S: MetaStore> MetaStore for ErrorStore<S> {
 pub struct Suite {
     pub endpoints: HashMap<u64, LazyWorker<Task>>,
     pub meta_store: ErrorStore<SlashEtcStore>,
-    pub cluster: Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    pub cluster: Cluster<ServerCluster>,
     tikv_cli: HashMap<u64, TikvClient>,
     log_backup_cli: HashMap<u64, LogBackupClient>,
     obs: HashMap<u64, BackupStreamObserver>,
@@ -357,7 +361,7 @@ impl Suite {
             .get(&id)
             .expect("must register endpoint first");
 
-        let serv = Service::new(endpoint.scheduler());
+        let serv = BackupStreamGrpcService::new(endpoint.scheduler());
         let builder =
             ServerBuilder::new(self.env.clone()).register_service(create_log_backup(serv));
         let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
@@ -405,7 +409,13 @@ impl Suite {
             cluster.pd_client.clone(),
             cm,
             BackupStreamResolver::V1(resolver),
-            sim.encryption.clone(),
+            BackupEncryptionManager::new(
+                None,
+                EncryptionMethod::Plaintext,
+                MultiMasterKeyBackend::default(),
+                sim.encryption.clone(),
+            ),
+            Arc::new(TxnStatusCache::new_for_test()),
         );
         worker.start(endpoint);
     }
@@ -435,7 +445,7 @@ impl Suite {
         ))
         .unwrap();
         let name = name.to_owned();
-        self.wait_with_router(move |r| r.get_task_info(&name).is_ok())
+        self.wait_with_router(move |r| r.get_task_handler(&name).is_ok())
     }
 
     /// This function tries to calculate the global checkpoint from the flush
@@ -928,7 +938,7 @@ impl Suite {
         self.wait_with_router(move |r| {
             let task_names = r.select_task(TaskSelector::All.reference());
             for task_name in task_names {
-                let tsk = r.get_task_info(&task_name);
+                let tsk = r.get_task_handler(&task_name);
                 if tsk.unwrap().is_flushing() {
                     return false;
                 }
