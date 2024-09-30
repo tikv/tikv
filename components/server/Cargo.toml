@@ -33,6 +33,7 @@ clap = { workspace = true }
 collections = { workspace = true }
 concurrency_manager = { workspace = true }
 crossbeam = { workspace = true }
+encryption = { workspace = true }
 encryption_export = { workspace = true }
 engine_rocks = { workspace = true }
 engine_rocks_helper = { workspace = true }
