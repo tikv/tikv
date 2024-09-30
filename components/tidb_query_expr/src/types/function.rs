@@ -345,6 +345,9 @@ thread_local! {
     pub static VARG_PARAM_BUF_JSON_REF: std::cell::RefCell<Vec<Option<JsonRef<'static>>>> =
         std::cell::RefCell::new(Vec::with_capacity(20));
 
+    pub static VARG_PARAM_BUF_VECTOR_FLOAT32_REF: std::cell::RefCell<Vec<Option<VectorFloat32Ref<'static>>>> =
+        std::cell::RefCell::new(Vec::with_capacity(20));
+
     pub static RAW_VARG_PARAM_BUF: std::cell::RefCell<Vec<ScalarValueRef<'static>>> =
         std::cell::RefCell::new(Vec::with_capacity(20));
 }
