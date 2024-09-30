@@ -98,6 +98,7 @@ impl PdMocker for MetaStorage {
         }
 
         let mut store = self.store.lock().unwrap();
+        let store_clone = self.store.clone();
         let key = if req.get_range_end().is_empty() {
             Keys::Key(MetaKey(req.get_key().to_vec()))
         } else {
@@ -124,15 +125,10 @@ impl PdMocker for MetaStorage {
                 resp.set_events(vec![event].into());
                 sink.send((resp, Default::default())).await.unwrap();
 
-                #[cfg(feature = "failpoints")]
-                {
-                    use futures::executor::block_on;
-                    let cli_clone = cli.clone();
-                    fail_point!("watch_meta_storage_return", |_| {
-                        block_on(async move { cli_clone.lock().await.clear_subs() });
-                        watcher.close();
-                    });
-                }
+                fail::fail_point!("watch_meta_storage_return", |_| {
+                    store_clone.lock().unwrap().clear_subs();
+                    watcher.close();
+                });
             }
         });
         true

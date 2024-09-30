@@ -26,7 +26,7 @@ kvproto = { workspace = true }
 lazy_static = "1.4"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 pd_client = { workspace = true }
-prometheus = { version = "0.13", default_features = false, features = ["nightly"] }
+prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
 protobuf = { version = "2.8", features = ["bytes"] }
 raft_log_engine = { workspace = true }

@@ -2,6 +2,7 @@
 #![allow(dead_code)]
 #![allow(unused_variables)]
 #![feature(let_chains)]
+#![feature(trait_upcasting)]
 
 mod cf_names;
 mod cf_options;

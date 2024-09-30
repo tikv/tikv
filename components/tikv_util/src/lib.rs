@@ -461,7 +461,7 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
 
     let data_dir = data_dir.to_string();
 
-    panic::set_hook(Box::new(move |info: &panic::PanicInfo<'_>| {
+    panic::set_hook(Box::new(move |info: &panic::PanicHookInfo<'_>| {
         let msg = match info.payload().downcast_ref::<&'static str>() {
             Some(s) => *s,
             None => match info.payload().downcast_ref::<String>() {

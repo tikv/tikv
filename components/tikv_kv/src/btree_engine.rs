@@ -115,7 +115,7 @@ impl Engine for BTreeEngine {
     }
 
     type IMSnap = Self::Snap;
-    type IMSnapshotRes = Self::SnapshotRes;
+    type IMSnapshotRes = impl Future<Output = EngineResult<Self::IMSnap>> + Send;
     fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes {
         self.async_snapshot(ctx)
     }

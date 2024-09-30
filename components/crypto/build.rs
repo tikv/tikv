@@ -3,6 +3,9 @@
 use std::env;
 
 fn main() {
+    println!("cargo::rustc-check-cfg=cfg(ossl1,ossl3)");
+    println!("cargo::rustc-check-cfg=cfg(disable_fips)");
+
     if !option_env!("ENABLE_FIPS").map_or(false, |v| v == "1") {
         println!("cargo:rustc-cfg=disable_fips");
         return;

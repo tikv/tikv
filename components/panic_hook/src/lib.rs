@@ -8,13 +8,13 @@
 
 use std::{
     cell::RefCell,
-    panic::{self, AssertUnwindSafe, PanicInfo},
+    panic::{self, AssertUnwindSafe, PanicHookInfo},
     sync::Once,
 };
 
 static INIT: Once = Once::new();
 // store the default panic hook defined in std.
-static mut DEFAULT_HOOK: Option<*mut (dyn Fn(&PanicInfo<'_>) + 'static + Sync + Send)> = None;
+static mut DEFAULT_HOOK: Option<*mut (dyn Fn(&PanicHookInfo<'_>) + 'static + Sync + Send)> = None;
 
 thread_local! {
     static MUTED: RefCell<bool> = RefCell::new(false)
@@ -40,7 +40,7 @@ pub fn unmute() {
 }
 
 /// Print the stacktrace according to the static MUTED.
-fn track_hook(p: &PanicInfo<'_>) {
+fn track_hook(p: &PanicHookInfo<'_>) {
     MUTED.with(|m| {
         if *m.borrow() {
             return;
