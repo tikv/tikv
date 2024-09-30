@@ -632,6 +632,11 @@ def target(
     hide=False,
     data_source=DATASOURCE,
     interval_factor=1,  # Prefer "high" resolution
+    # It indicates whether to add additional groupby label to the groupby and legend.
+    # If the expr is already groupby by instance, no need to set it to True.
+    # Additional groupby is used to support optional by instance. By default, it doesn't
+    # take effect. When the variable $additional_groupby of dashboard is set to `instance`.
+    # The expr would be groupby by `instance`.
     additional_groupby=False,
 ) -> Target:
     if isinstance(expr, Expr):
