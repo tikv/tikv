@@ -518,7 +518,7 @@ def expr_simple(
 
 def expr_operator(
     lhs: Union[Expr, OpExpr, str], operator: str, rhs: Union[Expr, OpExpr, str]
-) -> str:
+) -> OpExpr:
     return OpExpr(lhs, operator, rhs)
 
 
