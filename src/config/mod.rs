@@ -3962,6 +3962,15 @@ impl TikvConfig {
         self.causal_ts.validate()?;
         self.in_memory_engine.validate()?;
 
+        // Now, only support cross check in in-memory engine when compaction filter is
+        // enabled.
+        if self.in_memory_engine.enabled
+            && !self.in_memory_engine.cross_check_interval.is_zero()
+            && !self.gc.enable_compaction_filter
+        {
+            return Err("Compaction-filter should be enabled when cross-check is turned on in in-memory engine".to_string().into());
+        }
+
         // Validate feature TTL with Titan configuration.
         if matches!(self.rocksdb.titan.enabled, Some(true)) && self.storage.enable_ttl {
             return Err("Titan is unavailable for feature TTL".to_string().into());
