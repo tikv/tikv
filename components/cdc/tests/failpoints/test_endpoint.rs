@@ -656,3 +656,70 @@ fn test_delegate_fail_during_incremental_scan() {
     recv_timeout(&mut recver, Duration::from_secs(1)).unwrap_err();
     recv.replace(Some(recver));
 }
+
+// The case shows it's possible that unordered Prewrite events on one same key
+// can be sent to TiCDC clients. Generally it only happens when a region changes
+// during a Pipelined-DML transaction.
+//
+// To ensure TiCDC can handle the situation, `generation` should be carried in
+// Prewrite events.
+#[test]
+fn test_cdc_pipeline_dml() {
+    let mut cluster = new_server_cluster(0, 1);
+    configure_for_lease_read(&mut cluster.cfg, Some(100), Some(10));
+    cluster.pd_client.disable_default_operator();
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
+    let region = suite.cluster.get_region(&[]);
+    let rid = region.id;
+
+    let prewrite_tso = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    let (k, v) = (b"key".to_vec(), vec![b'x'; 16]);
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.key = k.clone();
+    mutation.value = v;
+    suite.must_kv_flush(rid, vec![mutation], k.clone(), prewrite_tso, 1);
+
+    fail::cfg("cdc_incremental_scan_start", "pause").unwrap();
+
+    let cf_tso = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    let (mut req_tx, _, receive_event) = new_event_feed_v2(suite.get_region_cdc_client(rid));
+    let mut req = suite.new_changedata_request(rid);
+    req.request_id = 1;
+    req.checkpoint_ts = cf_tso.into_inner();
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    sleep_ms(100);
+
+    let (k, v) = (b"key".to_vec(), vec![b'y'; 16]);
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.key = k.clone();
+    mutation.value = v;
+    suite.must_kv_flush(rid, vec![mutation], k.clone(), prewrite_tso, 2);
+
+    let events = receive_event(false).take_events().into_vec();
+    for entry in events[0].get_entries().get_entries() {
+        assert_eq!(entry.r_type, EventLogType::Prewrite);
+        assert_eq!(entry.generation, 2);
+        assert_eq!(entry.value, vec![b'y'; 16]);
+    }
+
+    let commit_tso = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_kv_commit(rid, vec![b"key".to_vec()], prewrite_tso, commit_tso);
+
+    let events = receive_event(false).take_events().into_vec();
+    for entry in events[0].get_entries().get_entries() {
+        assert_eq!(entry.r_type, EventLogType::Commit);
+        assert_eq!(entry.start_ts, prewrite_tso.into_inner());
+        assert_eq!(entry.commit_ts, commit_tso.into_inner());
+    }
+
+    fail::remove("cdc_incremental_scan_start");
+
+    let events = receive_event(false).take_events().into_vec();
+    let entries = events[0].get_entries().get_entries();
+    assert_eq!(entries[0].r_type, EventLogType::Prewrite);
+    assert_eq!(entries[0].generation, 1);
+    assert_eq!(entries[0].value, vec![b'x'; 16]);
+    assert_eq!(entries[1].r_type, EventLogType::Initialized);
+}

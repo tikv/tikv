@@ -8,7 +8,7 @@ use cloud::{
     kms::{Config, CryptographyType, DataKeyPair, EncryptedKey, KeyId, KmsProvider, PlainKey},
 };
 use rusoto_core::{request::DispatchSignedRequest, RusotoError};
-use rusoto_credential::ProvideAwsCredentials;
+use rusoto_credential::{AwsCredentials, ProvideAwsCredentials, StaticProvider};
 use rusoto_kms::{
     DecryptError, DecryptRequest, GenerateDataKeyError, GenerateDataKeyRequest, Kms, KmsClient,
 };
@@ -62,17 +62,35 @@ impl AwsKms {
         })
     }
 
-    fn new_with_dispatcher<D>(config: Config, dispatcher: D) -> Result<AwsKms>
-    where
-        D: DispatchSignedRequest + Send + Sync + 'static,
-    {
-        let credentials_provider = util::CredentialsProvider::new()?;
-        Self::new_with_creds_dispatcher(config, dispatcher, credentials_provider)
-    }
-
     pub fn new(config: Config) -> Result<AwsKms> {
         let dispatcher = util::new_http_client()?;
-        Self::new_with_dispatcher(config, dispatcher)
+        match config.aws.as_ref() {
+            Some(aws_config) => {
+                if let (Some(access_key), Some(secret_access_key)) = (
+                    aws_config.access_key.clone(),
+                    aws_config.secret_access_key.clone(),
+                ) {
+                    // Use provided AWS credentials
+                    let credentials = AwsCredentials::new(
+                        access_key,
+                        secret_access_key,
+                        None, // session token
+                        None, // expiration
+                    );
+                    let static_provider = StaticProvider::from(credentials);
+                    Self::new_with_creds_dispatcher(config, dispatcher, static_provider)
+                } else {
+                    // Fall back to default credentials provider
+                    let provider = util::CredentialsProvider::new()?;
+                    Self::new_with_creds_dispatcher(config, dispatcher, provider)
+                }
+            }
+            None => {
+                // No AWS config provided, use default credentials provider
+                let provider = util::CredentialsProvider::new()?;
+                Self::new_with_creds_dispatcher(config, dispatcher, provider)
+            }
+        }
     }
 }
 
@@ -226,6 +244,7 @@ mod tests {
             },
             azure: None,
             gcp: None,
+            aws: None,
         };
 
         let dispatcher =
@@ -271,6 +290,7 @@ mod tests {
             },
             azure: None,
             gcp: None,
+            aws: None,
         };
 
         // IncorrectKeyException

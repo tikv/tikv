@@ -86,6 +86,7 @@ futures = "0.3"
 grpcio = { workspace = true }
 grpcio-health = { workspace = true }
 health_controller = { workspace = true }
+in_memory_engine = { workspace = true }
 kvproto = { workspace = true }
 log_wrappers = { workspace = true }
 more-asserts = "0.2"
@@ -98,7 +99,6 @@ raft_log_engine = { workspace = true }
 raftstore = { workspace = true }
 raftstore-v2 = { workspace = true }
 rand = "0.8.3"
-range_cache_memory_engine = { workspace = true }
 resource_control = { workspace = true }
 server = { workspace = true }
 service = { workspace = true }

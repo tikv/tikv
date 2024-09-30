@@ -6,7 +6,7 @@ publish = false
 license = "Apache-2.0"
 
 [dependencies]
-async-compression = { version = "0.3.14", features = ["futures-io", "zstd"] }
+async-compression = { version = "0.4.12", features = ["futures-io", "zstd"] }
 async-trait = "0.1"
 aws = { workspace = true }
 azure = { workspace = true }

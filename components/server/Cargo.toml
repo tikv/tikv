@@ -44,6 +44,7 @@ futures = "0.3"
 grpcio = { workspace = true }
 health_controller = { workspace = true }
 hybrid_engine = { workspace = true }
+in_memory_engine = { workspace = true }
 keys = { workspace = true }
 kvproto = { workspace = true }
 libc = "0.2"
@@ -55,7 +56,6 @@ raft = { workspace = true }
 raft_log_engine = { workspace = true }
 raftstore = { workspace = true, features = ["engine_rocks"] }
 raftstore-v2 = { workspace = true }
-range_cache_memory_engine = { workspace = true }
 resolved_ts = { workspace = true }
 resource_control = { workspace = true }
 resource_metering = { workspace = true }
