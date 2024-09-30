@@ -32,9 +32,7 @@ pub enum PluginLoadingError {
         tikv_rustc: String,
     },
 
-    #[error(
-        "target mismatch: plugin was compiled for {plugin_target}, but TiKV for {tikv_target}"
-    )]
+    #[error("target mismatch: plugin was compiled for {plugin_target}, but TiKV for {tikv_target}")]
     TargetMismatch {
         plugin_target: String,
         tikv_target: String,
