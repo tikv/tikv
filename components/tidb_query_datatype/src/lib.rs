@@ -7,6 +7,7 @@
 #![feature(test)]
 #![allow(internal_features)]
 #![feature(str_internals)]
+#![feature(core_intrinsics)]
 
 #[macro_use]
 extern crate num_derive;

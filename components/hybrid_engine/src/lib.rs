@@ -20,8 +20,8 @@ mod misc;
 mod mvcc_properties;
 pub mod observer;
 mod perf_context;
-mod range_cache_engine;
 mod range_properties;
+mod region_cache_engine;
 mod snapshot;
 mod sst;
 mod table_properties;
@@ -29,5 +29,5 @@ mod ttl_properties;
 pub mod util;
 mod write_batch;
 
-pub use engine::HybridEngine;
+pub use engine::{new_in_memory_snapshot, HybridEngine};
 pub use snapshot::HybridEngineSnapshot;

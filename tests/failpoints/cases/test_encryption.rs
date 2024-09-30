@@ -64,11 +64,8 @@ fn test_kms_provider_temporary_unavailable() {
     let (iv, pt, plainkey, ..) = prepare_data_for_encrypt();
     let mut backend = prepare_kms_backend(plainkey, false);
     let encrypted_content = backend.encrypt_content(&pt, iv).unwrap();
-    // Clear the cached state to ensure that the subsequent
-    // backend.decrypt_content() invocation bypasses the cache and triggers the
-    // mocked FakeKMS::decrypt_data_key() function.
-    backend.clear_state();
 
+    backend.clear_state();
     // Same as above.
     fail::cfg("kms_api_timeout_decrypt", "1*return(true)").unwrap();
     let pt_decrypt = backend.decrypt_content(&encrypted_content).unwrap();

@@ -9,7 +9,6 @@ use std::{
 };
 
 use collections::HashMap;
-use engine_rocks::RocksEngine;
 use kvproto::metapb::Region;
 use more_asserts::{assert_gt, assert_le};
 use pd_client::{RegionStat, RegionWriteCfCopDetail};
@@ -20,9 +19,7 @@ use raftstore::coprocessor::{
 use test_raftstore::*;
 use tikv_util::HandyRwLock;
 
-fn prepare_cluster<T: Simulator<RocksEngine>>(
-    cluster: &mut Cluster<RocksEngine, T>,
-) -> Vec<Region> {
+fn prepare_cluster<T: Simulator>(cluster: &mut Cluster<T>) -> Vec<Region> {
     for i in 0..15 {
         let i = i + b'0';
         let key = vec![b'k', i];
@@ -81,7 +78,7 @@ fn test_region_collection_seek_region() {
         .sim
         .wl()
         .post_create_coprocessor_host(Box::new(move |id, host| {
-            let p = RegionInfoAccessor::new(host, Arc::new(|| false), 0);
+            let p = RegionInfoAccessor::new(host, Arc::new(|| false), Box::new(|| 0));
             tx.send((id, p)).unwrap()
         }));
 
@@ -155,7 +152,7 @@ fn test_region_collection_get_regions_in_range() {
         .sim
         .wl()
         .post_create_coprocessor_host(Box::new(move |id, host| {
-            let p = RegionInfoAccessor::new(host, Arc::new(|| false), 0);
+            let p = RegionInfoAccessor::new(host, Arc::new(|| false), Box::new(|| 0));
             tx.send((id, p)).unwrap()
         }));
 
@@ -200,7 +197,7 @@ fn test_region_collection_get_top_regions() {
         .sim
         .wl()
         .post_create_coprocessor_host(Box::new(move |id, host| {
-            let p = RegionInfoAccessor::new(host, Arc::new(|| true), 0);
+            let p = RegionInfoAccessor::new(host, Arc::new(|| true), Box::new(|| 0));
             tx.send((id, p)).unwrap()
         }));
     cluster.run();
@@ -264,7 +261,7 @@ fn test_region_collection_find_region_by_key() {
         .sim
         .wl()
         .post_create_coprocessor_host(Box::new(move |id, host| {
-            let p = RegionInfoAccessor::new(host, Arc::new(|| false), 0);
+            let p = RegionInfoAccessor::new(host, Arc::new(|| false), Box::new(|| 0));
             tx.send((id, p)).unwrap()
         }));
 
