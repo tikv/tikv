@@ -2306,8 +2306,7 @@ dependencies = [
 [[package]]
 name = "grpcio"
 version = "0.10.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f2506de56197d01821c2d1d21082d2dcfd6c82d7a1d6e04d33f37aab6130632"
+source = "git+https://github.com/LykxSassinator/grpc-rs.git?branch=load-balance#723a8021851538dec497626bb71e681b805cc8f2"
 dependencies = [
  "futures-executor",
  "futures-util",
@@ -2343,8 +2342,7 @@ dependencies = [
 [[package]]
 name = "grpcio-sys"
 version = "0.10.3+1.44.0-patched"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f23adc509a3c4dea990e0ab8d2add4a65389ee69c288b7851d75dd1df7a6d6c6"
+source = "git+https://github.com/LykxSassinator/grpc-rs.git?branch=load-balance#723a8021851538dec497626bb71e681b805cc8f2"
 dependencies = [
  "bindgen 0.59.2",
  "cc",

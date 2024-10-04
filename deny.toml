@@ -104,3 +104,4 @@ exceptions = [
 unknown-git = "deny"
 unknown-registry = "deny"
 allow-org = { github = ["tikv", "pingcap", "rust-lang"] }
+allow-git = [ "https://github.com/LykxSassinator/grpc-rs.git" ]
