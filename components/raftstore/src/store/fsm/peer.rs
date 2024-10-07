@@ -2627,6 +2627,7 @@ where
         );
 
         let msg_type = msg.get_message().get_msg_type();
+        #[cfg(feature = "failpoints")]
         let fp_enable = |target_msg_type: MessageType| -> bool {
             self.fsm.region_id() == 1000
                 && self.store_id() == 2
