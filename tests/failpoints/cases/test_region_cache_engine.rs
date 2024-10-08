@@ -663,7 +663,7 @@ fn test_pre_load_when_transfer_ledaer() {
     let _ = rx.recv_timeout(Duration::from_secs(500)).unwrap();
 
     let region_cache_engine = cluster.sim.rl().get_region_cache_engine(2);
-    region_cache_engine.region_cached(&r);
+    assert!(region_cache_engine.region_cached(&r));
 }
 
 #[test]
@@ -674,8 +674,8 @@ fn test_background_loading_pending_region() {
     cluster.run();
 
     let r = cluster.get_region(b"");
-    let range_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
-    range_cache_engine
+    let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
+    region_cache_engine
         .load_region(CacheRegion::from_region(&r))
         .unwrap();
 
@@ -686,5 +686,5 @@ fn test_background_loading_pending_region() {
     .unwrap();
 
     rx.recv_timeout(Duration::from_secs(2)).unwrap();
-    range_cache_engine.region_cached(&r);
+    assert!(region_cache_engine.region_cached(&r));
 }
