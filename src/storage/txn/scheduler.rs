@@ -39,7 +39,6 @@ use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use crossbeam::utils::CachePadded;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use file_system::IoBytes;
 use futures::{compat::Future01CompatExt, FutureExt as _, StreamExt};
 use kvproto::{
     kvrpcpb::{self, CommandPri, Context, DiskFullOpt},
@@ -103,10 +102,6 @@ pub const DEFAULT_EXECUTION_DURATION_LIMIT: Duration = Duration::from_secs(24 * 
 
 const IN_MEMORY_PESSIMISTIC_LOCK: Feature = Feature::require(6, 0, 0);
 pub const LAST_CHANGE_TS: Feature = Feature::require(6, 5, 0);
-
-// we only do resource control in txn scheduler, so the cpu time tracked is much
-// less than the actual cost, so we increase it by a factor.
-const SCHEDULER_CPU_TIME_FACTOR: u32 = 5;
 
 type SVec<T> = SmallVec<[T; 4]>;
 
@@ -1285,18 +1280,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let write_bytes = task.cmd().write_bytes();
         let tag = task.cmd().tag();
         let quota_limiter = txn_scheduler.inner.quota_limiter.clone();
-        let _resource_limiter = txn_scheduler.inner.resource_manager.as_ref().and_then(|m| {
-            let ctx = task.cmd().ctx();
-            m.get_resource_limiter(
-                ctx.get_resource_control_context().get_resource_group_name(),
-                ctx.get_request_source(),
-                ctx.get_resource_control_context().get_override_priority(),
-            )
-        });
         let mut sample = quota_limiter.new_sample(true);
-        // if resource_limiter.is_some() {
-        //     sample.enable_cpu_limit();
-        // }
         let max_ts_synced = snapshot.ext().is_max_ts_synced();
         let causal_ts_provider = txn_scheduler.inner.causal_ts_provider.clone();
         let concurrency_manager = txn_scheduler.inner.concurrency_manager.clone();
@@ -1335,25 +1319,6 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             // TODO: write bytes can be a bit inaccurate due to error requests or in-memory
             // pessimistic locks.
             sample.add_write_bytes(write_bytes);
-            // if let Some(limiter) = resource_limiter {
-            //     let expected_dur = if limiter.is_background() {
-            //         // estimate the cpu time for write by the schduling cpu
-            // time and write bytes         (sample.cpu_time() +
-            // Duration::from_micros(write_bytes as u64))
-            //             * SCHEDULER_CPU_TIME_FACTOR
-            //     } else {
-            //         sample.cpu_time()
-            //     };
-            //     limiter
-            //         .async_consume(
-            //             expected_dur,
-            //             IoBytes {
-            //                 read: 0,
-            //                 write: write_bytes as u64,
-            //             },
-            //         )
-            //         .await;
-            // }
         }
         let read_bytes = sched_details
             .stat
