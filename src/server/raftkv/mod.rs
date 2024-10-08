@@ -22,9 +22,10 @@ use std::{
 
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot, SnapshotContext};
+use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot};
 use futures::{future::BoxFuture, task::AtomicWaker, Future, Stream, StreamExt, TryFutureExt};
-use hybrid_engine::{HybridEngine, HybridEngineSnapshot};
+use hybrid_engine::HybridEngineSnapshot;
+use in_memory_engine::RegionCacheMemoryEngine;
 use kvproto::{
     errorpb,
     kvrpcpb::{Context, IsolationLevel},
@@ -43,13 +44,12 @@ use raftstore::{
         dispatcher::BoxReadIndexObserver, Coprocessor, CoprocessorHost, ReadIndexObserver,
     },
     errors::Error as RaftServerError,
-    router::{LocalReadRouter, RaftStoreRouter},
+    router::{LocalReadRouter, RaftStoreRouter, ReadContext},
     store::{
         self, util::encode_start_ts_into_flag_data, Callback as StoreCallback, RaftCmdExtraOpts,
-        ReadCallback, ReadIndexContext, ReadResponse, RegionSnapshot, StoreMsg, WriteResponse,
+        ReadIndexContext, ReadResponse, RegionSnapshot, StoreMsg, WriteResponse,
     },
 };
-use range_cache_memory_engine::RangeCacheMemoryEngine;
 use thiserror::Error;
 use tikv_kv::{write_modifies, OnAppliedCb, WriteEvent};
 use tikv_util::{
@@ -57,7 +57,7 @@ use tikv_util::{
     future::{paired_future_callback, paired_must_called_future_callback},
     time::Instant,
 };
-use tracker::GLOBAL_TRACKERS;
+use tracker::{get_tls_tracker_token, GLOBAL_TRACKERS};
 use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, WriteBatchFlags};
 
 use super::metrics::*;
@@ -355,7 +355,6 @@ where
 {
     router: RaftRouterWrap<S, E>,
     engine: E,
-    in_memory_engine: Option<HybridEngine<E, RangeCacheMemoryEngine>>,
     txn_extra_scheduler: Option<Arc<dyn TxnExtraScheduler>>,
     region_leaders: Arc<RwLock<HashSet<u64>>>,
 }
@@ -366,16 +365,10 @@ where
     S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
 {
     /// Create a RaftKv using specified configuration.
-    pub fn new(
-        router: S,
-        engine: E,
-        in_memory_engine: Option<HybridEngine<E, RangeCacheMemoryEngine>>,
-        region_leaders: Arc<RwLock<HashSet<u64>>>,
-    ) -> RaftKv<E, S> {
+    pub fn new(router: S, engine: E, region_leaders: Arc<RwLock<HashSet<u64>>>) -> RaftKv<E, S> {
         RaftKv {
             router: RaftRouterWrap::new(router),
             engine,
-            in_memory_engine,
             txn_extra_scheduler: None,
             region_leaders,
         }
@@ -557,6 +550,10 @@ where
                     });
                     let mut res = match on_write_result::<E::Snapshot>(resp) {
                         Ok(CmdRes::Resp(_)) => {
+                            ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();
+                            ASYNC_REQUESTS_DURATIONS_VEC
+                                .write
+                                .observe(begin_instant.saturating_elapsed_secs());
                             fail_point!("raftkv_async_write_finish");
                             Ok(())
                         }
@@ -590,51 +587,30 @@ where
             tx.notify(res);
         }
         rx.inspect(move |ev| {
-            let WriteEvent::Finished(res) = ev else {
-                return;
-            };
-            match res {
-                Ok(()) => {
-                    ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();
-                    ASYNC_REQUESTS_DURATIONS_VEC
-                        .write
-                        .observe(begin_instant.saturating_elapsed_secs());
-                }
-                Err(e) => {
-                    let status_kind = get_status_kind_from_engine_error(e);
-                    ASYNC_REQUESTS_COUNTER_VEC.write.get(status_kind).inc();
-                }
+            if let WriteEvent::Finished(Err(e)) = ev {
+                let status_kind = get_status_kind_from_engine_error(e);
+                ASYNC_REQUESTS_COUNTER_VEC.write.get(status_kind).inc();
             }
         })
     }
 
     type SnapshotRes = impl Future<Output = kv::Result<Self::Snap>> + Send;
     fn async_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::SnapshotRes {
-        async_snapshot(&mut self.router, ctx, None)
+        async_snapshot(&mut self.router, ctx)
     }
 
     fn release_snapshot(&mut self) {
         self.router.release_snapshot_cache();
     }
 
-    type IMSnap = RegionSnapshot<HybridEngineSnapshot<E, RangeCacheMemoryEngine>>;
+    type IMSnap = RegionSnapshot<HybridEngineSnapshot<E, RegionCacheMemoryEngine>>;
     type IMSnapshotRes = impl Future<Output = kv::Result<Self::IMSnap>> + Send;
     fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes {
-        let snap_ctx = if self.in_memory_engine.is_some() {
-            // When range cache engine is enabled, we need snapshot context to determine
-            // whether we should use range cache engine snapshot for this request.
-            ctx.start_ts.map(|ts| SnapshotContext {
-                region: None,
-                read_ts: ts.into_inner(),
-            })
-        } else {
-            None
-        };
-        async_snapshot(&mut self.router, ctx, snap_ctx.clone()).map_ok(|region_snap| {
+        async_snapshot(&mut self.router, ctx).map_ok(|region_snap| {
             // TODO: Remove replace_snapshot. Taking a snapshot and replacing it
             // with a new one is a bit confusing.
             // A better way to build an in-memory snapshot is to return
-            // `HybridEngineSnapshot<RegionSnapshot<E>, RangeCacheMemoryEngine>>;`
+            // `HybridEngineSnapshot<RegionSnapshot<E>, RegionCacheMemoryEngine>>;`
             // so the `replace_snapshot` can be removed.
             region_snap.replace_snapshot(move |disk_snap, pinned| {
                 HybridEngineSnapshot::from_observed_snapshot(disk_snap, pinned)
@@ -697,7 +673,6 @@ where
 fn async_snapshot<E, S>(
     router: &mut RaftRouterWrap<S, E>,
     mut ctx: SnapContext<'_>,
-    snap_ctx: Option<SnapshotContext>,
 ) -> impl Future<Output = kv::Result<RegionSnapshot<E::Snapshot>>> + Send
 where
     E: KvEngine,
@@ -740,14 +715,43 @@ where
     let mut cmd = RaftCmdRequest::default();
     cmd.set_header(header);
     cmd.set_requests(vec![req].into());
+    let tracker = get_tls_tracker_token();
     let store_cb = StoreCallback::read(Box::new(move |resp| {
-        cb(on_read_result(resp).map_err(Error::into));
+        let res = on_read_result(resp).map_err(Error::into);
+        if res.is_ok() {
+            let elapse = begin_instant.saturating_elapsed_secs();
+            GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
+                if tracker.metrics.read_index_propose_wait_nanos > 0 {
+                    ASYNC_REQUESTS_DURATIONS_VEC
+                        .snapshot_read_index_propose_wait
+                        .observe(
+                            tracker.metrics.read_index_propose_wait_nanos as f64 / 1_000_000_000.0,
+                        );
+                    // snapshot may be handled by lease read in raftstore
+                    if tracker.metrics.read_index_confirm_wait_nanos > 0 {
+                        ASYNC_REQUESTS_DURATIONS_VEC
+                            .snapshot_read_index_confirm
+                            .observe(
+                                tracker.metrics.read_index_confirm_wait_nanos as f64
+                                    / 1_000_000_000.0,
+                            );
+                    }
+                } else if tracker.metrics.local_read {
+                    ASYNC_REQUESTS_DURATIONS_VEC
+                        .snapshot_local_read
+                        .observe(elapse);
+                }
+            });
+            ASYNC_REQUESTS_DURATIONS_VEC.snapshot.observe(elapse);
+            ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
+        }
+        cb(res);
     }));
-    let tracker = store_cb.read_tracker().unwrap();
 
+    let read_ctx = ReadContext::new(ctx.read_id, ctx.start_ts.map(|ts| ts.into_inner()));
     if res.is_ok() {
         res = router
-            .read(snap_ctx, ctx.read_id, cmd, store_cb)
+            .read(read_ctx, cmd, store_cb)
             .map_err(kv::Error::from);
     }
     async move {
@@ -773,35 +777,7 @@ where
                 };
                 Err(e)
             }
-            Ok(CmdRes::Snap(s)) => {
-                let elapse = begin_instant.saturating_elapsed_secs();
-                GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
-                    if tracker.metrics.read_index_propose_wait_nanos > 0 {
-                        ASYNC_REQUESTS_DURATIONS_VEC
-                            .snapshot_read_index_propose_wait
-                            .observe(
-                                tracker.metrics.read_index_propose_wait_nanos as f64
-                                    / 1_000_000_000.0,
-                            );
-                        // snapshot may be handled by lease read in raftstore
-                        if tracker.metrics.read_index_confirm_wait_nanos > 0 {
-                            ASYNC_REQUESTS_DURATIONS_VEC
-                                .snapshot_read_index_confirm
-                                .observe(
-                                    tracker.metrics.read_index_confirm_wait_nanos as f64
-                                        / 1_000_000_000.0,
-                                );
-                        }
-                    } else if tracker.metrics.local_read {
-                        ASYNC_REQUESTS_DURATIONS_VEC
-                            .snapshot_local_read
-                            .observe(elapse);
-                    }
-                });
-                ASYNC_REQUESTS_DURATIONS_VEC.snapshot.observe(elapse);
-                ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
-                Ok(s)
-            }
+            Ok(CmdRes::Snap(s)) => Ok(s),
             Err(e) => {
                 let status_kind = get_status_kind_from_engine_error(&e);
                 ASYNC_REQUESTS_COUNTER_VEC.snapshot.get(status_kind).inc();

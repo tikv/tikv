@@ -96,7 +96,5 @@ encryption_export = { workspace = true }
 engine_panic = { workspace = true }
 engine_rocks = { workspace = true }
 engine_test = { workspace = true }
-hybrid_engine = { workspace = true }
 panic_hook = { workspace = true }
-range_cache_memory_engine = { workspace = true }
 test_sst_importer = { workspace = true }

@@ -4,10 +4,7 @@ use std::{
     fmt::Write,
     path::Path,
     str::FromStr,
-    sync::{
-        mpsc::{self},
-        Arc, Mutex,
-    },
+    sync::{mpsc, Arc, Mutex},
     thread,
     time::Duration,
 };
@@ -27,6 +24,7 @@ use file_system::IoRateLimiter;
 use futures::{executor::block_on, future::BoxFuture, StreamExt};
 use grpcio::{ChannelBuilder, Environment};
 use hybrid_engine::HybridEngine;
+use in_memory_engine::RegionCacheMemoryEngine;
 use kvproto::{
     encryptionpb::EncryptionMethod,
     kvrpcpb::{PrewriteRequestPessimisticAction::*, *},
@@ -48,7 +46,6 @@ use raftstore::{
     RaftRouterCompactedEventSender, Result,
 };
 use rand::{seq::SliceRandom, RngCore};
-use range_cache_memory_engine::RangeCacheMemoryEngine;
 use server::common::ConfiguredRaftEngine;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
@@ -74,7 +71,7 @@ use txn_types::Key;
 
 use crate::{Cluster, Config, RawEngine, ServerCluster, Simulator};
 
-pub type HybridEngineImpl = HybridEngine<RocksEngine, RangeCacheMemoryEngine>;
+pub type HybridEngineImpl = HybridEngine<RocksEngine, RegionCacheMemoryEngine>;
 
 pub fn must_get<EK: KvEngine>(
     engine: &impl RawEngine<EK>,
@@ -483,7 +480,7 @@ pub fn read_on_peer<T: Simulator>(
         read_quorum,
     );
     request.mut_header().set_peer(peer);
-    cluster.read(None, None, request, timeout)
+    cluster.read(None, request, timeout)
 }
 
 pub fn async_read_on_peer<T: Simulator>(
@@ -505,10 +502,7 @@ pub fn async_read_on_peer<T: Simulator>(
     request.mut_header().set_replica_read(replica_read);
     let (tx, mut rx) = future::bounded(1, future::WakePolicy::Immediately);
     let cb = Callback::read(Box::new(move |resp| drop(tx.send(resp.response))));
-    cluster
-        .sim
-        .wl()
-        .async_read(None, node_id, None, request, cb);
+    cluster.sim.wl().async_read(node_id, None, request, cb);
     Box::pin(async move {
         let fut = rx.next();
         fut.await.unwrap()
@@ -539,7 +533,7 @@ pub fn batch_read_on_peer<T: Simulator>(
         cluster
             .sim
             .wl()
-            .async_read(None, node_id, batch_id.clone(), request, cb);
+            .async_read(node_id, batch_id.clone(), request, cb);
         len += 1;
     }
     while results.len() < len {
@@ -563,7 +557,7 @@ pub fn read_index_on_peer<T: Simulator>(
         read_quorum,
     );
     request.mut_header().set_peer(peer);
-    cluster.read(None, None, request, timeout)
+    cluster.read(None, request, timeout)
 }
 
 pub fn async_read_index_on_peer<T: Simulator>(
@@ -588,10 +582,7 @@ pub fn async_read_index_on_peer<T: Simulator>(
     request.mut_header().set_peer(peer);
     let (tx, mut rx) = future::bounded(1, future::WakePolicy::Immediately);
     let cb = Callback::read(Box::new(move |resp| drop(tx.send(resp.response))));
-    cluster
-        .sim
-        .wl()
-        .async_read(None, node_id, None, request, cb);
+    cluster.sim.wl().async_read(node_id, None, request, cb);
     Box::pin(async move {
         let fut = rx.next();
         fut.await.unwrap()

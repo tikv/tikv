@@ -2,23 +2,28 @@
 
 use std::sync::Arc;
 
-use engine_traits::{CacheRegion, EvictReason, KvEngine, RangeCacheEngineExt, RegionEvent};
-use kvproto::{raft_cmdpb::AdminCmdType, raft_serverpb::RaftApplyState};
+use engine_traits::{CacheRegion, EvictReason, KvEngine, RegionCacheEngineExt, RegionEvent};
+use kvproto::{
+    metapb::Region,
+    raft_cmdpb::AdminCmdType,
+    raft_serverpb::{ExtraMessage, ExtraMessageType, RaftApplyState},
+};
 use raft::StateRole;
 use raftstore::coprocessor::{
-    AdminObserver, ApplyCtxInfo, ApplySnapshotObserver, BoxAdminObserver, BoxApplySnapshotObserver,
-    BoxQueryObserver, BoxRoleObserver, Cmd, Coprocessor, CoprocessorHost, ObserverContext,
-    QueryObserver, RegionState, RoleObserver,
+    dispatcher::BoxExtraMessageObserver, AdminObserver, ApplyCtxInfo, ApplySnapshotObserver,
+    BoxAdminObserver, BoxApplySnapshotObserver, BoxQueryObserver, BoxRoleObserver, Cmd,
+    Coprocessor, CoprocessorHost, ExtraMessageObserver, ObserverContext, QueryObserver,
+    RegionState, RoleObserver,
 };
 use tikv_util::info;
 
 #[derive(Clone)]
 pub struct LoadEvictionObserver {
-    cache_engine: Arc<dyn RangeCacheEngineExt + Send + Sync>,
+    cache_engine: Arc<dyn RegionCacheEngineExt + Send + Sync>,
 }
 
 impl LoadEvictionObserver {
-    pub fn new(cache_engine: Arc<dyn RangeCacheEngineExt + Send + Sync>) -> Self {
+    pub fn new(cache_engine: Arc<dyn RegionCacheEngineExt + Send + Sync>) -> Self {
         LoadEvictionObserver { cache_engine }
     }
 
@@ -44,6 +49,10 @@ impl LoadEvictionObserver {
         coprocessor_host
             .registry
             .register_role_observer(priority, BoxRoleObserver::new(self.clone()));
+        // Pre load region in transfer leader
+        coprocessor_host
+            .registry
+            .register_extra_message_observer(priority, BoxExtraMessageObserver::new(self.clone()));
     }
 
     fn post_exec_cmd(
@@ -107,9 +116,12 @@ impl LoadEvictionObserver {
         });
     }
 
+    // Try to load region. It will be loaded if it's overlapped with maunal range
     fn try_load_region(&self, region: CacheRegion) {
-        self.cache_engine
-            .on_region_event(RegionEvent::TryLoad { region });
+        self.cache_engine.on_region_event(RegionEvent::TryLoad {
+            region,
+            for_manual_range: true,
+        });
     }
 
     fn evict_region(&self, region: CacheRegion, reason: EvictReason) {
@@ -150,6 +162,19 @@ impl AdminObserver for LoadEvictionObserver {
         // immediately, so return false.
         false
     }
+
+    fn pre_transfer_leader(
+        &self,
+        ctx: &mut ObserverContext<'_>,
+        _tr: &kvproto::raft_cmdpb::TransferLeaderRequest,
+    ) -> raftstore::coprocessor::Result<Option<kvproto::raft_serverpb::ExtraMessage>> {
+        if !self.cache_engine.region_cached(ctx.region()) {
+            return Ok(None);
+        }
+        let mut msg = ExtraMessage::new();
+        msg.set_type(ExtraMessageType::MsgPreLoadRegionRequest);
+        Ok(Some(msg))
+    }
 }
 
 impl ApplySnapshotObserver for LoadEvictionObserver {
@@ -178,7 +203,7 @@ impl RoleObserver for LoadEvictionObserver {
             // Currently, it is only used by the manual load.
             let cache_region = CacheRegion::from_region(ctx.region());
             info!(
-                "ime load region due to became leader";
+                "ime try to load region due to became leader";
                 "region" => ?cache_region,
             );
             self.try_load_region(cache_region);
@@ -187,10 +212,18 @@ impl RoleObserver for LoadEvictionObserver {
         {
             let cache_region = CacheRegion::from_region(ctx.region());
             info!(
-                "ime evict region due to became follower";
+                "ime try to evict region due to became follower";
                 "region" => ?cache_region,
             );
             self.evict_region(cache_region, EvictReason::BecomeFollower);
+        }
+    }
+}
+
+impl ExtraMessageObserver for LoadEvictionObserver {
+    fn on_extra_message(&self, r: &Region, extra_msg: &ExtraMessage) {
+        if extra_msg.get_type() == ExtraMessageType::MsgPreLoadRegionRequest {
+            self.cache_engine.load_region(r);
         }
     }
 }
@@ -210,12 +243,20 @@ mod tests {
     use super::*;
 
     #[derive(Default)]
-    struct MockRangeCacheEngine {
+    struct MockRegionCacheEngine {
         region_events: Arc<Mutex<Vec<RegionEvent>>>,
     }
-    impl RangeCacheEngineExt for MockRangeCacheEngine {
+    impl RegionCacheEngineExt for MockRegionCacheEngine {
         fn on_region_event(&self, event: RegionEvent) {
             self.region_events.lock().unwrap().push(event);
+        }
+
+        fn region_cached(&self, range: &Region) -> bool {
+            unreachable!()
+        }
+
+        fn load_region(&self, range: &Region) {
+            unreachable!()
         }
     }
 
@@ -229,7 +270,7 @@ mod tests {
 
     #[test]
     fn test_do_not_evict_region_region_split() {
-        let cache_engine = Arc::new(MockRangeCacheEngine::default());
+        let cache_engine = Arc::new(MockRegionCacheEngine::default());
         let observer = LoadEvictionObserver::new(cache_engine.clone());
 
         let mut region = Region::default();
@@ -257,7 +298,7 @@ mod tests {
 
     #[test]
     fn test_evict_region_ingest_sst() {
-        let cache_engine = Arc::new(MockRangeCacheEngine::default());
+        let cache_engine = Arc::new(MockRegionCacheEngine::default());
         let observer = LoadEvictionObserver::new(cache_engine.clone());
 
         let mut region = Region::default();
@@ -296,7 +337,7 @@ mod tests {
 
     #[test]
     fn test_load_region_became_leader() {
-        let cache_engine = Arc::new(MockRangeCacheEngine::default());
+        let cache_engine = Arc::new(MockRegionCacheEngine::default());
         let observer = LoadEvictionObserver::new(cache_engine.clone());
 
         let mut region = Region::default();
@@ -308,6 +349,7 @@ mod tests {
         let cached_region = CacheRegion::from_region(&region);
         let expected = RegionEvent::TryLoad {
             region: cached_region,
+            for_manual_range: true,
         };
         assert_eq!(&cache_engine.region_events.lock().unwrap()[0], &expected);
     }

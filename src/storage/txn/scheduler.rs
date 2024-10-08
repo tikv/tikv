@@ -284,9 +284,12 @@ struct TxnSchedulerInner<L: LockManager> {
     resource_manager: Option<Arc<ResourceGroupManager>>,
     feature_gate: FeatureGate,
 
-    txn_status_cache: TxnStatusCache,
+    txn_status_cache: Arc<TxnStatusCache>,
 
     memory_quota: Arc<MemoryQuota>,
+
+    in_memory_peer_size_limit: Arc<AtomicU64>,
+    in_memory_instance_size_limit: Arc<AtomicU64>,
 }
 
 #[inline]
@@ -442,6 +445,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         feature_gate: FeatureGate,
         resource_ctl: Option<Arc<ResourceController>>,
         resource_manager: Option<Arc<ResourceGroupManager>>,
+        txn_status_cache: Arc<TxnStatusCache>,
     ) -> Self {
         let t = Instant::now_coarse();
         let mut task_slots = Vec::with_capacity(TASKS_SLOTS_NUM);
@@ -479,8 +483,10 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             quota_limiter,
             resource_manager,
             feature_gate,
-            txn_status_cache: TxnStatusCache::new(config.txn_status_cache_capacity),
+            txn_status_cache,
             memory_quota: Arc::new(MemoryQuota::new(config.memory_quota.0 as _)),
+            in_memory_peer_size_limit: dynamic_configs.in_memory_peer_size_limit,
+            in_memory_instance_size_limit: dynamic_configs.in_memory_instance_size_limit,
         });
 
         SCHED_TXN_MEMORY_QUOTA
@@ -894,7 +900,9 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             // remain not updated after receiving signal from the callback.
             let now = std::time::SystemTime::now();
             for (start_ts, commit_ts) in known_txn_status {
-                self.inner.txn_status_cache.insert(start_ts, commit_ts, now);
+                self.inner
+                    .txn_status_cache
+                    .insert_committed(start_ts, commit_ts, now);
             }
         }
 
@@ -1300,7 +1308,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 statistics: &mut sched_details.stat,
                 async_apply_prewrite: txn_scheduler.inner.enable_async_apply_prewrite,
                 raw_ext,
-                txn_status_cache: &txn_scheduler.inner.txn_status_cache,
+                txn_status_cache: txn_scheduler.inner.txn_status_cache.clone(),
             };
             let begin_instant = Instant::now();
             let res = unsafe {
@@ -1393,37 +1401,42 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
         // Process the possible encountered locks.
         if !lock_info.is_empty() {
-            if tag == CommandKind::acquire_pessimistic_lock {
-                assert_eq!(lock_info.len(), 1);
-                let lock_info = lock_info.into_iter().next().unwrap();
+            match tag {
+                CommandKind::acquire_pessimistic_lock => {
+                    assert_eq!(lock_info.len(), 1);
+                    let lock_info = lock_info.into_iter().next().unwrap();
 
-                // Only handle lock waiting if `wait_timeout` is set. Otherwise it indicates
-                // that it's a lock-no-wait request and we need to report error
-                // immediately.
-                if lock_info.parameters.wait_timeout.is_some() {
-                    assert_eq!(to_be_write.size(), 0);
-                    pr = ProcessResult::Res;
+                    // Only handle lock waiting if `wait_timeout` is set. Otherwise it indicates
+                    // that it's a lock-no-wait request and we need to report error
+                    // immediately.
+                    if lock_info.parameters.wait_timeout.is_some() {
+                        assert_eq!(to_be_write.size(), 0);
+                        pr = ProcessResult::Res;
 
-                    txn_scheduler.on_wait_for_lock(&ctx, cid, lock_info, tracker_token);
-                } else {
-                    // For requests with `allow_lock_with_conflict`, key errors are set key-wise.
-                    // TODO: It's better to return this error from
-                    // `commands::AcquirePessimisticLocks::process_write`.
-                    if lock_info.parameters.allow_lock_with_conflict {
-                        pr = ProcessResult::PessimisticLockRes {
-                            res: Err(StorageError::from(Error::from(MvccError::from(
-                                MvccErrorInner::KeyIsLocked(lock_info.lock_info_pb),
-                            )))),
-                        };
+                        txn_scheduler.on_wait_for_lock(&ctx, cid, lock_info, tracker_token);
+                    } else {
+                        // For requests with `allow_lock_with_conflict`, key errors are set
+                        // key-wise. TODO: It's better to return this error
+                        // from
+                        // `commands::AcquirePessimisticLocks::process_write`.
+                        if lock_info.parameters.allow_lock_with_conflict {
+                            pr = ProcessResult::PessimisticLockRes {
+                                res: Err(StorageError::from(Error::from(MvccError::from(
+                                    MvccErrorInner::KeyIsLocked(lock_info.lock_info_pb),
+                                )))),
+                            };
+                        }
                     }
                 }
-            } else if tag == CommandKind::acquire_pessimistic_lock_resumed {
-                // Some requests meets lock again after waiting and resuming.
-                txn_scheduler.on_wait_for_lock_after_resuming(cid, &mut pr, lock_info);
-            } else {
-                // WriteResult returning lock info is only expected to exist for pessimistic
-                // lock requests.
-                unreachable!();
+                CommandKind::acquire_pessimistic_lock_resumed => {
+                    // Some requests meets lock again after waiting and resuming.
+                    txn_scheduler.on_wait_for_lock_after_resuming(cid, &mut pr, lock_info);
+                }
+                _ => {
+                    // WriteResult returning lock info is only expected to exist for pessimistic
+                    // lock requests.
+                    unreachable!();
+                }
             }
         }
 
@@ -1456,9 +1469,10 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             return None;
         }
 
-        if (tag == CommandKind::acquire_pessimistic_lock
-            || tag == CommandKind::acquire_pessimistic_lock_resumed)
-            && txn_scheduler.pessimistic_lock_mode() == PessimisticLockMode::InMemory
+        if matches!(
+            tag,
+            CommandKind::acquire_pessimistic_lock | CommandKind::acquire_pessimistic_lock_resumed
+        ) && txn_scheduler.pessimistic_lock_mode() == PessimisticLockMode::InMemory
             && txn_scheduler.try_write_in_memory_pessimistic_locks(
                 txn_ext.as_deref(),
                 &mut to_be_write,
@@ -1901,7 +1915,13 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         {
             return false;
         }
-        match pessimistic_locks.insert(mem::take(&mut to_be_write.modifies)) {
+        match pessimistic_locks.insert(
+            mem::take(&mut to_be_write.modifies),
+            self.inner.in_memory_peer_size_limit.load(Ordering::Relaxed) as usize,
+            self.inner
+                .in_memory_instance_size_limit
+                .load(Ordering::Relaxed) as usize,
+        ) {
             Ok(()) => {
                 IN_MEMORY_PESSIMISTIC_LOCKING_COUNTER_STATIC.success.inc();
                 true
@@ -2081,9 +2101,8 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         }
     }
 
-    #[cfg(test)]
-    pub fn get_txn_status_cache(&self) -> &TxnStatusCache {
-        &self.inner.txn_status_cache
+    pub fn get_txn_status_cache(&self) -> Arc<TxnStatusCache> {
+        self.inner.txn_status_cache.clone()
     }
 }
 
@@ -2231,6 +2250,8 @@ mod tests {
                     pipelined_pessimistic_lock: Arc::new(AtomicBool::new(true)),
                     in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
                     wake_up_delay_duration_ms: Arc::new(AtomicU64::new(0)),
+                    in_memory_peer_size_limit: Arc::new(AtomicU64::new(512 << 10)),
+                    in_memory_instance_size_limit: Arc::new(AtomicU64::new(100 << 20)),
                 },
                 Arc::new(FlowController::Singleton(EngineFlowController::empty())),
                 None,
@@ -2240,6 +2261,7 @@ mod tests {
                 latest_feature_gate(),
                 Some(controller),
                 Some(resource_manager),
+                Arc::new(TxnStatusCache::new_for_test()),
             ),
             engine,
         )
@@ -2328,7 +2350,7 @@ mod tests {
                 Context::default(),
             )
             .into(),
-            commands::TxnHeartBeat::new(Key::from_raw(b"k"), 10.into(), 100, Context::default())
+            commands::TxnHeartBeat::new(Key::from_raw(b"k"), 10.into(), 100, 0, Context::default())
                 .into(),
         ];
 
@@ -2581,6 +2603,8 @@ mod tests {
                 pipelined_pessimistic_lock: Arc::new(AtomicBool::new(false)),
                 in_memory_pessimistic_lock: Arc::new(AtomicBool::new(false)),
                 wake_up_delay_duration_ms: Arc::new(AtomicU64::new(0)),
+                in_memory_peer_size_limit: Arc::new(AtomicU64::new(512 << 10)),
+                in_memory_instance_size_limit: Arc::new(AtomicU64::new(100 << 20)),
             },
             Arc::new(FlowController::Singleton(EngineFlowController::empty())),
             None,
@@ -2590,6 +2614,7 @@ mod tests {
             feature_gate.clone(),
             Some(controller),
             Some(resource_manager),
+            Arc::new(TxnStatusCache::new_for_test()),
         );
         // Use sync mode if pipelined_pessimistic_lock is false.
         assert_eq!(scheduler.pessimistic_lock_mode(), PessimisticLockMode::Sync);

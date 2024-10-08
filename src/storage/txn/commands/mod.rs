@@ -310,6 +310,7 @@ impl From<TxnHeartBeatRequest> for TypedCommand<TxnStatus> {
             Key::from_raw(req.get_primary_lock()),
             req.get_start_version().into(),
             req.get_advise_lock_ttl(),
+            req.get_min_commit_ts(),
             req.take_context(),
         )
     }
@@ -642,7 +643,7 @@ pub struct WriteContext<'a, L: LockManager> {
     pub async_apply_prewrite: bool,
     pub raw_ext: Option<RawExt>,
     // use for apiv2
-    pub txn_status_cache: &'a TxnStatusCache,
+    pub txn_status_cache: Arc<TxnStatusCache>,
 }
 
 pub struct ReaderWithStats<'a, S: Snapshot> {
@@ -930,7 +931,7 @@ pub mod test_util {
             statistics,
             async_apply_prewrite: false,
             raw_ext: None,
-            txn_status_cache: &TxnStatusCache::new_for_test(),
+            txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
         };
         let ret = cmd.cmd.process_write(snap, context)?;
         let res = match ret.pr {
@@ -1091,7 +1092,7 @@ pub mod test_util {
             statistics,
             async_apply_prewrite: false,
             raw_ext: None,
-            txn_status_cache: &TxnStatusCache::new_for_test(),
+            txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
         };
 
         let ret = cmd.cmd.process_write(snap, context)?;
@@ -1117,7 +1118,7 @@ pub mod test_util {
             statistics,
             async_apply_prewrite: false,
             raw_ext: None,
-            txn_status_cache: &TxnStatusCache::new_for_test(),
+            txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
         };
 
         let ret = cmd.cmd.process_write(snap, context)?;

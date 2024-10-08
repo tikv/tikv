@@ -4,10 +4,7 @@ use std::{
     collections::hash_map::Entry as MapEntry,
     error::Error as StdError,
     result,
-    sync::{
-        mpsc::{self, sync_channel},
-        Arc, Mutex, RwLock,
-    },
+    sync::{mpsc, Arc, Mutex, RwLock},
     thread,
     time::Duration,
 };
@@ -18,13 +15,11 @@ use encryption_export::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
-    CacheRegion, CompactExt, Engines, Iterable, ManualCompactionOptions, MiscExt, Mutable,
-    Peekable, RaftEngineReadOnly, SnapshotContext, SyncMutable, WriteBatch, WriteBatchExt,
-    CF_DEFAULT, CF_RAFT,
+    CompactExt, Engines, Iterable, ManualCompactionOptions, MiscExt, Mutable, Peekable,
+    RaftEngineReadOnly, SyncMutable, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_RAFT,
 };
 use file_system::IoRateLimiter;
 use futures::{self, channel::oneshot, executor::block_on, future::BoxFuture, StreamExt};
-use keys::{DATA_MAX_KEY, DATA_MIN_KEY};
 use kvproto::{
     errorpb::Error as PbError,
     kvrpcpb::{ApiVersion, Context, DiskFullOpt},
@@ -47,7 +42,6 @@ use raftstore::{
             RaftBatchSystem, RaftRouter,
         },
         transport::CasualRouter,
-        util::encode_start_ts_into_flag_data,
         *,
     },
     Error, Result,
@@ -64,7 +58,7 @@ use tikv_util::{
 };
 use txn_types::WriteBatchFlags;
 
-use self::range_cache_engine::RangCacheEngineExt;
+use self::region_cache_engine::RangCacheEngineExt;
 use super::*;
 use crate::Config;
 // We simulate 3 or 5 nodes, each has a store.
@@ -122,21 +116,19 @@ pub trait Simulator {
 
     fn read(
         &mut self,
-        snap_ctx: Option<SnapshotContext>,
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
         timeout: Duration,
     ) -> Result<RaftCmdResponse> {
         let node_id = request.get_header().get_peer().get_store_id();
         let (cb, mut rx) = make_cb(&request);
-        self.async_read(snap_ctx, node_id, batch_id, request, cb);
+        self.async_read(node_id, batch_id, request, cb);
         rx.recv_timeout(timeout)
             .map_err(|_| Error::Timeout(format!("request timeout for {:?}", timeout)))
     }
 
     fn async_read(
         &mut self,
-        snap_ctx: Option<SnapshotContext>,
         node_id: u64,
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
@@ -189,7 +181,7 @@ pub struct Cluster<T: Simulator> {
     // When this is set, the `HybridEngineImpl` will be used as the underlying KvEngine. In
     // addition, it atomaticaly load the whole range when start. When we want to do something
     // specific, for example, only load ranges of some regions, we may not set this.
-    range_cache_engine_enabled_with_whole_range: bool,
+    region_cache_engine_enabled_with_whole_range: bool,
 }
 
 impl<T: Simulator> Cluster<T> {
@@ -223,7 +215,7 @@ impl<T: Simulator> Cluster<T> {
             resource_manager: Some(Arc::new(ResourceGroupManager::default())),
             kv_statistics: vec![],
             raft_statistics: vec![],
-            range_cache_engine_enabled_with_whole_range: false,
+            region_cache_engine_enabled_with_whole_range: false,
         }
     }
 
@@ -353,7 +345,7 @@ impl<T: Simulator> Cluster<T> {
         self.create_engines();
         self.bootstrap_region().unwrap();
         self.start().unwrap();
-        if self.range_cache_engine_enabled_with_whole_range {
+        if self.region_cache_engine_enabled_with_whole_range {
             let pd_regions = self.pd_client.scan_regions(&[], &[], i32::MAX).unwrap();
             let regions: Vec<_> = pd_regions
                 .into_iter()
@@ -471,16 +463,11 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn read(
         &self,
-        snap_ctx: Option<SnapshotContext>,
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
         timeout: Duration,
     ) -> Result<RaftCmdResponse> {
-        match self
-            .sim
-            .wl()
-            .read(snap_ctx, batch_id, request.clone(), timeout)
-        {
+        match self.sim.wl().read(batch_id, request.clone(), timeout) {
             Err(e) => {
                 warn!("failed to read {:?}: {:?}", request, e);
                 Err(e)
@@ -494,15 +481,6 @@ impl<T: Simulator> Cluster<T> {
         request: RaftCmdRequest,
         timeout: Duration,
     ) -> Result<RaftCmdResponse> {
-        self.call_command_with_snap_ctx(request, timeout, None)
-    }
-
-    pub fn call_command_with_snap_ctx(
-        &self,
-        request: RaftCmdRequest,
-        timeout: Duration,
-        snap_ctx: Option<SnapshotContext>,
-    ) -> Result<RaftCmdResponse> {
         let mut is_read = false;
         for req in request.get_requests() {
             match req.get_cmd_type() {
@@ -513,7 +491,7 @@ impl<T: Simulator> Cluster<T> {
             }
         }
         let ret = if is_read {
-            self.sim.wl().read(snap_ctx, None, request.clone(), timeout)
+            self.sim.wl().read(None, request.clone(), timeout)
         } else {
             self.sim.rl().call_command(request.clone(), timeout)
         };
@@ -526,11 +504,10 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
-    pub fn call_command_on_leader_with_snap_ctx(
+    pub fn call_command_on_leader(
         &mut self,
         mut request: RaftCmdRequest,
         timeout: Duration,
-        snap_ctx: Option<SnapshotContext>,
     ) -> Result<RaftCmdResponse> {
         let timer = Instant::now();
         let region_id = request.get_header().get_region_id();
@@ -540,11 +517,10 @@ impl<T: Simulator> Cluster<T> {
                 Some(l) => l,
             };
             request.mut_header().set_peer(leader);
-            let resp =
-                match self.call_command_with_snap_ctx(request.clone(), timeout, snap_ctx.clone()) {
-                    e @ Err(_) => return e,
-                    Ok(resp) => resp,
-                };
+            let resp = match self.call_command(request.clone(), timeout) {
+                e @ Err(_) => return e,
+                Ok(resp) => resp,
+            };
             if self.refresh_leader_if_needed(&resp, region_id)
                 && timer.saturating_elapsed() < timeout
             {
@@ -556,14 +532,6 @@ impl<T: Simulator> Cluster<T> {
             }
             return Ok(resp);
         }
-    }
-
-    pub fn call_command_on_leader(
-        &mut self,
-        request: RaftCmdRequest,
-        timeout: Duration,
-    ) -> Result<RaftCmdResponse> {
-        self.call_command_on_leader_with_snap_ctx(request, timeout, None)
     }
 
     fn valid_leader_id(&self, region_id: u64, leader_id: u64) -> bool {
@@ -912,17 +880,6 @@ impl<T: Simulator> Cluster<T> {
         read_quorum: bool,
         timeout: Duration,
     ) -> RaftCmdResponse {
-        self.request_with_snap_ctx(key, reqs, read_quorum, timeout, None)
-    }
-
-    pub fn request_with_snap_ctx(
-        &mut self,
-        key: &[u8],
-        reqs: Vec<Request>,
-        read_quorum: bool,
-        timeout: Duration,
-        snap_ctx: Option<SnapshotContext>,
-    ) -> RaftCmdResponse {
         let timer = Instant::now();
         let mut tried_times = 0;
         // At least retry once.
@@ -930,16 +887,13 @@ impl<T: Simulator> Cluster<T> {
             tried_times += 1;
             let mut region = self.get_region(key);
             let region_id = region.get_id();
-            let mut req = new_request(
+            let req = new_request(
                 region_id,
                 region.take_region_epoch(),
                 reqs.clone(),
                 read_quorum,
             );
-            if let Some(ref ctx) = snap_ctx {
-                encode_start_ts_into_flag_data(req.mut_header(), ctx.read_ts);
-            }
-            let result = self.call_command_on_leader_with_snap_ctx(req, timeout, snap_ctx.clone());
+            let result = self.call_command_on_leader(req, timeout);
 
             let resp = match result {
                 e @ Err(Error::Timeout(_))
@@ -1005,39 +959,15 @@ impl<T: Simulator> Cluster<T> {
     }
 
     pub fn get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
-        if !self.range_cache_engine_enabled_with_whole_range {
-            self.get_impl(CF_DEFAULT, key, false)
-        } else {
-            let ctx = SnapshotContext {
-                read_ts: u64::MAX,
-                region: Some(CacheRegion::new(0, 0, DATA_MIN_KEY, DATA_MAX_KEY)),
-            };
-            self.get_cf_with_snap_ctx(CF_DEFAULT, key, true, ctx)
-        }
+        self.get_impl(CF_DEFAULT, key, false)
     }
 
     pub fn get_cf(&mut self, cf: &str, key: &[u8]) -> Option<Vec<u8>> {
-        if !self.range_cache_engine_enabled_with_whole_range {
-            self.get_impl(cf, key, false)
-        } else {
-            let ctx = SnapshotContext {
-                read_ts: u64::MAX,
-                region: Some(CacheRegion::new(0, 0, DATA_MIN_KEY, DATA_MAX_KEY)),
-            };
-            self.get_cf_with_snap_ctx(cf, key, true, ctx)
-        }
+        self.get_impl(cf, key, false)
     }
 
     pub fn must_get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
-        if !self.range_cache_engine_enabled_with_whole_range {
-            self.get_impl(CF_DEFAULT, key, true)
-        } else {
-            let ctx = SnapshotContext {
-                read_ts: u64::MAX,
-                region: Some(CacheRegion::new(0, 0, DATA_MIN_KEY, DATA_MAX_KEY)),
-            };
-            self.get_cf_with_snap_ctx(CF_DEFAULT, key, true, ctx)
-        }
+        self.get_impl(CF_DEFAULT, key, true)
     }
 
     fn get_impl(&mut self, cf: &str, key: &[u8], read_quorum: bool) -> Option<Vec<u8>> {
@@ -1057,61 +987,6 @@ impl<T: Simulator> Cluster<T> {
         } else {
             None
         }
-    }
-
-    pub fn get_with_snap_ctx(
-        &mut self,
-        key: &[u8],
-        read_quorum: bool,
-        snap_ctx: SnapshotContext,
-    ) -> Option<Vec<u8>> {
-        self.get_cf_with_snap_ctx(CF_DEFAULT, key, read_quorum, snap_ctx)
-    }
-
-    // called by range cache engine only
-    pub fn get_cf_with_snap_ctx(
-        &mut self,
-        cf: &str,
-        key: &[u8],
-        read_quorum: bool,
-        snap_ctx: SnapshotContext,
-    ) -> Option<Vec<u8>> {
-        let rx = if self.range_cache_engine_enabled_with_whole_range {
-            fail::remove("on_range_cache_get_value");
-            let (tx, rx) = sync_channel(1);
-            fail::cfg_callback("on_range_cache_get_value", move || {
-                tx.send(true).unwrap();
-            })
-            .unwrap();
-            Some(rx)
-        } else {
-            None
-        };
-
-        let mut resp = self.request_with_snap_ctx(
-            key,
-            vec![new_get_cf_cmd(cf, key)],
-            read_quorum,
-            Duration::from_secs(5),
-            Some(snap_ctx),
-        );
-        if resp.get_header().has_error() {
-            panic!("response {:?} has error", resp);
-        }
-        assert_eq!(resp.get_responses().len(), 1);
-        assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Get);
-        let res = if resp.get_responses()[0].has_get() {
-            if let Some(rx) = rx {
-                rx.recv_timeout(Duration::from_secs(5)).unwrap();
-            }
-            Some(resp.mut_responses()[0].mut_get().take_value())
-        } else {
-            None
-        };
-        if self.range_cache_engine_enabled_with_whole_range {
-            fail::remove("on_range_cache_get_value");
-        }
-        res
     }
 
     pub fn async_request(
@@ -2141,8 +2016,8 @@ impl<T: Simulator> Cluster<T> {
         Ok(())
     }
 
-    pub fn range_cache_engine_enabled_with_whole_range(&mut self, v: bool) {
-        self.range_cache_engine_enabled_with_whole_range = v;
+    pub fn region_cache_engine_enabled_with_whole_range(&mut self, v: bool) {
+        self.region_cache_engine_enabled_with_whole_range = v;
     }
 }
 
@@ -2156,7 +2031,7 @@ impl<T: Simulator> Drop for Cluster<T> {
 pub trait RawEngine<EK: engine_traits::KvEngine>:
     Peekable<DbVector = EK::DbVector> + SyncMutable
 {
-    fn range_cache_engine(&self) -> bool {
+    fn region_cache_engine(&self) -> bool {
         false
     }
 
@@ -2186,7 +2061,7 @@ impl RawEngine<RocksEngine> for RocksEngine {
 }
 
 impl RawEngine<RocksEngine> for HybridEngineImpl {
-    fn range_cache_engine(&self) -> bool {
+    fn region_cache_engine(&self) -> bool {
         true
     }
 

@@ -317,10 +317,10 @@ def Cluster() -> RowPanel:
                     ),
                     target(
                         expr=expr_sum_rate(
-                            "tikv_range_cache_memory_engine_flow",
+                            "tikv_in_memory_engine_flow",
                             label_selectors=['type=~"bytes_read|iter_bytes_read"'],
                         ),
-                        legend_format=r"{{instance}}-range-cache-engine-read-",
+                        legend_format=r"{{instance}}-in-memory-engine-read",
                     ),
                 ],
             ),
@@ -1467,6 +1467,28 @@ def ThreadCPU() -> RowPanel:
                         ),
                         legend_format="{{instance}}-{{name}}",
                         hide=True,
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Busy Threads (>80%)",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_topk(
+                            20,
+                            "%s"
+                            % expr_sum_rate(
+                                "tikv_thread_cpu_seconds_total",
+                                label_selectors=['name!~"rocksdb.*"'],
+                                by_labels=["instance", "name"],
+                            ).extra(extra_expr="> 0.8"),
+                        ),
+                        legend_format="{{name}}-{{instance}}",
                     ),
                 ],
             ),
@@ -2701,18 +2723,32 @@ def LocalReader() -> RowPanel:
 
 
 def UnifiedReadPool() -> RowPanel:
-    layout = Layout(title="Unified Read Pool")
+    return YatpPool(
+        title="Unified Read Pool",
+        pool_name_prefix="unified-read",
+        running_task_metric="tikv_unified_read_pool_running_tasks",
+        running_task_metric_label="priority",
+    )
+
+
+def YatpPool(
+    title: str,
+    pool_name_prefix: str,
+    running_task_metric: str,
+    running_task_metric_label: str,
+) -> RowPanel:
+    layout = Layout(title)
     layout.row(
         [
             graph_panel(
                 title="Time used by level",
-                description="The time used by each level in the unified read pool per second. Level 0 refers to small queries.",
+                description="The time used by each level in the yatp thread pool per second. Level 0 refers to small queries.",
                 yaxes=yaxes(left_format=UNITS.MICRO_SECONDS),
                 targets=[
                     target(
                         expr=expr_sum_rate(
                             "tikv_multilevel_level_elapsed",
-                            label_selectors=['name="unified-read-pool"'],
+                            label_selectors=[f'name=~"{pool_name_prefix}.*"'],
                             by_labels=["level"],
                         ),
                     ),
@@ -2720,15 +2756,15 @@ def UnifiedReadPool() -> RowPanel:
             ),
             graph_panel(
                 title="Level 0 chance",
-                description="The chance that level 0 (small) tasks are scheduled in the unified read pool.",
+                description="The chance that level 0 (small) tasks are scheduled in the yatp thread pool.",
                 yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
                 targets=[
                     target(
                         expr=expr_simple(
                             "tikv_multilevel_level0_chance",
-                            label_selectors=['name="unified-read-pool"'],
+                            label_selectors=[f'name=~"{pool_name_prefix}.*"'],
                         ),
-                        legend_format="{{type}}",
+                        legend_format="{{instance}}",
                     ),
                 ],
             ),
@@ -2738,24 +2774,23 @@ def UnifiedReadPool() -> RowPanel:
         [
             graph_panel(
                 title="Running tasks",
-                description="The number of concurrently running tasks in the unified read pool.",
+                description="The number of concurrently running tasks in the yatp thread pool.",
                 targets=[
                     target(
                         expr=expr_sum_aggr_over_time(
-                            "tikv_unified_read_pool_running_tasks",
+                            running_task_metric,
                             "avg",
                             "1m",
-                            by_labels=["priority"],
+                            by_labels=[running_task_metric_label],
                         ),
-                        legend_format="{{priority}}",
                     ),
                 ],
             ),
             heatmap_panel(
-                title="Unified Read Pool Wait Duration",
+                title="Wait Duration",
                 yaxis=yaxis(format=UNITS.SECONDS),
                 metric="tikv_yatp_pool_schedule_wait_duration_bucket",
-                label_selectors=['name=~"unified-read.*"'],
+                label_selectors=[f'name=~"{pool_name_prefix}.*"'],
             ),
         ]
     )
@@ -2763,16 +2798,18 @@ def UnifiedReadPool() -> RowPanel:
         [
             graph_panel_histogram_quantiles(
                 title="Duration of One Time Slice",
-                description="Unified read pool task execution time during one schedule.",
+                description="Task execution time during one schedule.",
                 yaxes=yaxes(left_format=UNITS.SECONDS, log_base=2),
                 metric="tikv_yatp_task_poll_duration",
+                label_selectors=[f'name=~"{pool_name_prefix}.*"'],
                 hide_count=True,
             ),
             graph_panel_histogram_quantiles(
                 title="Task Execute Duration",
-                description="Unified read pool task total execution duration.",
+                description="Task total execution duration.",
                 yaxes=yaxes(left_format=UNITS.SECONDS, log_base=2),
                 metric="tikv_yatp_task_exec_duration",
+                label_selectors=[f'name=~"{pool_name_prefix}.*"'],
                 hide_count=True,
             ),
         ]
@@ -2784,6 +2821,7 @@ def UnifiedReadPool() -> RowPanel:
                 description="Task schedule number of times.",
                 yaxes=yaxes(left_format=UNITS.NONE_FORMAT, log_base=2),
                 metric="tikv_yatp_task_execute_times",
+                label_selectors=[f'name=~"{pool_name_prefix}.*"'],
                 hide_count=True,
             ),
         ]
@@ -3379,6 +3417,15 @@ def Scheduler() -> RowPanel:
         ]
     )
     return layout.row_panel
+
+
+def SchedulerWorkerPool() -> RowPanel:
+    return YatpPool(
+        title="Scheduler Worker Pool",
+        pool_name_prefix="sched-worker",
+        running_task_metric="tikv_scheduler_running_commands",
+        running_task_metric_label="instance",
+    )
 
 
 def GC() -> RowPanel:
@@ -4112,7 +4159,9 @@ def CoprocessorDetail() -> RowPanel:
                     target(
                         expr=expr_sum_rate(
                             "tikv_coprocessor_scan_details",
-                            label_selectors=['req=~"select|select_by_range_cache"'],
+                            label_selectors=[
+                                'req=~"select|select_by_in_memory_engine"'
+                            ],
                             by_labels=["tag"],
                         ),
                     ),
@@ -4125,7 +4174,7 @@ def CoprocessorDetail() -> RowPanel:
                     target(
                         expr=expr_sum_rate(
                             "tikv_coprocessor_scan_details",
-                            label_selectors=['req=~"index|index_by_range_cache"'],
+                            label_selectors=['req=~"index|index_by_region_cache"'],
                             by_labels=["tag"],
                         ),
                     ),
@@ -4142,7 +4191,9 @@ def CoprocessorDetail() -> RowPanel:
                     target(
                         expr=expr_sum_rate(
                             "tikv_coprocessor_scan_details",
-                            label_selectors=['req=~"select|select_by_range_cache"'],
+                            label_selectors=[
+                                'req=~"select|select_by_in_memory_engine"'
+                            ],
                             by_labels=["cf", "tag"],
                         ),
                     ),
@@ -4155,7 +4206,7 @@ def CoprocessorDetail() -> RowPanel:
                     target(
                         expr=expr_sum_rate(
                             "tikv_coprocessor_scan_details",
-                            label_selectors=['req=~"index|index_by_range_cache"'],
+                            label_selectors=['req=~"index|index_by_region_cache"'],
                             by_labels=["cf", "tag"],
                         ),
                     ),
@@ -4176,8 +4227,8 @@ def CoprocessorDetail() -> RowPanel:
     return layout.row_panel
 
 
-def RangeCacheMemoryEngine() -> RowPanel:
-    layout = Layout(title="Range Cache Memory Engine")
+def InMemoryEngine() -> RowPanel:
+    layout = Layout(title="In Memory Engine")
     layout.row(
         [
             graph_panel(
@@ -4199,7 +4250,7 @@ def RangeCacheMemoryEngine() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_sum_rate(
-                            "tikv_range_cache_snapshot_acquire_failed_reason_count",
+                            "tikv_in_memory_engine_snapshot_acquire_failed_reason_count",
                             by_labels=["type"],
                         ),
                         legend_format="{{type}}",
@@ -4207,12 +4258,12 @@ def RangeCacheMemoryEngine() -> RowPanel:
                 ],
             ),
             graph_panel(
-                title="Range Count",
-                description="The count of different types of range",
+                title="Region Count",
+                description="The count of different types of region",
                 targets=[
                     target(
                         expr=expr_avg(
-                            "tikv_range_cache_count",
+                            "tikv_in_memory_engine_cache_count",
                             by_labels=["instance", "type"],
                         ),
                         legend_format="{{instance}}--{{type}}",
@@ -4225,12 +4276,12 @@ def RangeCacheMemoryEngine() -> RowPanel:
         [
             graph_panel(
                 title="Memory Usage",
-                description="The memory usage of the range cache memory engine",
+                description="The memory usage of the in-memory engine",
                 yaxes=yaxes(left_format=UNITS.BYTES_IEC),
                 targets=[
                     target(
                         expr=expr_avg(
-                            "tikv_range_cache_memory_usage_bytes",
+                            "tikv_in_memory_engine_memory_usage_bytes",
                             by_labels=["instance"],
                         ),
                     ),
@@ -4242,7 +4293,7 @@ def RangeCacheMemoryEngine() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_sum_rate(
-                            "tikv_range_cache_memory_engine_gc_filtered",
+                            "tikv_in_memory_engine_gc_filtered",
                             by_labels=["type"],
                         ),
                         legend_format="{{type}}",
@@ -4250,29 +4301,29 @@ def RangeCacheMemoryEngine() -> RowPanel:
                 ],
             ),
             heatmap_panel(
-                title="Range GC Duration",
-                description="The handle duration of range gc",
+                title="Region GC Duration",
+                description="The handle duration of region gc",
                 yaxis=yaxis(format=UNITS.SECONDS),
-                metric="tikv_range_gc_duration_secs_bucket",
+                metric="tikv_in_memory_engine_gc_duration_secs_bucket",
             ),
         ]
     )
     layout.row(
         [
             heatmap_panel(
-                title="Range Load Duration",
-                description="The handle duration of range load",
+                title="Region Load Duration",
+                description="The handle duration of region load",
                 yaxis=yaxis(format=UNITS.SECONDS),
-                metric="tikv_range_load_duration_secs_bucket",
+                metric="tikv_in_memory_engine_load_duration_secs_bucket",
             ),
             graph_panel(
-                title="Range Load Count",
-                description="The count of range loading per seconds",
+                title="Region Load Count",
+                description="The count of region loading per seconds",
                 yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
                 targets=[
                     target(
                         expr=expr_sum_rate(
-                            "tikv_range_load_duration_secs_count",
+                            "tikv_in_memory_engine_load_duration_secs_count",
                             by_labels=["instance"],
                         ),
                         legend_format="{{instance}}",
@@ -4284,19 +4335,19 @@ def RangeCacheMemoryEngine() -> RowPanel:
     layout.row(
         [
             heatmap_panel(
-                title="Range Eviction Duration",
-                description="The handle duration of range eviction",
+                title="Region Eviction Duration",
+                description="The handle duration of region eviction",
                 yaxis=yaxis(format=UNITS.SECONDS),
-                metric="tikv_range_eviction_duration_secs_bucket",
+                metric="tikv_in_memory_engine_eviction_duration_secs_bucket",
             ),
             graph_panel(
-                title="Range Eviction Count",
-                description="The count of range eviction per seconds",
+                title="Region Eviction Count",
+                description="The count of region eviction per seconds",
                 yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
                 targets=[
                     target(
                         expr=expr_sum_rate(
-                            "tikv_range_eviction_duration_secs_count",
+                            "tikv_in_memory_engine_eviction_duration_secs_count",
                             by_labels=["type"],
                         ),
                         legend_format="{{type}}",
@@ -4308,25 +4359,25 @@ def RangeCacheMemoryEngine() -> RowPanel:
     layout.row(
         heatmap_panel_graph_panel_histogram_quantile_pairs(
             heatmap_title="Write duration",
-            heatmap_description="The time consumed of write in range cache engine",
-            graph_title="99% Range cache engine write duration per server",
-            graph_description="The time consumed of write in range cache engine per TiKV instance",
+            heatmap_description="The time consumed of write in region cache engine",
+            graph_title="99% In-memory engine write duration per server",
+            graph_description="The time consumed of write in region cache engine per TiKV instance",
             graph_by_labels=["instance"],
             graph_hides=["count", "avg"],
             yaxis_format=UNITS.SECONDS,
-            metric="tikv_range_cache_engine_write_duration_seconds",
+            metric="tikv_in_memory_engine_write_duration_seconds",
         )
     )
     layout.row(
         heatmap_panel_graph_panel_histogram_quantile_pairs(
             heatmap_title="Prepare for write duration",
-            heatmap_description="The time consumed of prepare for write in range cache engine",
-            graph_title="99% Range cache engine prepare for write duration per server",
-            graph_description="The time consumed of prepare for write in range cache engine per TiKV instance",
+            heatmap_description="The time consumed of prepare for write in the in-memory engine",
+            graph_title="99% In-memory engine prepare for write duration per server",
+            graph_description="The time consumed of prepare for write in the in-memory engine per TiKV instance",
             graph_by_labels=["instance"],
             graph_hides=["count", "avg"],
             yaxis_format=UNITS.SECONDS,
-            metric="tikv_range_cache_engine_prepare_for_write_duration_seconds",
+            metric="tikv_in_memory_engine_prepare_for_write_duration_seconds",
         )
     )
     layout.row(
@@ -4338,7 +4389,7 @@ def RangeCacheMemoryEngine() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_sum_rate(
-                            "tikv_range_cache_memory_engine_locate",
+                            "tikv_in_memory_engine_locate",
                             label_selectors=[
                                 'type="number_db_seek"',
                             ],
@@ -4348,7 +4399,7 @@ def RangeCacheMemoryEngine() -> RowPanel:
                     ),
                     target(
                         expr=expr_sum_rate(
-                            "tikv_range_cache_memory_engine_locate",
+                            "tikv_in_memory_engine_locate",
                             label_selectors=[
                                 'type="number_db_seek_found"',
                             ],
@@ -4358,7 +4409,7 @@ def RangeCacheMemoryEngine() -> RowPanel:
                     ),
                     target(
                         expr=expr_sum_rate(
-                            "tikv_range_cache_memory_engine_locate",
+                            "tikv_in_memory_engine_locate",
                             label_selectors=[
                                 'type="number_db_next"',
                             ],
@@ -4368,7 +4419,7 @@ def RangeCacheMemoryEngine() -> RowPanel:
                     ),
                     target(
                         expr=expr_sum_rate(
-                            "tikv_range_cache_memory_engine_locate",
+                            "tikv_in_memory_engine_locate",
                             label_selectors=[
                                 'type="number_db_next_found"',
                             ],
@@ -4378,7 +4429,7 @@ def RangeCacheMemoryEngine() -> RowPanel:
                     ),
                     target(
                         expr=expr_sum_rate(
-                            "tikv_range_cache_memory_engine_locate",
+                            "tikv_in_memory_engine_locate",
                             label_selectors=[
                                 'type="number_db_prev"',
                             ],
@@ -4388,7 +4439,7 @@ def RangeCacheMemoryEngine() -> RowPanel:
                     ),
                     target(
                         expr=expr_sum_rate(
-                            "tikv_range_cache_memory_engine_locate",
+                            "tikv_in_memory_engine_locate",
                             label_selectors=[
                                 'type="number_db_prev_found"',
                             ],
@@ -4406,27 +4457,27 @@ def RangeCacheMemoryEngine() -> RowPanel:
                     target(
                         expr=expr_histogram_quantile(
                             1,
-                            "tikv_range_cache_memory_engine_seek_duration",
+                            "tikv_in_memory_engine_seek_duration",
                         ),
                         legend_format="max",
                     ),
                     target(
                         expr=expr_histogram_quantile(
                             0.99,
-                            "tikv_range_cache_memory_engine_seek_duration",
+                            "tikv_in_memory_engine_seek_duration",
                         ),
                         legend_format="99%",
                     ),
                     target(
                         expr=expr_histogram_quantile(
                             0.95,
-                            "tikv_range_cache_memory_engine_seek_duration",
+                            "tikv_in_memory_engine_seek_duration",
                         ),
                         legend_format="95%",
                     ),
                     target(
                         expr=expr_histogram_avg(
-                            "tikv_range_cache_memory_engine_seek_duration",
+                            "tikv_in_memory_engine_seek_duration",
                             by_labels=["type"],
                         ),
                         legend_format="avg",
@@ -9236,6 +9287,40 @@ def StatusServer() -> RowPanel:
     return layout.row_panel
 
 
+def ResourceControl() -> RowPanel:
+    layout = Layout(title="Resource Control")
+    layout.row(
+        [
+            graph_panel(
+                title="Background Task Total Wait Duration",
+                yaxes=yaxes(left_format=UNITS.MICRO_SECONDS),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_resource_control_background_task_wait_duration",
+                            by_labels=["instance", "resource_group"],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Priority Quota Limit",
+                description="The memory usage of the resource control module.",
+                yaxes=yaxes(left_format=UNITS.MICRO_SECONDS),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_resource_control_priority_quota_limit",
+                            by_labels=["instance", "priority"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    return layout.row_panel
+
+
 #### Metrics Definition End ####
 
 
@@ -9272,10 +9357,11 @@ dashboard = Dashboard(
         RaftEngine(),
         RocksDB(),
         Titan(),
-        RangeCacheMemoryEngine(),
+        InMemoryEngine(),
         # Scheduler and Read Pools
         FlowControl(),
         Scheduler(),
+        SchedulerWorkerPool(),
         SchedulerCommands(),
         CoprocessorOverview(),
         CoprocessorDetail(),
@@ -9297,6 +9383,7 @@ dashboard = Dashboard(
         Threads(),
         Memory(),
         # Infrequently Used
+        ResourceControl(),
         StatusServer(),
         Encryption(),
         TTL(),
