@@ -4259,7 +4259,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_raftstore_region_size_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_raftstore_region_size_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -4267,7 +4267,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_raftstore_region_size_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_raftstore_region_size_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -4279,6 +4279,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -4564,7 +4565,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_region_written_bytes_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_region_written_bytes_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -4572,7 +4573,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_region_written_bytes_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_region_written_bytes_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -4584,6 +4585,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -4801,7 +4803,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_region_written_keys_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_region_written_keys_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -4809,7 +4811,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_region_written_keys_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_region_written_keys_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -4821,6 +4823,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -5239,7 +5242,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_raftstore_apply_key_size_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_raftstore_apply_key_size_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -5247,7 +5250,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_raftstore_apply_key_size_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_raftstore_apply_key_size_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -5259,6 +5262,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -5343,7 +5347,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_raftstore_apply_value_size_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_raftstore_apply_value_size_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -5351,7 +5355,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_raftstore_apply_value_size_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_raftstore_apply_value_size_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -5363,6 +5367,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -8274,7 +8279,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_storage_engine_async_request_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"write\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_storage_engine_async_request_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"write\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -8282,7 +8287,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_storage_engine_async_request_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"write\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_storage_engine_async_request_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"write\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -8294,6 +8299,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -8579,7 +8585,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_storage_engine_async_request_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"snapshot\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_storage_engine_async_request_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"snapshot\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -8587,7 +8593,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_storage_engine_async_request_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"snapshot\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_storage_engine_async_request_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"snapshot\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -8599,6 +8605,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -8884,7 +8891,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_storage_engine_async_request_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"snapshot_local_read\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_storage_engine_async_request_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"snapshot_local_read\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -8892,7 +8899,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_storage_engine_async_request_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"snapshot_local_read\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_storage_engine_async_request_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"snapshot_local_read\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -8904,6 +8911,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -9189,7 +9197,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_storage_engine_async_request_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"snapshot_read_index_propose_wait\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_storage_engine_async_request_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"snapshot_read_index_propose_wait\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -9197,7 +9205,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_storage_engine_async_request_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"snapshot_read_index_propose_wait\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_storage_engine_async_request_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"snapshot_read_index_propose_wait\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -9209,6 +9217,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -9494,7 +9503,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_storage_engine_async_request_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"snapshot_read_index_confirm\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_storage_engine_async_request_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"snapshot_read_index_confirm\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -9502,7 +9511,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_storage_engine_async_request_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"snapshot_read_index_confirm\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_storage_engine_async_request_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"snapshot_read_index_confirm\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -9514,6 +9523,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -16963,7 +16973,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_raftstore_raft_process_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"ready\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_raftstore_raft_process_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"ready\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -16971,7 +16981,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_raftstore_raft_process_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"ready\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_raftstore_raft_process_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"ready\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -16983,6 +16993,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -17268,7 +17279,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_raftstore_store_write_loop_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_raftstore_store_write_loop_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -17276,7 +17287,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_raftstore_store_write_loop_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_raftstore_store_write_loop_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -17288,6 +17299,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -17573,7 +17585,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_raftstore_append_log_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_raftstore_append_log_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -17581,7 +17593,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_raftstore_append_log_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_raftstore_append_log_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -17593,6 +17605,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -17878,7 +17891,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_raftstore_commit_log_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_raftstore_commit_log_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -17886,7 +17899,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_raftstore_commit_log_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_raftstore_commit_log_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -17898,6 +17911,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -18183,7 +18197,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_raftstore_apply_log_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_raftstore_apply_log_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -18191,7 +18205,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_raftstore_apply_log_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_raftstore_apply_log_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -18203,6 +18217,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -18488,7 +18503,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_server_raft_client_wait_ready_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_server_raft_client_wait_ready_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -18496,7 +18511,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_server_raft_client_wait_ready_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_server_raft_client_wait_ready_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -18508,6 +18523,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -19648,7 +19664,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_raftstore_request_wait_time_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_raftstore_request_wait_time_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -19656,7 +19672,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_raftstore_request_wait_time_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_raftstore_request_wait_time_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -19668,6 +19684,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -19953,7 +19970,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_raftstore_store_write_task_wait_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_raftstore_store_write_task_wait_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -19961,7 +19978,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_raftstore_store_write_task_wait_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_raftstore_store_write_task_wait_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -19973,6 +19990,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -20258,7 +20276,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_raftstore_apply_wait_time_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_raftstore_apply_wait_time_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -20266,7 +20284,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_raftstore_apply_wait_time_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_raftstore_apply_wait_time_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -20278,6 +20296,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -20563,7 +20582,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_raftstore_store_write_handle_msg_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_raftstore_store_write_handle_msg_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -20571,7 +20590,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_raftstore_store_write_handle_msg_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_raftstore_store_write_handle_msg_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -20583,6 +20602,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -20667,7 +20687,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_raftstore_store_write_trigger_wb_bytes_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_raftstore_store_write_trigger_wb_bytes_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -20675,7 +20695,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_raftstore_store_write_trigger_wb_bytes_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_raftstore_store_write_trigger_wb_bytes_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -20687,6 +20707,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -21390,7 +21411,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_replica_read_lock_check_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_replica_read_lock_check_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -21398,7 +21419,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_replica_read_lock_check_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_replica_read_lock_check_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -21410,6 +21431,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -21494,7 +21516,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_raftstore_peer_msg_len_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_raftstore_peer_msg_len_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -21502,7 +21524,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_raftstore_peer_msg_len_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_raftstore_peer_msg_len_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -21514,6 +21536,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -32149,7 +32172,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_engine_ingestion_picked_level_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_engine_ingestion_picked_level_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -32157,7 +32180,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_engine_ingestion_picked_level_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_engine_ingestion_picked_level_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -32169,6 +32192,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -38016,7 +38040,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_in_memory_engine_gc_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_in_memory_engine_gc_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -38024,7 +38048,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_in_memory_engine_gc_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_in_memory_engine_gc_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -38036,6 +38060,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -38120,7 +38145,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_in_memory_engine_load_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_in_memory_engine_load_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -38128,7 +38153,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_in_memory_engine_load_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_in_memory_engine_load_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -38140,6 +38165,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -38357,7 +38383,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_in_memory_engine_eviction_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_in_memory_engine_eviction_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -38365,7 +38391,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_in_memory_engine_eviction_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_in_memory_engine_eviction_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -38377,6 +38403,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -38594,7 +38621,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_in_memory_engine_write_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_in_memory_engine_write_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -38602,7 +38629,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_in_memory_engine_write_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_in_memory_engine_write_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -38614,6 +38641,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -38899,7 +38927,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_in_memory_engine_prepare_for_write_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_in_memory_engine_prepare_for_write_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -38907,7 +38935,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_in_memory_engine_prepare_for_write_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_in_memory_engine_prepare_for_write_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -38919,6 +38947,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -39913,7 +39942,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_scheduler_throttle_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_scheduler_throttle_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -39921,7 +39950,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_scheduler_throttle_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_scheduler_throttle_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -39933,6 +39962,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -41908,7 +41938,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_yatp_pool_schedule_wait_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_yatp_pool_schedule_wait_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -41916,7 +41946,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_yatp_pool_schedule_wait_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_yatp_pool_schedule_wait_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -41928,6 +41958,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -42453,7 +42484,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_yatp_pool_schedule_wait_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_yatp_pool_schedule_wait_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -42461,7 +42492,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_yatp_pool_schedule_wait_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_yatp_pool_schedule_wait_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sched-worker.*\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -42473,6 +42504,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -44887,7 +44919,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_storage_check_mem_lock_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"$command\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_storage_check_mem_lock_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"$command\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -44895,7 +44927,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_storage_check_mem_lock_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"$command\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_storage_check_mem_lock_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"$command\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -44907,6 +44939,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -45033,7 +45066,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_coprocessor_request_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_coprocessor_request_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -45041,7 +45074,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_coprocessor_request_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_coprocessor_request_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -45053,6 +45086,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -47981,7 +48015,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_coprocessor_mem_lock_check_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_coprocessor_mem_lock_check_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -47989,7 +48023,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_coprocessor_mem_lock_check_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_coprocessor_mem_lock_check_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -48001,6 +48035,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -48727,7 +48762,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_yatp_pool_schedule_wait_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"unified-read.*\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_yatp_pool_schedule_wait_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"unified-read.*\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -48735,7 +48770,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_yatp_pool_schedule_wait_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"unified-read.*\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_yatp_pool_schedule_wait_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"unified-read.*\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -48747,6 +48782,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -52860,7 +52896,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_lock_wait_queue_length_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_lock_wait_queue_length_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -52868,7 +52904,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_lock_wait_queue_length_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_lock_wait_queue_length_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -52880,6 +52916,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -58120,7 +58157,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_resolved_ts_check_leader_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_resolved_ts_check_leader_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -58128,7 +58165,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_resolved_ts_check_leader_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_resolved_ts_check_leader_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -58140,6 +58177,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -58786,7 +58824,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_resolved_ts_initial_scan_backoff_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_resolved_ts_initial_scan_backoff_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -58794,7 +58832,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_resolved_ts_initial_scan_backoff_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_resolved_ts_initial_scan_backoff_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -58806,6 +58844,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -59908,7 +59947,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_import_rpc_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",request=\"apply\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_import_rpc_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",request=\"apply\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -59916,7 +59955,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_import_rpc_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",request=\"apply\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_import_rpc_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",request=\"apply\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -59928,6 +59967,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -60012,7 +60052,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_import_apply_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"exec_download\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_import_apply_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"exec_download\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -60020,7 +60060,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_import_apply_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"exec_download\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_import_apply_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"exec_download\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -60032,6 +60072,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -60116,7 +60157,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_import_engine_request_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"queuing\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_import_engine_request_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"queuing\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -60124,7 +60165,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_import_engine_request_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"queuing\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_import_engine_request_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"queuing\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -60136,6 +60177,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -60353,7 +60395,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_import_download_bytes_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_import_download_bytes_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -60361,7 +60403,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_import_download_bytes_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_import_download_bytes_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -60373,6 +60415,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -60457,7 +60500,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_import_apply_bytes_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_import_apply_bytes_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -60465,7 +60508,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_import_apply_bytes_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_import_apply_bytes_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -60477,6 +60520,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -60561,7 +60605,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_import_engine_request_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"get_permit\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_import_engine_request_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"get_permit\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -60569,7 +60613,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_import_engine_request_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"get_permit\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_import_engine_request_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"get_permit\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -60581,6 +60625,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -61064,7 +61109,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_import_engine_request_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"apply\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_import_engine_request_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"apply\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -61072,7 +61117,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_import_engine_request_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"apply\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_import_engine_request_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"apply\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -61084,6 +61129,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -61772,7 +61818,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_backup_range_size_bytes_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",cf=\"write\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_backup_range_size_bytes_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",cf=\"write\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -61780,7 +61826,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_backup_range_size_bytes_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",cf=\"write\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_backup_range_size_bytes_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",cf=\"write\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -61792,6 +61838,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -61876,7 +61923,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_backup_range_size_bytes_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",cf=\"default\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_backup_range_size_bytes_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",cf=\"default\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -61884,7 +61931,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_backup_range_size_bytes_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",cf=\"default\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_backup_range_size_bytes_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",cf=\"default\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -61896,6 +61943,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -62128,7 +62176,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_backup_range_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"snapshot\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_backup_range_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"snapshot\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -62136,7 +62184,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_backup_range_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"snapshot\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_backup_range_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"snapshot\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -62148,6 +62196,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -62232,7 +62281,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_backup_range_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"scan\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_backup_range_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"scan\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -62240,7 +62289,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_backup_range_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"scan\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_backup_range_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"scan\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -62252,6 +62301,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -62336,7 +62386,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_backup_range_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=~\"save.*\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_backup_range_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=~\"save.*\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -62344,7 +62394,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_backup_range_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=~\"save.*\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_backup_range_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=~\"save.*\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -62356,6 +62406,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -62603,7 +62654,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_external_storage_create_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_external_storage_create_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -62611,7 +62662,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_external_storage_create_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_external_storage_create_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -62623,6 +62674,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -64138,7 +64190,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_import_rpc_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",request=~\"download|write\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_import_rpc_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",request=~\"download|write\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -64146,7 +64198,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_import_rpc_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",request=~\"download|write\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_import_rpc_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",request=~\"download|write\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -64158,6 +64210,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -64242,7 +64295,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_import_download_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"queue\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_import_download_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"queue\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -64250,7 +64303,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_import_download_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"queue\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_import_download_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"queue\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -64262,6 +64315,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -64346,7 +64400,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_import_download_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"read\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_import_download_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"read\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -64354,7 +64408,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_import_download_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"read\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_import_download_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"read\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -64366,6 +64420,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -64450,7 +64505,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_import_download_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"rewrite\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_import_download_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"rewrite\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -64458,7 +64513,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_import_download_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"rewrite\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_import_download_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"rewrite\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -64470,6 +64525,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -64554,7 +64610,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_import_rpc_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",request=~\"ingest\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_import_rpc_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",request=~\"ingest\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -64562,7 +64618,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_import_rpc_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",request=~\"ingest\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_import_rpc_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",request=~\"ingest\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -64574,6 +64630,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -64658,7 +64715,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_import_ingest_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=~\"ingest\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_import_ingest_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=~\"ingest\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -64666,7 +64723,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_import_ingest_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=~\"ingest\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_import_ingest_duration_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=~\"ingest\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -64678,6 +64735,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -64762,7 +64820,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_import_ingest_byte_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_import_ingest_byte_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -64770,7 +64828,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_import_ingest_byte_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_import_ingest_byte_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -64782,6 +64840,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -67478,7 +67537,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_log_backup_flush_duration_sec_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",stage=~\"save_files\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_log_backup_flush_duration_sec_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",stage=~\"save_files\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -67486,7 +67545,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_log_backup_flush_duration_sec_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",stage=~\"save_files\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_log_backup_flush_duration_sec_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",stage=~\"save_files\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -67498,6 +67557,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -67582,7 +67642,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_log_backup_initial_scan_duration_sec_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_log_backup_initial_scan_duration_sec_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -67590,7 +67650,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_log_backup_initial_scan_duration_sec_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_log_backup_initial_scan_duration_sec_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -67602,6 +67662,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -67686,7 +67747,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_log_backup_event_handle_duration_sec_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",stage=~\"to_stream_event\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_log_backup_event_handle_duration_sec_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",stage=~\"to_stream_event\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -67694,7 +67755,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_log_backup_event_handle_duration_sec_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",stage=~\"to_stream_event\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_log_backup_event_handle_duration_sec_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",stage=~\"to_stream_event\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -67706,6 +67767,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -67790,7 +67852,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_log_backup_event_handle_duration_sec_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",stage=~\"get_router_lock\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_log_backup_event_handle_duration_sec_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",stage=~\"get_router_lock\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -67798,7 +67860,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_log_backup_event_handle_duration_sec_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",stage=~\"get_router_lock\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_log_backup_event_handle_duration_sec_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",stage=~\"get_router_lock\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -67810,6 +67872,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -67894,7 +67957,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_log_backup_handle_kv_batch_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_log_backup_handle_kv_batch_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -67902,7 +67965,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_log_backup_handle_kv_batch_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_log_backup_handle_kv_batch_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -67914,6 +67977,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -67998,7 +68062,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_log_backup_event_handle_duration_sec_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",stage=~\"save_to_temp_file\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_log_backup_event_handle_duration_sec_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",stage=~\"save_to_temp_file\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -68006,7 +68070,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_log_backup_event_handle_duration_sec_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",stage=~\"save_to_temp_file\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_log_backup_event_handle_duration_sec_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",stage=~\"save_to_temp_file\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -68018,6 +68082,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -68102,7 +68167,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_log_backup_on_event_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",stage=\"write_to_tempfile\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_log_backup_on_event_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",stage=\"write_to_tempfile\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -68110,7 +68175,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_log_backup_on_event_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",stage=\"write_to_tempfile\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_log_backup_on_event_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",stage=\"write_to_tempfile\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -68122,6 +68187,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -68206,7 +68272,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_log_backup_on_event_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",stage=\"syscall_write\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_log_backup_on_event_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",stage=\"syscall_write\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -68214,7 +68280,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_log_backup_on_event_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",stage=\"syscall_write\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_log_backup_on_event_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",stage=\"syscall_write\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -68226,6 +68292,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -69374,7 +69441,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tidb_log_backup_advancer_batch_size_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"checkpoint\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tidb_log_backup_advancer_batch_size_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"checkpoint\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -69382,7 +69449,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tidb_log_backup_advancer_batch_size_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"checkpoint\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tidb_log_backup_advancer_batch_size_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"checkpoint\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -69394,6 +69461,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
@@ -69478,7 +69546,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tidb_log_backup_advancer_tick_duration_sec_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",step=\"tick\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tidb_log_backup_advancer_tick_duration_sec_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",step=\"tick\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -69486,7 +69554,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(rate(\n    tidb_log_backup_advancer_tick_duration_sec_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",step=\"tick\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tidb_log_backup_advancer_tick_duration_sec_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",step=\"tick\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -69498,6 +69566,7 @@
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "show": true,
             "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
