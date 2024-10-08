@@ -7446,6 +7446,64 @@ def PessimisticLocking() -> RowPanel:
             ),
         ]
     )
+    layout.row(
+        [
+            graph_panel(
+                title="Deadlock detector sizes",
+                description="The number of entries, blockers and total keys in deadlock detector",
+                targets=[
+                    target(
+                        expr=expr_sum("tikv_lock_manager_detector_wait_for_map_size"),
+                        legend_format="entry",
+                    ),
+                    target(
+                        expr=expr_sum("tikv_lock_manager_detector_total_blockers"),
+                        legend_format="blockers",
+                    ),
+                    target(
+                        expr=expr_sum("tikv_lock_manager_detector_total_keys"),
+                        legend_format="keys",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="WaitTable memory",
+                description="Estimated memory usage of the wait table",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_lock_manager_waiter_wait_table_estimated_mem"
+                        ),
+                        legend_format="mem",
+                    ),
+                ],
+            ),
+        ],
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Deadlock detector channel ops",
+                description="The counter of the deadlock detector rpc channel",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_lock_manager_detector_send_channel_queued_counter"
+                        ),
+                        legend_format="enqueue",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_lock_manager_detector_send_channel_sent_counter"
+                        ),
+                        legend_format="dequeue",
+                    ),
+                ],
+            )
+        ]
+    )
     return layout.row_panel
 
 

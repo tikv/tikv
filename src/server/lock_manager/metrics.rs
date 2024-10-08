@@ -66,6 +66,37 @@ lazy_static! {
         "Heartbeat of the leader of the deadlock detector"
     )
     .unwrap();
+    pub static ref DETECTOR_SEND_CHANNEL_QUEUED_COUNTER: IntCounter = register_int_counter!(
+        "tikv_lock_manager_detector_send_channel_queued_counter",
+        "Counter of the msgs sent to the rpc channel of the deadlock detector"
+    )
+    .unwrap();
+    pub static ref DETECTOR_SEND_CHANNEL_SENT_COUNTER: IntCounter = register_int_counter!(
+        "tikv_lock_manager_detector_send_channel_sent_counter",
+        "Counter of the msgs sent from the rpc channel of the deadlock detector"
+    )
+    .unwrap();
+    pub static ref WAITER_WAIT_TABLE_ESTIMATED_MEM: IntGauge = register_int_gauge!(
+        "tikv_lock_manager_waiter_wait_table_estimated_mem",
+        "Estimated memory usage of the wait table"
+    )
+    .unwrap();
+    pub static ref DETECTOR_WAIT_FOR_MAP_SIZE: IntGauge = register_int_gauge!(
+        "tikv_lock_manager_detector_wait_for_map_size",
+        "The number of entries in the wait_for_map"
+    )
+    .unwrap();
+    pub static ref DETECTOR_TOTAL_BLOCKERS: IntGauge = register_int_gauge!(
+        "tikv_lock_manager_detector_total_blockers",
+        "The number of blockers in wait_for_map; 1 txn can be counted more than once"
+    )
+    .unwrap();
+    pub static ref DETECTOR_TOTAL_KEYS: IntGauge = register_int_gauge!(
+        "tikv_lock_manager_detector_total_keys",
+        "The number of keys in wait_for_map"
+    )
+    .unwrap();
+
     pub static ref TASK_COUNTER_METRICS: LocalTaskCounter =
         auto_flush_from!(TASK_COUNTER_VEC, LocalTaskCounter);
     pub static ref ERROR_COUNTER_METRICS: LocalErrorCounter =

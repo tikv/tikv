@@ -60,6 +60,17 @@ struct Locks {
     last_detect_time: Instant,
 }
 
+// Memory usage sampling strategy:
+// - Calculating full detect table memory usage is expensive
+// - Update memory usage every SAMPLE_THRESHOLD modifications
+// - Skip the update if time since last update < MIN_SAMPLE_INTERVAL
+// - Trigger update if time since last update > MAX_SAMPLE_INTERVAL
+//
+// This balances accuracy and performance for memory usage tracking.
+const MAX_SAMPLE_INTERVAL: Duration = Duration::from_secs(15);
+const MIN_SAMPLE_INTERVAL: Duration = Duration::from_secs(5);
+const SAMPLE_THRESHOLD: u64 = 1000;
+
 impl Locks {
     /// Creates a new `Locks`.
     fn new(
@@ -114,7 +125,7 @@ impl Locks {
 pub struct DetectTable {
     /// Keeps the DAG of wait-for-lock. Every edge from `txn_ts` to `lock_ts`
     /// has a survival time -- `ttl`. When checking the deadlock, if the ttl
-    /// has elpased, the corresponding edge will be removed.
+    /// has elapsed, the corresponding edge will be removed.
     /// `last_detect_time` is the start time of the edge. `Detect` requests will
     /// refresh it.
     // txn_ts => (lock_ts => Locks)
@@ -127,6 +138,10 @@ pub struct DetectTable {
     last_active_expire: Instant,
 
     now: Instant,
+
+    // update metrics every a few modifications
+    modification_count: u64,
+    last_sample_time: Instant,
 }
 
 impl DetectTable {
@@ -137,6 +152,8 @@ impl DetectTable {
             ttl,
             last_active_expire: Instant::now_coarse(),
             now: Instant::now_coarse(),
+            modification_count: 0,
+            last_sample_time: Instant::now_coarse(),
         }
     }
 
@@ -171,6 +188,7 @@ impl DetectTable {
             return Some((deadlock_key_hash, wait_chain));
         }
         self.register(txn_ts, lock_ts, lock_hash, lock_key, resource_group_tag);
+        self.update_metrics();
         None
     }
 
@@ -319,18 +337,23 @@ impl DetectTable {
                 }
             }
         }
+        self.update_metrics();
         TASK_COUNTER_METRICS.clean_up_wait_for.inc();
     }
 
     /// Removes the entries of the transaction.
     fn clean_up(&mut self, txn_ts: TimeStamp) {
         self.wait_for_map.remove(&txn_ts);
+        self.update_metrics();
         TASK_COUNTER_METRICS.clean_up.inc();
     }
 
     /// Clears the whole detect table.
     fn clear(&mut self) {
         self.wait_for_map.clear();
+        DETECTOR_WAIT_FOR_MAP_SIZE.set(0);
+        DETECTOR_TOTAL_BLOCKERS.set(0);
+        DETECTOR_TOTAL_KEYS.set(0);
     }
 
     /// Reset the ttl
@@ -357,6 +380,36 @@ impl DetectTable {
             self.wait_for_map.retain(|_, wait_for| !wait_for.is_empty());
             self.last_active_expire = self.now;
         }
+        self.update_metrics();
+    }
+
+    fn update_metrics(&mut self) {
+        self.modification_count += 1;
+        let now = Instant::now_coarse();
+        let elapsed = now.duration_since(self.last_sample_time);
+        if (self.modification_count >= SAMPLE_THRESHOLD && elapsed > MIN_SAMPLE_INTERVAL)
+            || elapsed >= MAX_SAMPLE_INTERVAL
+        {
+            self.sample_memory_usage();
+            self.modification_count = 0;
+            self.last_sample_time = now;
+        }
+    }
+
+    fn sample_memory_usage(&self) {
+        let mut total_blockers = 0;
+        let mut total_keys = 0;
+
+        for inner_map in self.wait_for_map.values() {
+            total_blockers += inner_map.len();
+            for locks in inner_map.values() {
+                total_keys += locks.keys.len();
+            }
+        }
+
+        DETECTOR_WAIT_FOR_MAP_SIZE.set(self.wait_for_map.len() as i64);
+        DETECTOR_TOTAL_BLOCKERS.set(total_blockers as i64);
+        DETECTOR_TOTAL_KEYS.set(total_keys as i64);
     }
 }
 
@@ -655,7 +708,7 @@ where
         waiter_mgr_scheduler: WaiterMgrScheduler,
         cfg: &Config,
     ) -> Self {
-        assert!(store_id != INVALID_ID);
+        assert_ne!(store_id, INVALID_ID);
         Self {
             store_id,
             env: client::env(),

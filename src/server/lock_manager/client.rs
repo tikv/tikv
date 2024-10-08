@@ -12,7 +12,7 @@ use grpcio::{ChannelBuilder, EnvBuilder, Environment, WriteFlags};
 use kvproto::deadlock::*;
 use security::SecurityManager;
 
-use super::{Error, Result};
+use super::{metrics::*, Error, Result};
 
 type DeadlockFuture<T> = BoxFuture<'static, Result<T>>;
 
@@ -60,12 +60,16 @@ impl Client {
         let send_task = Box::pin(async move {
             let mut sink = sink.sink_map_err(Error::Grpc);
 
-            sink.send_all(&mut rx.map(|r| Ok((r, WriteFlags::default()))))
-                .await
-                .map(|_| {
-                    info!("cancel detect sender");
-                    sink.get_mut().cancel();
-                })
+            sink.send_all(&mut rx.map(|r| {
+                // update metrics
+                DETECTOR_SEND_CHANNEL_SENT_COUNTER.inc();
+                Ok((r, WriteFlags::default()))
+            }))
+            .await
+            .map(|_| {
+                info!("cancel detect sender");
+                sink.get_mut().cancel();
+            })
         });
         self.sender = Some(tx);
 
@@ -82,6 +86,7 @@ impl Client {
             .as_ref()
             .unwrap()
             .unbounded_send(req)
+            .map(|_| DETECTOR_SEND_CHANNEL_QUEUED_COUNTER.inc())
             .map_err(|e| Error::Other(box_err!(e)))
     }
 }
