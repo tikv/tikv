@@ -4533,7 +4533,9 @@ where
                 } => {
                     self.unsafe_force_compact(apply_ctx, term, compact_index);
                 }
-                Msg::InMemoryEngineLoadRegion { trigger_load_cb, .. } => {
+                Msg::InMemoryEngineLoadRegion {
+                    trigger_load_cb, ..
+                } => {
                     trigger_load_cb(&self.delegate.region);
                     fail_point!("on_apply_in_memory_engine_load_region");
                 }
