@@ -238,6 +238,9 @@ where
 
 /// Apply the given snapshot file into a column family. `callback` will be
 /// invoked after each batch of key value pairs written to db.
+///
+/// Attention, callers should manually flush and sync the column family after
+/// applying all sst files to make sure the data durability.
 pub fn apply_plain_cf_file<E, F>(
     path: &str,
     key_mgr: Option<&Arc<DataKeyManager>>,
@@ -309,6 +312,96 @@ where
     Ok(())
 }
 
+<<<<<<< HEAD
+=======
+fn apply_sst_cf_file_without_ingest<E, F>(
+    path: &str,
+    db: &E,
+    cf: &str,
+    key_mgr: Option<Arc<DataKeyManager>>,
+    stale_detector: &impl StaleDetector,
+    batch_size: usize,
+    callback: &mut F,
+) -> Result<(), Error>
+where
+    E: KvEngine,
+    F: for<'r> FnMut(&'r [(Vec<u8>, Vec<u8>)]),
+{
+    let sst_reader = E::SstReader::open(path, key_mgr)?;
+    let mut iter = sst_reader.iter(IterOptions::default())?;
+    iter.seek_to_first()?;
+
+    let mut wb = db.write_batch();
+    let mut write_to_db = |batch: &mut Vec<(Vec<u8>, Vec<u8>)>| -> Result<(), EngineError> {
+        batch.iter().try_for_each(|(k, v)| wb.put_cf(cf, k, v))?;
+        wb.write()?;
+        wb.clear();
+        callback(batch);
+        batch.clear();
+        Ok(())
+    };
+
+    // Collect keys to a vec rather than wb so that we can invoke the callback less
+    // times.
+    let mut batch = Vec::with_capacity(1024);
+    let mut batch_data_size = 0;
+    loop {
+        if stale_detector.is_stale() {
+            return Err(Error::Abort);
+        }
+        if !iter.valid()? {
+            break;
+        }
+        let key = iter.key().to_vec();
+        let value = iter.value().to_vec();
+        batch_data_size += key.len() + value.len();
+        batch.push((key, value));
+        if batch_data_size >= batch_size {
+            box_try!(write_to_db(&mut batch));
+            batch_data_size = 0;
+        }
+        iter.next()?;
+    }
+    if !batch.is_empty() {
+        box_try!(write_to_db(&mut batch));
+    }
+    Ok(())
+}
+
+/// Apply the given snapshot file into a column family by directly writing kv
+/// pairs to db, without ingesting them. `callback` will be invoked after each
+/// batch of key value pairs written to db.
+///
+/// Attention, callers should manually flush and sync the column family after
+/// applying all sst files to make sure the data durability.
+pub fn apply_sst_cf_files_without_ingest<E, F>(
+    files: &[&str],
+    db: &E,
+    cf: &str,
+    key_mgr: Option<Arc<DataKeyManager>>,
+    stale_detector: &impl StaleDetector,
+    batch_size: usize,
+    callback: &mut F,
+) -> Result<(), Error>
+where
+    E: KvEngine,
+    F: for<'r> FnMut(&'r [(Vec<u8>, Vec<u8>)]),
+{
+    for path in files {
+        box_try!(apply_sst_cf_file_without_ingest(
+            path,
+            db,
+            cf,
+            key_mgr.clone(),
+            stale_detector,
+            batch_size,
+            callback
+        ));
+    }
+    Ok(())
+}
+
+>>>>>>> ca3820886e (snap: ensure the state of snapshot flushed after applying snapshots. (#17594))
 fn create_sst_file_writer<E>(engine: &E, cf: CfName, path: &str) -> Result<E::SstWriter, Error>
 where
     E: KvEngine,
