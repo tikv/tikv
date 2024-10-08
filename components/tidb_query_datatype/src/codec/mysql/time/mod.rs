@@ -24,7 +24,7 @@ use crate::{
     codec::{
         convert::ConvertTo,
         data_type::Real,
-        mysql::{check_fsp, Decimal, Duration, Res, DEFAULT_FSP, MAX_FSP},
+        mysql::{check_fsp, duration::SECS_PER_DAY, Decimal, Duration, Res, DEFAULT_FSP, MAX_FSP},
         Error, Result, TEN_POW,
     },
     expr::{EvalContext, Flag, SqlMode},
@@ -1598,21 +1598,30 @@ impl Time {
         .ok()
     }
 
-    pub fn add_nanos(self, ctx: &mut EvalContext, nanos: i64) -> Result<Time> {
-        let duration = chrono::Duration::nanoseconds(nanos);
+    pub fn add_sec_nanos(self, ctx: &mut EvalContext, secs: i64, nanos: i64) -> Result<Time> {
+        // https://github.com/pingcap/tidb/blob/3ee87658d283441408e6132c80c0c00019d2fff1/pkg/types/core_time.go#L283
+        const MAX_SECS: i64 = 10000 * 365 * SECS_PER_DAY;
+        const MIN_SECS: i64 = -MAX_SECS;
+        if !(MIN_SECS..=MAX_SECS).contains(&secs) {
+            return Err(Error::datetime_function_overflow());
+        }
+        let sec_dur = chrono::Duration::seconds(secs);
+        let duration = sec_dur
+            .checked_add(&chrono::Duration::nanoseconds(nanos))
+            .ok_or_else(|| Error::datetime_function_overflow())?;
         let time_type = self.get_time_type();
         let fsp = self.fsp() as i8;
         let mut new_time = if time_type == TimeType::Timestamp {
             let datetime = self
                 .try_into_chrono_datetime(ctx)?
                 .checked_add_signed(duration)
-                .ok_or(Error::datetime_function_overflow())?;
+                .ok_or_else(|| Error::datetime_function_overflow())?;
             Time::try_from_chrono_datetime(ctx, datetime, TimeType::Timestamp, fsp)?
         } else {
             let naive = self
                 .try_into_chrono_naive_datetime()?
                 .checked_add_signed(duration)
-                .ok_or(Error::datetime_function_overflow())?;
+                .ok_or_else(|| Error::datetime_function_overflow())?;
             Time::try_from_chrono_datetime(ctx, naive, time_type, fsp)?
         };
 
@@ -2186,12 +2195,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        codec::mysql::{
-            duration::{
-                NANOS_PER_DAY, NANOS_PER_HOUR, NANOS_PER_MICRO, NANOS_PER_MIN, NANOS_PER_SEC,
-            },
-            MAX_FSP, UNSPECIFIED_FSP,
-        },
+        codec::mysql::{duration::*, MAX_FSP, UNSPECIFIED_FSP},
         expr::EvalConfig,
     };
 
@@ -3570,69 +3574,87 @@ mod tests {
     }
 
     #[test]
-    fn test_add_nanos() -> Result<()> {
-        // (initial time, nanos to add, expected time, should_overflow)
+    fn test_add_sec_nanos() -> Result<()> {
+        // (initial time, sec, nano, expected time, should_overflow)
         let cases = vec![
             (
                 "2023-01-01 00:00:00",
-                2 * NANOS_PER_SEC,
-                "2023-01-01 00:00:02.000000",
+                2,
+                123000 * NANOS_PER_MICRO,
+                "2023-01-01 00:00:02.123000",
                 false,
             ),
             (
                 "2023-01-01 00:00:00",
+                0,
                 -NANOS_PER_SEC,
                 "2022-12-31 23:59:59.000000",
                 false,
             ),
             (
                 "2023-12-31 23:59:59",
-                NANOS_PER_SEC,
+                1,
+                0,
                 "2024-01-01 00:00:00.000000",
                 false,
             ),
             (
                 "2023-01-01 00:00:00",
-                5 * NANOS_PER_DAY,
+                3 * SECS_PER_DAY,
+                2 * NANOS_PER_DAY,
                 "2023-01-06 00:00:00.000000",
                 false,
             ),
             (
                 "2024-02-27 00:00:00",
-                3 * NANOS_PER_DAY
-                    + 12 * NANOS_PER_HOUR
-                    + 3 * NANOS_PER_MIN
-                    + 55 * NANOS_PER_SEC
-                    + 123456 * NANOS_PER_MICRO,
+                2 * SECS_PER_DAY + 6 * SECS_PER_HOUR + 3 * SECS_PER_MINUTE + 55,
+                NANOS_PER_DAY + 6 * NANOS_PER_HOUR + 123456 * NANOS_PER_MICRO,
                 "2024-03-01 12:03:55.123456",
                 false,
             ),
             (
                 "0001-01-01 00:00:00",
-                -2 * NANOS_PER_DAY,
+                -2 * SECS_PER_DAY,
+                0,
                 "0000-00-00 00:00:00.000000",
                 false,
             ),
             (
                 "2023-01-01 00:00:00",
-                10000 * NANOS_PER_DAY,
+                10000 * SECS_PER_DAY,
+                0,
                 "2050-05-19 00:00:00.000000",
                 false,
             ),
             (
                 "0001-01-01 00:00:00",
-                -NANOS_PER_DAY,
+                -SECS_PER_DAY,
+                0,
                 "0000-00-00 00:00:00.000000",
                 false,
             ),
-            ("0000-01-01 00:00:00", -2 * NANOS_PER_DAY, "", true),
+            ("0000-01-01 00:00:00", -2 * SECS_PER_DAY, 0, "", true),
+            (
+                "2024-01-01 00:00:00",
+                10000 * 365 * SECS_PER_DAY + 1,
+                0,
+                "",
+                true,
+            ),
+            (
+                "2024-01-01 00:00:00",
+                -10000 * 365 * SECS_PER_DAY - 1,
+                0,
+                "",
+                true,
+            ),
         ];
 
         let mut ctx = EvalContext::default();
         for case in cases {
-            let (input, nanos, expected, should_overflow) = case;
+            let (input, sec, nano, expected, should_overflow) = case;
             let time = Time::parse_datetime(&mut ctx, input, 6, false)?;
-            let result = time.add_nanos(&mut ctx, nanos);
+            let result = time.add_sec_nanos(&mut ctx, sec, nano);
             if should_overflow {
                 assert!(
                     result.is_err(),
