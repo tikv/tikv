@@ -11,7 +11,7 @@ test-cgroup = []
 
 [dependencies]
 # TODO: use `async-speed-limit` in crates.io after new version(v0.4.2) is released.
-async-speed-limit = { git = "https://github.com/tikv/async-speed-limit", branch = "master" }
+async-speed-limit = "0.4.2"
 backtrace = "0.3.9"
 byteorder = "1.2"
 bytes = "1.0"
