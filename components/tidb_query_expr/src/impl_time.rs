@@ -1016,14 +1016,14 @@ fn add_date(
     result_fsp: i8,
 ) -> CodecResult<DateTime> {
     let month = interval.month();
+    let sec = interval.sec();
     let nano = interval.nano();
 
-    if nano != 0 {
-        datetime = datetime.add_nanos(ctx, nano)?;
-    }
+    datetime = datetime.add_sec_nanos(ctx, sec, nano)?;
     if month != 0 {
         datetime.add_months(month)?;
     }
+
     if let Ok(fsp) = check_fsp(result_fsp) {
         datetime.set_fsp(fsp);
     }
@@ -1063,7 +1063,10 @@ fn add_sub_date_time_any_interval_any_as_string<
         metadata.interval_unsigned,
         metadata.interval_decimal,
     )?;
-    let interval = Interval::parse_from_str(ctx, &metadata.unit, &interval_str)?;
+    let interval = match Interval::parse_from_str(ctx, &metadata.unit, &interval_str)? {
+        Some(i) => i,
+        None => return Ok(None),
+    };
     let mut date_res = match op(
         ctx,
         datetime,
@@ -1104,7 +1107,10 @@ fn add_sub_date_time_datetime_interval_any_as_datetime<
         metadata.interval_unsigned,
         metadata.interval_decimal,
     )?;
-    let interval = Interval::parse_from_str(ctx, &metadata.unit, &interval_str)?;
+    let interval = match Interval::parse_from_str(ctx, &metadata.unit, &interval_str)? {
+        Some(i) => i,
+        None => return Ok(None),
+    };
     let date_res = match op(
         ctx,
         datetime,
@@ -1137,7 +1143,10 @@ fn add_sub_date_time_duration_interval_any_as_datetime<
         metadata.interval_unsigned,
         metadata.interval_decimal,
     )?;
-    let interval = Interval::parse_from_str(ctx, &metadata.unit, &interval_str)?;
+    let interval = match Interval::parse_from_str(ctx, &metadata.unit, &interval_str)? {
+        Some(i) => i,
+        None => return Ok(None),
+    };
     let date_res = match op(
         ctx,
         datetime,
@@ -3724,6 +3733,8 @@ mod tests {
                 ),
                 (AddDateDecimalInt, None, Some("1234"), "MICROSECOND", None),
                 (SubDateIntString, Some("20240901"), None, "second", None),
+                (AddDateIntInt, Some("0"), Some("0"), "day_hour", None),
+                (SubDateIntDecimal, Some("0"), Some("0.0"), "minute", None),
             ]
         };
         let builder_push_param = |ctx: &mut EvalContext,
