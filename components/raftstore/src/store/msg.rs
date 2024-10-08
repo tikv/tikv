@@ -652,7 +652,7 @@ pub enum CasualMessage<EK: KvEngine> {
     // Trigger loading pending region for in_memory_engine,
     InMemoryEngineLoadRegion {
         region_id: u64,
-        cb: Box<dyn FnOnce(&Region) + Send + 'static>,
+        trigger_load_cb: Box<dyn FnOnce(&Region) + Send + 'static>,
     },
 }
 

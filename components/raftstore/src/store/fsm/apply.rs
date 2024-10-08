@@ -3813,7 +3813,7 @@ where
     // Trigger loading pending region for in_memory_engine,
     InMemoryEngineLoadRegion {
         region_id: u64,
-        cb: Box<dyn FnOnce(&Region) + Send + 'static>,
+        trigger_load_cb: Box<dyn FnOnce(&Region) + Send + 'static>,
     },
 }
 
@@ -4533,9 +4533,9 @@ where
                 } => {
                     self.unsafe_force_compact(apply_ctx, term, compact_index);
                 }
-                Msg::InMemoryEngineLoadRegion { cb, .. } => {
+                Msg::InMemoryEngineLoadRegion { trigger_load_cb, .. } => {
+                    trigger_load_cb(&self.delegate.region);
                     fail_point!("on_apply_in_memory_engine_load_region");
-                    cb(&self.delegate.region);
                 }
             }
         }

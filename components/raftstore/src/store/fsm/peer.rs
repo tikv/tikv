@@ -1289,10 +1289,10 @@ where
                 let _ = self.fsm.peer.raft_group.campaign();
                 self.fsm.has_ready = true;
             }
-            CasualMessage::InMemoryEngineLoadRegion { region_id, cb } => {
+            CasualMessage::InMemoryEngineLoadRegion { region_id, trigger_load_cb } => {
                 self.ctx.apply_router.schedule_task(
                     region_id,
-                    ApplyTask::InMemoryEngineLoadRegion { region_id, cb },
+                    ApplyTask::InMemoryEngineLoadRegion { region_id, trigger_load_cb },
                 )
             }
         }

@@ -1284,7 +1284,7 @@ impl Runnable for BackgroundRunner {
                             region_id,
                             CasualMessage::InMemoryEngineLoadRegion {
                                 region_id,
-                                cb: Box::new(move |r| {
+                                trigger_load_cb: Box::new(move |r| {
                                     let cache_region = CacheRegion::from_region(r);
                                     _ = ime_engine.prepare_for_apply(
                                         &cache_region,
