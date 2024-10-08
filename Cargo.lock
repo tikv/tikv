@@ -2963,7 +2963,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/v01dstar/rust-rocksdb?branch=upgrade-rocksdb#51ab90b4d0fa5aba64fb491e4fde33dcd21fa467"
+source = "git+https://github.com/v01dstar/rust-rocksdb?branch=test-load-options#770496992390effee297451068d4657d3343bf52"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -2982,7 +2982,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/v01dstar/rust-rocksdb?branch=upgrade-rocksdb#51ab90b4d0fa5aba64fb491e4fde33dcd21fa467"
+source = "git+https://github.com/v01dstar/rust-rocksdb?branch=test-load-options#770496992390effee297451068d4657d3343bf52"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4820,7 +4820,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/v01dstar/rust-rocksdb?branch=upgrade-rocksdb#51ab90b4d0fa5aba64fb491e4fde33dcd21fa467"
+source = "git+https://github.com/v01dstar/rust-rocksdb?branch=test-load-options#770496992390effee297451068d4657d3343bf52"
 dependencies = [
  "libc 0.2.151",
  "librocksdb_sys",
@@ -6545,7 +6545,6 @@ dependencies = [
  "resource_control",
  "resource_metering",
  "rev_lines",
- "rocksdb",
  "seahash",
  "security",
  "semver 0.11.0",

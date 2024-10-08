@@ -195,6 +195,9 @@ impl Dicts {
 
     fn get_file(&self, fname: &str) -> Option<FileInfo> {
         let dict = self.file_dict.lock().unwrap();
+        let file_info = dict.files.get(fname).cloned();
+        info!("dict get_file"; "fname" => fname, "file_info" => file_info.unwrap_or(FileInfo::default()));
+
         dict.files.get(fname).cloned()
     }
 
@@ -216,6 +219,7 @@ impl Dicts {
             file_dict.files.insert(fname.to_owned(), file.clone());
             file_dict.files.len() as _
         };
+        info!("dict new_file"; "fname" => fname, "file_info" => file);
 
         file_dict_file.insert(fname, &file, sync)?;
         ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
