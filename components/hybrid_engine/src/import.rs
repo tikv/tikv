@@ -1,13 +1,13 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{ImportExt, KvEngine, RangeCacheEngine};
+use engine_traits::{ImportExt, KvEngine, RegionCacheEngine};
 
 use crate::engine::HybridEngine;
 
 impl<EK, EC> ImportExt for HybridEngine<EK, EC>
 where
     EK: KvEngine,
-    EC: RangeCacheEngine,
+    EC: RegionCacheEngine,
 {
     type IngestExternalFileOptions = EK::IngestExternalFileOptions;
 

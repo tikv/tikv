@@ -27,7 +27,7 @@ use crate::{
     perf_context::PERF_CONTEXT,
     perf_counter_add,
     statistics::{LocalStatistics, Statistics, Tickers},
-    RangeCacheMemoryEngine,
+    RegionCacheMemoryEngine,
 };
 
 // The max snapshot number that can exist in the RocksDB. This is typically used
@@ -42,15 +42,15 @@ enum Direction {
 }
 
 #[derive(Clone, Debug)]
-pub struct RangeCacheSnapshotMeta {
+pub struct RegionCacheSnapshotMeta {
     pub(crate) region: CacheRegion,
     pub(crate) snapshot_ts: u64,
-    // Sequence number is shared between RangeCacheEngine and disk KvEnigne to
+    // Sequence number is shared between RegionCacheEngine and disk KvEnigne to
     // provide atomic write
     pub(crate) sequence_number: u64,
 }
 
-impl RangeCacheSnapshotMeta {
+impl RegionCacheSnapshotMeta {
     pub(crate) fn new(region: CacheRegion, snapshot_ts: u64, sequence_number: u64) -> Self {
         Self {
             region,
@@ -61,15 +61,15 @@ impl RangeCacheSnapshotMeta {
 }
 
 #[derive(Debug)]
-pub struct RangeCacheSnapshot {
-    snapshot_meta: RangeCacheSnapshotMeta,
+pub struct RegionCacheSnapshot {
+    snapshot_meta: RegionCacheSnapshotMeta,
     skiplist_engine: SkiplistEngine,
-    engine: RangeCacheMemoryEngine,
+    engine: RegionCacheMemoryEngine,
 }
 
-impl RangeCacheSnapshot {
+impl RegionCacheSnapshot {
     pub fn new(
-        engine: RangeCacheMemoryEngine,
+        engine: RegionCacheMemoryEngine,
         region: CacheRegion,
         read_ts: u64,
         seq_num: u64,
@@ -78,19 +78,19 @@ impl RangeCacheSnapshot {
             .core
             .region_manager
             .region_snapshot(region.id, region.epoch_version, read_ts)?;
-        Ok(RangeCacheSnapshot {
-            snapshot_meta: RangeCacheSnapshotMeta::new(region, read_ts, seq_num),
+        Ok(RegionCacheSnapshot {
+            snapshot_meta: RegionCacheSnapshotMeta::new(region, read_ts, seq_num),
             skiplist_engine: engine.core.engine.clone(),
             engine: engine.clone(),
         })
     }
 
-    pub(crate) fn snapshot_meta(&self) -> &RangeCacheSnapshotMeta {
+    pub(crate) fn snapshot_meta(&self) -> &RegionCacheSnapshotMeta {
         &self.snapshot_meta
     }
 }
 
-impl Drop for RangeCacheSnapshot {
+impl Drop for RegionCacheSnapshot {
     fn drop(&mut self) {
         let regions_removable = self
             .engine
@@ -113,10 +113,10 @@ impl Drop for RangeCacheSnapshot {
     }
 }
 
-impl Snapshot for RangeCacheSnapshot {}
+impl Snapshot for RegionCacheSnapshot {}
 
-impl Iterable for RangeCacheSnapshot {
-    type Iterator = RangeCacheIterator;
+impl Iterable for RegionCacheSnapshot {
+    type Iterator = RegionCacheIterator;
 
     fn iterator_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
         let iter = self.skiplist_engine.data[cf_to_id(cf)].owned_iter();
@@ -145,7 +145,7 @@ impl Iterable for RangeCacheSnapshot {
             )));
         }
 
-        Ok(RangeCacheIterator {
+        Ok(RegionCacheIterator {
             valid: false,
             prefix: None,
             lower_bound,
@@ -164,8 +164,8 @@ impl Iterable for RangeCacheSnapshot {
     }
 }
 
-impl Peekable for RangeCacheSnapshot {
-    type DbVector = RangeCacheDbVector;
+impl Peekable for RegionCacheSnapshot {
+    type DbVector = RegionCacheDbVector;
 
     fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<Self::DbVector>> {
         self.get_value_cf_opt(opts, CF_DEFAULT, key)
@@ -177,7 +177,7 @@ impl Peekable for RangeCacheSnapshot {
         cf: &str,
         key: &[u8],
     ) -> Result<Option<Self::DbVector>> {
-        fail::fail_point!("on_range_cache_get_value");
+        fail::fail_point!("on_region_cache_get_value");
         if !self.snapshot_meta.region.contains_key(key) {
             return Err(Error::Other(box_err!(
                 "key {} not in range[{}, {}]",
@@ -206,26 +206,26 @@ impl Peekable for RangeCacheSnapshot {
                     .statistics()
                     .record_ticker(Tickers::BytesRead, value.len() as u64);
                 perf_counter_add!(get_read_bytes, value.len() as u64);
-                Ok(Some(RangeCacheDbVector(value)))
+                Ok(Some(RegionCacheDbVector(value)))
             }
             _ => Ok(None),
         }
     }
 }
 
-impl CfNamesExt for RangeCacheSnapshot {
+impl CfNamesExt for RegionCacheSnapshot {
     fn cf_names(&self) -> Vec<&str> {
         unimplemented!()
     }
 }
 
-impl SnapshotMiscExt for RangeCacheSnapshot {
+impl SnapshotMiscExt for RegionCacheSnapshot {
     fn sequence_number(&self) -> u64 {
         self.snapshot_meta.sequence_number
     }
 }
 
-pub struct RangeCacheIterator {
+pub struct RegionCacheIterator {
     valid: bool,
     iter: OwnedIter<Arc<SkipList<InternalBytes, InternalBytes>>, InternalBytes, InternalBytes>,
     // The lower bound is inclusive while the upper bound is exclusive if set
@@ -255,7 +255,7 @@ pub struct RangeCacheIterator {
     pub(crate) snapshot_read_ts: u64,
 }
 
-impl Drop for RangeCacheIterator {
+impl Drop for RegionCacheIterator {
     fn drop(&mut self) {
         self.statistics
             .record_ticker(Tickers::IterBytesRead, self.local_stats.bytes_read);
@@ -282,7 +282,7 @@ impl Drop for RangeCacheIterator {
     }
 }
 
-impl RangeCacheIterator {
+impl RegionCacheIterator {
     // If `skipping_saved_key` is true, the function will keep iterating until it
     // finds a user key that is larger than `saved_user_key`.
     // If `prefix` is not None, the iterator needs to stop when all keys for the
@@ -470,7 +470,7 @@ impl RangeCacheIterator {
     }
 }
 
-impl Iterator for RangeCacheIterator {
+impl Iterator for RegionCacheIterator {
     fn key(&self) -> &[u8] {
         assert!(self.valid);
         &self.saved_user_key
@@ -532,7 +532,7 @@ impl Iterator for RangeCacheIterator {
     }
 
     fn seek(&mut self, key: &[u8]) -> Result<bool> {
-        fail::fail_point!("on_range_cache_iterator_seek");
+        fail::fail_point!("on_region_cache_iterator_seek");
         let begin = Instant::now();
         self.direction = Direction::Forward;
         if let Some(ref mut extractor) = self.prefix_extractor {
@@ -622,9 +622,9 @@ impl Iterator for RangeCacheIterator {
     }
 }
 
-pub struct RangeCacheIterMetricsCollector;
+pub struct RegionCacheIterMetricsCollector;
 
-impl IterMetricsCollector for RangeCacheIterMetricsCollector {
+impl IterMetricsCollector for RegionCacheIterMetricsCollector {
     fn internal_delete_skipped_count(&self) -> u64 {
         PERF_CONTEXT.with(|perf_context| perf_context.borrow().internal_delete_skipped_count)
     }
@@ -634,17 +634,17 @@ impl IterMetricsCollector for RangeCacheIterMetricsCollector {
     }
 }
 
-impl MetricsExt for RangeCacheIterator {
-    type Collector = RangeCacheIterMetricsCollector;
+impl MetricsExt for RegionCacheIterator {
+    type Collector = RegionCacheIterMetricsCollector;
     fn metrics_collector(&self) -> Self::Collector {
-        RangeCacheIterMetricsCollector {}
+        RegionCacheIterMetricsCollector {}
     }
 }
 
 #[derive(Debug)]
-pub struct RangeCacheDbVector(Bytes);
+pub struct RegionCacheDbVector(Bytes);
 
-impl Deref for RangeCacheDbVector {
+impl Deref for RegionCacheDbVector {
     type Target = [u8];
 
     fn deref(&self) -> &[u8] {
@@ -652,9 +652,9 @@ impl Deref for RangeCacheDbVector {
     }
 }
 
-impl DbVector for RangeCacheDbVector {}
+impl DbVector for RegionCacheDbVector {}
 
-impl<'a> PartialEq<&'a [u8]> for RangeCacheDbVector {
+impl<'a> PartialEq<&'a [u8]> for RegionCacheDbVector {
     fn eq(&self, rhs: &&[u8]) -> bool {
         self.0.as_slice() == *rhs
     }
@@ -678,14 +678,15 @@ mod tests {
     };
     use engine_traits::{
         CacheRegion, EvictReason, FailedReason, IterMetricsCollector, IterOptions, Iterable,
-        Iterator, MetricsExt, Mutable, Peekable, RangeCacheEngine, RangeCacheEngineExt,
-        ReadOptions, RegionEvent, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_WRITE,
+        Iterator, MetricsExt, Mutable, Peekable, ReadOptions, RegionCacheEngine,
+        RegionCacheEngineExt, RegionEvent, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK,
+        CF_WRITE,
     };
     use keys::DATA_PREFIX_KEY;
     use tempfile::Builder;
     use tikv_util::config::VersionTrack;
 
-    use super::{RangeCacheIterator, RangeCacheSnapshot};
+    use super::{RegionCacheIterator, RegionCacheSnapshot};
     use crate::{
         engine::{cf_to_id, SkiplistEngine},
         keys::{
@@ -693,17 +694,17 @@ mod tests {
             encode_key, encode_seek_key, InternalBytes, ValueType,
         },
         perf_context::PERF_CONTEXT,
-        range_manager::RegionState,
+        region_manager::RegionState,
         statistics::Tickers,
         test_util::new_region,
-        RangeCacheEngineConfig, RangeCacheEngineContext, RangeCacheMemoryEngine,
-        RangeCacheWriteBatch,
+        InMemoryEngineConfig, InMemoryEngineContext, RegionCacheMemoryEngine,
+        RegionCacheWriteBatch,
     };
 
     #[test]
     fn test_snapshot() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
-            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(InMemoryEngineConfig::config_for_test()),
         )));
         let region = new_region(1, b"k00", b"k10");
         engine.new_region(region.clone());
@@ -863,7 +864,7 @@ mod tests {
     }
 
     fn verify_key_values<I: iter::Iterator<Item = u32>, J: iter::Iterator<Item = u32> + Clone>(
-        iter: &mut RangeCacheIterator,
+        iter: &mut RegionCacheIterator,
         key_range: I,
         mvcc_range: J,
         foward: bool,
@@ -889,8 +890,8 @@ mod tests {
 
     #[test]
     fn test_seek() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
-            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(InMemoryEngineConfig::config_for_test()),
         )));
         let region = new_region(1, b"", b"z");
         let range = CacheRegion::from_region(&region);
@@ -924,8 +925,8 @@ mod tests {
 
     #[test]
     fn test_get_value() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
-            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(InMemoryEngineConfig::config_for_test()),
         )));
         let region = new_region(1, b"", b"z");
         let cache_region = CacheRegion::from_region(&region);
@@ -1002,8 +1003,8 @@ mod tests {
 
     #[test]
     fn test_iterator_forawrd() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
-            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(InMemoryEngineConfig::config_for_test()),
         )));
         let region = new_region(1, b"", b"z");
         let range = CacheRegion::from_region(&region);
@@ -1163,8 +1164,8 @@ mod tests {
 
     #[test]
     fn test_iterator_backward() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
-            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(InMemoryEngineConfig::config_for_test()),
         )));
         let region = new_region(1, b"", b"z");
         let range = CacheRegion::from_region(&region);
@@ -1231,8 +1232,8 @@ mod tests {
 
     #[test]
     fn test_seq_visibility() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
-            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(InMemoryEngineConfig::config_for_test()),
         )));
         let region = new_region(1, b"", b"z");
         let range = CacheRegion::from_region(&region);
@@ -1354,8 +1355,8 @@ mod tests {
 
     #[test]
     fn test_seq_visibility_backward() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
-            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(InMemoryEngineConfig::config_for_test()),
         )));
         let region = new_region(1, b"", b"z");
         let range = CacheRegion::from_region(&region);
@@ -1458,8 +1459,8 @@ mod tests {
 
         // backward, all put
         {
-            let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(
-                Arc::new(VersionTrack::new(RangeCacheEngineConfig::config_for_test())),
+            let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(
+                Arc::new(VersionTrack::new(InMemoryEngineConfig::config_for_test())),
             ));
             engine.new_region(region.clone());
             let sl = {
@@ -1495,8 +1496,8 @@ mod tests {
 
         // backward, all deletes
         {
-            let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(
-                Arc::new(VersionTrack::new(RangeCacheEngineConfig::config_for_test())),
+            let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(
+                Arc::new(VersionTrack::new(InMemoryEngineConfig::config_for_test())),
             ));
             engine.new_region(region.clone());
             let sl = {
@@ -1525,8 +1526,8 @@ mod tests {
 
         // backward, all deletes except for last put, last put's seq
         {
-            let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(
-                Arc::new(VersionTrack::new(RangeCacheEngineConfig::config_for_test())),
+            let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(
+                Arc::new(VersionTrack::new(InMemoryEngineConfig::config_for_test())),
             ));
             engine.new_region(region.clone());
             let sl = {
@@ -1557,8 +1558,8 @@ mod tests {
 
         // all deletes except for last put, deletions' seq
         {
-            let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(
-                Arc::new(VersionTrack::new(RangeCacheEngineConfig::config_for_test())),
+            let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(
+                Arc::new(VersionTrack::new(InMemoryEngineConfig::config_for_test())),
             ));
             engine.new_region(region.clone());
             let sl = {
@@ -1588,8 +1589,8 @@ mod tests {
 
     #[test]
     fn test_prefix_seek() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
-            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(InMemoryEngineConfig::config_for_test()),
         )));
         let region = new_region(1, b"k000", b"k100");
         let range = CacheRegion::from_region(&region);
@@ -1685,7 +1686,7 @@ mod tests {
         });
     }
 
-    fn verify_evict_region_deleted(engine: &RangeCacheMemoryEngine, region: &CacheRegion) {
+    fn verify_evict_region_deleted(engine: &RegionCacheMemoryEngine, region: &CacheRegion) {
         test_util::eventually(
             Duration::from_millis(100),
             Duration::from_millis(2000),
@@ -1712,8 +1713,8 @@ mod tests {
 
     #[test]
     fn test_evict_region_without_snapshot() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
-            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(InMemoryEngineConfig::config_for_test()),
         )));
         let region = new_region(1, construct_region_key(0), construct_region_key(30));
         let range = CacheRegion::from_region(&region);
@@ -1782,8 +1783,8 @@ mod tests {
 
     #[test]
     fn test_evict_range_with_snapshot() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
-            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(InMemoryEngineConfig::config_for_test()),
         )));
         let region = new_region(1, construct_region_key(0), construct_region_key(30));
         engine.new_region(region.clone());
@@ -1871,8 +1872,8 @@ mod tests {
 
     #[test]
     fn test_tombstone_count_when_iterating() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
-            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(InMemoryEngineConfig::config_for_test()),
         )));
         let region = new_region(1, b"", b"z");
         let range = CacheRegion::from_region(&region);
@@ -1915,8 +1916,8 @@ mod tests {
 
     #[test]
     fn test_read_flow_metrics() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
-            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(InMemoryEngineConfig::config_for_test()),
         )));
         let region = new_region(1, b"", b"z");
         let range = CacheRegion::from_region(&region);
@@ -2032,15 +2033,15 @@ mod tests {
         snap_sequence: u64,
         put_entries: F,
     ) -> (
-        RangeCacheMemoryEngine,
-        RangeCacheSnapshot,
-        RangeCacheIterator,
+        RegionCacheMemoryEngine,
+        RegionCacheSnapshot,
+        RegionCacheIterator,
     )
     where
-        F: FnOnce(&mut RangeCacheWriteBatch),
+        F: FnOnce(&mut RegionCacheWriteBatch),
     {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
-            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(InMemoryEngineConfig::config_for_test()),
         )));
         let region = new_region(1, b"", b"z");
         let range = CacheRegion::from_region(&region);

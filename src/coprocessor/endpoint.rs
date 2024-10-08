@@ -442,8 +442,8 @@ impl<E: Engine> Endpoint<E> {
         .await?;
         let latest_buckets = snapshot.ext().get_buckets();
 
-        let range_cache_snap = snapshot.ext().range_cache_engine_hit();
-        tracker.adjust_snapshot_type(range_cache_snap);
+        let region_cache_snap = snapshot.ext().region_cache_engine_hit();
+        tracker.adjust_snapshot_type(region_cache_snap);
 
         // Check if the buckets version is latest.
         // skip if request don't carry this bucket version.

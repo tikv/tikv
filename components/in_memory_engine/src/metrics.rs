@@ -9,7 +9,7 @@ use prometheus_static_metric::*;
 
 use crate::{
     statistics::{Tickers, ENGINE_TICKER_TYPES},
-    RangeCacheMemoryEngineStatistics,
+    InMemoryEngineStatistics,
 };
 
 make_auto_flush_static_metric! {
@@ -59,67 +59,69 @@ make_auto_flush_static_metric! {
 
 lazy_static! {
     pub static ref GC_FILTERED: IntCounterVec = register_int_counter_vec!(
-        "tikv_range_cache_memory_engine_gc_filtered",
+        "tikv_in_memory_engine_gc_filtered",
         "Filtered version by GC",
         &["type"]
     )
     .unwrap();
-    pub static ref RANGE_CACHE_MEMORY_USAGE: IntGauge = register_int_gauge!(
-        "tikv_range_cache_memory_usage_bytes",
-        "The memory usage of the range cache engine",
+    pub static ref IN_MEMORY_ENGINE_MEMORY_USAGE: IntGauge = register_int_gauge!(
+        "tikv_in_memory_engine_memory_usage_bytes",
+        "The memory usage of the region cache engine",
     )
     .unwrap();
-    pub static ref RANGE_LOAD_TIME_HISTOGRAM: Histogram = register_histogram!(
-        "tikv_range_load_duration_secs",
-        "Bucketed histogram of range load time duration.",
+    pub static ref IN_MEMORY_ENGINE_LOAD_TIME_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_in_memory_engine_load_duration_secs",
+        "Bucketed histogram of region load time duration.",
         exponential_buckets(0.001, 2.0, 20).unwrap()
     )
     .unwrap();
-    pub static ref RANGE_GC_TIME_HISTOGRAM: Histogram = register_histogram!(
-        "tikv_range_gc_duration_secs",
-        "Bucketed histogram of range gc time duration.",
+    pub static ref IN_MEMORY_ENGINE_GC_TIME_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_in_memory_engine_gc_duration_secs",
+        "Bucketed histogram of region gc time duration.",
         exponential_buckets(0.001, 2.0, 20).unwrap()
     )
     .unwrap();
-    pub static ref RANGE_EVICTION_DURATION_HISTOGRAM: HistogramVec = register_histogram_vec!(
-        "tikv_range_eviction_duration_secs",
-        "Bucketed histogram of range eviction time duration.",
-        &["type"],
-        exponential_buckets(0.001, 2.0, 20).unwrap()
-    )
-    .unwrap();
-    pub static ref WRITE_DURATION_HISTOGRAM: Histogram = register_histogram!(
-        "tikv_range_cache_engine_write_duration_seconds",
-        "Bucketed histogram of write duration in range cache engine.",
+    pub static ref IN_MEMORY_ENGINE_EVICTION_DURATION_HISTOGRAM: HistogramVec =
+        register_histogram_vec!(
+            "tikv_in_memory_engine_eviction_duration_secs",
+            "Bucketed histogram of region eviction time duration.",
+            &["type"],
+            exponential_buckets(0.001, 2.0, 20).unwrap()
+        )
+        .unwrap();
+    pub static ref IN_MEMORY_ENGINE_WRITE_DURATION_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_in_memory_engine_write_duration_seconds",
+        "Bucketed histogram of write duration in region cache engine.",
         exponential_buckets(0.00001, 2.0, 20).unwrap()
     )
     .unwrap();
-    pub static ref RANGE_PREPARE_FOR_WRITE_DURATION_HISTOGRAM: Histogram = register_histogram!(
-        "tikv_range_cache_engine_prepare_for_write_duration_seconds",
-        "Bucketed histogram of prepare for write duration in range cache engine.",
-        exponential_buckets(0.00001, 2.0, 20).unwrap()
-    )
-    .unwrap();
-    pub static ref RANGE_CACHE_COUNT: IntGaugeVec = register_int_gauge_vec!(
-        "tikv_range_cache_count",
-        "The count of each type on range cache.",
+    pub static ref IN_MEMORY_ENGINE_PREPARE_FOR_WRITE_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_in_memory_engine_prepare_for_write_duration_seconds",
+            "Bucketed histogram of prepare for write duration in region cache engine.",
+            exponential_buckets(0.00001, 2.0, 20).unwrap()
+        )
+        .unwrap();
+    pub static ref IN_MEMORY_ENGINE_CACHE_COUNT: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_in_memory_engine_cache_count",
+        "The count of each type on region cache.",
         &["type"]
     )
     .unwrap();
     pub static ref IN_MEMORY_ENGINE_FLOW: IntCounterVec = register_int_counter_vec!(
-        "tikv_range_cache_memory_engine_flow",
-        "Bytes and keys of read/written of range cache memory engine",
+        "tikv_in_memory_engine_flow",
+        "Bytes and keys of read/written of in-memory engine",
         &["type"]
     )
     .unwrap();
     pub static ref IN_MEMORY_ENGINE_LOCATE: IntCounterVec = register_int_counter_vec!(
-        "tikv_range_cache_memory_engine_locate",
+        "tikv_in_memory_engine_locate",
         "Number of calls to seek/next/prev",
         &["type"]
     )
     .unwrap();
     pub static ref IN_MEMORY_ENGINE_SEEK_DURATION: Histogram = register_histogram!(
-        "tikv_range_cache_memory_engine_seek_duration",
+        "tikv_in_memory_engine_seek_duration",
         "Histogram of seek duration",
         exponential_buckets(0.00001, 2.0, 26).unwrap()
     )
@@ -127,17 +129,19 @@ lazy_static! {
 }
 
 lazy_static! {
-    pub static ref GC_FILTERED_STATIC: GcFilteredCountVec =
+    pub static ref IN_MEMORY_ENGINE_GC_FILTERED_STATIC: GcFilteredCountVec =
         auto_flush_from!(GC_FILTERED, GcFilteredCountVec);
     pub static ref IN_MEMORY_ENGINE_FLOW_STATIC: InMemoryEngineTickerMetrics =
         auto_flush_from!(IN_MEMORY_ENGINE_FLOW, InMemoryEngineTickerMetrics);
     pub static ref IN_MEMORY_ENGINE_LOCATE_STATIC: InMemoryEngineTickerMetrics =
         auto_flush_from!(IN_MEMORY_ENGINE_LOCATE, InMemoryEngineTickerMetrics);
-    pub static ref RANGE_EVICTION_DURATION_HISTOGRAM_STATIC: EvictionDurationVec =
-        auto_flush_from!(RANGE_EVICTION_DURATION_HISTOGRAM, EvictionDurationVec);
+    pub static ref IN_MEMORY_ENGINE_EVICTION_DURATION_HISTOGRAM_STATIC: EvictionDurationVec = auto_flush_from!(
+        IN_MEMORY_ENGINE_EVICTION_DURATION_HISTOGRAM,
+        EvictionDurationVec
+    );
 }
 
-pub fn flush_range_cache_engine_statistics(statistics: &Arc<RangeCacheMemoryEngineStatistics>) {
+pub fn flush_in_memory_engine_statistics(statistics: &Arc<InMemoryEngineStatistics>) {
     for t in ENGINE_TICKER_TYPES {
         let v = statistics.get_and_reset_ticker_count(*t);
         flush_engine_ticker_metrics(*t, v);
@@ -184,32 +188,34 @@ fn flush_engine_ticker_metrics(t: Tickers, value: u64) {
 
 pub(crate) fn observe_eviction_duration(secs: f64, evict_reason: EvictReason) {
     match evict_reason {
-        EvictReason::AutoEvict => RANGE_EVICTION_DURATION_HISTOGRAM_STATIC
+        EvictReason::AutoEvict => IN_MEMORY_ENGINE_EVICTION_DURATION_HISTOGRAM_STATIC
             .auto_evict
             .observe(secs),
-        EvictReason::BecomeFollower => RANGE_EVICTION_DURATION_HISTOGRAM_STATIC
+        EvictReason::BecomeFollower => IN_MEMORY_ENGINE_EVICTION_DURATION_HISTOGRAM_STATIC
             .become_follower
             .observe(secs),
-        EvictReason::DeleteRange => RANGE_EVICTION_DURATION_HISTOGRAM_STATIC
+        EvictReason::DeleteRange => IN_MEMORY_ENGINE_EVICTION_DURATION_HISTOGRAM_STATIC
             .delete_range
             .observe(secs),
-        EvictReason::LoadFailed => RANGE_EVICTION_DURATION_HISTOGRAM_STATIC
+        EvictReason::LoadFailed => IN_MEMORY_ENGINE_EVICTION_DURATION_HISTOGRAM_STATIC
             .load_failed
             .observe(secs),
-        EvictReason::LoadFailedWithoutStart => RANGE_EVICTION_DURATION_HISTOGRAM_STATIC
+        EvictReason::LoadFailedWithoutStart => IN_MEMORY_ENGINE_EVICTION_DURATION_HISTOGRAM_STATIC
             .load_failed_without_start
             .observe(secs),
-        EvictReason::MemoryLimitReached => RANGE_EVICTION_DURATION_HISTOGRAM_STATIC
+        EvictReason::MemoryLimitReached => IN_MEMORY_ENGINE_EVICTION_DURATION_HISTOGRAM_STATIC
             .memory_limit_reached
             .observe(secs),
-        EvictReason::Merge => RANGE_EVICTION_DURATION_HISTOGRAM_STATIC.merge.observe(secs),
-        EvictReason::Disabled => RANGE_EVICTION_DURATION_HISTOGRAM_STATIC
+        EvictReason::Merge => IN_MEMORY_ENGINE_EVICTION_DURATION_HISTOGRAM_STATIC
+            .merge
+            .observe(secs),
+        EvictReason::Disabled => IN_MEMORY_ENGINE_EVICTION_DURATION_HISTOGRAM_STATIC
             .disabled
             .observe(secs),
-        EvictReason::ApplySnapshot => RANGE_EVICTION_DURATION_HISTOGRAM_STATIC
+        EvictReason::ApplySnapshot => IN_MEMORY_ENGINE_EVICTION_DURATION_HISTOGRAM_STATIC
             .apply_snapshot
             .observe(secs),
-        EvictReason::Manual => RANGE_EVICTION_DURATION_HISTOGRAM_STATIC
+        EvictReason::Manual => IN_MEMORY_ENGINE_EVICTION_DURATION_HISTOGRAM_STATIC
             .manual
             .observe(secs),
     }
