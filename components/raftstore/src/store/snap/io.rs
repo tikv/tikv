@@ -370,8 +370,8 @@ where
 /// pairs to db, without ingesting them. `callback` will be invoked after each
 /// batch of key value pairs written to db.
 ///
-/// Attention, callers should manually flush the column family after applying
-/// all sst files to make sure the data is visible to the following operations.
+/// Attention, callers should manually flush and sync the column family after
+/// applying all sst files to make sure the data durability.
 pub fn apply_sst_cf_files_without_ingest<E, F>(
     files: &[&str],
     db: &E,
