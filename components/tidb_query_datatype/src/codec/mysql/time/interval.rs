@@ -521,11 +521,11 @@ impl Interval {
             Some(v) => v,
             None => return Ok(None),
         };
-        let total_secs = match check_result(total_secs1.checked_add(total_secs2))? {
+        let mut sec = match check_result(total_secs1.checked_add(total_secs2))? {
             Some(v) => v,
             None => return Ok(None),
         };
-        let total_nanos = match check_result(microseconds.checked_mul(NANOS_PER_MICRO))? {
+        let mut nano = match check_result(microseconds.checked_mul(NANOS_PER_MICRO))? {
             Some(v) => v,
             None => return Ok(None),
         };
@@ -540,10 +540,9 @@ impl Interval {
         };
         if neg {
             month = -month;
+            sec = -sec;
+            nano = -nano;
         }
-
-        let sec = if neg { -total_secs } else { total_secs };
-        let nano = if neg { -total_nanos } else { total_nanos };
 
         // Return Interval with month, nano, and fsp values
         Ok(Some(Self {
@@ -567,14 +566,20 @@ impl Interval {
             .ok_or_else(|| Error::datetime_function_overflow())?;
         use IntervalUnit::*;
         match unit {
-            Microsecond | Second | Minute | Hour | Day | Week | Month | Quarter | Year => Ok(
-                Duration::from_nanos(val.month * 30 * NANOS_PER_DAY + val.nano, val.fsp)?,
-            ),
+            Microsecond | Second | Minute | Hour | Day | Week | Month | Quarter | Year => {
+                Ok(Duration::from_nanos(
+                    val.month * 30 * NANOS_PER_DAY + val.sec * NANOS_PER_SEC + val.nano,
+                    val.fsp,
+                )?)
+            }
             _ => {
-                if val.month != 0 || val.nano.abs() > MAX_NANOS {
+                if val.month != 0 || val.sec.abs() > MAX_SECS || val.nano.abs() > MAX_NANOS {
                     return Err(Error::datetime_function_overflow());
                 }
-                Ok(Duration::from_nanos(val.nano, val.fsp)?)
+                Ok(Duration::from_nanos(
+                    val.sec * NANOS_PER_SEC + val.nano,
+                    val.fsp,
+                )?)
             }
         }
     }
