@@ -276,7 +276,6 @@ struct TxnSchedulerInner<L: LockManager> {
     lock_wait_queues: LockWaitQueues<L>,
 
     quota_limiter: Arc<QuotaLimiter>,
-    resource_manager: Option<Arc<ResourceGroupManager>>,
     feature_gate: FeatureGate,
 
     txn_status_cache: Arc<TxnStatusCache>,
@@ -477,7 +476,6 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             resource_tag_factory,
             lock_wait_queues,
             quota_limiter,
-            resource_manager,
             feature_gate,
             txn_status_cache,
             memory_quota: Arc::new(MemoryQuota::new(config.memory_quota.0 as _)),
