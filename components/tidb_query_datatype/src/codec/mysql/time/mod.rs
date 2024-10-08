@@ -1602,7 +1602,7 @@ impl Time {
         // https://github.com/pingcap/tidb/blob/3ee87658d283441408e6132c80c0c00019d2fff1/pkg/types/core_time.go#L283
         const MAX_SECS: i64 = 10000 * 365 * SECS_PER_DAY;
         const MIN_SECS: i64 = -MAX_SECS;
-        if secs > MAX_SECS || secs < MIN_SECS {
+        if !(MIN_SECS..=MAX_SECS).contains(&secs) {
             return Err(Error::datetime_function_overflow());
         }
         let sec_dur = chrono::Duration::seconds(secs);
@@ -3608,7 +3608,7 @@ mod tests {
             (
                 "2024-02-27 00:00:00",
                 2 * SECS_PER_DAY + 6 * SECS_PER_HOUR + 3 * SECS_PER_MINUTE + 55,
-                1 * NANOS_PER_DAY + 6 * NANOS_PER_HOUR + 123456 * NANOS_PER_MICRO,
+                NANOS_PER_DAY + 6 * NANOS_PER_HOUR + 123456 * NANOS_PER_MICRO,
                 "2024-03-01 12:03:55.123456",
                 false,
             ),
