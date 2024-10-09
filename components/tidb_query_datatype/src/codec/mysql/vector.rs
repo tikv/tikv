@@ -1,8 +1,4 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
-#[cfg(target_arch = "aarch64")]
-use core::arch::aarch64::*;
-#[cfg(target_arch = "x86_64")]
-use core::arch::x86_64::*;
 
 use codec::prelude::*;
 use ordered_float::OrderedFloat;
@@ -144,190 +140,54 @@ impl ToString for VectorFloat32Ref<'_> {
 
 // Vector distance and functions
 impl<'a> VectorFloat32Ref<'a> {
+    #[inline]
     pub fn l2_squared_distance(&self, b: VectorFloat32Ref<'a>) -> Result<f64> {
-        self.check_dims(b)?;
-        let l2_distance =
-            f32::sqeuclidean(self.data(), b.data()).expect("Vectors must be of the same length");
-        Ok(l2_distance)
+        match f32::sqeuclidean(self.data(), b.data()) {
+            Some(l2_distance) => Ok(l2_distance),
+            None => Err(box_err!("Vectors must be of the same length")),
+        }
     }
 
+    #[inline]
     pub fn l2_distance(&self, b: VectorFloat32Ref<'a>) -> Result<f64> {
         Ok(self.l2_squared_distance(b)?.sqrt())
     }
 
+    #[inline]
     pub fn inner_product(&self, b: VectorFloat32Ref<'a>) -> Result<f64> {
-        self.check_dims(b)?;
-        let inner_product = SpatialSimilarity::dot(self.data(), b.data())
-            .expect("Vectors must be of the same length");
-        Ok(inner_product)
+        match f32::dot(self.data(), b.data()) {
+            Some(inner_product) => Ok(inner_product),
+            None => Err(box_err!("Vectors must be of the same length")),
+        }
     }
 
+    #[inline]
     pub fn cosine_distance(&self, b: VectorFloat32Ref<'a>) -> Result<f64> {
-        self.check_dims(b)?;
-        #[cfg(target_arch = "x86_64")]
-        {
-            let mut distance: f32 = 0.0;
-            let mut norma: f32 = 0.0;
-            let mut normb: f32 = 0.0;
-
-            unsafe {
-                let mut i = 0;
-                while i + 4 <= self.len() {
-                    // load 4 float-elements to simd register.
-                    let a_vec = _mm_loadu_ps(self.data().as_ptr().add(i));
-                    let b_vec = _mm_loadu_ps(b.data().as_ptr().add(i));
-
-                    let ab_vec = _mm_mul_ps(a_vec, b_vec);
-                    let a_sq_vec = _mm_mul_ps(a_vec, a_vec);
-                    let b_sq_vec = _mm_mul_ps(b_vec, b_vec);
-
-                    distance += _mm_cvtss_f32(_mm_hadd_ps(ab_vec, _mm_setzero_ps()))
-                        + _mm_cvtss_f32(_mm_hadd_ps(
-                            _mm_movehl_ps(ab_vec, ab_vec),
-                            _mm_setzero_ps(),
-                        ));
-
-                    norma += _mm_cvtss_f32(_mm_hadd_ps(a_sq_vec, _mm_setzero_ps()))
-                        + _mm_cvtss_f32(_mm_hadd_ps(
-                            _mm_movehl_ps(a_sq_vec, a_sq_vec),
-                            _mm_setzero_ps(),
-                        ));
-
-                    normb += _mm_cvtss_f32(_mm_hadd_ps(b_sq_vec, _mm_setzero_ps()))
-                        + _mm_cvtss_f32(_mm_hadd_ps(
-                            _mm_movehl_ps(b_sq_vec, b_sq_vec),
-                            _mm_setzero_ps(),
-                        ));
-
-                    i += 4;
-                }
-
-                // process remaining element
-                for j in i..self.len() {
-                    distance += self[j] * b[j];
-                    norma += self[j] * self[j];
-                    normb += b[j] * b[j];
-                }
-            }
-
-            let similarity = (distance as f64) / ((norma as f64) * (normb as f64)).sqrt();
-            if similarity.is_nan() {
-                return Ok(std::f64::NAN);
-            }
-            let similarity = similarity.clamp(-1.0, 1.0);
-            Ok(1.0 - similarity)
-        }
-
-        #[cfg(target_arch = "aarch64")]
-        {
-            let mut distance: f32 = 0.0;
-            let mut norma: f32 = 0.0;
-            let mut normb: f32 = 0.0;
-
-            unsafe {
-                let mut i = 0;
-                while i + 4 <= self.len() {
-                    // load 4 float-elements to simd register.
-                    let a_vec = vld1q_f32(self.data().as_ptr().add(i));
-                    let b_vec = vld1q_f32(b.data().as_ptr().add(i));
-
-                    let ab_vec = vmulq_f32(a_vec, b_vec);
-                    let a_sq_vec = vmulq_f32(a_vec, a_vec);
-                    let b_sq_vec = vmulq_f32(b_vec, b_vec);
-
-                    distance += vaddvq_f32(ab_vec);
-                    norma += vaddvq_f32(a_sq_vec);
-                    normb += vaddvq_f32(b_sq_vec);
-
-                    i += 4;
-                }
-
-                // process remaining element
-                for j in i..self.len() {
-                    distance += self[j] * b[j];
-                    norma += self[j] * self[j];
-                    normb += b[j] * b[j];
-                }
-            }
-
-            let similarity = (distance as f64) / ((norma as f64) * (normb as f64)).sqrt();
-            if similarity.is_nan() {
-                return Ok(std::f64::NAN);
-            }
-            let similarity = similarity.clamp(-1.0, 1.0);
-            Ok(1.0 - similarity)
+        match f32::cosine(self.data(), b.data()) {
+            Some(cosine_similarity) => Ok(cosine_similarity),
+            None => Err(box_err!("Vectors must be of the same length")),
         }
     }
 
     pub fn l1_distance(&self, b: VectorFloat32Ref<'a>) -> Result<f64> {
         self.check_dims(b)?;
-        #[cfg(target_arch = "x86_64")]
-        {
-            let mut distance: f32 = 0.0;
-            unsafe {
-                let mut i = 0;
-                while i + 4 <= self.len() {
-                    let a_vec = _mm_loadu_ps(self.data().as_ptr().add(i));
-                    let b_vec = _mm_loadu_ps(b.data().as_ptr().add(i));
-
-                    let diff = _mm_sub_ps(a_vec, b_vec);
-
-                    let abs_diff = _mm_andnot_ps(_mm_set1_ps(-0.0), diff);
-
-                    let sum1 = _mm_hadd_ps(abs_diff, abs_diff);
-                    let sum2 = _mm_hadd_ps(sum1, sum1);
-
-                    distance += _mm_cvtss_f32(sum2);
-
-                    i += 4;
-                }
-                // process remaining element
-                for j in i..self.len() {
-                    let diff = self[j] - b[j];
-                    distance += diff.abs();
-                }
-            }
-            Ok(distance as f64)
+        let mut distance: f32 = 0.0;
+        for i in 0..self.len() {
+            let diff = self[i] - b[i];
+            distance += diff.abs();
         }
 
-        #[cfg(target_arch = "aarch64")]
-        {
-            let mut distance: f32 = 0.0;
-            unsafe {
-                let mut i = 0;
-                while i + 4 <= self.len() {
-                    // load 4 float-elements to simd register.
-                    let a_vec = vld1q_f32(self.data().as_ptr().add(i));
-                    let b_vec = vld1q_f32(b.data().as_ptr().add(i));
-
-                    let diff = vsubq_f32(a_vec, b_vec);
-
-                    let abs_diff = vabsq_f32(diff);
-
-                    distance += vaddvq_f32(abs_diff);
-
-                    i += 4;
-                }
-                // process remaining element
-                for j in i..self.len() {
-                    let diff = self[j] - b[j];
-                    distance += diff.abs();
-                }
-            }
-            Ok(distance as f64)
-        }
+        Ok(distance as f64)
     }
 
-    pub fn l2_norm(&self) -> f64 {
+    #[inline]
+    pub fn l2_norm(&self) -> Result<f64> {
         // Note: We align the impl with pgvector: Only l2_norm use double
         // precision during calculation.
-        let mut norm: f64 = 0.0;
-        for i in 0..self.len() {
-            let v = self[i] as f64;
-            norm += v * v;
+        match f32::dot(self.data(), self.data()) {
+            Some(norm) => Ok(norm.sqrt()),
+            None => Err(box_err!("Vectors must be of the same length")),
         }
-
-        norm.sqrt()
     }
 }
 
@@ -344,7 +204,7 @@ impl<T: BufferWriter> VectorFloat32DatumPayloadChunkEncoder for T {}
 impl<T: BufferWriter> VectorFloat32Encoder for T {}
 
 /// Misaligned, Ref.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct VectorFloat32RefMisaligned<'a> {
     value: &'a [u8], // Data could be notaligned. Does not contain length prefix.
 }
@@ -353,6 +213,11 @@ impl<'a> VectorFloat32RefMisaligned<'a> {
     #[inline]
     pub fn len(&self) -> usize {
         self.value.len() / ELEMENT_SIZE
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.value.len() == 0
     }
 
     /// It's safe to convert a misaligned ref to an aligned owned value. We will
@@ -427,25 +292,6 @@ mod tests {
         assert_eq!("[]", v.to_string());
     }
 
-    // #[test]
-    // fn test_input_length() {
-    //     let buf: Vec<u8> = vec![
-    //         0xcd, 0xcc, 0x8c, 0x3f, // Element 1 = 0x3f8ccccd
-    //         0xcd, 0xcc, 0x0c, 0x40, // Element 2 = 0x400ccccd
-    //         0xcd, 0xcc, 0x0c,
-    //     ];
-    //     let v = VectorFloat32Ref::copy_from_f32(&buf[..]);
-    //     v.unwrap_err();
-
-    //     let buf: Vec<u8> = vec![
-    //         0xcd, 0xcc, 0x8c, 0x3f, // Element 1 = 0x3f8ccccd
-    //         0xcd, 0xcc, 0x0c, 0x40, // Element 2 = 0x400ccccd
-    //         0xcd, 0xcc, 0x0c, 0x40,
-    //     ];
-    //     let v = VectorFloat32Ref::copy_from_f32(&buf[..]);
-    //     v.unwrap();
-    // }
-
     #[test]
     fn test_compare() {
         let v1 = VectorFloat32::copy_from_f32(&[1.0, 2.0]);
@@ -501,7 +347,7 @@ mod tests {
         assert_eq!(buf_slice.len(), 1);
         assert_eq!(buf_slice, &[0xff]);
 
-        let _ = buf_slice.read_vector_float32_ref();
+        buf_slice.read_vector_float32_ref().unwrap_err();
         assert_eq!(buf_slice.len(), 1);
         assert_eq!(buf_slice, &[0xff]);
 
@@ -510,7 +356,9 @@ mod tests {
         assert_eq!(v.len(), 0);
         assert_eq!(v.to_owned().as_ref().to_string(), "[]");
         let mut encode_buf = Vec::new();
-        encode_buf.write_vector_float32(v.to_owned().as_ref()).unwrap();
+        encode_buf
+            .write_vector_float32(v.to_owned().as_ref())
+            .unwrap();
         assert_eq!(encode_buf, vec![0x00, 0x00, 0x00, 0x00]);
     }
 }
