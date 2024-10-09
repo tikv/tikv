@@ -15,7 +15,8 @@ use aws_sdk_s3::config::HttpClient;
 use aws_smithy_runtime::client::http::hyper_014::HyperClientBuilder;
 use cloud::metrics;
 use futures::{executor::block_on, Future, TryFutureExt};
-use hyper::{client::HttpConnector, Client};
+use hyper::Client;
+use hyper_tls::HttpsConnector;
 use tikv_util::{
     stream::{retry_ext, RetryError, RetryExt},
     warn,
@@ -54,19 +55,10 @@ impl RetryError for CredentialsErrorWrapper {
 pub fn new_http_client() -> impl HttpClient + 'static {
     let mut hyper_builder = Client::builder();
     hyper_builder.http1_read_buf_exact_size(READ_BUF_SIZE);
-    let openssl_conn = hyper_tls::native_tls::TlsConnector::builder()
-        .min_protocol_version(Some(hyper_tls::native_tls::Protocol::Tlsv12))
-        .build()
-        .unwrap_or_else(|e| panic!("error while creating TLS connector: {}", e));
-
-    let mut http_connector = hyper::client::HttpConnector::new();
-    http_connector.enforce_http(false);
-    let https_conn =
-        hyper_tls::HttpsConnector::<HttpConnector>::from((http_connector, openssl_conn.into()));
 
     HyperClientBuilder::new()
         .hyper_builder(hyper_builder)
-        .build(https_conn)
+        .build(HttpsConnector::new())
 }
 
 pub fn new_credentials_provider() -> DefaultCredentialsProvider {
