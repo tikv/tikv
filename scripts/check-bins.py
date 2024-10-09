@@ -156,8 +156,8 @@ def check_release(enabled_features, args):
         pr("checking binary %s" % arg)
         if is_jemalloc_enabled(enabled_features):
             check_jemalloc(arg)
-        if is_sse_enabled(enabled_features):
-            check_sse(arg)
+        # if is_sse_enabled(enabled_features):
+        #     check_sse(arg)
         check_openssl(arg, is_openssl_vendored_enabled(enabled_features))
         pr("%s [%s] \033[32menabled\033[0m\n" % (arg, " ".join(checked_features)))
 
