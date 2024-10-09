@@ -72,11 +72,11 @@ pub fn new_engine_opt(
     let existed: Vec<&str> = cfs_list.iter().map(|v| v.as_str()).collect();
     let needed: Vec<&str> = cf_opts.iter().map(|(name, _)| *name).collect();
 
-    let env = match db_opt.env() {
-        Some(env) => env,
-        None => Arc::new(Env::default()),
-    };
     let cf_descs = if !existed.is_empty() {
+        let env = match db_opt.env() {
+            Some(env) => env,
+            None => Arc::new(Env::default()),
+        };
         // panic if OPTIONS not found for existing instance?
         let (_, tmp) = load_latest_options(path, &env, true)
             .unwrap_or_else(|e| panic!("failed to load_latest_options {:?}", e))
