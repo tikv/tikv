@@ -21,10 +21,12 @@ use backup_stream::{
     utils, BackupStreamGrpcService, BackupStreamResolver, Endpoint, GetCheckpointResult,
     RegionCheckpointOperation, RegionSet, Task,
 };
+use encryption::{BackupEncryptionManager, MultiMasterKeyBackend};
 use futures::{executor::block_on, AsyncWriteExt, Future, Stream, StreamExt};
 use grpcio::{ChannelBuilder, Server, ServerBuilder};
 use kvproto::{
     brpb::{CompressionType, Local, Metadata, StorageBackend},
+    encryptionpb::EncryptionMethod,
     kvrpcpb::*,
     logbackuppb::{SubscribeFlushEventRequest, SubscribeFlushEventResponse},
     logbackuppb_grpc::{create_log_backup, LogBackupClient},
@@ -37,7 +39,10 @@ use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use test_raftstore::{new_server_cluster, Cluster, Config, ServerCluster};
 use test_util::retry;
-use tikv::config::{BackupStreamConfig, ResolvedTsConfig};
+use tikv::{
+    config::{BackupStreamConfig, ResolvedTsConfig},
+    storage::txn::txn_status_cache::TxnStatusCache,
+};
 use tikv_util::{
     codec::{
         number::NumberEncoder,
@@ -404,7 +409,13 @@ impl Suite {
             cluster.pd_client.clone(),
             cm,
             BackupStreamResolver::V1(resolver),
-            sim.encryption.clone(),
+            BackupEncryptionManager::new(
+                None,
+                EncryptionMethod::Plaintext,
+                MultiMasterKeyBackend::default(),
+                sim.encryption.clone(),
+            ),
+            Arc::new(TxnStatusCache::new_for_test()),
         );
         worker.start(endpoint);
     }

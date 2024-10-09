@@ -3287,7 +3287,7 @@ where
                     // open files in rocksdb.
                     // TODO: figure out another way to do consistency check without snapshot
                     // or short life snapshot.
-                    snap: ctx.engine.snapshot(None),
+                    snap: ctx.engine.snapshot(),
                 })
             },
         ))
@@ -3810,6 +3810,11 @@ where
         term: u64,
         compact_index: u64,
     },
+    // Trigger loading pending region for in_memory_engine,
+    InMemoryEngineLoadRegion {
+        region_id: u64,
+        trigger_load_cb: Box<dyn FnOnce(&Region) + Send + 'static>,
+    },
 }
 
 impl<EK: KvEngine> ResourceMetered for Box<Msg<EK>> {
@@ -3910,6 +3915,9 @@ where
                     "[region {}] force compact, term: {} compact_index: {}",
                     region_id, term, compact_index
                 )
+            }
+            Msg::InMemoryEngineLoadRegion { region_id, .. } => {
+                write!(f, "[region {}] try load in memory cache", region_id)
             }
         }
     }
@@ -4263,7 +4271,7 @@ where
         }
 
         if let Err(e) = snap_task.generate_and_schedule_snapshot::<EK>(
-            apply_ctx.engine.snapshot(None),
+            apply_ctx.engine.snapshot(),
             self.delegate.applied_term,
             self.delegate.apply_state.clone(),
             &apply_ctx.region_scheduler,
@@ -4335,7 +4343,7 @@ where
                 ReadResponse {
                     response: Default::default(),
                     snapshot: Some(RegionSnapshot::from_snapshot(
-                        Arc::new(apply_ctx.engine.snapshot(None)),
+                        Arc::new(apply_ctx.engine.snapshot()),
                         Arc::new(self.delegate.region.clone()),
                     )),
                     txn_extra_op: TxnExtraOp::Noop,
@@ -4524,6 +4532,12 @@ where
                     ..
                 } => {
                     self.unsafe_force_compact(apply_ctx, term, compact_index);
+                }
+                Msg::InMemoryEngineLoadRegion {
+                    trigger_load_cb, ..
+                } => {
+                    trigger_load_cb(&self.delegate.region);
+                    fail_point!("on_apply_in_memory_engine_load_region");
                 }
             }
         }
@@ -4956,6 +4970,11 @@ where
                             "region_id" => region_id);
                     return;
                 }
+                Msg::InMemoryEngineLoadRegion { region_id, .. } => {
+                    info!("skip check load in memory region cache because target region is not found";
+                        "region_id" => region_id);
+                    return;
+                }
             },
             Either::Left(Err(TrySendError::Full(_))) => unreachable!(),
         };
@@ -5096,6 +5115,7 @@ mod memtrace {
                 Msg::Recover(..) => 0,
                 Msg::CheckCompact { .. } => 0,
                 Msg::UnsafeForceCompact { .. } => 0,
+                Msg::InMemoryEngineLoadRegion { .. } => 0,
             }
         }
     }

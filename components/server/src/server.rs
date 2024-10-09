@@ -41,12 +41,12 @@ use file_system::{get_io_rate_limiter, BytesFetcher, MetricsManager as IoMetrics
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
 use health_controller::HealthController;
-use hybrid_engine::{
-    observer::{
-        EvictionObserver as HybridEngineObserver, HybridSnapshotObserver,
-        RegionCacheWriteBatchObserver,
-    },
-    HybridEngine,
+use hybrid_engine::observer::{
+    HybridSnapshotObserver, LoadEvictionObserver as HybridEngineLoadEvictionObserver,
+    RegionCacheWriteBatchObserver,
+};
+use in_memory_engine::{
+    config::RegionCacheConfigManager, InMemoryEngineContext, InMemoryEngineStatistics,
 };
 use kvproto::{
     brpb::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
@@ -78,12 +78,8 @@ use raftstore::{
     },
     RaftRouterCompactedEventSender,
 };
-use range_cache_memory_engine::{
-    config::RangeCacheConfigManager, RangeCacheEngineContext, RangeCacheMemoryEngine,
-    RangeCacheMemoryEngineStatistics,
-};
 use resolved_ts::{LeadershipResolver, Task};
-use resource_control::ResourceGroupManager;
+use resource_control::{config::ResourceContrlCfgMgr, ResourceGroupManager};
 use security::SecurityManager;
 use service::{service_event::ServiceEvent, service_manager::GrpcServiceManager};
 use snap_recovery::RecoveryService;
@@ -117,7 +113,10 @@ use tikv::{
         config_manager::StorageConfigManger,
         kv::LocalTablets,
         mvcc::MvccConsistencyCheckObserver,
-        txn::flow_controller::{EngineFlowController, FlowController},
+        txn::{
+            flow_controller::{EngineFlowController, FlowController},
+            txn_status_cache::TxnStatusCache,
+        },
         Engine, Storage,
     },
 };
@@ -146,6 +145,7 @@ use crate::{
     setup::*,
     signal_handler,
     tikv_util::sys::thread::ThreadBuildWrapper,
+    utils,
 };
 
 #[inline]
@@ -169,8 +169,8 @@ fn run_impl<CER, F>(
     tikv.core.init_encryption();
     let fetcher = tikv.core.init_io_utility();
     let listener = tikv.core.init_flow_receiver();
-    let (engines, engines_info, in_memory_engine) = tikv.init_raw_engines(listener);
-    tikv.init_engines(engines.clone(), in_memory_engine);
+    let (engines, engines_info) = tikv.init_raw_engines(listener);
+    tikv.init_engines(engines.clone());
     let server_config = tikv.init_servers();
     tikv.register_services();
     tikv.init_metrics_flusher(fetcher, engines_info);
@@ -258,10 +258,10 @@ where
     snap_mgr: Option<SnapManager>, // Will be filled in `init_servers`.
     engines: Option<TikvEngines<RocksEngine, ER>>,
     kv_statistics: Option<Arc<RocksStatistics>>,
-    range_cache_engine_statistics: Option<Arc<RangeCacheMemoryEngineStatistics>>,
+    in_memory_engine_statistics: Option<Arc<InMemoryEngineStatistics>>,
     raft_statistics: Option<Arc<RocksStatistics>>,
     servers: Option<Servers<RocksEngine, ER, F>>,
-    region_info_accessor: RegionInfoAccessor,
+    region_info_accessor: Option<RegionInfoAccessor>,
     coprocessor_host: Option<CoprocessorHost<RocksEngine>>,
     concurrency_manager: ConcurrencyManager,
     env: Arc<Environment>,
@@ -376,7 +376,7 @@ where
             .create();
 
         let resource_manager = if config.resource_control.enabled {
-            let mgr = Arc::new(ResourceGroupManager::default());
+            let mgr = Arc::new(ResourceGroupManager::new(config.resource_control.clone()));
             let io_bandwidth = config.storage.io_rate_limit.max_bytes_per_sec.0;
             resource_control::start_periodic_tasks(
                 &mgr,
@@ -392,30 +392,10 @@ where
         // Initialize raftstore channels.
         let (router, system) = fsm::create_raft_batch_system(&config.raft_store, &resource_manager);
 
-        let mut coprocessor_host = Some(CoprocessorHost::new(
+        let coprocessor_host = Some(CoprocessorHost::new(
             router.clone(),
             config.coprocessor.clone(),
         ));
-
-        // Region stats manager collects region heartbeat for use by in-memory engine.
-        let region_stats_manager_enabled_cb: Arc<dyn Fn() -> bool + Send + Sync> =
-            if cfg!(feature = "memory-engine") {
-                let cfg_controller_clone = cfg_controller.clone();
-                Arc::new(move || {
-                    cfg_controller_clone
-                        .get_current()
-                        .range_cache_engine
-                        .enabled
-                })
-            } else {
-                Arc::new(|| false)
-            };
-
-        let region_info_accessor = RegionInfoAccessor::new(
-            coprocessor_host.as_mut().unwrap(),
-            region_stats_manager_enabled_cb,
-            config.range_cache_engine.mvcc_amplification_threshold,
-        );
 
         // Initialize concurrency manager
         let latest_ts = block_on(pd_client.get_tso()).expect("failed to get timestamp from PD");
@@ -473,10 +453,10 @@ where
             snap_mgr: None,
             engines: None,
             kv_statistics: None,
-            range_cache_engine_statistics: None,
+            in_memory_engine_statistics: None,
             raft_statistics: None,
             servers: None,
-            region_info_accessor,
+            region_info_accessor: None,
             coprocessor_host,
             concurrency_manager,
             env,
@@ -493,11 +473,7 @@ where
         }
     }
 
-    fn init_engines(
-        &mut self,
-        engines: Engines<RocksEngine, ER>,
-        in_memory_engine: Option<HybridEngine<RocksEngine, RangeCacheMemoryEngine>>,
-    ) {
+    fn init_engines(&mut self, engines: Engines<RocksEngine, ER>) {
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(PENDING_MSG_CAP)));
         let engine = RaftKv::new(
             ServerRaftStoreRouter::new(
@@ -510,8 +486,7 @@ where
                 ),
             ),
             engines.kv.clone(),
-            in_memory_engine.clone(),
-            self.region_info_accessor.region_leaders(),
+            self.region_info_accessor.as_ref().unwrap().region_leaders(),
         );
 
         self.engines = Some(TikvEngines {
@@ -530,7 +505,7 @@ where
             self.core.flow_info_sender.take().unwrap(),
             self.core.config.gc.clone(),
             self.pd_client.feature_gate().clone(),
-            Arc::new(self.region_info_accessor.clone()),
+            Arc::new(self.region_info_accessor.clone().unwrap()),
         );
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
@@ -675,6 +650,13 @@ where
             Box::new(cfg_manager),
         );
 
+        if let Some(resource_ctl) = &self.resource_manager {
+            cfg_controller.register(
+                tikv::config::Module::ResourceControl,
+                Box::new(ResourceContrlCfgMgr::new(resource_ctl.get_config().clone())),
+            );
+        }
+
         let storage_read_pool_handle = if self.core.config.readpool.storage.use_unified_pool() {
             unified_read_pool.as_ref().unwrap().handle()
         } else {
@@ -685,6 +667,9 @@ where
             ));
             storage_read_pools.handle()
         };
+        let txn_status_cache = Arc::new(TxnStatusCache::new(
+            self.core.config.storage.txn_status_cache_capacity,
+        ));
 
         let storage = Storage::<_, _, F>::from_engine(
             engines.engine.clone(),
@@ -703,6 +688,7 @@ where
                 .as_ref()
                 .map(|m| m.derive_controller("scheduler-worker-pool".to_owned(), true)),
             self.resource_manager.clone(),
+            txn_status_cache.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
         cfg_controller.register(
@@ -751,6 +737,7 @@ where
             .enable_receive_tablet_snapshot(
                 self.core.config.raft_store.enable_v2_compatible_learner,
             )
+            .min_ingest_snapshot_limit(self.core.config.server.snap_min_ingest_size)
             .build(snap_path);
 
         // Create coprocessor endpoint.
@@ -925,6 +912,12 @@ where
                 Duration::from_secs(60),
             );
 
+            // build stream backup encryption manager
+            let backup_encryption_manager =
+                utils::build_backup_encryption_manager(self.core.encryption_key_manager.clone())
+                    .expect("failed to build backup encryption manager in server");
+
+            // build stream backup endpoint
             let backup_stream_endpoint = backup_stream::Endpoint::new(
                 raft_server.id(),
                 PdStore::new(Checked::new(Sourced::new(
@@ -935,12 +928,13 @@ where
                 self.core.config.resolved_ts.clone(),
                 backup_stream_scheduler.clone(),
                 backup_stream_ob,
-                self.region_info_accessor.clone(),
+                self.region_info_accessor.clone().unwrap(),
                 CdcRaftRouter(self.router.clone()),
                 self.pd_client.clone(),
                 self.concurrency_manager.clone(),
                 BackupStreamResolver::V1(leadership_resolver),
-                self.core.encryption_key_manager.clone(),
+                backup_encryption_manager,
+                txn_status_cache.clone(),
             );
             backup_stream_worker.start(backup_stream_endpoint);
             self.core.to_stop.push(backup_stream_worker);
@@ -1049,7 +1043,7 @@ where
         assert!(raft_server.id() > 0); // MultiRaftServer id should never be 0.
         let auto_gc_config = AutoGcConfig::new(
             self.pd_client.clone(),
-            self.region_info_accessor.clone(),
+            self.region_info_accessor.clone().unwrap(),
             raft_server.id(),
         );
         gc_worker
@@ -1063,7 +1057,7 @@ where
         if self.core.config.storage.enable_ttl {
             ttl_checker.start_with_timer(TtlChecker::new(
                 self.engines.as_ref().unwrap().engine.kv_engine().unwrap(),
-                self.region_info_accessor.clone(),
+                self.region_info_accessor.clone().unwrap(),
                 self.core.config.storage.ttl_check_poll_interval.into(),
             ));
             self.core.to_stop.push(ttl_checker);
@@ -1105,6 +1099,7 @@ where
                 self.concurrency_manager.clone(),
                 server.env(),
                 self.security_mgr.clone(),
+                storage.get_scheduler().get_txn_status_cache(),
             );
             self.resolved_ts_scheduler = Some(rts_worker.scheduler());
             rts_worker.start_with_timer(rts_endpoint);
@@ -1156,7 +1151,7 @@ where
             servers.importer.clone(),
             None,
             self.resource_manager.clone(),
-            Arc::new(self.region_info_accessor.clone()),
+            Arc::new(self.region_info_accessor.clone().unwrap()),
         );
         let import_cfg_mgr = import_service.get_config_manager();
 
@@ -1245,7 +1240,7 @@ where
         let backup_endpoint = backup::Endpoint::new(
             servers.raft_server.id(),
             engines.engine.clone(),
-            self.region_info_accessor.clone(),
+            self.region_info_accessor.clone().unwrap(),
             LocalTablets::Singleton(engines.engines.kv.clone()),
             self.core.config.backup.clone(),
             self.concurrency_manager.clone(),
@@ -1328,7 +1323,7 @@ where
         let mut engine_metrics = EngineMetricsManager::<RocksEngine, ER>::new(
             self.tablet_registry.clone().unwrap(),
             self.kv_statistics.clone(),
-            self.range_cache_engine_statistics.clone(),
+            self.in_memory_engine_statistics.clone(),
             self.core.config.rocksdb.titan.enabled.map_or(false, |v| v),
             self.engines.as_ref().unwrap().engines.raft.clone(),
             self.raft_statistics.clone(),
@@ -1555,7 +1550,7 @@ where
             .unwrap_or_else(|e| fatal!("failed to stop server: {}", e));
 
         servers.raft_server.stop();
-        self.region_info_accessor.stop();
+        self.region_info_accessor.as_ref().unwrap().stop();
 
         servers.lock_mgr.stop();
 
@@ -1596,11 +1591,7 @@ where
     fn init_raw_engines(
         &mut self,
         flow_listener: engine_rocks::FlowListener,
-    ) -> (
-        Engines<RocksEngine, CER>,
-        Arc<EnginesResourceInfo>,
-        Option<HybridEngine<RocksEngine, RangeCacheMemoryEngine>>,
-    ) {
+    ) -> (Engines<RocksEngine, CER>, Arc<EnginesResourceInfo>) {
         let block_cache = self.core.config.storage.block_cache.build_shared_cache();
         let env = self
             .core
@@ -1620,6 +1611,32 @@ where
         );
         self.raft_statistics = raft_statistics;
 
+        // Region stats manager collects region heartbeat for use by in-memory engine.
+        let region_stats_manager_enabled_cb: Arc<dyn Fn() -> bool + Send + Sync> =
+            if cfg!(feature = "memory-engine") {
+                let cfg_controller_clone = self.cfg_controller.clone().unwrap();
+                Arc::new(move || cfg_controller_clone.get_current().in_memory_engine.enabled)
+            } else {
+                Arc::new(|| false)
+            };
+
+        let mut in_memory_engine_config = self.core.config.in_memory_engine.clone();
+        let _ = in_memory_engine_config
+            .expected_region_size
+            .get_or_insert(self.core.config.coprocessor.region_split_size());
+        let in_memory_engine_config = Arc::new(VersionTrack::new(in_memory_engine_config));
+        let in_memory_engine_config_clone = in_memory_engine_config.clone();
+        let region_info_accessor = RegionInfoAccessor::new(
+            self.coprocessor_host.as_mut().unwrap(),
+            region_stats_manager_enabled_cb,
+            Box::new(move || {
+                in_memory_engine_config_clone
+                    .value()
+                    .mvcc_amplification_threshold
+            }),
+        );
+        self.region_info_accessor = Some(region_info_accessor);
+
         // Create kv engine.
         let builder = KvEngineFactoryBuilder::new(
             env,
@@ -1630,46 +1647,44 @@ where
         .compaction_event_sender(Arc::new(RaftRouterCompactedEventSender {
             router: Mutex::new(self.router.clone()),
         }))
-        .region_info_accessor(self.region_info_accessor.clone())
+        .region_info_accessor(self.region_info_accessor.clone().unwrap())
         .sst_recovery_sender(self.init_sst_recovery_sender())
         .flow_listener(flow_listener);
         let factory = Box::new(builder.build());
         let kv_engine = factory
             .create_shared_db(&self.core.store_path)
             .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
-        let mut range_cache_engine_config = self.core.config.range_cache_engine.clone();
-        let _ = range_cache_engine_config
+        let mut region_cache_engine_config = self.core.config.in_memory_engine.clone();
+        let _ = region_cache_engine_config
             .expected_region_size
             .get_or_insert(self.core.config.coprocessor.region_split_size());
-        let range_cache_engine_config = Arc::new(VersionTrack::new(range_cache_engine_config));
-        let range_cache_engine_context =
-            RangeCacheEngineContext::new(range_cache_engine_config.clone(), self.pd_client.clone());
-        let range_cache_engine_statistics = range_cache_engine_context.statistics();
-        let in_memory_engine = if self.core.config.range_cache_engine.enabled {
+        let region_cache_engine_config = Arc::new(VersionTrack::new(region_cache_engine_config));
+        let region_cache_engine_context =
+            InMemoryEngineContext::new(region_cache_engine_config.clone(), self.pd_client.clone());
+        let region_cache_engine_statistics = region_cache_engine_context.statistics();
+        if self.core.config.in_memory_engine.enabled {
             let in_memory_engine = build_hybrid_engine(
-                range_cache_engine_context,
+                region_cache_engine_context,
                 kv_engine.clone(),
                 Some(self.pd_client.clone()),
-                Some(Arc::new(self.region_info_accessor.clone())),
+                Some(Arc::new(self.region_info_accessor.clone().unwrap())),
+                Box::new(self.router.clone()),
             );
 
             // Hybrid engine observer.
-            let eviction_observer = HybridEngineObserver::new(Arc::new(in_memory_engine.clone()));
+            let eviction_observer =
+                HybridEngineLoadEvictionObserver::new(Arc::new(in_memory_engine.clone()));
             eviction_observer.register_to(self.coprocessor_host.as_mut().unwrap());
             let write_batch_observer =
-                RegionCacheWriteBatchObserver::new(in_memory_engine.range_cache_engine().clone());
+                RegionCacheWriteBatchObserver::new(in_memory_engine.region_cache_engine().clone());
             write_batch_observer.register_to(self.coprocessor_host.as_mut().unwrap());
             let snapshot_observer =
-                HybridSnapshotObserver::new(in_memory_engine.range_cache_engine().clone());
+                HybridSnapshotObserver::new(in_memory_engine.region_cache_engine().clone());
             snapshot_observer.register_to(self.coprocessor_host.as_mut().unwrap());
-
-            Some(in_memory_engine)
-        } else {
-            None
         };
-        let range_cache_config_manager = RangeCacheConfigManager(range_cache_engine_config);
+        let region_cache_config_manager = RegionCacheConfigManager(region_cache_engine_config);
         self.kv_statistics = Some(factory.rocks_statistics());
-        self.range_cache_engine_statistics = Some(range_cache_engine_statistics);
+        self.in_memory_engine_statistics = Some(region_cache_engine_statistics);
         let engines = Engines::new(kv_engine.clone(), raft_engine);
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
@@ -1682,8 +1697,8 @@ where
             )),
         );
         cfg_controller.register(
-            tikv::config::Module::RangeCacheEngine,
-            Box::new(range_cache_config_manager),
+            tikv::config::Module::RegionCacheEngine,
+            Box::new(region_cache_config_manager),
         );
         let reg = TabletRegistry::new(
             Box::new(SingletonFactory::new(kv_engine)),
@@ -1703,7 +1718,7 @@ where
             180, // max_samples_to_preserve
         ));
 
-        (engines, engines_info, in_memory_engine)
+        (engines, engines_info)
     }
 }
 

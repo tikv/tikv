@@ -16,13 +16,14 @@ use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
-use engine_traits::{Engines, MiscExt, SnapshotContext};
+use engine_traits::{Engines, MiscExt};
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
 use health_controller::HealthController;
 use hybrid_engine::observer::{
-    EvictionObserver, HybridSnapshotObserver, RegionCacheWriteBatchObserver,
+    HybridSnapshotObserver, LoadEvictionObserver, RegionCacheWriteBatchObserver,
 };
+use in_memory_engine::{InMemoryEngineConfig, InMemoryEngineContext, RegionCacheMemoryEngine};
 use kvproto::{
     deadlock::create_deadlock,
     debugpb::{create_debug, DebugClient},
@@ -37,7 +38,7 @@ use pd_client::PdClient;
 use raftstore::{
     coprocessor::{CoprocessorHost, RegionInfoAccessor},
     errors::Error as RaftError,
-    router::{CdcRaftRouter, LocalReadRouter, RaftStoreRouter, ServerRaftStoreRouter},
+    router::{CdcRaftRouter, LocalReadRouter, RaftStoreRouter, ReadContext, ServerRaftStoreRouter},
     store::{
         fsm::{store::StoreMeta, ApplyRouter, RaftBatchSystem, RaftRouter},
         msg::RaftCmdExtraOpts,
@@ -45,9 +46,6 @@ use raftstore::{
         SnapManagerBuilder, SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
     },
     Result,
-};
-use range_cache_memory_engine::{
-    RangeCacheEngineConfig, RangeCacheEngineContext, RangeCacheMemoryEngine,
 };
 use resource_control::ResourceGroupManager;
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
@@ -76,7 +74,10 @@ use tikv::{
     storage::{
         self,
         kv::{FakeExtension, LocalTablets, SnapContext},
-        txn::flow_controller::{EngineFlowController, FlowController},
+        txn::{
+            flow_controller::{EngineFlowController, FlowController},
+            txn_status_cache::TxnStatusCache,
+        },
         Engine, Storage,
     },
 };
@@ -309,7 +310,7 @@ impl ServerCluster {
 
         // Create coprocessor.
         let enable_region_stats_mgr_cb: Arc<dyn Fn() -> bool + Send + Sync> =
-            if cfg.range_cache_engine.enabled {
+            if cfg.in_memory_engine.enabled {
                 Arc::new(|| true)
             } else {
                 Arc::new(|| false)
@@ -320,37 +321,45 @@ impl ServerCluster {
                 hook(&mut coprocessor_host);
             }
         }
+
+        // In-memory engine
+        let mut in_memory_engine_config = cfg.in_memory_engine.clone();
+        let _ = in_memory_engine_config
+            .expected_region_size
+            .get_or_insert(cfg.coprocessor.region_split_size());
+        let in_memory_engine_config = Arc::new(VersionTrack::new(in_memory_engine_config));
+        let in_memory_engine_config_clone = in_memory_engine_config.clone();
+
         let region_info_accessor = RegionInfoAccessor::new(
             &mut coprocessor_host,
             enable_region_stats_mgr_cb,
-            cfg.range_cache_engine.mvcc_amplification_threshold,
+            Box::new(move || {
+                in_memory_engine_config_clone
+                    .value()
+                    .mvcc_amplification_threshold
+            }),
         );
 
-        // In-memory engine
-        let mut range_cache_engine_config = cfg.range_cache_engine.clone();
-        let _ = range_cache_engine_config
-            .expected_region_size
-            .get_or_insert(cfg.coprocessor.region_split_size());
-        let range_cache_engine_config = Arc::new(VersionTrack::new(range_cache_engine_config));
-        let range_cache_engine_context =
-            RangeCacheEngineContext::new(range_cache_engine_config.clone(), self.pd_client.clone());
-        let in_memory_engine = if cfg.range_cache_engine.enabled {
+        let in_memory_engine_context =
+            InMemoryEngineContext::new(in_memory_engine_config.clone(), self.pd_client.clone());
+        let in_memory_engine = if cfg.in_memory_engine.enabled {
             let in_memory_engine = build_hybrid_engine(
-                range_cache_engine_context,
+                in_memory_engine_context,
                 engines.kv.clone(),
                 None,
                 Some(Arc::new(region_info_accessor.clone())),
+                Box::new(router.clone()),
             );
             // Eviction observer
-            let observer = EvictionObserver::new(Arc::new(in_memory_engine.clone()));
+            let observer = LoadEvictionObserver::new(Arc::new(in_memory_engine.clone()));
             observer.register_to(&mut coprocessor_host);
             // Write batch observer
             let write_batch_observer =
-                RegionCacheWriteBatchObserver::new(in_memory_engine.range_cache_engine().clone());
+                RegionCacheWriteBatchObserver::new(in_memory_engine.region_cache_engine().clone());
             write_batch_observer.register_to(&mut coprocessor_host);
             // Snapshot observer
             let snapshot_observer =
-                HybridSnapshotObserver::new(in_memory_engine.range_cache_engine().clone());
+                HybridSnapshotObserver::new(in_memory_engine.region_cache_engine().clone());
             snapshot_observer.register_to(&mut coprocessor_host);
             Some(in_memory_engine)
         } else {
@@ -370,7 +379,6 @@ impl ServerCluster {
         let mut raft_kv = RaftKv::new(
             sim_router.clone(),
             engines.kv.clone(),
-            in_memory_engine,
             region_info_accessor.region_leaders(),
         );
 
@@ -401,6 +409,7 @@ impl ServerCluster {
         );
         gc_worker.start(node_id).unwrap();
 
+        let txn_status_cache = Arc::new(TxnStatusCache::new_for_test());
         let rts_worker = if cfg.resolved_ts.enable {
             // Resolved ts worker
             let mut rts_worker = LazyWorker::new("resolved-ts");
@@ -418,6 +427,7 @@ impl ServerCluster {
                 concurrency_manager.clone(),
                 self.env.clone(),
                 self.security_mgr.clone(),
+                txn_status_cache.clone(),
             );
             // Start the worker
             rts_worker.start(rts_endpoint);
@@ -478,6 +488,7 @@ impl ServerCluster {
                 .as_ref()
                 .map(|m| m.derive_controller("scheduler-worker-pool".to_owned(), true)),
             resource_manager.clone(),
+            txn_status_cache,
         )?;
         self.storages.insert(node_id, raft_kv.clone());
 
@@ -522,6 +533,7 @@ impl ServerCluster {
             .max_per_file_size(cfg.raft_store.max_snapshot_file_raw_size.0)
             .enable_multi_snapshot_files(true)
             .enable_receive_tablet_snapshot(cfg.raft_store.enable_v2_compatible_learner)
+            .min_ingest_snapshot_limit(cfg.server.snap_min_ingest_size)
             .build(tmp_str);
         self.snap_mgrs.insert(node_id, snap_mgr.clone());
         let server_cfg = Arc::new(VersionTrack::new(cfg.server.clone()));
@@ -729,13 +741,13 @@ impl ServerCluster {
         Some(w.scheduler())
     }
 
-    pub fn get_range_cache_engine(&self, node_id: u64) -> RangeCacheMemoryEngine {
+    pub fn get_region_cache_engine(&self, node_id: u64) -> RegionCacheMemoryEngine {
         self.in_memory_engines
             .get(&node_id)
             .unwrap()
             .as_ref()
             .unwrap()
-            .range_cache_engine()
+            .region_cache_engine()
             .clone()
     }
 }
@@ -812,7 +824,6 @@ impl Simulator for ServerCluster {
 
     fn async_read(
         &mut self,
-        snap_ctx: Option<SnapshotContext>,
         node_id: u64,
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
@@ -826,9 +837,8 @@ impl Simulator for ServerCluster {
                 cb.invoke_with_response(resp);
             }
             Some(meta) => {
-                meta.sim_router
-                    .read(snap_ctx, batch_id, request, cb)
-                    .unwrap();
+                let read_ctx = ReadContext::new(batch_id, None);
+                meta.sim_router.read(read_ctx, request, cb).unwrap();
             }
         };
     }
@@ -943,14 +953,14 @@ pub fn new_server_cluster(id: u64, count: usize) -> Cluster<ServerCluster> {
     Cluster::new(id, count, sim, pd_client, ApiVersion::V1)
 }
 
-pub fn new_server_cluster_with_hybrid_engine_with_no_range_cache(
+pub fn new_server_cluster_with_hybrid_engine_with_no_region_cache(
     id: u64,
     count: usize,
 ) -> Cluster<ServerCluster> {
     let pd_client = Arc::new(TestPdClient::new(id, false));
     let sim = Arc::new(RwLock::new(ServerCluster::new(Arc::clone(&pd_client))));
     let mut cluster = Cluster::new(id, count, sim, pd_client, ApiVersion::V1);
-    cluster.cfg.tikv.range_cache_engine = RangeCacheEngineConfig::config_for_test();
+    cluster.cfg.tikv.in_memory_engine = InMemoryEngineConfig::config_for_test();
     cluster
 }
 

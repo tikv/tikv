@@ -688,6 +688,7 @@ fn test_cdc_pipeline_dml() {
     req.request_id = 1;
     req.checkpoint_ts = cf_tso.into_inner();
     block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    sleep_ms(100);
 
     let (k, v) = (b"key".to_vec(), vec![b'y'; 16]);
     let mut mutation = Mutation::default();
