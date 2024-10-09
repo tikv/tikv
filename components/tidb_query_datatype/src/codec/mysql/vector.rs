@@ -203,13 +203,13 @@ impl<T: BufferWriter> VectorFloat32DatumPayloadChunkEncoder for T {}
 
 impl<T: BufferWriter> VectorFloat32Encoder for T {}
 
-/// Misaligned, Ref.
+/// Unaligned, Ref.
 #[derive(Clone, Copy, Debug)]
-pub struct VectorFloat32RefMisaligned<'a> {
+pub struct VectorFloat32RefUnaligned<'a> {
     value: &'a [u8], // Data could be notaligned. Does not contain length prefix.
 }
 
-impl<'a> VectorFloat32RefMisaligned<'a> {
+impl<'a> VectorFloat32RefUnaligned<'a> {
     #[inline]
     pub fn len(&self) -> usize {
         self.value.len() / ELEMENT_SIZE
@@ -220,7 +220,7 @@ impl<'a> VectorFloat32RefMisaligned<'a> {
         self.value.len() == 0
     }
 
-    /// It's safe to convert a misaligned ref to an aligned owned value. We will
+    /// It's safe to convert a unaligned ref to an aligned owned value. We will
     /// copy data with proper alignment.
     pub fn to_owned(&self) -> VectorFloat32 {
         let mut aligned_data: Vec<OrderedFloat<f32>> = Vec::new();
@@ -241,18 +241,18 @@ impl<'a> VectorFloat32RefMisaligned<'a> {
 pub trait VectorFloat32Decoder: NumberDecoder {
     // `read_vector_float32_ref` decodes value encoded by `write_vector_float32`
     // before.
-    fn read_vector_float32_ref(&mut self) -> Result<VectorFloat32RefMisaligned<'_>> {
+    fn read_vector_float32_ref(&mut self) -> Result<VectorFloat32RefUnaligned<'_>> {
         if !cfg!(target_endian = "little") {
             return Err(box_err!("VectorFloat32 only support Little Endian"));
         }
 
         if self.bytes().is_empty() {
-            return Ok(VectorFloat32RefMisaligned { value: &[] });
+            return Ok(VectorFloat32RefUnaligned { value: &[] });
         }
         let n = self.read_u32_le()? as usize;
         let data_size = n * ELEMENT_SIZE;
         let data = self.read_bytes(data_size)?;
-        Ok(VectorFloat32RefMisaligned { value: data })
+        Ok(VectorFloat32RefUnaligned { value: data })
     }
 
     // `read_vector_float32` decodes value encoded by `write_vector_float32` before.
