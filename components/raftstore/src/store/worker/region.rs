@@ -497,12 +497,15 @@ where
         self.coprocessor_host
             .post_apply_snapshot(&region, peer_id, &snap_key, Some(&s));
 
-        // delete snapshot state.
-        let mut wb = self.engine.write_batch();
+        // Delete snapshot state and assure the relative region state and snapshot state
+        // is updated and flushed into kvdb.
         region_state.set_state(PeerState::Normal);
+        let mut wb = self.engine.write_batch();
         box_try!(wb.put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &region_state));
         box_try!(wb.delete_cf(CF_RAFT, &keys::snapshot_raft_state_key(region_id)));
-        wb.write().unwrap_or_else(|e| {
+        let mut wopts = WriteOptions::default();
+        wopts.set_sync(true);
+        wb.write_opt(&wopts).unwrap_or_else(|e| {
             panic!("{} failed to save apply_snap result: {:?}", region_id, e);
         });
         info!(

@@ -1401,37 +1401,42 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
         // Process the possible encountered locks.
         if !lock_info.is_empty() {
-            if tag == CommandKind::acquire_pessimistic_lock {
-                assert_eq!(lock_info.len(), 1);
-                let lock_info = lock_info.into_iter().next().unwrap();
+            match tag {
+                CommandKind::acquire_pessimistic_lock => {
+                    assert_eq!(lock_info.len(), 1);
+                    let lock_info = lock_info.into_iter().next().unwrap();
 
-                // Only handle lock waiting if `wait_timeout` is set. Otherwise it indicates
-                // that it's a lock-no-wait request and we need to report error
-                // immediately.
-                if lock_info.parameters.wait_timeout.is_some() {
-                    assert_eq!(to_be_write.size(), 0);
-                    pr = ProcessResult::Res;
+                    // Only handle lock waiting if `wait_timeout` is set. Otherwise it indicates
+                    // that it's a lock-no-wait request and we need to report error
+                    // immediately.
+                    if lock_info.parameters.wait_timeout.is_some() {
+                        assert_eq!(to_be_write.size(), 0);
+                        pr = ProcessResult::Res;
 
-                    txn_scheduler.on_wait_for_lock(&ctx, cid, lock_info, tracker_token);
-                } else {
-                    // For requests with `allow_lock_with_conflict`, key errors are set key-wise.
-                    // TODO: It's better to return this error from
-                    // `commands::AcquirePessimisticLocks::process_write`.
-                    if lock_info.parameters.allow_lock_with_conflict {
-                        pr = ProcessResult::PessimisticLockRes {
-                            res: Err(StorageError::from(Error::from(MvccError::from(
-                                MvccErrorInner::KeyIsLocked(lock_info.lock_info_pb),
-                            )))),
-                        };
+                        txn_scheduler.on_wait_for_lock(&ctx, cid, lock_info, tracker_token);
+                    } else {
+                        // For requests with `allow_lock_with_conflict`, key errors are set
+                        // key-wise. TODO: It's better to return this error
+                        // from
+                        // `commands::AcquirePessimisticLocks::process_write`.
+                        if lock_info.parameters.allow_lock_with_conflict {
+                            pr = ProcessResult::PessimisticLockRes {
+                                res: Err(StorageError::from(Error::from(MvccError::from(
+                                    MvccErrorInner::KeyIsLocked(lock_info.lock_info_pb),
+                                )))),
+                            };
+                        }
                     }
                 }
-            } else if tag == CommandKind::acquire_pessimistic_lock_resumed {
-                // Some requests meets lock again after waiting and resuming.
-                txn_scheduler.on_wait_for_lock_after_resuming(cid, &mut pr, lock_info);
-            } else {
-                // WriteResult returning lock info is only expected to exist for pessimistic
-                // lock requests.
-                unreachable!();
+                CommandKind::acquire_pessimistic_lock_resumed => {
+                    // Some requests meets lock again after waiting and resuming.
+                    txn_scheduler.on_wait_for_lock_after_resuming(cid, &mut pr, lock_info);
+                }
+                _ => {
+                    // WriteResult returning lock info is only expected to exist for pessimistic
+                    // lock requests.
+                    unreachable!();
+                }
             }
         }
 
@@ -1464,9 +1469,10 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             return None;
         }
 
-        if (tag == CommandKind::acquire_pessimistic_lock
-            || tag == CommandKind::acquire_pessimistic_lock_resumed)
-            && txn_scheduler.pessimistic_lock_mode() == PessimisticLockMode::InMemory
+        if matches!(
+            tag,
+            CommandKind::acquire_pessimistic_lock | CommandKind::acquire_pessimistic_lock_resumed
+        ) && txn_scheduler.pessimistic_lock_mode() == PessimisticLockMode::InMemory
             && txn_scheduler.try_write_in_memory_pessimistic_locks(
                 txn_ext.as_deref(),
                 &mut to_be_write,

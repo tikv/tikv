@@ -1289,6 +1289,16 @@ where
                 let _ = self.fsm.peer.raft_group.campaign();
                 self.fsm.has_ready = true;
             }
+            CasualMessage::InMemoryEngineLoadRegion {
+                region_id,
+                trigger_load_cb,
+            } => self.ctx.apply_router.schedule_task(
+                region_id,
+                ApplyTask::InMemoryEngineLoadRegion {
+                    region_id,
+                    trigger_load_cb,
+                },
+            ),
         }
     }
 
@@ -2646,6 +2656,7 @@ where
         );
 
         let msg_type = msg.get_message().get_msg_type();
+        #[cfg(feature = "failpoints")]
         let fp_enable = |target_msg_type: MessageType| -> bool {
             self.fsm.region_id() == 1000
                 && self.store_id() == 2
