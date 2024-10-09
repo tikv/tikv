@@ -43,6 +43,7 @@ log_wrappers = { workspace = true }
 online_config = { workspace = true }
 openssl = { workspace = true }
 prometheus = { version = "0.13", default-features = false }
+protobuf = { version = "2.8", features = ["bytes"] }
 rand = "0.8"
 serde = "1.0"
 serde_derive = "1.0"

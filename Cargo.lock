@@ -5477,6 +5477,7 @@ dependencies = [
  "online_config",
  "openssl",
  "prometheus",
+ "protobuf",
  "rand 0.8.5",
  "serde",
  "serde_derive",
