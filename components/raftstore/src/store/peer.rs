@@ -925,6 +925,16 @@ where
     /// this peer has raft log gaps and whether should be marked busy on
     /// apply.
     pub last_leader_committed_idx: Option<u64>,
+    /// Whether the previous admin command is finished. If not, the current
+    /// admin command should be postponed.
+    ///
+    /// This is used to prevent the command from being applied before the
+    /// previous command is finished. Typically, this is used to prevent
+    /// the `TransferLeader` command from being applied before the
+    /// `SplitRegion` command is finished, vice versa.
+    /// TODO: maybe executions on admin commands should be serialized and
+    /// mutually exclusive.
+    pub last_admin_cmd_finished: bool,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -1076,6 +1086,7 @@ where
             snapshot_recovery_state: None,
             busy_on_apply: Some(false),
             last_leader_committed_idx: None,
+            last_admin_cmd_finished: true,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -2348,6 +2359,8 @@ where
                 },
             );
             self.cmd_epoch_checker.maybe_update_term(self.term());
+            // Reset it to execute the admin commands in the next ready.
+            self.last_admin_cmd_finished = true;
         } else if let Some(hs) = ready.hs() {
             if hs.get_term() != self.get_store().hard_state().get_term() {
                 self.on_leader_changed(self.leader_id(), hs.get_term());
@@ -4833,6 +4846,17 @@ where
             }
             Ok(msgs) => msgs,
         };
+        // If the peer has not finished the previous admin cmd yet, it should
+        // abort the current leader transfer operation.
+        if !self.last_admin_cmd_finished {
+            warn!(
+                "skip transfer leader, previous admin command is still running";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+            );
+            return false;
+        }
+
         ctx.raft_metrics.propose.transfer_leader.inc();
 
         let prs = self.raft_group.raft.prs();
@@ -4872,6 +4896,8 @@ where
         // an advice
         cb.invoke_with_response(make_transfer_leader_response());
 
+        self.last_admin_cmd_finished = !transferred;
+
         transferred
     }
 
@@ -4880,6 +4906,7 @@ where
     // 2. Removing the leader is not allowed in the configuration;
     // 3. The conf change makes the raft group not healthy;
     // 4. The conf change is dropped by raft group internally.
+    // 5. There exists pending admin commands not finished yet.
     /// Returns Ok(Either::Left(index)) means the proposal is proposed
     /// successfully and is located on `index` position. Ok(Either::
     /// Right(index)) means the proposal is rejected by `CmdEpochChecker` and
@@ -4915,6 +4942,18 @@ where
                 self.term()
             ));
         }
+        // If the peer has not finished the previous admin cmds, it should not be able
+        // to propose a new conf change.
+        if !self.last_admin_cmd_finished {
+            info!("skip conf change, previous admin command is still running";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer_id(),
+            );
+            return Err(Error::Other(box_err!(
+                "region has pending admin commands, region_id[{}]",
+                self.region_id
+            )));
+        }
 
         if let Err(err) = ctx.coprocessor_host.pre_propose(self.region(), &mut req) {
             warn!("Coprocessor rejected proposing conf change.";
@@ -4947,6 +4986,10 @@ where
         };
         if let Err(ref e) = res {
             warn!("failed to propose confchange"; "error" => ?e);
+        } else {
+            // After proposed a conf change, the relative peer should be marked
+            // as not last admin command finished.
+            self.last_admin_cmd_finished = false;
         }
         res.map(Either::Left)
     }

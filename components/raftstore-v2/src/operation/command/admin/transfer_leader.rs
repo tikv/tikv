@@ -20,7 +20,7 @@ use raftstore::{
     Result,
 };
 use rand::prelude::SliceRandom;
-use slog::info;
+use slog::{info, warn};
 use txn_types::WriteBatchFlags;
 
 use super::AdminCmdResult;
@@ -73,6 +73,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         req: RaftCmdRequest,
         ch: CmdResChannel,
     ) -> bool {
+        // If the peer has not finished the previous admin cmd yet, it should
+        // abort the current leader transfer operation.
+        if !self.last_admin_cmd_finished {
+            warn!(
+                self.logger,
+                "skip transfer leader, previous admin command is still running";
+                "region_id" => self.region_id(),
+                "peer_id" => self.peer_id(),
+            );
+            return false;
+        }
         ctx.raft_metrics.propose.transfer_leader.inc();
 
         let transfer_leader = transfer_leader_cmd(&req).unwrap();
@@ -114,6 +125,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // return immediately. Note that this command may fail, we can view it just as
         // an advice
         ch.set_result(make_transfer_leader_response());
+
+        self.last_admin_cmd_finished = !transferee;
 
         transferee
     }

@@ -1140,6 +1140,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 },
             );
             self.proposal_control_mut().maybe_update_term(term);
+            // Reset it to execute the admin commands in the next ready.
+            self.last_admin_cmd_finished = true;
         }
     }
 

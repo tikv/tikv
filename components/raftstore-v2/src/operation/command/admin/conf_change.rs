@@ -70,6 +70,20 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             );
             return Err(box_err!("there is a pending conf change, try later"));
         }
+        // If the peer has not finished the previous admin cmds, it should not be able
+        // to propose a new conf change.
+        if !self.last_admin_cmd_finished {
+            info!(
+                self.logger,
+                "skip conf change, previous admin command is still running";
+                "region_id" => self.region_id(),
+                "peer_id" => self.peer_id(),
+            );
+            return Err(box_err!(
+                "region has pending admin commands, region_id[{}]",
+                self.region_id()
+            ));
+        }
         let data = req.write_to_bytes()?;
         let admin = req.get_admin_request();
         if admin.has_change_peer() {
@@ -87,7 +101,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// 2. Removing the leader is not allowed in the configuration;
     /// 3. The conf change makes the raft group not healthy;
     /// 4. The conf change is dropped by raft group internally.
-    /// 5. There is a same peer on the same store in history record (TODO).
+    /// 5. There exists pending admin commands not finished yet.
+    /// 6. There is a same peer on the same store in history record (TODO).
     fn propose_conf_change_imp<T>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
@@ -130,6 +145,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // or transferring leader. Both cases can be considered as NotLeader error.
             return Err(Error::NotLeader(self.region_id(), None));
         }
+        // After proposed a conf change, the relative peer should be marked
+        // as not last admin command finished.
+        self.last_admin_cmd_finished = false;
 
         Ok(proposal_index)
     }
@@ -216,6 +234,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 .put_region_state(region_id, conf_change.index, &conf_change.region_state)
                 .unwrap();
             self.set_has_extra_write();
+            // Reset the relative status.
+            self.last_admin_cmd_finished = true;
         }
     }
 

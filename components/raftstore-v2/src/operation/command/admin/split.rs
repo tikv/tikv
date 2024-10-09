@@ -324,6 +324,34 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             )));
             return;
         }
+        if self.raft_group().raft.lead_transferee.is_some() {
+            // region is under transferring, skipped to avoid new region is
+            // created while the original region has not finished
+            // transferring.
+            info!(
+                self.logger,
+                "region is under transferring, skip proposing split";
+                "region_id" => self.region_id(),
+                "peer_id" => self.peer_id(),
+            );
+            ch.set_result(cmd_resp::new_error(Error::Other(box_err!(
+                "region is under transferring"
+            ))));
+            return;
+        }
+        if !self.last_admin_cmd_finished {
+            // region is pending on previous admin commands, skipped.
+            info!(
+                self.logger,
+                "previous admin command not finished, skip proposing split";
+                "region_id" => self.region_id(),
+                "peer_id" => self.peer_id(),
+            );
+            ch.set_result(cmd_resp::new_error(Error::Other(box_err!(
+                "region is pending on previous admin commands"
+            ))));
+            return;
+        }
         if self.storage().has_dirty_data() {
             // If we split dirty tablet, the same trim compaction will be repeated
             // exponentially more times.
@@ -837,6 +865,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .put_dirty_mark(region_id, res.tablet_index, true)
             .unwrap();
         self.set_has_extra_write();
+        // Reset the relative state after split.
+        self.last_admin_cmd_finished = true;
     }
 
     pub fn on_split_init<T>(
