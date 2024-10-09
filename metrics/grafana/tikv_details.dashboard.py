@@ -9651,6 +9651,40 @@ def StatusServer() -> RowPanel:
     return layout.row_panel
 
 
+def ResourceControl() -> RowPanel:
+    layout = Layout(title="Resource Control")
+    layout.row(
+        [
+            graph_panel(
+                title="Background Task Total Wait Duration",
+                yaxes=yaxes(left_format=UNITS.MICRO_SECONDS),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_resource_control_background_task_wait_duration",
+                            by_labels=["instance", "resource_group"],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Priority Quota Limit",
+                description="The memory usage of the resource control module.",
+                yaxes=yaxes(left_format=UNITS.MICRO_SECONDS),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_resource_control_priority_quota_limit",
+                            by_labels=["instance", "priority"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    return layout.row_panel
+
+
 #### Metrics Definition End ####
 
 
@@ -9713,6 +9747,7 @@ dashboard = Dashboard(
         Threads(),
         Memory(),
         # Infrequently Used
+        ResourceControl(),
         StatusServer(),
         Encryption(),
         TTL(),

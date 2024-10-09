@@ -1668,6 +1668,7 @@ where
                 kv_engine.clone(),
                 Some(self.pd_client.clone()),
                 Some(Arc::new(self.region_info_accessor.clone().unwrap())),
+                Box::new(self.router.clone()),
             );
 
             // Hybrid engine observer.
