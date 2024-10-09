@@ -16,7 +16,6 @@ fail = "0.5"
 file_system = { workspace = true }
 keys = { workspace = true }
 kvproto = { workspace = true }
-lazy_static = "1.0"
 log_wrappers = { workspace = true }
 protobuf = "2"
 raft = { workspace = true }
@@ -25,11 +24,9 @@ serde = "1.0"
 slog = { workspace = true }
 slog-global = { workspace = true }
 thiserror = "1.0"
-tikv_alloc = { workspace = true }
 tikv_util = { workspace = true }
 tracker = { workspace = true }
 txn_types = { workspace = true }
 
 [dev-dependencies]
-serde_derive = "1.0"
 toml = "0.5"
