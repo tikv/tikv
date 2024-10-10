@@ -39,7 +39,6 @@ use collections::HashMap;
 use concurrency_manager::{ConcurrencyManager, KeyHandleGuard};
 use crossbeam::utils::CachePadded;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use file_system::IoBytes;
 use futures::{compat::Future01CompatExt, FutureExt as _, StreamExt};
 use kvproto::{
     kvrpcpb::{self, CommandPri, Context, DiskFullOpt},
@@ -103,10 +102,6 @@ pub const DEFAULT_EXECUTION_DURATION_LIMIT: Duration = Duration::from_secs(24 * 
 
 const IN_MEMORY_PESSIMISTIC_LOCK: Feature = Feature::require(6, 0, 0);
 pub const LAST_CHANGE_TS: Feature = Feature::require(6, 5, 0);
-
-// we only do resource control in txn scheduler, so the cpu time tracked is much
-// less than the actual cost, so we increase it by a factor.
-const SCHEDULER_CPU_TIME_FACTOR: u32 = 5;
 
 type SVec<T> = SmallVec<[T; 4]>;
 
@@ -281,7 +276,6 @@ struct TxnSchedulerInner<L: LockManager> {
     lock_wait_queues: LockWaitQueues<L>,
 
     quota_limiter: Arc<QuotaLimiter>,
-    resource_manager: Option<Arc<ResourceGroupManager>>,
     feature_gate: FeatureGate,
 
     txn_status_cache: Arc<TxnStatusCache>,
@@ -383,7 +377,7 @@ impl<L: LockManager> TxnSchedulerInner<L> {
     fn acquire_lock_on_wakeup(
         &self,
         cid: u64,
-    ) -> Result<Option<Task>, (TaskMetadata<'_>, CommandPri, StorageError)> {
+    ) -> Result<Option<Task>, (String, TaskMetadata<'_>, CommandPri, StorageError)> {
         let mut task_slot = self.get_task_slot(cid);
         let tctx = task_slot.get_mut(&cid).unwrap();
         // Check deadline early during acquiring latches to avoid expired requests
@@ -397,6 +391,7 @@ impl<L: LockManager> TxnSchedulerInner<L> {
             // lock, so we increase one to make `release` work.
             tctx.lock.owned_count += 1;
             return Err((
+                cmd.ctx().request_source.clone(),
                 TaskMetadata::from_ctx(cmd.resource_control_ctx()),
                 cmd.priority(),
                 e.into(),
@@ -481,7 +476,6 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             resource_tag_factory,
             lock_wait_queues,
             quota_limiter,
-            resource_manager,
             feature_gate,
             txn_status_cache,
             memory_quota: Arc::new(MemoryQuota::new(config.memory_quota.0 as _)),
@@ -617,6 +611,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let sched = self.clone();
         self.get_sched_pool()
             .spawn(
+                &cmd.ctx().request_source,
                 TaskMetadata::from_ctx(cmd.resource_control_ctx()),
                 cmd.priority(),
                 async move {
@@ -674,12 +669,12 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 self.execute(task);
             }
             Ok(None) => {}
-            Err((metadata, pri, err)) => {
+            Err((request_source, metadata, pri, err)) => {
                 // Spawn the finish task to the pool to avoid stack overflow
                 // when many queuing tasks fail successively.
                 let this = self.clone();
                 self.get_sched_pool()
-                    .spawn(metadata, pri, async move {
+                    .spawn(&request_source, metadata, pri, async move {
                         this.finish_with_err(cid, err, None);
                     })
                     .unwrap();
@@ -719,6 +714,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         set_tls_tracker_token(task.tracker_token());
         let sched = self.clone();
         let metadata = TaskMetadata::from_ctx(task.cmd().resource_control_ctx());
+        let request_source = task.cmd().ctx().request_source.clone();
         let priority = task.cmd().priority();
         let execution = async move {
             fail_point!("scheduler_start_execute");
@@ -797,7 +793,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         });
         SCHED_TXN_RUNNING_COMMANDS.inc();
         self.get_sched_pool()
-            .spawn(metadata, priority, execution)
+            .spawn(&request_source, metadata, priority, execution)
             .unwrap();
     }
 
@@ -868,6 +864,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         new_acquired_locks: Vec<kvrpcpb::LockInfo>,
         known_txn_status: Vec<(TimeStamp, TimeStamp)>,
         tag: CommandKind,
+        request_source: &str,
         metadata: TaskMetadata<'_>,
         sched_details: &SchedulerDetails,
     ) {
@@ -949,7 +946,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             assert!(pipelined || async_apply_prewrite);
         }
 
-        self.on_acquired_locks_finished(metadata, new_acquired_locks);
+        self.on_acquired_locks_finished(request_source, metadata, new_acquired_locks);
 
         if do_wake_up {
             let woken_up_resumable_lock_requests = tctx.woken_up_resumable_lock_requests;
@@ -1036,6 +1033,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
     fn on_release_locks(
         &self,
+        request_source: &str,
         metadata: &TaskMetadata<'_>,
         released_locks: ReleasedLocks,
     ) -> SVec<Box<LockWaitEntry>> {
@@ -1080,6 +1078,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
         if !legacy_wake_up_list.is_empty() || !delay_wake_up_futures.is_empty() {
             self.wake_up_legacy_pessimistic_locks(
+                request_source,
                 metadata.clone(),
                 legacy_wake_up_list,
                 delay_wake_up_futures,
@@ -1091,6 +1090,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
     fn on_acquired_locks_finished(
         &self,
+        request_source: &str,
         metadata: TaskMetadata<'_>,
         new_acquired_locks: Vec<kvrpcpb::LockInfo>,
     ) {
@@ -1107,7 +1107,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         } else {
             let lock_wait_queues = self.inner.lock_wait_queues.clone();
             self.get_sched_pool()
-                .spawn(metadata, CommandPri::High, async move {
+                .spawn(request_source, metadata, CommandPri::High, async move {
                     lock_wait_queues.update_lock_wait(new_acquired_locks);
                 })
                 .unwrap();
@@ -1116,6 +1116,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
     fn wake_up_legacy_pessimistic_locks(
         &self,
+        request_source: &str,
         metadata: TaskMetadata<'_>,
         legacy_wake_up_list: impl IntoIterator<Item = (Box<LockWaitEntry>, ReleasedLock)>
         + Send
@@ -1124,8 +1125,9 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
     ) {
         let self1 = self.clone();
         let metadata1 = metadata.deep_clone();
+        let rsource = request_source.to_string();
         self.get_sched_pool()
-            .spawn(metadata, CommandPri::High, async move {
+            .spawn(request_source, metadata, CommandPri::High, async move {
                 for (lock_info, released_lock) in legacy_wake_up_list {
                     let cb = lock_info.key_cb.unwrap().into_inner();
                     let e = StorageError::from(Error::from(MvccError::from(
@@ -1146,7 +1148,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                     let metadata2 = metadata1.clone();
                     self1
                         .get_sched_pool()
-                        .spawn(metadata2, CommandPri::High, async move {
+                        .spawn(&rsource, metadata2, CommandPri::High, async move {
                             let res = f.await;
                             if let Some(resumable_lock_wait_entry) = res {
                                 self2.schedule_awakened_pessimistic_locks(
@@ -1276,18 +1278,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let write_bytes = task.cmd().write_bytes();
         let tag = task.cmd().tag();
         let quota_limiter = txn_scheduler.inner.quota_limiter.clone();
-        let resource_limiter = txn_scheduler.inner.resource_manager.as_ref().and_then(|m| {
-            let ctx = task.cmd().ctx();
-            m.get_resource_limiter(
-                ctx.get_resource_control_context().get_resource_group_name(),
-                ctx.get_request_source(),
-                ctx.get_resource_control_context().get_override_priority(),
-            )
-        });
         let mut sample = quota_limiter.new_sample(true);
-        if resource_limiter.is_some() {
-            sample.enable_cpu_limit();
-        }
         let max_ts_synced = snapshot.ext().is_max_ts_synced();
         let causal_ts_provider = txn_scheduler.inner.causal_ts_provider.clone();
         let concurrency_manager = txn_scheduler.inner.concurrency_manager.clone();
@@ -1326,24 +1317,6 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             // TODO: write bytes can be a bit inaccurate due to error requests or in-memory
             // pessimistic locks.
             sample.add_write_bytes(write_bytes);
-            if let Some(limiter) = resource_limiter {
-                let expected_dur = if limiter.is_background() {
-                    // estimate the cpu time for write by the schduling cpu time and write bytes
-                    (sample.cpu_time() + Duration::from_micros(write_bytes as u64))
-                        * SCHEDULER_CPU_TIME_FACTOR
-                } else {
-                    sample.cpu_time()
-                };
-                limiter
-                    .async_consume(
-                        expected_dur,
-                        IoBytes {
-                            read: 0,
-                            write: write_bytes as u64,
-                        },
-                    )
-                    .await;
-            }
         }
         let read_bytes = sched_details
             .stat
@@ -1441,7 +1414,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         }
 
         let woken_up_resumable_entries = if !released_locks.is_empty() {
-            txn_scheduler.on_release_locks(&task_meta_data, released_locks)
+            txn_scheduler.on_release_locks(&ctx.request_source, &task_meta_data, released_locks)
         } else {
             smallvec![]
         };
@@ -1463,6 +1436,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 new_acquired_locks,
                 known_txn_status,
                 tag,
+                &ctx.request_source,
                 task_meta_data,
                 sched_details,
             );
@@ -1505,6 +1479,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 new_acquired_locks,
                 known_txn_status,
                 tag,
+                &ctx.request_source,
                 task_meta_data,
                 sched_details,
             );
@@ -1764,6 +1739,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                         new_acquired_locks,
                         known_txn_status,
                         tag,
+                        &ctx.request_source,
                         task_meta_data,
                         sched_details,
                     );

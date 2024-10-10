@@ -26,12 +26,9 @@ test-engines-panic = [
 ]
 
 [dependencies]
-encryption = { workspace = true }
 encryption_export = { workspace = true }
 engine_test = { workspace = true }
 engine_traits = { workspace = true }
-kvproto = { workspace = true }
 panic_hook = { workspace = true }
 tempfile = "3.0"
-tikv_alloc = { workspace = true }
 test_util = { workspace = true }
