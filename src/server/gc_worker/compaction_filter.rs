@@ -263,7 +263,7 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
 
         debug!(
             "gc in compaction filter"; "safe_point" => safe_point,
-            "files" => ?context.file_numbers(),
+            "files" => ?context.input_table_properties().iter().map(|(k, _)| k).collect::<Vec<_>>(),
             "bottommost" => context.is_bottommost_level(),
             "manual" => context.is_manual_compaction(),
         );
@@ -452,7 +452,6 @@ impl WriteCompactionFilter {
         &mut self,
         _start_level: usize,
         key: &[u8],
-        _sequence: u64,
         value: &[u8],
         value_type: CompactionFilterValueType,
     ) -> Result<CompactionFilterDecision, String> {
@@ -691,7 +690,6 @@ impl CompactionFilter for WriteCompactionFilter {
         &mut self,
         level: usize,
         key: &[u8],
-        sequence: u64,
         value: &[u8],
         value_type: CompactionFilterValueType,
     ) -> CompactionFilterDecision {
@@ -700,7 +698,7 @@ impl CompactionFilter for WriteCompactionFilter {
             return CompactionFilterDecision::Keep;
         }
 
-        match self.do_filter(level, key, sequence, value, value_type) {
+        match self.do_filter(level, key, value, value_type) {
             Ok(decision) => decision,
             Err(e) => {
                 warn!("compaction filter meet error: {}", e);
@@ -787,9 +785,9 @@ pub fn check_need_gc(
     };
 
     let (mut sum_props, mut needs_gc) = (MvccProperties::new(), 0);
-    for i in 0..context.file_numbers().len() {
-        let table_props = context.table_properties(i);
-        let user_props = table_props.user_collected_properties();
+    let table_props = context.input_table_properties();
+    for (_, table_prop) in table_props {
+        let user_props = table_prop.user_collected_properties();
         if let Ok(props) = RocksMvccProperties::decode(user_props) {
             sum_props.add(&props);
             let (sst_needs_gc, skip_more_checks) = check_props(&props);
@@ -798,13 +796,13 @@ pub fn check_need_gc(
             }
             if skip_more_checks {
                 // It's the bottommost level or ratio_threshold is less than 1.
-                needs_gc = context.file_numbers().len();
+                needs_gc = table_props.len();
                 break;
             }
         }
     }
 
-    (needs_gc >= ((context.file_numbers().len() + 1) / 2)) || check_props(&sum_props).0
+    (needs_gc >= ((table_props.len() + 1) / 2)) || check_props(&sum_props).0
 }
 
 #[allow(dead_code)] // Some interfaces are not used with different compile options.
