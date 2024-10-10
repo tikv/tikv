@@ -1591,7 +1591,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         SCHED_STAGE_COUNTER_VEC.get(tag).new.inc();
         self.sched
             .get_sched_pool()
-            .spawn(metadata, pri, future)
+            // NOTE: we don't support background resource control for raw api.
+            .spawn("", metadata, pri, future)
             .map_err(|_| Error::from(ErrorInner::SchedTooBusy))
     }
 
