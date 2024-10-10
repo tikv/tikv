@@ -9,8 +9,10 @@ extern crate slog_global;
 extern crate tikv_alloc;
 
 use std::{
+    any::Any,
     io::{self, Write},
     marker::Unpin,
+    panic::Location,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -21,7 +23,7 @@ use encryption::{DecrypterReader, FileEncryptionInfo, Iv};
 use file_system::{File, Sha256Reader};
 use futures::io::BufReader;
 use futures_io::AsyncRead;
-use futures_util::AsyncReadExt;
+use futures_util::{future::LocalBoxFuture, stream::LocalBoxStream, AsyncReadExt};
 use kvproto::brpb::CompressionType;
 use openssl::hash::{Hasher, MessageDigest};
 use tikv_util::{
@@ -34,9 +36,11 @@ use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 use url::Url;
 
 mod hdfs;
+pub use cloud::blob::{BlobObject, IterableStorage};
 pub use hdfs::{HdfsConfig, HdfsStorage};
 pub mod local;
 pub use local::LocalStorage;
+pub mod locking;
 mod noop;
 pub use noop::NoopStorage;
 mod metrics;
@@ -54,7 +58,13 @@ pub fn record_storage_create(start: Instant, storage: &dyn ExternalStorage) {
 /// This wrapper would remove the lifetime at the argument of the generated
 /// async function in order to make rustc happy. (And reduce the length of
 /// signature of write.) see https://github.com/rust-lang/rust/issues/63033
-pub struct UnpinReader(pub Box<dyn AsyncRead + Unpin + Send>);
+pub struct UnpinReader<'a>(pub Box<dyn AsyncRead + Unpin + Send + 'a>);
+
+impl<'a, R: AsyncRead + Unpin + Send + 'a> From<R> for UnpinReader<'a> {
+    fn from(r: R) -> Self {
+        UnpinReader(Box::new(r))
+    }
+}
 
 pub type ExternalData<'a> = Box<dyn AsyncRead + Unpin + Send + 'a>;
 
@@ -99,13 +109,18 @@ pub fn compression_reader_dispatcher(
 /// An abstraction of an external storage.
 // TODO: these should all be returning a future (i.e. async fn).
 #[async_trait]
-pub trait ExternalStorage: 'static + Send + Sync {
+pub trait ExternalStorage: 'static + Send + Sync + Any {
     fn name(&self) -> &'static str;
 
     fn url(&self) -> io::Result<Url>;
 
     /// Write all contents of the read to the given path.
-    async fn write(&self, name: &str, reader: UnpinReader, content_length: u64) -> io::Result<()>;
+    async fn write(
+        &self,
+        name: &str,
+        reader: UnpinReader<'_>,
+        content_length: u64,
+    ) -> io::Result<()>;
 
     /// Read all contents of the given path.
     fn read(&self, name: &str) -> ExternalData<'_>;
@@ -169,6 +184,26 @@ pub trait ExternalStorage: 'static + Send + Sync {
         )
         .await
     }
+
+    /// Walk the prefix of the blob storage.
+    /// It returns the stream of items.
+    fn iter_prefix(
+        &self,
+        prefix: &str,
+    ) -> LocalBoxStream<'_, std::result::Result<BlobObject, io::Error>>;
+
+    fn delete(&self, name: &str) -> LocalBoxFuture<'_, io::Result<()>>;
+}
+
+#[track_caller]
+pub fn unimplemented() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::Unsupported,
+        format!(
+            "this method isn't supported, check more details at {:?}",
+            Location::caller()
+        ),
+    )
 }
 
 #[async_trait]
@@ -181,7 +216,12 @@ impl ExternalStorage for Arc<dyn ExternalStorage> {
         (**self).url()
     }
 
-    async fn write(&self, name: &str, reader: UnpinReader, content_length: u64) -> io::Result<()> {
+    async fn write(
+        &self,
+        name: &str,
+        reader: UnpinReader<'_>,
+        content_length: u64,
+    ) -> io::Result<()> {
         (**self).write(name, reader, content_length).await
     }
 
@@ -211,6 +251,17 @@ impl ExternalStorage for Arc<dyn ExternalStorage> {
             )
             .await
     }
+
+    fn iter_prefix(
+        &self,
+        prefix: &str,
+    ) -> LocalBoxStream<'_, std::result::Result<BlobObject, io::Error>> {
+        (**self).iter_prefix(prefix)
+    }
+
+    fn delete(&self, name: &str) -> LocalBoxFuture<'_, io::Result<()>> {
+        (**self).delete(name)
+    }
 }
 
 #[async_trait]
@@ -223,7 +274,12 @@ impl ExternalStorage for Box<dyn ExternalStorage> {
         self.as_ref().url()
     }
 
-    async fn write(&self, name: &str, reader: UnpinReader, content_length: u64) -> io::Result<()> {
+    async fn write(
+        &self,
+        name: &str,
+        reader: UnpinReader<'_>,
+        content_length: u64,
+    ) -> io::Result<()> {
         self.as_ref().write(name, reader, content_length).await
     }
 
@@ -252,6 +308,17 @@ impl ExternalStorage for Box<dyn ExternalStorage> {
                 restore_config,
             )
             .await
+    }
+
+    fn iter_prefix(
+        &self,
+        prefix: &str,
+    ) -> LocalBoxStream<'_, std::result::Result<BlobObject, io::Error>> {
+        self.as_ref().iter_prefix(prefix)
+    }
+
+    fn delete(&self, name: &str) -> LocalBoxFuture<'_, io::Result<()>> {
+        self.as_ref().delete(name)
     }
 }
 

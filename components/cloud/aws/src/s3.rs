@@ -2,17 +2,22 @@
 use std::{
     error::Error as StdError,
     io,
+    pin::Pin,
     time::{Duration, SystemTime},
 };
 
 use async_trait::async_trait;
 use cloud::{
-    blob::{none_to_empty, BlobConfig, BlobStorage, BucketConf, PutResource, StringNonEmpty},
+    blob::{
+        none_to_empty, BlobConfig, BlobObject, BlobStorage, BucketConf, DeletableStorage,
+        IterableStorage, PutResource, StringNonEmpty,
+    },
     metrics::CLOUD_REQUEST_HISTOGRAM_VEC,
 };
 use fail::fail_point;
+use futures::stream::{self, Stream};
 use futures_util::{
-    future::FutureExt,
+    future::{FutureExt, LocalBoxFuture},
     io::{AsyncRead, AsyncReadExt},
     stream::TryStreamExt,
 };
@@ -29,6 +34,7 @@ use crate::util::{self, retry_and_count};
 
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(900);
 pub const STORAGE_VENDOR_NAME_AWS: &str = "aws";
+const DEFAULT_SEP: char = '/';
 
 #[derive(Clone)]
 pub struct AccessKeyPair {
@@ -236,9 +242,20 @@ impl S3Storage {
 
     fn maybe_prefix_key(&self, key: &str) -> String {
         if let Some(prefix) = &self.config.bucket.prefix {
-            return format!("{}/{}", *prefix, key);
+            return format!("{}{}{}", *prefix, DEFAULT_SEP, key);
         }
         key.to_owned()
+    }
+
+    fn strip_prefix_if_needed(&self, key: String) -> String {
+        if let Some(prefix) = &self.config.bucket.prefix {
+            if key.starts_with(prefix.as_str()) {
+                return key[prefix.len()..]
+                    .trim_start_matches(DEFAULT_SEP)
+                    .to_owned();
+            }
+        }
+        key
     }
 
     fn get_range(&self, name: &str, range: Option<String>) -> cloud::blob::BlobStream<'_> {
@@ -595,7 +612,7 @@ impl BlobStorage for S3Storage {
     async fn put(
         &self,
         name: &str,
-        mut reader: PutResource,
+        mut reader: PutResource<'_>,
         content_length: u64,
     ) -> io::Result<()> {
         let key = self.maybe_prefix_key(name);
@@ -626,6 +643,103 @@ impl BlobStorage for S3Storage {
     }
 }
 
+struct S3PrefixIter<'cli> {
+    cli: &'cli S3Storage,
+    finished: bool,
+    cont_token: Option<String>,
+    prefix: String,
+}
+
+impl<'cli> S3PrefixIter<'cli> {
+    async fn next_page(&mut self) -> io::Result<Option<Vec<BlobObject>>> {
+        if self.finished {
+            return Ok(None);
+        }
+        let mut input = ListObjectsV2Request::default();
+        input.bucket = String::clone(&self.cli.config.bucket.bucket);
+        input.prefix = Some(self.cli.maybe_prefix_key(&self.prefix));
+        input.continuation_token = self.cont_token.clone();
+        let now = Instant::now();
+        let res = retry_and_count(
+            || self.cli.client.list_objects_v2(input.clone()),
+            "get_one_page",
+        )
+        .await
+        .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+        CLOUD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&["s3", "list_objects_v2"])
+            .observe(now.saturating_elapsed().as_secs_f64());
+
+        self.finished = !res.is_truncated.ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "no IsTruncated in response")
+        })? || res.next_continuation_token.is_none();
+        self.cont_token = res.next_continuation_token;
+        let data = res
+            .contents
+            .unwrap_or_default()
+            .into_iter()
+            .map(|data| BlobObject {
+                key: self
+                    .cli
+                    .strip_prefix_if_needed(data.key.unwrap_or_default()),
+            })
+            .collect::<Vec<_>>();
+        Ok(Some(data))
+    }
+}
+
+impl DeletableStorage for S3Storage {
+    fn delete(&self, name: &str) -> LocalBoxFuture<'_, io::Result<()>> {
+        let key = self.maybe_prefix_key(name);
+        async move {
+            let now = Instant::now();
+            let res = retry_and_count(
+                || {
+                    self.client.delete_object(DeleteObjectRequest {
+                        bucket: self.config.bucket.bucket.to_string(),
+                        key: key.clone(),
+                        ..Default::default()
+                    })
+                },
+                "delete_object",
+            )
+            .await;
+            CLOUD_REQUEST_HISTOGRAM_VEC
+                .with_label_values(&["s3", "delete_object"])
+                .observe(now.saturating_elapsed().as_secs_f64());
+            match res {
+                Ok(_) => Ok(()),
+                Err(e) => Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("failed to delete object {}", e),
+                )),
+            }
+        }
+        .boxed_local()
+    }
+}
+
+impl IterableStorage for S3Storage {
+    fn iter_prefix(
+        &self,
+        prefix: &str,
+    ) -> Pin<Box<dyn Stream<Item = std::result::Result<BlobObject, io::Error>> + '_>> {
+        let walker = S3PrefixIter {
+            cli: self,
+            finished: false,
+            cont_token: None,
+            prefix: prefix.to_owned(),
+        };
+        let s = stream::try_unfold(walker, |mut w| async move {
+            let res = w.next_page().await?;
+            io::Result::Ok(res.map(|v| (v, w)))
+        })
+        .map_ok(|data| stream::iter(data.into_iter().map(Ok)))
+        .try_flatten();
+        Box::pin(s)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::assert_matches::assert_matches;
@@ -635,6 +749,128 @@ mod tests {
     use tikv_util::stream::block_on_external_io;
 
     use super::*;
+
+    fn make_list_bucket_result(
+        name: &str,
+        pfx: &str,
+        next_cont_token: Option<&str>,
+        is_truncated: bool,
+        max_keys: u64,
+        items: impl IntoIterator<Item = String>,
+    ) -> MockRequestDispatcher {
+        let items = items.into_iter().collect::<Vec<_>>();
+        let mut s = format!(
+            r#"
+        <?xml version="1.0" encoding="UTF-8"?>
+        <ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+            <Name>{}</Name>
+            <Prefix>{}</Prefix>
+            <NextContinuationToken>{}</NextContinuationToken>
+            <KeyCount>{}</KeyCount>
+            <MaxKeys>{}</MaxKeys>
+            <IsTruncated>{}</IsTruncated>"#,
+            name,
+            pfx,
+            next_cont_token.unwrap_or(""),
+            items.len(),
+            max_keys,
+            is_truncated
+        );
+        for item in items {
+            s.push_str(&format!(
+                r#"
+            <Contents>
+                <Key>{}</Key>
+                <StorageClass>STANDARD</StorageClass>
+            </Contents>"#,
+                item
+            ));
+        }
+        s.push_str("\n</ListBucketResult>");
+        MockRequestDispatcher::with_status(200).with_body(&s)
+    }
+
+    #[tokio::test]
+    async fn test_list_objects() {
+        const BUCKET: &str = "breeze";
+        const PREFIX: &str = "/my/great/prefix";
+
+        let bucket_name = StringNonEmpty::required(BUCKET.to_string()).unwrap();
+        let bucket = BucketConf::default(bucket_name);
+        let mut config = Config::default(bucket);
+        let multi_part_size = 2;
+        // set multi_part_size to use upload_part function
+        config.multi_part_size = multi_part_size;
+
+        let check_cont_tok = |cont: Option<String>| {
+            move |r: &SignedRequest| {
+                assert_eq!(
+                    r.params.get("continuation-token").and_then(|v| v.as_ref()),
+                    cont.as_ref()
+                );
+            }
+        };
+
+        let files = |pfx, max| {
+            let mut i = 0;
+            std::iter::repeat_with(move || {
+                i += 1;
+                format!("{}-{}", pfx, i)
+            })
+            .take(max)
+        };
+
+        // split magic_contents into 3 parts, so we mock 5 requests here(1 begin + 3
+        // part + 1 complete)
+        let dispatcher = MultipleMockRequestDispatcher::new(vec![
+            make_list_bucket_result(BUCKET, PREFIX, Some("foo"), true, 16, files("foo", 16))
+                .with_request_checker(check_cont_tok(None)),
+            make_list_bucket_result(BUCKET, PREFIX, Some("bar"), true, 16, files("bar", 16))
+                .with_request_checker(check_cont_tok(Some("foo".to_owned()))),
+            make_list_bucket_result(BUCKET, PREFIX, None, false, 16, files("quux", 8))
+                .with_request_checker(check_cont_tok(Some("bar".to_owned()))),
+            MockRequestDispatcher::with_status(400).with_request_checker(|req| {
+                panic!("Walk haven't stopped. The last request is {:?}", req)
+            }),
+        ]);
+
+        let credentials_provider = StaticProvider::new_minimal(String::new(), String::new());
+        let s = S3Storage::new_creds_dispatcher(config, dispatcher, credentials_provider).unwrap();
+        assert_eq!(
+            s.iter_prefix(PREFIX)
+                .map_ok(|v| v.key)
+                .try_collect::<Vec<_>>()
+                .await
+                .unwrap(),
+            files("foo", 16)
+                .chain(files("bar", 16))
+                .chain(files("quux", 8))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn test_somewhat() {
+        let mut bucket = BucketConf::default(StringNonEmpty::opt("astro".to_owned()).unwrap());
+        bucket.endpoint = StringNonEmpty::opt("http://10.2.7.193:9000".to_owned());
+        let s3 = Config::default(bucket);
+        let s3 = Config {
+            access_key_pair: Some(AccessKeyPair {
+                access_key: StringNonEmpty::opt("minioadmin".to_owned()).unwrap(),
+                secret_access_key: StringNonEmpty::opt("minioadmin".to_owned()).unwrap(),
+                session_token: None,
+            }),
+            force_path_style: true,
+            ..s3
+        };
+
+        let storage = S3Storage::new(s3).unwrap();
+        let s = storage.iter_prefix("tpcc-1000-incr-with-crc64/v1/backupmeta");
+        let items = block_on_external_io(TryStreamExt::try_collect::<Vec<_>>(s));
+        println!("{:?}", items);
+        println!("{}", items.unwrap().len());
+    }
 
     #[test]
     fn test_s3_get_content_md5() {

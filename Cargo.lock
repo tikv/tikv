@@ -953,6 +953,7 @@ dependencies = [
  "async-trait",
  "derive_more",
  "error_code",
+ "futures 0.3.15",
  "futures-io",
  "kvproto",
  "lazy_static",
@@ -961,6 +962,7 @@ dependencies = [
  "thiserror",
  "tikv_util",
  "url",
+ "uuid 0.8.2",
 ]
 
 [[package]]
@@ -1701,6 +1703,7 @@ dependencies = [
  "async-trait",
  "aws",
  "azure",
+ "chrono",
  "cloud",
  "encryption",
  "file_system",
@@ -1714,6 +1717,8 @@ dependencies = [
  "prometheus",
  "rand 0.8.5",
  "rust-ini",
+ "serde",
+ "serde_json",
  "slog",
  "slog-global",
  "structopt",
@@ -1723,6 +1728,8 @@ dependencies = [
  "tokio",
  "tokio-util",
  "url",
+ "uuid 0.8.2",
+ "walkdir",
 ]
 
 [[package]]

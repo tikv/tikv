@@ -1,8 +1,9 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{io, marker::Unpin, pin::Pin, task::Poll};
+use std::{fmt::Display, io, marker::Unpin, panic::Location, pin::Pin, task::Poll};
 
 use async_trait::async_trait;
+use futures::{future::LocalBoxFuture, stream::Stream};
 use futures_io::AsyncRead;
 
 pub trait BlobConfig: 'static + Send + Sync {
@@ -16,11 +17,11 @@ pub trait BlobConfig: 'static + Send + Sync {
 ///
 /// See the documentation of [external_storage::UnpinReader] for why those
 /// wrappers exists.
-pub struct PutResource(pub Box<dyn AsyncRead + Send + Unpin>);
+pub struct PutResource<'a>(pub Box<dyn AsyncRead + Send + Unpin + 'a>);
 
 pub type BlobStream<'a> = Box<dyn AsyncRead + Unpin + Send + 'a>;
 
-impl AsyncRead for PutResource {
+impl<'a> AsyncRead for PutResource<'a> {
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -30,8 +31,8 @@ impl AsyncRead for PutResource {
     }
 }
 
-impl From<Box<dyn AsyncRead + Send + Unpin>> for PutResource {
-    fn from(s: Box<dyn AsyncRead + Send + Unpin>) -> Self {
+impl<'a> From<Box<dyn AsyncRead + Send + Unpin + 'a>> for PutResource<'a> {
+    fn from(s: Box<dyn AsyncRead + Send + Unpin + 'a>) -> Self {
         Self(s)
     }
 }
@@ -43,13 +44,50 @@ pub trait BlobStorage: 'static + Send + Sync {
     fn config(&self) -> Box<dyn BlobConfig>;
 
     /// Write all contents of the read to the given path.
-    async fn put(&self, name: &str, reader: PutResource, content_length: u64) -> io::Result<()>;
+    async fn put(&self, name: &str, reader: PutResource<'_>, content_length: u64)
+    -> io::Result<()>;
 
     /// Read all contents of the given path.
     fn get(&self, name: &str) -> BlobStream<'_>;
 
     /// Read part of contents of the given path.
     fn get_part(&self, name: &str, off: u64, len: u64) -> BlobStream<'_>;
+}
+
+pub trait DeletableStorage {
+    fn delete(&self, name: &str) -> LocalBoxFuture<'_, io::Result<()>>;
+}
+
+#[track_caller]
+pub fn unimplemented() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::Unsupported,
+        format!(
+            "this method isn't supported, check more details at {:?}",
+            Location::caller()
+        ),
+    )
+}
+
+#[derive(Debug)]
+pub struct BlobObject {
+    pub key: String,
+}
+
+impl Display for BlobObject {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.key)
+    }
+}
+
+/// An storage that its content can be enumerated by prefix.
+pub trait IterableStorage {
+    /// Walk the prefix of the blob storage.
+    /// It returns the stream of items.
+    fn iter_prefix(
+        &self,
+        prefix: &str,
+    ) -> Pin<Box<dyn Stream<Item = std::result::Result<BlobObject, io::Error>> + '_>>;
 }
 
 impl BlobConfig for dyn BlobStorage {
@@ -68,7 +106,12 @@ impl BlobStorage for Box<dyn BlobStorage> {
         (**self).config()
     }
 
-    async fn put(&self, name: &str, reader: PutResource, content_length: u64) -> io::Result<()> {
+    async fn put(
+        &self,
+        name: &str,
+        reader: PutResource<'_>,
+        content_length: u64,
+    ) -> io::Result<()> {
         let fut = (**self).put(name, reader, content_length);
         fut.await
     }

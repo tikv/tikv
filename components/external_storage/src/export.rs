@@ -5,8 +5,10 @@ use std::{io, path::Path, sync::Arc};
 use async_trait::async_trait;
 pub use aws::{Config as S3Config, S3Storage};
 pub use azure::{AzureStorage, Config as AzureConfig};
-use cloud::blob::{BlobStorage, PutResource};
+pub use cloud::blob::BlobObject;
+use cloud::blob::{BlobStorage, DeletableStorage, IterableStorage, PutResource};
 use encryption::DataKeyManager;
+use futures_util::{future::LocalBoxFuture, stream::LocalBoxStream};
 use gcp::GcsStorage;
 use kvproto::brpb::{
     AzureBlobStorage, Gcs, Noop, StorageBackend, StorageBackend_oneof_backend as Backend, S3,
@@ -18,7 +20,6 @@ use crate::{
     record_storage_create, wrap_with_checksum_reader_if_needed, BackendConfig, ExternalData,
     ExternalStorage, HdfsStorage, LocalStorage, NoopStorage, RestoreConfig, UnpinReader,
 };
-
 pub fn create_storage(
     storage_backend: &StorageBackend,
     config: BackendConfig,
@@ -45,8 +46,10 @@ fn bad_backend(backend: Backend) -> io::Error {
     bad_storage_backend(&storage_backend)
 }
 
-fn blob_store<Blob: BlobStorage>(store: Blob) -> Box<dyn ExternalStorage> {
-    Box::new(BlobStore::new(store)) as Box<dyn ExternalStorage>
+fn blob_store<Blob: BlobStorage + IterableStorage + DeletableStorage>(
+    store: Blob,
+) -> Box<dyn ExternalStorage> {
+    Box::new(Compat::new(store)) as Box<dyn ExternalStorage>
 }
 
 fn create_backend(
@@ -121,15 +124,19 @@ pub fn make_azblob_backend(config: AzureBlobStorage) -> StorageBackend {
     backend
 }
 
-pub struct BlobStore<Blob: BlobStorage>(Blob);
+pub struct Compat<Blob>(Blob);
 
-impl<Blob: BlobStorage> BlobStore<Blob> {
+impl<Blob> Compat<Blob> {
     pub fn new(inner: Blob) -> Self {
-        BlobStore(inner)
+        Compat(inner)
+    }
+
+    pub fn into_inner(self) -> Blob {
+        self.0
     }
 }
 
-impl<Blob: BlobStorage> std::ops::Deref for BlobStore<Blob> {
+impl<Blob> std::ops::Deref for Compat<Blob> {
     type Target = Blob;
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -149,7 +156,12 @@ impl<S: ExternalStorage> ExternalStorage for AutoEncryptLocalRestoredFileExterna
     fn url(&self) -> io::Result<url::Url> {
         self.storage.url()
     }
-    async fn write(&self, name: &str, reader: UnpinReader, content_length: u64) -> io::Result<()> {
+    async fn write(
+        &self,
+        name: &str,
+        reader: UnpinReader<'_>,
+        content_length: u64,
+    ) -> io::Result<()> {
         self.storage.write(name, reader, content_length).await
     }
     fn read(&self, name: &str) -> ExternalData<'_> {
@@ -209,17 +221,30 @@ impl<S: ExternalStorage> ExternalStorage for AutoEncryptLocalRestoredFileExterna
         )
         .await
     }
+
+    fn iter_prefix(&self, prefix: &str) -> LocalBoxStream<'_, io::Result<BlobObject>> {
+        self.storage.iter_prefix(prefix)
+    }
+
+    fn delete(&self, name: &str) -> LocalBoxFuture<'_, io::Result<()>> {
+        self.storage.delete(name)
+    }
 }
 
 #[async_trait]
-impl<Blob: BlobStorage> ExternalStorage for BlobStore<Blob> {
+impl<Blob: BlobStorage + IterableStorage + DeletableStorage> ExternalStorage for Compat<Blob> {
     fn name(&self) -> &'static str {
         (**self).config().name()
     }
     fn url(&self) -> io::Result<url::Url> {
         (**self).config().url()
     }
-    async fn write(&self, name: &str, reader: UnpinReader, content_length: u64) -> io::Result<()> {
+    async fn write(
+        &self,
+        name: &str,
+        reader: UnpinReader<'_>,
+        content_length: u64,
+    ) -> io::Result<()> {
         (**self)
             .put(name, PutResource(reader.0), content_length)
             .await
@@ -231,6 +256,19 @@ impl<Blob: BlobStorage> ExternalStorage for BlobStore<Blob> {
 
     fn read_part(&self, name: &str, off: u64, len: u64) -> ExternalData<'_> {
         (**self).get_part(name, off, len)
+    }
+
+    /// Walk the prefix of the blob storage.
+    /// It returns the stream of items.
+    fn iter_prefix(
+        &self,
+        prefix: &str,
+    ) -> LocalBoxStream<'_, std::result::Result<BlobObject, io::Error>> {
+        (**self).iter_prefix(prefix)
+    }
+
+    fn delete(&self, name: &str) -> LocalBoxFuture<'_, io::Result<()>> {
+        (**self).delete(name)
     }
 }
 

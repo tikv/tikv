@@ -1537,7 +1537,7 @@ impl StreamTaskHandler {
         &self,
         mut data_file_readers: Vec<ForRead>,
     ) -> Result<(
-        UnpinReader,
+        UnpinReader<'_>,
         Vec<FileEncryptionInfo>,
         Vec<Arc<std::sync::Mutex<Hasher>>>,
     )> {
@@ -1936,8 +1936,8 @@ mod tests {
 
     use async_compression::tokio::bufread::ZstdDecoder;
     use encryption::{DecrypterReader, FileConfig, MasterKeyConfig, MultiMasterKeyBackend};
-    use external_storage::{ExternalData, NoopStorage};
-    use futures::AsyncReadExt;
+    use external_storage::{BlobObject, ExternalData, NoopStorage};
+    use futures::{future::LocalBoxFuture, stream::LocalBoxStream, AsyncReadExt};
     use kvproto::{
         brpb::{CipherInfo, Noop, StorageBackend, StreamBackupTaskInfo},
         encryptionpb::EncryptionMethod,
@@ -2374,7 +2374,7 @@ mod tests {
         async fn write(
             &self,
             name: &str,
-            reader: UnpinReader,
+            reader: UnpinReader<'_>,
             content_length: u64,
         ) -> io::Result<()> {
             (self.error_on_write)()?;
@@ -2387,6 +2387,17 @@ mod tests {
 
         fn read_part(&self, name: &str, off: u64, len: u64) -> ExternalData<'_> {
             self.inner.read_part(name, off, len)
+        }
+
+        fn iter_prefix(
+            &self,
+            _prefix: &str,
+        ) -> LocalBoxStream<'_, std::result::Result<BlobObject, io::Error>> {
+            unreachable!()
+        }
+
+        fn delete(&self, _name: &str) -> LocalBoxFuture<'_, io::Result<()>> {
+            unreachable!()
         }
     }
 
@@ -2746,7 +2757,7 @@ mod tests {
         async fn write(
             &self,
             _name: &str,
-            mut reader: UnpinReader,
+            mut reader: UnpinReader<'_>,
             content_length: u64,
         ) -> io::Result<()> {
             let mut data = Vec::new();
@@ -2769,6 +2780,19 @@ mod tests {
 
         fn read_part(&self, name: &str, off: u64, len: u64) -> ExternalData<'_> {
             self.s.read_part(name, off, len)
+        }
+
+        /// Walk the prefix of the blob storage.
+        /// It returns the stream of items.
+        fn iter_prefix(
+            &self,
+            _prefix: &str,
+        ) -> LocalBoxStream<'_, std::result::Result<BlobObject, io::Error>> {
+            unreachable!()
+        }
+
+        fn delete(&self, _name: &str) -> LocalBoxFuture<'_, io::Result<()>> {
+            unreachable!()
         }
     }
 

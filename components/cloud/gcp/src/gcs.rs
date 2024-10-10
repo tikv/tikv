@@ -3,20 +3,23 @@ use std::{fmt::Display, io};
 
 use async_trait::async_trait;
 use cloud::{
-    blob::{none_to_empty, BlobConfig, BlobStorage, BucketConf, PutResource, StringNonEmpty},
+    blob::{
+        none_to_empty, BlobConfig, BlobObject, BlobStorage, BucketConf, DeletableStorage,
+        IterableStorage, PutResource, StringNonEmpty,
+    },
     metrics,
 };
 use futures_util::{
-    future::TryFutureExt,
+    future::{FutureExt, LocalBoxFuture, TryFutureExt},
     io::{self as async_io, AsyncRead, Cursor},
-    stream::{StreamExt, TryStreamExt},
+    stream::{self, Stream, StreamExt, TryStreamExt},
 };
 use http::HeaderValue;
 use hyper::{Body, Request, Response};
 pub use kvproto::brpb::Gcs as InputConfig;
 use tame_gcs::{
     common::{PredefinedAcl, StorageClass},
-    objects::{InsertObjectOptional, Metadata, Object},
+    objects::{InsertObjectOptional, ListOptional, ListResponse, Metadata, Object},
     types::{BucketName, ObjectId},
 };
 use tame_oauth::gcp::ServiceAccountInfo;
@@ -27,9 +30,10 @@ use tikv_util::{
 
 use crate::{
     client::{status_code_error, GcpClient, RequestError},
-    utils::retry,
+    utils::{self, retry},
 };
 
+const DEFAULT_SEP: char = '/';
 const GOOGLE_APIS: &str = "https://www.googleapis.com";
 const HARDCODED_ENDPOINTS_SUFFIX: &[&str] = &["upload/storage/v1/", "storage/v1/"];
 
@@ -112,7 +116,7 @@ pub struct GcsStorage {
     client: GcpClient,
 }
 
-trait ResultExt {
+pub trait ResultExt {
     type Ok;
 
     // Maps the error of this result as an `std::io::Error` with `Other` error
@@ -134,6 +138,36 @@ impl<T, E: Display> ResultExt for Result<T, E> {
     }
 }
 
+impl DeletableStorage for GcsStorage {
+    fn delete(&self, name: &str) -> LocalBoxFuture<'_, io::Result<()>> {
+        let name = name.to_owned();
+        async move {
+            let key = self.maybe_prefix_key(&name);
+            let oid = ObjectId::new(self.config.bucket.bucket.to_string(), key)
+                .or_invalid_input(format_args!("invalid object id"))?;
+            let now = Instant::now();
+            retry(
+                || async {
+                    let req = Object::delete(&oid, None).map_err(RequestError::Gcs)?;
+                    self.make_request(
+                        req.map(|_: io::Empty| Body::empty()),
+                        tame_gcs::Scopes::ReadWrite,
+                    )
+                    .await
+                },
+                "delete",
+            )
+            .await?;
+            metrics::CLOUD_REQUEST_HISTOGRAM_VEC
+                .with_label_values(&["gcp", "delete"])
+                .observe(now.saturating_elapsed_secs());
+
+            Ok(())
+        }
+        .boxed_local()
+    }
+}
+
 impl GcsStorage {
     pub fn from_input(input: InputConfig) -> io::Result<Self> {
         Self::new(Config::from_input(input)?)
@@ -147,7 +181,7 @@ impl GcsStorage {
 
     fn maybe_prefix_key(&self, key: &str) -> String {
         if let Some(prefix) = &self.config.bucket.prefix {
-            return format!("{}/{}", prefix, key);
+            return format!("{}{}{}", prefix, DEFAULT_SEP, key);
         }
         key.to_owned()
     }
@@ -168,6 +202,17 @@ impl GcsStorage {
         }
 
         self.client.make_request(req, scope).await
+    }
+
+    fn strip_prefix_if_needed(&self, key: String) -> String {
+        if let Some(prefix) = &self.config.bucket.prefix {
+            if key.starts_with(prefix.as_str()) {
+                return key[prefix.len()..]
+                    .trim_start_matches(DEFAULT_SEP)
+                    .to_owned();
+            }
+        }
+        key
     }
 
     fn error_to_async_read<E>(kind: io::ErrorKind, e: E) -> cloud::blob::BlobStream<'static>
@@ -202,7 +247,9 @@ impl GcsStorage {
                     if response.status().is_success() {
                         Ok(response.into_body().map_err(|e| {
                             io::Error::new(
-                                io::ErrorKind::Other,
+                                // Given the status is success, if the content stream has been cut down, 
+                                // there must be some network unavailable, which should generally be retryable.
+                                io::ErrorKind::Interrupted,
                                 format!("download from GCS error: {}", e),
                             )
                         }))
@@ -279,7 +326,12 @@ impl BlobStorage for GcsStorage {
         Box::new(self.config.clone()) as Box<dyn BlobConfig>
     }
 
-    async fn put(&self, name: &str, reader: PutResource, content_length: u64) -> io::Result<()> {
+    async fn put(
+        &self,
+        name: &str,
+        reader: PutResource<'_>,
+        content_length: u64,
+    ) -> io::Result<()> {
         if content_length == 0 {
             // It is probably better to just write the empty file
             // However, currently going forward results in a body write aborted error
@@ -342,6 +394,82 @@ impl BlobStorage for GcsStorage {
     fn get_part(&self, name: &str, off: u64, len: u64) -> cloud::blob::BlobStream<'_> {
         // inclusive, bytes=0-499 -> [0, 499]
         self.get_range(name, Some(format!("bytes={}-{}", off, off + len - 1)))
+    }
+}
+
+struct GcsPrefixIter<'cli> {
+    cli: &'cli GcsStorage,
+    page_token: Option<String>,
+    prefix: String,
+    finished: bool,
+}
+
+impl<'cli> GcsPrefixIter<'cli> {
+    async fn one_page(&mut self) -> io::Result<Option<Vec<BlobObject>>> {
+        if self.finished {
+            return Ok(None);
+        }
+
+        let mut opt = ListOptional::default();
+        let bucket =
+            BucketName::try_from(self.cli.config.bucket.bucket.to_string()).or_invalid_input(
+                format_args!("invalid bucket {}", self.cli.config.bucket.bucket),
+            )?;
+        let prefix = self.cli.maybe_prefix_key(&self.prefix);
+        opt.prefix = Some(&prefix);
+        opt.page_token = self.page_token.as_deref();
+        let now = Instant::now();
+        let req = Object::list(&bucket, Some(opt)).or_io_error(format_args!(
+            "failed to list with prefix {} page_token {:?}",
+            self.prefix, self.page_token
+        ))?;
+        let res = self
+            .cli
+            .make_request(req.map(|_e| Body::empty()), tame_gcs::Scopes::ReadOnly)
+            .await
+            .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+        let resp = utils::read_from_http_body::<ListResponse>(res).await?;
+        metrics::CLOUD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&["gcp", "list"])
+            .observe(now.saturating_elapsed_secs());
+
+        debug!("requesting paging GCP"; "prefix" => %self.prefix, "page_token" => self.page_token.as_deref(), 
+            "response_size" => resp.objects.len(), "new_page_token" => resp.page_token.as_deref());
+        // GCP returns an empty page token when returning the last page...
+        // We need to break there or we will enter an infinity loop...
+        if resp.page_token.is_none() {
+            self.finished = true;
+        }
+        self.page_token = resp.page_token;
+        let items = resp
+            .objects
+            .into_iter()
+            .map(|v| BlobObject {
+                key: self.cli.strip_prefix_if_needed(v.name.unwrap_or_default()),
+            })
+            .collect::<Vec<_>>();
+        Ok(Some(items))
+    }
+}
+
+impl IterableStorage for GcsStorage {
+    fn iter_prefix(
+        &self,
+        prefix: &str,
+    ) -> std::pin::Pin<Box<dyn Stream<Item = io::Result<cloud::blob::BlobObject>> + '_>> {
+        let walker = GcsPrefixIter {
+            cli: self,
+            page_token: None,
+            prefix: prefix.to_owned(),
+            finished: false,
+        };
+        let s = stream::try_unfold(walker, |mut w| async move {
+            let res = w.one_page().await?;
+            io::Result::Ok(res.map(|v| (v, w)))
+        })
+        .map_ok(|data| stream::iter(data.into_iter().map(Ok)))
+        .try_flatten();
+        Box::pin(s)
     }
 }
 
