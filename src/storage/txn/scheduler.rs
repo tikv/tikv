@@ -1127,7 +1127,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let metadata1 = metadata.deep_clone();
         let rsource = request_source.to_string();
         self.get_sched_pool()
-            .spawn(&request_source, metadata, CommandPri::High, async move {
+            .spawn(request_source, metadata, CommandPri::High, async move {
                 for (lock_info, released_lock) in legacy_wake_up_list {
                     let cb = lock_info.key_cb.unwrap().into_inner();
                     let e = StorageError::from(Error::from(MvccError::from(
