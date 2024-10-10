@@ -319,6 +319,13 @@ impl<S: Snapshot> ProposedAdminCmd<S> {
         }
     }
 
+    /// Returns true if the command is mutually exclusive with other commands.
+    ///
+    /// Typically, although the `TransferLeader` command does not change the
+    /// `conf_ver`, it should be mutually exclusive with other commands which
+    /// change the `conf_ver`, such as `Split` and `BatchSplit`. If it's not
+    /// mutually exclusive, it may cause unexpected behaviors in rare scenarios
+    /// (e.g. #12410 and #17602.)
     fn is_mutually_exclusive(&self) -> bool {
         self.cmd_type == AdminCmdType::TransferLeader
     }
@@ -400,6 +407,8 @@ impl<S: Snapshot> CmdEpochChecker<S> {
             .find(|cmd| {
                 (check_ver && cmd.epoch_state.change_ver)
                     || (check_conf_ver
+                        // If it's a mutually exclusive command, it should be checked with all
+                        // commands which change the `conf_ver`.
                         && (cmd.epoch_state.change_conf_ver || cmd.is_mutually_exclusive()))
             })
             .map(|cmd| cmd.index)
@@ -6529,11 +6538,12 @@ mod tests {
                 epoch_checker.propose_check_epoch(&transfer_leader_admin, 10),
                 None
             );
-            // Transfer leader admin cmd should not be ignored.
+            // Transfer leader admin cmd should not be ignored to avoid the later propose
+            // on batch split before the transfer leader is applied.
             epoch_checker.post_propose(AdminCmdType::TransferLeader, 5, 10);
             assert_eq!(epoch_checker.proposed_admin_cmd.len(), 1);
-            // If there exists a transfer leader admin cmd, other admin cmds should be
-            // ignored.
+            // If there exists a transfer leader admin cmd, other admin cmds which needs to
+            // check epoch.check_conf_change should be ignored.
             assert_eq!(epoch_checker.propose_check_epoch(&split_admin, 10), Some(5));
             assert_eq!(epoch_checker.propose_check_epoch(&normal_cmd, 10), None);
             assert_eq!(
