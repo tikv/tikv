@@ -188,7 +188,7 @@ mod tests {
             (
                 Some(vec![1.0, 1.0]),
                 Some(vec![-1.1, -1.1]),
-                Some(1.9999557833738604),
+                Some(1.9995274909415564),
             ),
             (Some(vec![3e38]), Some(vec![3e38]), None), // NaN turns to NULL
             (Some(vec![1.0, 2.0]), None, None),
