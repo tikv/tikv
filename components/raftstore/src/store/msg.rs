@@ -13,7 +13,7 @@ use kvproto::{
     brpb::CheckAdminResponse,
     kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp},
     metapb,
-    metapb::RegionEpoch,
+    metapb::{Region, RegionEpoch},
     pdpb::{self, CheckPolicy},
     raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
     raft_serverpb::RaftMessage,
@@ -649,6 +649,11 @@ pub enum CasualMessage<EK: KvEngine> {
 
     // Trigger raft to campaign which is used after exiting force leader
     Campaign,
+    // Trigger loading pending region for in_memory_engine,
+    InMemoryEngineLoadRegion {
+        region_id: u64,
+        trigger_load_cb: Box<dyn FnOnce(&Region) + Send + 'static>,
+    },
 }
 
 impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
@@ -720,6 +725,11 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
                 peer_id, tombstone
             ),
             CasualMessage::Campaign => write!(fmt, "Campaign"),
+            CasualMessage::InMemoryEngineLoadRegion { region_id, .. } => write!(
+                fmt,
+                "[region={}] try load in memory region cache",
+                region_id
+            ),
         }
     }
 }

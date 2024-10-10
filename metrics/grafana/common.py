@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from typing import Optional, Union
 
 import attr
@@ -33,6 +35,7 @@ DATASOURCE_INPUT = DataSourceInput(
     pluginName="Prometheus",
 )
 DATASOURCE = f"${{{DATASOURCE_INPUT.name}}}"
+ADDITIONAL_GROUPBY = "$additional_groupby"
 
 
 @attr.s
@@ -149,6 +152,36 @@ class Expr(object):
 
     def skip_default_instance_selector(self) -> "Expr":
         self.skip_default_instance = True
+        return self
+
+    def append_by_labels(self, label: str) -> "Expr":
+        self.by_labels.append(label)
+        return self
+
+
+class OpExpr:
+    lhs: Union[Expr, OpExpr, str]
+    op: str
+    rhs: Union[Expr, OpExpr, str]
+
+    def __init__(
+        self, lhs: Union[Expr, OpExpr, str], op: str, rhs: Union[Expr, OpExpr, str]
+    ):
+        self.lhs = lhs
+        self.op = op
+        self.rhs = rhs
+
+    def __str__(self) -> str:
+        return f"""({self.lhs} {self.op} {self.rhs})"""
+
+    def __repr__(self) -> str:
+        return self.__str__()
+
+    def append_by_labels(self, label: str) -> "OpExpr":
+        if not isinstance(self.lhs, str):
+            self.lhs.append_by_labels(label)
+        if not isinstance(self.rhs, str):
+            self.rhs.append_by_labels(label)
         return self
 
 
@@ -483,8 +516,10 @@ def expr_simple(
     return expr
 
 
-def expr_operator(lhs: Union[Expr, str], operator: str, rhs: Union[Expr, str]) -> str:
-    return f"""({lhs} {operator} {rhs})"""
+def expr_operator(
+    lhs: Union[Expr, OpExpr, str], operator: str, rhs: Union[Expr, OpExpr, str]
+) -> OpExpr:
+    return OpExpr(lhs, operator, rhs)
 
 
 def expr_histogram_quantile(
@@ -555,7 +590,7 @@ def expr_histogram_avg(
     metrics: str,
     label_selectors: list[str] = [],
     by_labels: list[str] = ["instance"],
-) -> str:
+) -> OpExpr:
     """
     Query the avg of a histogram metric.
 
@@ -576,7 +611,7 @@ def expr_histogram_avg(
             suffix
         ), f"'{metrics}' should not specify '{suffix}' suffix manually"
 
-    return expr_operator(
+    return OpExpr(
         expr_sum_rate(
             metrics + "_sum",
             label_selectors=label_selectors,
@@ -592,14 +627,32 @@ def expr_histogram_avg(
 
 
 def target(
-    expr: Union[Expr, str],
+    expr: Union[Expr, OpExpr, str],
     legend_format: Optional[str] = None,
     hide=False,
     data_source=DATASOURCE,
     interval_factor=1,  # Prefer "high" resolution
+    # It indicates whether to add additional groupby label to the groupby and legend.
+    # If the expr is already groupby by instance, no need to set it to True.
+    # Additional groupby is used to support optional by instance. By default, it doesn't
+    # take effect. When the variable $additional_groupby of dashboard is set to `instance`.
+    # The expr would be groupby by `instance`.
+    additional_groupby=False,
 ) -> Target:
-    if legend_format is None and isinstance(expr, Expr) and expr.by_labels:
-        legend_format = "-".join(map(lambda x: "{{" + f"{x}" + "}}", expr.by_labels))
+    if isinstance(expr, Expr):
+        if legend_format is None and expr.by_labels:
+            legend_format = "-".join(
+                map(lambda x: "{{" + f"{x}" + "}}", expr.by_labels)
+            )
+        if additional_groupby:
+            expr.append_by_labels(ADDITIONAL_GROUPBY)
+            legend_format += " {{" + ADDITIONAL_GROUPBY + "}}"
+    elif isinstance(expr, OpExpr):
+        assert legend_format is not None, "legend_format must be specified"
+        if additional_groupby:
+            expr.append_by_labels(ADDITIONAL_GROUPBY)
+            legend_format += " {{" + ADDITIONAL_GROUPBY + "}}"
+
     return Target(
         expr=f"{expr}",
         hide=hide,
@@ -611,6 +664,7 @@ def target(
 
 def template(
     name,
+    type,
     query,
     data_source,
     hide,
@@ -628,7 +682,7 @@ def template(
         query=query,
         refresh=2,
         sort=1,
-        type="query",
+        type=type,
         useTags=False,
         regex=regex,
         includeAll=include_all,
@@ -986,6 +1040,7 @@ def graph_panel_histogram_quantiles(
     hide_p9999=False,
     hide_avg=False,
     hide_count=False,
+    additional_groupby=True,
 ) -> Panel:
     """
     Return a graph panel that shows histogram quantiles of a metric.
@@ -1017,6 +1072,7 @@ def graph_panel_histogram_quantiles(
                 ),
                 legend_format=legend("99.99%", by_labels),
                 hide=hide_p9999,
+                additional_groupby=additional_groupby,
             ),
             target(
                 expr=expr_histogram_quantile(
@@ -1026,6 +1082,7 @@ def graph_panel_histogram_quantiles(
                     by_labels=by_labels,
                 ),
                 legend_format=legend("99%", by_labels),
+                additional_groupby=additional_groupby,
             ),
             target(
                 expr=expr_histogram_avg(
@@ -1035,6 +1092,7 @@ def graph_panel_histogram_quantiles(
                 ),
                 legend_format=legend("avg", by_labels),
                 hide=hide_avg,
+                additional_groupby=additional_groupby,
             ),
             target(
                 expr=expr_sum_rate(
@@ -1044,6 +1102,7 @@ def graph_panel_histogram_quantiles(
                 ),
                 legend_format=legend("count", by_labels),
                 hide=hide_count,
+                additional_groupby=additional_groupby,
             ),
         ],
         series_overrides=[

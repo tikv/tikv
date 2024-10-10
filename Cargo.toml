@@ -68,8 +68,6 @@ api_version = { workspace = true }
 async-stream = "0.2"
 async-trait = "0.1"
 backtrace = "0.3"
-batch-system = { workspace = true }
-byteorder = "1.2"
 causal_ts = { workspace = true }
 chrono = { workspace = true }
 codec = { workspace = true }
@@ -79,7 +77,6 @@ coprocessor_plugin_api = { workspace = true }
 crc32fast = "1.2"
 crc64fast = "0.1"
 crossbeam = { workspace = true }
-crypto = { workspace = true }
 dashmap = "5"
 encryption = { workspace = true }
 encryption_export = { workspace = true }
@@ -108,7 +105,6 @@ hybrid_engine = { workspace = true }
 hyper = { version = "0.14", features = ["full"] }
 hyper-tls = "0.5"
 in_memory_engine = { workspace = true }
-into_other = { workspace = true }
 itertools = "0.10"
 keyed_priority_queue = "0.4"
 keys = { workspace = true }
@@ -122,7 +118,6 @@ log = { version = "0.4", features = [
 ] }
 log_wrappers = { workspace = true }
 match-template = "0.0.1"
-memory_trace_macros = { workspace = true }
 mime = "0.3.13"
 more-asserts = "0.2"
 mur3 = "0.1"
@@ -170,7 +165,6 @@ sync_wrapper = "0.1.1"
 sysinfo = "0.26"
 tempfile = "3.0"
 thiserror = "1.0"
-tidb_query_aggr = { workspace = true }
 tidb_query_common = { workspace = true }
 tidb_query_datatype = { workspace = true }
 tidb_query_executors = { workspace = true }
@@ -195,13 +189,10 @@ yatp = { workspace = true }
 [dev-dependencies]
 api_version = { workspace = true, features = ["testexport"] }
 engine_test = { workspace = true }
-engine_traits_tests = { workspace = true }
-example_coprocessor_plugin = { workspace = true }                              # should be a binary dependency
 hyper-openssl = "0.9"
 panic_hook = { workspace = true }
 raftstore = { workspace = true, features = ["testexport"] }
 reqwest = { version = "0.11", features = ["blocking"] }
-test_sst_importer = { workspace = true }
 test_util = { workspace = true }
 tokio = { version = "1.17", features = ["macros", "rt-multi-thread", "time"] }
 zipf = "6.1.0"
@@ -233,9 +224,6 @@ fs2 = { git = "https://github.com/tikv/fs2-rs", branch = "tikv" }
 cmake = { git = "https://github.com/rust-lang/cmake-rs" }
 
 sysinfo = { git = "https://github.com/tikv/sysinfo", branch = "0.26-fix-cpu" }
-
-[target.'cfg(target_os = "linux")'.dependencies]
-procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "7693954bd1dd86eb1709572fd7b62fd5f7ff2ea1" }
 # When you modify TiKV cooperatively with kvproto, this will be useful to submit the PR to TiKV and the PR to
 # kvproto at the same time.
 # After the PR to kvproto is merged, remember to comment this out and run `cargo update -p kvproto`.
@@ -327,6 +315,11 @@ members = [
   "tests",
 ]
 default-members = ["cmd/tikv-server", "cmd/tikv-ctl"]
+
+[workspace.metadata.cargo-machete]
+ignored = ["slog", "slog-global", "serde", "prometheus", "slog_derive", "strum", "error_code", "fuzz-targets", "libfuzzer-sys"]
+[package.metadata.cargo-machete]
+ignored = ["encryption", "engine_panic", "hybrid_engine", "hyper-tls", "match-template"]
 
 [workspace.dependencies]
 api_version = { path = "components/api_version" }
