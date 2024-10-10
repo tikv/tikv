@@ -394,6 +394,8 @@ impl<S: Snapshot> CmdEpochChecker<S> {
                 .push_back(ProposedAdminCmd::new(cmd_type, epoch_state, index));
         } else if epoch_state.check_ver || epoch_state.check_conf_ver {
             let proposed = ProposedAdminCmd::new(cmd_type, epoch_state, index);
+            // Although the command does not change the epoch, it should be checked whether
+            // it is mutually exclusive with other commands which change the epoch.
             if proposed.is_mutually_exclusive() {
                 self.proposed_admin_cmd.push_back(proposed);
             }
