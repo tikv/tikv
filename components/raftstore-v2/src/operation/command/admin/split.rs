@@ -324,21 +324,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             )));
             return;
         }
-        if self.raft_group().raft.lead_transferee.is_some() {
-            // region is under transferring, skipped to avoid new region is
-            // created while the original region has not finished
-            // transferring.
-            info!(
-                self.logger,
-                "region is under transferring, skip proposing split";
-                "region_id" => self.region_id(),
-                "peer_id" => self.peer_id(),
-            );
-            ch.set_result(cmd_resp::new_error(Error::Other(box_err!(
-                "region is under transferring"
-            ))));
-            return;
-        }
         if self.storage().has_dirty_data() {
             // If we split dirty tablet, the same trim compaction will be repeated
             // exponentially more times.

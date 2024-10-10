@@ -6277,20 +6277,6 @@ where
             )));
             return;
         }
-        if self.fsm.peer.raft_group.raft.lead_transferee.is_some() {
-            // region is under transferring, skipped to avoid new region is
-            // created while the original region has not finished
-            // transferring.
-            info!(
-                "region is under transferring, skip proposing split";
-                "region_id" => self.fsm.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-            );
-            cb.invoke_with_response(new_error(Error::Other(box_err!(
-                "region is under transferring"
-            ))));
-            return;
-        }
         if let Err(e) = util::validate_split_region(
             self.fsm.region_id(),
             self.fsm.peer_id(),
@@ -6308,7 +6294,6 @@ where
             cb.invoke_with_response(new_error(e));
             return;
         }
-
         let region = self.fsm.peer.region();
         let task = PdTask::AskBatchSplit {
             region: region.clone(),
@@ -6688,8 +6673,6 @@ where
                 self.on_exit_force_leader(true);
             }
         }
-
-        // TODO: clear the mutual exclusion state after a timeout.
 
         if self.ctx.cfg.hibernate_regions {
             let group_state = self.fsm.hibernate_state.group_state();

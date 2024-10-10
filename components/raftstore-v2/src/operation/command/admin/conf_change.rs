@@ -87,8 +87,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// 2. Removing the leader is not allowed in the configuration;
     /// 3. The conf change makes the raft group not healthy;
     /// 4. The conf change is dropped by raft group internally.
-    /// 5. There exists pending admin commands not finished yet.
-    /// 6. There is a same peer on the same store in history record (TODO).
+    /// 5. There is a same peer on the same store in history record (TODO).
     fn propose_conf_change_imp<T>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,

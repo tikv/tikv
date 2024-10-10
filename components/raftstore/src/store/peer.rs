@@ -4852,7 +4852,6 @@ where
             }
             Ok(msgs) => msgs,
         };
-
         ctx.raft_metrics.propose.transfer_leader.inc();
 
         let prs = self.raft_group.raft.prs();
@@ -4900,7 +4899,6 @@ where
     // 2. Removing the leader is not allowed in the configuration;
     // 3. The conf change makes the raft group not healthy;
     // 4. The conf change is dropped by raft group internally.
-    // 5. There exists pending admin commands not finished yet.
     /// Returns Ok(Either::Left(index)) means the proposal is proposed
     /// successfully and is located on `index` position. Ok(Either::
     /// Right(index)) means the proposal is rejected by `CmdEpochChecker` and
