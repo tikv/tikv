@@ -4333,8 +4333,6 @@ where
             self.fsm.peer.ping();
             self.fsm.has_ready = true;
         }
-        // Reset the relative status.
-        self.fsm.peer.last_admin_cmd_finished = true;
         if remove_self {
             self.destroy_peer(false);
         }
@@ -4600,8 +4598,6 @@ where
         if is_leader {
             self.on_split_region_check_tick();
         }
-        // Reset the relative stats after split.
-        self.fsm.peer.last_admin_cmd_finished = true;
         fail_point!("after_split", self.ctx.store_id() == 3, |_| {});
     }
 
@@ -6281,18 +6277,6 @@ where
             )));
             return;
         }
-        if !self.fsm.peer.last_admin_cmd_finished {
-            // region is pending on previous admin commands, skipped.
-            info!(
-                "previous admin command not finished, skip proposing split";
-                "region_id" => self.fsm.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-            );
-            cb.invoke_with_response(new_error(Error::Other(box_err!(
-                "region is pending on previous admin commands"
-            ))));
-            return;
-        }
         if self.fsm.peer.raft_group.raft.lead_transferee.is_some() {
             // region is under transferring, skipped to avoid new region is
             // created while the original region has not finished
@@ -6324,8 +6308,6 @@ where
             cb.invoke_with_response(new_error(e));
             return;
         }
-        // Mark the region is going to be split, pending on admin command.
-        self.fsm.peer.last_admin_cmd_finished = false;
 
         let region = self.fsm.peer.region();
         let task = PdTask::AskBatchSplit {
@@ -6706,6 +6688,8 @@ where
                 self.on_exit_force_leader(true);
             }
         }
+
+        // TODO: clear the mutual exclusion state after a timeout.
 
         if self.ctx.cfg.hibernate_regions {
             let group_state = self.fsm.hibernate_state.group_state();

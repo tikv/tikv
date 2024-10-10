@@ -142,16 +142,6 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// For details, see the comment of `ForceLeaderState`.
     force_leader_state: Option<ForceLeaderState>,
     unsafe_recovery_state: Option<UnsafeRecoveryState>,
-    /// Whether the previous admin command is finished. If not, the current
-    /// admin command should be postponed.
-    ///
-    /// This is used to prevent the command from being applied before the
-    /// previous command is finished. Typically, this is used to prevent
-    /// the `TransferLeader` command from being applied before the
-    /// `SplitRegion` command is finished, vice versa.
-    /// TODO: maybe executions on admin commands should be serialized and
-    /// mutually exclusive.
-    pub last_admin_cmd_finished: bool,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -247,7 +237,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             region_merge_proposal_index: 0_u64,
             force_leader_state: None,
             unsafe_recovery_state: None,
-            last_admin_cmd_finished: true,
         };
 
         // If merge_context is not None, it means the PrepareMerge is applied before

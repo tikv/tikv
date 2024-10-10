@@ -318,6 +318,10 @@ impl<S: Snapshot> ProposedAdminCmd<S> {
             cbs: Vec::new(),
         }
     }
+
+    fn is_mutually_exclusive(&self) -> bool {
+        self.cmd_type == AdminCmdType::TransferLeader
+    }
 }
 
 struct CmdEpochChecker<S: Snapshot> {
@@ -381,6 +385,11 @@ impl<S: Snapshot> CmdEpochChecker<S> {
             }
             self.proposed_admin_cmd
                 .push_back(ProposedAdminCmd::new(cmd_type, epoch_state, index));
+        } else if epoch_state.check_ver || epoch_state.check_conf_ver {
+            let proposed = ProposedAdminCmd::new(cmd_type, epoch_state, index);
+            if proposed.is_mutually_exclusive() {
+                self.proposed_admin_cmd.push_back(proposed);
+            }
         }
     }
 
@@ -390,7 +399,8 @@ impl<S: Snapshot> CmdEpochChecker<S> {
             .rev()
             .find(|cmd| {
                 (check_ver && cmd.epoch_state.change_ver)
-                    || (check_conf_ver && cmd.epoch_state.change_conf_ver)
+                    || (check_conf_ver
+                        && (cmd.epoch_state.change_conf_ver || cmd.is_mutually_exclusive()))
             })
             .map(|cmd| cmd.index)
     }
@@ -925,16 +935,6 @@ where
     /// this peer has raft log gaps and whether should be marked busy on
     /// apply.
     pub last_leader_committed_idx: Option<u64>,
-    /// Whether the previous admin command is finished. If not, the current
-    /// admin command should be postponed.
-    ///
-    /// This is used to prevent the command from being applied before the
-    /// previous command is finished. Typically, this is used to prevent
-    /// the `TransferLeader` command from being applied before the
-    /// `SplitRegion` command is finished, vice versa.
-    /// TODO: maybe executions on admin commands should be serialized and
-    /// mutually exclusive.
-    pub last_admin_cmd_finished: bool,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -1086,7 +1086,6 @@ where
             snapshot_recovery_state: None,
             busy_on_apply: Some(false),
             last_leader_committed_idx: None,
-            last_admin_cmd_finished: true,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -2359,8 +2358,6 @@ where
                 },
             );
             self.cmd_epoch_checker.maybe_update_term(self.term());
-            // Reset it to execute the admin commands in the next ready.
-            self.last_admin_cmd_finished = true;
         } else if let Some(hs) = ready.hs() {
             if hs.get_term() != self.get_store().hard_state().get_term() {
                 self.on_leader_changed(self.leader_id(), hs.get_term());
@@ -4846,16 +4843,6 @@ where
             }
             Ok(msgs) => msgs,
         };
-        // If the peer has not finished the previous admin cmd yet, it should
-        // abort the current leader transfer operation.
-        if !self.last_admin_cmd_finished {
-            warn!(
-                "skip transfer leader, previous admin command is still running";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-            );
-            return false;
-        }
 
         ctx.raft_metrics.propose.transfer_leader.inc();
 
@@ -4895,8 +4882,6 @@ where
         // return immediately. Note that this command may fail, we can view it just as
         // an advice
         cb.invoke_with_response(make_transfer_leader_response());
-
-        self.last_admin_cmd_finished = !transferred;
 
         transferred
     }
@@ -4942,18 +4927,6 @@ where
                 self.term()
             ));
         }
-        // If the peer has not finished the previous admin cmds, it should not be able
-        // to propose a new conf change.
-        if !self.last_admin_cmd_finished {
-            info!("skip conf change, previous admin command is still running";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer_id(),
-            );
-            return Err(Error::Other(box_err!(
-                "region has pending admin commands, region_id[{}]",
-                self.region_id
-            )));
-        }
 
         if let Err(err) = ctx.coprocessor_host.pre_propose(self.region(), &mut req) {
             warn!("Coprocessor rejected proposing conf change.";
@@ -4986,10 +4959,6 @@ where
         };
         if let Err(ref e) = res {
             warn!("failed to propose confchange"; "error" => ?e);
-        } else {
-            // After proposed a conf change, the relative peer should be marked
-            // as not last admin command finished.
-            self.last_admin_cmd_finished = false;
         }
         res.map(Either::Left)
     }
@@ -6548,97 +6517,136 @@ mod tests {
         let split_admin = new_admin_request(AdminCmdType::BatchSplit);
         let prepare_merge_admin = new_admin_request(AdminCmdType::PrepareMerge);
         let change_peer_admin = new_admin_request(AdminCmdType::ChangePeer);
+        let transfer_leader_admin = new_admin_request(AdminCmdType::TransferLeader);
 
-        let mut epoch_checker = CmdEpochChecker::<KvTestSnapshot>::default();
+        // Check the conflicts on mutually exclusive commands.
+        {
+            let mut epoch_checker = CmdEpochChecker::<KvTestSnapshot>::default();
 
-        assert_eq!(epoch_checker.propose_check_epoch(&split_admin, 10), None);
-        assert_eq!(epoch_checker.term, 10);
-        epoch_checker.post_propose(AdminCmdType::BatchSplit, 5, 10);
-        assert_eq!(epoch_checker.proposed_admin_cmd.len(), 1);
-
-        // Both conflict with the split admin cmd
-        assert_eq!(epoch_checker.propose_check_epoch(&normal_cmd, 10), Some(5));
-        assert_eq!(
-            epoch_checker.propose_check_epoch(&prepare_merge_admin, 10),
-            Some(5)
-        );
-
-        assert_eq!(
-            epoch_checker.propose_check_epoch(&change_peer_admin, 10),
-            None
-        );
-        epoch_checker.post_propose(AdminCmdType::ChangePeer, 6, 10);
-        assert_eq!(epoch_checker.proposed_admin_cmd.len(), 2);
-
-        assert_eq!(
-            epoch_checker.last_cmd_index(AdminCmdType::BatchSplit),
-            Some(5)
-        );
-        assert_eq!(
-            epoch_checker.last_cmd_index(AdminCmdType::ChangePeer),
-            Some(6)
-        );
-        assert_eq!(
-            epoch_checker.last_cmd_index(AdminCmdType::PrepareMerge),
-            None
-        );
-
-        // Conflict with the change peer admin cmd
-        assert_eq!(
-            epoch_checker.propose_check_epoch(&change_peer_admin, 10),
-            Some(6)
-        );
-        // Conflict with the split admin cmd
-        assert_eq!(epoch_checker.propose_check_epoch(&normal_cmd, 10), Some(5));
-        // Conflict with the change peer admin cmd
-        assert_eq!(
-            epoch_checker.propose_check_epoch(&prepare_merge_admin, 10),
-            Some(6)
-        );
-
-        epoch_checker.advance_apply(4, 10, &region);
-        // Have no effect on `proposed_admin_cmd`
-        assert_eq!(epoch_checker.proposed_admin_cmd.len(), 2);
-
-        epoch_checker.advance_apply(5, 10, &region);
-        // Left one change peer admin cmd
-        assert_eq!(epoch_checker.proposed_admin_cmd.len(), 1);
-
-        assert_eq!(epoch_checker.propose_check_epoch(&normal_cmd, 10), None);
-
-        assert_eq!(epoch_checker.propose_check_epoch(&split_admin, 10), Some(6));
-        // Change term to 11
-        assert_eq!(epoch_checker.propose_check_epoch(&split_admin, 11), None);
-        assert_eq!(epoch_checker.term, 11);
-        // Should be empty
-        assert_eq!(epoch_checker.proposed_admin_cmd.len(), 0);
-
-        // Test attaching multiple callbacks.
-        epoch_checker.post_propose(AdminCmdType::BatchSplit, 7, 12);
-        let mut rxs = vec![];
-        for _ in 0..3 {
-            let conflict_idx = epoch_checker.propose_check_epoch(&normal_cmd, 12).unwrap();
-            let (cb, rx) = new_cb();
-            epoch_checker.attach_to_conflict_cmd(conflict_idx, cb);
-            rxs.push(rx);
+            assert_eq!(epoch_checker.propose_check_epoch(&split_admin, 10), None);
+            assert_eq!(epoch_checker.term, 10);
+            assert_eq!(
+                epoch_checker.propose_check_epoch(&transfer_leader_admin, 10),
+                None
+            );
+            // Transfer leader admin cmd should not be ignored.
+            epoch_checker.post_propose(AdminCmdType::TransferLeader, 5, 10);
+            assert_eq!(epoch_checker.proposed_admin_cmd.len(), 1);
+            // If there exists a transfer leader admin cmd, other admin cmds should be
+            // ignored.
+            assert_eq!(epoch_checker.propose_check_epoch(&split_admin, 10), Some(5));
+            assert_eq!(epoch_checker.propose_check_epoch(&normal_cmd, 10), None);
+            assert_eq!(
+                epoch_checker.propose_check_epoch(&prepare_merge_admin, 10),
+                Some(5)
+            );
+            assert_eq!(
+                epoch_checker.propose_check_epoch(&change_peer_admin, 10),
+                Some(5)
+            );
+            // Change term to 11
+            assert_eq!(epoch_checker.propose_check_epoch(&split_admin, 11), None);
+            epoch_checker.post_propose(AdminCmdType::BatchSplit, 6, 11);
+            assert_eq!(epoch_checker.proposed_admin_cmd.len(), 1);
+            // Both conflict with the split admin cmd
+            assert_eq!(
+                epoch_checker.propose_check_epoch(&transfer_leader_admin, 11),
+                Some(6)
+            );
         }
-        epoch_checker.advance_apply(7, 12, &region);
-        for rx in rxs {
+        // Test basic propose check
+        {
+            let mut epoch_checker = CmdEpochChecker::<KvTestSnapshot>::default();
+
+            assert_eq!(epoch_checker.propose_check_epoch(&split_admin, 10), None);
+            assert_eq!(epoch_checker.term, 10);
+            epoch_checker.post_propose(AdminCmdType::BatchSplit, 5, 10);
+            assert_eq!(epoch_checker.proposed_admin_cmd.len(), 1);
+
+            // Both conflict with the split admin cmd
+            assert_eq!(epoch_checker.propose_check_epoch(&normal_cmd, 10), Some(5));
+            assert_eq!(
+                epoch_checker.propose_check_epoch(&prepare_merge_admin, 10),
+                Some(5)
+            );
+
+            assert_eq!(
+                epoch_checker.propose_check_epoch(&change_peer_admin, 10),
+                None
+            );
+            epoch_checker.post_propose(AdminCmdType::ChangePeer, 6, 10);
+            assert_eq!(epoch_checker.proposed_admin_cmd.len(), 2);
+
+            assert_eq!(
+                epoch_checker.last_cmd_index(AdminCmdType::BatchSplit),
+                Some(5)
+            );
+            assert_eq!(
+                epoch_checker.last_cmd_index(AdminCmdType::ChangePeer),
+                Some(6)
+            );
+            assert_eq!(
+                epoch_checker.last_cmd_index(AdminCmdType::PrepareMerge),
+                None
+            );
+
+            // Conflict with the change peer admin cmd
+            assert_eq!(
+                epoch_checker.propose_check_epoch(&change_peer_admin, 10),
+                Some(6)
+            );
+            // Conflict with the split admin cmd
+            assert_eq!(epoch_checker.propose_check_epoch(&normal_cmd, 10), Some(5));
+            // Conflict with the change peer admin cmd
+            assert_eq!(
+                epoch_checker.propose_check_epoch(&prepare_merge_admin, 10),
+                Some(6)
+            );
+
+            epoch_checker.advance_apply(4, 10, &region);
+            // Have no effect on `proposed_admin_cmd`
+            assert_eq!(epoch_checker.proposed_admin_cmd.len(), 2);
+
+            epoch_checker.advance_apply(5, 10, &region);
+            // Left one change peer admin cmd
+            assert_eq!(epoch_checker.proposed_admin_cmd.len(), 1);
+
+            assert_eq!(epoch_checker.propose_check_epoch(&normal_cmd, 10), None);
+
+            assert_eq!(epoch_checker.propose_check_epoch(&split_admin, 10), Some(6));
+            // Change term to 11
+            assert_eq!(epoch_checker.propose_check_epoch(&split_admin, 11), None);
+            assert_eq!(epoch_checker.term, 11);
+            // Should be empty
+            assert_eq!(epoch_checker.proposed_admin_cmd.len(), 0);
+
+            // Test attaching multiple callbacks.
+            epoch_checker.post_propose(AdminCmdType::BatchSplit, 7, 12);
+            let mut rxs = vec![];
+            for _ in 0..3 {
+                let conflict_idx = epoch_checker.propose_check_epoch(&normal_cmd, 12).unwrap();
+                let (cb, rx) = new_cb();
+                epoch_checker.attach_to_conflict_cmd(conflict_idx, cb);
+                rxs.push(rx);
+            }
+            epoch_checker.advance_apply(7, 12, &region);
+            for rx in rxs {
+                rx.try_recv().unwrap();
+            }
+
+            // Should invoke callbacks when term is increased.
+            epoch_checker.post_propose(AdminCmdType::BatchSplit, 8, 12);
+            let (cb, rx) = new_cb();
+            epoch_checker.attach_to_conflict_cmd(8, cb);
+            assert_eq!(epoch_checker.propose_check_epoch(&normal_cmd, 13), None);
+            rx.try_recv().unwrap();
+
+            // Should invoke callbacks when it's dropped.
+            epoch_checker.post_propose(AdminCmdType::BatchSplit, 9, 13);
+            let (cb, rx) = new_cb();
+            epoch_checker.attach_to_conflict_cmd(9, cb);
+            drop(epoch_checker);
             rx.try_recv().unwrap();
         }
-
-        // Should invoke callbacks when term is increased.
-        epoch_checker.post_propose(AdminCmdType::BatchSplit, 8, 12);
-        let (cb, rx) = new_cb();
-        epoch_checker.attach_to_conflict_cmd(8, cb);
-        assert_eq!(epoch_checker.propose_check_epoch(&normal_cmd, 13), None);
-        rx.try_recv().unwrap();
-
-        // Should invoke callbacks when it's dropped.
-        epoch_checker.post_propose(AdminCmdType::BatchSplit, 9, 13);
-        let (cb, rx) = new_cb();
-        epoch_checker.attach_to_conflict_cmd(9, cb);
-        drop(epoch_checker);
-        rx.try_recv().unwrap();
     }
 }
