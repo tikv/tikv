@@ -4,6 +4,7 @@ use std::io::{self, Result};
 
 use byteorder::{NativeEndian, ReadBytesExt};
 
+#[allow(dead_code)]
 pub trait ReadLiteralExt: io::Read {
     #[inline]
     fn read_as_u8(&mut self) -> Result<u8> {

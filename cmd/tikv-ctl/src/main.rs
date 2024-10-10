@@ -1,6 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-#![feature(lazy_cell)]
 #![feature(let_chains)]
 
 #[macro_use]

@@ -161,6 +161,7 @@ struct TypeWrapper {
     cred_type: CredentialType,
 }
 
+#[allow(dead_code)]
 trait ResultExt {
     type Ok;
 

@@ -112,6 +112,7 @@ pub struct GcsStorage {
     client: GcpClient,
 }
 
+#[allow(dead_code)]
 trait ResultExt {
     type Ok;
 

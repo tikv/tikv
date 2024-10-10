@@ -401,6 +401,7 @@ impl SubscriptionTracer {
     }
 }
 
+#[allow(dead_code)]
 pub trait Ref {
     type Key;
     type Value;

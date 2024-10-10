@@ -1773,7 +1773,7 @@ where
     ) -> Result<(RaftCmdResponse, ApplyResult<EK::Snapshot>)> {
         fail_point!(
             "on_apply_write_cmd",
-            cfg!(release) || self.id() == 3,
+            cfg!(not(debug_assertions)) || self.id() == 3,
             |_| {
                 unimplemented!();
             }

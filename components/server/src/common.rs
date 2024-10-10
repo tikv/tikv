@@ -644,7 +644,7 @@ impl EnginesResourceInfo {
         );
     }
 
-    #[cfg(any(test, feature = "testexport"))]
+    #[cfg(test)]
     pub fn latest_normalized_pending_bytes(&self) -> u32 {
         self.latest_normalized_pending_bytes.load(Ordering::Relaxed)
     }

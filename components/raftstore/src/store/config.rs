@@ -493,12 +493,12 @@ impl Default for Config {
             leader_transfer_max_log_lag: 128,
             snap_apply_batch_size: ReadableSize::mb(10),
             snap_apply_copy_symlink: false,
-            region_worker_tick_interval: if cfg!(feature = "test") {
+            region_worker_tick_interval: if cfg!(test) {
                 ReadableDuration::millis(200)
             } else {
                 ReadableDuration::millis(1000)
             },
-            clean_stale_ranges_tick: if cfg!(feature = "test") { 1 } else { 10 },
+            clean_stale_ranges_tick: if cfg!(test) { 1 } else { 10 },
             lock_cf_compact_interval: ReadableDuration::minutes(10),
             lock_cf_compact_bytes_threshold: ReadableSize::mb(256),
             // Disable consistency check by default as it will hurt performance.

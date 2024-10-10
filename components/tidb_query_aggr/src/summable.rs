@@ -6,6 +6,7 @@ use tidb_query_datatype::{codec::data_type::*, expr::EvalContext};
 /// A trait for all summable types.
 ///
 /// This trait is used to implement `AVG()` and `SUM()` by using generics.
+#[allow(dead_code)]
 pub trait Summable: Evaluable + EvaluableRet {
     /// Returns the zero value.
     fn zero() -> Self;

@@ -32,7 +32,6 @@
 #![allow(incomplete_features)]
 #![feature(core_io_borrowed_buf)]
 #![feature(assert_matches)]
-#![feature(associated_type_bounds)]
 
 #[macro_use(fail_point)]
 extern crate fail;

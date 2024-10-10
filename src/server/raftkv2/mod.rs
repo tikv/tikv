@@ -276,7 +276,7 @@ impl<EK: KvEngine, ER: RaftEngine> tikv_kv::Engine for RaftKv2<EK, ER> {
     }
 
     type IMSnap = Self::Snap;
-    type IMSnapshotRes = Self::SnapshotRes;
+    type IMSnapshotRes = impl Future<Output = tikv_kv::Result<Self::Snap>> + Send + 'static;
     fn async_in_memory_snapshot(&mut self, ctx: tikv_kv::SnapContext<'_>) -> Self::IMSnapshotRes {
         self.async_snapshot(ctx)
     }
