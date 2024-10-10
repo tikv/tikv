@@ -51,7 +51,7 @@ fn vec_l2_norm(a: VectorFloat32Ref) -> Result<Option<Real>> {
     Ok(Real::new(a.l2_norm()?).ok())
 }
 
-// note: The distance calculated by the simd instruction will 
+// note: The distance calculated by the simd instruction will
 // be different depending on the platform. The following is based on x86.
 #[cfg(test)]
 mod tests {
