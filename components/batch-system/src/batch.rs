@@ -606,7 +606,7 @@ where
             .spawn_wrapper(move || {
                 tikv_alloc::thread_allocate_exclusive_arena().unwrap();
                 tikv_util::thread_group::set_properties(props);
-                set_io_type(IoType::ForegroundWrite);
+                set_io_type(IoType::RaftstoreControl);
                 poller.control_poll();
             })
             .unwrap();

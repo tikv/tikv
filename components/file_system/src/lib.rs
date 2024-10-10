@@ -77,6 +77,7 @@ pub enum IoType {
     Export = 10,
     RewriteLog = 11,
     VerifyChecksum = 12,
+    RaftstoreControl = 13,
 }
 
 impl IoType {
@@ -95,6 +96,7 @@ impl IoType {
             IoType::Export => "export",
             IoType::RewriteLog => "log_rewrite",
             IoType::VerifyChecksum => "verify_checksum",
+            IoType::RaftstoreControl => "raftstore_control",
         }
     }
 }
