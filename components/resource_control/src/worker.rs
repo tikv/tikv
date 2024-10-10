@@ -272,7 +272,7 @@ impl<R: ResourceStatsProvider> GroupQuotaAdjustWorker<R> {
         let mut available_resource_rate = ((resource_stats.total_quota
             - resource_stats.current_used
             + background_consumed_total)
-            * 0.9)
+            * 0.8)
             .min(resource_stats.total_quota * util_limit_percent)
             .max(resource_stats.total_quota * 0.1);
         let mut total_expected_cost = 0.0;
