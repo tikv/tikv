@@ -51,6 +51,8 @@ fn vec_l2_norm(a: VectorFloat32Ref) -> Result<Option<Real>> {
     Ok(Real::new(a.l2_norm()?).ok())
 }
 
+// note: The distance calculated by the simd instruction will 
+// be different depending on the platform. The following is based on x86.
 #[cfg(test)]
 mod tests {
 
@@ -164,29 +166,29 @@ mod tests {
             (
                 Some(vec![1.0, 2.0]),
                 Some(vec![2.0, 4.0]),
-                Some(0.004130363464355469),
+                Some(0.00007439282489940524),
             ),
             (Some(vec![1.0, 2.0]), Some(vec![0.0, 0.0]), Some(1.0)),
             (
                 Some(vec![1.0, 1.0]),
                 Some(vec![1.0, 1.0]),
-                Some(0.00572967529296875),
+                Some(0.0001057357294484973),
             ),
             (Some(vec![1.0, 0.0]), Some(vec![0.0, 2.0]), Some(1.0)),
             (
                 Some(vec![1.0, 1.0]),
                 Some(vec![-1.0, -1.0]),
-                Some(1.9942703247070313),
+                Some(1.9998942642705515),
             ),
             (
                 Some(vec![1.0, 1.0]),
                 Some(vec![1.1, 1.1]),
-                Some(0.00022123077178548556),
+                Some(0.00004421662613961208),
             ),
             (
                 Some(vec![1.0, 1.0]),
                 Some(vec![-1.1, -1.1]),
-                Some(1.9997787692282145),
+                Some(1.9999557833738604),
             ),
             (Some(vec![3e38]), Some(vec![3e38]), None), // NaN turns to NULL
             (Some(vec![1.0, 2.0]), None, None),
