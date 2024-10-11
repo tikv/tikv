@@ -1,31 +1,44 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::cmp::Ordering;
+
 use codec::prelude::*;
-use ordered_float::OrderedFloat;
-use simsimd::SpatialSimilarity;
-use static_assertions::assert_eq_size;
 
 use crate::codec::Result;
 
-const LEN_PREFIX_SIZE: usize = std::mem::size_of::<u32>();
-const ELEMENT_SIZE: usize = std::mem::size_of::<f32>();
+const F32_SIZE: usize = std::mem::size_of::<f32>();
 
-/// Aligned, Owned.
-#[derive(Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
+// TODO: Implement generic version
+#[derive(Clone, Eq, Hash, PartialEq)]
 pub struct VectorFloat32 {
-    pub value: Vec<OrderedFloat<f32>>, // Data must be aligned
+    // Use Vec<u8> instead of Vec<f32> to avoid reading from unaligned bytes. For example,
+    // bytes read from protobuf is usually not aligned by f32.
+    pub value: Vec<u8>,
+}
+
+impl Ord for VectorFloat32 {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.as_ref().cmp(&other.as_ref())
+    }
+}
+
+impl PartialOrd for VectorFloat32 {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 impl VectorFloat32 {
-    pub fn copy_from_f32(value: &[f32]) -> Self {
-        let ordered_value: Vec<OrderedFloat<f32>> =
-            value.iter().map(|v| OrderedFloat(*v)).collect();
-        VectorFloat32 {
-            value: ordered_value,
-        }
+    pub fn new(value: Vec<u8>) -> Result<Self> {
+        _ = VectorFloat32Ref::new(&value[..])?;
+        Ok(VectorFloat32 { value })
     }
 
-    #[inline]
+    pub fn from_f32(value: Vec<f32>) -> Result<Self> {
+        let value_u8: &[u8] = bytemuck::cast_slice(&value);
+        VectorFloat32::new(value_u8.to_owned())
+    }
+
     pub fn as_ref(&self) -> VectorFloat32Ref<'_> {
         VectorFloat32Ref { value: &self.value }
     }
@@ -43,58 +56,110 @@ impl std::fmt::Debug for VectorFloat32 {
     }
 }
 
-/// Aligned, Ref.
-#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub struct VectorFloat32Ref<'a> {
-    value: &'a [OrderedFloat<f32>], // Data must be aligned
-}
-
-impl<'a> std::ops::Index<usize> for VectorFloat32Ref<'a> {
-    type Output = f32;
-
-    #[inline]
-    fn index(&self, index: usize) -> &Self::Output {
-        &self.value[index].0
+pub trait VectorFloat32DatumPayloadChunkEncoder: BufferWriter {
+    fn write_vector_float32_to_chunk_by_datum_payload(&mut self, src_payload: &[u8]) -> Result<()> {
+        // VectorFloat32's chunk format is same as binary format.
+        self.write_bytes(src_payload)?;
+        Ok(())
     }
 }
 
-assert_eq_size!(OrderedFloat<f32>, f32);
+impl<T: BufferWriter> VectorFloat32DatumPayloadChunkEncoder for T {}
+
+impl<T: BufferWriter> VectorFloat32Encoder for T {}
+
+pub trait VectorFloat32Decoder: NumberDecoder {
+    // `read_vector_float32_ref` decodes value encoded by `write_vector_float32`
+    // before.
+    fn read_vector_float32_ref(&mut self) -> Result<VectorFloat32Ref<'_>> {
+        if !cfg!(target_endian = "little") {
+            return Err(box_err!("VectorFloat32 only support Little Endian"));
+        }
+
+        if self.bytes().is_empty() {
+            return VectorFloat32Ref::new(&[]);
+        }
+        let n = self.read_u32_le()? as usize;
+        let data_size = n * F32_SIZE;
+        let data = self.read_bytes(data_size)?;
+        VectorFloat32Ref::new(data)
+    }
+
+    // `read_vector_float32` decodes value encoded by `write_vector_float32` before.
+    fn read_vector_float32(&mut self) -> Result<VectorFloat32> {
+        let r = self.read_vector_float32_ref()?;
+        Ok(r.to_owned())
+    }
+}
+
+impl<T: BufferReader> VectorFloat32Decoder for T {}
+
+/// Represents a reference of VectorFloat32 value aiming to reduce memory copy.
+#[derive(Clone, Copy, Eq, PartialEq, Hash)]
+pub struct VectorFloat32Ref<'a> {
+    // Use &[u8] instead of &[u32] to allow reading from unaligned bytes. For example,
+    // bytes read from protobuf is usually not aligned by f32.
+    value: &'a [u8],
+}
+
+impl<'a> Ord for VectorFloat32Ref<'a> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        let la = self.len();
+        let lb = other.len();
+        let common_len = std::cmp::min(la, lb);
+        for i in 0..common_len {
+            if self.index(i) > other.index(i) {
+                return Ordering::Greater;
+            } else if self.index(i) < other.index(i) {
+                return Ordering::Less;
+            }
+        }
+        la.cmp(&lb)
+    }
+}
+
+impl<'a> PartialOrd for VectorFloat32Ref<'a> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
 
 impl<'a> VectorFloat32Ref<'a> {
-    pub fn from_f32(value: &[f32]) -> VectorFloat32Ref<'_> {
-        // OrderedFloat is POD, so it is safe.
-        let ordered_value = unsafe {
-            std::slice::from_raw_parts(value.as_ptr() as *const OrderedFloat<f32>, value.len())
-        };
-        VectorFloat32Ref {
-            value: ordered_value,
+    pub fn new(value: &[u8]) -> Result<VectorFloat32Ref<'_>> {
+        if value.len() % F32_SIZE != 0 {
+            return Err(box_err!("Vector length error. Please check the input."));
         }
+        let check_vec = VectorFloat32Ref { value };
+        for i in 0..check_vec.len() {
+            if check_vec.index(i).is_nan() {
+                return Err(box_err!("NaN not allowed in vector"));
+            }
+            if check_vec.index(i).is_infinite() {
+                return Err(box_err!("infinite value not allowed in vector"));
+            }
+        }
+        Ok(check_vec)
     }
 
-    #[inline]
-    pub fn data(&self) -> &[f32] {
-        // OrderedFloat is POD, so it is safe.
-        unsafe { std::slice::from_raw_parts(self.value.as_ptr() as *const f32, self.value.len()) }
+    pub fn from_f32(value: &[f32]) -> Result<VectorFloat32Ref<'_>> {
+        let vec_u8: &[u8] = bytemuck::cast_slice(value);
+        VectorFloat32Ref::new(vec_u8)
     }
 
-    #[inline]
     pub fn encoded_len(&self) -> usize {
-        self.value.len() * ELEMENT_SIZE + LEN_PREFIX_SIZE
+        self.value.len() + std::mem::size_of::<u32>()
     }
 
-    #[inline]
     pub fn to_owned(&self) -> VectorFloat32 {
         VectorFloat32 {
             value: self.value.to_owned(),
         }
     }
 
-    #[inline]
     pub fn len(&self) -> usize {
-        self.value.len()
+        self.value.len() / F32_SIZE
     }
 
-    #[inline]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -109,16 +174,136 @@ impl<'a> VectorFloat32Ref<'a> {
         }
         Ok(())
     }
+
+    fn index(&self, idx: usize) -> f32 {
+        if idx > self.len() {
+            panic!(
+                "Index out of bounds: index = {}, length = {}",
+                idx,
+                self.len()
+            );
+        }
+        let byte_index: usize = idx * F32_SIZE;
+        unsafe {
+            let float_ptr = self.value.as_ptr().add(byte_index) as *const f32;
+            float_ptr.read_unaligned()
+        }
+    }
+
+    // An unsafe function to get the 'f32' value without boundary check.
+    // it will check the bounding in debug model and remove the check in
+    // release.
+    unsafe fn index_unchecked(&self, idx: usize) -> f32 {
+        #[cfg(debug_assertions)]
+        {
+            if idx > self.len() {
+                panic!(
+                    "Index out of bounds: index = {}, length = {}",
+                    idx,
+                    self.len()
+                );
+            }
+        }
+        let byte_index: usize = idx * 4;
+        let float_ptr = self.value.as_ptr().add(byte_index) as *const f32;
+        float_ptr.read_unaligned()
+    }
+
+    pub fn l2_squared_distance(&self, b: VectorFloat32Ref<'a>) -> Result<f64> {
+        self.check_dims(b)?;
+        let mut distance: f32 = 0.0;
+
+        for i in 0..self.len() {
+            let diff = unsafe { self.index_unchecked(i) - b.index_unchecked(i) };
+            distance += diff * diff;
+        }
+
+        Ok(distance as f64)
+    }
+
+    pub fn l2_distance(&self, b: VectorFloat32Ref<'a>) -> Result<f64> {
+        Ok(self.l2_squared_distance(b)?.sqrt())
+    }
+
+    pub fn inner_product(&self, b: VectorFloat32Ref<'a>) -> Result<f64> {
+        self.check_dims(b)?;
+        let mut distance: f32 = 0.0;
+        for i in 0..self.len() {
+            distance += unsafe { self.index_unchecked(i) * b.index_unchecked(i) };
+        }
+
+        Ok(distance as f64)
+    }
+
+    pub fn cosine_distance(&self, b: VectorFloat32Ref<'a>) -> Result<f64> {
+        self.check_dims(b)?;
+        let mut distance: f32 = 0.0;
+        let mut norma: f32 = 0.0;
+        let mut normb: f32 = 0.0;
+        for i in 0..self.len() {
+            unsafe {
+                distance += self.index_unchecked(i) * b.index_unchecked(i);
+                norma += self.index_unchecked(i) * self.index_unchecked(i);
+                normb += b.index_unchecked(i) * b.index_unchecked(i);
+            }
+        }
+
+        let similarity = (distance as f64) / ((norma as f64) * (normb as f64)).sqrt();
+        if similarity.is_nan() {
+            // Divide by zero
+            return Ok(std::f64::NAN);
+        }
+        let similarity = similarity.clamp(-1.0, 1.0);
+        Ok(1.0 - similarity)
+    }
+
+    pub fn l1_distance(&self, b: VectorFloat32Ref<'a>) -> Result<f64> {
+        self.check_dims(b)?;
+        let mut distance: f32 = 0.0;
+        for i in 0..self.len() {
+            let diff = unsafe { self.index_unchecked(i) - b.index_unchecked(i) };
+            distance += diff.abs();
+        }
+
+        Ok(distance as f64)
+    }
+
+    pub fn l2_norm(&self) -> f64 {
+        // Note: We align the impl with pgvector: Only l2_norm use double
+        // precision during calculation.
+        let mut norm: f64 = 0.0;
+        for i in 0..self.len() {
+            let v = unsafe { self.index_unchecked(i) as f64 };
+            norm += v * v;
+        }
+
+        norm.sqrt()
+    }
+}
+
+pub trait VectorFloat32Encoder: NumberEncoder {
+    fn write_vector_float32(&mut self, data: VectorFloat32Ref<'_>) -> Result<()> {
+        if !cfg!(target_endian = "little") {
+            return Err(box_err!("VectorFloat32 only support Little Endian"));
+        }
+
+        self.write_u32_le(data.len() as u32)?;
+        self.write_bytes(data.value)?;
+
+        Ok(())
+    }
 }
 
 impl std::fmt::Display for VectorFloat32Ref<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "[")?;
+        let mut is_first = true;
         for i in 0..self.len() {
-            if i == 0 {
-                write!(f, "{}", self[i])?;
+            if is_first {
+                write!(f, "{}", self.index(i))?;
+                is_first = false;
             } else {
-                write!(f, ",{}", self[i])?;
+                write!(f, ",{}", self.index(i))?;
             }
         }
         write!(f, "]")?;
@@ -138,182 +323,84 @@ impl ToString for VectorFloat32Ref<'_> {
     }
 }
 
-// Vector distance and functions
-impl<'a> VectorFloat32Ref<'a> {
-    #[inline]
-    pub fn l2_squared_distance(&self, b: VectorFloat32Ref<'a>) -> Result<f64> {
-        match f32::sqeuclidean(self.data(), b.data()) {
-            Some(l2_distance) => Ok(l2_distance),
-            None => Err(box_err!("Vectors must be of the same length")),
-        }
-    }
-
-    #[inline]
-    pub fn l2_distance(&self, b: VectorFloat32Ref<'a>) -> Result<f64> {
-        Ok(self.l2_squared_distance(b)?.sqrt())
-    }
-
-    #[inline]
-    pub fn inner_product(&self, b: VectorFloat32Ref<'a>) -> Result<f64> {
-        match f32::dot(self.data(), b.data()) {
-            Some(inner_product) => Ok(inner_product),
-            None => Err(box_err!("Vectors must be of the same length")),
-        }
-    }
-
-    #[inline]
-    pub fn cosine_distance(&self, b: VectorFloat32Ref<'a>) -> Result<f64> {
-        match f32::cosine(self.data(), b.data()) {
-            Some(cosine_similarity) => Ok(cosine_similarity),
-            None => Err(box_err!("Vectors must be of the same length")),
-        }
-    }
-
-    pub fn l1_distance(&self, b: VectorFloat32Ref<'a>) -> Result<f64> {
-        self.check_dims(b)?;
-        let mut distance: f32 = 0.0;
-        for i in 0..self.len() {
-            let diff = self[i] - b[i];
-            distance += diff.abs();
-        }
-
-        Ok(distance as f64)
-    }
-
-    #[inline]
-    pub fn l2_norm(&self) -> Result<f64> {
-        // Note: We align the impl with pgvector: Only l2_norm use double
-        // precision during calculation.
-        match f32::dot(self.data(), self.data()) {
-            Some(norm) => Ok(norm.sqrt()),
-            None => Err(box_err!("Vectors must be of the same length")),
-        }
-    }
-}
-
-pub trait VectorFloat32DatumPayloadChunkEncoder: BufferWriter {
-    fn write_vector_float32_to_chunk_by_datum_payload(&mut self, src_payload: &[u8]) -> Result<()> {
-        // VectorFloat32's chunk format is same as binary format.
-        self.write_bytes(src_payload)?;
-        Ok(())
-    }
-}
-
-impl<T: BufferWriter> VectorFloat32DatumPayloadChunkEncoder for T {}
-
-impl<T: BufferWriter> VectorFloat32Encoder for T {}
-
-/// Unaligned, Ref.
-#[derive(Clone, Copy, Debug)]
-pub struct VectorFloat32RefUnaligned<'a> {
-    value: &'a [u8], // Data could be notaligned. Does not contain length prefix.
-}
-
-impl<'a> VectorFloat32RefUnaligned<'a> {
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.value.len() / ELEMENT_SIZE
-    }
-
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.value.len() == 0
-    }
-
-    /// It's safe to convert a unaligned ref to an aligned owned value. We will
-    /// copy data with proper alignment.
-    pub fn to_owned(&self) -> VectorFloat32 {
-        let mut aligned_data: Vec<OrderedFloat<f32>> = Vec::new();
-        aligned_data.resize(self.len(), OrderedFloat(0.0f32));
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                self.value.as_ptr(),              // Aligned by u8
-                aligned_data.as_mut_ptr().cast(), // Aligned by f32 → u8
-                self.value.len(),
-            )
-        }
-        VectorFloat32 {
-            value: aligned_data,
-        }
-    }
-}
-
-pub trait VectorFloat32Decoder: NumberDecoder {
-    // `read_vector_float32_ref` decodes value encoded by `write_vector_float32`
-    // before.
-    fn read_vector_float32_ref(&mut self) -> Result<VectorFloat32RefUnaligned<'_>> {
-        if !cfg!(target_endian = "little") {
-            return Err(box_err!("VectorFloat32 only support Little Endian"));
-        }
-
-        if self.bytes().is_empty() {
-            return Ok(VectorFloat32RefUnaligned { value: &[] });
-        }
-        let n = self.read_u32_le()? as usize;
-        let data_size = n * ELEMENT_SIZE;
-        let data = self.read_bytes(data_size)?;
-        Ok(VectorFloat32RefUnaligned { value: data })
-    }
-
-    // `read_vector_float32` decodes value encoded by `write_vector_float32` before.
-    fn read_vector_float32(&mut self) -> Result<VectorFloat32> {
-        let r = self.read_vector_float32_ref()?;
-        Ok(r.to_owned())
-    }
-}
-
-impl<T: BufferReader> VectorFloat32Decoder for T {}
-
-pub trait VectorFloat32Encoder: NumberEncoder {
-    fn write_vector_float32(&mut self, data: VectorFloat32Ref<'_>) -> Result<()> {
-        if !cfg!(target_endian = "little") {
-            return Err(box_err!("VectorFloat32 only support Little Endian"));
-        }
-        self.write_u32_le(data.len() as u32)?;
-        self.write_bytes(bytemuck::cast_slice(data.data()))?;
-        Ok(())
-    }
-}
-
 #[cfg(test)]
 mod tests {
-
     use super::*;
 
     #[test]
+    fn test_nan_inf() {
+        let v = VectorFloat32::from_f32(vec![1.0, std::f32::NAN]);
+        v.unwrap_err();
+
+        let v = VectorFloat32::from_f32(vec![1.0, std::f32::INFINITY]);
+        v.unwrap_err();
+
+        let v = VectorFloat32::from_f32(vec![1.0, std::f32::NEG_INFINITY]);
+        v.unwrap_err();
+
+        let v = VectorFloat32Ref::from_f32(&[1.0, std::f32::NAN]);
+        v.unwrap_err();
+
+        let v = VectorFloat32Ref::from_f32(&[1.0, std::f32::INFINITY]);
+        v.unwrap_err();
+
+        let v = VectorFloat32Ref::from_f32(&[1.0, std::f32::NEG_INFINITY]);
+        v.unwrap_err();
+    }
+
+    #[test]
     fn test_to_string() {
-        let v = VectorFloat32::copy_from_f32(&[1.0, 2.0]);
+        let v = VectorFloat32::from_f32(vec![1.0, 2.0]).unwrap();
         assert_eq!("[1,2]", v.to_string());
 
-        let v = VectorFloat32::copy_from_f32(&[1.1, 2.2]);
+        let v = VectorFloat32::from_f32(vec![1.1, 2.2]).unwrap();
         assert_eq!("[1.1,2.2]", v.to_string());
 
-        let v = VectorFloat32::copy_from_f32(&[]);
+        let v = VectorFloat32::from_f32(vec![]).unwrap();
         assert_eq!("[]", v.to_string());
     }
 
     #[test]
+    fn test_input_length() {
+        let buf: Vec<u8> = vec![
+            0xcd, 0xcc, 0x8c, 0x3f, // Element 1 = 0x3f8ccccd
+            0xcd, 0xcc, 0x0c, 0x40, // Element 2 = 0x400ccccd
+            0xcd, 0xcc, 0x0c,
+        ];
+        let v = VectorFloat32Ref::new(&buf[..]);
+        v.unwrap_err();
+
+        let buf: Vec<u8> = vec![
+            0xcd, 0xcc, 0x8c, 0x3f, // Element 1 = 0x3f8ccccd
+            0xcd, 0xcc, 0x0c, 0x40, // Element 2 = 0x400ccccd
+            0xcd, 0xcc, 0x0c, 0x40,
+        ];
+        let v = VectorFloat32Ref::new(&buf[..]);
+        v.unwrap();
+    }
+
+    #[test]
     fn test_compare() {
-        let v1 = VectorFloat32::copy_from_f32(&[1.0, 2.0]);
-        let v2 = VectorFloat32::copy_from_f32(&[1.1, 2.2]);
+        let v1 = VectorFloat32::from_f32(vec![1.0, 2.0]).unwrap();
+        let v2 = VectorFloat32::from_f32(vec![1.1, 2.2]).unwrap();
         assert!(v1 < v2);
 
-        let v3 = VectorFloat32::copy_from_f32(&[1.0, 2.0]);
+        let v3 = VectorFloat32::from_f32(vec![1.0, 2.0]).unwrap();
         assert!(v1 == v3);
 
-        let v4 = VectorFloat32::copy_from_f32(&[0.3, 0.4]);
+        let v4 = VectorFloat32::from_f32(vec![0.3, 0.4]).unwrap();
         assert!(v1 > v4);
 
-        let v4 = VectorFloat32::copy_from_f32(&[1.0]);
+        let v4 = VectorFloat32::from_f32(vec![1.0]).unwrap();
         assert!(v1 > v4);
 
-        let v5 = VectorFloat32::copy_from_f32(&[1.0, 2.0, 0.5]);
+        let v5 = VectorFloat32::from_f32(vec![1.0, 2.0, 0.5]).unwrap();
         assert!(v1 < v5);
     }
 
     #[test]
     fn test_encode() {
-        let v = VectorFloat32::copy_from_f32(&[1.1, 2.2]);
+        let v = VectorFloat32::from_f32(vec![1.1, 2.2]).unwrap();
         let mut encoded = Vec::new();
 
         encoded.write_vector_float32(v.as_ref()).unwrap();
@@ -342,7 +429,7 @@ mod tests {
         let v = buf_slice.read_vector_float32_ref().unwrap();
 
         assert_eq!(v.len(), 2);
-        assert_eq!(v.to_owned().as_ref().to_string(), "[1.1,2.2]");
+        assert_eq!(v.to_string(), "[1.1,2.2]");
 
         assert_eq!(buf_slice.len(), 1);
         assert_eq!(buf_slice, &[0xff]);
@@ -354,11 +441,9 @@ mod tests {
         buf_slice = &[];
         let v = buf_slice.read_vector_float32_ref().unwrap();
         assert_eq!(v.len(), 0);
-        assert_eq!(v.to_owned().as_ref().to_string(), "[]");
+        assert_eq!(v.to_string(), "[]");
         let mut encode_buf = Vec::new();
-        encode_buf
-            .write_vector_float32(v.to_owned().as_ref())
-            .unwrap();
+        encode_buf.write_vector_float32(v).unwrap();
         assert_eq!(encode_buf, vec![0x00, 0x00, 0x00, 0x00]);
     }
 }
