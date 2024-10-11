@@ -43,7 +43,7 @@ pub use self::{
         Task as RefreshConfigTask, WriterContoller,
     },
     region::{Runner as RegionRunner, Task as RegionTask},
-    snap_gen::{Runner as SnapGenRunner, Task as SnapGenTask},
+    snap_gen::{Runner as SnapGenRunner, Task as SnapGenTask, SNAP_GENERATOR_MAX_POOL_SIZE},
     split_check::{
         Bucket, BucketRange, BucketStatsInfo, KeyEntry, Runner as SplitCheckRunner,
         Task as SplitCheckTask,

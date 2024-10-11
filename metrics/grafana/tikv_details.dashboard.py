@@ -1267,13 +1267,13 @@ def ThreadCPU() -> RowPanel:
                 ],
             ),
             graph_panel(
-                title="Snap generator CPU",
+                title="Snap gen worker CPU",
                 yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
                 targets=[
                     target(
                         expr=expr_sum_rate(
                             "tikv_thread_cpu_seconds_total",
-                            label_selectors=['name=~"snap_generator.*"'],
+                            label_selectors=['name=~"snap_gen_worker.*"'],
                         ),
                     ),
                 ],

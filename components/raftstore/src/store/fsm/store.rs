@@ -107,7 +107,7 @@ use crate::{
             CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
             GcSnapshotRunner, GcSnapshotTask, PdRunner, RaftlogGcRunner, RaftlogGcTask,
             ReadDelegate, RefreshConfigRunner, RefreshConfigTask, RegionRunner, RegionTask,
-            SnapGenRunner, SnapGenTask, SplitCheckTask,
+            SnapGenRunner, SnapGenTask, SplitCheckTask, SNAP_GENERATOR_MAX_POOL_SIZE,
         },
         worker_metrics::PROCESS_STAT_CPU_USAGE,
         Callback, CasualMessage, CompactThreshold, FullCompactController, GlobalReplicationState,
@@ -122,7 +122,6 @@ type Key = Vec<u8>;
 pub const PENDING_MSG_CAP: usize = 100;
 pub const ENTRY_CACHE_EVICT_TICK_DURATION: Duration = Duration::from_secs(1);
 pub const MULTI_FILES_SNAPSHOT_FEATURE: Feature = Feature::require(6, 1, 0); // it only makes sense for large region
-const SNAP_GENERATOR_MAX_POOL_SIZE: usize = 16;
 
 // Every 30 minutes, check if we can run full compaction. This allows the config
 // setting `periodic_full_compact_start_times` to be changed dynamically.

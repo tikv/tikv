@@ -23,9 +23,12 @@ use tikv_util::{
     worker::Runnable,
     yatp_pool::FuturePool,
 };
+use tokio::sync::Semaphore;
 
 use super::metrics::*;
 use crate::store::{self, snap::Result, transport::CasualRouter, CasualMessage, SnapManager};
+
+pub const SNAP_GENERATOR_MAX_POOL_SIZE: usize = 16;
 
 const TIFLASH: &str = "tiflash";
 const ENGINE: &str = "engine";
@@ -167,6 +170,7 @@ where
     router: R,
     pd_client: Option<Arc<T>>,
     pool: FuturePool,
+    semaphore: Arc<Semaphore>,
 }
 
 impl<EK, R, T> Runner<EK, R, T>
@@ -189,6 +193,7 @@ where
             router,
             pd_client,
             pool,
+            semaphore: Arc::new(Semaphore::new(SNAP_GENERATOR_MAX_POOL_SIZE)),
         }
     }
 }
@@ -241,8 +246,13 @@ where
                     router: self.router.clone(),
                     start: UnixSecs::now(),
                 };
+
                 let scheduled_time = Instant::now_coarse();
+                let semaphore = self.semaphore.clone();
                 self.pool.spawn(async move {
+                    // Limit the concurrency of the snapshot generation tasks.
+                    let _permit = semaphore.acquire().await;
+
                     SNAP_GEN_WAIT_DURATION_HISTOGRAM
                         .observe(scheduled_time.saturating_elapsed_secs());
 
