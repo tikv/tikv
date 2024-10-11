@@ -227,8 +227,8 @@ sysinfo = { git = "https://github.com/tikv/sysinfo", branch = "0.26-fix-cpu" }
 # When you modify TiKV cooperatively with kvproto, this will be useful to submit the PR to TiKV and the PR to
 # kvproto at the same time.
 # After the PR to kvproto is merged, remember to comment this out and run `cargo update -p kvproto`.
-[patch.'https://github.com/pingcap/kvproto']
-kvproto = { git = "https://github.com/yujuncen/kvproto", branch = "compact-log-backup" }
+# [patch.'https://github.com/pingcap/kvproto']
+# kvproto = { git = "https://github.com/your_github_id/kvproto", branch = "your_branch" }
 #
 # After the PR to rust-rocksdb is merged, remember to comment this out and run `cargo update -p rocksdb`.
 # [patch.'https://github.com/tikv/rust-rocksdb']
@@ -285,7 +285,7 @@ members = [
   "components/service",
   "components/snap_recovery",
   "components/sst_importer",
-  "components/test_backup", 
+  "components/test_backup",
   "components/test_coprocessor",
   "components/test_coprocessor_plugin/example_plugin",
   "components/test_pd",

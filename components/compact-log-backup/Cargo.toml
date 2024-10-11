@@ -8,7 +8,7 @@ edition = "2021"
 failpoints = ["fail/failpoints"]
 
 [dependencies]
-async-compression = { version = "0.3.14", features = ["tokio", "zstd"] }
+async-compression = { version = "0.4.12", features = ["tokio", "futures-io", "zstd"] }
 bytes = "1"
 chrono = { workspace = true }
 codec = { workspace = true }
