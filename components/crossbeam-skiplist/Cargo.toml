@@ -32,9 +32,6 @@ alloc = ["crossbeam-epoch/alloc"]
 crossbeam-epoch = { workspace = true }
 crossbeam-utils = { workspace = true }
 
-[dev-dependencies]
-rand = "0.8"
-
 # Rename test and example binary names to pass TiKV jemalloc check.
 [[test]]
 name = "crossbeam_skiplist_base"

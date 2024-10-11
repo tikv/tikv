@@ -93,15 +93,6 @@ impl ResolvedRegions {
         }
     }
 
-    /// take the region checkpoints from the structure.
-    #[deprecated = "please use `take_resolve_result` instead."]
-    pub fn take_region_checkpoints(&mut self) -> Vec<(Region, TimeStamp)> {
-        std::mem::take(&mut self.items)
-            .into_iter()
-            .map(|x| (x.region, x.checkpoint))
-            .collect()
-    }
-
     /// take the resolve result from this struct.
     pub fn take_resolve_result(&mut self) -> Vec<ResolveResult> {
         std::mem::take(&mut self.items)
@@ -840,6 +831,8 @@ mod test {
         time::Duration,
     };
 
+    use dashmap::DashMap;
+    use encryption::BackupEncryptionManager;
     use engine_test::{kv::KvTestEngine, raft::RaftTestEngine};
     use kvproto::{
         brpb::{Noop, StorageBackend, StreamBackupTaskInfo},
@@ -850,7 +843,10 @@ mod test {
         router::{CdcRaftRouter, ServerRaftStoreRouter},
         RegionInfo,
     };
-    use tikv::{config::BackupStreamConfig, storage::Statistics};
+    use tikv::{
+        config::BackupStreamConfig,
+        storage::{txn::txn_status_cache::TxnStatusCache, Statistics},
+    };
     use tikv_util::{box_err, info, memory::MemoryQuota, worker::dummy_scheduler};
     use tokio::{sync::mpsc::Sender, task::JoinHandle};
     use txn_types::TimeStamp;
@@ -1039,10 +1035,17 @@ mod test {
             let meta_cli = SlashEtcStore::default();
             let meta_cli = MetadataClient::new(meta_cli, 1);
             let (scheduler, mut output) = dummy_scheduler();
-            let subs = SubscriptionTracer::default();
+            let subs = SubscriptionTracer(
+                Arc::new(DashMap::new()),
+                Arc::new(TxnStatusCache::new_for_test()),
+            );
             let memory_manager = Arc::new(MemoryQuota::new(1024));
             let (tx, mut rx) = tokio::sync::mpsc::channel(8);
-            let router = RouterInner::new(scheduler.clone(), BackupStreamConfig::default().into());
+            let router = RouterInner::new(
+                scheduler.clone(),
+                BackupStreamConfig::default().into(),
+                BackupEncryptionManager::default(),
+            );
             let mut task = StreamBackupTaskInfo::new();
             task.set_name(task_name.to_owned());
             task.set_storage({

@@ -1,7 +1,7 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{
-    CacheRange, EvictReason, KvEngine, MiscExt, RangeCacheEngine, RegionEvent, Result,
+    CacheRegion, EvictReason, KvEngine, MiscExt, RegionCacheEngine, RegionEvent, Result,
     WriteBatchExt,
 };
 
@@ -10,7 +10,7 @@ use crate::{engine::HybridEngine, hybrid_metrics::HybridEngineStatisticsReporter
 impl<EK, EC> MiscExt for HybridEngine<EK, EC>
 where
     EK: KvEngine,
-    EC: RangeCacheEngine,
+    EC: RegionCacheEngine,
     HybridEngine<EK, EC>: WriteBatchExt,
 {
     type StatisticsReporter = HybridEngineStatisticsReporter;
@@ -39,9 +39,9 @@ where
         ranges: &[engine_traits::Range<'_>],
     ) -> Result<bool> {
         for r in ranges {
-            self.range_cache_engine()
+            self.region_cache_engine()
                 .on_region_event(RegionEvent::EvictByRange {
-                    range: CacheRange::new(r.start_key.to_vec(), r.end_key.to_vec()),
+                    range: CacheRegion::new(0, 0, r.start_key.to_vec(), r.end_key.to_vec()),
                     reason: EvictReason::DeleteRange,
                 });
         }
@@ -155,10 +155,10 @@ where
 #[cfg(test)]
 pub mod tests {
     use engine_traits::{
-        CacheRange, DeleteStrategy, MiscExt, Mutable, Range, RangeCacheEngine, WriteBatch,
+        CacheRegion, DeleteStrategy, MiscExt, Mutable, Range, RegionCacheEngine, WriteBatch,
         WriteBatchExt, WriteOptions, CF_DEFAULT,
     };
-    use range_cache_memory_engine::{test_util::new_region, RangeCacheEngineConfig};
+    use in_memory_engine::{test_util::new_region, InMemoryEngineConfig};
 
     use crate::util::hybrid_engine_for_tests;
 
@@ -172,7 +172,7 @@ pub mod tests {
         let r3_clone = r3.clone();
         let (_path, hybrid_engine) = hybrid_engine_for_tests(
             "temp",
-            RangeCacheEngineConfig::config_for_test(),
+            InMemoryEngineConfig::config_for_test(),
             move |memory_engine| {
                 memory_engine.new_region(r1_clone);
                 memory_engine.new_region(r2_clone);
@@ -180,16 +180,21 @@ pub mod tests {
             },
         )
         .unwrap();
+
+        let cache_r1 = CacheRegion::from_region(&r1);
+        let cache_r2 = CacheRegion::from_region(&r2);
+        let cache_r3 = CacheRegion::from_region(&r3);
+
         let mut write_batch = hybrid_engine.write_batch();
-        write_batch.prepare_for_region(&r1);
+        write_batch.prepare_for_region(cache_r1.clone());
         write_batch.put(b"zk02", b"val").unwrap();
         write_batch.put(b"zk03", b"val").unwrap();
-        write_batch.prepare_for_region(&r2);
+        write_batch.prepare_for_region(cache_r2.clone());
         write_batch.put(b"zk22", b"val").unwrap();
         write_batch.put(b"zk23", b"val").unwrap();
-        write_batch.prepare_for_region(&r3);
+        write_batch.prepare_for_region(cache_r3.clone());
         write_batch.put(b"zk42", b"val").unwrap();
-        write_batch.put(b"zk42", b"val").unwrap();
+        write_batch.put(b"zk43", b"val").unwrap();
         write_batch.write().unwrap();
 
         hybrid_engine
@@ -202,16 +207,16 @@ pub mod tests {
             .unwrap();
 
         hybrid_engine
-            .range_cache_engine()
-            .snapshot(r1.id, 0, CacheRange::from_region(&r1), 1000, 1000)
+            .region_cache_engine()
+            .snapshot(cache_r1.clone(), 1000, 1000)
             .unwrap_err();
         hybrid_engine
-            .range_cache_engine()
-            .snapshot(r2.id, 0, CacheRange::from_region(&r2), 1000, 1000)
+            .region_cache_engine()
+            .snapshot(cache_r2.clone(), 1000, 1000)
             .unwrap_err();
         hybrid_engine
-            .range_cache_engine()
-            .snapshot(r3.id, 0, CacheRange::from_region(&r3), 1000, 1000)
+            .region_cache_engine()
+            .snapshot(cache_r3.clone(), 1000, 1000)
             .unwrap();
     }
 }

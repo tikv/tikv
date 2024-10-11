@@ -4,7 +4,7 @@ use std::io::{Read, Write};
 
 use azure::STORAGE_VENDOR_NAME_AZURE;
 pub use cloud::kms::Config as CloudConfig;
-use encryption::GcpConfig;
+use encryption::{GcpConfig, KmsBackend};
 use encryption_export::{create_cloud_backend, AzureConfig, Backend, Error, KmsConfig, Result};
 use file_system::{File, OpenOptions};
 use gcp::STORAGE_VENDOR_NAME_GCP;
@@ -99,7 +99,7 @@ struct SubCommandGcp {
 fn create_aws_backend(
     cmd: &SubCommandAws,
     credential_file: Option<&String>,
-) -> Result<Box<dyn Backend>> {
+) -> Result<Box<KmsBackend>> {
     let mut config = KmsConfig::default();
 
     if let Some(credential_file) = credential_file {
@@ -122,7 +122,7 @@ fn create_aws_backend(
 fn create_azure_backend(
     cmd: &SubCommandAzure,
     credential_file: Option<&String>,
-) -> Result<Box<dyn Backend>> {
+) -> Result<Box<KmsBackend>> {
     let mut config = KmsConfig::default();
 
     config.vendor = STORAGE_VENDOR_NAME_AZURE.to_owned();
@@ -146,7 +146,7 @@ fn create_azure_backend(
 fn create_gcp_backend(
     cmd: &SubCommandGcp,
     credential_file: Option<&String>,
-) -> Result<Box<dyn Backend>> {
+) -> Result<Box<KmsBackend>> {
     let mut config = KmsConfig::default();
     config.gcp = Some(GcpConfig {
         credential_file_path: credential_file

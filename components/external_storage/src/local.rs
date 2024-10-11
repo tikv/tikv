@@ -177,8 +177,8 @@ impl ExternalStorage for LocalStorage {
                 WalkDir::new(self.base.join(dir_name))
                     .follow_links(false)
                     .into_iter()
-                    .filter(move |v| { 
-                        let require_prefix = require_prefix.as_ref(); 
+                    .filter(move |v| {
+                        let require_prefix = require_prefix.as_ref();
                         v.as_ref().map(|d| {
                             let is_file = d.file_type().is_file();
                             let target_file_name = match require_prefix {

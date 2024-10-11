@@ -33,7 +33,7 @@ use crate::{
     utils::{self, retry},
 };
 
-const SEP: char = '/';
+const DEFAULT_SEP: char = '/';
 const GOOGLE_APIS: &str = "https://www.googleapis.com";
 const HARDCODED_ENDPOINTS_SUFFIX: &[&str] = &["upload/storage/v1/", "storage/v1/"];
 
@@ -145,13 +145,23 @@ impl DeletableStorage for GcsStorage {
             let key = self.maybe_prefix_key(&name);
             let oid = ObjectId::new(self.config.bucket.bucket.to_string(), key)
                 .or_invalid_input(format_args!("invalid object id"))?;
-            let req = Object::delete(&oid, None)
-                .or_io_error(format_args!("failed to delete {}", name))?;
-            self.make_request(
-                req.map(|_: io::Empty| Body::empty()),
-                tame_gcs::Scopes::ReadWrite,
+            let now = Instant::now();
+            retry(
+                || async {
+                    let req = Object::delete(&oid, None).map_err(RequestError::Gcs)?;
+                    self.make_request(
+                        req.map(|_: io::Empty| Body::empty()),
+                        tame_gcs::Scopes::ReadWrite,
+                    )
+                    .await
+                },
+                "delete",
             )
             .await?;
+            metrics::CLOUD_REQUEST_HISTOGRAM_VEC
+                .with_label_values(&["gcp", "delete"])
+                .observe(now.saturating_elapsed_secs());
+
             Ok(())
         }
         .boxed_local()
@@ -171,7 +181,7 @@ impl GcsStorage {
 
     fn maybe_prefix_key(&self, key: &str) -> String {
         if let Some(prefix) = &self.config.bucket.prefix {
-            return format!("{}{}{}", prefix, SEP, key);
+            return format!("{}{}{}", prefix, DEFAULT_SEP, key);
         }
         key.to_owned()
     }
@@ -197,7 +207,9 @@ impl GcsStorage {
     fn strip_prefix_if_needed(&self, key: String) -> String {
         if let Some(prefix) = &self.config.bucket.prefix {
             if key.starts_with(prefix.as_str()) {
-                return key[prefix.len()..].trim_start_matches(SEP).to_owned();
+                return key[prefix.len()..]
+                    .trim_start_matches(DEFAULT_SEP)
+                    .to_owned();
             }
         }
         key
@@ -406,6 +418,7 @@ impl<'cli> GcsPrefixIter<'cli> {
         let prefix = self.cli.maybe_prefix_key(&self.prefix);
         opt.prefix = Some(&prefix);
         opt.page_token = self.page_token.as_deref();
+        let now = Instant::now();
         let req = Object::list(&bucket, Some(opt)).or_io_error(format_args!(
             "failed to list with prefix {} page_token {:?}",
             self.prefix, self.page_token
@@ -416,6 +429,10 @@ impl<'cli> GcsPrefixIter<'cli> {
             .await
             .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
         let resp = utils::read_from_http_body::<ListResponse>(res).await?;
+        metrics::CLOUD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&["gcp", "list"])
+            .observe(now.saturating_elapsed_secs());
+
         debug!("requesting paging GCP"; "prefix" => %self.prefix, "page_token" => self.page_token.as_deref(), 
             "response_size" => resp.objects.len(), "new_page_token" => resp.page_token.as_deref());
         // GCP returns an empty page token when returning the last page...

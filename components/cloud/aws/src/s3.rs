@@ -659,12 +659,17 @@ impl<'cli> S3PrefixIter<'cli> {
         input.bucket = String::clone(&self.cli.config.bucket.bucket);
         input.prefix = Some(self.cli.maybe_prefix_key(&self.prefix));
         input.continuation_token = self.cont_token.clone();
+        let now = Instant::now();
         let res = retry_and_count(
             || self.cli.client.list_objects_v2(input.clone()),
             "get_one_page",
         )
         .await
         .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+        CLOUD_REQUEST_HISTOGRAM_VEC
+            .with_label_values(&["s3", "list_objects_v2"])
+            .observe(now.saturating_elapsed().as_secs_f64());
+
         self.finished = !res.is_truncated.ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidData, "no IsTruncated in response")
         })? || res.next_continuation_token.is_none();
@@ -687,7 +692,7 @@ impl DeletableStorage for S3Storage {
     fn delete(&self, name: &str) -> LocalBoxFuture<'_, io::Result<()>> {
         let key = self.maybe_prefix_key(name);
         async move {
-            debug!("delete file from s3 storage"; "key" => %key);
+            let now = Instant::now();
             let res = retry_and_count(
                 || {
                     self.client.delete_object(DeleteObjectRequest {
@@ -699,6 +704,9 @@ impl DeletableStorage for S3Storage {
                 "delete_object",
             )
             .await;
+            CLOUD_REQUEST_HISTOGRAM_VEC
+                .with_label_values(&["s3", "delete_object"])
+                .observe(now.saturating_elapsed().as_secs_f64());
             match res {
                 Ok(_) => Ok(()),
                 Err(e) => Err(io::Error::new(

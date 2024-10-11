@@ -9,17 +9,13 @@ license = "Apache-2.0"
 sm4 = ["encryption/sm4"]
 
 [dependencies]
-async-trait = "0.1"
 aws = { workspace = true }
 azure = { workspace = true }
 cloud = { workspace = true }
-derive_more = "0.99.3"
 encryption = { workspace = true }
-error_code = { workspace = true }
 file_system = { workspace = true }
 gcp = { workspace = true }
 kvproto = { workspace = true }
-openssl = { workspace = true }
 protobuf = { version = "2.8", features = ["bytes"] }
 slog = { workspace = true }
 # better to not use slog-global, but pass in the logger

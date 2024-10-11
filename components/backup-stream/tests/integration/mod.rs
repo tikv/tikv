@@ -17,6 +17,7 @@ mod all {
         RegionSet, Task,
     };
     use futures::{Stream, StreamExt};
+    use kvproto::metapb::RegionEpoch;
     use pd_client::PdClient;
     use test_raftstore::IsolationFilterFactory;
     use tikv::config::BackupStreamConfig;
@@ -55,6 +56,7 @@ mod all {
             .build();
         let round = run_async_test(async {
             suite.must_split(&make_split_key_at_record(1, 42));
+            suite.must_split(&make_split_key_at_record(1, 86));
             let round1 = suite.write_records(0, 128, 1).await;
             suite.must_register_task(1, "region_boundaries");
             round1
@@ -78,13 +80,30 @@ mod all {
         .unwrap();
         let dfs = a_meta_content.mut_file_groups()[0].mut_data_files_info();
         // Two regions, two CFs.
-        assert_eq!(dfs.len(), 4);
+        assert_eq!(dfs.len(), 6);
         dfs.sort_by(|x1, x2| x1.start_key.cmp(&x2.start_key));
         let hnd_key = |hnd| make_split_key_at_record(1, hnd);
+        let epoch = |ver, conf_ver| {
+            let mut e = RegionEpoch::new();
+            e.set_version(ver);
+            e.set_conf_ver(conf_ver);
+            e
+        };
         assert_eq!(dfs[0].region_start_key, b"");
         assert_eq!(dfs[0].region_end_key, hnd_key(42));
+        assert_eq!(dfs[0].region_epoch.len(), 1, "{:?}", dfs[0]);
+        assert_eq!(dfs[0].region_epoch[0], epoch(2, 1), "{:?}", dfs[0]);
+
         assert_eq!(dfs[2].region_start_key, hnd_key(42));
-        assert_eq!(dfs[2].region_end_key, b"");
+        assert_eq!(dfs[2].region_end_key, hnd_key(86));
+        assert_eq!(dfs[2].region_epoch.len(), 1, "{:?}", dfs[2]);
+        assert_eq!(dfs[2].region_epoch[0], epoch(3, 1), "{:?}", dfs[2]);
+
+        assert_eq!(dfs[4].region_start_key, hnd_key(86));
+        assert_eq!(dfs[4].region_end_key, b"");
+        assert_eq!(dfs[4].region_epoch.len(), 1, "{:?}", dfs[4]);
+        assert_eq!(dfs[4].region_epoch[0], epoch(3, 1), "{:?}", dfs[4]);
+
         suite.cluster.shutdown();
     }
 

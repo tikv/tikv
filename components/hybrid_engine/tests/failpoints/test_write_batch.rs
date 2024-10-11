@@ -3,16 +3,16 @@
 use std::sync::mpsc::sync_channel;
 
 use crossbeam::epoch;
-use engine_traits::{Mutable, WriteBatch, WriteBatchExt};
+use engine_traits::{CacheRegion, Mutable, WriteBatch, WriteBatchExt};
 use hybrid_engine::util::hybrid_engine_for_tests;
-use range_cache_memory_engine::{
-    decode_key, test_util::new_region, InternalKey, RangeCacheEngineConfig, ValueType,
+use in_memory_engine::{
+    decode_key, test_util::new_region, InMemoryEngineConfig, InternalKey, ValueType,
 };
 
 #[test]
 fn test_sequence_number_unique() {
     let (_path, hybrid_engine) =
-        hybrid_engine_for_tests("temp", RangeCacheEngineConfig::config_for_test(), |_| {}).unwrap();
+        hybrid_engine_for_tests("temp", InMemoryEngineConfig::config_for_test(), |_| {}).unwrap();
 
     let (tx, rx) = sync_channel(0);
     fail::cfg_callback("on_completes_batch_loading", move || {
@@ -26,7 +26,7 @@ fn test_sequence_number_unique() {
     wb.put(b"zk5", b"val").unwrap(); // seq 1
     wb.put(b"zk7", b"val").unwrap(); // seq 2
 
-    let engine = hybrid_engine.range_cache_engine().clone();
+    let engine = hybrid_engine.region_cache_engine().clone();
     let r = new_region(1, b"k", b"k5");
     engine.new_region(r.clone());
     wb.write().unwrap();
@@ -35,9 +35,10 @@ fn test_sequence_number_unique() {
     // during the load
     let r2 = new_region(2, b"k5", b"k7");
     let r3 = new_region(3, b"k7", b"k9");
-
-    engine.load_region(r2.clone()).unwrap();
-    engine.load_region(r3.clone()).unwrap();
+    let cache_region2 = CacheRegion::from_region(&r2);
+    let cache_region3 = CacheRegion::from_region(&r3);
+    engine.load_region(cache_region2.clone()).unwrap();
+    engine.load_region(cache_region3.clone()).unwrap();
 
     // The sequence number of write batch should be increased one by one, otherwise
     // if a delete and a put of the same key occurs in the same write batch,
@@ -46,29 +47,24 @@ fn test_sequence_number_unique() {
     // while we block the batch loading of region3, it's new KVs are still directly
     // written into the skiplist.
     let mut wb = hybrid_engine.write_batch();
-    wb.prepare_for_region(&r);
+    wb.prepare_for_region(CacheRegion::from_region(&r));
     wb.put(b"zk", b"val").unwrap(); // seq 3
     wb.delete(b"zk").unwrap(); // seq 4
     wb.put(b"zk2", b"val").unwrap(); // seq 5
 
-    wb.prepare_for_region(&r2);
+    wb.prepare_for_region(CacheRegion::from_region(&r2));
     wb.put(b"zk6", b"val").unwrap(); // seq 6
     wb.delete(b"zk5").unwrap(); // seq 7
     wb.put(b"zk5", b"val2").unwrap(); // seq 8
 
-    wb.prepare_for_region(&r3);
+    wb.prepare_for_region(CacheRegion::from_region(&r3));
     wb.put(b"zk8", b"val").unwrap(); // seq 9
     wb.put(b"zk7", b"val2").unwrap(); // seq 10
 
     rx.recv().unwrap();
     wb.write().unwrap();
 
-    let mut iter = engine
-        .core()
-        .read()
-        .engine()
-        .cf_handle("default")
-        .iterator();
+    let mut iter = engine.core().engine().cf_handle("default").iterator();
     let guard = &epoch::pin();
 
     let mut first = true;

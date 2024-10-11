@@ -13,15 +13,14 @@ use std::{
     io::{self, Write},
     marker::Unpin,
     panic::Location,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
 use async_compression::futures::bufread::ZstdDecoder;
 use async_trait::async_trait;
-
 use encryption::{DecrypterReader, FileEncryptionInfo, Iv};
-use file_system::File;
+use file_system::{File, Sha256Reader};
 use futures::io::BufReader;
 use futures_io::AsyncRead;
 use futures_util::{future::LocalBoxFuture, stream::LocalBoxStream, AsyncReadExt};
@@ -33,6 +32,8 @@ use tikv_util::{
     time::{Instant, Limiter},
 };
 use tokio::time::timeout;
+use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
+use url::Url;
 
 mod hdfs;
 pub use cloud::blob::{BlobObject, IterableStorage};
@@ -77,8 +78,9 @@ pub struct BackendConfig {
 pub struct RestoreConfig {
     pub range: Option<(u64, u64)>,
     pub compression_type: Option<CompressionType>,
-    pub expected_sha256: Option<Vec<u8>>,
+    pub expected_plaintext_file_checksum: Option<Vec<u8>>,
     pub file_crypter: Option<FileEncryptionInfo>,
+    pub opt_encrypted_file_checksum: Option<Vec<u8>>,
 }
 
 /// a reader dispatcher for different compression type.
@@ -110,7 +112,7 @@ pub fn compression_reader_dispatcher(
 pub trait ExternalStorage: 'static + Send + Sync + Any {
     fn name(&self) -> &'static str;
 
-    fn url(&self) -> io::Result<url::Url>;
+    fn url(&self) -> io::Result<Url>;
 
     /// Write all contents of the read to the given path.
     async fn write(
@@ -138,18 +140,31 @@ pub trait ExternalStorage: 'static + Send + Sync + Any {
         let RestoreConfig {
             range,
             compression_type,
-            expected_sha256,
+            expected_plaintext_file_checksum: expected_sha256,
             file_crypter,
+            opt_encrypted_file_checksum,
         } = restore_config;
 
-        let reader = {
+        let (reader, opt_hasher) = {
             let inner = if let Some((off, len)) = range {
                 self.read_part(storage_name, off, len)
             } else {
                 self.read(storage_name)
             };
 
-            compression_reader_dispatcher(compression_type, inner)?
+            // wrap with checksum reader if needed
+            //
+            let (checksum_reader, opt_hasher) =
+                wrap_with_checksum_reader_if_needed(opt_encrypted_file_checksum.is_some(), inner)?;
+
+            // wrap with decrypter if needed
+            //
+            let encrypted_reader = encrypt_wrap_reader(file_crypter, checksum_reader)?;
+
+            (
+                compression_reader_dispatcher(compression_type, encrypted_reader)?,
+                opt_hasher,
+            )
         };
         let output = File::create(restore_name)?;
         // the minimum speed of reading data, in bytes/second.
@@ -157,15 +172,15 @@ pub trait ExternalStorage: 'static + Send + Sync + Any {
         // a "TimedOut" error.
         // (at 8 KB/s for a 2 MB buffer, this means we timeout after 4m16s.)
         let min_read_speed: usize = 8192;
-        let input = encrypt_wrap_reader(file_crypter, reader)?;
-
         read_external_storage_into_file(
-            input,
+            reader,
             output,
             speed_limiter,
             expected_length,
             expected_sha256,
             min_read_speed,
+            opt_encrypted_file_checksum,
+            opt_hasher,
         )
         .await
     }
@@ -197,7 +212,7 @@ impl ExternalStorage for Arc<dyn ExternalStorage> {
         (**self).name()
     }
 
-    fn url(&self) -> io::Result<url::Url> {
+    fn url(&self) -> io::Result<Url> {
         (**self).url()
     }
 
@@ -255,7 +270,7 @@ impl ExternalStorage for Box<dyn ExternalStorage> {
         self.as_ref().name()
     }
 
-    fn url(&self) -> io::Result<url::Url> {
+    fn url(&self) -> io::Result<Url> {
         self.as_ref().url()
     }
 
@@ -331,8 +346,10 @@ pub async fn read_external_storage_into_file<In, Out>(
     mut output: Out,
     speed_limiter: &Limiter,
     expected_length: u64,
-    expected_sha256: Option<Vec<u8>>,
+    expected_plaintext_file_checksum: Option<Vec<u8>>,
     min_read_speed: usize,
+    opt_expected_encrypted_file_checksum: Option<Vec<u8>>,
+    opt_encrypted_file_hasher: Option<Arc<Mutex<Hasher>>>,
 ) -> io::Result<()>
 where
     In: AsyncRead + Unpin,
@@ -343,12 +360,8 @@ where
     // do the I/O copy from external_storage to the local file.
     let mut buffer = vec![0u8; READ_BUF_SIZE];
     let mut file_length = 0;
-    let mut hasher = Hasher::new(MessageDigest::sha256()).map_err(|err| {
-        io::Error::new(
-            io::ErrorKind::Other,
-            format!("openssl hasher failed to init: {}", err),
-        )
-    })?;
+    let mut hasher = build_hasher()?;
+
     let mut yield_checker =
         RescheduleChecker::new(tokio::task::yield_now, Duration::from_millis(10));
     loop {
@@ -362,13 +375,8 @@ where
         }
         speed_limiter.consume(bytes_read).await;
         output.write_all(&buffer[..bytes_read])?;
-        if expected_sha256.is_some() {
-            hasher.update(&buffer[..bytes_read]).map_err(|err| {
-                io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("openssl hasher udpate failed: {}", err),
-                )
-            })?;
+        if expected_plaintext_file_checksum.is_some() {
+            update_hasher(&mut hasher, &buffer[..bytes_read])?;
         }
         file_length += bytes_read as u64;
         yield_checker.check().await;
@@ -384,21 +392,18 @@ where
         ));
     }
 
-    if let Some(expected_s) = expected_sha256 {
-        let cal_sha256 = hasher.finish().map_or_else(
-            |err| {
-                Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("openssl hasher finish failed: {}", err),
-                ))
-            },
-            |bytes| Ok(bytes.to_vec()),
-        )?;
+    calc_and_compare_checksums(
+        opt_expected_encrypted_file_checksum,
+        opt_encrypted_file_hasher,
+    )?;
+
+    if let Some(expected_s) = expected_plaintext_file_checksum {
+        let cal_sha256 = finish_hasher(hasher)?;
         if !expected_s.eq(&cal_sha256) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!(
-                    "sha256 not match, expect: {:?}, calculate: {:?}",
+                    "plaintext file checksums do not match, expect: {:?}, calculate: {:?}",
                     expected_s, cal_sha256,
                 ),
             ));
@@ -414,8 +419,10 @@ pub async fn read_external_storage_info_buff(
     reader: &mut (dyn AsyncRead + Unpin + Send),
     speed_limiter: &Limiter,
     expected_length: u64,
-    expected_sha256: Option<Vec<u8>>,
+    opt_expected_checksum: Option<Vec<u8>>,
     min_read_speed: usize,
+    opt_expected_encrypted_file_checksum: Option<Vec<u8>>,
+    opt_encrypted_file_hasher: Option<Arc<Mutex<Hasher>>>,
 ) -> io::Result<Vec<u8>> {
     // the minimum speed of reading data, in bytes/second.
     // if reading speed is slower than this rate, we will stop with
@@ -455,40 +462,103 @@ pub async fn read_external_storage_info_buff(
             ),
         ));
     }
-    // check sha256 of file
-    if let Some(sha256) = expected_sha256 {
-        let mut hasher = Hasher::new(MessageDigest::sha256()).map_err(|err| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("openssl hasher failed to init: {}", err),
-            )
-        })?;
-        hasher.update(&output).map_err(|err| {
-            io::Error::new(
-                io::ErrorKind::Other,
-                format!("openssl hasher udpate failed: {}", err),
-            )
-        })?;
 
-        let cal_sha256 = hasher.finish().map_or_else(
-            |err| {
-                Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("openssl hasher finish failed: {}", err),
-                ))
-            },
-            |bytes| Ok(bytes.to_vec()),
-        )?;
-        if !sha256.eq(&cal_sha256) {
+    // check encrypted file checksum
+    //
+    calc_and_compare_checksums(
+        opt_expected_encrypted_file_checksum,
+        opt_encrypted_file_hasher,
+    )?;
+
+    // check sha256 of file
+    if let Some(expected_checksum) = opt_expected_checksum {
+        let mut hasher = build_hasher()?;
+
+        update_hasher(&mut hasher, &output)?;
+
+        let cal_sha256 = finish_hasher(hasher)?;
+        if !expected_checksum.eq(&cal_sha256) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!(
                     "sha256 not match, expect: {:?}, calculate: {:?}",
-                    sha256, cal_sha256,
+                    expected_checksum, cal_sha256,
                 ),
             ));
         }
     }
 
     Ok(output)
+}
+
+fn build_hasher() -> Result<Hasher, io::Error> {
+    Hasher::new(MessageDigest::sha256()).map_err(|err| {
+        io::Error::new(
+            io::ErrorKind::Other,
+            format!("openssl hasher failed to init: {}", err),
+        )
+    })
+}
+
+fn update_hasher(hasher: &mut Hasher, data: &[u8]) -> Result<(), io::Error> {
+    hasher.update(data).map_err(|err| {
+        io::Error::new(
+            io::ErrorKind::Other,
+            format!("openssl hasher update failed: {}", err),
+        )
+    })
+}
+
+fn finish_hasher(mut hasher: Hasher) -> Result<Vec<u8>, io::Error> {
+    hasher.finish().map_or_else(
+        |err| {
+            Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!("openssl hasher finish failed: {}", err),
+            ))
+        },
+        |bytes| Ok(bytes.to_vec()),
+    )
+}
+
+fn calc_and_compare_checksums(
+    opt_expected_encrypted_file_checksum: Option<Vec<u8>>,
+    opt_encrypted_file_hasher: Option<Arc<Mutex<Hasher>>>,
+) -> Result<(), io::Error> {
+    if let Some(expected_encrypted_checksum) = opt_expected_encrypted_file_checksum {
+        if let Some(hasher) = opt_encrypted_file_hasher {
+            let calc_checksum = hasher.lock().unwrap().finish().map_or_else(
+                |err| {
+                    Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("openssl hasher finish failed: {}", err),
+                    ))
+                },
+                |bytes| Ok(bytes.to_vec()),
+            )?;
+
+            if !expected_encrypted_checksum.eq(&calc_checksum) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "encrypted file checksums do not match, expected: {:?}, calculated: {:?}",
+                        expected_encrypted_checksum, calc_checksum,
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn wrap_with_checksum_reader_if_needed(
+    contains_checksum: bool,
+    encrypted_reader: ExternalData<'_>,
+) -> Result<(ExternalData<'_>, Option<Arc<Mutex<Hasher>>>), io::Error> {
+    if contains_checksum {
+        let (checksum_reader, hasher) = Sha256Reader::new(encrypted_reader.compat())?;
+        Ok((Box::new(checksum_reader.compat()), Some(hasher)))
+    } else {
+        Ok((encrypted_reader, None))
+    }
 }

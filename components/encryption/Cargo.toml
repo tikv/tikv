@@ -10,16 +10,15 @@ failpoints = ["fail/failpoints"]
 # openssl/vendored is necssary in order to conditionally building SM4 encryption
 # support, as SM4 is disabled on various openssl distributions, such as Rocky Linux 9.
 sm4 = ["openssl/vendored"]
+testexport = []
 
 [dependencies]
 async-trait = "0.1"
 byteorder = "1.2"
-bytes = "1.0"
 cloud = { workspace = true }
 crc32fast = "1.2"
 crossbeam = { workspace = true }
 crypto = { workspace = true }
-derive_more = "0.99.3"
 error_code = { workspace = true }
 fail = "0.5"
 file_system = { workspace = true }
@@ -32,6 +31,7 @@ online_config = { workspace = true }
 openssl = { workspace = true }
 prometheus = { version = "0.13", features = ["nightly"] }
 protobuf = { version = "2.8", features = ["bytes"] }
+rand = "0.8.0"
 # For simplicity and compliance with FIPS 140 requirements for random number
 # generation, do not use the 'rand' crate in encryption-related code.
 # rand = "*"
@@ -40,8 +40,8 @@ serde_derive = "1.0"
 slog = { workspace = true }
 # better to not use slog-global, but pass in the logger
 slog-global = { workspace = true }
+tempfile = "3.1"
 thiserror = "1.0"
-tikv_alloc = { workspace = true }
 tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["time", "rt"] }
 walkdir = "2"

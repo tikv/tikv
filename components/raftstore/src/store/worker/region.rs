@@ -497,12 +497,15 @@ where
         self.coprocessor_host
             .post_apply_snapshot(&region, peer_id, &snap_key, Some(&s));
 
-        // delete snapshot state.
-        let mut wb = self.engine.write_batch();
+        // Delete snapshot state and assure the relative region state and snapshot state
+        // is updated and flushed into kvdb.
         region_state.set_state(PeerState::Normal);
+        let mut wb = self.engine.write_batch();
         box_try!(wb.put_msg_cf(CF_RAFT, &keys::region_state_key(region_id), &region_state));
         box_try!(wb.delete_cf(CF_RAFT, &keys::snapshot_raft_state_key(region_id)));
-        wb.write().unwrap_or_else(|e| {
+        let mut wopts = WriteOptions::default();
+        wopts.set_sync(true);
+        wb.write_opt(&wopts).unwrap_or_else(|e| {
             panic!("{} failed to save apply_snap result: {:?}", region_id, e);
         });
         info!(
@@ -1128,7 +1131,7 @@ pub(crate) mod tests {
             ranges.push(key);
         }
         engine.kv.put(b"k1", b"v1").unwrap();
-        let snap = engine.kv.snapshot(None);
+        let snap = engine.kv.snapshot();
         engine.kv.put(b"k2", b"v2").unwrap();
 
         sched
@@ -1241,7 +1244,7 @@ pub(crate) mod tests {
             sched
                 .schedule(Task::Gen {
                     region_id: id,
-                    kv_snap: engine.kv.snapshot(None),
+                    kv_snap: engine.kv.snapshot(),
                     last_applied_term: entry.get_term(),
                     last_applied_state: apply_state,
                     canceled: Arc::new(AtomicBool::new(false)),
