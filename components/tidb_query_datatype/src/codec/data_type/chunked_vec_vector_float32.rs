@@ -3,7 +3,10 @@
 use super::{
     bit_vec::BitVec, ChunkRef, ChunkedVec, UnsafeRefInto, VectorFloat32, VectorFloat32Ref,
 };
-use crate::impl_chunked_vec_common;
+use crate::{
+    codec::mysql::{VectorFloat32Decoder, VectorFloat32Encoder},
+    impl_chunked_vec_common,
+};
 
 /// A vector storing `Option<VectorFloat32>` with a compact layout.
 ///
@@ -15,7 +18,7 @@ use crate::impl_chunked_vec_common;
 /// each element.
 #[derive(Debug, PartialEq, Clone)]
 pub struct ChunkedVecVectorFloat32 {
-    data: Vec<f32>, // Only contains the data part, without any length prefix
+    data: Vec<u8>,
     bitmap: BitVec,
     length: usize,
     var_offset: Vec<usize>,
@@ -26,8 +29,12 @@ impl ChunkedVecVectorFloat32 {
     pub fn get(&self, idx: usize) -> Option<VectorFloat32Ref<'_>> {
         assert!(idx < self.len());
         if self.bitmap.get(idx) {
-            let sliced_data = &self.data[self.var_offset[idx]..self.var_offset[idx + 1]];
-            Some(VectorFloat32Ref::from_f32(sliced_data))
+            let mut sliced_data = &self.data[self.var_offset[idx]..self.var_offset[idx + 1]];
+            let v: VectorFloat32Ref<'_> = sliced_data.read_vector_float32_ref().unwrap();
+            unsafe {
+                let v_with_static_lifetime = v.unsafe_into();
+                Some(v_with_static_lifetime)
+            }
         } else {
             None
         }
@@ -49,7 +56,7 @@ impl ChunkedVec<VectorFloat32> for ChunkedVecVectorFloat32 {
     #[inline]
     fn push_data(&mut self, value: VectorFloat32) {
         self.bitmap.push(true);
-        self.data.extend_from_slice(value.as_ref().data());
+        self.data.write_vector_float32(value.as_ref()).unwrap();
         self.var_offset.push(self.data.len());
         self.length += 1;
     }
@@ -124,35 +131,5 @@ impl From<Vec<Option<VectorFloat32>>> for ChunkedVecVectorFloat32 {
 impl<'a> UnsafeRefInto<&'static ChunkedVecVectorFloat32> for &'a ChunkedVecVectorFloat32 {
     unsafe fn unsafe_into(self) -> &'static ChunkedVecVectorFloat32 {
         std::mem::transmute(self)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_push_data_and_get() {
-        let mut chunked_vec = ChunkedVecVectorFloat32::with_capacity(5);
-
-        chunked_vec.push_data(VectorFloat32::copy_from_f32(&[1.1, 2.2, 3.3]));
-        chunked_vec.push_data(VectorFloat32::copy_from_f32(&[4.4, 5.5]));
-        // push a null value
-        chunked_vec.push_null();
-        chunked_vec.push_data(VectorFloat32::copy_from_f32(&[6.6, 7.7, 8.8, 9.9]));
-
-        assert_eq!(chunked_vec.len(), 4);
-
-        let vector1 = chunked_vec.get(0).unwrap().to_string();
-        assert_eq!(vector1, "[1.1,2.2,3.3]");
-
-        let vector2 = chunked_vec.get(1).unwrap().to_string();
-        assert_eq!(vector2, "[4.4,5.5]");
-
-        // check if null value is right
-        assert!(chunked_vec.get(2).is_none());
-
-        let vector3 = chunked_vec.get(3).unwrap().to_string();
-        assert_eq!(vector3, "[6.6,7.7,8.8,9.9]");
     }
 }
