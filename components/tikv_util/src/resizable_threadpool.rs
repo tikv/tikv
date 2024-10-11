@@ -61,13 +61,7 @@ impl ResizableRuntime {
     }
 
     /// Lazily adjust the thread pool's size
-    ///
-    /// Resizing if the thread pool need to expend or there
-    /// are too many idle threads. Otherwise do nothing.
     pub fn adjust_with(&mut self, new_size: usize) {
-        if self.size >= new_size && self.size - new_size <= 10 {
-            return;
-        }
         // TODO: after tokio supports adjusting thread pool size(https://github.com/tokio-rs/tokio/issues/3329),
         //   adapt it.
         let workers = create_tokio_runtime(new_size, "bkwkr")
