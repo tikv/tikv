@@ -317,9 +317,40 @@ pub fn path_in_diff_mount_point(_path1: impl AsRef<Path>, _path2: impl AsRef<Pat
     false
 }
 
+#[cfg(unix)]
+pub fn hostname() -> Option<String> {
+    let mut buf = [0u8; 128];
+    let os_name = nix::unistd::gethostname(&mut buf).ok()?;
+    Some(os_name.to_string_lossy().to_string())
+}
+
+#[cfg(not(unix))]
+pub fn hostname() -> Option<String> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn test_hostname() {
+        use std::process::Command;
+
+        let hn = Command::new("hostname").output().map(|mut output| {
+            output.stdout.pop();
+            // Remove the '\n'.
+            output.stdout
+        });
+        match hn {
+            Err(err) => eprintln!(
+                "cannot run test_hostname: `hostname` CLI not installed or failed to run: {}",
+                err
+            ),
+            Ok(hn) => assert_eq!(&hn, hostname().unwrap().as_bytes()),
+        }
+    }
 
     #[cfg(target_os = "linux")]
     #[test]
