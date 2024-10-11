@@ -4,7 +4,7 @@ use std::{
     fmt::{self, Debug},
     ops::Bound,
     result,
-    sync::{atomic::AtomicU64, Arc},
+    sync::{atomic::{AtomicU64, Ordering}, Arc},
 };
 
 use crossbeam::epoch::{self, default_collector, Guard};

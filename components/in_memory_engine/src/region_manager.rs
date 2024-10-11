@@ -20,6 +20,7 @@ use collections::HashMap;
 use engine_traits::{CacheRegion, EvictReason, FailedReason};
 use futures::executor::block_on;
 use parking_lot::RwLock;
+use raftstore::store::fsm::apply::PRINTF_LOG;
 use strum::EnumCount;
 use tikv_util::{info, time::Instant, warn};
 

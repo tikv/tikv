@@ -10,7 +10,7 @@ use std::{
     net::SocketAddr,
     pin::Pin,
     str::{self, FromStr},
-    sync::Arc,
+    sync::{Arc, atomic::Ordering},
     task::{Context, Poll},
     time::{Duration, Instant},
 };

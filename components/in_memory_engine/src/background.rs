@@ -1,6 +1,11 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{fmt, sync::Arc, time::Duration};
+use core::slice::SlicePattern;
+use std::{
+    fmt,
+    sync::{atomic::Ordering, Arc},
+    time::Duration,
+};
 
 use bytes::Bytes;
 use crossbeam::{
@@ -1632,8 +1637,6 @@ impl Filter {
                         "commit_ts" => commit_ts,
                     );
                 }
-                self.write_cf_handle
-                    .remove(&InternalBytes::from_vec(cache_skiplist_delete_key), guard)
             }
             self.cached_skiplist_delete_key = Some(key.to_vec());
             return Ok(());
