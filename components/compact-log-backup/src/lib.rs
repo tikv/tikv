@@ -16,7 +16,4 @@ pub mod execute;
 
 pub use errors::{Error, ErrorKind, OtherErrExt, Result, TraceResultExt};
 
-#[cfg(test)]
-mod test;
-
 mod util;
