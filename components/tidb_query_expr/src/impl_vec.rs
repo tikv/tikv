@@ -48,14 +48,11 @@ fn vec_cosine_distance(a: VectorFloat32Ref, b: VectorFloat32Ref) -> Result<Optio
 #[inline]
 fn vec_l2_norm(a: VectorFloat32Ref) -> Result<Option<Real>> {
     // TiKV does not support NaN. This turns NaN into null
-    Ok(Real::new(a.l2_norm()?).ok())
+    Ok(Real::new(a.l2_norm()).ok())
 }
 
-// note: The distance calculated by the simd instruction will
-// be different depending on the platform. The following is based on x86.
 #[cfg(test)]
 mod tests {
-
     use tipb::ScalarFuncSig;
 
     use super::*;
@@ -72,7 +69,7 @@ mod tests {
             (vec![1.0, 2.0, 3.0], Some(3)),
         ];
         for (arg, expected_output) in cases {
-            let arg = VectorFloat32::copy_from_f32(&arg);
+            let arg = VectorFloat32::from_f32(arg).unwrap();
             let output: Option<Int> = RpnFnScalarEvaluator::new()
                 .push_param(arg)
                 .evaluate(ScalarFuncSig::VecDimsSig)
@@ -90,7 +87,7 @@ mod tests {
         ];
 
         for (arg, expected_output) in cases {
-            let arg = VectorFloat32::copy_from_f32(&arg);
+            let arg = VectorFloat32::from_f32(arg).unwrap();
             let output: Option<Real> = RpnFnScalarEvaluator::new()
                 .push_param(arg)
                 .evaluate(ScalarFuncSig::VecL2NormSig)
@@ -108,8 +105,8 @@ mod tests {
             (Some(vec![1.0, 2.0]), None, None),
         ];
         for (arg1, arg2, expected_output) in ok_cases {
-            let arg1 = arg1.map(|v| VectorFloat32::copy_from_f32(v.as_slice()));
-            let arg2 = arg2.map(|v| VectorFloat32::copy_from_f32(v.as_slice()));
+            let arg1 = arg1.map(|v| VectorFloat32::from_f32(v).unwrap());
+            let arg2 = arg2.map(|v| VectorFloat32::from_f32(v).unwrap());
             let output: Option<Real> = RpnFnScalarEvaluator::new()
                 .push_param(arg1)
                 .push_param(arg2)
@@ -120,8 +117,8 @@ mod tests {
 
         let err_cases = vec![(vec![1.0, 2.0], vec![3.0])];
         for (arg1, arg2) in err_cases {
-            let arg1 = VectorFloat32::copy_from_f32(&arg1);
-            let arg2 = VectorFloat32::copy_from_f32(&arg2);
+            let arg1 = VectorFloat32::from_f32(arg1).unwrap();
+            let arg2 = VectorFloat32::from_f32(arg2).unwrap();
             let output: Result<Option<Real>> = RpnFnScalarEvaluator::new()
                 .push_param(arg1)
                 .push_param(arg2)
@@ -138,8 +135,8 @@ mod tests {
             (Some(vec![1.0, 2.0]), None, None),
         ];
         for (arg1, arg2, expected_output) in ok_cases {
-            let arg1 = arg1.map(|v| VectorFloat32::copy_from_f32(v.as_slice()));
-            let arg2 = arg2.map(|v| VectorFloat32::copy_from_f32(v.as_slice()));
+            let arg1 = arg1.map(|v| VectorFloat32::from_f32(v).unwrap());
+            let arg2 = arg2.map(|v| VectorFloat32::from_f32(v).unwrap());
             let output: Option<Real> = RpnFnScalarEvaluator::new()
                 .push_param(arg1)
                 .push_param(arg2)
@@ -150,8 +147,8 @@ mod tests {
 
         let err_cases = vec![(vec![1.0, 2.0], vec![3.0])];
         for (arg1, arg2) in err_cases {
-            let arg1 = VectorFloat32::copy_from_f32(&arg1);
-            let arg2 = VectorFloat32::copy_from_f32(&arg2);
+            let arg1 = VectorFloat32::from_f32(arg1).unwrap();
+            let arg2 = VectorFloat32::from_f32(arg2).unwrap();
             let output: Result<Option<Real>> = RpnFnScalarEvaluator::new()
                 .push_param(arg1)
                 .push_param(arg2)
@@ -163,39 +160,19 @@ mod tests {
     #[test]
     fn test_cosine_distance() {
         let ok_cases = vec![
-            (
-                Some(vec![1.0, 2.0]),
-                Some(vec![2.0, 4.0]),
-                Some(0.0003132075071334839),
-            ),
-            (Some(vec![1.0, 2.0]), Some(vec![0.0, 0.0]), Some(1.0)),
-            (
-                Some(vec![1.0, 1.0]),
-                Some(vec![1.0, 1.0]),
-                Some(0.0005588233470916748),
-            ),
+            (Some(vec![1.0, 2.0]), Some(vec![2.0, 4.0]), Some(0.0)),
+            (Some(vec![1.0, 2.0]), Some(vec![0.0, 0.0]), None), // NaN turns to NULL
+            (Some(vec![1.0, 1.0]), Some(vec![1.0, 1.0]), Some(0.0)),
             (Some(vec![1.0, 0.0]), Some(vec![0.0, 2.0]), Some(1.0)),
-            (
-                Some(vec![1.0, 1.0]),
-                Some(vec![-1.0, -1.0]),
-                Some(1.9994411766529083),
-            ),
-            (
-                Some(vec![1.0, 1.0]),
-                Some(vec![1.1, 1.1]),
-                Some(0.00047250905844364866),
-            ),
-            (
-                Some(vec![1.0, 1.0]),
-                Some(vec![-1.1, -1.1]),
-                Some(1.9995274909415564),
-            ),
+            (Some(vec![1.0, 1.0]), Some(vec![-1.0, -1.0]), Some(2.0)),
+            (Some(vec![1.0, 1.0]), Some(vec![1.1, 1.1]), Some(0.0)),
+            (Some(vec![1.0, 1.0]), Some(vec![-1.1, -1.1]), Some(2.0)),
             (Some(vec![3e38]), Some(vec![3e38]), None), // NaN turns to NULL
             (Some(vec![1.0, 2.0]), None, None),
         ];
         for (arg1, arg2, expected_output) in ok_cases {
-            let arg1 = arg1.map(|v| VectorFloat32::copy_from_f32(v.as_slice()));
-            let arg2 = arg2.map(|v| VectorFloat32::copy_from_f32(v.as_slice()));
+            let arg1 = arg1.map(|v| VectorFloat32::from_f32(v).unwrap());
+            let arg2 = arg2.map(|v| VectorFloat32::from_f32(v).unwrap());
             let output: Option<Real> = RpnFnScalarEvaluator::new()
                 .push_param(arg1)
                 .push_param(arg2)
@@ -206,8 +183,8 @@ mod tests {
 
         let err_cases = vec![(vec![1.0, 2.0], vec![3.0])];
         for (arg1, arg2) in err_cases {
-            let arg1 = VectorFloat32::copy_from_f32(&arg1);
-            let arg2 = VectorFloat32::copy_from_f32(&arg2);
+            let arg1 = VectorFloat32::from_f32(arg1).unwrap();
+            let arg2 = VectorFloat32::from_f32(arg2).unwrap();
             let output: Result<Option<Real>> = RpnFnScalarEvaluator::new()
                 .push_param(arg1)
                 .push_param(arg2)
@@ -225,8 +202,8 @@ mod tests {
             (Some(vec![1.0, 2.0]), None, None),
         ];
         for (arg1, arg2, expected_output) in ok_cases {
-            let arg1 = arg1.map(|v| VectorFloat32::copy_from_f32(v.as_slice()));
-            let arg2 = arg2.map(|v| VectorFloat32::copy_from_f32(v.as_slice()));
+            let arg1 = arg1.map(|v| VectorFloat32::from_f32(v).unwrap());
+            let arg2 = arg2.map(|v| VectorFloat32::from_f32(v).unwrap());
             let output: Option<Real> = RpnFnScalarEvaluator::new()
                 .push_param(arg1)
                 .push_param(arg2)
@@ -237,8 +214,8 @@ mod tests {
 
         let err_cases = vec![(vec![1.0, 2.0], vec![3.0])];
         for (arg1, arg2) in err_cases {
-            let arg1 = VectorFloat32::copy_from_f32(&arg1);
-            let arg2 = VectorFloat32::copy_from_f32(&arg2);
+            let arg1 = VectorFloat32::from_f32(arg1).unwrap();
+            let arg2 = VectorFloat32::from_f32(arg2).unwrap();
             let output: Result<Option<Real>> = RpnFnScalarEvaluator::new()
                 .push_param(arg1)
                 .push_param(arg2)
