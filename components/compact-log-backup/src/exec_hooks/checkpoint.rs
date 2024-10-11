@@ -1,11 +1,16 @@
+// Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::{collections::HashSet, os::unix::ffi::OsStrExt, path::Path};
 
 use external_storage::ExternalStorage;
-use futures::{ stream::TryStreamExt};
+use futures::stream::TryStreamExt;
 use tikv_util::{info, time::Instant, warn};
 
-use super::hooks::ExecHooks;
-use crate::{compaction::META_OUT_REL, ErrorKind, OtherErrExt, Result, TraceResultExt};
+use crate::{
+    compaction::META_OUT_REL,
+    execute::hooking::{BeforeStartCtx, CId, ExecHooks, SubcompactionStartCtx},
+    ErrorKind, OtherErrExt, Result, TraceResultExt,
+};
 
 #[derive(Default)]
 pub struct Checkpoint {
@@ -57,10 +62,7 @@ impl Checkpoint {
 }
 
 impl ExecHooks for Checkpoint {
-    async fn before_execution_started(
-        &mut self,
-        cx: super::hooks::BeforeStartCtx<'_>,
-    ) -> crate::Result<()> {
+    async fn before_execution_started(&mut self, cx: BeforeStartCtx<'_>) -> crate::Result<()> {
         self.load(
             cx.storage,
             &format!("{}/{}", cx.this.out_prefix, META_OUT_REL),
@@ -68,11 +70,7 @@ impl ExecHooks for Checkpoint {
         .await
     }
 
-    fn before_a_subcompaction_start(
-        &mut self,
-        _cid: super::hooks::CId,
-        cx: super::hooks::SubcompactionStartCtx<'_>,
-    ) {
+    fn before_a_subcompaction_start(&mut self, _cid: CId, cx: SubcompactionStartCtx<'_>) {
         let hash = cx.subc.crc64();
         if self.loaded.contains(&hash) {
             info!("Checkpoint: skipping a subcompaction because we have found it."; 

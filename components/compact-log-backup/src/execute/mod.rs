@@ -1,6 +1,5 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
-pub mod checkpoint;
-pub mod hooks;
+pub mod hooking;
 
 #[cfg(test)]
 mod test;
@@ -13,7 +12,7 @@ pub use engine_traits::SstCompressionType;
 use engine_traits::SstExt;
 use external_storage::{BackendConfig, ExternalStorage};
 use futures::stream::{self, StreamExt};
-use hooks::{
+use hooking::{
     AfterFinishCtx, BeforeStartCtx, CId, ExecHooks, SubcompactionFinishCtx, SubcompactionStartCtx,
 };
 use kvproto::brpb::StorageBackend;
@@ -23,7 +22,7 @@ use tracing::{trace_span, Instrument};
 use tracing_active_tree::{frame, root};
 use txn_types::TimeStamp;
 
-use self::hooks::AbortedCtx;
+use self::hooking::AbortedCtx;
 use super::{
     compaction::{
         collector::{CollectSubcompaction, CollectSubcompactionConfig},
@@ -125,7 +124,7 @@ struct ExecuteCtx<'a, H: ExecHooks> {
 }
 
 impl Execution {
-    fn gen_name(&self) -> String {
+    pub fn gen_name(&self) -> String {
         let compaction_name = Path::new(&self.out_prefix)
             .file_name()
             .map(|v| v.to_string_lossy())

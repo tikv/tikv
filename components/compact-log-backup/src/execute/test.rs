@@ -1,3 +1,5 @@
+// Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::{
     collections::HashMap,
     future::Future,
@@ -13,15 +15,14 @@ use futures::{future::FutureExt, stream::TryStreamExt};
 use kvproto::brpb::StorageBackend;
 use tokio::sync::mpsc::Sender;
 
-use super::{
-    checkpoint::Checkpoint,
-    hooks::{SaveMeta, StorageConsistencyGuard},
-    Execution, ExecutionConfig,
-};
+use super::{Execution, ExecutionConfig};
 use crate::{
     compaction::SubcompactionResult,
     errors::OtherErrExt,
-    execute::hooks::{CId, ExecHooks, SubcompactionFinishCtx},
+    exec_hooks::{
+        checkpoint::Checkpoint, consistency::StorageConsistencyGuard, save_meta::SaveMeta,
+    },
+    execute::hooking::{CId, ExecHooks, SubcompactionFinishCtx},
     storage::LOCK_PREFIX,
     test_util::{gen_step, CompactInMem, KvGen, LogFileBuilder, TmpStorage},
     ErrorKind,
@@ -33,8 +34,8 @@ struct CompactionSpy(Sender<SubcompactionResult>);
 impl ExecHooks for CompactionSpy {
     async fn after_a_subcompaction_end(
         &mut self,
-        _cid: super::hooks::CId,
-        res: super::hooks::SubcompactionFinishCtx<'_>,
+        _cid: super::hooking::CId,
+        res: super::hooking::SubcompactionFinishCtx<'_>,
     ) -> crate::Result<()> {
         self.0
             .send(res.result.clone())

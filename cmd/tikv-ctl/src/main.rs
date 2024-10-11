@@ -20,7 +20,7 @@ use std::{
 };
 
 use collections::HashMap;
-use compact_log_backup::{execute as compact_log, TraceResultExt};
+use compact_log_backup::{exec_hooks as compact_log_hooks, execute as compact_log, TraceResultExt};
 use crypto::fips;
 use encryption_export::{
     create_backend, data_key_manager_from_config, DataKeyManager, DecrypterReader, Iv,
@@ -438,10 +438,10 @@ fn main() {
             struct ExportTiKVInfo {
                 cfg: TikvConfig,
             }
-            impl compact_log::hooks::ExecHooks for ExportTiKVInfo {
+            impl compact_log::hooking::ExecHooks for ExportTiKVInfo {
                 async fn before_execution_started(
                     &mut self,
-                    cx: compact_log::hooks::BeforeStartCtx<'_>,
+                    cx: compact_log::hooking::BeforeStartCtx<'_>,
                 ) -> compact_log_backup::Result<()> {
                     use compact_log_backup::OtherErrExt;
                     tikv_util::info!("Welcome to TiKV control: compact log backup.");
@@ -458,14 +458,14 @@ fn main() {
                 }
             }
 
-            let log_to_term = compact_log::hooks::Observability::default();
-            let save_meta = compact_log::hooks::SaveMeta::default();
-            let with_lock = compact_log::hooks::StorageConsistencyGuard::default();
+            let log_to_term = compact_log_hooks::observability::Observability::default();
+            let save_meta = compact_log_hooks::save_meta::SaveMeta::default();
+            let with_lock = compact_log_hooks::consistency::StorageConsistencyGuard::default();
             let with_status_server = ExportTiKVInfo { cfg: cfg.clone() };
             let checkpoint = if force_regenerate {
                 None
             } else {
-                Some(compact_log::checkpoint::Checkpoint::default())
+                Some(compact_log_hooks::checkpoint::Checkpoint::default())
             };
             let hooks = (
                 ((log_to_term, checkpoint), with_status_server),

@@ -26,8 +26,10 @@ use crate::server::Result;
 /// server.
 type Svc = StatusServer<()>;
 
-/// Server is the controller of requests.
-/// It listens to a socket, and forwards requests to the service.
+/// Server manages how we accept the incoming requests and how we handle them.
+///
+/// After creating and configurating this, you may use [`start`] to start
+/// serving and detach this. You can control the server then by the [`Handle`].
 pub struct Server {
     security_config: Arc<SecurityConfig>,
 }
@@ -85,6 +87,7 @@ impl Server {
         C: super::ServerConnection,
     {
         let mut svc = LiteService;
+
         let server = builder.serve(super::make_service_fn(move |conn: &C| {
             let client_cert = conn.get_x509();
             let security = self.security_config.clone();
