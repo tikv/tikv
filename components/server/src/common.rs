@@ -35,7 +35,7 @@ use in_memory_engine::{
 };
 use pd_client::{PdClient, RpcClient};
 use raft_log_engine::RaftLogEngine;
-use raftstore::coprocessor::RegionInfoProvider;
+use raftstore::{coprocessor::RegionInfoProvider, store::CasualRouter};
 use security::SecurityManager;
 use tikv::{
     config::{ConfigController, DbConfigManger, DbType, TikvConfig},
@@ -702,11 +702,13 @@ pub fn build_hybrid_engine(
     disk_engine: RocksEngine,
     pd_client: Option<Arc<RpcClient>>,
     region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
+    casual_router: Box<dyn CasualRouter<RocksEngine>>,
 ) -> HybridEngine<RocksEngine, RegionCacheMemoryEngine> {
     // todo(SpadeA): add config for it
     let mut memory_engine = RegionCacheMemoryEngine::with_region_info_provider(
         region_cache_engine_context.clone(),
         region_info_provider,
+        Some(casual_router),
     );
     memory_engine.set_disk_engine(disk_engine.clone());
     if let Some(pd_client) = pd_client.as_ref() {

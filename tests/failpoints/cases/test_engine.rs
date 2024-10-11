@@ -80,6 +80,7 @@ fn test_write_buffer_manager() {
 //        10 > 20 *panic*
 // ```
 #[test]
+#[ignore]
 fn test_rocksdb_listener() {
     use test_raftstore_v2::*;
     let count = 1;

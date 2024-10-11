@@ -23,16 +23,17 @@ use crate::{
 pub const NANOS_PER_MICRO: i64 = 1_000;
 pub const NANOS_PER_MILLI: i64 = 1_000_000;
 pub const NANOS_PER_SEC: i64 = 1_000_000_000;
-pub const NANOS_PER_MIN: i64 = 60 * NANOS_PER_SEC;
-pub const NANOS_PER_HOUR: i64 = 60 * NANOS_PER_MIN;
+pub const NANOS_PER_MINUTE: i64 = 60 * NANOS_PER_SEC;
+pub const NANOS_PER_HOUR: i64 = 60 * NANOS_PER_MINUTE;
 pub const NANOS_PER_DAY: i64 = 24 * NANOS_PER_HOUR;
 
 pub const MICROS_PER_SEC: i64 = 1_000_000;
 pub const NANO_WIDTH: usize = 9;
 pub const MICRO_WIDTH: usize = 6;
 
-const SECS_PER_HOUR: i64 = 3600;
-const SECS_PER_MINUTE: i64 = 60;
+pub const SECS_PER_MINUTE: i64 = 60;
+pub const SECS_PER_HOUR: i64 = 3600;
+pub const SECS_PER_DAY: i64 = SECS_PER_HOUR * 24;
 
 pub const MAX_HOUR_PART: u32 = 838;
 pub const MAX_MINUTE_PART: u32 = 59;

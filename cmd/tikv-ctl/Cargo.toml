@@ -33,17 +33,12 @@ nortcheck = ["engine_rocks/nortcheck"]
 
 [dependencies]
 api_version = { workspace = true }
-backup = { workspace = true }
-cdc = { workspace = true }
 clap = { workspace = true }
 collections = { workspace = true }
-concurrency_manager = { workspace = true }
-crossbeam = { workspace = true }
 crypto = { workspace = true }
 encryption_export = { workspace = true }
 engine_rocks = { workspace = true }
 engine_traits = { workspace = true }
-error_code = { workspace = true }
 file_system = { workspace = true }
 futures = "0.3"
 gag = "1.0"
@@ -51,11 +46,9 @@ grpcio = { workspace = true }
 hex = "0.4"
 keys = { workspace = true }
 kvproto = { workspace = true }
-libc = "0.2"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 log_wrappers = { workspace = true }
 pd_client = { workspace = true }
-prometheus = { version = "0.13", features = ["nightly"] }
 protobuf = { version = "2.8", features = ["bytes"] }
 raft = { workspace = true }
 raft-engine = { workspace = true }
@@ -69,9 +62,7 @@ server = { workspace = true }
 slog = { workspace = true }
 slog-global = { workspace = true }
 structopt = "0.3"
-tempfile = "3.0"
 tikv = { workspace = true }
-tikv_alloc = { workspace = true }
 tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["rt-multi-thread", "time"] }
 toml = "0.5"
@@ -80,6 +71,3 @@ txn_types = { workspace = true }
 [build-dependencies]
 cc = "1.0"
 time = { workspace = true }
-
-[target.'cfg(unix)'.dependencies]
-signal-hook = "0.3"

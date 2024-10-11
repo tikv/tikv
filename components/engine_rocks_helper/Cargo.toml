@@ -12,18 +12,14 @@ failpoints = ["fail/failpoints"]
 engine_rocks = { workspace = true }
 engine_traits = { workspace = true }
 fail = "0.5"
-futures = "0.3"
 keys = { workspace = true }
 lazy_static = "1.4.0"
-pd_client = { workspace = true }
 prometheus = { version = "0.13", features = ["nightly"] }
-protobuf = "2.8"
 raftstore = { workspace = true }
 slog = { workspace = true }
 slog-global = { workspace = true }
 tikv_util = { workspace = true }
 
 [dev-dependencies]
-engine_test = { workspace = true }
 kvproto = { workspace = true }
 tempfile = "3.0"

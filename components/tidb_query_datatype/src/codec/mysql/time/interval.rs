@@ -139,12 +139,17 @@ lazy_static! {
 #[derive(Debug, PartialEq)]
 pub struct Interval {
     month: i64,
+    sec: i64,
     nano: i64,
     fsp: i8,
 }
 
 impl Interval {
-    pub fn parse_from_str(ctx: &mut EvalContext, unit: &IntervalUnit, input: &str) -> Result<Self> {
+    pub fn parse_from_str(
+        ctx: &mut EvalContext,
+        unit: &IntervalUnit,
+        input: &str,
+    ) -> Result<Option<Self>> {
         Self::parse_from_str_internal(ctx, unit, input, false)
     }
 
@@ -154,7 +159,7 @@ impl Interval {
         unit: &IntervalUnit,
         input: &str,
         for_duration: bool,
-    ) -> Result<Self> {
+    ) -> Result<Option<Self>> {
         if let Some(&(index, max_cnt)) = INTERVAL_STR_INDEX_MAP.get(unit) {
             Self::parse_time_value(ctx, input, index, max_cnt, for_duration)
         } else {
@@ -167,7 +172,7 @@ impl Interval {
         unit: &IntervalUnit,
         input: &str,
         for_duration: bool,
-    ) -> Result<Self> {
+    ) -> Result<Option<Self>> {
         use IntervalUnit::*;
         // Find decimal point position
         let decimal_point_pos = input.find('.').unwrap_or(input.len());
@@ -237,94 +242,179 @@ impl Interval {
 
         match unit {
             Microsecond => {
-                if for_duration && riv.abs() > MAX_SECS * 1_000 {
-                    return Err(Error::datetime_function_overflow());
-                }
-                Ok(Self {
+                let nano = if for_duration {
+                    if riv.abs() > MAX_SECS * NANOS_PER_MICRO {
+                        return Err(Error::datetime_function_overflow());
+                    }
+                    riv * NANOS_PER_MICRO
+                } else {
+                    match riv.checked_mul(NANOS_PER_MICRO) {
+                        Some(n) => n,
+                        None => {
+                            return ctx
+                                .handle_invalid_time_error(Error::datetime_function_overflow())
+                                .map(|_| Ok(None))?;
+                        }
+                    }
+                };
+                Ok(Some(Self {
                     month: 0,
-                    nano: riv * NANOS_PER_MICRO,
+                    sec: 0,
+                    nano,
                     fsp: MAX_FSP,
-                })
+                }))
             }
             Second => {
                 if for_duration && iv.abs() > MAX_SECS {
                     return Err(Error::datetime_function_overflow());
                 }
-                Ok(Self {
+                Ok(Some(Self {
                     month: 0,
-                    nano: iv * NANOS_PER_SEC + dv * NANOS_PER_MICRO,
+                    sec: iv,
+                    nano: dv * NANOS_PER_MICRO,
                     fsp: decimal_len as i8,
-                })
+                }))
             }
             Minute => {
-                if for_duration && riv.abs() > (MAX_HOUR_PART * 60 + MAX_MINUTE_PART) as i64 {
-                    return Err(Error::datetime_function_overflow());
-                }
-                Ok(Self {
+                let sec = if for_duration {
+                    if riv.abs() > (MAX_HOUR_PART * 60 + MAX_MINUTE_PART) as i64 {
+                        return Err(Error::datetime_function_overflow());
+                    }
+                    riv * SECS_PER_MINUTE
+                } else {
+                    match riv.checked_mul(SECS_PER_MINUTE) {
+                        Some(n) => n,
+                        None => {
+                            return ctx
+                                .handle_invalid_time_error(Error::datetime_function_overflow())
+                                .map(|_| Ok(None))?;
+                        }
+                    }
+                };
+                Ok(Some(Self {
                     month: 0,
-                    nano: riv * NANOS_PER_MIN,
+                    sec,
+                    nano: 0,
                     fsp: 0,
-                })
+                }))
             }
             Hour => {
-                if for_duration && riv.abs() > MAX_HOUR_PART as i64 {
-                    return Err(Error::datetime_function_overflow());
-                }
-                Ok(Self {
+                let sec = if for_duration {
+                    if riv.abs() > MAX_HOUR_PART as i64 {
+                        return Err(Error::datetime_function_overflow());
+                    }
+                    riv * SECS_PER_HOUR
+                } else {
+                    match riv.checked_mul(SECS_PER_HOUR) {
+                        Some(n) => n,
+                        None => {
+                            return ctx
+                                .handle_invalid_time_error(Error::datetime_function_overflow())
+                                .map(|_| Ok(None))?;
+                        }
+                    }
+                };
+                Ok(Some(Self {
                     month: 0,
-                    nano: riv * NANOS_PER_HOUR,
+                    sec,
+                    nano: 0,
                     fsp: 0,
-                })
+                }))
             }
             Day => {
-                if for_duration && riv.abs() > MAX_HOUR_PART as i64 / 24 {
-                    return Err(Error::datetime_function_overflow());
-                }
-                Ok(Self {
+                let sec = if for_duration {
+                    if riv.abs() > MAX_HOUR_PART as i64 / 24 {
+                        return Err(Error::datetime_function_overflow());
+                    }
+                    riv * SECS_PER_DAY
+                } else {
+                    match riv.checked_mul(SECS_PER_DAY) {
+                        Some(n) => n,
+                        None => {
+                            return ctx
+                                .handle_invalid_time_error(Error::datetime_function_overflow())
+                                .map(|_| Ok(None))?;
+                        }
+                    }
+                };
+                Ok(Some(Self {
                     month: 0,
-                    nano: riv * NANOS_PER_DAY,
+                    sec,
+                    nano: 0,
                     fsp: 0,
-                })
+                }))
             }
             Week => {
-                if for_duration && riv.abs() * 7 > MAX_HOUR_PART as i64 / 24 {
-                    return Err(Error::datetime_function_overflow());
-                }
-                Ok(Self {
+                let sec = if for_duration {
+                    if riv.abs() * 7 > MAX_HOUR_PART as i64 / 24 {
+                        return Err(Error::datetime_function_overflow());
+                    }
+                    riv * SECS_PER_DAY * 7
+                } else {
+                    match riv.checked_mul(SECS_PER_DAY * 7) {
+                        Some(n) => n,
+                        None => {
+                            return ctx
+                                .handle_invalid_time_error(Error::datetime_function_overflow())
+                                .map(|_| Ok(None))?;
+                        }
+                    }
+                };
+                Ok(Some(Self {
                     month: 0,
-                    nano: riv * NANOS_PER_DAY * 7,
+                    sec,
+                    nano: 0,
                     fsp: 0,
-                })
+                }))
             }
             Month => {
                 if for_duration && riv.abs() > 1 {
                     return Err(Error::datetime_function_overflow());
                 }
-                Ok(Self {
+                Ok(Some(Self {
                     month: riv,
+                    sec: 0,
                     nano: 0,
                     fsp: 0,
-                })
+                }))
             }
             Quarter => {
                 if for_duration {
                     return Err(Error::datetime_function_overflow());
                 }
-                Ok(Self {
-                    month: riv * 3,
+                let month = match riv.checked_mul(3) {
+                    Some(m) => m,
+                    None => {
+                        return ctx
+                            .handle_invalid_time_error(Error::datetime_function_overflow())
+                            .map(|_| Ok(None))?;
+                    }
+                };
+                Ok(Some(Self {
+                    month,
+                    sec: 0,
                     nano: 0,
                     fsp: 0,
-                })
+                }))
             }
             Year => {
                 if for_duration {
                     return Err(Error::datetime_function_overflow());
                 }
-                Ok(Self {
-                    month: riv * 12,
+                let month = match riv.checked_mul(12) {
+                    Some(m) => m,
+                    None => {
+                        return ctx
+                            .handle_invalid_time_error(Error::datetime_function_overflow())
+                            .map(|_| Ok(None))?;
+                    }
+                };
+                Ok(Some(Self {
+                    month,
+                    sec: 0,
                     nano: 0,
                     fsp: 0,
-                })
+                }))
             }
             _ => Err(box_err!("invalid single time unit {:?}", unit)),
         }
@@ -336,7 +426,7 @@ impl Interval {
         index: TimeIndex,
         max_cnt: usize,
         for_duration: bool,
-    ) -> Result<Self> {
+    ) -> Result<Option<Self>> {
         let mut neg = false;
         let original_input = input;
 
@@ -357,11 +447,12 @@ impl Interval {
                 return Err(Error::incorrect_datetime_value(original_input));
             }
             ctx.handle_invalid_time_error(Error::incorrect_datetime_value(original_input))?;
-            return Ok(Self {
+            return Ok(Some(Self {
                 month: 0,
+                sec: 0,
                 nano: 0,
                 fsp: DEFAULT_FSP,
-            });
+            }));
         }
 
         // Populate fields in reverse order
@@ -398,30 +489,72 @@ impl Interval {
         }
         let microseconds = parse_field(&frac_part)?;
 
-        // Convert everything into nanoseconds for the Interval struct
-        let total_nanos = days * NANOS_PER_DAY
-            + hours * NANOS_PER_HOUR
-            + minutes * NANOS_PER_MIN
-            + seconds * NANOS_PER_SEC
-            + microseconds * NANOS_PER_MICRO;
-
-        let month = if neg {
-            -(years * 12 + months)
-        } else {
-            years * 12 + months
+        let mut check_result = |res: Option<i64>| -> Result<Option<i64>> {
+            match res {
+                Some(v) => Ok(Some(v)),
+                None => {
+                    if for_duration {
+                        return Err(Error::datetime_function_overflow());
+                    }
+                    ctx.handle_invalid_time_error(Error::datetime_function_overflow())?;
+                    Ok(None)
+                }
+            }
         };
-        let nano = if neg { -total_nanos } else { total_nanos };
+        let day_secs = match check_result(days.checked_mul(SECS_PER_DAY))? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+        let hour_secs = match check_result(hours.checked_mul(SECS_PER_HOUR))? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+        let minute_secs = match check_result(minutes.checked_mul(SECS_PER_MINUTE))? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+        let total_secs1 = match check_result(day_secs.checked_add(hour_secs))? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+        let total_secs2 = match check_result(minute_secs.checked_add(seconds))? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+        let mut sec = match check_result(total_secs1.checked_add(total_secs2))? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+        let mut nano = match check_result(microseconds.checked_mul(NANOS_PER_MICRO))? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+
+        let month1 = match check_result(years.checked_mul(12))? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+        let mut month = match check_result(month1.checked_add(months))? {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+        if neg {
+            month = -month;
+            sec = -sec;
+            nano = -nano;
+        }
 
         // Return Interval with month, nano, and fsp values
-        Ok(Self {
+        Ok(Some(Self {
             month,
+            sec,
             nano,
             fsp: if index == TimeIndex::Microsecond {
                 MAX_FSP
             } else {
                 MIN_FSP
             },
-        })
+        }))
     }
 
     pub fn extract_duration(
@@ -429,17 +562,24 @@ impl Interval {
         unit: &IntervalUnit,
         input: &str,
     ) -> Result<Duration> {
-        let val = Self::parse_from_str_internal(ctx, unit, input, true)?;
+        let val = Self::parse_from_str_internal(ctx, unit, input, true)?
+            .ok_or_else(|| Error::datetime_function_overflow())?;
         use IntervalUnit::*;
         match unit {
-            Microsecond | Second | Minute | Hour | Day | Week | Month | Quarter | Year => Ok(
-                Duration::from_nanos(val.month * 30 * NANOS_PER_DAY + val.nano, val.fsp)?,
-            ),
+            Microsecond | Second | Minute | Hour | Day | Week | Month | Quarter | Year => {
+                Ok(Duration::from_nanos(
+                    val.month * 30 * NANOS_PER_DAY + val.sec * NANOS_PER_SEC + val.nano,
+                    val.fsp,
+                )?)
+            }
             _ => {
-                if val.month != 0 || val.nano.abs() > MAX_NANOS {
+                if val.month != 0 || val.sec.abs() > MAX_SECS || val.nano.abs() > MAX_NANOS {
                     return Err(Error::datetime_function_overflow());
                 }
-                Ok(Duration::from_nanos(val.nano, val.fsp)?)
+                Ok(Duration::from_nanos(
+                    val.sec * NANOS_PER_SEC + val.nano,
+                    val.fsp,
+                )?)
             }
         }
     }
@@ -447,6 +587,7 @@ impl Interval {
     pub fn negate(&self) -> Self {
         Self {
             month: -self.month,
+            sec: -self.sec,
             nano: -self.nano,
             fsp: self.fsp,
         }
@@ -454,6 +595,10 @@ impl Interval {
 
     pub fn month(&self) -> i64 {
         self.month
+    }
+
+    pub fn sec(&self) -> i64 {
+        self.sec
     }
 
     pub fn nano(&self) -> i64 {
@@ -507,7 +652,13 @@ impl<'a> ConvertToIntervalStr for BytesRef<'a> {
                 // But:
                 // date + INTERVAL "1e2" MINUTE = date + INTERVAL 1 MINUTE
                 // date + INTERVAL "1.6" MINUTE = date + INTERVAL 1 MINUTE
-                let dec = Decimal::from_bytes(self)?.into_result(ctx)?;
+                let dec = match Decimal::from_bytes(self) {
+                    Ok(d) => d.into_result(ctx)?,
+                    Err(_) => {
+                        ctx.handle_truncate(true)?;
+                        Decimal::zero()
+                    }
+                };
                 interval = dec.to_string();
             }
             _ => {
@@ -545,6 +696,7 @@ impl ConvertToIntervalStr for Real {
         decimal: isize,
     ) -> Result<String> {
         if decimal < 0 {
+            // Default
             Ok(self.to_string())
         } else {
             Ok(format!("{:.*}", decimal as usize, self.into_inner()))
@@ -654,6 +806,7 @@ mod tests {
             (b"-2e4", Second, "-20000"),
             (b"1.6", Second, "1.6"),
             (b"-1.6554", Second, "-1.6554"),
+            (b"sdfasersasd", Second, "0"),
         ];
 
         let mut config = EvalConfig::new();
@@ -781,6 +934,7 @@ mod tests {
                 Microsecond,
                 Interval {
                     month: 0,
+                    sec: 0,
                     nano: 123456 * NANOS_PER_MICRO,
                     fsp: 6,
                 },
@@ -790,6 +944,7 @@ mod tests {
                 Microsecond,
                 Interval {
                     month: 0,
+                    sec: 0,
                     nano: -123456 * NANOS_PER_MICRO,
                     fsp: 6,
                 },
@@ -799,7 +954,8 @@ mod tests {
                 Second,
                 Interval {
                     month: 0,
-                    nano: 2 * NANOS_PER_SEC + 123456 * NANOS_PER_MICRO,
+                    sec: 2,
+                    nano: 123456 * NANOS_PER_MICRO,
                     fsp: 6,
                 },
             ),
@@ -808,7 +964,8 @@ mod tests {
                 Second,
                 Interval {
                     month: 0,
-                    nano: -2 * NANOS_PER_SEC - 123456 * NANOS_PER_MICRO,
+                    sec: -2,
+                    nano: -123456 * NANOS_PER_MICRO,
                     fsp: 6,
                 },
             ),
@@ -817,7 +974,8 @@ mod tests {
                 Second,
                 Interval {
                     month: 0,
-                    nano: 2 * NANOS_PER_SEC + 123450 * NANOS_PER_MICRO,
+                    sec: 2,
+                    nano: 123450 * NANOS_PER_MICRO,
                     fsp: 5,
                 },
             ),
@@ -826,7 +984,8 @@ mod tests {
                 Second,
                 Interval {
                     month: 0,
-                    nano: -2 * NANOS_PER_SEC - 123450 * NANOS_PER_MICRO,
+                    sec: -2,
+                    nano: -123450 * NANOS_PER_MICRO,
                     fsp: 5,
                 },
             ),
@@ -835,7 +994,8 @@ mod tests {
                 Second,
                 Interval {
                     month: 0,
-                    nano: 2 * NANOS_PER_SEC + 123456 * NANOS_PER_MICRO,
+                    sec: 2,
+                    nano: 123456 * NANOS_PER_MICRO,
                     fsp: 6,
                 },
             ),
@@ -844,7 +1004,8 @@ mod tests {
                 Second,
                 Interval {
                     month: 0,
-                    nano: -2 * NANOS_PER_SEC - 123456 * NANOS_PER_MICRO,
+                    sec: -2,
+                    nano: -123456 * NANOS_PER_MICRO,
                     fsp: 6,
                 },
             ),
@@ -853,7 +1014,8 @@ mod tests {
                 Second,
                 Interval {
                     month: 0,
-                    nano: 2 * NANOS_PER_SEC + 990000 * NANOS_PER_MICRO,
+                    sec: 2,
+                    nano: 990000 * NANOS_PER_MICRO,
                     fsp: 2,
                 },
             ),
@@ -862,7 +1024,8 @@ mod tests {
                 Second,
                 Interval {
                     month: 0,
-                    nano: -2 * NANOS_PER_SEC - 500000 * NANOS_PER_MICRO,
+                    sec: -2,
+                    nano: -500000 * NANOS_PER_MICRO,
                     fsp: 5,
                 },
             ),
@@ -871,7 +1034,8 @@ mod tests {
                 Minute,
                 Interval {
                     month: 0,
-                    nano: 3 * NANOS_PER_MIN,
+                    sec: 3 * SECS_PER_MINUTE,
+                    nano: 0,
                     fsp: 0,
                 },
             ),
@@ -880,7 +1044,8 @@ mod tests {
                 Minute,
                 Interval {
                     month: 0,
-                    nano: -3 * NANOS_PER_MIN,
+                    sec: -3 * SECS_PER_MINUTE,
+                    nano: 0,
                     fsp: 0,
                 },
             ),
@@ -889,7 +1054,8 @@ mod tests {
                 Minute,
                 Interval {
                     month: 0,
-                    nano: 100 * NANOS_PER_MIN,
+                    sec: 100 * SECS_PER_MINUTE,
+                    nano: 0,
                     fsp: 0,
                 },
             ),
@@ -898,7 +1064,8 @@ mod tests {
                 Minute,
                 Interval {
                     month: 0,
-                    nano: -99 * NANOS_PER_MIN,
+                    sec: -99 * SECS_PER_MINUTE,
+                    nano: 0,
                     fsp: 0,
                 },
             ),
@@ -907,7 +1074,8 @@ mod tests {
                 Hour,
                 Interval {
                     month: 0,
-                    nano: 100 * NANOS_PER_HOUR,
+                    sec: 100 * SECS_PER_HOUR,
+                    nano: 0,
                     fsp: 0,
                 },
             ),
@@ -916,7 +1084,8 @@ mod tests {
                 Hour,
                 Interval {
                     month: 0,
-                    nano: -99 * NANOS_PER_HOUR,
+                    sec: -99 * SECS_PER_HOUR,
+                    nano: 0,
                     fsp: 0,
                 },
             ),
@@ -925,7 +1094,8 @@ mod tests {
                 Day,
                 Interval {
                     month: 0,
-                    nano: 100 * NANOS_PER_DAY,
+                    sec: 100 * SECS_PER_DAY,
+                    nano: 0,
                     fsp: 0,
                 },
             ),
@@ -934,7 +1104,8 @@ mod tests {
                 Day,
                 Interval {
                     month: 0,
-                    nano: -99 * NANOS_PER_DAY,
+                    sec: -99 * SECS_PER_DAY,
+                    nano: 0,
                     fsp: 0,
                 },
             ),
@@ -943,7 +1114,8 @@ mod tests {
                 Week,
                 Interval {
                     month: 0,
-                    nano: 100 * NANOS_PER_DAY * 7,
+                    sec: 100 * SECS_PER_DAY * 7,
+                    nano: 0,
                     fsp: 0,
                 },
             ),
@@ -952,7 +1124,8 @@ mod tests {
                 Week,
                 Interval {
                     month: 0,
-                    nano: -99 * NANOS_PER_DAY * 7,
+                    sec: -99 * SECS_PER_DAY * 7,
+                    nano: 0,
                     fsp: 0,
                 },
             ),
@@ -961,6 +1134,7 @@ mod tests {
                 Month,
                 Interval {
                     month: 100,
+                    sec: 0,
                     nano: 0,
                     fsp: 0,
                 },
@@ -970,6 +1144,7 @@ mod tests {
                 Month,
                 Interval {
                     month: -99,
+                    sec: 0,
                     nano: 0,
                     fsp: 0,
                 },
@@ -979,6 +1154,7 @@ mod tests {
                 Quarter,
                 Interval {
                     month: 100 * 3,
+                    sec: 0,
                     nano: 0,
                     fsp: 0,
                 },
@@ -988,6 +1164,7 @@ mod tests {
                 Quarter,
                 Interval {
                     month: -99 * 3,
+                    sec: 0,
                     nano: 0,
                     fsp: 0,
                 },
@@ -997,6 +1174,7 @@ mod tests {
                 Year,
                 Interval {
                     month: 100 * 12,
+                    sec: 0,
                     nano: 0,
                     fsp: 0,
                 },
@@ -1006,6 +1184,7 @@ mod tests {
                 Year,
                 Interval {
                     month: -99 * 12,
+                    sec: 0,
                     nano: 0,
                     fsp: 0,
                 },
@@ -1016,6 +1195,7 @@ mod tests {
                 SecondMicrosecond,
                 Interval {
                     month: 0,
+                    sec: 0,
                     nano: 123000 * NANOS_PER_MICRO,
                     fsp: 6,
                 },
@@ -1025,6 +1205,7 @@ mod tests {
                 SecondMicrosecond,
                 Interval {
                     month: 0,
+                    sec: 0,
                     nano: -123000 * NANOS_PER_MICRO,
                     fsp: 6,
                 },
@@ -1034,7 +1215,8 @@ mod tests {
                 SecondMicrosecond,
                 Interval {
                     month: 0,
-                    nano: 123 * NANOS_PER_SEC + 123000 * NANOS_PER_MICRO,
+                    sec: 123,
+                    nano: 123000 * NANOS_PER_MICRO,
                     fsp: 6,
                 },
             ),
@@ -1043,7 +1225,8 @@ mod tests {
                 SecondMicrosecond,
                 Interval {
                     month: 0,
-                    nano: -123 * NANOS_PER_SEC - 123000 * NANOS_PER_MICRO,
+                    sec: -123,
+                    nano: -123000 * NANOS_PER_MICRO,
                     fsp: 6,
                 },
             ),
@@ -1052,6 +1235,7 @@ mod tests {
                 MinuteMicrosecond,
                 Interval {
                     month: 0,
+                    sec: 0,
                     nano: 123000 * NANOS_PER_MICRO,
                     fsp: 6,
                 },
@@ -1061,6 +1245,7 @@ mod tests {
                 MinuteMicrosecond,
                 Interval {
                     month: 0,
+                    sec: 0,
                     nano: -123000 * NANOS_PER_MICRO,
                     fsp: 6,
                 },
@@ -1070,7 +1255,8 @@ mod tests {
                 MinuteMicrosecond,
                 Interval {
                     month: 0,
-                    nano: 123 * NANOS_PER_SEC + 123000 * NANOS_PER_MICRO,
+                    sec: 123,
+                    nano: 123000 * NANOS_PER_MICRO,
                     fsp: 6,
                 },
             ),
@@ -1079,7 +1265,8 @@ mod tests {
                 MinuteMicrosecond,
                 Interval {
                     month: 0,
-                    nano: -123 * NANOS_PER_SEC - 123000 * NANOS_PER_MICRO,
+                    sec: -123,
+                    nano: -123000 * NANOS_PER_MICRO,
                     fsp: 6,
                 },
             ),
@@ -1088,7 +1275,8 @@ mod tests {
                 MinuteMicrosecond,
                 Interval {
                     month: 0,
-                    nano: 2 * NANOS_PER_MIN + 123 * NANOS_PER_SEC + 123000 * NANOS_PER_MICRO,
+                    sec: 2 * SECS_PER_MINUTE + 123,
+                    nano: 123000 * NANOS_PER_MICRO,
                     fsp: 6,
                 },
             ),
@@ -1097,7 +1285,8 @@ mod tests {
                 MinuteMicrosecond,
                 Interval {
                     month: 0,
-                    nano: -62 * NANOS_PER_MIN - 123 * NANOS_PER_SEC - 123000 * NANOS_PER_MICRO,
+                    sec: -62 * SECS_PER_MINUTE - 123,
+                    nano: -123000 * NANOS_PER_MICRO,
                     fsp: 6,
                 },
             ),
@@ -1106,7 +1295,8 @@ mod tests {
                 MinuteSecond,
                 Interval {
                     month: 0,
-                    nano: 123 * NANOS_PER_SEC,
+                    sec: 123,
+                    nano: 0,
                     fsp: 0,
                 },
             ),
@@ -1115,7 +1305,8 @@ mod tests {
                 MinuteSecond,
                 Interval {
                     month: 0,
-                    nano: -123 * NANOS_PER_SEC,
+                    sec: -123,
+                    nano: 0,
                     fsp: 0,
                 },
             ),
@@ -1124,7 +1315,8 @@ mod tests {
                 MinuteSecond,
                 Interval {
                     month: 0,
-                    nano: 2 * NANOS_PER_MIN + 123 * NANOS_PER_SEC,
+                    sec: 2 * SECS_PER_MINUTE + 123,
+                    nano: 0,
                     fsp: 0,
                 },
             ),
@@ -1133,7 +1325,8 @@ mod tests {
                 MinuteSecond,
                 Interval {
                     month: 0,
-                    nano: -2 * NANOS_PER_MIN - 123 * NANOS_PER_SEC,
+                    sec: -2 * SECS_PER_MINUTE - 123,
+                    nano: 0,
                     fsp: 0,
                 },
             ),
@@ -1142,6 +1335,7 @@ mod tests {
                 HourMicrosecond,
                 Interval {
                     month: 0,
+                    sec: 0,
                     nano: 123000 * NANOS_PER_MICRO,
                     fsp: 6,
                 },
@@ -1151,6 +1345,7 @@ mod tests {
                 HourMicrosecond,
                 Interval {
                     month: 0,
+                    sec: 0,
                     nano: -123000 * NANOS_PER_MICRO,
                     fsp: 6,
                 },
@@ -1160,7 +1355,8 @@ mod tests {
                 HourMicrosecond,
                 Interval {
                     month: 0,
-                    nano: 123 * NANOS_PER_SEC + 123000 * NANOS_PER_MICRO,
+                    sec: 123,
+                    nano: 123000 * NANOS_PER_MICRO,
                     fsp: 6,
                 },
             ),
@@ -1169,7 +1365,8 @@ mod tests {
                 HourMicrosecond,
                 Interval {
                     month: 0,
-                    nano: -123 * NANOS_PER_SEC - 123000 * NANOS_PER_MICRO,
+                    sec: -123,
+                    nano: -123000 * NANOS_PER_MICRO,
                     fsp: 6,
                 },
             ),
@@ -1178,7 +1375,8 @@ mod tests {
                 HourMicrosecond,
                 Interval {
                     month: 0,
-                    nano: 2 * NANOS_PER_MIN + 123 * NANOS_PER_SEC + 123000 * NANOS_PER_MICRO,
+                    sec: 2 * SECS_PER_MINUTE + 123,
+                    nano: 123000 * NANOS_PER_MICRO,
                     fsp: 6,
                 },
             ),
@@ -1187,7 +1385,8 @@ mod tests {
                 HourMicrosecond,
                 Interval {
                     month: 0,
-                    nano: -62 * NANOS_PER_MIN - 123 * NANOS_PER_SEC - 123000 * NANOS_PER_MICRO,
+                    sec: -62 * SECS_PER_MINUTE - 123,
+                    nano: -123000 * NANOS_PER_MICRO,
                     fsp: 6,
                 },
             ),
@@ -1196,10 +1395,8 @@ mod tests {
                 HourMicrosecond,
                 Interval {
                     month: 0,
-                    nano: 12 * NANOS_PER_HOUR
-                        + 2 * NANOS_PER_MIN
-                        + 123 * NANOS_PER_SEC
-                        + 123000 * NANOS_PER_MICRO,
+                    sec: 12 * SECS_PER_HOUR + 2 * SECS_PER_MINUTE + 123,
+                    nano: 123000 * NANOS_PER_MICRO,
                     fsp: 6,
                 },
             ),
@@ -1208,10 +1405,8 @@ mod tests {
                 HourMicrosecond,
                 Interval {
                     month: 0,
-                    nano: -2 * NANOS_PER_HOUR
-                        - 62 * NANOS_PER_MIN
-                        - 123 * NANOS_PER_SEC
-                        - 123000 * NANOS_PER_MICRO,
+                    sec: -2 * SECS_PER_HOUR - 62 * SECS_PER_MINUTE - 123,
+                    nano: -123000 * NANOS_PER_MICRO,
                     fsp: 6,
                 },
             ),
@@ -1220,7 +1415,8 @@ mod tests {
                 HourSecond,
                 Interval {
                     month: 0,
-                    nano: 123 * NANOS_PER_SEC,
+                    sec: 123,
+                    nano: 0,
                     fsp: 0,
                 },
             ),
@@ -1229,7 +1425,8 @@ mod tests {
                 HourSecond,
                 Interval {
                     month: 0,
-                    nano: -123 * NANOS_PER_SEC,
+                    sec: -123,
+                    nano: 0,
                     fsp: 0,
                 },
             ),
@@ -1238,7 +1435,8 @@ mod tests {
                 HourSecond,
                 Interval {
                     month: 0,
-                    nano: 2 * NANOS_PER_MIN + 123 * NANOS_PER_SEC,
+                    sec: 2 * SECS_PER_MINUTE + 123,
+                    nano: 0,
                     fsp: 0,
                 },
             ),
@@ -1247,7 +1445,8 @@ mod tests {
                 HourSecond,
                 Interval {
                     month: 0,
-                    nano: -2 * NANOS_PER_MIN - 123 * NANOS_PER_SEC,
+                    sec: -2 * SECS_PER_MINUTE - 123,
+                    nano: 0,
                     fsp: 0,
                 },
             ),
@@ -1256,7 +1455,8 @@ mod tests {
                 HourSecond,
                 Interval {
                     month: 0,
-                    nano: 9 * NANOS_PER_HOUR + 62 * NANOS_PER_MIN + 123 * NANOS_PER_SEC,
+                    sec: 9 * SECS_PER_HOUR + 62 * SECS_PER_MINUTE + 123,
+                    nano: 0,
                     fsp: 0,
                 },
             ),
@@ -1265,7 +1465,8 @@ mod tests {
                 HourSecond,
                 Interval {
                     month: 0,
-                    nano: -55 * NANOS_PER_HOUR - 62 * NANOS_PER_MIN - 123 * NANOS_PER_SEC,
+                    sec: -55 * SECS_PER_HOUR - 62 * SECS_PER_MINUTE - 123,
+                    nano: 0,
                     fsp: 0,
                 },
             ),
@@ -1274,7 +1475,8 @@ mod tests {
                 HourMinute,
                 Interval {
                     month: 0,
-                    nano: 123 * NANOS_PER_MIN,
+                    sec: 123 * SECS_PER_MINUTE,
+                    nano: 0,
                     fsp: 0,
                 },
             ),
@@ -1283,7 +1485,8 @@ mod tests {
                 HourMinute,
                 Interval {
                     month: 0,
-                    nano: -123 * NANOS_PER_MIN,
+                    sec: -123 * SECS_PER_MINUTE,
+                    nano: 0,
                     fsp: 0,
                 },
             ),
@@ -1292,7 +1495,8 @@ mod tests {
                 HourMinute,
                 Interval {
                     month: 0,
-                    nano: 2 * NANOS_PER_HOUR + 123 * NANOS_PER_MIN,
+                    sec: 2 * SECS_PER_HOUR + 123 * SECS_PER_MINUTE,
+                    nano: 0,
                     fsp: 0,
                 },
             ),
@@ -1301,7 +1505,8 @@ mod tests {
                 HourMinute,
                 Interval {
                     month: 0,
-                    nano: -88 * NANOS_PER_HOUR - 123 * NANOS_PER_MIN,
+                    sec: -88 * SECS_PER_HOUR - 123 * SECS_PER_MINUTE,
+                    nano: 0,
                     fsp: 0,
                 },
             ),
@@ -1310,6 +1515,7 @@ mod tests {
                 DayMicrosecond,
                 Interval {
                     month: 0,
+                    sec: 0,
                     nano: 123000 * NANOS_PER_MICRO,
                     fsp: 6,
                 },
@@ -1319,6 +1525,7 @@ mod tests {
                 DayMicrosecond,
                 Interval {
                     month: 0,
+                    sec: 0,
                     nano: -123000 * NANOS_PER_MICRO,
                     fsp: 6,
                 },
@@ -1328,7 +1535,8 @@ mod tests {
                 DayMicrosecond,
                 Interval {
                     month: 0,
-                    nano: 123 * NANOS_PER_SEC + 123000 * NANOS_PER_MICRO,
+                    sec: 123,
+                    nano: 123000 * NANOS_PER_MICRO,
                     fsp: 6,
                 },
             ),
@@ -1337,7 +1545,8 @@ mod tests {
                 DayMicrosecond,
                 Interval {
                     month: 0,
-                    nano: -123 * NANOS_PER_SEC - 123000 * NANOS_PER_MICRO,
+                    sec: -123,
+                    nano: -123000 * NANOS_PER_MICRO,
                     fsp: 6,
                 },
             ),
@@ -1346,7 +1555,8 @@ mod tests {
                 DayMicrosecond,
                 Interval {
                     month: 0,
-                    nano: 2 * NANOS_PER_MIN + 123 * NANOS_PER_SEC + 123000 * NANOS_PER_MICRO,
+                    sec: 2 * SECS_PER_MINUTE + 123,
+                    nano: 123000 * NANOS_PER_MICRO,
                     fsp: 6,
                 },
             ),
@@ -1355,7 +1565,8 @@ mod tests {
                 DayMicrosecond,
                 Interval {
                     month: 0,
-                    nano: -62 * NANOS_PER_MIN - 123 * NANOS_PER_SEC - 123000 * NANOS_PER_MICRO,
+                    sec: -62 * SECS_PER_MINUTE - 123,
+                    nano: -123000 * NANOS_PER_MICRO,
                     fsp: 6,
                 },
             ),
@@ -1364,10 +1575,8 @@ mod tests {
                 DayMicrosecond,
                 Interval {
                     month: 0,
-                    nano: 12 * NANOS_PER_HOUR
-                        + 2 * NANOS_PER_MIN
-                        + 123 * NANOS_PER_SEC
-                        + 123000 * NANOS_PER_MICRO,
+                    sec: 12 * SECS_PER_HOUR + 2 * SECS_PER_MINUTE + 123,
+                    nano: 123000 * NANOS_PER_MICRO,
                     fsp: 6,
                 },
             ),
@@ -1376,10 +1585,8 @@ mod tests {
                 DayMicrosecond,
                 Interval {
                     month: 0,
-                    nano: -2 * NANOS_PER_HOUR
-                        - 62 * NANOS_PER_MIN
-                        - 123 * NANOS_PER_SEC
-                        - 123000 * NANOS_PER_MICRO,
+                    sec: -2 * SECS_PER_HOUR - 62 * SECS_PER_MINUTE - 123,
+                    nano: -123000 * NANOS_PER_MICRO,
                     fsp: 6,
                 },
             ),
@@ -1388,24 +1595,18 @@ mod tests {
                 DayMicrosecond,
                 Interval {
                     month: 0,
-                    nano: 9 * NANOS_PER_DAY
-                        + 12 * NANOS_PER_HOUR
-                        + 2 * NANOS_PER_MIN
-                        + 123 * NANOS_PER_SEC
-                        + 123000 * NANOS_PER_MICRO,
+                    sec: 9 * SECS_PER_DAY + 12 * SECS_PER_HOUR + 2 * SECS_PER_MINUTE + 123,
+                    nano: 123000 * NANOS_PER_MICRO,
                     fsp: 6,
                 },
             ),
             (
-                "-77 2:62:123.123",
+                "-77 2:62:123.123456789",
                 DayMicrosecond,
                 Interval {
                     month: 0,
-                    nano: -77 * NANOS_PER_DAY
-                        - 2 * NANOS_PER_HOUR
-                        - 62 * NANOS_PER_MIN
-                        - 123 * NANOS_PER_SEC
-                        - 123000 * NANOS_PER_MICRO,
+                    sec: -77 * SECS_PER_DAY - 2 * SECS_PER_HOUR - 62 * SECS_PER_MINUTE - 123,
+                    nano: -123456789 * NANOS_PER_MICRO,
                     fsp: 6,
                 },
             ),
@@ -1414,7 +1615,8 @@ mod tests {
                 DaySecond,
                 Interval {
                     month: 0,
-                    nano: 123 * NANOS_PER_SEC,
+                    sec: 123,
+                    nano: 0,
                     fsp: 0,
                 },
             ),
@@ -1423,7 +1625,8 @@ mod tests {
                 DaySecond,
                 Interval {
                     month: 0,
-                    nano: -123 * NANOS_PER_SEC,
+                    sec: -123,
+                    nano: 0,
                     fsp: 0,
                 },
             ),
@@ -1432,7 +1635,8 @@ mod tests {
                 DaySecond,
                 Interval {
                     month: 0,
-                    nano: 2 * NANOS_PER_MIN + 123 * NANOS_PER_SEC,
+                    sec: 2 * SECS_PER_MINUTE + 123,
+                    nano: 0,
                     fsp: 0,
                 },
             ),
@@ -1441,7 +1645,8 @@ mod tests {
                 DaySecond,
                 Interval {
                     month: 0,
-                    nano: -2 * NANOS_PER_MIN - 123 * NANOS_PER_SEC,
+                    sec: -2 * SECS_PER_MINUTE - 123,
+                    nano: 0,
                     fsp: 0,
                 },
             ),
@@ -1450,7 +1655,8 @@ mod tests {
                 DaySecond,
                 Interval {
                     month: 0,
-                    nano: 9 * NANOS_PER_HOUR + 62 * NANOS_PER_MIN + 123 * NANOS_PER_SEC,
+                    sec: 9 * SECS_PER_HOUR + 62 * SECS_PER_MINUTE + 123,
+                    nano: 0,
                     fsp: 0,
                 },
             ),
@@ -1459,7 +1665,8 @@ mod tests {
                 DaySecond,
                 Interval {
                     month: 0,
-                    nano: -55 * NANOS_PER_HOUR - 62 * NANOS_PER_MIN - 123 * NANOS_PER_SEC,
+                    sec: -55 * SECS_PER_HOUR - 62 * SECS_PER_MINUTE - 123,
+                    nano: 0,
                     fsp: 0,
                 },
             ),
@@ -1468,10 +1675,8 @@ mod tests {
                 DaySecond,
                 Interval {
                     month: 0,
-                    nano: NANOS_PER_DAY
-                        + 9 * NANOS_PER_HOUR
-                        + 62 * NANOS_PER_MIN
-                        + 123 * NANOS_PER_SEC,
+                    sec: SECS_PER_DAY + 9 * SECS_PER_HOUR + 62 * SECS_PER_MINUTE + 123,
+                    nano: 0,
                     fsp: 0,
                 },
             ),
@@ -1480,10 +1685,8 @@ mod tests {
                 DaySecond,
                 Interval {
                     month: 0,
-                    nano: -3 * NANOS_PER_DAY
-                        - 55 * NANOS_PER_HOUR
-                        - 62 * NANOS_PER_MIN
-                        - 123 * NANOS_PER_SEC,
+                    sec: -3 * SECS_PER_DAY - 55 * SECS_PER_HOUR - 62 * SECS_PER_MINUTE - 123,
+                    nano: 0,
                     fsp: 0,
                 },
             ),
@@ -1492,7 +1695,8 @@ mod tests {
                 DayMinute,
                 Interval {
                     month: 0,
-                    nano: 123 * NANOS_PER_MIN,
+                    sec: 123 * SECS_PER_MINUTE,
+                    nano: 0,
                     fsp: 0,
                 },
             ),
@@ -1501,7 +1705,8 @@ mod tests {
                 DayMinute,
                 Interval {
                     month: 0,
-                    nano: -123 * NANOS_PER_MIN,
+                    sec: -123 * SECS_PER_MINUTE,
+                    nano: 0,
                     fsp: 0,
                 },
             ),
@@ -1510,7 +1715,8 @@ mod tests {
                 DayMinute,
                 Interval {
                     month: 0,
-                    nano: 2 * NANOS_PER_HOUR + 123 * NANOS_PER_MIN,
+                    sec: 2 * SECS_PER_HOUR + 123 * SECS_PER_MINUTE,
+                    nano: 0,
                     fsp: 0,
                 },
             ),
@@ -1519,7 +1725,8 @@ mod tests {
                 DayMinute,
                 Interval {
                     month: 0,
-                    nano: -88 * NANOS_PER_HOUR - 123 * NANOS_PER_MIN,
+                    sec: -88 * SECS_PER_HOUR - 123 * SECS_PER_MINUTE,
+                    nano: 0,
                     fsp: 0,
                 },
             ),
@@ -1528,7 +1735,8 @@ mod tests {
                 DayMinute,
                 Interval {
                     month: 0,
-                    nano: 8 * NANOS_PER_DAY + 2 * NANOS_PER_HOUR + 123 * NANOS_PER_MIN,
+                    sec: 8 * SECS_PER_DAY + 2 * SECS_PER_HOUR + 123 * SECS_PER_MINUTE,
+                    nano: 0,
                     fsp: 0,
                 },
             ),
@@ -1537,7 +1745,8 @@ mod tests {
                 DayMinute,
                 Interval {
                     month: 0,
-                    nano: -70 * NANOS_PER_DAY - 88 * NANOS_PER_HOUR - 123 * NANOS_PER_MIN,
+                    sec: -70 * SECS_PER_DAY - 88 * SECS_PER_HOUR - 123 * SECS_PER_MINUTE,
+                    nano: 0,
                     fsp: 0,
                 },
             ),
@@ -1546,7 +1755,8 @@ mod tests {
                 DayHour,
                 Interval {
                     month: 0,
-                    nano: 123 * NANOS_PER_HOUR,
+                    sec: 123 * SECS_PER_HOUR,
+                    nano: 0,
                     fsp: 0,
                 },
             ),
@@ -1555,7 +1765,8 @@ mod tests {
                 DayHour,
                 Interval {
                     month: 0,
-                    nano: -123 * NANOS_PER_HOUR,
+                    sec: -123 * SECS_PER_HOUR,
+                    nano: 0,
                     fsp: 0,
                 },
             ),
@@ -1564,7 +1775,8 @@ mod tests {
                 DayHour,
                 Interval {
                     month: 0,
-                    nano: 66 * NANOS_PER_DAY + 123 * NANOS_PER_HOUR,
+                    sec: 66 * SECS_PER_DAY + 123 * SECS_PER_HOUR,
+                    nano: 0,
                     fsp: 0,
                 },
             ),
@@ -1573,7 +1785,8 @@ mod tests {
                 DayHour,
                 Interval {
                     month: 0,
-                    nano: -77 * NANOS_PER_DAY - 123 * NANOS_PER_HOUR,
+                    sec: -77 * SECS_PER_DAY - 123 * SECS_PER_HOUR,
+                    nano: 0,
                     fsp: 0,
                 },
             ),
@@ -1582,6 +1795,7 @@ mod tests {
                 YearMonth,
                 Interval {
                     month: 123,
+                    sec: 0,
                     nano: 0,
                     fsp: 0,
                 },
@@ -1591,6 +1805,7 @@ mod tests {
                 YearMonth,
                 Interval {
                     month: -123,
+                    sec: 0,
                     nano: 0,
                     fsp: 0,
                 },
@@ -1600,6 +1815,7 @@ mod tests {
                 YearMonth,
                 Interval {
                     month: 99 * 12 + 123,
+                    sec: 0,
                     nano: 0,
                     fsp: 0,
                 },
@@ -1609,6 +1825,7 @@ mod tests {
                 YearMonth,
                 Interval {
                     month: -7 * 12 - 123,
+                    sec: 0,
                     nano: 0,
                     fsp: 0,
                 },
@@ -1616,7 +1833,9 @@ mod tests {
         ];
         let mut ctx = EvalContext::default();
         for (input, unit, expected) in cases {
-            let result = Interval::parse_from_str(&mut ctx, &unit, input).unwrap();
+            let result = Interval::parse_from_str(&mut ctx, &unit, input)
+                .unwrap()
+                .unwrap();
             assert_eq!(
                 result, expected,
                 "Failed for input: {}, unit: {:?}",
@@ -1638,14 +1857,54 @@ mod tests {
             ("99 123:123", YearMonth),
         ];
         for (input, unit) in err_cases {
-            let result = Interval::parse_from_str(&mut ctx, &unit, input).unwrap();
+            let result = Interval::parse_from_str(&mut ctx, &unit, input)
+                .unwrap()
+                .unwrap();
             assert_eq!(
                 result,
                 Interval {
                     month: 0,
+                    sec: 0,
                     nano: 0,
-                    fsp: DEFAULT_FSP
+                    fsp: DEFAULT_FSP,
                 },
+                "Failed for input: {}, unit: {:?}",
+                input,
+                unit
+            );
+        }
+
+        let none_cases = vec![
+            // 2^54 * 1000 > 2^63
+            ("8791026472627208192", Microsecond),
+            ("-8791026472627208192", Microsecond),
+            // 2^60 * 60 > 2^63
+            ("1152921504606846976", Minute),
+            ("-1152921504606846976", Minute),
+            // 2^55 * 3600 > 2^63
+            ("36028797018963968", Hour),
+            ("-36028797018963968", Hour),
+            // 2^47 * 86400 > 2^63
+            ("140737488355328", Day),
+            ("-140737488355328", Day),
+            // 2^44 * 86400 * 7 > 2^63
+            ("17592186044416", Week),
+            ("-17592186044416", Week),
+            // 2^62 * 3 > 2*63
+            ("4611686018427387904", Quarter),
+            ("-4611686018427387904", Quarter),
+            // 2^60 * 12 > 2*63
+            ("1152921504606846976", Year),
+            ("-1152921504606846976", Year),
+            ("140737488355328 12:12:12.123", DayMicrosecond),
+            ("-2 36028797018963968:12:12.123", DayMicrosecond),
+            ("-2 12:1152921504606846976:12.123", DayMicrosecond),
+            ("-2 12:12:9223372036854731888.123", DayMicrosecond),
+        ];
+        for (input, unit) in none_cases {
+            let result = Interval::parse_from_str(&mut ctx, &unit, input).unwrap();
+            assert!(
+                result.is_none(),
                 "Failed for input: {}, unit: {:?}",
                 input,
                 unit
@@ -1707,8 +1966,12 @@ mod tests {
                 Second,
                 Duration::from_nanos(-2 * NANOS_PER_SEC - 500000 * NANOS_PER_MICRO, 5),
             ),
-            ("99", Minute, Duration::from_nanos(99 * NANOS_PER_MIN, 0)),
-            ("-99", Minute, Duration::from_nanos(-99 * NANOS_PER_MIN, 0)),
+            ("99", Minute, Duration::from_nanos(99 * NANOS_PER_MINUTE, 0)),
+            (
+                "-99",
+                Minute,
+                Duration::from_nanos(-99 * NANOS_PER_MINUTE, 0),
+            ),
             ("30", Day, Duration::from_nanos(30 * NANOS_PER_DAY, 0)),
             ("-30", Day, Duration::from_nanos(-30 * NANOS_PER_DAY, 0)),
             ("2", Week, Duration::from_nanos(2 * NANOS_PER_DAY * 7, 0)),
@@ -1721,7 +1984,7 @@ mod tests {
                 Duration::from_nanos(
                     29 * NANOS_PER_DAY
                         + 12 * NANOS_PER_HOUR
-                        + 23 * NANOS_PER_MIN
+                        + 23 * NANOS_PER_MINUTE
                         + 36 * NANOS_PER_SEC
                         + 123400 * NANOS_PER_MICRO,
                     6,
@@ -1733,7 +1996,7 @@ mod tests {
                 Duration::from_nanos(
                     -29 * NANOS_PER_DAY
                         - 12 * NANOS_PER_HOUR
-                        - 23 * NANOS_PER_MIN
+                        - 23 * NANOS_PER_MINUTE
                         - 36 * NANOS_PER_SEC
                         - 123400 * NANOS_PER_MICRO,
                     6,

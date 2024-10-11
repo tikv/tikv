@@ -10,9 +10,9 @@ async-compression = { version = "0.4.12", features = ["futures-io", "zstd"] }
 async-trait = "0.1"
 aws = { workspace = true }
 azure = { workspace = true }
+chrono = { workspace = true }
 cloud = { workspace = true }
 encryption = { workspace = true }
-engine_traits = { workspace = true }
 file_system = { workspace = true }
 futures = "0.3"
 futures-io = "0.3"
@@ -23,6 +23,8 @@ lazy_static = "1.3"
 openssl = { workspace = true }
 prometheus = { version = "0.13", default-features = false, features = ["nightly", "push"] }
 rand = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 slog = { workspace = true }
 # better to not use slog-global, but pass in the logger
 slog-global = { workspace = true }
@@ -31,9 +33,10 @@ tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["time", "fs", "process"] }
 tokio-util = { version = "0.7", features = ["compat"] }
 url = "2.0"
+uuid = { version = "0.8", features = ["v4", "serde"] }
+walkdir = "2"
 
 [dev-dependencies]
-matches = "0.1.8"
 rust-ini = "0.14.0"
 structopt = "0.3"
 tempfile = "3.1"
