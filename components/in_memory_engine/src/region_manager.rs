@@ -732,6 +732,12 @@ impl RegionManager {
         let mut deletable_regions = vec![];
         if snapshot_list.is_empty() {
             drop(snapshot_list);
+            if PRINTF_LOG.load(Ordering::Relaxed) {
+                info!(
+                    "last snapshot to remove, remove history range";
+                    "snapshot_meta" => ?snapshot_meta,
+                );
+            }
             historical_regions.remove(&hist_key).unwrap();
             regions_map.iter_overlapped_regions(&snapshot_meta.region, |meta| {
                 if matches!(
@@ -753,6 +759,13 @@ impl RegionManager {
                     let meta = regions_map.mut_region_meta(r.id).unwrap();
                     meta.set_state(RegionState::Evicting);
                 }
+            }
+        } else {
+            if PRINTF_LOG.load(Ordering::Relaxed) {
+                info!(
+                    "on snapshots exist";
+                    "snapshot_meta" => ?snapshot_meta,
+                );
             }
         }
         deletable_regions

@@ -106,6 +106,8 @@ pub const APPLY_WB_SHRINK_SIZE: usize = 1024 * 1024;
 pub const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
 pub const MAX_APPLY_BATCH_SIZE: usize = 64 * 1024 * 1024;
 
+pub static PRINTF_LOG: AtomicBool = AtomicBool::new(false);
+
 pub struct PendingCmd<C> {
     pub index: u64,
     pub term: u64,

@@ -19,7 +19,7 @@ use engine_traits::{
 };
 use kvproto::metapb::Region;
 use pd_client::PdClient;
-use raftstore::coprocessor::RegionInfoProvider;
+use raftstore::{coprocessor::RegionInfoProvider, store::fsm::apply::PRINTF_LOG};
 use slog_global::error;
 use tikv_util::{config::VersionTrack, info, warn};
 
@@ -97,6 +97,12 @@ impl SkiplistHandle {
 
     pub fn remove(&self, key: &InternalBytes, guard: &Guard) {
         if let Some(entry) = self.0.remove(key, guard) {
+            if PRINTF_LOG.load(Ordering::Relaxed) {
+                info!(
+                    "remove";
+                    "key" => log_wrappers::Value(key.as_bytes()),
+                );
+            }
             entry.release(guard);
         }
     }
@@ -163,6 +169,13 @@ impl SkiplistEngine {
         iter.seek(&start, guard);
         while iter.valid() && iter.key() < &end {
             handle.remove(iter.key(), guard);
+            if PRINTF_LOG.load(Ordering::Relaxed) {
+                info!(
+                    "delete range";
+                    "key" => log_wrappers::Value(iter.key().as_slice()),
+                    "cf" => ?cf,
+                );
+            }
             iter.next(guard);
         }
         // guard will buffer 8 drop methods, flush here to clear the buffer.
