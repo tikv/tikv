@@ -59,8 +59,6 @@ pub struct RegionCacheWriteBatch {
     save_points: Vec<usize>,
     sequence_number: Option<u64>,
     memory_controller: Arc<MemoryController>,
-    memory_usage_reach_hard_limit: bool,
-    region_save_point: usize,
     current_region_evicted: bool,
     current_region: Option<CacheRegion>,
     // all the regions this write batch is written.
@@ -89,8 +87,6 @@ impl From<&RegionCacheMemoryEngine> for RegionCacheWriteBatch {
             save_points: Vec::new(),
             sequence_number: None,
             memory_controller: engine.memory_controller(),
-            memory_usage_reach_hard_limit: false,
-            region_save_point: 0,
             current_region_evicted: false,
             prepare_for_write_duration: Duration::default(),
             current_region: None,
@@ -109,8 +105,6 @@ impl RegionCacheWriteBatch {
             save_points: Vec::new(),
             sequence_number: None,
             memory_controller: engine.memory_controller(),
-            memory_usage_reach_hard_limit: false,
-            region_save_point: 0,
             current_region_evicted: false,
             prepare_for_write_duration: Duration::default(),
             current_region: None,
@@ -224,17 +218,6 @@ impl RegionCacheWriteBatch {
         }
         self.engine
             .evict_region(self.current_region.as_ref().unwrap(), reason, None);
-        // cleanup cached entries belong to this region as there is no need
-        // to write them.
-        assert!(self.save_points.is_empty());
-        if self.buffer.len() > self.region_save_point {
-            let mut total_size = 0;
-            for e in &self.buffer[self.region_save_point..] {
-                total_size += e.memory_size_required();
-            }
-            self.memory_controller.release(total_size);
-            self.buffer.truncate(self.region_save_point);
-        }
         self.current_region_evicted = true;
     }
 
@@ -289,7 +272,6 @@ impl RegionCacheWriteBatch {
     fn memory_acquire(&mut self, mem_required: usize) -> bool {
         match self.memory_controller.acquire(mem_required) {
             MemoryUsage::HardLimitReached(n) => {
-                self.memory_usage_reach_hard_limit = true;
                 warn!(
                     "ime the memory usage of in-memory engine reaches to hard limit";
                     "region" => ?self.current_region.as_ref().unwrap(),
@@ -468,8 +450,6 @@ impl WriteBatch for RegionCacheWriteBatch {
         self.buffer.clear();
         self.save_points.clear();
         self.sequence_number = None;
-        self.memory_usage_reach_hard_limit = false;
-        self.region_save_point = 0;
         self.current_region_evicted = false;
         self.current_region = None;
         self.written_regions.clear();
@@ -509,8 +489,6 @@ impl WriteBatch for RegionCacheWriteBatch {
         // TODO: remote range.
         self.set_region_cache_status(self.engine.prepare_for_apply(&region));
         self.current_region = Some(region);
-        self.memory_usage_reach_hard_limit = false;
-        self.region_save_point = self.buffer.len();
         self.current_region_evicted = false;
         self.prepare_for_write_duration += time.saturating_elapsed();
     }
