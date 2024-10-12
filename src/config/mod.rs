@@ -6947,14 +6947,8 @@ mod tests {
         cfg.validate().unwrap();
     }
 
-    #[test]
-    fn test_config_template_no_superfluous_keys() {
-        let template_config = CONFIG_TEMPLATE
-            .lines()
-            .map(|l| l.strip_prefix('#').unwrap_or(l))
-            .join("\n");
-
-        let mut deserializer = toml::Deserializer::new(&template_config);
+    fn must_no_unknown_key(content: &str) {
+        let mut deserializer = toml::Deserializer::new(content);
         let mut unrecognized_keys = Vec::new();
         let _: TikvConfig = serde_ignored::deserialize(&mut deserializer, |key| {
             unrecognized_keys.push(key.to_string())
@@ -6963,6 +6957,16 @@ mod tests {
 
         // Don't use `is_empty()` so we see which keys are superfluous on failure.
         assert_eq!(unrecognized_keys, Vec::<String>::new());
+    }
+
+    #[test]
+    fn test_config_template_no_superfluous_keys() {
+        let template_config = CONFIG_TEMPLATE
+            .lines()
+            .map(|l| l.strip_prefix('#').unwrap_or(l))
+            .join("\n");
+
+        must_no_unknown_key(&template_config);
     }
 
     #[test]
@@ -7580,7 +7584,7 @@ mod tests {
                         [in-memory-engine]
                         enabled = true
                         evict-threshold = "1GB"
-                        hard-limit-threshold = "2GB"
+                        capacity = "2GB"
                     "#,
                     r#"
                         [in-memory-engine]
@@ -7611,7 +7615,7 @@ mod tests {
                         [in-memory-engine]
                         enabled = true
                         evict-threshold = "1GB"
-                        hard-limit-threshold = "2GB"
+                        capacity = "2GB"
                         [storage]
                         api-version = 1
                         enable-ttl = true
@@ -7620,7 +7624,7 @@ mod tests {
                         [in-memory-engine]
                         enabled = true
                         evict-threshold = "1GB"
-                        hard-limit-threshold = "2GB"
+                        capacity = "2GB"
                         [storage]
                         api-version = 2
                         enable-ttl = true
@@ -7637,6 +7641,7 @@ mod tests {
                 } else {
                     cfg.validate().unwrap_err();
                 }
+                must_no_unknown_key(content);
             }
         }
     }
