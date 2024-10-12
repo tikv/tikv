@@ -7693,6 +7693,12 @@ mod tests {
         check_cfg(&cfg);
 
         cfg_controller
+            .update_config("in-memory-engine.gc-run-interval", "7m")
+            .unwrap();
+        cfg.in_memory_engine.gc_run_interval = ReadableDuration::minutes(7);
+        check_cfg(&cfg);
+
+        cfg_controller
             .update_config("in-memory-engine.enable", "false")
             .unwrap();
         cfg.in_memory_engine.enable = false;

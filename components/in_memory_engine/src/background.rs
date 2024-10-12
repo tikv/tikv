@@ -365,11 +365,11 @@ impl BgWorkManager {
             Duration::from_secs(5)
         })();
         ticker.spawn_interval_task(interval, move || {
-            let mut gc_interval = config.value().gc_interval.0;
-            let mut gc_ticker = tick(gc_interval);
+            let mut gc_run_interval = config.value().gc_run_interval.0;
+            let mut gc_ticker = tick(gc_run_interval);
             let mut load_evict_interval = config.value().load_evict_interval.0;
             let mut load_evict_ticker = tick(load_evict_interval);
-            let mut tso_timeout = std::cmp::min(gc_interval, TIMTOUT_FOR_TSO);
+            let mut tso_timeout = std::cmp::min(gc_run_interval, TIMTOUT_FOR_TSO);
             let check_pending_region_ticker = tick(check_load_pending_interval);
             'LOOP: loop {
                 select! {
@@ -385,7 +385,7 @@ impl BgWorkManager {
                                 continue 'LOOP;
                             }
                         };
-                        let safe_point = now.physical() - gc_interval.as_millis() as u64;
+                        let safe_point = now.physical() - gc_run_interval.as_millis() as u64;
                         let safe_point = TimeStamp::compose(safe_point, 0).into_inner();
                         if let Err(e) = scheduler.schedule(BackgroundTask::Gc(GcTask {safe_point})) {
                             error!(
@@ -393,16 +393,16 @@ impl BgWorkManager {
                                 "err" => ?e,
                             );
                         }
-                        let cur_gc_interval = config.value().gc_interval.0;
-                        if cur_gc_interval != gc_interval {
-                            tso_timeout = std::cmp::min(gc_interval, TIMTOUT_FOR_TSO);
+                        let cur_gc_run_interval = config.value().gc_run_interval.0;
+                        if cur_gc_run_interval != gc_run_interval {
+                            tso_timeout = std::cmp::min(gc_run_interval, TIMTOUT_FOR_TSO);
                             info!(
-                                "ime gc-interval changed";
-                                "from" => ?gc_interval,
-                                "to" => ?cur_gc_interval,
+                                "ime gc-run-interval changed";
+                                "from" => ?gc_run_interval,
+                                "to" => ?cur_gc_run_interval,
                             );
-                            gc_interval = cur_gc_interval;
-                            gc_ticker = tick(gc_interval);
+                            gc_run_interval = cur_gc_run_interval;
+                            gc_ticker = tick(gc_run_interval);
                         }
                     },
                     recv(load_evict_ticker) -> _ => {
@@ -956,7 +956,7 @@ impl Runnable for BackgroundRunner {
                 let core = self.core.clone();
                 let delete_range_scheduler = self.delete_range_scheduler.clone();
                 let pd_client = self.pd_client.clone();
-                let gc_interval = self.config.value().gc_interval.0;
+                let gc_run_interval = self.config.value().gc_run_interval.0;
                 let f = async move {
                     fail::fail_point!("before_start_loading_region");
                     fail::fail_point!("on_start_loading_region");
@@ -1046,7 +1046,7 @@ impl Runnable for BackgroundRunner {
                             }
                         }
                         // gc the range
-                        let tso_timeout = std::cmp::min(gc_interval, TIMTOUT_FOR_TSO);
+                        let tso_timeout = std::cmp::min(gc_run_interval, TIMTOUT_FOR_TSO);
                         let now = match block_on_timeout(pd_client.get_tso(), tso_timeout) {
                             Ok(Ok(ts)) => ts,
                             err => {
@@ -1067,7 +1067,7 @@ impl Runnable for BackgroundRunner {
 
                             let safe_point = now
                                 .physical()
-                                .saturating_sub(gc_interval.as_millis() as u64);
+                                .saturating_sub(gc_run_interval.as_millis() as u64);
                             TimeStamp::compose(safe_point, 0).into_inner()
                         })();
 
@@ -3149,7 +3149,7 @@ pub mod tests {
         }
 
         let mut config = InMemoryEngineConfig::config_for_test();
-        config.gc_interval = ReadableDuration(Duration::from_millis(100));
+        config.gc_run_interval = ReadableDuration(Duration::from_millis(100));
         config.load_evict_interval = ReadableDuration(Duration::from_millis(200));
         let config = Arc::new(VersionTrack::new(config));
         let start_time = TimeStamp::compose(TimeStamp::physical_now(), 0);
@@ -3158,8 +3158,9 @@ pub mod tests {
         let (scheduler, mut rx) = dummy_scheduler();
         let (ticker, stop) = BgWorkManager::start_tick(scheduler, pd_client, config.clone());
 
-        let Some(BackgroundTask::Gc(GcTask { safe_point })) =
-            rx.recv_timeout(10 * config.value().gc_interval.0).unwrap()
+        let Some(BackgroundTask::Gc(GcTask { safe_point })) = rx
+            .recv_timeout(10 * config.value().gc_run_interval.0)
+            .unwrap()
         else {
             panic!("must be a GcTask");
         };

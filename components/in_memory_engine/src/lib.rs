@@ -65,7 +65,9 @@ pub struct InMemoryEngineConfig {
     // TODO(SpadeA): ultimately we only expose one memory limit to user.
     // When memory usage reaches this amount, no further load will be performed.
     pub stop_load_threshold: Option<ReadableSize>,
-    pub gc_interval: ReadableDuration,
+    // Determines the oldest timestamp (approximately, now - gc_run_interval)
+    // of the read request the in memory engine can serve.
+    pub gc_run_interval: ReadableDuration,
     pub load_evict_interval: ReadableDuration,
     pub expected_region_size: Option<ReadableSize>,
     // used in getting top regions to filter those with less mvcc amplification. Here, we define
@@ -81,7 +83,7 @@ impl Default for InMemoryEngineConfig {
     fn default() -> Self {
         Self {
             enable: false,
-            gc_interval: ReadableDuration(Duration::from_secs(180)),
+            gc_run_interval: ReadableDuration(Duration::from_secs(180)),
             stop_load_threshold: None,
             // Each load/evict operation should run within five minutes.
             load_evict_interval: ReadableDuration(Duration::from_secs(300)),
@@ -155,7 +157,7 @@ impl InMemoryEngineConfig {
     pub fn config_for_test() -> InMemoryEngineConfig {
         InMemoryEngineConfig {
             enable: true,
-            gc_interval: ReadableDuration(Duration::from_secs(180)),
+            gc_run_interval: ReadableDuration(Duration::from_secs(180)),
             load_evict_interval: ReadableDuration(Duration::from_secs(300)), /* Should run within
                                                                               * five minutes */
             stop_load_threshold: Some(ReadableSize::gb(1)),

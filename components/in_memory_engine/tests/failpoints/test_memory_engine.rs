@@ -61,7 +61,7 @@ fn key_exist(sl: &SkiplistHandle, key: &InternalBytes, guard: &epoch::Guard) -> 
 #[test]
 fn test_gc_worker() {
     let mut config = InMemoryEngineConfig::config_for_test();
-    config.gc_interval = ReadableDuration(Duration::from_secs(1));
+    config.gc_run_interval = ReadableDuration(Duration::from_secs(1));
     let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
         VersionTrack::new(config),
     )));
@@ -595,7 +595,7 @@ fn test_load_with_gc() {
     let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
 
     let mut config = InMemoryEngineConfig::config_for_test();
-    config.gc_interval = ReadableDuration(Duration::from_secs(1));
+    config.gc_run_interval = ReadableDuration(Duration::from_secs(1));
     let mut engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
         VersionTrack::new(config),
     )));
@@ -663,7 +663,7 @@ fn test_region_split_before_batch_loading_start() {
     let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
 
     let mut config = InMemoryEngineConfig::config_for_test();
-    config.gc_interval = ReadableDuration(Duration::from_secs(1));
+    config.gc_run_interval = ReadableDuration(Duration::from_secs(1));
     let mut engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
         VersionTrack::new(config),
     )));
@@ -756,7 +756,7 @@ fn test_region_split_before_batch_loading_start() {
 #[test]
 fn test_cb_on_eviction() {
     let mut config = InMemoryEngineConfig::config_for_test();
-    config.gc_interval = ReadableDuration(Duration::from_secs(1));
+    config.gc_run_interval = ReadableDuration(Duration::from_secs(1));
     let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
         VersionTrack::new(config),
     )));

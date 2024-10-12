@@ -691,7 +691,7 @@ pub mod tests {
 
             let config = Arc::new(VersionTrack::new(InMemoryEngineConfig {
                 enable: true,
-                gc_interval: Default::default(),
+                gc_run_interval: Default::default(),
                 load_evict_interval: Default::default(),
                 stop_load_threshold: Some(ReadableSize(300)),
                 evict_threshold: Some(ReadableSize(300)),
@@ -749,7 +749,7 @@ pub mod tests {
 
         let config = Arc::new(VersionTrack::new(InMemoryEngineConfig {
             enable: true,
-            gc_interval: Default::default(),
+            gc_run_interval: Default::default(),
             load_evict_interval: Default::default(),
             stop_load_threshold: Some(ReadableSize(300)),
             evict_threshold: Some(ReadableSize(300)),
@@ -885,7 +885,7 @@ pub mod tests {
     #[test]
     fn test_cb_on_eviction_with_on_going_snapshot() {
         let mut config = InMemoryEngineConfig::config_for_test();
-        config.gc_interval = ReadableDuration(Duration::from_secs(1));
+        config.gc_run_interval = ReadableDuration(Duration::from_secs(1));
         let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(config),
         )));

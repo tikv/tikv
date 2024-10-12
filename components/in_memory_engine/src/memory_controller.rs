@@ -126,7 +126,7 @@ mod tests {
         let skiplist_engine = SkiplistEngine::new();
         let config = Arc::new(VersionTrack::new(InMemoryEngineConfig {
             enable: true,
-            gc_interval: Default::default(),
+            gc_run_interval: Default::default(),
             load_evict_interval: Default::default(),
             stop_load_threshold: Some(ReadableSize(300)),
             evict_threshold: Some(ReadableSize(300)),
