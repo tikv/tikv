@@ -1850,6 +1850,18 @@ where
         fail::fail_point!("on_handle_put");
         PEER_WRITE_CMD_COUNTER.put.inc();
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
+        let cf = req.get_put().get_cf();
+
+        if PRINTF_LOG.load(Ordering::Relaxed) {
+            info!(
+                "handle put";
+                "region_id" => self.region.get_id(),
+                "cf" => ?cf,
+                "key" => log_wrappers::hex_encode_upper(key),
+                "index" => ctx.exec_log_index,
+            );
+        }
+
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
         if let Some(s) = self.buckets.as_mut() {
@@ -1898,6 +1910,19 @@ where
     fn handle_delete(&mut self, ctx: &mut ApplyContext<EK>, req: &Request) -> Result<()> {
         PEER_WRITE_CMD_COUNTER.delete.inc();
         let key = req.get_delete().get_key();
+
+        let cf = req.get_delete().get_cf();
+
+        if PRINTF_LOG.load(Ordering::Relaxed) {
+            info!(
+                "handle delete";
+                "region_id" => self.region.get_id(),
+                "cf" => ?cf,
+                "key" => log_wrappers::hex_encode_upper(key),
+                "index" => ctx.exec_log_index,
+            );
+        }
+
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
         if let Some(s) = self.buckets.as_mut() {
@@ -1953,6 +1978,19 @@ where
         PEER_WRITE_CMD_COUNTER.delete_range.inc();
         let s_key = req.get_delete_range().get_start_key();
         let e_key = req.get_delete_range().get_end_key();
+
+        let cf = req.get_put().get_cf();
+
+        if PRINTF_LOG.load(Ordering::Relaxed) {
+            info!(
+                "handle delete range";
+                "region_id" => self.region.get_id(),
+                "cf" => ?cf,
+                "start_key" => log_wrappers::hex_encode_upper(s_key),
+                "end_key" => log_wrappers::hex_encode_upper(e_key),
+            );
+        }
+
         let notify_only = req.get_delete_range().get_notify_only();
         if !e_key.is_empty() && s_key >= e_key {
             return Err(box_err!(
@@ -2025,6 +2063,14 @@ where
     ) -> Result<()> {
         PEER_WRITE_CMD_COUNTER.ingest_sst.inc();
         let sst = req.get_ingest_sst().get_sst();
+
+        if PRINTF_LOG.load(Ordering::Relaxed) {
+            info!(
+                "handle ingest sst";
+                "region_id" => self.region.get_id(),
+                "index" => ctx.exec_log_index,
+            );
+        }
 
         if let Err(e) = check_sst_for_ingestion(sst, &self.region) {
             error!(?e;
