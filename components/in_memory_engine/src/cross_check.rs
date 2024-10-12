@@ -128,19 +128,21 @@ impl CrossChecker {
             }
 
             if !disk_valid {
-                let Some(tikv_safe_point) = (self.get_tikv_safe_point)() else {
-                    return Err(StopReason::TiKVSafepointGetFailed);
-                };
-                // The keys in rocksdb may have been gced, so keys in ime should have mvcc
-                // versions less or equal to the safe point of tikv.
-                loop {
-                    let (_, mvcc) = split_ts(mem_iter.key()).unwrap();
-                    if mvcc > tikv_safe_point {
-                        break;
-                    }
-                    mem_iter.next().unwrap();
-                    if !mem_iter.valid().unwrap() {
-                        return Err(StopReason::KeyGcInRocksDB);
+                if *cf != CF_LOCK {
+                    let Some(tikv_safe_point) = (self.get_tikv_safe_point)() else {
+                        return Err(StopReason::TiKVSafepointGetFailed);
+                    };
+                    // The keys in rocksdb may have been gced, so keys in ime should have mvcc
+                    // versions less or equal to the safe point of tikv.
+                    loop {
+                        let (_, mvcc) = split_ts(mem_iter.key()).unwrap();
+                        if mvcc > tikv_safe_point {
+                            break;
+                        }
+                        mem_iter.next().unwrap();
+                        if !mem_iter.valid().unwrap() {
+                            return Err(StopReason::KeyGcInRocksDB);
+                        }
                     }
                 }
                 panic!(
@@ -363,12 +365,14 @@ impl CrossChecker {
         let mem_key = mem_iter.key();
         if next_fisrt {
             if !disk_iter.next().unwrap() {
-                let (_, mem_mvcc) = split_ts(mem_key).unwrap();
-                // The keys in rocksdb may have been gced. Check the mvcc version of `mem_key`,
-                // and if it has mvcc less or equal to the safe point of tikv, for simplicity,
-                // break the check in such cases.
-                if mem_mvcc <= get_tikv_safe_point().unwrap() {
-                    return Err(StopReason::KeyGcInRocksDB);
+                if cf != CF_LOCK {
+                    let (_, mem_mvcc) = split_ts(mem_key).unwrap();
+                    // The keys in rocksdb may have been gced. Check the mvcc version of `mem_key`,
+                    // and if it has mvcc less or equal to the safe point of tikv, for simplicity,
+                    // break the check in such cases.
+                    if mem_mvcc <= get_tikv_safe_point().unwrap() {
+                        return Err(StopReason::KeyGcInRocksDB);
+                    }
                 }
                 panic!(
                     "ime cross check fail(key should not exist): disk iterator next failed;
