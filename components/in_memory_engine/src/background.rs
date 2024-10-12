@@ -1047,6 +1047,7 @@ impl Runnable for BackgroundRunner {
                                                 "write to memory in load";
                                                 "key" => log_wrappers::Value(encoded_key.as_slice()),
                                                 "cf" => ?cf,
+                                                "seq" => seq,
                                             );
                                         }
 
