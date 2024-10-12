@@ -3960,6 +3960,15 @@ impl TikvConfig {
         self.resource_metering.validate()?;
         self.quota.validate()?;
         self.causal_ts.validate()?;
+
+        // Disable in memory engine if api version is V1ttl or V2.
+        if (self.storage.api_version() == ApiVersion::V2 || self.storage.enable_ttl)
+            && self.in_memory_engine.enabled
+        {
+            return Err("in-memory-engine is unavailable for feature TTL or API v2"
+                .to_string()
+                .into());
+        }
         self.in_memory_engine.validate()?;
 
         // Validate feature TTL with Titan configuration.
@@ -7561,5 +7570,79 @@ mod tests {
                 .unwrap(),
             50
         );
+    }
+
+    #[test]
+    fn test_in_memory_engine_and_api_version() {
+        let tests = [
+            (
+                true,
+                vec![
+                    r#"
+                        [in-memory-engine]
+                    "#,
+                    r#"
+                        [in-memory-engine]
+                        enabled = true
+                        soft-limit-threshold = "1GB"
+                        hard-limit-threshold = "2GB"
+                    "#,
+                    r#"
+                        [in-memory-engine]
+                        enabled = false
+                    "#,
+                    // Ok if in-memory engine is off.
+                    r#"
+                        [in-memory-engine]
+                        enabled = false
+                        [storage]
+                        api-version = 1
+                        enable-ttl = true
+                    "#,
+                    r#"
+                        [in-memory-engine]
+                        enabled = false
+                        [storage]
+                        api-version = 2
+                        enable-ttl = true
+                    "#,
+                ],
+            ),
+            (
+                false,
+                vec![
+                    // Error for incompatiable API version.
+                    r#"
+                        [in-memory-engine]
+                        enabled = true
+                        soft-limit-threshold = "1GB"
+                        hard-limit-threshold = "2GB"
+                        [storage]
+                        api-version = 1
+                        enable-ttl = true
+                    "#,
+                    r#"
+                        [in-memory-engine]
+                        enabled = true
+                        soft-limit-threshold = "1GB"
+                        hard-limit-threshold = "2GB"
+                        [storage]
+                        api-version = 2
+                        enable-ttl = true
+                    "#,
+                ],
+            ),
+        ];
+
+        for t in tests {
+            for content in t.1 {
+                let mut cfg: TikvConfig = toml::from_str(content).unwrap();
+                if t.0 {
+                    cfg.validate().unwrap();
+                } else {
+                    cfg.validate().unwrap_err();
+                }
+            }
+        }
     }
 }
