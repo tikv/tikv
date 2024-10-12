@@ -183,6 +183,7 @@ pub fn near_seek_old_value<S: EngineSnapshot>(
     load_from_cf_data: Either<&S, &mut Cursor<S::Iter>>,
     statistics: &mut Statistics,
 ) -> Result<Option<Value>> {
+    println!("near_seek_old_value is called");
     let start = Instant::now();
     tikv_util::defer!(
         CDC_OLD_VALUE_DURATION_HISTOGRAM

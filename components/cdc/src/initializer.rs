@@ -232,10 +232,13 @@ impl<E: KvEngine> Initializer<E> {
         let (mut hint_min_ts, mut old_value_cursors) = (None, None);
         let mut scanner = if kv_api == ChangeDataRequestKvApi::TiDb {
             if self.ts_filter_is_helpful(&snap) {
+                println!("ts_filter_is_helpful returns true");
                 hint_min_ts = Some(self.checkpoint_ts);
                 let wc = new_old_value_cursor(&snap, CF_WRITE);
                 let dc = new_old_value_cursor(&snap, CF_DEFAULT);
                 old_value_cursors = Some(OldValueCursors::new(wc, dc));
+            } else {
+                println!("ts_filter_is_helpful returns false");
             }
 
             // Time range: (checkpoint_ts, max]
@@ -382,6 +385,7 @@ impl<E: KvEngine> Initializer<E> {
         };
         let perf_delta = perf_instant.delta();
         let emit = total_bytes;
+        println!("cf write stats: {:?}", stats.write);
         Ok(ScanStat {
             emit,
             disk_read,
@@ -515,6 +519,8 @@ impl<E: KvEngine> Initializer<E> {
     }
 
     fn ts_filter_is_helpful<S: Snapshot>(&self, snap: &S) -> bool {
+        fail_point!("ts_filter_is_helpful_always_true", |_| return true);
+
         if self.ts_filter_ratio < f64::EPSILON {
             return false;
         }
