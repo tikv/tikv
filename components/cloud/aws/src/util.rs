@@ -60,17 +60,10 @@ pub fn new_http_client() -> io::Result<HttpClient> {
 }
 
 pub fn get_region(region: &str, endpoint: &str) -> io::Result<Region> {
-    if !endpoint.is_empty() {
+    if !region.is_empty() || !endpoint.is_empty() {
         Ok(Region::Custom {
             name: region.to_owned(),
             endpoint: endpoint.to_owned(),
-        })
-    } else if !region.is_empty() {
-        region.parse::<Region>().map_err(|e| {
-            Error::new(
-                ErrorKind::InvalidInput,
-                format!("invalid aws region format {}: {}", region, e),
-            )
         })
     } else {
         Ok(Region::default())
