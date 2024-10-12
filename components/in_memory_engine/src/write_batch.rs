@@ -803,32 +803,30 @@ mod tests {
         let val2: Vec<u8> = vec![2; 500];
         // The memory will fail to acquire
         wb.put(b"zk22", &val2).unwrap();
+        assert_eq!(562, memory_controller.mem_usage());
+        assert_eq!(wb.count(), 4);
 
         wb.prepare_for_region(CacheRegion::from_region(&regions[3]));
-        // region 2 is evicted due to memory insufficient,
-        // after preprare, all region 2's entries are removed.
-        assert_eq!(356, memory_controller.mem_usage());
-        assert_eq!(wb.count(), 2);
-
         // The memory capacity is enough for the following two inserts
-        // Now, 534
+        // Now, 740
         let val3: Vec<u8> = vec![3; 150];
         wb.put(b"zk32", &val3).unwrap();
-        assert_eq!(534, memory_controller.mem_usage());
+        assert_eq!(740, memory_controller.mem_usage());
+        assert_eq!(wb.count(), 5);
 
-        // Now, 862
+        // The memory will fail to acquire
         let val4: Vec<u8> = vec![3; 300];
         wb.prepare_for_region(CacheRegion::from_region(&regions[4]));
         wb.put(b"zk41", &val4).unwrap();
 
         // We should have allocated 740 as calculated above
-        assert_eq!(862, memory_controller.mem_usage());
+        assert_eq!(740, memory_controller.mem_usage());
         wb.write_impl(1000).unwrap();
         // We dont count the node overhead (96 bytes for each node) in write batch, so
         // after they are written into the engine, the mem usage can even exceed
         // the hard limit. But this should be fine as this amount should be at
         // most MB level.
-        assert_eq!(1246, memory_controller.mem_usage());
+        assert_eq!(1220, memory_controller.mem_usage());
 
         let snap1 = engine
             .snapshot(CacheRegion::from_region(&regions[0]), 1000, 1010)
@@ -851,9 +849,19 @@ mod tests {
             .unwrap();
         assert_eq!(snap4.get_value(b"zk32").unwrap().unwrap(), &val3);
 
-        let _snap5 = engine
-            .snapshot(CacheRegion::from_region(&regions[4]), 1000, 1010)
-            .unwrap();
+        assert_eq!(
+            engine
+                .snapshot(CacheRegion::from_region(&regions[4]), 1000, 1010)
+                .unwrap_err(),
+            FailedReason::NotCached
+        );
+
+        // For region3, one write is buffered but others is rejected, so the region3 is
+        // evicted and the keys of it are deleted. After flush the epoch, we should
+        // get 1220-178-28(kv)-96*2(node overhead) = 822 memory usage.
+        flush_epoch();
+        wait_evict_done(&engine);
+        assert_eq!(822, memory_controller.mem_usage());
 
         drop(snap1);
         engine.evict_region(
@@ -861,9 +869,10 @@ mod tests {
             EvictReason::AutoEvict,
             None,
         );
+
         wait_evict_done(&engine);
         flush_epoch();
-        assert_eq!(972, memory_controller.mem_usage());
+        assert_eq!(548, memory_controller.mem_usage());
     }
 
     #[test]
