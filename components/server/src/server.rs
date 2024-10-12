@@ -46,7 +46,7 @@ use hybrid_engine::observer::{
     RegionCacheWriteBatchObserver,
 };
 use in_memory_engine::{
-    config::RegionCacheConfigManager, InMemoryEngineContext, InMemoryEngineStatistics,
+    config::InMemoryEngineConfigManager, InMemoryEngineContext, InMemoryEngineStatistics,
 };
 use kvproto::{
     brpb::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
@@ -1620,10 +1620,7 @@ where
                 Arc::new(|| false)
             };
 
-        let mut in_memory_engine_config = self.core.config.in_memory_engine.clone();
-        let _ = in_memory_engine_config
-            .expected_region_size
-            .get_or_insert(self.core.config.coprocessor.region_split_size());
+        let in_memory_engine_config = self.core.config.in_memory_engine.clone();
         let in_memory_engine_config = Arc::new(VersionTrack::new(in_memory_engine_config));
         let in_memory_engine_config_clone = in_memory_engine_config.clone();
         let region_info_accessor = RegionInfoAccessor::new(
@@ -1654,17 +1651,12 @@ where
         let kv_engine = factory
             .create_shared_db(&self.core.store_path)
             .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
-        let mut region_cache_engine_config = self.core.config.in_memory_engine.clone();
-        let _ = region_cache_engine_config
-            .expected_region_size
-            .get_or_insert(self.core.config.coprocessor.region_split_size());
-        let region_cache_engine_config = Arc::new(VersionTrack::new(region_cache_engine_config));
-        let region_cache_engine_context =
-            InMemoryEngineContext::new(region_cache_engine_config.clone(), self.pd_client.clone());
-        let region_cache_engine_statistics = region_cache_engine_context.statistics();
+        let in_memory_engine_context =
+            InMemoryEngineContext::new(in_memory_engine_config.clone(), self.pd_client.clone());
+        let in_memory_engine_statistics = in_memory_engine_context.statistics();
         if self.core.config.in_memory_engine.enable {
             let in_memory_engine = build_hybrid_engine(
-                region_cache_engine_context,
+                in_memory_engine_context,
                 kv_engine.clone(),
                 Some(self.pd_client.clone()),
                 Some(Arc::new(self.region_info_accessor.clone().unwrap())),
@@ -1682,9 +1674,9 @@ where
                 HybridSnapshotObserver::new(in_memory_engine.region_cache_engine().clone());
             snapshot_observer.register_to(self.coprocessor_host.as_mut().unwrap());
         };
-        let region_cache_config_manager = RegionCacheConfigManager(region_cache_engine_config);
+        let in_memory_engine_config_manager = InMemoryEngineConfigManager(in_memory_engine_config);
         self.kv_statistics = Some(factory.rocks_statistics());
-        self.in_memory_engine_statistics = Some(region_cache_engine_statistics);
+        self.in_memory_engine_statistics = Some(in_memory_engine_statistics);
         let engines = Engines::new(kv_engine.clone(), raft_engine);
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
@@ -1697,8 +1689,8 @@ where
             )),
         );
         cfg_controller.register(
-            tikv::config::Module::RegionCacheEngine,
-            Box::new(region_cache_config_manager),
+            tikv::config::Module::InMemoryEngine,
+            Box::new(in_memory_engine_config_manager),
         );
         let reg = TabletRegistry::new(
             Box::new(SingletonFactory::new(kv_engine)),

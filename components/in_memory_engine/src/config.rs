@@ -6,15 +6,15 @@ use tikv_util::{config::VersionTrack, info};
 use crate::InMemoryEngineConfig;
 
 #[derive(Clone)]
-pub struct RegionCacheConfigManager(pub Arc<VersionTrack<InMemoryEngineConfig>>);
+pub struct InMemoryEngineConfigManager(pub Arc<VersionTrack<InMemoryEngineConfig>>);
 
-impl RegionCacheConfigManager {
+impl InMemoryEngineConfigManager {
     pub fn new(config: Arc<VersionTrack<InMemoryEngineConfig>>) -> Self {
         Self(config)
     }
 }
 
-impl ConfigManager for RegionCacheConfigManager {
+impl ConfigManager for InMemoryEngineConfigManager {
     fn dispatch(
         &mut self,
         change: ConfigChange,
@@ -24,15 +24,12 @@ impl ConfigManager for RegionCacheConfigManager {
             self.0
                 .update(move |cfg: &mut InMemoryEngineConfig| cfg.update(change))?;
         }
-        info!(
-            "ime config changed";
-            "change" => ?change,
-        );
+        info!("ime config changed"; "change" => ?change);
         Ok(())
     }
 }
 
-impl std::ops::Deref for RegionCacheConfigManager {
+impl std::ops::Deref for InMemoryEngineConfigManager {
     type Target = Arc<VersionTrack<InMemoryEngineConfig>>;
 
     fn deref(&self) -> &Self::Target {

@@ -536,7 +536,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        background::flush_epoch, config::RegionCacheConfigManager, region_manager::RegionState,
+        background::flush_epoch, config::InMemoryEngineConfigManager, region_manager::RegionState,
         test_util::new_region, InMemoryEngineConfig, InMemoryEngineContext,
     };
 
@@ -903,7 +903,7 @@ mod tests {
             .unwrap();
 
         // disable the range cache
-        let mut config_manager = RegionCacheConfigManager(config.clone());
+        let mut config_manager = InMemoryEngineConfigManager(config.clone());
         let mut config_change = ConfigChange::new();
         config_change.insert(String::from("enabled"), ConfigValue::Bool(false));
         config_manager.dispatch(config_change).unwrap();
@@ -929,7 +929,7 @@ mod tests {
         assert_eq!(snap2.get_value(b"zkk11").unwrap().unwrap(), &val1);
 
         // enable the range cache again
-        let mut config_manager = RegionCacheConfigManager(config.clone());
+        let mut config_manager = InMemoryEngineConfigManager(config.clone());
         let mut config_change = ConfigChange::new();
         config_change.insert(String::from("enabled"), ConfigValue::Bool(true));
         config_manager.dispatch(config_change).unwrap();

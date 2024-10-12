@@ -3960,6 +3960,9 @@ impl TikvConfig {
         {
             return Err("in-memory-engine is unavailable for feature TTL or API v2".into());
         }
+        if self.in_memory_engine.expected_region_size.is_none() {
+            self.in_memory_engine.expected_region_size = Some(self.coprocessor.region_split_size());
+        }
         self.in_memory_engine.validate()?;
 
         // Validate feature TTL with Titan configuration.
@@ -4742,7 +4745,7 @@ pub enum Module {
     Rocksdb,
     Raftdb,
     RaftEngine,
-    RegionCacheEngine,
+    InMemoryEngine,
     Storage,
     Security,
     Encryption,
@@ -4775,7 +4778,7 @@ impl From<&str> for Module {
             "rocksdb" => Module::Rocksdb,
             "raftdb" => Module::Raftdb,
             "raft_engine" => Module::RaftEngine,
-            "region_cache_engine" => Module::RegionCacheEngine,
+            "in_memory_engine" => Module::InMemoryEngine,
             "storage" => Module::Storage,
             "security" => Module::Security,
             "import" => Module::Import,
@@ -4939,6 +4942,7 @@ mod tests {
     use engine_traits::{CfOptions as _, CfOptionsExt, DbOptions as _, DbOptionsExt};
     use futures::executor::block_on;
     use grpcio::ResourceQuota;
+    use in_memory_engine::config::InMemoryEngineConfigManager;
     use itertools::Itertools;
     use kvproto::kvrpcpb::CommandPri;
     use raft_log_engine::RaftLogEngine;
@@ -7635,5 +7639,65 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_in_memory_engine_change_config() {
+        let content = r#"
+            [in-memory-engine]
+            enabled = true
+            evict-threshold = "1GB"
+            capacity = "2GB"
+        "#;
+        let mut cfg: TikvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap();
+        let cfg_controller = ConfigController::new(cfg.clone());
+        let version_tracker = Arc::new(VersionTrack::new(cfg.in_memory_engine.clone()));
+        cfg_controller.register(
+            Module::InMemoryEngine,
+            Box::new(InMemoryEngineConfigManager::new(version_tracker.clone())),
+        );
+
+        let check_cfg = |cfg: &TikvConfig| {
+            assert_eq_debug(&cfg_controller.get_current(), cfg);
+            assert_eq!(&*version_tracker.value(), &cfg.in_memory_engine);
+        };
+
+        cfg_controller
+            .update_config("in-memory-engine.capacity", "3GB")
+            .unwrap();
+        cfg.in_memory_engine.capacity = Some(ReadableSize::gb(3));
+        check_cfg(&cfg);
+
+        cfg_controller
+            .update_config("in-memory-engine.evict-threshold", "2GB")
+            .unwrap();
+        cfg.in_memory_engine.evict_threshold = Some(ReadableSize::gb(2));
+        check_cfg(&cfg);
+
+        cfg_controller
+            .update_config("in-memory-engine.stop-load-threshold", "1GB")
+            .unwrap();
+        cfg.in_memory_engine.stop_load_threshold = Some(ReadableSize::gb(1));
+        check_cfg(&cfg);
+
+        cfg_controller
+            .update_config("in-memory-engine.mvcc-amplification-threshold", "777")
+            .unwrap();
+        cfg.in_memory_engine.mvcc_amplification_threshold = 777;
+        check_cfg(&cfg);
+
+        cfg_controller
+            .update_config("in-memory-engine.enable", "false")
+            .unwrap();
+        cfg.in_memory_engine.enable = false;
+        check_cfg(&cfg);
+
+        // Test snake case.
+        cfg_controller
+            .update_config("in_memory_engine.enable", "true")
+            .unwrap();
+        cfg.in_memory_engine.enable = true;
+        check_cfg(&cfg);
     }
 }
