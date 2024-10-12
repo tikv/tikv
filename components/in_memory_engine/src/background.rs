@@ -1,6 +1,11 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{fmt, sync::Arc, time::Duration};
+use core::slice::SlicePattern;
+use std::{
+    fmt,
+    sync::{atomic::Ordering, Arc},
+    time::Duration,
+};
 
 use bytes::Bytes;
 use crossbeam::{
@@ -17,7 +22,7 @@ use keys::{origin_end_key, origin_key};
 use pd_client::{PdClient, RpcClient};
 use raftstore::{
     coprocessor::RegionInfoProvider,
-    store::{CasualMessage, CasualRouter},
+    store::{fsm::apply::PRINTF_LOG, CasualMessage, CasualRouter},
 };
 use slog_global::{error, info, warn};
 use strum::EnumCount;
@@ -29,7 +34,7 @@ use tikv_util::{
     worker::{Builder, Runnable, RunnableWithTimer, ScheduleError, Scheduler, Worker},
 };
 use tokio::sync::mpsc;
-use txn_types::{Key, TimeStamp, WriteRef, WriteType};
+use txn_types::{Key, Lock, TimeStamp, WriteRef, WriteType};
 use yatp::Remote;
 
 use crate::{
@@ -93,6 +98,7 @@ pub enum BackgroundTask {
             RocksEngine,
             Arc<dyn PdClient>,
             Duration,
+            Box<dyn Fn() -> Option<u64> + Send>,
         ),
     ),
     SetRocksEngine(RocksEngine),
@@ -1035,6 +1041,16 @@ impl Runnable for BackgroundRunner {
                                         encoded_key
                                             .set_memory_controller(core.memory_controller.clone());
                                         val.set_memory_controller(core.memory_controller.clone());
+
+                                        if PRINTF_LOG.load(Ordering::Relaxed) {
+                                            info!(
+                                                "write to memory in load";
+                                                "key" => log_wrappers::Value(encoded_key.as_slice()),
+                                                "cf" => ?cf,
+                                                "seq" => seq,
+                                            );
+                                        }
+
                                         handle.insert(encoded_key, val, guard);
                                         iter.next().unwrap();
                                     }
@@ -1203,6 +1219,12 @@ impl Runnable for BackgroundRunner {
                         if user_key != last_user_key {
                             if let Some(remove) = cached_to_remove.take() {
                                 removed += 1;
+                                if PRINTF_LOG.load(Ordering::Relaxed) {
+                                    info!(
+                                        "clean lock";
+                                        "key" => log_wrappers::Value(&remove),
+                                    );
+                                }
                                 lock_handle.remove(&InternalBytes::from_vec(remove), guard);
                             }
                             last_user_key = user_key.to_vec();
@@ -1217,6 +1239,25 @@ impl Runnable for BackgroundRunner {
                         } else if remove_rest {
                             assert!(sequence < snapshot_seqno);
                             removed += 1;
+                            if v_type != ValueType::Deletion {
+                                let cached_to_remove_value =
+                                    Lock::parse(iter.value().as_bytes().as_slice()).unwrap();
+                                if PRINTF_LOG.load(Ordering::Relaxed) {
+                                    info!(
+                                        "clean lock2";
+                                        "key" => log_wrappers::Value(iter.key().as_bytes()),
+                                        "lock_type" => ?cached_to_remove_value.lock_type,
+                                        "ts" => cached_to_remove_value.ts,
+                                    );
+                                }
+                            } else {
+                                if PRINTF_LOG.load(Ordering::Relaxed) {
+                                    info!(
+                                        "clean lock2";
+                                        "key" => log_wrappers::Value(iter.key().as_bytes()),
+                                    );
+                                }
+                            }
                             lock_handle.remove(iter.key(), guard);
                         } else if sequence < snapshot_seqno {
                             remove_rest = true;
@@ -1230,6 +1271,12 @@ impl Runnable for BackgroundRunner {
                     }
                     if let Some(remove) = cached_to_remove.take() {
                         removed += 1;
+                        if PRINTF_LOG.load(Ordering::Relaxed) {
+                            info!(
+                                "clean lock";
+                                "key" => log_wrappers::Value(&remove),
+                            );
+                        }
                         lock_handle.remove(&InternalBytes::from_vec(remove), guard);
                     }
 
@@ -1247,10 +1294,21 @@ impl Runnable for BackgroundRunner {
 
                 self.lock_cleanup_remote.spawn(f);
             }
-            BackgroundTask::TurnOnCrossCheck((engine, rocks_engine, pd_client, check_interval)) => {
+            BackgroundTask::TurnOnCrossCheck((
+                engine,
+                rocks_engine,
+                pd_client,
+                check_interval,
+                get_tikv_safe_point,
+            )) => {
                 let cross_check_worker = Worker::new("cross-check-worker");
-                let cross_check_runner =
-                    CrossChecker::new(pd_client, engine, rocks_engine, check_interval);
+                let cross_check_runner = CrossChecker::new(
+                    pd_client,
+                    engine,
+                    rocks_engine,
+                    check_interval,
+                    get_tikv_safe_point,
+                );
                 let _ =
                     cross_check_worker.start_with_timer("cross-check-runner", cross_check_runner);
                 self.cross_check_worker = Some(cross_check_worker);
@@ -1469,11 +1527,29 @@ impl Drop for Filter {
     fn drop(&mut self) {
         if let Some(cached_delete_key) = self.cached_mvcc_delete_key.take() {
             let guard = &epoch::pin();
+
+            if PRINTF_LOG.load(Ordering::Relaxed) {
+                info!(
+                    "gc filter write n";
+                    "key" => log_wrappers::Value(&cached_delete_key),
+                    "safe_ts" => self.safe_point,
+                );
+            }
+
             self.write_cf_handle
                 .remove(&InternalBytes::from_vec(cached_delete_key), guard);
         }
         if let Some(cached_delete_key) = self.cached_skiplist_delete_key.take() {
             let guard = &epoch::pin();
+
+            if PRINTF_LOG.load(Ordering::Relaxed) {
+                info!(
+                    "gc filter tombstone";
+                    "key" => log_wrappers::Value(&cached_delete_key),
+                    "safe_ts" => self.safe_point,
+                );
+            }
+
             self.write_cf_handle
                 .remove(&InternalBytes::from_vec(cached_delete_key), guard);
         }
@@ -1552,8 +1628,16 @@ impl Filter {
                 // 2. Two consecutive ValueType::Deletion of different user keys.
                 // In either cases, we can delete the previous one directly.
                 let guard = &epoch::pin();
-                self.write_cf_handle
-                    .remove(&InternalBytes::from_vec(cache_skiplist_delete_key), guard)
+                let key = InternalBytes::from_vec(cache_skiplist_delete_key);
+                self.write_cf_handle.remove(&key, guard);
+                if PRINTF_LOG.load(Ordering::Relaxed) {
+                    info!(
+                        "delete in memory due to gc";
+                        "key" => log_wrappers::Value(key.as_bytes()),
+                        "cf" => "write",
+                        "commit_ts" => commit_ts,
+                    );
+                }
             }
             self.cached_skiplist_delete_key = Some(key.to_vec());
             return Ok(());
@@ -1567,9 +1651,25 @@ impl Filter {
                 self.metrics.filtered += 1;
                 self.write_cf_handle
                     .remove(&InternalBytes::from_bytes(key.clone()), guard);
+                if PRINTF_LOG.load(Ordering::Relaxed) {
+                    info!(
+                        "gc filter write hidden by tombstone";
+                        "key" => log_wrappers::Value(key),
+                        "safe_ts" => self.safe_point,
+                        "commit_ts" => commit_ts,
+                    );
+                }
                 return Ok(());
             } else {
                 self.metrics.filtered += 1;
+                if PRINTF_LOG.load(Ordering::Relaxed) {
+                    info!(
+                        "gc filter write tombstone";
+                        "key" => log_wrappers::Value(&self.cached_skiplist_delete_key.as_ref().unwrap()),
+                        "safe_ts" => self.safe_point,
+                        "commit_ts" => commit_ts,
+                    );
+                }
                 self.write_cf_handle.remove(
                     &InternalBytes::from_vec(self.cached_skiplist_delete_key.take().unwrap()),
                     guard,
@@ -1586,6 +1686,14 @@ impl Filter {
             self.metrics.filtered += 1;
             self.write_cf_handle
                 .remove(&InternalBytes::from_bytes(key.clone()), guard);
+            if PRINTF_LOG.load(Ordering::Relaxed) {
+                info!(
+                    "gc filter write user key";
+                    "key" => log_wrappers::Value(&key),
+                    "safe_ts" => self.safe_point,
+                    "commit_ts" => commit_ts,
+                );
+            }
             return Ok(());
         }
 
@@ -1597,6 +1705,14 @@ impl Filter {
             self.remove_older = false;
             if let Some(cached_delete_key) = self.cached_mvcc_delete_key.take() {
                 self.metrics.filtered += 1;
+                if PRINTF_LOG.load(Ordering::Relaxed) {
+                    info!(
+                        "gc filter write n";
+                        "key" => log_wrappers::Value(&cached_delete_key),
+                        "safe_ts" => self.safe_point,
+                        "commit_ts" => commit_ts,
+                    );
+                }
                 self.write_cf_handle
                     .remove(&InternalBytes::from_vec(cached_delete_key), guard);
             }
@@ -1624,11 +1740,32 @@ impl Filter {
         }
 
         if !filtered {
+            if PRINTF_LOG.load(Ordering::Relaxed) {
+                info!(
+                    "gc filter not filter";
+                    "key" => log_wrappers::Value(key),
+                    "seqno" => sequence,
+                    "write type" => ?write.write_type,
+                    "start_ts" => write.start_ts,
+                    "commit_ts" => commit_ts,
+                );
+            }
             return Ok(());
         }
         self.metrics.filtered += 1;
         self.write_cf_handle
             .remove(&InternalBytes::from_bytes(key.clone()), guard);
+        if PRINTF_LOG.load(Ordering::Relaxed) {
+            info!(
+                "gc filter write";
+                "key" => log_wrappers::Value(key),
+                "seqno" => sequence,
+                "write type" => ?write.write_type,
+                "start_ts" => write.start_ts,
+                "safe_ts" => self.safe_point,
+                "commit_ts" => commit_ts,
+            );
+        }
         self.handle_filtered_write(write, guard);
 
         Ok(())
@@ -1647,6 +1784,13 @@ impl Filter {
             iter.seek(&default_key, guard);
             while iter.valid() && iter.key().same_user_key_with(&default_key) {
                 self.default_cf_handle.remove(iter.key(), guard);
+                if PRINTF_LOG.load(Ordering::Relaxed) {
+                    info!(
+                        "gc filter default";
+                        "key" => log_wrappers::Value(iter.key().as_bytes()),
+                        "safe_ts" => self.safe_point,
+                    );
+                }
                 iter.next(guard);
             }
         }

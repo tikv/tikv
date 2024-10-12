@@ -1,6 +1,7 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    fmt::Debug,
     sync::{atomic::Ordering, Arc},
     time::Duration,
 };
@@ -11,6 +12,7 @@ use engine_traits::{
     CacheRegion, EvictReason, MiscExt, Mutable, RegionCacheEngine, Result, WriteBatch,
     WriteBatchExt, WriteOptions, CF_DEFAULT,
 };
+use raftstore::store::fsm::apply::PRINTF_LOG;
 use tikv_util::{box_err, config::ReadableSize, error, info, time::Instant, warn};
 
 use crate::{
@@ -60,7 +62,6 @@ pub struct RegionCacheWriteBatch {
     sequence_number: Option<u64>,
     memory_controller: Arc<MemoryController>,
     memory_usage_reach_hard_limit: bool,
-    region_save_point: usize,
     current_region_evicted: bool,
     current_region: Option<CacheRegion>,
     // all the regions this write batch is written.
@@ -90,7 +91,6 @@ impl From<&RegionCacheMemoryEngine> for RegionCacheWriteBatch {
             sequence_number: None,
             memory_controller: engine.memory_controller(),
             memory_usage_reach_hard_limit: false,
-            region_save_point: 0,
             current_region_evicted: false,
             prepare_for_write_duration: Duration::default(),
             current_region: None,
@@ -110,7 +110,6 @@ impl RegionCacheWriteBatch {
             sequence_number: None,
             memory_controller: engine.memory_controller(),
             memory_usage_reach_hard_limit: false,
-            region_save_point: 0,
             current_region_evicted: false,
             prepare_for_write_duration: Duration::default(),
             current_region: None,
@@ -176,6 +175,13 @@ impl RegionCacheWriteBatch {
         // record last region before flush.
         self.record_last_written_region();
 
+        if PRINTF_LOG.load(Ordering::Relaxed) {
+            info!(
+                "write impl";
+                "seq" => seq,
+            );
+        }
+
         fail::fail_point!("on_region_cache_write_batch_write_impl");
         let guard = &epoch::pin();
         let start = Instant::now();
@@ -224,17 +230,6 @@ impl RegionCacheWriteBatch {
         }
         self.engine
             .evict_region(self.current_region.as_ref().unwrap(), reason, None);
-        // cleanup cached entries belong to this region as there is no need
-        // to write them.
-        assert!(self.save_points.is_empty());
-        if self.buffer.len() > self.region_save_point {
-            let mut total_size = 0;
-            for e in &self.buffer[self.region_save_point..] {
-                total_size += e.memory_size_required();
-            }
-            self.memory_controller.release(total_size);
-            self.buffer.truncate(self.region_save_point);
-        }
         self.current_region_evicted = true;
     }
 
@@ -337,13 +332,6 @@ impl WriteBatchEntryInternal {
         }
     }
 
-    fn value(&self) -> &[u8] {
-        match self {
-            WriteBatchEntryInternal::PutValue(value) => value,
-            WriteBatchEntryInternal::Deletion => &[],
-        }
-    }
-
     fn data_size(&self) -> usize {
         match self {
             WriteBatchEntryInternal::PutValue(value) => value.len(),
@@ -352,11 +340,23 @@ impl WriteBatchEntryInternal {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(crate) struct RegionCacheWriteBatchEntry {
     cf: usize,
     key: Bytes,
     inner: WriteBatchEntryInternal,
+}
+
+impl Debug for RegionCacheWriteBatchEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Region Cache Entry: Key {}, Value {:?}, CF {}",
+            log_wrappers::hex_encode_upper(&self.key),
+            self.inner,
+            self.cf,
+        )
+    }
 }
 
 impl RegionCacheWriteBatchEntry {
@@ -401,10 +401,6 @@ impl RegionCacheWriteBatchEntry {
         self.key.len() + ENC_KEY_SEQ_LENGTH + self.inner.data_size()
     }
 
-    fn memory_size_required(&self) -> usize {
-        Self::memory_size_required_for_key_value(&self.key, self.inner.value())
-    }
-
     #[inline]
     pub fn write_to_memory(
         &self,
@@ -419,6 +415,14 @@ impl RegionCacheWriteBatchEntry {
         key.set_memory_controller(memory_controller.clone());
         value.set_memory_controller(memory_controller);
         handle.insert(key, value, guard);
+
+        if PRINTF_LOG.load(Ordering::Relaxed) {
+            info!(
+                "write to memory";
+                "entry" => ?self,
+                "seqno" => seq,
+            );
+        }
     }
 }
 
@@ -469,7 +473,6 @@ impl WriteBatch for RegionCacheWriteBatch {
         self.save_points.clear();
         self.sequence_number = None;
         self.memory_usage_reach_hard_limit = false;
-        self.region_save_point = 0;
         self.current_region_evicted = false;
         self.current_region = None;
         self.written_regions.clear();
@@ -510,7 +513,6 @@ impl WriteBatch for RegionCacheWriteBatch {
         self.set_region_cache_status(self.engine.prepare_for_apply(&region));
         self.current_region = Some(region);
         self.memory_usage_reach_hard_limit = false;
-        self.region_save_point = self.buffer.len();
         self.current_region_evicted = false;
         self.prepare_for_write_duration += time.saturating_elapsed();
     }

@@ -153,6 +153,7 @@ impl Iterable for RegionCacheSnapshot {
             iter,
             sequence_number: self.sequence_number(),
             saved_user_key: vec![],
+            saved_key: vec![],
             saved_value: None,
             direction: Direction::Uninit,
             statistics: self.engine.statistics(),
@@ -237,6 +238,7 @@ pub struct RegionCacheIterator {
     pub(crate) sequence_number: u64,
 
     saved_user_key: Vec<u8>,
+    saved_key: Vec<u8>,
     // This is only used by backwawrd iteration where the value we want may not be pointed by the
     // `iter`
     saved_value: Option<Bytes>,
@@ -283,6 +285,10 @@ impl Drop for RegionCacheIterator {
 }
 
 impl RegionCacheIterator {
+    pub fn saved_key(&self) -> &[u8] {
+        &self.saved_key
+    }
+
     // If `skipping_saved_key` is true, the function will keep iterating until it
     // finds a user key that is larger than `saved_user_key`.
     // If `prefix` is not None, the iterator needs to stop when all keys for the
@@ -313,6 +319,8 @@ impl RegionCacheIterator {
                 } else {
                     self.saved_user_key.clear();
                     self.saved_user_key.extend_from_slice(user_key);
+                    self.saved_key.clear();
+                    self.saved_key.extend_from_slice(self.iter.key().as_slice());
                     // self.saved_user_key =
                     // Key::from_encoded(user_key.to_vec()).into_raw().unwrap();
 
@@ -365,6 +373,8 @@ impl RegionCacheIterator {
             let InternalKey { user_key, .. } = decode_key(self.iter.key().as_slice());
             self.saved_user_key.clear();
             self.saved_user_key.extend_from_slice(user_key);
+            self.saved_key.clear();
+            self.saved_key.extend_from_slice(self.iter.key().as_slice());
 
             if user_key < self.lower_bound.as_slice() {
                 break;

@@ -60,6 +60,12 @@ pub struct GcContext {
     callbacks_on_drop: Vec<Arc<dyn Fn(&WriteCompactionFilter) + Send + Sync>>,
 }
 
+impl GcContext {
+    pub fn safe_point(&self) -> u64 {
+        self.safe_point.load(Ordering::Relaxed)
+    }
+}
+
 // Give all orphan versions an ID to log them.
 static ORPHAN_VERSIONS_ID: AtomicUsize = AtomicUsize::new(0);
 

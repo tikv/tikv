@@ -4,7 +4,10 @@ use std::{
     fmt::{self, Debug},
     ops::Bound,
     result,
-    sync::{atomic::AtomicU64, Arc},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
 };
 
 use crossbeam::epoch::{self, default_collector, Guard};
@@ -19,7 +22,10 @@ use engine_traits::{
 };
 use kvproto::metapb::Region;
 use pd_client::PdClient;
-use raftstore::{coprocessor::RegionInfoProvider, store::CasualRouter};
+use raftstore::{
+    coprocessor::RegionInfoProvider,
+    store::{fsm::apply::PRINTF_LOG, CasualRouter},
+};
 use slog_global::error;
 use tikv_util::{config::VersionTrack, info, warn, worker::Scheduler};
 
@@ -97,6 +103,12 @@ impl SkiplistHandle {
 
     pub fn remove(&self, key: &InternalBytes, guard: &Guard) {
         if let Some(entry) = self.0.remove(key, guard) {
+            if PRINTF_LOG.load(Ordering::Relaxed) {
+                info!(
+                    "remove";
+                    "key" => log_wrappers::Value(key.as_bytes()),
+                );
+            }
             entry.release(guard);
         }
     }
@@ -163,6 +175,13 @@ impl SkiplistEngine {
         iter.seek(&start, guard);
         while iter.valid() && iter.key() < &end {
             handle.remove(iter.key(), guard);
+            if PRINTF_LOG.load(Ordering::Relaxed) {
+                info!(
+                    "delete range";
+                    "key" => log_wrappers::Value(iter.key().as_slice()),
+                    "cf" => ?cf,
+                );
+            }
             iter.next(guard);
         }
         // guard will buffer 8 drop methods, flush here to clear the buffer.
@@ -299,6 +318,26 @@ impl RegionCacheMemoryEngineCore {
         // get snapshot and schedule loading task at last to avoid locking IME for too
         // long.
         if schedule_load {
+            for &cf in DATA_CFS {
+                let handle = self.engine.cf_handle(cf);
+                let mut iter = handle.iterator();
+
+                let (start, end) = if cf == CF_LOCK {
+                    encode_key_for_boundary_without_mvcc(&region)
+                } else {
+                    encode_key_for_boundary_with_mvcc(&region)
+                };
+                let guard = &epoch::pin();
+                iter.seek(&start, guard);
+                if iter.valid() && iter.key() < &end {
+                    panic!(
+                        "dirty data exists when schedule load, region {:?}, key {:?}",
+                        region,
+                        log_wrappers::Value(iter.key().as_slice()),
+                    );
+                }
+            }
+
             let rocks_snap = Arc::new(rocks_engine.unwrap().snapshot());
             if let Err(e) =
                 scheduler.schedule(BackgroundTask::LoadRegion(region.clone(), rocks_snap))
@@ -454,7 +493,12 @@ impl RegionCacheMemoryEngine {
         self.statistics.clone()
     }
 
-    pub fn start_cross_check(&self, rocks_engine: RocksEngine, pd_client: Arc<dyn PdClient>) {
+    pub fn start_cross_check(
+        &self,
+        rocks_engine: RocksEngine,
+        pd_client: Arc<dyn PdClient>,
+        get_tikv_safe_point: Box<dyn Fn() -> Option<u64> + Send>,
+    ) {
         let cross_check_interval = self.config.value().cross_check_interval;
         if !cross_check_interval.is_zero() {
             if let Err(e) =
@@ -464,6 +508,7 @@ impl RegionCacheMemoryEngine {
                         rocks_engine,
                         pd_client,
                         cross_check_interval.0,
+                        get_tikv_safe_point,
                     )))
             {
                 error!(
