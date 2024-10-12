@@ -131,8 +131,8 @@ where
         self.disk_engine().get_range_stats(cf, start, end)
     }
 
-    fn is_stalled_or_stopped(&self) -> bool {
-        self.disk_engine().is_stalled_or_stopped()
+    fn is_write_stopped(&self) -> bool {
+        self.disk_engine().is_write_stopped()
     }
 
     fn get_active_memtable_stats_cf(
