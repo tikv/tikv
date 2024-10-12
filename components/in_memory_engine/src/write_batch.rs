@@ -2,7 +2,7 @@
 
 use std::{
     sync::{atomic::Ordering, Arc},
-    time::Duration,
+    time::Duration, fmt::Debug,
 };
 
 use bytes::Bytes;
@@ -346,11 +346,23 @@ impl WriteBatchEntryInternal {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(crate) struct RegionCacheWriteBatchEntry {
     cf: usize,
     key: Bytes,
     inner: WriteBatchEntryInternal,
+}
+
+impl Debug for RegionCacheWriteBatchEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Region Cache Entry: Key {}, Value {:?}, CF {}",
+            log_wrappers::hex_encode_upper(&self.key),
+            self.inner,
+            self.cf,
+        )
+    }
 }
 
 impl RegionCacheWriteBatchEntry {
