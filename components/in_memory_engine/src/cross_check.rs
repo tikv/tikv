@@ -150,7 +150,7 @@ impl CrossChecker {
                     cache_region={:?}; cache_key={:?}; sequence_numer={};",
                     cf,
                     region_snap.snapshot_meta().region,
-                    log_wrappers::Value(mem_iter.key()),
+                    log_wrappers::Value(mem_iter.saved_key()),
                     mem_iter.sequence_number,
                 );
             }
@@ -170,7 +170,7 @@ impl CrossChecker {
                                 cache_region={:?}; default_key={:?}, write_key={:?}, start_ts={}; sequence_numer={};",
                                 region_snap.snapshot_meta().region,
                                 log_wrappers::Value(default_key.as_encoded()),
-                                log_wrappers::Value(iter.key()),
+                                log_wrappers::Value(iter.saved_key()),
                                 start_ts,
                                 iter.sequence_number,
                             );
@@ -230,7 +230,7 @@ impl CrossChecker {
                             "ime cross check fail(parse error); 
                             cache_region={:?}; cache_key={:?}, cache_val={:?}; sequence_numer={}; Error={:?}",
                             region_snap.snapshot_meta().region,
-                            log_wrappers::Value(mem_iter.key()),
+                            log_wrappers::Value(mem_iter.saved_key()),
                             log_wrappers::Value(mem_iter.value()),
                             mem_iter.sequence_number,
                             e,
@@ -275,7 +275,7 @@ impl CrossChecker {
                                 "ime cross check fail(parse error); 
                                 cache_region={:?}; cache_key={:?}, cache_val={:?}; sequence_numer={}; Error={:?}",
                                 region_snap.snapshot_meta().region,
-                                log_wrappers::Value(mem_iter.key()),
+                                log_wrappers::Value(mem_iter.saved_key()),
                                 log_wrappers::Value(mem_iter.value()),
                                 mem_iter.sequence_number,
                                 e,
@@ -378,7 +378,7 @@ impl CrossChecker {
                     "ime cross check fail(key should not exist): disk iterator next failed;
                         cache_region={:?}; cache_key={:?}; sequence_numer={}; cf={:?}",
                     cached_region,
-                    log_wrappers::Value(mem_key),
+                    log_wrappers::Value(mem_iter.saved_key()),
                     mem_iter.sequence_number,
                     cf,
                 );
@@ -394,7 +394,7 @@ impl CrossChecker {
                         "ime cross check fail(key not equal): lock cf not match; 
                         cache_region={:?}; cache_key={:?}, disk_key={:?}; sequence_numer={};",
                         cached_region,
-                        log_wrappers::Value(mem_key),
+                        log_wrappers::Value(mem_iter.saved_key()),
                         log_wrappers::Value(disk_key),
                         mem_iter.sequence_number,
                     );
@@ -404,7 +404,7 @@ impl CrossChecker {
                         "ime cross check fail(value not equal): lock cf not match; 
                         cache_region={:?}; key={:?}, mem_value={:?} disk_key={:?};",
                         cached_region,
-                        log_wrappers::Value(mem_key),
+                        log_wrappers::Value(mem_iter.saved_key()),
                         log_wrappers::Value(mem_iter.value()),
                         log_wrappers::Value(disk_iter.value()),
                     );
@@ -418,7 +418,7 @@ impl CrossChecker {
                         "ime cross check fail(value not equal): write cf not match; 
                         cache_region={:?}; key={:?}, mem_value={:?} disk_key={:?};",
                         cached_region,
-                        log_wrappers::Value(mem_key),
+                        log_wrappers::Value(mem_iter.saved_key()),
                         log_wrappers::Value(mem_iter.value()),
                         log_wrappers::Value(disk_iter.value()),
                     );
@@ -436,7 +436,7 @@ impl CrossChecker {
                         "ime cross check fail(parse error); 
                         cache_region={:?}; cache_key={:?}, cache_val={:?}; sequence_numer={}; Error={:?}",
                         cached_region,
-                        log_wrappers::Value(mem_iter.key()),
+                        log_wrappers::Value(mem_iter.saved_key()),
                         log_wrappers::Value(mem_iter.value()),
                         mem_iter.sequence_number,
                         e,
@@ -490,7 +490,7 @@ impl CrossChecker {
                                         "ime cross check fail(key should exist): miss valid mvcc version(larger than safe point);
                                         cache_region={:?}; cache_key={:?}, disk_key={:?}; sequence_numer={}; read_ts={}, safe_point={}; cur_key_info={:?}",
                                         cached_region,
-                                        log_wrappers::Value(mem_key),
+                                        log_wrappers::Value(mem_iter.saved_key()),
                                         log_wrappers::Value(disk_key),
                                         mem_iter.sequence_number,
                                         read_ts,
@@ -519,7 +519,7 @@ impl CrossChecker {
                                 "ime cross check fail(key should exist): miss valid mvcc version(less than safe point);
                                 cache_region={:?}; cache_key={:?}, disk_key={:?}; sequence_numer={}; read_ts={}, safe_point={}; cur_key_info={:?}",
                                 cached_region,
-                                log_wrappers::Value(mem_key),
+                                log_wrappers::Value(mem_iter.saved_key()),
                                 log_wrappers::Value(disk_key),
                                 mem_iter.sequence_number,
                                 read_ts,
@@ -582,7 +582,7 @@ impl CrossChecker {
                     "ime cross check fail(key should not exist): write cf not match;
                     cache_region={:?}; cache_key={:?}, disk_key={:?}; sequence_numer={}; read_ts={}, safe_point={}",
                     cached_region,
-                    log_wrappers::Value(mem_key),
+                    log_wrappers::Value(mem_iter.saved_key()),
                     log_wrappers::Value(disk_key),
                     mem_iter.sequence_number,
                     read_ts,
@@ -656,7 +656,7 @@ impl CrossChecker {
                         "ime cross check fail(parse error); 
                         cache_region={:?}; cache_key={:?}, cache_val={:?}; sequence_numer={}; Error={:?}",
                         cached_region,
-                        log_wrappers::Value(mem_iter.key()),
+                        log_wrappers::Value(mem_iter.saved_key()),
                         log_wrappers::Value(mem_iter.value()),
                         mem_iter.sequence_number,
                         e,
