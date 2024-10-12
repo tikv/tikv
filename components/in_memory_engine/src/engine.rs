@@ -4,7 +4,10 @@ use std::{
     fmt::{self, Debug},
     ops::Bound,
     result,
-    sync::{atomic::{AtomicU64, Ordering}, Arc},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
 };
 
 use crossbeam::epoch::{self, default_collector, Guard};
@@ -315,6 +318,26 @@ impl RegionCacheMemoryEngineCore {
         // get snapshot and schedule loading task at last to avoid locking IME for too
         // long.
         if schedule_load {
+            for &cf in DATA_CFS {
+                let handle = self.engine.cf_handle(cf);
+                let mut iter = handle.iterator();
+
+                let (start, end) = if cf == CF_LOCK {
+                    encode_key_for_boundary_without_mvcc(&region)
+                } else {
+                    encode_key_for_boundary_with_mvcc(&region)
+                };
+                let guard = &epoch::pin();
+                iter.seek(&start, guard);
+                if iter.valid() && iter.key() < &end {
+                    panic!(
+                        "dirty data exists when schedule load, region {:?}, key {:?}",
+                        region,
+                        log_wrappers::Value(iter.key().as_slice()),
+                    );
+                }
+            }
+
             let rocks_snap = Arc::new(rocks_engine.unwrap().snapshot());
             if let Err(e) =
                 scheduler.schedule(BackgroundTask::LoadRegion(region.clone(), rocks_snap))

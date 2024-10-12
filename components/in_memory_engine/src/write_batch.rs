@@ -1,8 +1,9 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    fmt::Debug,
     sync::{atomic::Ordering, Arc},
-    time::Duration, fmt::Debug,
+    time::Duration,
 };
 
 use bytes::Bytes;
@@ -331,13 +332,6 @@ impl WriteBatchEntryInternal {
         }
     }
 
-    fn value(&self) -> &[u8] {
-        match self {
-            WriteBatchEntryInternal::PutValue(value) => value,
-            WriteBatchEntryInternal::Deletion => &[],
-        }
-    }
-
     fn data_size(&self) -> usize {
         match self {
             WriteBatchEntryInternal::PutValue(value) => value.len(),
@@ -405,10 +399,6 @@ impl RegionCacheWriteBatchEntry {
 
     pub fn data_size(&self) -> usize {
         self.key.len() + ENC_KEY_SEQ_LENGTH + self.inner.data_size()
-    }
-
-    fn memory_size_required(&self) -> usize {
-        Self::memory_size_required_for_key_value(&self.key, self.inner.value())
     }
 
     #[inline]
