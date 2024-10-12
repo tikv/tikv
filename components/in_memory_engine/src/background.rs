@@ -680,8 +680,8 @@ impl BackgroundRunnerCore {
 
     /// Periodically load top regions.
     ///
-    /// If the soft limit is exceeded, evict (some) regions no longer considered
-    /// top.
+    /// If the evict threshold is exceeded, evict (some) regions no longer
+    /// considered top.
     ///
     /// See: [`RegionStatsManager::collect_changes_regions`] for
     /// algorithm details.
@@ -748,10 +748,10 @@ impl BackgroundRunnerCore {
                 break;
             }
         }
-        if !self.memory_controller.reached_stop_load_limit() {
+        if !self.memory_controller.reached_stop_load_threshold() {
             let expected_new_count = (self
                 .memory_controller
-                .soft_limit_threshold()
+                .evict_threshold()
                 .saturating_sub(self.memory_controller.mem_usage()))
                 / region_stats_manager.expected_region_size();
             let expected_new_count = usize::max(expected_new_count, 1);
@@ -975,7 +975,7 @@ impl Runnable for BackgroundRunner {
                     }
                     let skiplist_engine = core.engine.engine.clone();
 
-                    if core.memory_controller.reached_stop_load_limit() {
+                    if core.memory_controller.reached_stop_load_threshold() {
                         // We are running out of memory, so cancel the load.
                         is_canceled = true;
                     }
@@ -1021,11 +1021,11 @@ impl Runnable for BackgroundRunner {
 
                                         // todo(SpadeA): we can batch acquire the memory size
                                         // here.
-                                        if let MemoryUsage::HardLimitReached(n) =
+                                        if let MemoryUsage::CapacityReached(n) =
                                             core.memory_controller.acquire(mem_size)
                                         {
                                             warn!(
-                                                "ime stop loading snapshot due to memory reaching hard limit";
+                                                "ime stop loading snapshot due to memory reaching capacity";
                                                 "region" => ?region,
                                                 "memory_usage(MB)" => ReadableSize(n as u64).as_mb_f64(),
                                             );
@@ -1114,7 +1114,7 @@ impl Runnable for BackgroundRunner {
                     "ime start memory usage check and evict";
                     "mem_usage(MB)" => ReadableSize(mem_usage_before_check as u64).as_mb()
                 );
-                if mem_usage_before_check > self.core.memory_controller.soft_limit_threshold() {
+                if mem_usage_before_check > self.core.memory_controller.evict_threshold() {
                     let delete_range_scheduler = self.delete_range_scheduler.clone();
                     let core = self.core.clone();
                     let task = async move {
@@ -1138,7 +1138,7 @@ impl Runnable for BackgroundRunner {
                             };
 
                             region_stats_manager
-                                .evict_on_soft_limit_reached(
+                                .evict_on_evict_threshold_reached(
                                     evict_fn,
                                     &delete_range_scheduler,
                                     cached_region_ids,
@@ -1789,8 +1789,8 @@ pub mod tests {
 
     fn dummy_controller(skip_engine: SkiplistEngine) -> Arc<MemoryController> {
         let mut config = InMemoryEngineConfig::config_for_test();
-        config.soft_limit_threshold = Some(ReadableSize(u64::MAX));
-        config.hard_limit_threshold = Some(ReadableSize(u64::MAX));
+        config.evict_threshold = Some(ReadableSize(u64::MAX));
+        config.capacity = Some(ReadableSize(u64::MAX));
         let config = Arc::new(VersionTrack::new(config));
         Arc::new(MemoryController::new(config, skip_engine))
     }
@@ -2907,9 +2907,9 @@ pub mod tests {
     #[test]
     fn test_snapshot_load_reaching_stop_limit() {
         let mut config = InMemoryEngineConfig::config_for_test();
-        config.stop_load_limit_threshold = Some(ReadableSize(500));
-        config.soft_limit_threshold = Some(ReadableSize(1000));
-        config.hard_limit_threshold = Some(ReadableSize(1500));
+        config.stop_load_threshold = Some(ReadableSize(500));
+        config.evict_threshold = Some(ReadableSize(1000));
+        config.capacity = Some(ReadableSize(1500));
         let config = Arc::new(VersionTrack::new(config));
         let mut engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(config));
         let path = Builder::new()
@@ -2965,11 +2965,11 @@ pub mod tests {
     }
 
     #[test]
-    fn test_snapshot_load_reaching_hard_limit() {
+    fn test_snapshot_load_reaching_capacity() {
         let mut config = InMemoryEngineConfig::config_for_test();
-        config.stop_load_limit_threshold = Some(ReadableSize(1000));
-        config.soft_limit_threshold = Some(ReadableSize(1000));
-        config.hard_limit_threshold = Some(ReadableSize(1500));
+        config.stop_load_threshold = Some(ReadableSize(1000));
+        config.evict_threshold = Some(ReadableSize(1000));
+        config.capacity = Some(ReadableSize(1500));
         let config = Arc::new(VersionTrack::new(config));
         let mut engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(config));
         let path = Builder::new()
@@ -3005,7 +3005,7 @@ pub mod tests {
         rocks_engine.put_cf(CF_DEFAULT, &key, b"val").unwrap();
         rocks_engine.put_cf(CF_LOCK, &key, b"val").unwrap();
         rocks_engine.put_cf(CF_WRITE, &key, b"val").unwrap();
-        // 840*2 > hard limit 1500, so the load will fail and the loaded keys should be
+        // 840*2 > capacity 1500, so the load will fail and the loaded keys should be
         // removed
 
         let region3 = new_region(3, construct_region_key(5), construct_region_key(6));
@@ -3040,10 +3040,10 @@ pub mod tests {
     }
 
     #[test]
-    fn test_soft_hard_limit_change() {
+    fn test_memory_config_change() {
         let mut config = InMemoryEngineConfig::config_for_test();
-        config.soft_limit_threshold = Some(ReadableSize(1000));
-        config.hard_limit_threshold = Some(ReadableSize(1500));
+        config.evict_threshold = Some(ReadableSize(1000));
+        config.capacity = Some(ReadableSize(1500));
         let config = Arc::new(VersionTrack::new(config));
         let mut engine =
             RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(config.clone()));
@@ -3083,17 +3083,14 @@ pub mod tests {
         rocks_engine.put_cf(CF_DEFAULT, &key, b"val").unwrap();
         rocks_engine.put_cf(CF_LOCK, &key, b"val").unwrap();
         rocks_engine.put_cf(CF_WRITE, &key, b"val").unwrap();
-        // 840*2 > hard limit 1500, so the load will fail and the loaded keys should be
+        // 840*2 > capacity 1500, so the load will fail and the loaded keys should be
         // removed. However now we change the memory quota to 2000, so the range2 can be
         // cached.
         let mut config_manager = RegionCacheConfigManager(config.clone());
         let mut config_change = ConfigChange::new();
-        config_change.insert(
-            String::from("hard_limit_threshold"),
-            ConfigValue::Size(2000),
-        );
+        config_change.insert(String::from("capacity"), ConfigValue::Size(2000));
         config_manager.dispatch(config_change).unwrap();
-        assert_eq!(config.value().hard_limit_threshold(), 2000);
+        assert_eq!(config.value().capacity(), 2000);
 
         let cache_region2 = CacheRegion::from_region(&region2);
         engine.load_region(cache_region2.clone()).unwrap();

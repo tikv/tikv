@@ -272,7 +272,7 @@ mod tests {
         let mut config_change = ConfigChange::new();
         config_change.insert(String::from("enabled"), ConfigValue::Bool(false));
         config_manager.dispatch(config_change).unwrap();
-        assert!(!config.value().enabled);
+        assert!(!config.value().enable);
         snap_ctx.read_ts = 15;
         let s = hybrid_engine.new_snapshot(Some(snap_ctx));
         assert!(!s.region_cache_snapshot_available());

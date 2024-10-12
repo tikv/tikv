@@ -1615,7 +1615,7 @@ where
         let region_stats_manager_enabled_cb: Arc<dyn Fn() -> bool + Send + Sync> =
             if cfg!(feature = "memory-engine") {
                 let cfg_controller_clone = self.cfg_controller.clone().unwrap();
-                Arc::new(move || cfg_controller_clone.get_current().in_memory_engine.enabled)
+                Arc::new(move || cfg_controller_clone.get_current().in_memory_engine.enable)
             } else {
                 Arc::new(|| false)
             };
@@ -1662,7 +1662,7 @@ where
         let region_cache_engine_context =
             InMemoryEngineContext::new(region_cache_engine_config.clone(), self.pd_client.clone());
         let region_cache_engine_statistics = region_cache_engine_context.statistics();
-        if self.core.config.in_memory_engine.enabled {
+        if self.core.config.in_memory_engine.enable {
             let in_memory_engine = build_hybrid_engine(
                 region_cache_engine_context,
                 kv_engine.clone(),

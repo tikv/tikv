@@ -121,10 +121,10 @@ impl RegionStatsManager {
     /// amplification, and memory constraints. New top regions will be
     /// collected in `regions_added_out` to be loaded.
     ///
-    /// If memory usage is below the stop load limit, regions with low read flow
-    /// or low mvcc amplification are considered for eviction.
+    /// If memory usage is below the stop load threshold, regions with low read
+    /// flow or low mvcc amplification are considered for eviction.
     ///
-    /// If memory usage reaches stop load limit, whether to evict region is
+    /// If memory usage reaches stop load threshold, whether to evict region is
     /// determined by comparison between the new top regions' activity and the
     /// current cached regions.
     ///
@@ -171,10 +171,10 @@ impl RegionStatsManager {
             "ma_mvcc_amplification_reduction" => ma_mvcc_amplification_reduction,
         );
 
-        // Use soft-limit-threshold rather than stop-load-limit-threshold as there might
+        // Use evict-threshold rather than stop-load-threshold as there might
         // be some regions to be evicted.
         let expected_new_count = (memory_controller
-            .soft_limit_threshold()
+            .evict_threshold()
             .saturating_sub(memory_controller.mem_usage()))
             / self.expected_region_size();
         let expected_num_regions = current_region_count + expected_new_count;
@@ -244,7 +244,7 @@ impl RegionStatsManager {
             );
         }
 
-        let reach_stop_load = memory_controller.reached_stop_load_limit();
+        let reach_stop_load = memory_controller.reached_stop_load_threshold();
         let mut regions_loaded = self.region_loaded_at.write().unwrap();
         // Evict at most 1/10 of the regions.
         let max_count_to_evict = usize::max(1, regions_stat.len() / 10);
@@ -316,9 +316,9 @@ impl RegionStatsManager {
         (regions_to_load, regions_to_evict)
     }
 
-    // Evict regions with less read flow until the memory usage is below the soft
-    // limit threshold.
-    pub(crate) async fn evict_on_soft_limit_reached<F>(
+    // Evict regions with less read flow until the memory usage is below the evict
+    // threshold.
+    pub(crate) async fn evict_on_evict_threshold_reached<F>(
         &self,
         mut evict_region: F,
         delete_range_scheduler: &Scheduler<BackgroundTask>,
@@ -386,7 +386,7 @@ impl RegionStatsManager {
             let (tx, mut rx) = mpsc::channel(3);
             for r in regions {
                 info!(
-                    "ime evict on soft limit reached";
+                    "ime evict on evict threshold reached";
                     "region_to_evict" => ?r,
                 );
 
@@ -422,7 +422,7 @@ impl RegionStatsManager {
                     break;
                 }
             }
-            if !memory_controller.reached_stop_load_limit() {
+            if !memory_controller.reached_stop_load_threshold() {
                 return;
             }
         }
@@ -510,7 +510,7 @@ pub mod tests {
     fn test_collect_changed_regions() {
         let skiplist_engine = SkiplistEngine::new();
         let mut config = InMemoryEngineConfig::config_for_test();
-        config.stop_load_limit_threshold = Some(ReadableSize::kb(1));
+        config.stop_load_threshold = Some(ReadableSize::kb(1));
         config.mvcc_amplification_threshold = 10;
         let config = Arc::new(VersionTrack::new(config));
         let mc = MemoryController::new(config.clone(), skiplist_engine);
@@ -600,7 +600,7 @@ pub mod tests {
     fn test_collect_candidates_for_eviction() {
         let skiplist_engine = SkiplistEngine::new();
         let mut config = InMemoryEngineConfig::config_for_test();
-        config.stop_load_limit_threshold = Some(ReadableSize::kb(1));
+        config.stop_load_threshold = Some(ReadableSize::kb(1));
         config.mvcc_amplification_threshold = 10;
         let config = Arc::new(VersionTrack::new(config));
         let mc = MemoryController::new(config.clone(), skiplist_engine);
@@ -666,8 +666,13 @@ pub mod tests {
 
         let handle = std::thread::spawn(move || {
             block_on(async {
-                rsm.evict_on_soft_limit_reached(evict_fn, &scheduler, vec![1, 2, 3, 4, 5, 6], &mc)
-                    .await
+                rsm.evict_on_evict_threshold_reached(
+                    evict_fn,
+                    &scheduler,
+                    vec![1, 2, 3, 4, 5, 6],
+                    &mc,
+                )
+                .await
             });
         });
 

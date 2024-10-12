@@ -308,9 +308,9 @@ fn test_cached_write_batch_cleared_when_load_failed() {
     let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
 
     let mut config = InMemoryEngineConfig::config_for_test();
-    config.stop_load_limit_threshold = Some(ReadableSize(20));
-    config.soft_limit_threshold = Some(ReadableSize(30));
-    config.hard_limit_threshold = Some(ReadableSize(40));
+    config.stop_load_threshold = Some(ReadableSize(20));
+    config.evict_threshold = Some(ReadableSize(30));
+    config.capacity = Some(ReadableSize(40));
     let config = Arc::new(VersionTrack::new(config));
     let mut engine =
         RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(config.clone()));

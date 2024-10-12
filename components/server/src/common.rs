@@ -565,19 +565,19 @@ impl EnginesResourceInfo {
         }
 
         let mut normalized_pending_bytes = 0;
-        for (i, (pending, limit)) in compaction_pending_bytes
+        for (i, (pending, evict_threshold)) in compaction_pending_bytes
             .iter()
             .zip(soft_pending_compaction_bytes_limit)
             .enumerate()
         {
-            if limit > 0 {
+            if evict_threshold > 0 {
                 normalized_pending_bytes = cmp::max(
                     normalized_pending_bytes,
-                    (*pending * EnginesResourceInfo::SCALE_FACTOR / limit) as u32,
+                    (*pending * EnginesResourceInfo::SCALE_FACTOR / evict_threshold) as u32,
                 );
                 let base = self.base_max_compactions[i];
                 if base > 0 {
-                    let level = *pending as f32 / limit as f32;
+                    let level = *pending as f32 / evict_threshold as f32;
                     // 50% -> 1, 70% -> 2, 85% -> 3, 95% -> 6, 98% -> 1024.
                     let delta1 = if level > 0.98 {
                         1024
@@ -611,7 +611,7 @@ impl EnginesResourceInfo {
                             "cf" => cf,
                             "n" => base + delta,
                             "pending_bytes" => *pending,
-                            "soft_limit" => limit,
+                            "evict_threshold" => evict_threshold,
                             "level0_ratio" => level0_ratio[i],
                         );
                     }

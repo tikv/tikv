@@ -367,7 +367,7 @@ impl RegionCacheMemoryEngine {
             statistics,
             pd_client,
         } = in_memory_engine_context;
-        assert!(config.value().enabled);
+        assert!(config.value().enable);
         let memory_controller = Arc::new(MemoryController::new(config.clone(), skiplist_engine));
 
         let bg_work_manager = Arc::new(BgWorkManager::new(
@@ -526,7 +526,7 @@ impl RegionCacheEngine for RegionCacheMemoryEngine {
     }
 
     fn enabled(&self) -> bool {
-        self.config.value().enabled
+        self.config.value().enable
     }
 }
 
@@ -690,12 +690,12 @@ pub mod tests {
             let handle = skiplist.cf_handle(cf);
 
             let config = Arc::new(VersionTrack::new(InMemoryEngineConfig {
-                enabled: true,
+                enable: true,
                 gc_interval: Default::default(),
                 load_evict_interval: Default::default(),
-                stop_load_limit_threshold: Some(ReadableSize(300)),
-                soft_limit_threshold: Some(ReadableSize(300)),
-                hard_limit_threshold: Some(ReadableSize(500)),
+                stop_load_threshold: Some(ReadableSize(300)),
+                evict_threshold: Some(ReadableSize(300)),
+                capacity: Some(ReadableSize(500)),
                 expected_region_size: Some(ReadableSize::mb(20)),
                 cross_check_interval: Default::default(),
                 mvcc_amplification_threshold: 10,
@@ -748,12 +748,12 @@ pub mod tests {
         let lock_handle = skiplist.cf_handle(CF_LOCK);
 
         let config = Arc::new(VersionTrack::new(InMemoryEngineConfig {
-            enabled: true,
+            enable: true,
             gc_interval: Default::default(),
             load_evict_interval: Default::default(),
-            stop_load_limit_threshold: Some(ReadableSize(300)),
-            soft_limit_threshold: Some(ReadableSize(300)),
-            hard_limit_threshold: Some(ReadableSize(500)),
+            stop_load_threshold: Some(ReadableSize(300)),
+            evict_threshold: Some(ReadableSize(300)),
+            capacity: Some(ReadableSize(500)),
             expected_region_size: Some(ReadableSize::mb(20)),
             cross_check_interval: Default::default(),
             mvcc_amplification_threshold: 10,

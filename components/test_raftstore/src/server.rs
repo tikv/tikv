@@ -310,7 +310,7 @@ impl ServerCluster {
 
         // Create coprocessor.
         let enable_region_stats_mgr_cb: Arc<dyn Fn() -> bool + Send + Sync> =
-            if cfg.in_memory_engine.enabled {
+            if cfg.in_memory_engine.enable {
                 Arc::new(|| true)
             } else {
                 Arc::new(|| false)
@@ -342,7 +342,7 @@ impl ServerCluster {
 
         let in_memory_engine_context =
             InMemoryEngineContext::new(in_memory_engine_config.clone(), self.pd_client.clone());
-        let in_memory_engine = if cfg.in_memory_engine.enabled {
+        let in_memory_engine = if cfg.in_memory_engine.enable {
             let in_memory_engine = build_hybrid_engine(
                 in_memory_engine_context,
                 engines.kv.clone(),

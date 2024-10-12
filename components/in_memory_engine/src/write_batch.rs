@@ -271,7 +271,7 @@ impl RegionCacheWriteBatch {
     // quota to write to the engine
     fn memory_acquire(&mut self, mem_required: usize) -> bool {
         match self.memory_controller.acquire(mem_required) {
-            MemoryUsage::HardLimitReached(n) => {
+            MemoryUsage::CapacityReached(n) => {
                 warn!(
                     "ime the memory usage of in-memory engine reaches to hard limit";
                     "region" => ?self.current_region.as_ref().unwrap(),
@@ -280,7 +280,7 @@ impl RegionCacheWriteBatch {
                 self.schedule_memory_check();
                 return false;
             }
-            MemoryUsage::SoftLimitReached(_) => {
+            MemoryUsage::EvictThresholdReached(_) => {
                 self.schedule_memory_check();
             }
             _ => {}
@@ -756,9 +756,9 @@ mod tests {
     #[test]
     fn test_write_batch_with_memory_controller() {
         let mut config = InMemoryEngineConfig::default();
-        config.soft_limit_threshold = Some(ReadableSize(500));
-        config.hard_limit_threshold = Some(ReadableSize(1000));
-        config.enabled = true;
+        config.evict_threshold = Some(ReadableSize(500));
+        config.capacity = Some(ReadableSize(1000));
+        config.enable = true;
         let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(config),
         )));
@@ -822,10 +822,10 @@ mod tests {
         // We should have allocated 740 as calculated above
         assert_eq!(740, memory_controller.mem_usage());
         wb.write_impl(1000).unwrap();
-        // We dont count the node overhead (96 bytes for each node) in write batch, so
-        // after they are written into the engine, the mem usage can even exceed
-        // the hard limit. But this should be fine as this amount should be at
-        // most MB level.
+        // We don't count the node overhead (96 bytes for each node) in write batch,
+        // so after they are written into the engine, the mem usage can even
+        // exceed the capacity. But this should be fine as this amount should be
+        // at most MB level.
         assert_eq!(1220, memory_controller.mem_usage());
 
         let snap1 = engine
@@ -878,9 +878,9 @@ mod tests {
     #[test]
     fn test_write_batch_with_config_change() {
         let mut config = InMemoryEngineConfig::default();
-        config.soft_limit_threshold = Some(ReadableSize(u64::MAX));
-        config.hard_limit_threshold = Some(ReadableSize(u64::MAX));
-        config.enabled = true;
+        config.evict_threshold = Some(ReadableSize(u64::MAX));
+        config.capacity = Some(ReadableSize(u64::MAX));
+        config.enable = true;
         let config = Arc::new(VersionTrack::new(config));
         let engine =
             RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(config.clone()));

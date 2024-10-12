@@ -56,15 +56,17 @@ pub enum Error {
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, OnlineConfig)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct InMemoryEngineConfig {
-    pub enabled: bool,
-    pub gc_interval: ReadableDuration,
-    pub load_evict_interval: ReadableDuration,
+    // Determines whether to enable the in memory engine feature.
+    pub enable: bool,
+    // The maximum memory usage of the engine.
+    pub capacity: Option<ReadableSize>,
+    // When memory usage reaches this amount, we start to pick some regions to evict.
+    pub evict_threshold: Option<ReadableSize>,
     // TODO(SpadeA): ultimately we only expose one memory limit to user.
     // When memory usage reaches this amount, no further load will be performed.
-    pub stop_load_limit_threshold: Option<ReadableSize>,
-    // When memory usage reaches this amount, we start to pick some regions to evict.
-    pub soft_limit_threshold: Option<ReadableSize>,
-    pub hard_limit_threshold: Option<ReadableSize>,
+    pub stop_load_threshold: Option<ReadableSize>,
+    pub gc_interval: ReadableDuration,
+    pub load_evict_interval: ReadableDuration,
     pub expected_region_size: Option<ReadableSize>,
     // used in getting top regions to filter those with less mvcc amplification. Here, we define
     // mvcc amplification to be '(next + prev) / processed_keys'.
@@ -78,13 +80,13 @@ pub struct InMemoryEngineConfig {
 impl Default for InMemoryEngineConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enable: false,
             gc_interval: ReadableDuration(Duration::from_secs(180)),
-            stop_load_limit_threshold: None,
+            stop_load_threshold: None,
             // Each load/evict operation should run within five minutes.
             load_evict_interval: ReadableDuration(Duration::from_secs(300)),
-            soft_limit_threshold: None,
-            hard_limit_threshold: None,
+            evict_threshold: None,
+            capacity: None,
             expected_region_size: None,
             mvcc_amplification_threshold: 100,
             cross_check_interval: ReadableDuration(Duration::from_secs(0)),
@@ -94,7 +96,7 @@ impl Default for InMemoryEngineConfig {
 
 impl InMemoryEngineConfig {
     pub fn validate(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        if !self.enabled {
+        if !self.enable {
             return Ok(());
         }
 
@@ -102,49 +104,45 @@ impl InMemoryEngineConfig {
     }
 
     pub fn sanitize(&mut self) -> Result<(), Error> {
-        if self.soft_limit_threshold.is_none() || self.hard_limit_threshold.is_none() {
+        if self.evict_threshold.is_none() || self.capacity.is_none() {
             return Err(Error::InvalidArgument(
-                "soft-limit-threshold or hard-limit-threshold not set".to_string(),
+                "evict-threshold or capacity not set".to_string(),
             ));
         }
 
-        if self.stop_load_limit_threshold.is_none() {
-            self.stop_load_limit_threshold = self.soft_limit_threshold;
+        if self.stop_load_threshold.is_none() {
+            self.stop_load_threshold = self.evict_threshold;
         }
 
-        if self.stop_load_limit_threshold.as_ref().unwrap()
-            > self.soft_limit_threshold.as_ref().unwrap()
-        {
+        if self.stop_load_threshold.as_ref().unwrap() > self.evict_threshold.as_ref().unwrap() {
             return Err(Error::InvalidArgument(format!(
-                "stop-load-limit-threshold {:?} is larger to soft-limit-threshold {:?}",
-                self.stop_load_limit_threshold.as_ref().unwrap(),
-                self.soft_limit_threshold.as_ref().unwrap()
+                "stop-load-threshold {:?} is larger to evict-threshold {:?}",
+                self.stop_load_threshold.as_ref().unwrap(),
+                self.evict_threshold.as_ref().unwrap()
             )));
         }
 
-        if self.soft_limit_threshold.as_ref().unwrap()
-            >= self.hard_limit_threshold.as_ref().unwrap()
-        {
+        if self.evict_threshold.as_ref().unwrap() >= self.capacity.as_ref().unwrap() {
             return Err(Error::InvalidArgument(format!(
-                "soft-limit-threshold {:?} is larger or equal to hard-limit-threshold {:?}",
-                self.soft_limit_threshold.as_ref().unwrap(),
-                self.hard_limit_threshold.as_ref().unwrap()
+                "evict-threshold {:?} is larger or equal to capacity {:?}",
+                self.evict_threshold.as_ref().unwrap(),
+                self.capacity.as_ref().unwrap()
             )));
         }
 
         Ok(())
     }
 
-    pub fn stop_load_limit_threshold(&self) -> usize {
-        self.stop_load_limit_threshold.map_or(0, |r| r.0 as usize)
+    pub fn stop_load_threshold(&self) -> usize {
+        self.stop_load_threshold.map_or(0, |r| r.0 as usize)
     }
 
-    pub fn soft_limit_threshold(&self) -> usize {
-        self.soft_limit_threshold.map_or(0, |r| r.0 as usize)
+    pub fn evict_threshold(&self) -> usize {
+        self.evict_threshold.map_or(0, |r| r.0 as usize)
     }
 
-    pub fn hard_limit_threshold(&self) -> usize {
-        self.hard_limit_threshold.map_or(0, |r| r.0 as usize)
+    pub fn capacity(&self) -> usize {
+        self.capacity.map_or(0, |r| r.0 as usize)
     }
 
     pub fn expected_region_size(&self) -> usize {
@@ -156,13 +154,13 @@ impl InMemoryEngineConfig {
 
     pub fn config_for_test() -> InMemoryEngineConfig {
         InMemoryEngineConfig {
-            enabled: true,
+            enable: true,
             gc_interval: ReadableDuration(Duration::from_secs(180)),
             load_evict_interval: ReadableDuration(Duration::from_secs(300)), /* Should run within
                                                                               * five minutes */
-            stop_load_limit_threshold: Some(ReadableSize::gb(1)),
-            soft_limit_threshold: Some(ReadableSize::gb(1)),
-            hard_limit_threshold: Some(ReadableSize::gb(2)),
+            stop_load_threshold: Some(ReadableSize::gb(1)),
+            evict_threshold: Some(ReadableSize::gb(1)),
+            capacity: Some(ReadableSize::gb(2)),
             expected_region_size: Some(ReadableSize::mb(20)),
             mvcc_amplification_threshold: 10,
             cross_check_interval: ReadableDuration(Duration::from_secs(0)),

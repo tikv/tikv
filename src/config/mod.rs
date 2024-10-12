@@ -3956,7 +3956,7 @@ impl TikvConfig {
 
         // Disable in memory engine if api version is V1ttl or V2.
         if (self.storage.api_version() == ApiVersion::V2 || self.storage.enable_ttl)
-            && self.in_memory_engine.enabled
+            && self.in_memory_engine.enable
         {
             return Err("in-memory-engine is unavailable for feature TTL or API v2".into());
         }
@@ -7575,7 +7575,7 @@ mod tests {
                     r#"
                         [in-memory-engine]
                         enabled = true
-                        soft-limit-threshold = "1GB"
+                        evict-threshold = "1GB"
                         hard-limit-threshold = "2GB"
                     "#,
                     r#"
@@ -7606,7 +7606,7 @@ mod tests {
                     r#"
                         [in-memory-engine]
                         enabled = true
-                        soft-limit-threshold = "1GB"
+                        evict-threshold = "1GB"
                         hard-limit-threshold = "2GB"
                         [storage]
                         api-version = 1
@@ -7615,7 +7615,7 @@ mod tests {
                     r#"
                         [in-memory-engine]
                         enabled = true
-                        soft-limit-threshold = "1GB"
+                        evict-threshold = "1GB"
                         hard-limit-threshold = "2GB"
                         [storage]
                         api-version = 2
