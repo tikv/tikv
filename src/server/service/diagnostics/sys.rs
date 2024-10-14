@@ -58,8 +58,8 @@ fn cpu_load_info(prev_cpu: CpuTimeSnapshot, collector: &mut Vec<ServerInfoItem>)
     {
         let infos = {
             let mut system = SYS_INFO.lock().unwrap();
-            system.refresh_system();
-            let load = system.load_average();
+            system.refresh_cpu();
+            let load = system.system_load_average();
             vec![
                 ("load1", load.one),
                 ("load5", load.five),
@@ -126,12 +126,12 @@ fn cpu_load_info(prev_cpu: CpuTimeSnapshot, collector: &mut Vec<ServerInfoItem>)
 fn mem_load_info(collector: &mut Vec<ServerInfoItem>) {
     let mut system = SYS_INFO.lock().unwrap();
     system.refresh_memory();
-    let total_memory = system.total_memory();
-    let used_memory = system.used_memory();
-    let free_memory = system.free_memory();
-    let total_swap = system.total_swap();
-    let used_swap = system.used_swap();
-    let free_swap = system.free_swap();
+    let total_memory = system.system().total_memory();
+    let used_memory = system.system().used_memory();
+    let free_memory = system.system().free_memory();
+    let total_swap = system.system().total_swap();
+    let used_swap = system.system().used_swap();
+    let free_swap = system.system().free_swap();
     drop(system);
     let used_memory_pct = (used_memory as f64) / (total_memory as f64);
     let free_memory_pct = (free_memory as f64) / (total_memory as f64);
@@ -177,7 +177,6 @@ fn mem_load_info(collector: &mut Vec<ServerInfoItem>) {
 
 fn nic_load_info(prev_nic: HashMap<String, NicSnapshot>, collector: &mut Vec<ServerInfoItem>) {
     let mut system = SYS_INFO.lock().unwrap();
-    system.refresh_networks_list();
     system.refresh_networks();
     let current = system.networks();
 
@@ -291,7 +290,7 @@ pub fn load_info(
 fn cpu_hardware_info(collector: &mut Vec<ServerInfoItem>) {
     let mut system = SYS_INFO.lock().unwrap();
     system.refresh_cpu();
-    let processor = match system.cpus().iter().next() {
+    let processor = match system.system().cpus().iter().next() {
         Some(p) => p,
         None => return,
     };
@@ -357,11 +356,11 @@ fn mem_hardware_info(collector: &mut Vec<ServerInfoItem>) {
 
 fn disk_hardware_info(collector: &mut Vec<ServerInfoItem>) {
     let mut system = SYS_INFO.lock().unwrap();
-    system.refresh_disks_list();
     system.refresh_disks();
     let disks = system.disks();
     for disk in disks {
-        let file_sys = std::str::from_utf8(disk.file_system()).unwrap_or("unknown");
+        let file_sys =
+            std::str::from_utf8(disk.file_system().as_encoded_bytes()).unwrap_or("unknown");
         if file_sys == "rootfs" {
             continue;
         }
@@ -371,7 +370,7 @@ fn disk_hardware_info(collector: &mut Vec<ServerInfoItem>) {
         let free_pct = (free as f64) / (total as f64);
         let used_pct = (used as f64) / (total as f64);
         let infos = vec![
-            ("type", format!("{:?}", disk.type_())),
+            ("type", format!("{:?}", disk.kind())),
             ("fstype", file_sys.to_string()),
             (
                 "path",
@@ -517,7 +516,7 @@ pub fn process_info(collector: &mut Vec<ServerInfoItem>) {
         let mut pairs = vec![];
         let infos = vec![
             ("executable", format!("{:?}", p.exe())),
-            ("cmd", p.cmd().join(" ")),
+            ("cmd", format!("{:?}", p.cmd())),
             ("cwd", format!("{:?}", p.cwd())),
             ("start-time", p.start_time().to_string()),
             ("memory", p.memory().to_string()),
@@ -532,7 +531,7 @@ pub fn process_info(collector: &mut Vec<ServerInfoItem>) {
         }
         let mut item = ServerInfoItem::default();
         item.set_tp("process".to_string());
-        item.set_name(format!("{}({})", p.name(), pid));
+        item.set_name(format!("{:?}({})", p.name(), pid));
         item.set_pairs(pairs.into());
         collector.push(item);
     }
@@ -546,7 +545,6 @@ mod tests {
         let prev_cpu = cpu_time_snapshot();
         let prev_nic = {
             let mut system = SYS_INFO.lock().unwrap();
-            system.refresh_networks_list();
             system.refresh_all();
             system
                 .networks()

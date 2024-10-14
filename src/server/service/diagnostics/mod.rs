@@ -20,7 +20,7 @@ use kvproto::diagnosticspb::{
     ServerInfoResponse, ServerInfoType,
 };
 use tikv_util::{
-    sys::{ioload, System},
+    sys::{ioload, SystemInfo},
     timer::GLOBAL_TIMER_HANDLE,
 };
 use tokio::runtime::Handle;
@@ -32,7 +32,7 @@ mod log;
 pub mod sys;
 
 lazy_static! {
-    pub static ref SYS_INFO: Mutex<sysinfo::System> = Mutex::new(sysinfo::System::new());
+    pub static ref SYS_INFO: Mutex<SystemInfo> = Mutex::new(SystemInfo::new());
 }
 
 /// Service handles the RPC messages for the `Diagnostics` service.
@@ -114,7 +114,6 @@ impl Diagnostics for Service {
             let (load, when) = match tp {
                 ServerInfoType::LoadInfo | ServerInfoType::All => {
                     let mut system = SYS_INFO.lock().unwrap();
-                    system.refresh_networks_list();
                     system.refresh_all();
                     let load = (
                         sys::cpu_time_snapshot(),
