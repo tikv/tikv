@@ -35,7 +35,11 @@ use tikv_util::{mpsc::unbounded, HandyRwLock};
 use tipb::SelectResponse;
 use txn_types::Key;
 
-fn must_copr_point_get(cluster: &mut Cluster<ServerCluster>, table: &ProductTable, row_id: i64) {
+fn copr_point_get(
+    cluster: &mut Cluster<ServerCluster>,
+    table: &ProductTable,
+    row_id: i64,
+) -> SelectResponse {
     let key = table.get_table_prefix();
     let table_key = Key::from_raw(&key).into_encoded();
     let ctx = cluster.get_ctx(&table_key);
@@ -45,11 +49,15 @@ fn must_copr_point_get(cluster: &mut Cluster<ServerCluster>, table: &ProductTabl
         .key_ranges(vec![key_range])
         .build_with(ctx, &[0]);
     let cop_resp = handle_request(&endpoint, req);
-    let mut resp = SelectResponse::default();
-    resp.merge_from_bytes(cop_resp.get_data()).unwrap();
     assert!(!cop_resp.has_region_error(), "{:?}", cop_resp);
     assert!(cop_resp.get_other_error().is_empty(), "{:?}", cop_resp);
+    let mut resp = SelectResponse::default();
+    resp.merge_from_bytes(cop_resp.get_data()).unwrap();
+    resp
+}
 
+fn must_copr_point_get(cluster: &mut Cluster<ServerCluster>, table: &ProductTable, row_id: i64) {
+    let mut resp = copr_point_get(cluster, table, row_id);
     let mut spliter = DagChunkSpliter::new(resp.take_chunks().into(), 3);
     let row = spliter.next().unwrap();
     let expected_encoded = datum::encode_value(
@@ -64,6 +72,16 @@ fn must_copr_point_get(cluster: &mut Cluster<ServerCluster>, table: &ProductTabl
     let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
     assert_eq!(result_encoded, &*expected_encoded);
 
+    assert!(spliter.next().is_none());
+}
+
+fn must_copr_point_get_empty(
+    cluster: &mut Cluster<ServerCluster>,
+    table: &ProductTable,
+    row_id: i64,
+) {
+    let mut resp = copr_point_get(cluster, table, row_id);
+    let mut spliter = DagChunkSpliter::new(resp.take_chunks().into(), 3);
     assert!(spliter.next().is_none());
 }
 
@@ -751,18 +769,10 @@ fn test_delete_range() {
         cluster.must_delete_range_cf(cf, b"", &[255])
     }
 
-    // {
-    //     let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
-    //     // Load the whole range as if it is not splitted. Loading process should handle
-    //     // it correctly.
-    //     let cache_range = new_region(1, "", "");
-    //     region_cache_engine.evict_region(
-    //         &CacheRegion::from_region(&cache_range),
-    //         EvictReason::Manual,
-    //         None,
-    //     );
-    // }
-
-    must_copr_point_get(&mut cluster, &product, 1);
-    rx.try_recv().unwrap();
+    must_copr_point_get_empty(&mut cluster, &product, 1);
+    {
+        let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
+        let cache_range = new_region(1, "", "");
+        assert!(!region_cache_engine.region_cached(&cache_range));
+    }
 }

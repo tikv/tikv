@@ -24,7 +24,7 @@ use file_system::{IoType, WithIoType};
 use futures::executor::block_on;
 use kvproto::{kvrpcpb::Context, metapb::Region};
 use pd_client::{FeatureGate, PdClient};
-use raftstore::coprocessor::RegionInfoProvider;
+use raftstore::coprocessor::{CoprocessorHost, RegionInfoProvider};
 use tikv_kv::{CfStatistics, CursorBuilder, Modify, SnapContext};
 use tikv_util::{
     config::{Tracker, VersionTrack},
@@ -192,6 +192,8 @@ pub struct GcRunnerCore<E: Engine> {
     cfg_tracker: Tracker<GcConfig>,
 
     stats_map: HashMap<GcKeyMode, Statistics>,
+
+    coprocessor_hook: CoprocessorHost<E::Local>,
 }
 
 impl<E: Engine> Clone for GcRunnerCore<E> {
@@ -204,6 +206,7 @@ impl<E: Engine> Clone for GcRunnerCore<E> {
             cfg: self.cfg.clone(),
             cfg_tracker: self.cfg_tracker.clone(),
             stats_map: HashMap::default(),
+            coprocessor_hook: self.coprocessor_hook.clone(),
         }
     }
 }
@@ -310,6 +313,7 @@ impl<E: Engine> GcRunnerCore<E> {
         flow_info_sender: Sender<FlowInfo>,
         cfg_tracker: Tracker<GcConfig>,
         cfg: GcConfig,
+        coprocessor_hook: CoprocessorHost<E::Local>,
     ) -> Self {
         let limiter = Limiter::new(if cfg.max_write_bytes_per_sec.0 > 0 {
             cfg.max_write_bytes_per_sec.0 as f64
@@ -324,6 +328,7 @@ impl<E: Engine> GcRunnerCore<E> {
             cfg,
             cfg_tracker,
             stats_map: Default::default(),
+            coprocessor_hook,
         }
     }
 
@@ -747,6 +752,9 @@ impl<E: Engine> GcRunnerCore<E> {
             let start_data_key = keys::data_key(start_key.as_encoded());
             let end_data_key = keys::data_end_key(end_key.as_encoded());
 
+            self.coprocessor_hook
+                .pre_delete_range(&start_data_key, &end_data_key);
+
             let cfs = &[CF_LOCK, CF_DEFAULT, CF_WRITE];
 
             // First, use DeleteStrategy::DeleteFiles to free as much disk space as possible
@@ -1079,9 +1087,17 @@ impl<E: Engine> GcRunner<E> {
         cfg_tracker: Tracker<GcConfig>,
         cfg: GcConfig,
         pool: Remote<TaskCell>,
+        coprocessor_hook: CoprocessorHost<E::Local>,
     ) -> Self {
         Self {
-            inner: GcRunnerCore::new(store_id, engine, flow_info_sender, cfg_tracker, cfg),
+            inner: GcRunnerCore::new(
+                store_id,
+                engine,
+                flow_info_sender,
+                cfg_tracker,
+                cfg,
+                coprocessor_hook,
+            ),
             pool,
         }
     }
@@ -1281,7 +1297,7 @@ impl<E: Engine> GcWorker<E> {
         }
     }
 
-    pub fn start(&mut self, store_id: u64) -> Result<()> {
+    pub fn start(&mut self, store_id: u64, coprocessor_hook: CoprocessorHost<E::Local>) -> Result<()> {
         let mut worker = self.worker.lock().unwrap();
         let runner = GcRunner::new(
             store_id,
@@ -1293,6 +1309,7 @@ impl<E: Engine> GcWorker<E> {
                 .tracker("gc-worker".to_owned()),
             self.config_manager.value().clone(),
             worker.remote(),
+            coprocessor_hook,
         );
         worker.start(runner);
 

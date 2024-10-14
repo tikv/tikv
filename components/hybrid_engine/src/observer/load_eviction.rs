@@ -133,6 +133,31 @@ impl LoadEvictionObserver {
 impl Coprocessor for LoadEvictionObserver {}
 
 impl QueryObserver for LoadEvictionObserver {
+    fn pre_exec_query(
+        &self,
+        ctx: &mut ObserverContext<'_>,
+        reqs: &[kvproto::raft_cmdpb::Request],
+        _: u64,
+        _: u64,
+    ) -> bool {
+        reqs.iter().for_each(|r| {
+            if r.has_delete_range() {
+                self.cache_engine
+                    .on_region_event(RegionEvent::EvictByRange {
+                        range: CacheRegion::new(
+                            0,
+                            0,
+                            r.get_delete_range().get_start_key().to_vec(),
+                            r.get_delete_range().get_end_key().to_vec(),
+                        ),
+                        reason: EvictReason::DeleteRange,
+                    })
+            }
+        });
+
+        false
+    }
+
     fn post_exec_query(
         &self,
         ctx: &mut ObserverContext<'_>,
