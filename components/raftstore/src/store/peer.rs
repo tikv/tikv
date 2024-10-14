@@ -3921,17 +3921,6 @@ where
         extra_msgs: Vec<ExtraMessage>,
         ctx: &mut PollContext<EK, ER, T>,
     ) -> bool {
-        // Checks if safe to transfer leader.
-        if self.raft_group.raft.has_pending_conf() {
-            info!(
-                "reject transfer leader due to pending conf change";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-                "peer" => ?peer,
-            );
-            return false;
-        }
-
         // Broadcast heartbeat to make sure followers commit the entries immediately.
         // It's only necessary to ping the target peer, but ping all for simplicity.
         self.raft_group.ping();
@@ -3987,9 +3976,20 @@ where
             }
         }
 
-        if self.raft_group.raft.has_pending_conf()
-            || self.raft_group.raft.pending_conf_index > index
-        {
+        // It's safe to transfer leader to a target peer that has already applied the
+        // configuration change, even if the current leader has not yet applied
+        // it. For more details, refer to the issue at:
+        // https://github.com/tikv/tikv/issues/17363#issuecomment-2404227253.
+        if self.raft_group.raft.pending_conf_index > index {
+            info!(
+                "not ready to transfer leader; target peer has an unapplied conf change";
+                "region_id" => self.region_id,
+                "store_id" => self.peer.get_store_id(),
+                "peer_id" => peer_id,
+                "pending_conf_index" => self.raft_group.raft.pending_conf_index,
+                "leader_applied_index" => self.raft_group.raft.raft_log.applied,
+                "target_applied_index" => index
+            );
             return Some("pending conf change");
         }
 

@@ -2321,6 +2321,17 @@ where
         request: &AdminRequest,
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         assert!(request.has_change_peer_v2());
+        fail_point!(
+            "apply_on_conf_change_1_1",
+            self.id() == 1 && self.region_id() == 1,
+            |_| unreachable!()
+        );
+        fail_point!(
+            "apply_on_conf_change_3_1",
+            self.id() == 3 && self.region_id() == 1,
+            |_| unreachable!()
+        );
+
         let changes = request.get_change_peer_v2().get_change_peers().to_vec();
 
         info!(
