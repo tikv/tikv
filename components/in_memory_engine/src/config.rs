@@ -184,7 +184,7 @@ mod tests {
     #[test]
     fn test_validate() {
         let mut cfg = InMemoryEngineConfig::default();
-        assert!(cfg.validate().is_ok());
+        cfg.validate().unwrap();
 
         cfg.enable = true;
         assert!(cfg.validate().is_err());
@@ -192,7 +192,7 @@ mod tests {
         cfg.capacity = Some(ReadableSize::gb(2));
         cfg.evict_threshold = Some(ReadableSize::gb(1));
         cfg.stop_load_threshold = Some(ReadableSize::gb(1));
-        assert!(cfg.validate().is_ok());
+        cfg.validate().unwrap();
 
         // Error if less than MIN_GC_RUN_INTERVAL.
         cfg.gc_run_interval = ReadableDuration(Duration::ZERO);
@@ -207,6 +207,6 @@ mod tests {
         assert!(cfg.validate().is_err());
 
         cfg.gc_run_interval = ReadableDuration(Duration::from_secs(180));
-        assert!(cfg.validate().is_ok());
+        cfg.validate().unwrap();
     }
 }
