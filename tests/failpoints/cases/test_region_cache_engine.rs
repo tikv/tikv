@@ -19,12 +19,18 @@ use kvproto::{
 };
 use protobuf::Message;
 use tempfile::tempdir;
-use test_coprocessor::{handle_request, init_data_with_details_pd_client, DagSelect, ProductTable};
+use test_coprocessor::{
+    handle_request, init_data_with_details_pd_client, DagChunkSpliter, DagSelect, ProductTable,
+};
 use test_raftstore::{
     get_tso, new_peer, new_server_cluster_with_hybrid_engine_with_no_region_cache, Cluster,
     ServerCluster,
 };
 use test_util::eventually;
+use tidb_query_datatype::{
+    codec::{datum, Datum},
+    expr::EvalContext,
+};
 use tikv_util::{mpsc::unbounded, HandyRwLock};
 use tipb::SelectResponse;
 use txn_types::Key;
@@ -43,6 +49,22 @@ fn must_copr_point_get(cluster: &mut Cluster<ServerCluster>, table: &ProductTabl
     resp.merge_from_bytes(cop_resp.get_data()).unwrap();
     assert!(!cop_resp.has_region_error(), "{:?}", cop_resp);
     assert!(cop_resp.get_other_error().is_empty(), "{:?}", cop_resp);
+
+    let mut spliter = DagChunkSpliter::new(resp.take_chunks().into(), 3);
+    let row = spliter.next().unwrap();
+    let expected_encoded = datum::encode_value(
+        &mut EvalContext::default(),
+        &[
+            Datum::I64(row_id),
+            Some(format!("name:{}", row_id).into_bytes()).into(),
+            row_id.into(),
+        ],
+    )
+    .unwrap();
+    let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
+    assert_eq!(result_encoded, &*expected_encoded);
+
+    assert!(spliter.next().is_none());
 }
 
 fn must_copr_load_data(cluster: &mut Cluster<ServerCluster>, table: &ProductTable, row_id: i64) {
@@ -726,20 +748,21 @@ fn test_delete_range() {
     rx.try_recv().unwrap();
 
     for cf in DATA_CFS {
-        cluster.must_delete_range_cf(cf, b"", b"z")
+        cluster.must_delete_range_cf(cf, b"", &[255])
     }
 
-    {
-        let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
-        // Load the whole range as if it is not splitted. Loading process should handle
-        // it correctly.
-        let cache_range = new_region(1, "", "");
-        region_cache_engine.evict_region(
-            &CacheRegion::from_region(&cache_range),
-            EvictReason::Manual,
-            None,
-        );
-    }
+    // {
+    //     let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
+    //     // Load the whole range as if it is not splitted. Loading process should handle
+    //     // it correctly.
+    //     let cache_range = new_region(1, "", "");
+    //     region_cache_engine.evict_region(
+    //         &CacheRegion::from_region(&cache_range),
+    //         EvictReason::Manual,
+    //         None,
+    //     );
+    // }
 
     must_copr_point_get(&mut cluster, &product, 1);
+    rx.try_recv().unwrap();
 }
