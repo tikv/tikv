@@ -544,8 +544,8 @@ impl Resolver {
         }
     }
 
-    // This may be inaccurate: a large txn may have multiple locks, but we only track one.
-    // But it's just for monitoring and diagnosis.
+    // This may be inaccurate: a large txn may have multiple locks, but we only
+    // track one. But it's just for monitoring and diagnosis.
     pub(crate) fn num_locks(&self) -> u64 {
         (self.locks_by_key.len()
             + self
@@ -884,7 +884,9 @@ mod tests {
         let key3: Vec<u8> = vec![9, 10, 11, 12];
 
         // track 2 large txns, T1{key1}, T2{key2, key3}
-        resolver.track_lock(1.into(), key1.clone(), None, 1).unwrap();
+        resolver
+            .track_lock(1.into(), key1.clone(), None, 1)
+            .unwrap();
         resolver
             .track_lock(2.into(), key2.clone(), None, 1)
             .unwrap();
