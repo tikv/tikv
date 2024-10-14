@@ -9,8 +9,8 @@ use std::{
 use fail::fail_point;
 #[cfg(target_os = "linux")]
 use lazy_static::lazy_static;
-use sysinfo::RefreshKind;
 pub use sysinfo::{Cpu, Disk, NetworkData, Process, System};
+use sysinfo::{MemoryRefreshKind, RefreshKind};
 
 use crate::config::ReadableSize;
 
