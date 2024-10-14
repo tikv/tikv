@@ -2294,14 +2294,11 @@ pub struct UnifiedReadPoolConfig {
 impl UnifiedReadPoolConfig {
     fn validate(&self) -> Result<(), Box<dyn Error>> {
         if self.min_thread_count == 0 {
-            return Err("readpool.unified.min-thread-count should be > 0"
-                .to_string()
-                .into());
+            return Err("readpool.unified.min-thread-count should be > 0".into());
         }
         if self.max_thread_count < self.min_thread_count {
             return Err(
                 "readpool.unified.max-thread-count should be >= readpool.unified.min-thread-count"
-                    .to_string()
                     .into(),
             );
         }
@@ -2317,14 +2314,10 @@ impl UnifiedReadPoolConfig {
             .into());
         }
         if self.stack_size.0 < ReadableSize::mb(2).0 {
-            return Err("readpool.unified.stack-size should be >= 2mb"
-                .to_string()
-                .into());
+            return Err("readpool.unified.stack-size should be >= 2mb".into());
         }
         if self.max_tasks_per_worker <= 1 {
-            return Err("readpool.unified.max-tasks-per-worker should be > 1"
-                .to_string()
-                .into());
+            return Err("readpool.unified.max-tasks-per-worker should be > 1".into());
         }
         Ok(())
     }
@@ -3280,7 +3273,7 @@ impl Default for LogConfig {
 impl LogConfig {
     fn validate(&self) -> Result<(), Box<dyn Error>> {
         if self.file.max_size > 4096 {
-            return Err("Max log file size upper limit to 4096MB".to_string().into());
+            return Err("Max log file size upper limit to 4096MB".into());
         }
         Ok(())
     }
@@ -3960,11 +3953,18 @@ impl TikvConfig {
         self.resource_metering.validate()?;
         self.quota.validate()?;
         self.causal_ts.validate()?;
+
+        // Disable in memory engine if api version is V1ttl or V2.
+        if (self.storage.api_version() == ApiVersion::V2 || self.storage.enable_ttl)
+            && self.in_memory_engine.enabled
+        {
+            return Err("in-memory-engine is unavailable for feature TTL or API v2".into());
+        }
         self.in_memory_engine.validate()?;
 
         // Validate feature TTL with Titan configuration.
         if matches!(self.rocksdb.titan.enabled, Some(true)) && self.storage.enable_ttl {
-            return Err("Titan is unavailable for feature TTL".to_string().into());
+            return Err("Titan is unavailable for feature TTL".into());
         }
 
         Ok(())
@@ -7561,5 +7561,79 @@ mod tests {
                 .unwrap(),
             50
         );
+    }
+
+    #[test]
+    fn test_in_memory_engine_and_api_version() {
+        let tests = [
+            (
+                true,
+                vec![
+                    r#"
+                        [in-memory-engine]
+                    "#,
+                    r#"
+                        [in-memory-engine]
+                        enabled = true
+                        soft-limit-threshold = "1GB"
+                        hard-limit-threshold = "2GB"
+                    "#,
+                    r#"
+                        [in-memory-engine]
+                        enabled = false
+                    "#,
+                    // Ok if in-memory engine is off.
+                    r#"
+                        [in-memory-engine]
+                        enabled = false
+                        [storage]
+                        api-version = 1
+                        enable-ttl = true
+                    "#,
+                    r#"
+                        [in-memory-engine]
+                        enabled = false
+                        [storage]
+                        api-version = 2
+                        enable-ttl = true
+                    "#,
+                ],
+            ),
+            (
+                false,
+                vec![
+                    // Error for incompatiable API version.
+                    r#"
+                        [in-memory-engine]
+                        enabled = true
+                        soft-limit-threshold = "1GB"
+                        hard-limit-threshold = "2GB"
+                        [storage]
+                        api-version = 1
+                        enable-ttl = true
+                    "#,
+                    r#"
+                        [in-memory-engine]
+                        enabled = true
+                        soft-limit-threshold = "1GB"
+                        hard-limit-threshold = "2GB"
+                        [storage]
+                        api-version = 2
+                        enable-ttl = true
+                    "#,
+                ],
+            ),
+        ];
+
+        for t in tests {
+            for content in t.1 {
+                let mut cfg: TikvConfig = toml::from_str(content).unwrap();
+                if t.0 {
+                    cfg.validate().unwrap();
+                } else {
+                    cfg.validate().unwrap_err();
+                }
+            }
+        }
     }
 }
