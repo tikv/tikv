@@ -156,8 +156,15 @@ pub struct SystemInfo {
     networks: Networks,
 }
 
+impl Default for SystemInfo {
+    fn default() -> Self {
+        SystemInfo::new()
+    }
+}
+
 impl SystemInfo {
-    pub fn new() -> Self {
+    #[inline]
+    fn new() -> Self {
         SystemInfo {
             system: System::new_all(),
             disks: Disks::new_with_refreshed_list(),
@@ -182,7 +189,7 @@ impl SystemInfo {
 
     #[inline]
     pub fn processes(&self) -> &HashMap<Pid, Process> {
-        &self.system.processes()
+        self.system.processes()
     }
 
     #[inline]

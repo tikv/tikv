@@ -32,7 +32,7 @@ mod log;
 pub mod sys;
 
 lazy_static! {
-    pub static ref SYS_INFO: Mutex<SystemInfo> = Mutex::new(SystemInfo::new());
+    pub static ref SYS_INFO: Mutex<SystemInfo> = Mutex::new(SystemInfo::default());
 }
 
 /// Service handles the RPC messages for the `Diagnostics` service.
