@@ -905,7 +905,7 @@ mod tests {
         // disable the range cache
         let mut config_manager = InMemoryEngineConfigManager(config.clone());
         let mut config_change = ConfigChange::new();
-        config_change.insert(String::from("enabled"), ConfigValue::Bool(false));
+        config_change.insert(String::from("enable"), ConfigValue::Bool(false));
         config_manager.dispatch(config_change).unwrap();
 
         wb.write_impl(1000).unwrap();
@@ -931,7 +931,7 @@ mod tests {
         // enable the range cache again
         let mut config_manager = InMemoryEngineConfigManager(config.clone());
         let mut config_change = ConfigChange::new();
-        config_change.insert(String::from("enabled"), ConfigValue::Bool(true));
+        config_change.insert(String::from("enable"), ConfigValue::Bool(true));
         config_manager.dispatch(config_change).unwrap();
 
         let snap1 = engine.snapshot(CacheRegion::from_region(&r1), 1000, 1000);

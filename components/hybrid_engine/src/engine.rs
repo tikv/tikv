@@ -270,7 +270,7 @@ mod tests {
 
         let mut config_manager = InMemoryEngineConfigManager(config.clone());
         let mut config_change = ConfigChange::new();
-        config_change.insert(String::from("enabled"), ConfigValue::Bool(false));
+        config_change.insert(String::from("enable"), ConfigValue::Bool(false));
         config_manager.dispatch(config_change).unwrap();
         assert!(!config.value().enable);
         snap_ctx.read_ts = 15;
