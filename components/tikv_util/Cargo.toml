@@ -57,7 +57,7 @@ slog-global = { workspace = true }
 slog-json = "2.3"
 slog-term = "2.4"
 strum = { version = "0.20", features = ["derive"] }
-sysinfo = "0.26"
+sysinfo = "0.32"
 thiserror = "1.0"
 tikv_alloc = { workspace = true }
 time = { workspace = true }
