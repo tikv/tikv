@@ -7582,25 +7582,25 @@ mod tests {
                     "#,
                     r#"
                         [in-memory-engine]
-                        enabled = true
+                        enable = true
                         evict-threshold = "1GB"
                         capacity = "2GB"
                     "#,
                     r#"
                         [in-memory-engine]
-                        enabled = false
+                        enable = false
                     "#,
                     // Ok if in-memory engine is off.
                     r#"
                         [in-memory-engine]
-                        enabled = false
+                        enable = false
                         [storage]
                         api-version = 1
                         enable-ttl = true
                     "#,
                     r#"
                         [in-memory-engine]
-                        enabled = false
+                        enable = false
                         [storage]
                         api-version = 2
                         enable-ttl = true
@@ -7613,7 +7613,7 @@ mod tests {
                     // Error for incompatiable API version.
                     r#"
                         [in-memory-engine]
-                        enabled = true
+                        enable = true
                         evict-threshold = "1GB"
                         capacity = "2GB"
                         [storage]
@@ -7622,7 +7622,7 @@ mod tests {
                     "#,
                     r#"
                         [in-memory-engine]
-                        enabled = true
+                        enable = true
                         evict-threshold = "1GB"
                         capacity = "2GB"
                         [storage]
@@ -7650,7 +7650,7 @@ mod tests {
     fn test_in_memory_engine_change_config() {
         let content = r#"
             [in-memory-engine]
-            enabled = true
+            enable = true
             evict-threshold = "1GB"
             capacity = "2GB"
         "#;
