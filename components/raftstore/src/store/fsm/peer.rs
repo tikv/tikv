@@ -3700,6 +3700,9 @@ where
         }
     }
 
+    // NOTE: This method is used by both the leader and the follower.
+    // Both the request and response for transfer-leader share the MessageType
+    // `MsgTransferLeader`.
     fn on_transfer_leader_msg(&mut self, msg: &eraftpb::Message, peer_disk_usage: DiskUsage) {
         // log_term is set by original leader, represents the term last log is written
         // in, which should be equal to the original leader's term.
