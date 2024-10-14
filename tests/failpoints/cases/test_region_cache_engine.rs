@@ -8,7 +8,7 @@ use std::{
 use engine_rocks::RocksSstWriterBuilder;
 use engine_traits::{
     CacheRegion, EvictReason, RegionCacheEngine, RegionCacheEngineExt, SstWriter, SstWriterBuilder,
-    CF_DEFAULT,
+    CF_DEFAULT, DATA_CFS,
 };
 use file_system::calc_crc32_bytes;
 use in_memory_engine::test_util::new_region;
@@ -687,4 +687,59 @@ fn test_background_loading_pending_region() {
 
     rx.recv_timeout(Duration::from_secs(2)).unwrap();
     assert!(region_cache_engine.region_cached(&r));
+}
+
+#[test]
+fn test_delete_range() {
+    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
+    cluster.run();
+
+    let (tx, rx) = sync_channel(0);
+    fail::cfg_callback("on_snapshot_load_finished", move || {
+        tx.send(true).unwrap();
+    })
+    .unwrap();
+    // load range
+    {
+        let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
+        // Load the whole range as if it is not splitted. Loading process should handle
+        // it correctly.
+        let cache_range = new_region(1, "", "");
+        region_cache_engine
+            .core()
+            .region_manager()
+            .load_region(CacheRegion::from_region(&cache_range))
+            .unwrap();
+    }
+
+    let product = ProductTable::new();
+    must_copr_load_data(&mut cluster, &product, 1);
+    rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+    let (tx, rx) = unbounded();
+    fail::cfg_callback("on_region_cache_iterator_seek", move || {
+        tx.send(true).unwrap();
+    })
+    .unwrap();
+    must_copr_point_get(&mut cluster, &product, 1);
+    // verify it's read from range cache engine
+    rx.try_recv().unwrap();
+
+    for cf in DATA_CFS {
+        cluster.must_delete_range_cf(cf, b"", b"z")
+    }
+
+    {
+        let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
+        // Load the whole range as if it is not splitted. Loading process should handle
+        // it correctly.
+        let cache_range = new_region(1, "", "");
+        region_cache_engine.evict_region(
+            &CacheRegion::from_region(&cache_range),
+            EvictReason::Manual,
+            None,
+        );
+    }
+
+    must_copr_point_get(&mut cluster, &product, 1);
 }
