@@ -262,7 +262,7 @@ impl<E: KvEngine> ImportDir<E> {
     }
 
     pub fn join_for_write(&self, meta: &SstMeta) -> Result<ImportPath> {
-        let file_name = sst_meta_to_path(meta)?;
+        let file_name: PathBuf = sst_meta_to_path(meta)?;
         self.get_import_path(file_name.to_str().unwrap())
     }
 
