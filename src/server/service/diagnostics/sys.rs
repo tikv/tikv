@@ -21,7 +21,7 @@ pub struct NicSnapshot {
 }
 
 impl NicSnapshot {
-    pub fn from_network_data(data: &impl NetworkExt) -> NicSnapshot {
+    pub fn from_network_data(data: &NetworkData) -> NicSnapshot {
         NicSnapshot {
             rx_bytes: data.total_received(),
             tx_bytes: data.total_transmitted(),

@@ -20,7 +20,7 @@ use kvproto::diagnosticspb::{
     ServerInfoResponse, ServerInfoType,
 };
 use tikv_util::{
-    sys::{ioload, SystemExt},
+    sys::{ioload, System},
     timer::GLOBAL_TIMER_HANDLE,
 };
 use tokio::runtime::Handle;

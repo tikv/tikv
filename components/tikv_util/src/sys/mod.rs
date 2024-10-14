@@ -10,7 +10,7 @@ use fail::fail_point;
 #[cfg(target_os = "linux")]
 use lazy_static::lazy_static;
 use sysinfo::RefreshKind;
-pub use sysinfo::{CpuExt, DiskExt, NetworkExt, ProcessExt, SystemExt};
+pub use sysinfo::{Cpu, Disk, NetworkData, Process, System};
 
 use crate::config::ReadableSize;
 
@@ -137,7 +137,9 @@ impl SysQuota {
     }
 
     fn sysinfo_memory_limit_in_bytes() -> u64 {
-        let system = sysinfo::System::new_with_specifics(RefreshKind::new().with_memory());
+        let system = sysinfo::System::new_with_specifics(
+            RefreshKind::new().with_memory(MemoryRefreshKind::everything()),
+        );
         system.total_memory()
     }
 }
