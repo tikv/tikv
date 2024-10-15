@@ -8,28 +8,39 @@ use std::{
 use engine_rocks::RocksSstWriterBuilder;
 use engine_traits::{
     CacheRegion, EvictReason, RegionCacheEngine, RegionCacheEngineExt, SstWriter, SstWriterBuilder,
-    CF_DEFAULT,
+    CF_DEFAULT, DATA_CFS,
 };
 use file_system::calc_crc32_bytes;
 use in_memory_engine::test_util::new_region;
 use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};
 use kvproto::{
     import_sstpb::SstMeta,
+    kvrpcpb::Context,
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request},
 };
 use protobuf::Message;
 use tempfile::tempdir;
-use test_coprocessor::{handle_request, init_data_with_details_pd_client, DagSelect, ProductTable};
+use test_coprocessor::{
+    handle_request, init_data_with_details_pd_client, DagChunkSpliter, DagSelect, ProductTable,
+};
 use test_raftstore::{
     get_tso, new_peer, new_server_cluster_with_hybrid_engine_with_no_region_cache, Cluster,
     ServerCluster,
 };
 use test_util::eventually;
+use tidb_query_datatype::{
+    codec::{datum, Datum},
+    expr::EvalContext,
+};
 use tikv_util::{mpsc::unbounded, HandyRwLock};
 use tipb::SelectResponse;
 use txn_types::Key;
 
-fn must_copr_point_get(cluster: &mut Cluster<ServerCluster>, table: &ProductTable, row_id: i64) {
+fn copr_point_get(
+    cluster: &mut Cluster<ServerCluster>,
+    table: &ProductTable,
+    row_id: i64,
+) -> SelectResponse {
     let key = table.get_table_prefix();
     let table_key = Key::from_raw(&key).into_encoded();
     let ctx = cluster.get_ctx(&table_key);
@@ -39,10 +50,40 @@ fn must_copr_point_get(cluster: &mut Cluster<ServerCluster>, table: &ProductTabl
         .key_ranges(vec![key_range])
         .build_with(ctx, &[0]);
     let cop_resp = handle_request(&endpoint, req);
-    let mut resp = SelectResponse::default();
-    resp.merge_from_bytes(cop_resp.get_data()).unwrap();
     assert!(!cop_resp.has_region_error(), "{:?}", cop_resp);
     assert!(cop_resp.get_other_error().is_empty(), "{:?}", cop_resp);
+    let mut resp = SelectResponse::default();
+    resp.merge_from_bytes(cop_resp.get_data()).unwrap();
+    resp
+}
+
+fn must_copr_point_get(cluster: &mut Cluster<ServerCluster>, table: &ProductTable, row_id: i64) {
+    let mut resp = copr_point_get(cluster, table, row_id);
+    let mut spliter = DagChunkSpliter::new(resp.take_chunks().into(), 3);
+    let row = spliter.next().unwrap();
+    let expected_encoded = datum::encode_value(
+        &mut EvalContext::default(),
+        &[
+            Datum::I64(row_id),
+            Some(format!("name:{}", row_id).into_bytes()).into(),
+            row_id.into(),
+        ],
+    )
+    .unwrap();
+    let result_encoded = datum::encode_value(&mut EvalContext::default(), &row).unwrap();
+    assert_eq!(result_encoded, &*expected_encoded);
+
+    assert!(spliter.next().is_none());
+}
+
+fn must_copr_point_get_empty(
+    cluster: &mut Cluster<ServerCluster>,
+    table: &ProductTable,
+    row_id: i64,
+) {
+    let mut resp = copr_point_get(cluster, table, row_id);
+    let mut spliter = DagChunkSpliter::new(resp.take_chunks().into(), 3);
+    assert!(spliter.next().is_none());
 }
 
 fn must_copr_load_data(cluster: &mut Cluster<ServerCluster>, table: &ProductTable, row_id: i64) {
@@ -57,7 +98,7 @@ fn must_copr_load_data(cluster: &mut Cluster<ServerCluster>, table: &ProductTabl
         &[(row_id, Some(&format!("name:{}", row_id)), row_id)],
         true,
         &cluster.cfg.tikv.server,
-        Some(cluster.pd_client.clone()),
+        None,
     );
 }
 
@@ -282,7 +323,6 @@ fn test_load_with_split2() {
     let mut async_put = |table: &ProductTable, row_id| {
         let engine = cluster.sim.rl().storages[&1].clone();
         let cfg = cluster.cfg.tikv.server.clone();
-        let pd_client = cluster.pd_client.clone();
         let key = table.get_table_prefix();
         let split_key = Key::from_raw(&key).into_encoded();
         let ctx = cluster.get_ctx(&split_key);
@@ -297,7 +337,7 @@ fn test_load_with_split2() {
                 &[(row_id, Some(&format!("name:{}", row_id)), row_id)],
                 true,
                 &cfg,
-                Some(pd_client),
+                None,
             );
         });
         rx.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -687,4 +727,75 @@ fn test_background_loading_pending_region() {
 
     rx.recv_timeout(Duration::from_secs(2)).unwrap();
     assert!(region_cache_engine.region_cached(&r));
+}
+
+// test delete range and unsafe destroy range
+#[test]
+fn test_delete_range() {
+    let delete_range = |unsafe_destroy_range| {
+        let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
+        cluster.run();
+
+        let (tx, rx) = sync_channel(0);
+        fail::cfg_callback("on_snapshot_load_finished", move || {
+            tx.send(true).unwrap();
+        })
+        .unwrap();
+        // load range
+        {
+            let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
+            // Load the whole range as if it is not splitted. Loading process should handle
+            // it correctly.
+            let cache_range = new_region(1, "", "");
+            region_cache_engine
+                .core()
+                .region_manager()
+                .load_region(CacheRegion::from_region(&cache_range))
+                .unwrap();
+        }
+
+        let product = ProductTable::new();
+        must_copr_load_data(&mut cluster, &product, 1);
+        rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+        let (tx, rx) = unbounded();
+        fail::cfg_callback("on_region_cache_iterator_seek", move || {
+            tx.send(true).unwrap();
+        })
+        .unwrap();
+        must_copr_point_get(&mut cluster, &product, 1);
+        // verify it's read from range cache engine
+        rx.try_recv().unwrap();
+
+        if unsafe_destroy_range {
+            let (tx, rx) = unbounded();
+            let sim = cluster.sim.rl();
+            let gc_worker = sim.get_gc_worker(1);
+            gc_worker
+                .unsafe_destroy_range(
+                    Context::default(),
+                    Key::from_encoded(b"".to_vec()),
+                    Key::from_encoded(b"z".to_vec()),
+                    Box::new(move |_| {
+                        tx.send(()).unwrap();
+                    }),
+                )
+                .unwrap();
+            rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        } else {
+            for cf in DATA_CFS {
+                cluster.must_delete_range_cf(cf, b"", &[255])
+            }
+        }
+
+        must_copr_point_get_empty(&mut cluster, &product, 1);
+        {
+            let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
+            let cache_range = new_region(1, "", "");
+            assert!(!region_cache_engine.region_cached(&cache_range));
+        }
+    };
+
+    delete_range(false);
+    delete_range(true);
 }
