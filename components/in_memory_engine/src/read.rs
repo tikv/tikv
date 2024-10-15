@@ -137,7 +137,7 @@ impl Iterable for RegionCacheSnapshot {
             || upper_bound > self.snapshot_meta.region.end
         {
             return Err(Error::Other(box_err!(
-                "the bounderies required [{}, {}] exceeds the range of the snapshot [{}, {}]",
+                "the boundaries required [{}, {}] exceeds the range of the snapshot [{}, {}]",
                 log_wrappers::Value(&lower_bound),
                 log_wrappers::Value(&upper_bound),
                 log_wrappers::Value(&self.snapshot_meta.region.start),
