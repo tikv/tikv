@@ -30,7 +30,7 @@ use txn_types::{Key, TimeStamp, WriteType};
 #[test]
 fn test_set_disk_engine() {
     let (tx, rx) = sync_channel(0);
-    fail::cfg_callback("in_memory_engine_set_rocks_engine", move || {
+    fail::cfg_callback("ime_set_rocks_engine", move || {
         let _ = tx.send(true);
     })
     .unwrap();
@@ -74,7 +74,7 @@ fn test_gc_worker() {
     let write = skip_engine.cf_handle(CF_WRITE);
     let default = skip_engine.cf_handle(CF_DEFAULT);
 
-    fail::cfg("in_memory_engine_gc_oldest_seqno", "return(1000)").unwrap();
+    fail::cfg("ime_gc_oldest_seqno", "return(1000)").unwrap();
 
     let (tx, rx) = sync_channel(0);
     fail::cfg_callback("in_memory_engine_gc_finish", move || {
@@ -166,7 +166,7 @@ fn test_clean_up_tombstone() {
     let region = new_region(1, b"".to_vec(), b"z".to_vec());
     let cache_region = CacheRegion::from_region(&region);
     let (tx, rx) = sync_channel(0);
-    fail::cfg_callback("clean_lock_tombstone_done", move || {
+    fail::cfg_callback("ime_clean_lock_tombstone_done", move || {
         tx.send(true).unwrap();
     })
     .unwrap();
@@ -257,14 +257,14 @@ fn test_evict_with_loading_range() {
     // range1 and range2 will be evicted
     let r = new_region(4, b"k05".to_vec(), b"k25".to_vec());
     let engine_clone = engine.clone();
-    fail::cfg_callback("on_snapshot_load_finished", move || {
+    fail::cfg_callback("ime_on_snapshot_load_finished", move || {
         let _ = snapshot_load_tx.send(true);
         engine_clone.evict_region(&CacheRegion::from_region(&r), EvictReason::AutoEvict, None);
     })
     .unwrap();
 
     let (loading_complete_tx, loading_complete_rx) = sync_channel(0);
-    fail::cfg_callback("on_completes_batch_loading", move || {
+    fail::cfg_callback("ime_on_completes_batch_loading", move || {
         let _ = loading_complete_tx.send(true);
     })
     .unwrap();
@@ -317,12 +317,12 @@ fn test_cached_write_batch_cleared_when_load_failed() {
     engine.set_disk_engine(rocks_engine);
 
     let (tx, rx) = sync_channel(0);
-    fail::cfg_callback("on_snapshot_load_finished", move || {
+    fail::cfg_callback("ime_on_snapshot_load_finished", move || {
         let _ = tx.send(true);
     })
     .unwrap();
 
-    fail::cfg("on_snapshot_load_finished2", "pause").unwrap();
+    fail::cfg("ime_on_snapshot_load_finished2", "pause").unwrap();
 
     // range1 will be canceled in on_snapshot_load_finished whereas range2 will be
     // canceled at begin
@@ -345,7 +345,7 @@ fn test_cached_write_batch_cleared_when_load_failed() {
     wb.set_sequence_number(100).unwrap();
     wb.write().unwrap();
 
-    fail::remove("on_snapshot_load_finished2");
+    fail::remove("ime_on_snapshot_load_finished2");
 
     test_util::eventually(
         Duration::from_millis(100),
@@ -381,25 +381,28 @@ fn test_concurrency_between_delete_range_and_write_to_memory() {
     let r2 = new_region(2, b"k20".to_vec(), b"k30".to_vec());
     let r3 = new_region(3, b"k40".to_vec(), b"k50".to_vec());
     let (snapshot_load_cancel_tx, snapshot_load_cancel_rx) = sync_channel(0);
-    fail::cfg_callback("in_memory_engine_snapshot_load_canceled", move || {
+    fail::cfg_callback("ime_snapshot_load_canceled", move || {
         let _ = snapshot_load_cancel_tx.send(true);
     })
     .unwrap();
     let (snapshot_load_tx, snapshot_load_rx) = sync_channel(0);
-    fail::cfg_callback("on_snapshot_load_finished", move || {
+    fail::cfg_callback("ime_on_snapshot_load_finished", move || {
         let _ = snapshot_load_tx.send(true);
     })
     .unwrap();
-    fail::cfg("before_clear_ranges_in_being_written", "pause").unwrap();
+    fail::cfg("ime_before_clear_regions_in_being_written", "pause").unwrap();
 
     let (write_batch_consume_tx, write_batch_consume_rx) = sync_channel(0);
-    fail::cfg_callback("in_memory_engine_write_batch_consumed", move || {
-        let _ = write_batch_consume_tx.send(true);
-    })
+    fail::cfg_callback(
+        "ime_on_region_cache_write_batch_write_consumed",
+        move || {
+            let _ = write_batch_consume_tx.send(true);
+        },
+    )
     .unwrap();
 
     let (delete_range_tx, delete_range_rx) = sync_channel(0);
-    fail::cfg_callback("in_memory_engine_delete_range_done", move || {
+    fail::cfg_callback("ime_delete_range_done", move || {
         let _ = delete_range_tx.send(true);
     })
     .unwrap();
@@ -472,7 +475,7 @@ fn test_concurrency_between_delete_range_and_write_to_memory() {
     // the data has not be deleted
     verify_data(&r1, 3);
     // remove failpoint so that the range can leave write status
-    fail::remove("before_clear_ranges_in_being_written");
+    fail::remove("ime_before_clear_regions_in_being_written");
     delete_range_rx
         .recv_timeout(Duration::from_secs(5))
         .unwrap();
@@ -480,13 +483,13 @@ fn test_concurrency_between_delete_range_and_write_to_memory() {
     verify_data(&r1, 0);
 
     // Next to test range2
-    fail::cfg("before_clear_ranges_in_being_written", "pause").unwrap();
+    fail::cfg("ime_before_clear_regions_in_being_written", "pause").unwrap();
     write_batch_consume_rx
         .recv_timeout(Duration::from_secs(5))
         .unwrap();
     verify_data(&r2, 2);
     // remove failpoint so that the range can leave write status
-    fail::remove("before_clear_ranges_in_being_written");
+    fail::remove("ime_before_clear_regions_in_being_written");
     delete_range_rx
         .recv_timeout(Duration::from_secs(5))
         .unwrap();
@@ -498,7 +501,7 @@ fn test_concurrency_between_delete_range_and_write_to_memory() {
         .unwrap();
     engine.evict_region(&CacheRegion::from_region(&r3), EvictReason::AutoEvict, None);
 
-    fail::cfg("before_clear_ranges_in_being_written", "pause").unwrap();
+    fail::cfg("ime_before_clear_regions_in_being_written", "pause").unwrap();
     write_batch_consume_rx
         .recv_timeout(Duration::from_secs(5))
         .unwrap();
@@ -506,7 +509,7 @@ fn test_concurrency_between_delete_range_and_write_to_memory() {
     snapshot_load_cancel_rx
         .recv_timeout(Duration::from_secs(5))
         .unwrap();
-    fail::remove("before_clear_ranges_in_being_written");
+    fail::remove("ime_before_clear_regions_in_being_written");
     delete_range_rx
         .recv_timeout(Duration::from_secs(5))
         .unwrap();
@@ -533,7 +536,7 @@ fn test_double_delete_range_schedule() {
     let (snapshot_load_tx, snapshot_load_rx) = sync_channel(0);
     let engine_clone = engine.clone();
     let r = new_region(4, b"k00", b"k60");
-    fail::cfg_callback("on_snapshot_load_finished", move || {
+    fail::cfg_callback("ime_on_snapshot_load_finished", move || {
         let _ = snapshot_load_tx.send(true);
         // evict all ranges. So the loading ranges will also be evicted and a delete
         // range task will be scheduled.
@@ -542,7 +545,7 @@ fn test_double_delete_range_schedule() {
     .unwrap();
 
     let (delete_range_tx, delete_range_rx) = sync_channel(0);
-    fail::cfg_callback("on_in_memory_engine_delete_range", move || {
+    fail::cfg_callback("ime_on_delete_range", move || {
         let _ = delete_range_tx.send(true);
     })
     .unwrap();
@@ -615,9 +618,9 @@ fn test_load_with_gc() {
     put_data_in_rocks(b"k4", b"val", 6, 0, false, &rocks_engine, WriteType::Delete);
     put_data_in_rocks(b"k4", b"val", 5, 0, false, &rocks_engine, WriteType::Put);
 
-    fail::cfg("in_memory_engine_safe_point_in_loading", "return(6)").unwrap();
+    fail::cfg("ime_safe_point_in_loading", "return(6)").unwrap();
     let (load_tx, load_rx) = sync_channel(0);
-    fail::cfg_callback("on_completes_batch_loading", move || {
+    fail::cfg_callback("ime_on_completes_batch_loading", move || {
         let _ = load_tx.send(true);
     })
     .unwrap();
@@ -670,11 +673,11 @@ fn test_region_split_before_batch_loading_start() {
     engine.set_disk_engine(rocks_engine.clone());
 
     let (tx, rx) = sync_channel(0);
-    fail::cfg_callback("before_start_loading_region", move || {
+    fail::cfg_callback("ime_before_start_loading_region", move || {
         let _ = tx.send(());
     })
     .unwrap();
-    fail::cfg("on_start_loading_region", "pause").unwrap();
+    fail::cfg("ime_on_start_loading_region", "pause").unwrap();
 
     let region = new_region(1, b"k00", b"k30");
     let cache_region = CacheRegion::from_region(&region);
@@ -740,7 +743,7 @@ fn test_region_split_before_batch_loading_start() {
     }
 
     // unblock batch loading.
-    fail::remove("on_start_loading_region");
+    fail::remove("ime_on_start_loading_region");
 
     // all new regions should be active after batch loading task finished.
     test_util::eventually(
@@ -773,7 +776,7 @@ fn test_cb_on_eviction() {
     wb.put(b"c", b"val3").unwrap();
     wb.write().unwrap();
 
-    fail::cfg("in_memory_engine_on_delete_regions", "pause").unwrap();
+    fail::cfg("ime_on_delete_regions", "pause").unwrap();
 
     let (tx, rx) = mpsc::channel(1);
     engine.evict_region(
@@ -797,7 +800,7 @@ fn test_cb_on_eviction() {
             .await
             .unwrap_err()
     });
-    fail::remove("in_memory_engine_on_delete_regions");
+    fail::remove("ime_on_delete_regions");
     rt.block_on(async move { rx.lock().await.recv().await.unwrap() });
 
     {

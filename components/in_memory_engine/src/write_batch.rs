@@ -170,7 +170,7 @@ impl RegionCacheWriteBatch {
         // record last region before flush.
         self.record_last_written_region();
 
-        fail::fail_point!("on_region_cache_write_batch_write_impl");
+        fail::fail_point!("ime_on_region_cache_write_batch_write_impl");
         let guard = &epoch::pin();
         let start = Instant::now();
         let mut lock_modification: u64 = 0;
@@ -187,8 +187,8 @@ impl RegionCacheWriteBatch {
         let duration = start.saturating_elapsed_secs();
         IN_MEMORY_ENGINE_WRITE_DURATION_HISTOGRAM.observe(duration);
 
-        fail::fail_point!("in_memory_engine_write_batch_consumed");
-        fail::fail_point!("before_clear_ranges_in_being_written");
+        fail::fail_point!("ime_on_region_cache_write_batch_write_consumed");
+        fail::fail_point!("ime_before_clear_regions_in_being_written");
 
         if !self.written_regions.is_empty() {
             self.engine

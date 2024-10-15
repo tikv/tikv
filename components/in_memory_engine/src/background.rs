@@ -353,7 +353,7 @@ impl BgWorkManager {
         // TODO: Spawn non-blocking tasks and make full use of the ticker.
         let interval = Duration::from_millis(100);
         let check_load_pending_interval = (|| {
-            fail_point!("background_check_load_pending_interval", |t| {
+            fail_point!("ime_background_check_load_pending_interval", |t| {
                 let t = t.unwrap().parse::<u64>().unwrap();
                 Duration::from_millis(t)
             });
@@ -575,8 +575,8 @@ impl BackgroundRunnerCore {
         delete_range_scheduler: &Scheduler<BackgroundTask>,
         safe_point: u64,
     ) -> bool {
-        fail::fail_point!("on_snapshot_load_finished");
-        fail::fail_point!("on_snapshot_load_finished2");
+        fail::fail_point!("ime_on_snapshot_load_finished");
+        fail::fail_point!("ime_on_snapshot_load_finished2");
         // We still need to check whether the snapshot is canceled during the load
         let mut regions_map = self.engine.region_manager().regions_map.write();
         let region_meta = regions_map.mut_region_meta(region.id).unwrap();
@@ -610,7 +610,7 @@ impl BackgroundRunnerCore {
         drop(regions_map);
 
         if !remove_regions.is_empty() {
-            fail::fail_point!("in_memory_engine_snapshot_load_canceled");
+            fail::fail_point!("ime_snapshot_load_canceled");
 
             if let Err(e) =
                 delete_range_scheduler.schedule_force(BackgroundTask::DeleteRegions(remove_regions))
@@ -625,7 +625,7 @@ impl BackgroundRunnerCore {
             return false;
         }
 
-        fail::fail_point!("on_completes_batch_loading");
+        fail::fail_point!("ime_on_completes_batch_loading");
         true
     }
 
@@ -905,11 +905,11 @@ impl Runnable for BackgroundRunner {
         match task {
             BackgroundTask::SetRocksEngine(rocks_engine) => {
                 self.rocks_engine = Some(rocks_engine);
-                fail::fail_point!("in_memory_engine_set_rocks_engine");
+                fail::fail_point!("ime_set_rocks_engine");
             }
             BackgroundTask::Gc(t) => {
                 let seqno = (|| {
-                    fail::fail_point!("in_memory_engine_gc_oldest_seqno", |t| {
+                    fail::fail_point!("ime_gc_oldest_seqno", |t| {
                         Some(t.unwrap().parse::<u64>().unwrap())
                     });
 
@@ -957,8 +957,8 @@ impl Runnable for BackgroundRunner {
                 let pd_client = self.pd_client.clone();
                 let gc_run_interval = self.config.value().gc_run_interval.0;
                 let f = async move {
-                    fail::fail_point!("before_start_loading_region");
-                    fail::fail_point!("on_start_loading_region");
+                    fail::fail_point!("ime_before_start_loading_region");
+                    fail::fail_point!("ime_on_start_loading_region");
                     let mut is_canceled = false;
                     {
                         let regions_map = core.engine.region_manager().regions_map.read();
@@ -1060,7 +1060,7 @@ impl Runnable for BackgroundRunner {
                         };
 
                         let safe_point = (|| {
-                            fail::fail_point!("in_memory_engine_safe_point_in_loading", |t| {
+                            fail::fail_point!("ime_safe_point_in_loading", |t| {
                                 t.unwrap().parse::<u64>().unwrap()
                             });
 
@@ -1241,7 +1241,7 @@ impl Runnable for BackgroundRunner {
                         "current_count" => lock_handle.len(),
                     );
 
-                    fail::fail_point!("clean_lock_tombstone_done");
+                    fail::fail_point!("ime_clean_lock_tombstone_done");
                 };
 
                 self.lock_cleanup_remote.spawn(f);
@@ -1353,7 +1353,7 @@ impl DeleteRangeRunner {
         }
         self.engine.region_manager().on_delete_regions(regions);
 
-        fail::fail_point!("in_memory_engine_delete_range_done");
+        fail::fail_point!("ime_delete_range_done");
 
         #[cfg(test)]
         flush_epoch();
@@ -1365,7 +1365,7 @@ impl Runnable for DeleteRangeRunner {
     fn run(&mut self, task: Self::Task) {
         match task {
             BackgroundTask::DeleteRegions(regions) => {
-                fail::fail_point!("on_in_memory_engine_delete_range");
+                fail::fail_point!("ime_on_delete_range");
                 let (mut regions_to_delay, regions_to_delete) = {
                     let region_manager = self.engine.region_manager();
                     let regions_map = region_manager.regions_map.read();

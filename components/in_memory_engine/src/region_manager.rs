@@ -926,7 +926,7 @@ impl RegionManager {
     }
 
     pub fn on_delete_regions(&self, regions: &[CacheRegion]) {
-        fail::fail_point!("in_memory_engine_on_delete_regions");
+        fail::fail_point!("ime_on_delete_regions");
         let mut cbs = vec![];
         {
             let mut regions_map = self.regions_map.write();

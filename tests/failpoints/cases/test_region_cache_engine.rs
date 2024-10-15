@@ -127,7 +127,7 @@ fn test_put_copr_get() {
     let product = ProductTable::new();
     must_copr_load_data(&mut cluster, &product, 1);
     let (tx, rx) = unbounded();
-    fail::cfg_callback("on_region_cache_iterator_seek", move || {
+    fail::cfg_callback("ime_on_iterator_seek", move || {
         tx.send(true).unwrap();
     })
     .unwrap();
@@ -161,7 +161,7 @@ fn test_load() {
     }
 
     let (tx, rx) = unbounded();
-    fail::cfg_callback("on_snapshot_load_finished", move || {
+    fail::cfg_callback("ime_on_snapshot_load_finished", move || {
         tx.send(true).unwrap();
     })
     .unwrap();
@@ -200,7 +200,7 @@ fn test_load() {
     rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
     let (tx, rx) = unbounded();
-    fail::cfg_callback("on_region_cache_iterator_seek", move || {
+    fail::cfg_callback("ime_on_iterator_seek", move || {
         tx.send(true).unwrap();
     })
     .unwrap();
@@ -225,7 +225,7 @@ fn test_load_with_split() {
     // let channel to make load process block at finishing loading snapshot
     let (tx2, rx2) = sync_channel(0);
     let rx2 = Arc::new(Mutex::new(rx2));
-    fail::cfg_callback("on_snapshot_load_finished", move || {
+    fail::cfg_callback("ime_on_snapshot_load_finished", move || {
         tx.send(true).unwrap();
         let _ = rx2.lock().unwrap().recv().unwrap();
     })
@@ -271,7 +271,7 @@ fn test_load_with_split() {
     tx2.send(true).unwrap();
 
     let (tx, rx) = unbounded();
-    fail::cfg_callback("on_region_cache_iterator_seek", move || {
+    fail::cfg_callback("ime_on_iterator_seek", move || {
         tx.send(true).unwrap();
     })
     .unwrap();
@@ -356,7 +356,7 @@ fn test_load_with_split2() {
         .unwrap();
 
     let (tx, rx) = sync_channel(1);
-    fail::cfg_callback("on_snapshot_load_finished", move || {
+    fail::cfg_callback("ime_on_snapshot_load_finished", move || {
         tx.send(true).unwrap();
     })
     .unwrap();
@@ -384,7 +384,7 @@ fn test_load_with_split2() {
     handle2.join().unwrap();
 
     let (tx, rx) = unbounded();
-    fail::cfg_callback("on_region_cache_iterator_seek", move || {
+    fail::cfg_callback("ime_on_iterator_seek", move || {
         tx.send(true).unwrap();
     })
     .unwrap();
@@ -394,8 +394,8 @@ fn test_load_with_split2() {
     // ["", table2) should not cached.
     must_copr_load_data(&mut cluster, &product1, 3);
     let (tx, rx) = unbounded();
-    fail::remove("on_region_cache_iterator_seek");
-    fail::cfg_callback("on_region_cache_iterator_seek", move || {
+    fail::remove("ime_on_iterator_seek");
+    fail::cfg_callback("ime_on_iterator_seek", move || {
         tx.send(true).unwrap();
     })
     .unwrap();
@@ -430,7 +430,7 @@ fn test_load_with_eviction() {
     let r = cluster.get_region(&split_key);
     cluster.must_split(&r, &split_key);
 
-    fail::cfg("on_region_cache_write_batch_write_impl", "pause").unwrap();
+    fail::cfg("ime_on_region_cache_write_batch_write_impl", "pause").unwrap();
     let mut async_put = |table: &ProductTable, row_id| {
         let engine = cluster.sim.rl().storages[&1].clone();
         let cfg = cluster.cfg.tikv.server.clone();
@@ -474,14 +474,14 @@ fn test_load_with_eviction() {
         );
     }
 
-    fail::remove("on_region_cache_write_batch_write_impl");
+    fail::remove("ime_on_region_cache_write_batch_write_impl");
     handle1.join().unwrap();
     handle2.join().unwrap();
 
     for (table, is_cached) in &[(product1, true), (product2, false)] {
-        fail::remove("on_region_cache_iterator_seek");
+        fail::remove("ime_on_iterator_seek");
         let (tx, rx) = unbounded();
-        fail::cfg_callback("on_region_cache_iterator_seek", move || {
+        fail::cfg_callback("ime_on_iterator_seek", move || {
             tx.send(true).unwrap();
         })
         .unwrap();
@@ -682,7 +682,7 @@ fn test_pre_load_when_transfer_ledaer() {
     cluster.run();
 
     let (tx, rx) = unbounded();
-    fail::cfg_callback("on_completes_batch_loading", move || {
+    fail::cfg_callback("ime_on_completes_batch_loading", move || {
         tx.send(true).unwrap();
     })
     .unwrap();
@@ -708,7 +708,7 @@ fn test_pre_load_when_transfer_ledaer() {
 
 #[test]
 fn test_background_loading_pending_region() {
-    fail::cfg("background_check_load_pending_interval", "return(1000)").unwrap();
+    fail::cfg("ime_background_check_load_pending_interval", "return(1000)").unwrap();
 
     let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
     cluster.run();
