@@ -124,17 +124,11 @@ mod tests {
     #[test]
     fn test_memory_controller() {
         let skiplist_engine = SkiplistEngine::new();
-        let config = Arc::new(VersionTrack::new(InMemoryEngineConfig {
-            enable: true,
-            gc_run_interval: Default::default(),
-            load_evict_interval: Default::default(),
-            stop_load_threshold: Some(ReadableSize(300)),
-            evict_threshold: Some(ReadableSize(300)),
-            capacity: Some(ReadableSize(500)),
-            expected_region_size: Default::default(),
-            cross_check_interval: Default::default(),
-            mvcc_amplification_threshold: 10,
-        }));
+        let mut config = InMemoryEngineConfig::config_for_test();
+        config.stop_load_threshold = Some(ReadableSize(300));
+        config.evict_threshold = Some(ReadableSize(300));
+        config.capacity = Some(ReadableSize(500));
+        let config = Arc::new(VersionTrack::new(config));
         let mc = MemoryController::new(config, skiplist_engine.clone());
         assert_eq!(mc.acquire(100), MemoryUsage::NormalUsage(100));
         assert_eq!(mc.acquire(150), MemoryUsage::NormalUsage(250));

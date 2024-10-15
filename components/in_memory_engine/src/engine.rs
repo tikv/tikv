@@ -624,7 +624,7 @@ pub mod tests {
         CacheRegion, EvictReason, Mutable, RegionCacheEngine, RegionCacheEngineExt, RegionEvent,
         WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
     };
-    use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
+    use tikv_util::config::{ReadableDuration, VersionTrack};
     use tokio::{
         runtime::Builder,
         sync::{mpsc, Mutex},
@@ -685,17 +685,7 @@ pub mod tests {
             let skiplist = SkiplistEngine::default();
             let handle = skiplist.cf_handle(cf);
 
-            let config = Arc::new(VersionTrack::new(InMemoryEngineConfig {
-                enable: true,
-                gc_run_interval: Default::default(),
-                load_evict_interval: Default::default(),
-                stop_load_threshold: Some(ReadableSize(300)),
-                evict_threshold: Some(ReadableSize(300)),
-                capacity: Some(ReadableSize(500)),
-                expected_region_size: ReadableSize::mb(20),
-                cross_check_interval: Default::default(),
-                mvcc_amplification_threshold: 10,
-            }));
+            let config = Arc::new(VersionTrack::new(InMemoryEngineConfig::config_for_test()));
             let mem_controller = Arc::new(MemoryController::new(config.clone(), skiplist.clone()));
 
             let guard = &epoch::pin();
@@ -743,17 +733,7 @@ pub mod tests {
         let skiplist = SkiplistEngine::default();
         let lock_handle = skiplist.cf_handle(CF_LOCK);
 
-        let config = Arc::new(VersionTrack::new(InMemoryEngineConfig {
-            enable: true,
-            gc_run_interval: Default::default(),
-            load_evict_interval: Default::default(),
-            stop_load_threshold: Some(ReadableSize(300)),
-            evict_threshold: Some(ReadableSize(300)),
-            capacity: Some(ReadableSize(500)),
-            expected_region_size: ReadableSize::mb(20),
-            cross_check_interval: Default::default(),
-            mvcc_amplification_threshold: 10,
-        }));
+        let config = Arc::new(VersionTrack::new(InMemoryEngineConfig::config_for_test()));
         let mem_controller = Arc::new(MemoryController::new(config.clone(), skiplist.clone()));
 
         let guard = &epoch::pin();
