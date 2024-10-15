@@ -18,7 +18,7 @@ use grpcio::{ChannelBuilder, Environment, WriteFlags};
 use kvproto::{cdcpb::*, kvrpcpb::*, tikvpb_grpc::TikvClient};
 use pd_client::PdClient;
 use test_raftstore::*;
-use tikv_util::{debug, worker::Scheduler, HandyRwLock, keybuilder::KeyBuilder};
+use tikv_util::{debug, keybuilder::KeyBuilder, worker::Scheduler, HandyRwLock};
 use txn_types::{Key, TimeStamp};
 
 use crate::{new_event_feed, new_event_feed_v2, ClientReceiver, TestSuite, TestSuiteBuilder};
@@ -693,27 +693,34 @@ fn test_cdc_load_unnecessary_old_value() {
         let mut count = 0;
 
         let start = KeyBuilder::from_vec(vec![b'z'], 0, 0);
-        let end = KeyBuilder::from_vec(vec![b'z'+ 1], 0, 0);
+        let end = KeyBuilder::from_vec(vec![b'z' + 1], 0, 0);
         let iter_opts = IterOptions::new(Some(start), Some(end), false);
         let mut iter = engine.iterator_opt(cf, iter_opts).unwrap();
         let mut valid = iter.seek_to_first().unwrap();
 
-        while valid && count < 900 {
+        // skip some keys.
+        while valid && count < 2 {
+            count += 1;
+            valid = iter.next().unwrap();
+        }
+        while valid {
             count += 1;
             let key = iter.key();
             wb.delete_cf(cf, key).unwrap();
             valid = iter.next().unwrap();
         }
-        // skip 100 keys.
-        while valid {
-            count += 1;
-            valid = iter.next().unwrap();
-        }
-        println!("count: {}", count);
         assert!(count == 0 || count == 1000);
         wb.write_opt(&WriteOptions::default()).unwrap();
         engine.flush_cf(cf, true).unwrap();
     }
+
+    let scheduler = suite.endpoints.values().next().unwrap().scheduler();
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    scheduler
+        .schedule(Task::Validate(Validate::InitializeStats(Box::new(
+            move |stats| tx.send(stats).unwrap(),
+        ))))
+        .unwrap();
 
     fail::cfg("ts_filter_is_helpful_always_true", "return(0)").unwrap();
     let (mut req_tx, _, receive_event) = new_event_feed_v2(suite.get_region_cdc_client(rid));
@@ -733,6 +740,11 @@ fn test_cdc_load_unnecessary_old_value() {
         }
         _ => unreachable!(),
     }
+
+    let stats = rx.recv().unwrap().old_value.write;
+    assert_eq!(stats.seek_tombstone, 0);
+    assert_eq!(stats.next_tombstone, 0);
+    assert_eq!(stats.prev_tombstone, 0);
 
     fail::remove("ts_filter_is_helpful_always_true");
     suite.stop();
