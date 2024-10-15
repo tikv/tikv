@@ -142,8 +142,8 @@ fn test_rocksdb_skiplist_basic_operations(cf: CfName, operations: Vec<Operation>
     .unwrap();
 
     let mut cfg = InMemoryEngineConfig::default();
-    cfg.soft_limit_threshold = Some(ReadableSize::gb(1));
-    cfg.hard_limit_threshold = Some(ReadableSize::gb(2));
+    cfg.evict_threshold = Some(ReadableSize::gb(1));
+    cfg.capacity = Some(ReadableSize::gb(2));
     let controller = Arc::new(MemoryController::new(
         Arc::new(VersionTrack::new(cfg)),
         skiplist.clone(),
