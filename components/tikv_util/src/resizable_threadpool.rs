@@ -2,12 +2,9 @@
 
 use std::sync::Arc;
 
+use crate::sys::thread::ThreadBuildWrapper;
 use futures::Future;
-use tikv_util::{error, sys::thread::ThreadBuildWrapper};
 use tokio::{io::Result as TokioResult, runtime::Runtime};
-use txn_types::{Key, TimeStamp};
-
-use crate::Result;
 
 /// DaemonRuntime is a "background" runtime, which contains "daemon" tasks:
 /// any task spawn into it would run until finish even the runtime isn't
@@ -36,22 +33,30 @@ impl Drop for DaemonRuntime {
         self.0.take().unwrap().shutdown_background()
     }
 }
-pub struct ResizableRuntime {
-    pub(crate) size: usize,
+pub struct ResizableRuntime
+{
+    pub size: usize,
     workers: Option<Arc<DaemonRuntime>>,
+    thread_name: String,
+    after_adjust: fn(usize), 
+    io_type: fn(),
 }
 
-impl ResizableRuntime {
-    pub fn new() -> Self {
+impl ResizableRuntime
+{
+    pub fn new(thread_name: &str, after_adjust: fn(usize), io_type: fn()) -> Self {
         ResizableRuntime {
             size: 0,
+            thread_name: thread_name.to_string(),
             workers: None,
+            after_adjust,
+            io_type,
         }
     }
 
-    pub fn spawn<F>(&self, func: F)
+    pub fn spawn<Func>(&self, func: Func)
     where
-        F: Future<Output = ()> + Send + 'static,
+        Func: Future<Output = ()> + Send + 'static,
     {
         self.workers
             .as_ref()
@@ -60,41 +65,36 @@ impl ResizableRuntime {
     }
 
     /// Lazily adjust the thread pool's size
-    pub fn adjust_with<F>(&mut self, new_size: usize, after_adjust: F)
-    where
-        F: Fn() + Send + Sync + 'static,
+    pub fn adjust_with(&mut self, new_size: usize)
     {
         // TODO: after tokio supports adjusting thread pool size(https://github.com/tokio-rs/tokio/issues/3329),
         //   adapt it.
-        let workers = create_tokio_runtime(new_size, "bkwkr")
+        let workers = create_tokio_runtime(new_size, &self.thread_name, self.io_type)
             .expect("failed to create tokio runtime for backup worker.");
         
         self.workers = Some(DaemonRuntime::from_runtime(workers));
         self.size = new_size;
-        after_adjust();
+        (self.after_adjust)(new_size);
     }
 }
 
 /// Create a standard tokio runtime.
 /// (which allows io and time reactor, involve thread memory accessor),
-/// and set the I/O type to export.
-pub fn create_tokio_runtime<F1, F2>(
+pub fn create_tokio_runtime(
     thread_count: usize,
     thread_name: &str,
-    start_hook: Option<F1>,
-    stop_hook: Option<F2>,
+    io_type: fn(),
 ) -> TokioResult<Runtime>
-where
-    F1: Fn() + Send + Sync + 'static,
-    F2: Fn() + Send + Sync + 'static,
-{
+    {
     tokio::runtime::Builder::new_multi_thread()
         .thread_name(thread_name)
         .enable_io()
         .enable_time()
         .with_sys_and_custom_hooks(
-            start_hook.unwrap_or_else(|| || {}),  // Default to no-op
-            stop_hook.unwrap_or_else(|| || {})    // Default to no-op
+            move || {
+                io_type();
+            },
+            || {}
         )
         .worker_threads(thread_count)
         .build()
