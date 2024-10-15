@@ -141,7 +141,14 @@ impl SysQuota {
         let system = sysinfo::System::new_with_specifics(
             RefreshKind::new().with_memory(MemoryRefreshKind::everything()),
         );
-        system.total_memory()
+        // If cgroup limits are available, use the minimum of cgroup and system limits.
+        // TODO: replace self-defined `CgroupSys` with sysinfo::CgroupLimits later.
+        let cgroup_memory_limit = if let Some(cgroups) = system.cgroup_limits() {
+            cgroups.total_memory
+        } else {
+            u64::MAX
+        };
+        std::cmp::min(cgroup_memory_limit, system.total_memory())
     }
 }
 
