@@ -31,6 +31,9 @@ alloc = ["crossbeam-epoch/alloc"]
 [dependencies]
 crossbeam-epoch = { workspace = true }
 crossbeam-utils = { workspace = true }
+# Add the official version of `crossbeam-skiplist` to dependency tree, so that
+# our CI can keep track of upstream critical bug-fixes and security updates.
+crossbeam-skiplist-offical = { version = "0.1.3", package = "crossbeam-skiplist" }
 
 # Rename test and example binary names to pass TiKV jemalloc check.
 [[test]]
