@@ -15,7 +15,9 @@ use pd_client::{
     Error as PdError, PdClient, RpcClient, REGION_LABEL_PATH_PREFIX,
 };
 use serde::{Deserialize, Serialize};
+use tidb_query_datatype::codec::table::{encode_index_seek_key, TableEncoder};
 use tikv_util::{error, info, timer::GLOBAL_TIMER_HANDLE};
+use txn_types::Key;
 
 /// RegionLabel is the label of a region. This struct is partially copied from
 /// https://github.com/tikv/pd/blob/783d060861cef37c38cbdcab9777fe95c17907fe/server/schedule/labeler/rules.go#L31.
@@ -48,6 +50,41 @@ pub struct LabelRule {
 pub struct KeyRangeRule {
     pub start_key: String,
     pub end_key: String,
+}
+
+impl KeyRangeRule {
+    pub fn decode_table_id(&self) -> Option<i64> {
+        let key = hex::decode(&self.start_key).ok()?;
+        let raw_key = Key::from_encoded_slice(&key).to_raw().ok()?;
+        let table_id = tidb_query_datatype::codec::table::decode_table_id(&raw_key).ok()?;
+        Some(table_id)
+    }
+
+    pub fn encode_table_index_prefix(table_id: i64) -> KeyRangeRule {
+        let mut index_prefix: Vec<u8> = Vec::new();
+        index_prefix.append_table_index_prefix(table_id).unwrap();
+        let start_key = Key::from_raw(&index_prefix).into_encoded();
+
+        let mut record_prefix: Vec<u8> = Vec::new();
+        record_prefix.append_table_record_prefix(table_id).unwrap();
+        let end_key = Key::from_raw(&record_prefix).into_encoded();
+
+        KeyRangeRule {
+            start_key: hex::encode(start_key),
+            end_key: hex::encode(end_key),
+        }
+    }
+
+    pub fn encode_table_index_range(table_id: i64, index: i64) -> KeyRangeRule {
+        let start_key = Key::from_raw(&encode_index_seek_key(table_id, index, &[])).into_encoded();
+        let end_key =
+            Key::from_raw(&encode_index_seek_key(table_id, index + 1, &[])).into_encoded();
+
+        KeyRangeRule {
+            start_key: hex::encode(start_key),
+            end_key: hex::encode(end_key),
+        }
+    }
 }
 
 impl TryFrom<&KeyRangeRule> for CacheRegion {
