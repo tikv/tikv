@@ -1739,7 +1739,8 @@ mod tests {
             gate,
             Arc::new(MockRegionInfoProvider::new(vec![region1, region2])),
         );
-        gc_worker.start(store_id).unwrap();
+        let coprocessor_host = CoprocessorHost::default();
+        gc_worker.start(store_id, coprocessor_host).unwrap();
         // Convert keys to key value pairs, where the value is "value-{key}".
         let data: BTreeMap<_, _> = init_keys
             .iter()
@@ -1917,7 +1918,8 @@ mod tests {
             feature_gate,
             Arc::new(ri_provider.clone()),
         );
-        gc_worker.start(store_id).unwrap();
+        let coprocessor_host = CoprocessorHost::default();
+        gc_worker.start(store_id, coprocessor_host).unwrap();
 
         let mut r1 = Region::default();
         r1.set_id(1);
@@ -2002,6 +2004,7 @@ mod tests {
 
         let (tx, _rx) = mpsc::channel();
         let cfg = GcConfig::default();
+        let coprocessor_host = CoprocessorHost::default();
         let mut runner = GcRunnerCore::new(
             store_id,
             prefixed_engine.clone(),
@@ -2010,6 +2013,7 @@ mod tests {
                 .0
                 .tracker("gc-worker".to_owned()),
             cfg,
+            coprocessor_host,
         );
 
         let mut r1 = Region::default();
@@ -2066,6 +2070,7 @@ mod tests {
 
         let (tx, _rx) = mpsc::channel();
         let cfg = GcConfig::default();
+        let coprocessor_host = CoprocessorHost::default();
         let mut runner = GcRunnerCore::new(
             store_id,
             prefixed_engine.clone(),
@@ -2074,6 +2079,7 @@ mod tests {
                 .0
                 .tracker("gc-worker".to_owned()),
             cfg,
+            coprocessor_host,
         );
 
         let mut r1 = Region::default();
@@ -2171,6 +2177,7 @@ mod tests {
 
         let (tx, _rx) = mpsc::channel();
         let cfg = GcConfig::default();
+        let coprocessor_host = CoprocessorHost::default();
         let mut runner = GcRunnerCore::new(
             1,
             prefixed_engine.clone(),
@@ -2179,6 +2186,7 @@ mod tests {
                 .0
                 .tracker("gc-worker".to_owned()),
             cfg,
+            coprocessor_host,
         );
 
         let mut r1 = Region::default();
@@ -2358,7 +2366,8 @@ mod tests {
             )
             .unwrap();
 
-        gc_worker.start(store_id).unwrap();
+        let coprocessor_host = CoprocessorHost::default();
+        gc_worker.start(store_id, coprocessor_host).unwrap();
 
         // After the worker starts running, the destroy range task should run,
         // and the key in the range will be deleted.
@@ -2495,6 +2504,7 @@ mod tests {
         ]));
 
         let cfg = GcConfig::default();
+        let coprocessor_host = CoprocessorHost::default();
         let gc_runner = GcRunnerCore::new(
             store_id,
             engine.clone(),
@@ -2503,6 +2513,7 @@ mod tests {
                 .0
                 .tracker("gc-worker".to_owned()),
             cfg,
+            coprocessor_host,
         );
 
         let mut region_id = 0;
@@ -2673,6 +2684,7 @@ mod tests {
         let ri_provider = Arc::new(MockRegionInfoProvider::new(vec![r1, r2]));
 
         let cfg = GcConfig::default();
+        let coprocessor_host = CoprocessorHost::default();
         let mut gc_runner = GcRunnerCore::new(
             store_id,
             engine.clone(),
@@ -2681,6 +2693,7 @@ mod tests {
                 .0
                 .tracker("gc-worker".to_owned()),
             cfg,
+            coprocessor_host,
         );
 
         // region_id -> vec<(key,expir_ts,is_delete,expect_exist)>

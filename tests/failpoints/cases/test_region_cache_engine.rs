@@ -776,7 +776,7 @@ fn test_delete_range() {
                 .unsafe_destroy_range(
                     Context::default(),
                     Key::from_encoded(b"".to_vec()),
-                    Key::from_encoded((&[255]).to_vec()),
+                    Key::from_encoded(b"z".to_vec()),
                     Box::new(move |_| {
                         tx.send(()).unwrap();
                     }),
