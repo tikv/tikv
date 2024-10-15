@@ -390,10 +390,6 @@ impl RegionCacheMemoryEngine {
         }
     }
 
-    pub fn expected_region_size(&self) -> usize {
-        self.config.value().expected_region_size()
-    }
-
     pub fn new_region(&self, region: Region) {
         let cache_region = CacheRegion::from_region(&region);
         self.core.region_manager.new_region(cache_region);
@@ -696,7 +692,7 @@ pub mod tests {
                 stop_load_threshold: Some(ReadableSize(300)),
                 evict_threshold: Some(ReadableSize(300)),
                 capacity: Some(ReadableSize(500)),
-                expected_region_size: Some(ReadableSize::mb(20)),
+                expected_region_size: ReadableSize::mb(20),
                 cross_check_interval: Default::default(),
                 mvcc_amplification_threshold: 10,
             }));
@@ -754,7 +750,7 @@ pub mod tests {
             stop_load_threshold: Some(ReadableSize(300)),
             evict_threshold: Some(ReadableSize(300)),
             capacity: Some(ReadableSize(500)),
-            expected_region_size: Some(ReadableSize::mb(20)),
+            expected_region_size: ReadableSize::mb(20),
             cross_check_interval: Default::default(),
             mvcc_amplification_threshold: 10,
         }));

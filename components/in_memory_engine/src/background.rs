@@ -749,10 +749,10 @@ impl BackgroundRunnerCore {
             }
         }
         if !self.memory_controller.reached_stop_load_threshold() {
-            let expected_new_count = (self
+            let expected_new_count = self
                 .memory_controller
                 .evict_threshold()
-                .saturating_sub(self.memory_controller.mem_usage()))
+                .saturating_sub(self.memory_controller.mem_usage())
                 / region_stats_manager.expected_region_size();
             let expected_new_count = usize::max(expected_new_count, 1);
             let mut regions_map = self.engine.region_manager().regions_map.write();

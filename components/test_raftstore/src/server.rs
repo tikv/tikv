@@ -324,9 +324,7 @@ impl ServerCluster {
 
         // In-memory engine
         let mut in_memory_engine_config = cfg.in_memory_engine.clone();
-        let _ = in_memory_engine_config
-            .expected_region_size
-            .get_or_insert(cfg.coprocessor.region_split_size());
+        in_memory_engine_config.expected_region_size = cfg.coprocessor.region_split_size();
         let in_memory_engine_config = Arc::new(VersionTrack::new(in_memory_engine_config));
         let in_memory_engine_config_clone = in_memory_engine_config.clone();
 

@@ -3960,9 +3960,7 @@ impl TikvConfig {
         {
             return Err("in-memory-engine is unavailable for feature TTL or API v2".into());
         }
-        if self.in_memory_engine.expected_region_size.is_none() {
-            self.in_memory_engine.expected_region_size = Some(self.coprocessor.region_split_size());
-        }
+        self.in_memory_engine.expected_region_size = self.coprocessor.region_split_size();
         self.in_memory_engine.validate()?;
 
         // Validate feature TTL with Titan configuration.

@@ -35,7 +35,6 @@ pub struct InMemoryEngineConfig {
     /// of the read request the in memory engine can serve.
     pub gc_run_interval: ReadableDuration,
     pub load_evict_interval: ReadableDuration,
-    pub expected_region_size: Option<ReadableSize>,
     /// used in getting top regions to filter those with less mvcc
     /// amplification. Here, we define mvcc amplification to be
     /// '(next + prev) / processed_keys'.
@@ -45,6 +44,12 @@ pub struct InMemoryEngineConfig {
     /// the default value.
     #[online_config(skip)]
     pub cross_check_interval: ReadableDuration,
+
+    // It's always set to region split size, should not be modified manually.
+    #[online_config(skip)]
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub expected_region_size: ReadableSize,
 }
 
 impl Default for InMemoryEngineConfig {
@@ -57,9 +62,9 @@ impl Default for InMemoryEngineConfig {
             load_evict_interval: ReadableDuration(Duration::from_secs(300)),
             evict_threshold: None,
             capacity: None,
-            expected_region_size: None,
             mvcc_amplification_threshold: 100,
             cross_check_interval: ReadableDuration(Duration::from_secs(0)),
+            expected_region_size: raftstore::coprocessor::config::SPLIT_SIZE,
         }
     }
 }
@@ -123,13 +128,6 @@ impl InMemoryEngineConfig {
         self.capacity.map_or(0, |r| r.0 as usize)
     }
 
-    pub fn expected_region_size(&self) -> usize {
-        self.expected_region_size.map_or(
-            raftstore::coprocessor::config::SPLIT_SIZE.0 as usize,
-            |r: ReadableSize| r.0 as usize,
-        )
-    }
-
     pub fn config_for_test() -> InMemoryEngineConfig {
         InMemoryEngineConfig {
             enable: true,
@@ -138,7 +136,7 @@ impl InMemoryEngineConfig {
             stop_load_threshold: Some(ReadableSize::gb(1)),
             evict_threshold: Some(ReadableSize::gb(1)),
             capacity: Some(ReadableSize::gb(2)),
-            expected_region_size: Some(ReadableSize::mb(20)),
+            expected_region_size: ReadableSize::mb(20),
             mvcc_amplification_threshold: 10,
             cross_check_interval: ReadableDuration(Duration::from_secs(0)),
         }

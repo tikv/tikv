@@ -74,7 +74,7 @@ impl RegionStatsManager {
     }
 
     pub(crate) fn expected_region_size(&self) -> usize {
-        self.config.value().expected_region_size()
+        self.config.value().expected_region_size.0 as usize
     }
 
     /// If false is returned, it is not ready to check.
