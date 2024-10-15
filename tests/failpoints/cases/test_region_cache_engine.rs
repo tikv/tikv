@@ -15,6 +15,7 @@ use in_memory_engine::test_util::new_region;
 use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};
 use kvproto::{
     import_sstpb::SstMeta,
+    kvrpcpb::Context,
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request},
 };
 use protobuf::Message;
@@ -729,50 +730,73 @@ fn test_background_loading_pending_region() {
     assert!(region_cache_engine.region_cached(&r));
 }
 
+// test delete range and unsafe destroy range
 #[test]
 fn test_delete_range() {
-    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
-    cluster.run();
+    let delete_range = |unsafe_destroy_range| {
+        let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
+        cluster.run();
 
-    let (tx, rx) = sync_channel(0);
-    fail::cfg_callback("on_snapshot_load_finished", move || {
-        tx.send(true).unwrap();
-    })
-    .unwrap();
-    // load range
-    {
-        let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
-        // Load the whole range as if it is not splitted. Loading process should handle
-        // it correctly.
-        let cache_range = new_region(1, "", "");
-        region_cache_engine
-            .core()
-            .region_manager()
-            .load_region(CacheRegion::from_region(&cache_range))
-            .unwrap();
-    }
+        let (tx, rx) = sync_channel(0);
+        fail::cfg_callback("on_snapshot_load_finished", move || {
+            tx.send(true).unwrap();
+        })
+        .unwrap();
+        // load range
+        {
+            let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
+            // Load the whole range as if it is not splitted. Loading process should handle
+            // it correctly.
+            let cache_range = new_region(1, "", "");
+            region_cache_engine
+                .core()
+                .region_manager()
+                .load_region(CacheRegion::from_region(&cache_range))
+                .unwrap();
+        }
 
-    let product = ProductTable::new();
-    must_copr_load_data(&mut cluster, &product, 1);
-    rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let product = ProductTable::new();
+        must_copr_load_data(&mut cluster, &product, 1);
+        rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
-    let (tx, rx) = unbounded();
-    fail::cfg_callback("on_region_cache_iterator_seek", move || {
-        tx.send(true).unwrap();
-    })
-    .unwrap();
-    must_copr_point_get(&mut cluster, &product, 1);
-    // verify it's read from range cache engine
-    rx.try_recv().unwrap();
+        let (tx, rx) = unbounded();
+        fail::cfg_callback("on_region_cache_iterator_seek", move || {
+            tx.send(true).unwrap();
+        })
+        .unwrap();
+        must_copr_point_get(&mut cluster, &product, 1);
+        // verify it's read from range cache engine
+        rx.try_recv().unwrap();
 
-    for cf in DATA_CFS {
-        cluster.must_delete_range_cf(cf, b"", &[255])
-    }
+        if unsafe_destroy_range {
+            let (tx, rx) = unbounded();
+            let sim = cluster.sim.rl();
+            let gc_worker = sim.get_gc_worker(1);
+            gc_worker
+                .unsafe_destroy_range(
+                    Context::default(),
+                    Key::from_encoded(b"".to_vec()),
+                    Key::from_encoded((&[255]).to_vec()),
+                    Box::new(move |_| {
+                        tx.send(()).unwrap();
+                    }),
+                )
+                .unwrap();
+            rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        } else {
+            for cf in DATA_CFS {
+                cluster.must_delete_range_cf(cf, b"", &[255])
+            }
+        }
 
-    must_copr_point_get_empty(&mut cluster, &product, 1);
-    {
-        let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
-        let cache_range = new_region(1, "", "");
-        assert!(!region_cache_engine.region_cached(&cache_range));
-    }
+        must_copr_point_get_empty(&mut cluster, &product, 1);
+        {
+            let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
+            let cache_range = new_region(1, "", "");
+            assert!(!region_cache_engine.region_cached(&cache_range));
+        }
+    };
+
+    delete_range(false);
+    delete_range(true);
 }

@@ -1297,7 +1297,11 @@ impl<E: Engine> GcWorker<E> {
         }
     }
 
-    pub fn start(&mut self, store_id: u64, coprocessor_hook: CoprocessorHost<E::Local>) -> Result<()> {
+    pub fn start(
+        &mut self,
+        store_id: u64,
+        coprocessor_hook: CoprocessorHost<E::Local>,
+    ) -> Result<()> {
         let mut worker = self.worker.lock().unwrap();
         let runner = GcRunner::new(
             store_id,

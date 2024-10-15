@@ -2,7 +2,7 @@
 
 use std::{
     path::Path,
-    sync::{atomic::AtomicU64, Arc, Mutex, RwLock},
+    sync::{atomic::AtomicU64, mpsc::Receiver, Arc, Mutex, RwLock},
     thread,
     time::Duration,
     usize,
@@ -14,7 +14,7 @@ use causal_ts::CausalTsProviderImpl;
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::{FlowInfo, RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{Engines, MiscExt};
 use futures::executor::block_on;
@@ -144,6 +144,7 @@ struct ServerMeta {
     raw_router: RaftRouter<RocksEngine, RaftTestEngine>,
     raw_apply_router: ApplyRouter<RocksEngine>,
     gc_worker: GcWorker<RaftKv<RocksEngine, SimulateStoreTransport>>,
+    _reciever: Receiver<FlowInfo>,
     rts_worker: Option<LazyWorker<resolved_ts::Task>>,
     rsmeter_cleanup: Box<dyn FnOnce()>,
 }
@@ -399,7 +400,7 @@ impl ServerCluster {
             block_on(self.pd_client.get_tso()).expect("failed to get timestamp from PD");
         let concurrency_manager = ConcurrencyManager::new(latest_ts);
 
-        let (tx, _rx) = std::sync::mpsc::channel();
+        let (tx, rx) = std::sync::mpsc::channel();
         let mut gc_worker = GcWorker::new(
             raft_kv.clone(),
             tx,
@@ -722,6 +723,7 @@ impl ServerCluster {
                 sim_router,
                 sim_trans: simulate_trans,
                 gc_worker,
+                _reciever: rx,
                 rts_worker,
                 rsmeter_cleanup,
             },
