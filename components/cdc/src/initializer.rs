@@ -122,7 +122,7 @@ impl<E: KvEngine> Initializer<E> {
                 "downstream_id" => ?downstream_id,
                 "observe_id" => ?self.observe_id,
                 "conn_id" => ?self.conn_id);
-            return Err(box_err!("scan canceled"))
+            return Err(Error::Other(box_err!("scan canceled")))
         }
 
         // To avoid holding too many snapshots and holding them too long,
