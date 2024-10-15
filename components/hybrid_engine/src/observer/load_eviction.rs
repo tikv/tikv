@@ -147,8 +147,8 @@ impl QueryObserver for LoadEvictionObserver {
                         range: CacheRegion::new(
                             0,
                             0,
-                            r.get_delete_range().get_start_key().to_vec(),
-                            r.get_delete_range().get_end_key().to_vec(),
+                            keys::data_key(r.get_delete_range().get_start_key()),
+                            keys::data_key(r.get_delete_range().get_end_key()),
                         ),
                         reason: EvictReason::DeleteRange,
                     })

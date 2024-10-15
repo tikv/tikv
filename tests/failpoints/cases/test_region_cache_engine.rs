@@ -98,7 +98,7 @@ fn must_copr_load_data(cluster: &mut Cluster<ServerCluster>, table: &ProductTabl
         &[(row_id, Some(&format!("name:{}", row_id)), row_id)],
         true,
         &cluster.cfg.tikv.server,
-        Some(cluster.pd_client.clone()),
+        None,
     );
 }
 
@@ -323,7 +323,6 @@ fn test_load_with_split2() {
     let mut async_put = |table: &ProductTable, row_id| {
         let engine = cluster.sim.rl().storages[&1].clone();
         let cfg = cluster.cfg.tikv.server.clone();
-        let pd_client = cluster.pd_client.clone();
         let key = table.get_table_prefix();
         let split_key = Key::from_raw(&key).into_encoded();
         let ctx = cluster.get_ctx(&split_key);
@@ -338,7 +337,7 @@ fn test_load_with_split2() {
                 &[(row_id, Some(&format!("name:{}", row_id)), row_id)],
                 true,
                 &cfg,
-                Some(pd_client),
+                None,
             );
         });
         rx.recv_timeout(Duration::from_secs(5)).unwrap();

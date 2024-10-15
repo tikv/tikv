@@ -49,7 +49,7 @@ impl Suite {
         let rej = Arc::new(PrepareDiskSnapObserver::default());
         let rej2 = rej.clone();
         let mut w = self.cluster.sim.wl();
-        w.coprocessor_hooks
+        w.coprocessor_hosts
             .entry(id)
             .or_default()
             .push(Box::new(move |host| {

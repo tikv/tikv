@@ -193,7 +193,7 @@ pub struct GcRunnerCore<E: Engine> {
 
     stats_map: HashMap<GcKeyMode, Statistics>,
 
-    coprocessor_hook: CoprocessorHost<E::Local>,
+    coprocessor_host: CoprocessorHost<E::Local>,
 }
 
 impl<E: Engine> Clone for GcRunnerCore<E> {
@@ -206,7 +206,7 @@ impl<E: Engine> Clone for GcRunnerCore<E> {
             cfg: self.cfg.clone(),
             cfg_tracker: self.cfg_tracker.clone(),
             stats_map: HashMap::default(),
-            coprocessor_hook: self.coprocessor_hook.clone(),
+            coprocessor_host: self.coprocessor_host.clone(),
         }
     }
 }
@@ -313,7 +313,7 @@ impl<E: Engine> GcRunnerCore<E> {
         flow_info_sender: Sender<FlowInfo>,
         cfg_tracker: Tracker<GcConfig>,
         cfg: GcConfig,
-        coprocessor_hook: CoprocessorHost<E::Local>,
+        coprocessor_host: CoprocessorHost<E::Local>,
     ) -> Self {
         let limiter = Limiter::new(if cfg.max_write_bytes_per_sec.0 > 0 {
             cfg.max_write_bytes_per_sec.0 as f64
@@ -328,7 +328,7 @@ impl<E: Engine> GcRunnerCore<E> {
             cfg,
             cfg_tracker,
             stats_map: Default::default(),
-            coprocessor_hook,
+            coprocessor_host,
         }
     }
 
@@ -743,6 +743,9 @@ impl<E: Engine> GcRunnerCore<E> {
             .send(FlowInfo::BeforeUnsafeDestroyRange(ctx.region_id))
             .unwrap();
 
+        self.coprocessor_host
+            .pre_delete_range(start_key.as_encoded(), end_key.as_encoded());
+
         // We are in single-rocksdb version if we can get a local_storage, otherwise, we
         // are in multi-rocksdb version.
         if let Some(local_storage) = self.engine.kv_engine() {
@@ -751,9 +754,6 @@ impl<E: Engine> GcRunnerCore<E> {
             // to do it in somewhere of the same layer with apply_worker.
             let start_data_key = keys::data_key(start_key.as_encoded());
             let end_data_key = keys::data_end_key(end_key.as_encoded());
-
-            self.coprocessor_hook
-                .pre_delete_range(&start_data_key, &end_data_key);
 
             let cfs = &[CF_LOCK, CF_DEFAULT, CF_WRITE];
 
@@ -1087,7 +1087,7 @@ impl<E: Engine> GcRunner<E> {
         cfg_tracker: Tracker<GcConfig>,
         cfg: GcConfig,
         pool: Remote<TaskCell>,
-        coprocessor_hook: CoprocessorHost<E::Local>,
+        coprocessor_host: CoprocessorHost<E::Local>,
     ) -> Self {
         Self {
             inner: GcRunnerCore::new(
@@ -1096,7 +1096,7 @@ impl<E: Engine> GcRunner<E> {
                 flow_info_sender,
                 cfg_tracker,
                 cfg,
-                coprocessor_hook,
+                coprocessor_host,
             ),
             pool,
         }
@@ -1300,7 +1300,7 @@ impl<E: Engine> GcWorker<E> {
     pub fn start(
         &mut self,
         store_id: u64,
-        coprocessor_hook: CoprocessorHost<E::Local>,
+        coprocessor_host: CoprocessorHost<E::Local>,
     ) -> Result<()> {
         let mut worker = self.worker.lock().unwrap();
         let runner = GcRunner::new(
@@ -1313,7 +1313,7 @@ impl<E: Engine> GcWorker<E> {
                 .tracker("gc-worker".to_owned()),
             self.config_manager.value().clone(),
             worker.remote(),
-            coprocessor_hook,
+            coprocessor_host,
         );
         worker.start(runner);
 

@@ -160,7 +160,7 @@ pub struct ServerCluster {
     pub region_info_accessors: HashMap<u64, RegionInfoAccessor>,
     pub importers: HashMap<u64, Arc<SstImporter<RocksEngine>>>,
     pub pending_services: HashMap<u64, PendingServices>,
-    pub coprocessor_hooks: HashMap<u64, CopHooks<RocksEngine>>,
+    pub coprocessor_hosts: HashMap<u64, CopHooks<RocksEngine>>,
     pub health_controllers: HashMap<u64, HealthController>,
     pub security_mgr: Arc<SecurityManager>,
     pub txn_extra_schedulers: HashMap<u64, Arc<dyn TxnExtraScheduler>>,
@@ -211,7 +211,7 @@ impl ServerCluster {
             snap_paths: HashMap::default(),
             snap_mgrs: HashMap::default(),
             pending_services: HashMap::default(),
-            coprocessor_hooks: HashMap::default(),
+            coprocessor_hosts: HashMap::default(),
             health_controllers: HashMap::default(),
             raft_clients: HashMap::default(),
             conn_builder,
@@ -317,7 +317,7 @@ impl ServerCluster {
                 Arc::new(|| false)
             };
         let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
-        if let Some(hooks) = self.coprocessor_hooks.get(&node_id) {
+        if let Some(hooks) = self.coprocessor_hosts.get(&node_id) {
             for hook in hooks {
                 hook(&mut coprocessor_host);
             }
@@ -942,7 +942,7 @@ impl Cluster<ServerCluster> {
     ) {
         self.sim
             .wl()
-            .coprocessor_hooks
+            .coprocessor_hosts
             .entry(node_id)
             .or_default()
             .push(register);
