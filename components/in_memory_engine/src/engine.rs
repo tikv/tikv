@@ -367,7 +367,7 @@ impl RegionCacheMemoryEngine {
             statistics,
             pd_client,
         } = in_memory_engine_context;
-        assert!(config.value().enabled);
+        assert!(config.value().enable);
         let memory_controller = Arc::new(MemoryController::new(config.clone(), skiplist_engine));
 
         let bg_work_manager = Arc::new(BgWorkManager::new(
@@ -388,10 +388,6 @@ impl RegionCacheMemoryEngine {
             config,
             lock_modification_bytes: Arc::default(),
         }
-    }
-
-    pub fn expected_region_size(&self) -> usize {
-        self.config.value().expected_region_size()
     }
 
     pub fn new_region(&self, region: Region) {
@@ -532,7 +528,7 @@ impl RegionCacheEngine for RegionCacheMemoryEngine {
     }
 
     fn enabled(&self) -> bool {
-        self.config.value().enabled
+        self.config.value().enable
     }
 }
 
@@ -634,7 +630,7 @@ pub mod tests {
         CacheRegion, EvictReason, Mutable, RegionCacheEngine, RegionCacheEngineExt, RegionEvent,
         WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
     };
-    use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
+    use tikv_util::config::{ReadableDuration, VersionTrack};
     use tokio::{
         runtime::Builder,
         sync::{mpsc, Mutex},
@@ -695,17 +691,7 @@ pub mod tests {
             let skiplist = SkiplistEngine::default();
             let handle = skiplist.cf_handle(cf);
 
-            let config = Arc::new(VersionTrack::new(InMemoryEngineConfig {
-                enabled: true,
-                gc_interval: Default::default(),
-                load_evict_interval: Default::default(),
-                stop_load_limit_threshold: Some(ReadableSize(300)),
-                soft_limit_threshold: Some(ReadableSize(300)),
-                hard_limit_threshold: Some(ReadableSize(500)),
-                expected_region_size: Some(ReadableSize::mb(20)),
-                cross_check_interval: Default::default(),
-                mvcc_amplification_threshold: 10,
-            }));
+            let config = Arc::new(VersionTrack::new(InMemoryEngineConfig::config_for_test()));
             let mem_controller = Arc::new(MemoryController::new(config.clone(), skiplist.clone()));
 
             let guard = &epoch::pin();
@@ -753,17 +739,7 @@ pub mod tests {
         let skiplist = SkiplistEngine::default();
         let lock_handle = skiplist.cf_handle(CF_LOCK);
 
-        let config = Arc::new(VersionTrack::new(InMemoryEngineConfig {
-            enabled: true,
-            gc_interval: Default::default(),
-            load_evict_interval: Default::default(),
-            stop_load_limit_threshold: Some(ReadableSize(300)),
-            soft_limit_threshold: Some(ReadableSize(300)),
-            hard_limit_threshold: Some(ReadableSize(500)),
-            expected_region_size: Some(ReadableSize::mb(20)),
-            cross_check_interval: Default::default(),
-            mvcc_amplification_threshold: 10,
-        }));
+        let config = Arc::new(VersionTrack::new(InMemoryEngineConfig::config_for_test()));
         let mem_controller = Arc::new(MemoryController::new(config.clone(), skiplist.clone()));
 
         let guard = &epoch::pin();
@@ -891,7 +867,7 @@ pub mod tests {
     #[test]
     fn test_cb_on_eviction_with_on_going_snapshot() {
         let mut config = InMemoryEngineConfig::config_for_test();
-        config.gc_interval = ReadableDuration(Duration::from_secs(1));
+        config.gc_run_interval = ReadableDuration(Duration::from_secs(1));
         let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(config),
         )));
