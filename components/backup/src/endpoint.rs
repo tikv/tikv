@@ -880,7 +880,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
         resource_ctl: Option<Arc<ResourceGroupManager>>,
     ) -> Endpoint<E, R> {
-        let pool = ResizableRuntime::new("bkwkr",|new_size:usize|{BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64)}, ||{file_system::set_io_type(IoType::Export)});
+        let pool = ResizableRuntime::new("backup-worker", ||{BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64)},util::create_tokio_runtime);
         let rt = create_tokio_runtime(config.io_thread_size, "backup-io", ||{file_system::set_io_type(IoType::Export);}).unwrap();
         let config_manager = ConfigManager(Arc::new(RwLock::new(config)));
         let softlimit = SoftLimitKeeper::new(config_manager.clone());

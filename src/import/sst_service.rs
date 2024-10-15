@@ -119,6 +119,7 @@ pub struct ImportSstService<E: Engine> {
     cfg: ConfigManager,
     tablets: LocalTablets<E::Local>,
     engine: E,
+    //TODO: (Ris) change to ResizableRuntime
     threads: Arc<Runtime>,
     importer: Arc<SstImporter<E::Local>>,
     limiter: Limiter,
