@@ -143,12 +143,12 @@ impl SysQuota {
         );
         // If cgroup limits are available, use the minimum of cgroup and system limits.
         // TODO: replace self-defined `CgroupSys` with sysinfo::CgroupLimits later.
-        let cgroup_memory_limit = if let Some(cgroups) = system.cgroup_limits() {
-            cgroups.total_memory
-        } else {
-            u64::MAX
-        };
-        std::cmp::min(cgroup_memory_limit, system.total_memory())
+        std::cmp::min(
+            system.total_memory(),
+            system
+                .cgroup_limits()
+                .map_or(u64::MAX, |cgroups| cgroups.total_memory),
+        )
     }
 }
 
