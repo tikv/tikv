@@ -203,7 +203,8 @@ mod tests {
         RocksCfOptions, RocksDbOptions, RocksEngine, RocksSstPartitionerFactory, RocksSstReader,
     };
     use engine_traits::{
-        CompactExt, IterOptions, Iterator, MiscExt, RefIterable, SstReader, SyncMutable, CF_DEFAULT,
+        CompactExt, IterOptions, Iterator, ManualCompactionOptions, MiscExt, RefIterable,
+        SstReader, SyncMutable, CF_DEFAULT,
     };
     use keys::DATA_PREFIX_KEY;
     use kvproto::metapb::Region;
@@ -456,10 +457,10 @@ mod tests {
         db.put(b"zc6", &value).unwrap();
         db.flush_cfs(&[], true /* wait */).unwrap();
         db.compact_range_cf(
-            CF_DEFAULT, None,  // start_key
-            None,  // end_key
-            false, // exclusive_manual
-            1,     // max_subcompactions
+            CF_DEFAULT,
+            None, // start_key
+            None, // end_key
+            ManualCompactionOptions::new(false, 1, false),
         )
         .unwrap();
 

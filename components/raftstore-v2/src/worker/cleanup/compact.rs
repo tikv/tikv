@@ -5,7 +5,7 @@ use std::{
     fmt::{self, Display, Formatter},
 };
 
-use engine_traits::{KvEngine, RangeStats, TabletRegistry, CF_WRITE};
+use engine_traits::{KvEngine, ManualCompactionOptions, RangeStats, TabletRegistry, CF_WRITE};
 use fail::fail_point;
 use keys::{DATA_MAX_KEY, DATA_MIN_KEY};
 use slog::{debug, error, info, warn, Logger};
@@ -122,9 +122,12 @@ where
                         let Some(mut tablet_cache) = self.tablet_registry.get(region_id) else {continue};
                         let Some(tablet) = tablet_cache.latest() else {continue};
                         for cf in &cf_names {
-                            if let Err(e) =
-                                tablet.compact_range_cf(cf, None, None, false, 1 /* threads */)
-                            {
+                            if let Err(e) = tablet.compact_range_cf(
+                                cf,
+                                None,
+                                None,
+                                ManualCompactionOptions::new(false, 1, false),
+                            ) {
                                 error!(
                                     self.logger,
                                     "compact range failed";
