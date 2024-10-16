@@ -68,7 +68,7 @@ impl ResizableRuntime
     {
         // TODO: after tokio supports adjusting thread pool size(https://github.com/tokio-rs/tokio/issues/3329),
         //   adapt it.
-        let pool = (self.replace_pool_rule)(self.size,&self.thread_name).expect("failed to create tokio runtime for backup worker.");
+        let pool = (self.replace_pool_rule)(new_size, &self.thread_name).expect("failed to create tokio runtime for backup worker.");
         self.pool = Some(DaemonRuntime::from_runtime(pool));
         self.size = new_size;
         (self.after_adjust)(new_size);

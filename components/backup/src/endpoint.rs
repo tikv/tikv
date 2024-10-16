@@ -13,7 +13,6 @@ use causal_ts::{CausalTsProvider, CausalTsProviderImpl};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{name_to_cf, raw_ttl::ttl_current_ts, CfName, KvEngine, SstCompressionType};
 use external_storage::{create_storage, BackendConfig, ExternalStorage, HdfsConfig};
-use file_system::IoType;
 use futures::{channel::mpsc::*, executor::block_on};
 use kvproto::{
     brpb::*,
@@ -44,7 +43,6 @@ use tikv_util::{
     warn,
     worker::Runnable,
     resizable_threadpool::ResizableRuntime,
-    resizable_threadpool::create_tokio_runtime
 };
 use tokio::runtime::{Handle, Runtime};
 use txn_types::{Key, Lock, TimeStamp};
@@ -880,8 +878,8 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
         resource_ctl: Option<Arc<ResourceGroupManager>>,
     ) -> Endpoint<E, R> {
-        let pool = ResizableRuntime::new("backup-worker", ||{BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64)},util::create_tokio_runtime);
-        let rt = create_tokio_runtime(config.io_thread_size, "backup-io", ||{file_system::set_io_type(IoType::Export);}).unwrap();
+        let pool = ResizableRuntime::new("backup-worker", |new_size|{BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64)},utils::create_tokio_runtime);
+        let rt = utils::create_tokio_runtime(config.io_thread_size, "backup-io").unwrap();
         let config_manager = ConfigManager(Arc::new(RwLock::new(config)));
         let softlimit = SoftLimitKeeper::new(config_manager.clone());
         rt.spawn(softlimit.clone().run());
@@ -1502,7 +1500,7 @@ pub mod tests {
         use std::thread::sleep;
 
         let counter = Arc::new(AtomicU32::new(0));
-        let mut pool =  ResizableRuntime::new("bkwkr",|new_size:usize|{BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64)}, ||{file_system::set_io_type(IoType::Export)});
+        let mut pool =  ResizableRuntime::new("bkwkr",|new_size:usize|{BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64)}, utils::create_tokio_runtime);
         pool.adjust_with(3);
 
         for i in 0..8 {
@@ -2562,7 +2560,7 @@ pub mod tests {
         // for testing whether dropping the pool before all tasks finished causes panic.
         // but the panic must be checked manually. (It may panic at tokio runtime
         // threads)
-        let mut pool = ResizableRuntime::new("bkwkr",|new_size:usize|{BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64)}, ||{file_system::set_io_type(IoType::Export)});
+        let mut pool = ResizableRuntime::new("bkwkr",|new_size:usize|{BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64)}, utils::create_tokio_runtime);
         pool.adjust_with(1);
         pool.spawn(async { tokio::time::sleep(Duration::from_millis(100)).await });
         pool.adjust_with(2);
