@@ -41,6 +41,7 @@ pub const COMPACTION_OUT_PREFIX: &str = "compaction_out";
 pub const MIGRATION_PREFIX: &str = "v1/migrations";
 pub const LOCK_PREFIX: &str = "v1/LOCK";
 
+/// The in-memory presentation of the message [`brpb::Metadata`].
 #[derive(Debug, PartialEq, Eq)]
 pub struct MetaFile {
     pub name: Arc<str>,
@@ -93,6 +94,7 @@ impl MetaFile {
     }
 }
 
+/// The in-memory presentation of the message [`brpb::DataFileGroup`].
 #[derive(Debug, PartialEq, Eq)]
 pub struct PhysicalLogFile {
     pub size: u64,
@@ -125,6 +127,9 @@ impl From<Epoch> for RegionEpoch {
     }
 }
 
+/// The in-memory presentation of the message [`brpb::DataFileInfo`].
+/// The difference is that all `Vec<u8>` are replaced with `Arc<[u8]>` to save
+/// memory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 
 pub struct LogFile {
@@ -171,6 +176,8 @@ impl LogFile {
     }
 }
 
+/// The identity of a log file.
+/// A log file can be located in the storage with this.
 #[derive(Clone, Display, Eq, PartialEq)]
 #[display(fmt = "{}@{}+{}", name, offset, length)]
 pub struct LogFileId {
@@ -217,10 +224,13 @@ impl<'a> Default for LoadFromExt<'a> {
     }
 }
 
-/// A stream of metadatas.
+/// The storage of log backup.
+///
+/// For now, it supports load all metadata only, by consuming the stream.
+/// [`StreamyMetaStorage`] is a [`Stream`] that yields `Result<MetaFile>`.
 pub struct StreamyMetaStorage<'a> {
-    // NOTE: we want to keep the order of incoming meta files, so the subcompactions generated will
-    // be probably adjacent.
+    // NOTE: we want to keep the order of incoming meta files, so calls with the same argument can
+    // generate the same compactions.
     prefetch: VecDeque<
         Prefetch<Pin<Box<dyn Future<Output = Result<(MetaFile, LoadMetaStatistic)>> + 'a>>>,
     >,
@@ -305,6 +315,7 @@ impl<'a> Stream for StreamyMetaStorage<'a> {
 }
 
 impl<'a> StreamyMetaStorage<'a> {
+    /// Poll the next event.
     fn poll_fetch_or_finish(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<MetaFile>>> {
         loop {
             // No more space for prefetching.
@@ -382,7 +393,7 @@ impl<'a> StreamyMetaStorage<'a> {
         }
     }
 
-    /// Counter the number of the metadata prefix.
+    /// Count the number of the metadata prefix.
     pub async fn count_objects(s: &'a dyn ExternalStorage) -> std::io::Result<u64> {
         let mut n = 0;
         // NOTE: should we allow user to specify the prefix?

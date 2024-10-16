@@ -124,7 +124,7 @@ impl Subcompaction {
             c.add_file(item);
         }
 
-        c.compose(
+        c.form(
             &key,
             &CollectSubcompactionConfig {
                 compact_from_ts: 0,

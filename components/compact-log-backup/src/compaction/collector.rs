@@ -97,7 +97,7 @@ impl SubcompactionCollector {
                 u.add_file(file);
                 if u.size > self.cfg.subcompaction_size_threshold {
                     let uc = o.remove();
-                    let c = uc.compose(&key, &self.cfg);
+                    let c = uc.form(&key, &self.cfg);
                     self.stat.compactions_out += 1;
                     self.stat.bytes_out += c.size;
                     return Some(c);
@@ -116,7 +116,7 @@ impl SubcompactionCollector {
         self.items.drain().map(|(key, c)| {
             // Hacking: update the statistic when we really yield the compaction.
             // (At `poll_next`.)
-            c.compose(&key, &self.cfg)
+            c.form(&key, &self.cfg)
         })
     }
 }

@@ -132,8 +132,8 @@ impl UnformedSubcompaction {
         }
     }
 
-    /// compose a real Subcompaction by the current state.
-    fn compose(
+    /// Form a [`Subcompaction`] by the current state.
+    fn form(
         self,
         key: &SubcompactionCollectKey,
         cfg: &CollectSubcompactionConfig,

@@ -39,6 +39,7 @@ pub struct Kv {
     pub value: Vec<u8>,
 }
 
+/// A builder for fake [`LogFile`].
 pub struct LogFileBuilder {
     pub name: String,
     pub region_id: u64,
@@ -60,12 +61,14 @@ pub struct LogFileBuilder {
     file_real_size: u64,
 }
 
+/// A structure for "compact" logs simply sort and dedup its input.
 #[derive(Default, Clone)]
 pub struct CompactInMem {
     collect: Arc<Mutex<BTreeMap<Vec<u8>, Vec<u8>>>>,
 }
 
 impl CompactInMem {
+    /// Wrap a iterator and add its content to the compact buffer.
     pub fn tap_on<'it>(
         &self,
         it: impl Iterator<Item = Kv> + 'it,
@@ -76,6 +79,9 @@ impl CompactInMem {
         }
     }
 
+    /// Wrap a iterator and add its content to the compact buffer.
+    ///
+    /// But consume self instead of adding reference counter.
     pub fn tap_on_owned<'it>(
         self,
         it: impl Iterator<Item = Kv> + 'it,
@@ -86,7 +92,11 @@ impl CompactInMem {
         }
     }
 
-    // Note: will panic if there are other concurrency writing.
+    /// Get the compacted content from the compact buffer.
+    ///
+    /// # Panic
+    ///
+    /// Will panic if there are other concurrency writing.
     #[track_caller]
     pub fn must_iter(&mut self) -> impl Iterator<Item = Kv> + '_ {
         self.collect
@@ -102,7 +112,9 @@ impl CompactInMem {
     }
 }
 
-// Note: `it` yields keys without 'z' prefix.
+/// Verify that the content of an SST is the same as the input iterator.
+///
+/// Note: `input` should yield keys without 'z' prefix.
 #[track_caller]
 pub fn verify_the_same<DB: SstExt>(
     sst: impl AsRef<Path>,
