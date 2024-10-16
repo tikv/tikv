@@ -34,6 +34,12 @@ pprof-fp = ["tikv/pprof-fp"]
 [dependencies]
 clap = { workspace = true }
 crypto = { workspace = true }
+encryption_export = { workspace = true }
+engine_traits = { workspace = true }
+keys = { workspace = true }
+kvproto = { workspace = true }
+raft-engine = { workspace = true }
+regex = "1"
 serde_json = { version = "1.0", features = ["preserve_order"] }
 server = { workspace = true }
 tikv = { workspace = true }

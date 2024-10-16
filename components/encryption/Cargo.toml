@@ -15,10 +15,12 @@ testexport = []
 [dependencies]
 async-trait = "0.1"
 byteorder = "1.2"
+bytes = "1.0"
 cloud = { workspace = true }
 crc32fast = "1.2"
 crossbeam = { workspace = true }
 crypto = { workspace = true }
+derive_more = "0.99.3"
 error_code = { workspace = true }
 fail = "0.5"
 file_system = { workspace = true }
@@ -42,6 +44,7 @@ slog = { workspace = true }
 slog-global = { workspace = true }
 tempfile = "3.1"
 thiserror = "1.0"
+tikv_alloc = { workspace = true }
 tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["time", "rt"] }
 walkdir = "2"

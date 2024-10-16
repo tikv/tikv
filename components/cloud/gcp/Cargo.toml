@@ -10,6 +10,7 @@ async-trait = "0.1"
 base64 = "0.13.0"
 cloud = { workspace = true }
 crc32c = "0.6"
+crypto = { workspace = true }
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
 http = "0.2.0"
 hyper = "0.14"

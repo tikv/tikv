@@ -9,8 +9,10 @@ license = "Apache-2.0"
 failpoints = ["fail/failpoints"]
 
 [dependencies]
+byteorder = "1.2"
 collections = { workspace = true }
 crossbeam = { workspace = true }
+crossbeam-skiplist = { workspace = true }
 dashmap = "5.1"
 fail = "0.5"
 file_system = { workspace = true }
@@ -35,3 +37,4 @@ yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 [dev-dependencies]
 rand = "0.8"
 test_pd = { workspace = true }
+test_pd_client = { workspace = true }

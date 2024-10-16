@@ -18,5 +18,6 @@ raft = { workspace = true }
 slog = { workspace = true }
 slog-global = { workspace = true }
 tikv_util = { workspace = true }
+tokio = { version = "1.5", features = ["rt-multi-thread"] }
 tokio-timer = { workspace = true }
 txn_types = { workspace = true }

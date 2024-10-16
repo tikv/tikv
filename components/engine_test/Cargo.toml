@@ -25,6 +25,7 @@ test-engines-panic = [
 ]
 
 [dependencies]
+collections = { workspace = true }
 encryption = { workspace = true }
 engine_panic = { workspace = true }
 engine_rocks = { workspace = true }
@@ -32,3 +33,6 @@ engine_traits = { workspace = true }
 file_system = { workspace = true }
 raft_log_engine = { workspace = true }
 tempfile = "3.0"
+tikv_alloc = { workspace = true }
+# FIXME: Remove this dep from the engine_traits interface
+tikv_util = { workspace = true }

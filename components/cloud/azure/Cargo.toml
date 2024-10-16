@@ -5,6 +5,9 @@ edition = "2021"
 publish = false
 license = "Apache-2.0"
 
+[features]
+failpoints = ["fail/failpoints"]
+
 [dependencies]
 async-trait = "0.1"
 # TODO: The azure sdk with the newest version needs the rustc v1.70, but current version of rustc in TiKV is v1.67.
@@ -16,6 +19,7 @@ azure_storage = { git = "https://github.com/tikv/azure-sdk-for-rust", branch = "
 azure_storage_blobs = { git = "https://github.com/tikv/azure-sdk-for-rust", branch = "release-7.5-fips" }
 base64 = "0.13"
 cloud = { workspace = true }
+fail = "0.5"
 futures = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
 kvproto = { workspace = true }

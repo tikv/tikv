@@ -39,6 +39,7 @@ engine_rocks = { workspace = true }
 engine_traits = { workspace = true }
 fail = "0.5"
 futures = "0.3"
+futures-timer = "3.0"
 getset = "0.1"
 grpcio = { workspace = true }
 keys = { workspace = true }
@@ -68,6 +69,7 @@ txn_types = { workspace = true }
 criterion = "0.3"
 engine_rocks = { workspace = true }
 engine_traits = { workspace = true }
+tempfile = "3.0"
 test_pd_client = { workspace = true }
 test_raftstore = { workspace = true }
 test_util = { workspace = true }

@@ -21,9 +21,11 @@ test-engines-panic = [
 ]
 
 [dependencies]
+api_version = { workspace = true }
 codec = { workspace = true }
 collections = { workspace = true }
 concurrency_manager = { workspace = true }
+engine_rocks = { workspace = true }
 futures = "0.3"
 kvproto = { workspace = true }
 pd_client = { workspace = true }

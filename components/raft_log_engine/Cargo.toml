@@ -14,8 +14,14 @@ engine_traits = { workspace = true }
 codec = { workspace = true }
 file_system = { workspace = true }
 kvproto = { workspace = true }
+lazy_static = "1.4.0"
+num_cpus = "1"
+online_config = { workspace = true }
+protobuf = "2"
 raft = { workspace = true }
 raft-engine = { workspace = true }
+serde = "1.0"
+serde_derive = "1.0"
 slog = { workspace = true }
 slog-global = { workspace = true }
 tikv_util = { workspace = true }

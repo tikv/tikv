@@ -28,9 +28,12 @@ harness = true
 [dependencies]
 async-compression = { version = "0.4.12", features = ["tokio", "zstd"] }
 async-trait = { version = "0.1" }
+bytes = "1"
 chrono = { workspace = true }
 concurrency_manager = { workspace = true }
 crc64fast = "0.1"
+crossbeam = { workspace = true }
+crossbeam-channel = { workspace = true }
 dashmap = "5"
 encryption = { workspace = true }
 encryption_export = { workspace = true }
@@ -41,8 +44,11 @@ external_storage = { workspace = true }
 fail = "0.5"
 file_system = { workspace = true }
 futures = "0.3"
+futures-io = "0.3"
 grpcio = { workspace = true }
 hex = "0.4"
+# Fixing ahash cyclic dep: https://github.com/tkaitchuck/ahash/issues/95
+indexmap = "=1.6.2"
 kvproto = { workspace = true }
 lazy_static = "1.4"
 log_wrappers = { workspace = true }
@@ -56,12 +62,15 @@ protobuf = { version = "2.8", features = ["bytes"] }
 raft = { workspace = true }
 raftstore = { workspace = true }
 rand = "0.8.0"
+regex = "1"
 resolved_ts = { workspace = true }
+security = { path = "../security" }
 slog = { workspace = true }
 slog-global = { workspace = true }
 thiserror = "1"
 tidb_query_datatype = { workspace = true }
 tikv = { workspace = true }
+tikv_alloc = { workspace = true }
 tikv_kv = { workspace = true }
 tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["rt-multi-thread", "macros", "time", "sync"] }
@@ -71,6 +80,7 @@ tracing = { workspace = true }
 tracing-active-tree = { workspace = true }
 txn_types = { workspace = true }
 uuid = "0.8"
+yatp = { workspace = true }
 
 [dev-dependencies]
 async-trait = "0.1"

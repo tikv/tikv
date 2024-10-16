@@ -43,12 +43,18 @@ fail = "0.5"
 file_system = { workspace = true }
 futures = "0.3"
 grpcio = { workspace = true }
+grpcio-health = { workspace = true }
 health_controller = { workspace = true }
+hex = "0.4"
 hybrid_engine = { workspace = true }
 in_memory_engine = { workspace = true }
 keys = { workspace = true }
 kvproto = { workspace = true }
 libc = "0.2"
+log = { version = "0.4", features = [
+  "max_level_trace",
+  "release_max_level_debug",
+] }
 log_wrappers = { workspace = true }
 pd_client = { workspace = true }
 prometheus = { version = "0.13", features = ["nightly"] }
@@ -71,6 +77,8 @@ tikv = { workspace = true }
 tikv_alloc = { workspace = true }
 tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["rt-multi-thread"] }
+toml = "0.5"
+txn_types = { workspace = true }
 yatp = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]

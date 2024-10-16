@@ -74,6 +74,7 @@ portable = ["tikv/portable"]
 api_version = { workspace = true }
 async-trait = "0.1"
 batch-system = { workspace = true }
+cdc = { workspace = true }
 collections = { workspace = true }
 crc64fast = "0.1"
 crossbeam = { workspace = true }
@@ -88,6 +89,7 @@ grpcio-health = { workspace = true }
 health_controller = { workspace = true }
 in_memory_engine = { workspace = true }
 kvproto = { workspace = true }
+libc = "0.2"
 log_wrappers = { workspace = true }
 more-asserts = "0.2"
 online_config = { workspace = true }
@@ -105,9 +107,11 @@ service = { workspace = true }
 slog = { workspace = true }
 slog-global = { workspace = true }
 tempfile = "3.0"
+tidb_query_aggr = { workspace = true }
 tidb_query_common = { workspace = true }
 tidb_query_datatype = { workspace = true }
 tidb_query_executors = { workspace = true }
+tidb_query_expr = { workspace = true }
 tikv = { workspace = true }
 tikv_util = { workspace = true }
 time = { workspace = true }
@@ -116,6 +120,9 @@ toml = "0.5"
 tracker = { workspace = true }
 txn_types = { workspace = true }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "7693954bd1dd86eb1709572fd7b62fd5f7ff2ea1" }
 
 [dev-dependencies]
 byteorder = "1.2"
@@ -132,11 +139,13 @@ external_storage ={ workspace = true }
 file_system = { workspace = true }
 hyper = { version = "0.14", default-features = false, features = ["runtime"] }
 keys = { workspace = true }
+panic_hook = { workspace = true }
 profiler = { workspace = true }
 rand_xorshift = "0.3"
 resource_metering = { workspace = true }
 security = { workspace = true }
 serde_json = "1.0"
+sst_importer = { workspace = true }
 test_backup = { workspace = true, default-features = false }
 test_coprocessor = { workspace = true }
 test_pd = { workspace = true }
