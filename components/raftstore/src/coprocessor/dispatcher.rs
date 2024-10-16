@@ -7,7 +7,7 @@ use engine_traits::{CfName, KvEngine, WriteBatch};
 use kvproto::{
     metapb::{Region, RegionEpoch},
     pdpb::CheckPolicy,
-    raft_cmdpb::{ComputeHashRequest, RaftCmdRequest},
+    raft_cmdpb::{CmdType, ComputeHashRequest, RaftCmdRequest},
     raft_serverpb::RaftMessage,
 };
 use protobuf::Message;
@@ -613,6 +613,21 @@ impl<E: KvEngine> CoprocessorHost<E> {
                 post_apply_admin,
                 admin
             );
+        }
+    }
+
+    pub fn pre_delete_range(&self, start_key: &[u8], end_key: &[u8]) {
+        let region = Region::default();
+        let mut ctx = ObserverContext::new(&region);
+        for observer in &self.registry.query_observers {
+            let observer = observer.observer.inner();
+            let mut request = Request::new();
+            request.set_cmd_type(CmdType::DeleteRange);
+            request.mut_delete_range().set_start_key(start_key.to_vec());
+            request.mut_delete_range().set_end_key(end_key.to_vec());
+            if observer.pre_exec_query(&mut ctx, &[request], 0, 0) {
+                return;
+            }
         }
     }
 

@@ -24,7 +24,7 @@ use file_system::{IoType, WithIoType};
 use futures::executor::block_on;
 use kvproto::{kvrpcpb::Context, metapb::Region};
 use pd_client::{FeatureGate, PdClient};
-use raftstore::coprocessor::RegionInfoProvider;
+use raftstore::coprocessor::{CoprocessorHost, RegionInfoProvider};
 use tikv_kv::{CfStatistics, CursorBuilder, Modify, SnapContext};
 use tikv_util::{
     config::{Tracker, VersionTrack},
@@ -192,6 +192,8 @@ pub struct GcRunnerCore<E: Engine> {
     cfg_tracker: Tracker<GcConfig>,
 
     stats_map: HashMap<GcKeyMode, Statistics>,
+
+    coprocessor_host: CoprocessorHost<E::Local>,
 }
 
 impl<E: Engine> Clone for GcRunnerCore<E> {
@@ -204,6 +206,7 @@ impl<E: Engine> Clone for GcRunnerCore<E> {
             cfg: self.cfg.clone(),
             cfg_tracker: self.cfg_tracker.clone(),
             stats_map: HashMap::default(),
+            coprocessor_host: self.coprocessor_host.clone(),
         }
     }
 }
@@ -310,6 +313,7 @@ impl<E: Engine> GcRunnerCore<E> {
         flow_info_sender: Sender<FlowInfo>,
         cfg_tracker: Tracker<GcConfig>,
         cfg: GcConfig,
+        coprocessor_host: CoprocessorHost<E::Local>,
     ) -> Self {
         let limiter = Limiter::new(if cfg.max_write_bytes_per_sec.0 > 0 {
             cfg.max_write_bytes_per_sec.0 as f64
@@ -324,6 +328,7 @@ impl<E: Engine> GcRunnerCore<E> {
             cfg,
             cfg_tracker,
             stats_map: Default::default(),
+            coprocessor_host,
         }
     }
 
@@ -738,6 +743,9 @@ impl<E: Engine> GcRunnerCore<E> {
             .send(FlowInfo::BeforeUnsafeDestroyRange(ctx.region_id))
             .unwrap();
 
+        self.coprocessor_host
+            .pre_delete_range(start_key.as_encoded(), end_key.as_encoded());
+
         // We are in single-rocksdb version if we can get a local_storage, otherwise, we
         // are in multi-rocksdb version.
         if let Some(local_storage) = self.engine.kv_engine() {
@@ -1079,9 +1087,17 @@ impl<E: Engine> GcRunner<E> {
         cfg_tracker: Tracker<GcConfig>,
         cfg: GcConfig,
         pool: Remote<TaskCell>,
+        coprocessor_host: CoprocessorHost<E::Local>,
     ) -> Self {
         Self {
-            inner: GcRunnerCore::new(store_id, engine, flow_info_sender, cfg_tracker, cfg),
+            inner: GcRunnerCore::new(
+                store_id,
+                engine,
+                flow_info_sender,
+                cfg_tracker,
+                cfg,
+                coprocessor_host,
+            ),
             pool,
         }
     }
@@ -1281,7 +1297,11 @@ impl<E: Engine> GcWorker<E> {
         }
     }
 
-    pub fn start(&mut self, store_id: u64) -> Result<()> {
+    pub fn start(
+        &mut self,
+        store_id: u64,
+        coprocessor_host: CoprocessorHost<E::Local>,
+    ) -> Result<()> {
         let mut worker = self.worker.lock().unwrap();
         let runner = GcRunner::new(
             store_id,
@@ -1293,6 +1313,7 @@ impl<E: Engine> GcWorker<E> {
                 .tracker("gc-worker".to_owned()),
             self.config_manager.value().clone(),
             worker.remote(),
+            coprocessor_host,
         );
         worker.start(runner);
 
@@ -1718,7 +1739,8 @@ mod tests {
             gate,
             Arc::new(MockRegionInfoProvider::new(vec![region1, region2])),
         );
-        gc_worker.start(store_id).unwrap();
+        let coprocessor_host = CoprocessorHost::default();
+        gc_worker.start(store_id, coprocessor_host).unwrap();
         // Convert keys to key value pairs, where the value is "value-{key}".
         let data: BTreeMap<_, _> = init_keys
             .iter()
@@ -1896,7 +1918,8 @@ mod tests {
             feature_gate,
             Arc::new(ri_provider.clone()),
         );
-        gc_worker.start(store_id).unwrap();
+        let coprocessor_host = CoprocessorHost::default();
+        gc_worker.start(store_id, coprocessor_host).unwrap();
 
         let mut r1 = Region::default();
         r1.set_id(1);
@@ -1981,6 +2004,7 @@ mod tests {
 
         let (tx, _rx) = mpsc::channel();
         let cfg = GcConfig::default();
+        let coprocessor_host = CoprocessorHost::default();
         let mut runner = GcRunnerCore::new(
             store_id,
             prefixed_engine.clone(),
@@ -1989,6 +2013,7 @@ mod tests {
                 .0
                 .tracker("gc-worker".to_owned()),
             cfg,
+            coprocessor_host,
         );
 
         let mut r1 = Region::default();
@@ -2045,6 +2070,7 @@ mod tests {
 
         let (tx, _rx) = mpsc::channel();
         let cfg = GcConfig::default();
+        let coprocessor_host = CoprocessorHost::default();
         let mut runner = GcRunnerCore::new(
             store_id,
             prefixed_engine.clone(),
@@ -2053,6 +2079,7 @@ mod tests {
                 .0
                 .tracker("gc-worker".to_owned()),
             cfg,
+            coprocessor_host,
         );
 
         let mut r1 = Region::default();
@@ -2150,6 +2177,7 @@ mod tests {
 
         let (tx, _rx) = mpsc::channel();
         let cfg = GcConfig::default();
+        let coprocessor_host = CoprocessorHost::default();
         let mut runner = GcRunnerCore::new(
             1,
             prefixed_engine.clone(),
@@ -2158,6 +2186,7 @@ mod tests {
                 .0
                 .tracker("gc-worker".to_owned()),
             cfg,
+            coprocessor_host,
         );
 
         let mut r1 = Region::default();
@@ -2337,7 +2366,8 @@ mod tests {
             )
             .unwrap();
 
-        gc_worker.start(store_id).unwrap();
+        let coprocessor_host = CoprocessorHost::default();
+        gc_worker.start(store_id, coprocessor_host).unwrap();
 
         // After the worker starts running, the destroy range task should run,
         // and the key in the range will be deleted.
@@ -2474,6 +2504,7 @@ mod tests {
         ]));
 
         let cfg = GcConfig::default();
+        let coprocessor_host = CoprocessorHost::default();
         let gc_runner = GcRunnerCore::new(
             store_id,
             engine.clone(),
@@ -2482,6 +2513,7 @@ mod tests {
                 .0
                 .tracker("gc-worker".to_owned()),
             cfg,
+            coprocessor_host,
         );
 
         let mut region_id = 0;
@@ -2652,6 +2684,7 @@ mod tests {
         let ri_provider = Arc::new(MockRegionInfoProvider::new(vec![r1, r2]));
 
         let cfg = GcConfig::default();
+        let coprocessor_host = CoprocessorHost::default();
         let mut gc_runner = GcRunnerCore::new(
             store_id,
             engine.clone(),
@@ -2660,6 +2693,7 @@ mod tests {
                 .0
                 .tracker("gc-worker".to_owned()),
             cfg,
+            coprocessor_host,
         );
 
         // region_id -> vec<(key,expir_ts,is_delete,expect_exist)>

@@ -2294,14 +2294,11 @@ pub struct UnifiedReadPoolConfig {
 impl UnifiedReadPoolConfig {
     fn validate(&self) -> Result<(), Box<dyn Error>> {
         if self.min_thread_count == 0 {
-            return Err("readpool.unified.min-thread-count should be > 0"
-                .to_string()
-                .into());
+            return Err("readpool.unified.min-thread-count should be > 0".into());
         }
         if self.max_thread_count < self.min_thread_count {
             return Err(
                 "readpool.unified.max-thread-count should be >= readpool.unified.min-thread-count"
-                    .to_string()
                     .into(),
             );
         }
@@ -2317,14 +2314,10 @@ impl UnifiedReadPoolConfig {
             .into());
         }
         if self.stack_size.0 < ReadableSize::mb(2).0 {
-            return Err("readpool.unified.stack-size should be >= 2mb"
-                .to_string()
-                .into());
+            return Err("readpool.unified.stack-size should be >= 2mb".into());
         }
         if self.max_tasks_per_worker <= 1 {
-            return Err("readpool.unified.max-tasks-per-worker should be > 1"
-                .to_string()
-                .into());
+            return Err("readpool.unified.max-tasks-per-worker should be > 1".into());
         }
         Ok(())
     }
@@ -3280,7 +3273,7 @@ impl Default for LogConfig {
 impl LogConfig {
     fn validate(&self) -> Result<(), Box<dyn Error>> {
         if self.file.max_size > 4096 {
-            return Err("Max log file size upper limit to 4096MB".to_string().into());
+            return Err("Max log file size upper limit to 4096MB".into());
         }
         Ok(())
     }
@@ -3960,11 +3953,19 @@ impl TikvConfig {
         self.resource_metering.validate()?;
         self.quota.validate()?;
         self.causal_ts.validate()?;
+
+        // Disable in memory engine if api version is V1ttl or V2.
+        if (self.storage.api_version() == ApiVersion::V2 || self.storage.enable_ttl)
+            && self.in_memory_engine.enable
+        {
+            return Err("in-memory-engine is unavailable for feature TTL or API v2".into());
+        }
+        self.in_memory_engine.expected_region_size = self.coprocessor.region_split_size();
         self.in_memory_engine.validate()?;
 
         // Validate feature TTL with Titan configuration.
         if matches!(self.rocksdb.titan.enabled, Some(true)) && self.storage.enable_ttl {
-            return Err("Titan is unavailable for feature TTL".to_string().into());
+            return Err("Titan is unavailable for feature TTL".into());
         }
 
         Ok(())
@@ -4742,7 +4743,7 @@ pub enum Module {
     Rocksdb,
     Raftdb,
     RaftEngine,
-    RegionCacheEngine,
+    InMemoryEngine,
     Storage,
     Security,
     Encryption,
@@ -4775,7 +4776,7 @@ impl From<&str> for Module {
             "rocksdb" => Module::Rocksdb,
             "raftdb" => Module::Raftdb,
             "raft_engine" => Module::RaftEngine,
-            "region_cache_engine" => Module::RegionCacheEngine,
+            "in_memory_engine" => Module::InMemoryEngine,
             "storage" => Module::Storage,
             "security" => Module::Security,
             "import" => Module::Import,
@@ -4939,6 +4940,7 @@ mod tests {
     use engine_traits::{CfOptions as _, CfOptionsExt, DbOptions as _, DbOptionsExt};
     use futures::executor::block_on;
     use grpcio::ResourceQuota;
+    use in_memory_engine::config::InMemoryEngineConfigManager;
     use itertools::Itertools;
     use kvproto::kvrpcpb::CommandPri;
     use raft_log_engine::RaftLogEngine;
@@ -6943,14 +6945,8 @@ mod tests {
         cfg.validate().unwrap();
     }
 
-    #[test]
-    fn test_config_template_no_superfluous_keys() {
-        let template_config = CONFIG_TEMPLATE
-            .lines()
-            .map(|l| l.strip_prefix('#').unwrap_or(l))
-            .join("\n");
-
-        let mut deserializer = toml::Deserializer::new(&template_config);
+    fn must_no_unknown_key(content: &str) {
+        let mut deserializer = toml::Deserializer::new(content);
         let mut unrecognized_keys = Vec::new();
         let _: TikvConfig = serde_ignored::deserialize(&mut deserializer, |key| {
             unrecognized_keys.push(key.to_string())
@@ -6959,6 +6955,16 @@ mod tests {
 
         // Don't use `is_empty()` so we see which keys are superfluous on failure.
         assert_eq!(unrecognized_keys, Vec::<String>::new());
+    }
+
+    #[test]
+    fn test_config_template_no_superfluous_keys() {
+        let template_config = CONFIG_TEMPLATE
+            .lines()
+            .map(|l| l.strip_prefix('#').unwrap_or(l))
+            .join("\n");
+
+        must_no_unknown_key(&template_config);
     }
 
     #[test]
@@ -7561,5 +7567,146 @@ mod tests {
                 .unwrap(),
             50
         );
+    }
+
+    #[test]
+    fn test_in_memory_engine_and_api_version() {
+        let tests = [
+            (
+                true,
+                vec![
+                    r#"
+                        [in-memory-engine]
+                    "#,
+                    r#"
+                        [in-memory-engine]
+                        enable = true
+                        evict-threshold = "1GB"
+                        capacity = "2GB"
+                    "#,
+                    r#"
+                        [in-memory-engine]
+                        enable = false
+                    "#,
+                    // Ok if in-memory engine is off.
+                    r#"
+                        [in-memory-engine]
+                        enable = false
+                        [storage]
+                        api-version = 1
+                        enable-ttl = true
+                    "#,
+                    r#"
+                        [in-memory-engine]
+                        enable = false
+                        [storage]
+                        api-version = 2
+                        enable-ttl = true
+                    "#,
+                ],
+            ),
+            (
+                false,
+                vec![
+                    // Error for incompatiable API version.
+                    r#"
+                        [in-memory-engine]
+                        enable = true
+                        evict-threshold = "1GB"
+                        capacity = "2GB"
+                        [storage]
+                        api-version = 1
+                        enable-ttl = true
+                    "#,
+                    r#"
+                        [in-memory-engine]
+                        enable = true
+                        evict-threshold = "1GB"
+                        capacity = "2GB"
+                        [storage]
+                        api-version = 2
+                        enable-ttl = true
+                    "#,
+                ],
+            ),
+        ];
+
+        for t in tests {
+            for content in t.1 {
+                let mut cfg: TikvConfig = toml::from_str(content).unwrap();
+                if t.0 {
+                    cfg.validate().unwrap();
+                } else {
+                    cfg.validate().unwrap_err();
+                }
+                must_no_unknown_key(content);
+            }
+        }
+    }
+
+    #[test]
+    fn test_in_memory_engine_change_config() {
+        let content = r#"
+            [in-memory-engine]
+            enable = true
+            evict-threshold = "1GB"
+            capacity = "2GB"
+        "#;
+        let mut cfg: TikvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap();
+        let cfg_controller = ConfigController::new(cfg.clone());
+        let version_tracker = Arc::new(VersionTrack::new(cfg.in_memory_engine.clone()));
+        cfg_controller.register(
+            Module::InMemoryEngine,
+            Box::new(InMemoryEngineConfigManager::new(version_tracker.clone())),
+        );
+
+        let check_cfg = |cfg: &TikvConfig| {
+            assert_eq_debug(&cfg_controller.get_current(), cfg);
+            assert_eq!(&*version_tracker.value(), &cfg.in_memory_engine);
+        };
+
+        cfg_controller
+            .update_config("in-memory-engine.capacity", "3GB")
+            .unwrap();
+        cfg.in_memory_engine.capacity = Some(ReadableSize::gb(3));
+        check_cfg(&cfg);
+
+        cfg_controller
+            .update_config("in-memory-engine.evict-threshold", "2GB")
+            .unwrap();
+        cfg.in_memory_engine.evict_threshold = Some(ReadableSize::gb(2));
+        check_cfg(&cfg);
+
+        cfg_controller
+            .update_config("in-memory-engine.stop-load-threshold", "1GB")
+            .unwrap();
+        cfg.in_memory_engine.stop_load_threshold = Some(ReadableSize::gb(1));
+        check_cfg(&cfg);
+
+        cfg_controller
+            .update_config("in-memory-engine.mvcc-amplification-threshold", "777")
+            .unwrap();
+        cfg.in_memory_engine.mvcc_amplification_threshold = 777;
+        check_cfg(&cfg);
+
+        cfg_controller
+            .update_config("in-memory-engine.gc-run-interval", "7m")
+            .unwrap();
+        cfg.in_memory_engine.gc_run_interval = ReadableDuration::minutes(7);
+        check_cfg(&cfg);
+
+        cfg_controller
+            .update_config("in-memory-engine.enable", "false")
+            .unwrap();
+        cfg.in_memory_engine.enable = false;
+        check_cfg(&cfg);
+
+        // Test snake case.
+        cfg_controller
+            .update_config("in_memory_engine.enable", "true")
+            .unwrap();
+        cfg.in_memory_engine.enable = true;
+        check_cfg(&cfg);
     }
 }

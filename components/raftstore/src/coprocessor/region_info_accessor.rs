@@ -1,7 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    cmp::Ordering,
     collections::{
         BTreeMap,
         Bound::{Excluded, Unbounded},
@@ -601,52 +600,24 @@ impl RegionCollector {
 
         // Only used to log.
         let mut max_qps = 0;
-        let mut top_regions = if count == 0 {
-            self.regions
-                .values()
-                .map(|ri| {
-                    (
-                        ri.region.clone(),
-                        self.region_activity.get(&ri.region.get_id()),
-                    )
-                })
-                .sorted_by(|(_, a), (_, b)| match (a, b) {
-                    (None, None) => Ordering::Equal,
-                    (None, Some(_)) => Ordering::Greater,
-                    (Some(_), None) => Ordering::Less,
-                    (Some(a), Some(b)) => compare_fn(a, b),
-                })
-                .map(|(r, ra)| {
-                    (
-                        r,
-                        ra.map(|ra| {
-                            max_qps = u64::max(ra.region_stat.query_stats.coprocessor, max_qps);
-                            ra.region_stat.clone()
-                        })
-                        .unwrap_or_default(),
-                    )
-                })
-                .collect::<Vec<_>>()
-        } else {
-            let count = usize::max(count, self.region_activity.len());
-            self.region_activity
-                .iter()
-                .filter_map(|(id, ac)| {
-                    max_qps = u64::max(ac.region_stat.query_stats.coprocessor, max_qps);
-                    self.regions
-                        .get(id)
-                        .filter(|ri| {
-                            ri.role == StateRole::Leader
-                                && ac.region_stat.cop_detail.iterated_count() != 0
-                                && !ri.region.is_in_flashback
-                        })
-                        .map(|ri| (ri, ac))
-                })
-                .sorted_by(|(_, activity_0), (_, activity_1)| compare_fn(activity_0, activity_1))
-                .take(count)
-                .map(|(ri, ac)| (ri.region.clone(), ac.region_stat.clone()))
-                .collect::<Vec<_>>()
-        };
+        let mut top_regions = self
+            .region_activity
+            .iter()
+            .filter_map(|(id, ac)| {
+                max_qps = u64::max(ac.region_stat.query_stats.coprocessor, max_qps);
+                self.regions
+                    .get(id)
+                    .filter(|ri| {
+                        ri.role == StateRole::Leader
+                            && ac.region_stat.cop_detail.iterated_count() != 0
+                            && !ri.region.is_in_flashback
+                    })
+                    .map(|ri| (ri, ac))
+            })
+            .sorted_by(|(_, activity_0), (_, activity_1)| compare_fn(activity_0, activity_1))
+            .take(count)
+            .map(|(ri, ac)| (ri.region.clone(), ac.region_stat.clone()))
+            .collect::<Vec<_>>();
 
         // TODO(SpadeA): remove it when auto load/evict is stable
         {
@@ -967,7 +938,7 @@ pub trait RegionInfoProvider: Send + Sync {
         unimplemented!()
     }
 
-    fn get_top_regions(&self, _count: Option<NonZeroUsize>) -> Result<TopRegions> {
+    fn get_top_regions(&self, _count: NonZeroUsize) -> Result<TopRegions> {
         unimplemented!()
     }
 
@@ -1046,10 +1017,10 @@ impl RegionInfoProvider for RegionInfoAccessor {
                 })
             })
     }
-    fn get_top_regions(&self, count: Option<NonZeroUsize>) -> Result<TopRegions> {
+    fn get_top_regions(&self, count: NonZeroUsize) -> Result<TopRegions> {
         let (tx, rx) = mpsc::channel();
         let msg = RegionInfoQuery::GetTopRegions {
-            count: count.map_or_else(|| 0, usize::from),
+            count: usize::from(count),
             callback: Box::new(move |regions| {
                 if let Err(e) = tx.send(regions) {
                     warn!("failed to send get_top_regions result: {:?}", e);
@@ -1170,7 +1141,7 @@ impl RegionInfoProvider for MockRegionInfoProvider {
             .ok_or(box_err!("Not found region containing {:?}", key))
     }
 
-    fn get_top_regions(&self, _count: Option<NonZeroUsize>) -> Result<TopRegions> {
+    fn get_top_regions(&self, _count: NonZeroUsize) -> Result<TopRegions> {
         let mut regions = Vec::new();
         let (tx, rx) = mpsc::channel();
 

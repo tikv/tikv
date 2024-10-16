@@ -2462,6 +2462,7 @@ dependencies = [
  "engine_traits",
  "fail",
  "in_memory_engine",
+ "keys",
  "kvproto",
  "lazy_static",
  "online_config",

@@ -198,7 +198,7 @@ impl TestSuiteBuilder {
             let scheduler = worker.scheduler();
             let cdc_ob = cdc::CdcObserver::new(scheduler.clone());
             obs.insert(id, cdc_ob.clone());
-            sim.coprocessor_hooks.entry(id).or_default().push(Box::new(
+            sim.coprocessor_hosts.entry(id).or_default().push(Box::new(
                 move |host: &mut CoprocessorHost<RocksEngine>| {
                     cdc_ob.register_to(host);
                 },
