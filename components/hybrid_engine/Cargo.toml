@@ -31,11 +31,12 @@ prometheus-static-metric = "0.5"
 lazy_static = "1.4.0"
 crossbeam = { workspace = true }
 fail = "0.5"
-raftstore = { workspace = true, features = ["testexport"] }
+raftstore = { workspace = true }
 raft = { workspace = true }
 kvproto = { workspace = true }
 keys = { workspace = true }
 
 [dev-dependencies]
+raftstore = { workspace = true, features = ["testexport"] }
 tempfile = "3.0"
 test_util = { workspace = true }
