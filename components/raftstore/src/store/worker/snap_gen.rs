@@ -1,4 +1,4 @@
-// Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
+// Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
     fmt::{self, Display, Formatter},
@@ -218,8 +218,6 @@ where
                 for_balance,
                 to_store_id,
             } => {
-                // It is safe for now to handle generating and applying snapshot concurrently,
-                // but it may not when merge is implemented.
                 let mut allow_multi_files_snapshot = false;
                 // if to_store_id is 0, it means the to_store_id cannot be found
                 if to_store_id != 0 {
@@ -250,7 +248,10 @@ where
                 let scheduled_time = Instant::now_coarse();
                 let semaphore = self.semaphore.clone();
                 self.pool.spawn(async move {
-                    // Limit the concurrency of the snapshot generation tasks.
+                    // Use a semaphore to limit the number of snapshot
+                    // generation tasks running in parallel. This helps ensure
+                    // some tasks are completed first, preventing task
+                    // accumulation.
                     let _permit = semaphore.acquire().await;
 
                     SNAP_GEN_WAIT_DURATION_HISTOGRAM
