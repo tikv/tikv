@@ -1023,7 +1023,7 @@ pub(crate) mod tests {
         );
         worker.start_with_timer(runner);
 
-        let mut snap_gen_worker = LazyWorker::new("snap-gen-worker");
+        let mut snap_gen_worker = LazyWorker::new("snap-generator");
         let snap_gen_sched = snap_gen_worker.scheduler();
         let snap_gen_runner = SnapGenRunner::new(
             engine.kv.clone(),

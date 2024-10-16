@@ -1695,7 +1695,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             None
         };
         let bgworker_remote = background_worker.remote();
-        let snap_gen_worker = WorkerBuilder::new("snap-gen-worker")
+        let snap_gen_worker = WorkerBuilder::new("snap-generator")
             .thread_count(cfg.value().snap_generator_pool_size)
             .thread_count_limits(1, SNAP_GENERATOR_MAX_POOL_SIZE)
             .create();
@@ -1730,7 +1730,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let snap_generator_pool = workers.snap_gen_worker.pool();
         let snap_gen_scheduler: Scheduler<SnapGenTask<<EK as KvEngine>::Snapshot>> = workers
             .snap_gen_worker
-            .start("snap-gen-worker", snap_gen_runner);
+            .start("snap-generator", snap_gen_runner);
         let region_scheduler = workers
             .region_worker
             .start_with_timer("region-worker", region_runner);

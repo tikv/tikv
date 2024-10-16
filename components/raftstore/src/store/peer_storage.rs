@@ -1689,7 +1689,7 @@ pub mod tests {
         let mut s = new_storage_from_ents(sched.clone(), dummy_scheduler, &td, &ents);
         let (router, _) = mpsc::sync_channel(100);
 
-        let mut snap_gen_worker = LazyWorker::new("snap-gen-worker");
+        let mut snap_gen_worker = LazyWorker::new("snap-generator");
         let snap_gen_sched = snap_gen_worker.scheduler();
         let snap_gen_runner = SnapGenRunner::new(
             s.engines.kv.clone(),
@@ -1854,7 +1854,7 @@ pub mod tests {
         pd_client.add_store(store);
         let pd_mock = Arc::new(pd_client);
 
-        let mut snap_gen_worker = LazyWorker::new("snap-gen-worker");
+        let mut snap_gen_worker = LazyWorker::new("snap-generator");
         let snap_gen_sched = snap_gen_worker.scheduler();
         let snap_gen_runner = SnapGenRunner::new(
             s.engines.kv.clone(),
@@ -1917,7 +1917,7 @@ pub mod tests {
         let mut s = new_storage_from_ents(sched, dummy_scheduler, &td, &ents);
         let (router, _) = mpsc::sync_channel(100);
 
-        let mut snap_gen_worker = LazyWorker::new("snap-gen-worker");
+        let mut snap_gen_worker = LazyWorker::new("snap-generator");
         let snap_gen_sched = snap_gen_worker.scheduler();
         let snap_gen_runner = SnapGenRunner::new(
             s.engines.kv.clone(),
@@ -1997,7 +1997,7 @@ pub mod tests {
         let s1 = new_storage_from_ents(sched.clone(), dummy_scheduler.clone(), &td1, &ents);
         let (router, _) = mpsc::sync_channel(100);
 
-        let mut snap_gen_worker = LazyWorker::new("snap-gen-worker");
+        let mut snap_gen_worker = LazyWorker::new("snap-generator");
         let snap_gen_sched = snap_gen_worker.scheduler();
         let snap_gen_runner = SnapGenRunner::new(
             s1.engines.kv.clone(),
