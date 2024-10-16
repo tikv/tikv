@@ -177,11 +177,11 @@ impl RegionStatsManager {
             .evict_threshold()
             .saturating_sub(memory_controller.mem_usage()))
             / self.expected_region_size();
-        let expected_num_regions = current_region_count + expected_new_count;
+        let expected_num_regions = usize::max(1, current_region_count + expected_new_count);
         info!("ime collect_changed_ranges"; "num_regions" => expected_num_regions);
         let curr_top_regions = self
             .info_provider
-            .get_top_regions(Some(NonZeroUsize::try_from(expected_num_regions).unwrap()))
+            .get_top_regions(NonZeroUsize::try_from(expected_num_regions).unwrap())
             .unwrap() // TODO (afeinberg): Potentially custom error handling here.
             .iter()
             .map(|(r, region_stats)| (r.id, (r.clone(), region_stats.clone())))
@@ -252,16 +252,12 @@ impl RegionStatsManager {
         // with very few next and prev. If there's less than or equal to
         // MIN_REGION_COUNT_TO_EVICT regions, do not evict any one.
         let regions_to_evict = if regions_stat.len() > MIN_REGION_COUNT_TO_EVICT {
-            let avg_top_next_prev = if reach_stop_load {
-                regions_stat
-                    .iter()
-                    .map(|r| r.1.cop_detail.iterated_count())
-                    .take(MIN_REGION_COUNT_TO_EVICT)
-                    .sum::<usize>()
-                    / MIN_REGION_COUNT_TO_EVICT
-            } else {
-                0
-            };
+            let avg_top_next_prev = regions_stat
+                .iter()
+                .map(|r| r.1.cop_detail.iterated_count())
+                .take(MIN_REGION_COUNT_TO_EVICT)
+                .sum::<usize>()
+                / MIN_REGION_COUNT_TO_EVICT;
             let region_to_evict: Vec<_> = regions_stat
                     .into_iter()
                     .filter(|(_, r)| {
@@ -474,18 +470,14 @@ pub mod tests {
                 )
         }
 
-        fn get_top_regions(&self, count: Option<NonZeroUsize>) -> coprocessor::Result<TopRegions> {
-            Ok(count.map_or_else(
-                || self.regions.lock().clone(),
-                |count| {
-                    self.regions
-                        .lock()
-                        .iter()
-                        .take(count.get())
-                        .cloned()
-                        .collect::<Vec<_>>()
-                },
-            ))
+        fn get_top_regions(&self, count: NonZeroUsize) -> coprocessor::Result<TopRegions> {
+            Ok(self
+                .regions
+                .lock()
+                .iter()
+                .take(count.get())
+                .cloned()
+                .collect::<Vec<_>>())
         }
 
         fn get_regions_stat(
@@ -566,13 +558,13 @@ pub mod tests {
         );
 
         let region_stats = vec![
-            (region_1.clone(), new_region_stat(2, 10)),
-            (region_6.clone(), new_region_stat(30, 10)),
+            (region_1.clone(), new_region_stat(2, 0)), // evicted due to read flow
+            (region_6.clone(), new_region_stat(200, 10)),
             (region_2.clone(), new_region_stat(20, 8)),
-            (region_3.clone(), new_region_stat(15, 10)),
-            (region_4.clone(), new_region_stat(20, 10)),
-            (region_5.clone(), new_region_stat(25, 10)),
-            (region_7.clone(), new_region_stat(40, 10)),
+            (region_3.clone(), new_region_stat(15, 10)), // evicted due to mvcc amplification
+            (region_4.clone(), new_region_stat(30, 10)),
+            (region_5.clone(), new_region_stat(55, 10)),
+            (region_7.clone(), new_region_stat(80, 10)),
         ];
         sim.set_top_regions(&vec![]);
         sim.set_region_stats(&region_stats);
@@ -627,7 +619,7 @@ pub mod tests {
             new_region_stat(100000, 100000),
             new_region_stat(100, 50), // will be evicted
             new_region_stat(1000, 120),
-            new_region_stat(200, 120), // will be evicted
+            new_region_stat(20, 2), // will be evicted
         ];
 
         let all_regions = make_region_vec(&regions, &region_stats);
@@ -682,7 +674,7 @@ pub mod tests {
             let mut cb_lock = cbs.lock();
             if cb_lock.len() == 2 {
                 let evicted_regions_lock = evicted_regions.lock();
-                assert_eq!(*evicted_regions_lock, vec![4, 6]);
+                assert_eq!(*evicted_regions_lock, vec![6, 4]);
                 block_on(async {
                     cb_lock.pop().unwrap()().await;
                     cb_lock.pop().unwrap()().await;
