@@ -251,7 +251,9 @@ impl RegionCacheMemoryEngineCore {
             return RegionCacheStatus::NotInCache;
         };
 
-        if region_meta.get_region().epoch_version < region.epoch_version {
+        if region_meta.get_region().epoch_version < region.epoch_version
+            || region_meta.get_region().in_flash_back
+        {
             let meta = regions_map.remove_region(region.id);
             assert_eq!(meta.get_state(), RegionState::Pending);
             // try update outdated region.
