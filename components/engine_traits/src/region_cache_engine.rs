@@ -55,6 +55,7 @@ pub enum EvictReason {
     Merge,
     Disabled,
     ApplySnapshot,
+    Flashback,
     Manual,
 }
 

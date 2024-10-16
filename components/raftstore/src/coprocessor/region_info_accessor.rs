@@ -638,6 +638,7 @@ impl RegionCollector {
                         .filter(|ri| {
                             ri.role == StateRole::Leader
                                 && ac.region_stat.cop_detail.iterated_count() != 0
+                                && !ri.region.is_in_flashback
                         })
                         .map(|ri| (ri, ac))
                 })

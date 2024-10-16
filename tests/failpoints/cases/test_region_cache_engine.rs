@@ -11,11 +11,12 @@ use engine_traits::{
     CF_DEFAULT,
 };
 use file_system::calc_crc32_bytes;
+use futures::executor::block_on;
 use in_memory_engine::test_util::new_region;
 use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};
 use kvproto::{
     import_sstpb::SstMeta,
-    raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request},
+    raft_cmdpb::{AdminCmdType, CmdType, RaftCmdRequest, RaftRequestHeader, Request},
 };
 use protobuf::Message;
 use tempfile::tempdir;
@@ -687,4 +688,24 @@ fn test_background_loading_pending_region() {
 
     rx.recv_timeout(Duration::from_secs(2)).unwrap();
     assert!(region_cache_engine.region_cached(&r));
+}
+
+#[test]
+fn test_evict_on_flashback() {
+    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
+    cluster.cfg.raft_store.apply_batch_system.pool_size = 1;
+    cluster.run();
+
+    let table = ProductTable::new();
+
+    must_copr_load_data(&mut cluster, &table, 1);
+    must_copr_load_data(&mut cluster, &table, 2);
+    must_copr_load_data(&mut cluster, &table, 3);
+
+    let r = cluster.get_region(b"");
+    block_on(async {
+        cluster
+            .must_send_flashback_msg(r.id, AdminCmdType::PrepareFlashback)
+            .await;
+    });
 }

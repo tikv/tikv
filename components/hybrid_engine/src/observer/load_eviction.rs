@@ -149,6 +149,21 @@ impl QueryObserver for LoadEvictionObserver {
 }
 
 impl AdminObserver for LoadEvictionObserver {
+    fn pre_exec_admin(
+        &self,
+        ctx: &mut ObserverContext<'_>,
+        req: &kvproto::raft_cmdpb::AdminRequest,
+        _: u64,
+        _: u64,
+    ) -> bool {
+        if req.has_prepare_flashback() {
+            let cache_region = CacheRegion::from_region(ctx.region());
+            self.evict_region(cache_region, EvictReason::Flashback);
+        }
+
+        false
+    }
+
     fn post_exec_admin(
         &self,
         ctx: &mut ObserverContext<'_>,
