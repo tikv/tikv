@@ -181,7 +181,7 @@ impl AdminObserver for LoadEvictionObserver {
         _: u64,
         _: u64,
     ) -> bool {
-        if req.has_prepare_flashback() {
+        if req.cmd_type == AdminCmdType::PrepareFlashback {
             let cache_region = CacheRegion::from_region(ctx.region());
             self.evict_region(cache_region, EvictReason::Flashback);
         }

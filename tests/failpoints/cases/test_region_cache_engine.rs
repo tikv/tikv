@@ -835,11 +835,11 @@ fn test_evict_on_flashback() {
     .unwrap();
 
     must_copr_point_get(&mut cluster, &table, 1);
-    rx.try_recv().unwrap();
+    rx.try_recv().unwrap_err();
 
     must_copr_point_get(&mut cluster, &table, 2);
-    rx.try_recv().unwrap();
+    rx.try_recv().unwrap_err();
 
     must_copr_point_get(&mut cluster, &table, 3);
-    rx.try_recv().unwrap();
+    rx.try_recv().unwrap_err();
 }
