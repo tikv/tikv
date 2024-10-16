@@ -6,7 +6,7 @@ publish = false
 license = "Apache-2.0"
 
 [features]
-testexport = []
+testexport = ["raftstore/testexport"]
 failpoints = ["fail/failpoints"]
 
 [[test]]
@@ -36,6 +36,5 @@ raft = { workspace = true }
 kvproto = { workspace = true }
 
 [dev-dependencies]
-raftstore = { workspace = true, features = ["testexport"] }
 tempfile = "3.0"
 test_util = { workspace = true }
