@@ -4,9 +4,10 @@ use std::{
     collections::{HashMap, VecDeque},
     convert::identity,
     sync::{Arc, Mutex},
-    time::Duration,
+    time::Duration, cell::RefCell,
 };
 
+use crossbeam::utils;
 use engine_traits::{CompactExt, CF_DEFAULT, CF_WRITE};
 use file_system::{set_io_type, IoType};
 use futures::{sink::SinkExt, stream::TryStreamExt, FutureExt, TryFutureExt};
@@ -39,12 +40,12 @@ use tikv_util::{
     future::{create_stream_with_buffer, paired_future_callback},
     sys::{
         disk::{get_disk_status, DiskUsage},
-        thread::ThreadBuildWrapper,
     },
     time::{Instant, Limiter},
     HandyRwLock,
+    resizable_threadpool::ResizableRuntime,
 };
-use tokio::{runtime::Runtime, time::sleep};
+use tokio::{time::sleep};
 use txn_types::{Key, WriteRef, WriteType};
 
 use super::{
@@ -120,7 +121,7 @@ pub struct ImportSstService<E: Engine> {
     tablets: LocalTablets<E::Local>,
     engine: E,
     //TODO: (Ris) change to ResizableRuntime
-    threads: Arc<Runtime>,
+    threads: RefCell<ResizableRuntime>,
     importer: Arc<SstImporter<E::Local>>,
     limiter: Limiter,
     ingest_latch: Arc<IngestLatch>,
@@ -324,24 +325,7 @@ impl<E: Engine> ImportSstService<E> {
     ) -> Self {
         let props = tikv_util::thread_group::current_properties();
         let eng = Mutex::new(engine.clone());
-        let threads = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(cfg.num_threads)
-            .enable_all()
-            .thread_name("sst-importer")
-            .with_sys_and_custom_hooks(
-                move || {
-                    tikv_util::thread_group::set_properties(props.clone());
-
-                    set_io_type(IoType::Import);
-                    tikv_kv::set_tls_engine(eng.lock().unwrap().clone());
-                },
-                move || {
-                    // SAFETY: we have set the engine at some lines above with type `E`.
-                    unsafe { tikv_kv::destroy_tls_engine::<E>() };
-                },
-            )
-            .build()
-            .unwrap();
+        let threads = RefCell::new(ResizableRuntime::new("import", ||{}, utils::));
         if let LocalTablets::Singleton(tablet) = &tablets {
             importer.start_switch_mode_check(threads.handle(), Some(tablet.clone()));
         } else {

@@ -1,8 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::os::unix::thread;
+
 use api_version::{dispatch_api_version, ApiV2, KeyMode, KvFormat};
 use kvproto::kvrpcpb::ApiVersion;
-use tikv_util::{error, sys::thread::ThreadBuildWrapper};
+use tikv_util::{error, sys::thread::ThreadBuildWrapper, resizable_threadpool::TokioRuntimeCreator};
 use txn_types::{Key, TimeStamp};
 use file_system::IoType;
 use tokio::{io::Result as TokioResult, runtime::Runtime};
@@ -179,11 +181,14 @@ impl KeyValueCodec {
     }
 }
 
-/// Create a standard tokio runtime.
-/// (which allows io and time reactor, involve thread memory accessor),
-/// and set the I/O type to export.
-pub fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResult<Runtime> {
-    tokio::runtime::Builder::new_multi_thread()
+pub struct BackupRuntimeCreator;
+
+impl TokioRuntimeCreator for BackupRuntimeCreator {
+    /// Create a standard tokio runtime.
+    /// (which allows io and time reactor, involve thread memory accessor),
+    /// and set the I/O type to export.
+    fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResult<Runtime> {
+        tokio::runtime::Builder::new_multi_thread()
         .thread_name(thread_name)
         .enable_io()
         .enable_time()
@@ -195,6 +200,7 @@ pub fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResu
         )
         .worker_threads(thread_count)
         .build()
+    }
 }
 
 #[cfg(test)]

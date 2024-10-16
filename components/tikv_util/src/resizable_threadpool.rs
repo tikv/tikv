@@ -32,6 +32,7 @@ impl Drop for DaemonRuntime {
         self.0.take().unwrap().shutdown_background()
     }
 }
+
 pub struct ResizableRuntime
 {
     pub size: usize,
@@ -73,4 +74,8 @@ impl ResizableRuntime
         self.size = new_size;
         (self.after_adjust)(new_size);
     }
+}
+
+pub trait TokioRuntimeCreator {
+    fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResult<Runtime>;
 }
