@@ -600,7 +600,6 @@ impl RegionCollector {
 
         // Only used to log.
         let mut max_qps = 0;
-        let count = usize::max(count, self.region_activity.len());
         let mut top_regions = self
             .region_activity
             .iter()
