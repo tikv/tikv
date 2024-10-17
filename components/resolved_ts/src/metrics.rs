@@ -115,6 +115,12 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
+    pub static ref RTS_MIN_FOLLOWER_SAFE_TS_GAP_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_resolved_ts_min_follower_safe_ts_gap_millis_histogram",
+        "Bucketed histogram of the gap between now() and the minimal (non-zero) safe ts for followers",
+        exponential_buckets(50.0, 2.0, 20).unwrap(),
+    )
+    .unwrap();
     pub static ref RTS_CHECK_LEADER_DURATION_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_resolved_ts_check_leader_duration_seconds",
         "Bucketed histogram of resolved-ts check leader duration",

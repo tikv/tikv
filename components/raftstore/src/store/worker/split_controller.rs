@@ -14,7 +14,7 @@ use kvproto::{
     metapb::{self, Peer},
     pdpb::QueryKind,
 };
-use pd_client::{BucketMeta, BucketStat};
+use pd_client::{BucketMeta, BucketStat, RegionWriteCfCopDetail};
 use rand::Rng;
 use resource_metering::RawRecords;
 use tikv_util::{
@@ -333,6 +333,7 @@ impl Recorder {
 pub struct RegionInfo {
     pub sample_num: usize,
     pub query_stats: QueryStats,
+    pub cop_detail: RegionWriteCfCopDetail,
     pub peer: Peer,
     pub key_ranges: Vec<KeyRange>,
     pub flow: FlowStatistics,
@@ -343,6 +344,7 @@ impl RegionInfo {
         RegionInfo {
             sample_num,
             query_stats: QueryStats::default(),
+            cop_detail: RegionWriteCfCopDetail::default(),
             key_ranges: Vec::with_capacity(sample_num),
             peer: Peer::default(),
             flow: FlowStatistics::default(),
@@ -444,6 +446,7 @@ impl ReadStats {
         end: Option<&[u8]>,
         write: &FlowStatistics,
         data: &FlowStatistics,
+        write_cf_cop_detail: &RegionWriteCfCopDetail,
     ) {
         let num = self.sample_num;
         let region_info = self
@@ -452,6 +455,7 @@ impl ReadStats {
             .or_insert_with(|| RegionInfo::new(num));
         region_info.flow.add(write);
         region_info.flow.add(data);
+        region_info.cop_detail.add(write_cf_cop_detail);
         // the bucket of the follower only have the version info and not needs to be
         // recorded the hot bucket.
         if let Some(buckets) = buckets
@@ -848,18 +852,21 @@ impl AutoSplitController {
             if recorder.is_ready() {
                 let key = recorder.collect(&self.cfg);
                 if !key.is_empty() {
+                    info!("load base split region";
+                        "region_id" => region_id,
+                        "qps" => qps,
+                        "byte" => byte,
+                        "cpu_usage" => cpu_usage,
+                        "split_key" => log_wrappers::Value::key(&key),
+                        "start_key" => log_wrappers::Value::key(&recorder.hottest_key_range.as_ref().unwrap_or_default().start_key),
+                        "end_key" => log_wrappers::Value::key(&recorder.hottest_key_range.as_ref().unwrap_or_default().end_key),
+                    );
                     split_infos.push(SplitInfo::with_split_key(
                         region_id,
                         recorder.peer.clone(),
                         key,
                     ));
                     LOAD_BASE_SPLIT_EVENT.ready_to_split.inc();
-                    info!("load base split region";
-                        "region_id" => region_id,
-                        "qps" => qps,
-                        "byte" => byte,
-                        "cpu_usage" => cpu_usage,
-                    );
                     self.recorders.remove(&region_id);
                 } else if is_unified_read_pool_busy && is_region_busy {
                     LOAD_BASE_SPLIT_EVENT.cpu_load_fit.inc();

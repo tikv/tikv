@@ -120,9 +120,11 @@ impl Flush {
             kind: TransactionKind::Optimistic(false),
             commit_kind: CommitKind::TwoPc,
             primary: &self.primary,
-            txn_size: 0, // txn_size is unknown
+            // txn_size is unknown, set it to max to avoid unexpected resolve_lock_lite
+            txn_size: u64::MAX,
             lock_ttl: self.lock_ttl,
-            min_commit_ts: TimeStamp::zero(),
+            // min_commit_ts == 0 will disallow readers pushing it
+            min_commit_ts: self.start_ts.next(),
             need_old_value: extra_op == ExtraOp::ReadOldValue, // FIXME?
             is_retry_request: self.ctx.is_retry_request,
             assertion_level: self.assertion_level,
@@ -217,110 +219,26 @@ impl Flush {
 mod tests {
     use std::assert_matches::assert_matches;
 
-    use concurrency_manager::ConcurrencyManager;
-    use kvproto::kvrpcpb::{Assertion, AssertionLevel, Context, ExtraOp};
-    use tikv_kv::{Engine, Statistics};
-    use txn_types::{Key, Mutation, TimeStamp};
+    use kvproto::kvrpcpb::{Assertion, Context};
+    use tikv_kv::Engine;
+    use txn_types::TimeStamp;
 
     use crate::storage::{
-        lock_manager::MockLockManager,
         mvcc::{
             tests::{must_get, must_locked},
             Error as MvccError, ErrorInner as MvccErrorInner,
         },
         txn,
         txn::{
-            commands::{Flush, WriteContext, WriteResult},
             tests::{
-                must_acquire_pessimistic_lock, must_acquire_pessimistic_lock_err, must_commit,
+                flush_put_impl, flush_put_impl_with_assertion, must_acquire_pessimistic_lock,
+                must_acquire_pessimistic_lock_err, must_commit, must_flush_put,
                 must_pessimistic_locked, must_prewrite_put, must_prewrite_put_err,
             },
-            txn_status_cache::TxnStatusCache,
             Error, ErrorInner,
         },
         ProcessResult, TestEngineBuilder,
     };
-
-    pub fn flush_put_impl<E: Engine>(
-        engine: &mut E,
-        key: &[u8],
-        value: impl Into<Vec<u8>>,
-        pk: impl Into<Vec<u8>>,
-        start_ts: impl Into<TimeStamp>,
-        generation: u64,
-        should_not_exist: bool,
-    ) -> txn::Result<WriteResult> {
-        flush_put_impl_with_assertion(
-            engine,
-            key,
-            value,
-            pk,
-            start_ts,
-            generation,
-            should_not_exist,
-            Assertion::None,
-        )
-    }
-
-    pub fn flush_put_impl_with_assertion<E: Engine>(
-        engine: &mut E,
-        key: &[u8],
-        value: impl Into<Vec<u8>>,
-        pk: impl Into<Vec<u8>>,
-        start_ts: impl Into<TimeStamp>,
-        generation: u64,
-        should_not_exist: bool,
-        assertion: Assertion,
-    ) -> txn::Result<WriteResult> {
-        let key = Key::from_raw(key);
-        let start_ts = start_ts.into();
-        let mut m = if should_not_exist {
-            Mutation::make_insert(key, value.into())
-        } else {
-            Mutation::make_put(key, value.into())
-        };
-        m.set_assertion(assertion);
-        let cmd = Flush::new(
-            start_ts,
-            pk.into(),
-            vec![m],
-            generation,
-            3000,
-            AssertionLevel::Strict,
-            Context::new(),
-        );
-        let mut statistics = Statistics::default();
-        let cm = ConcurrencyManager::new(start_ts);
-        let context = WriteContext {
-            lock_mgr: &MockLockManager::new(),
-            concurrency_manager: cm.clone(),
-            extra_op: ExtraOp::Noop,
-            statistics: &mut statistics,
-            async_apply_prewrite: false,
-            raw_ext: None,
-            txn_status_cache: &TxnStatusCache::new_for_test(),
-        };
-        let snapshot = engine.snapshot(Default::default()).unwrap();
-        cmd.cmd.process_write(snapshot.clone(), context)
-    }
-
-    pub fn must_flush_put<E: Engine>(
-        engine: &mut E,
-        key: &[u8],
-        value: impl Into<Vec<u8>>,
-        pk: impl Into<Vec<u8>>,
-        start_ts: impl Into<TimeStamp>,
-        generation: u64,
-    ) {
-        let res = flush_put_impl(engine, key, value, pk, start_ts, generation, false);
-        assert!(res.is_ok());
-        let res = res.unwrap();
-        let to_be_write = res.to_be_write;
-        if to_be_write.modifies.is_empty() {
-            return;
-        }
-        engine.write(&Context::new(), to_be_write).unwrap();
-    }
 
     pub fn must_flush_put_with_assertion<E: Engine>(
         engine: &mut E,
@@ -467,12 +385,14 @@ mod tests {
         must_locked(&mut engine, k, 1);
         assert_matches!(
             must_flush_insert_err(&mut engine, k, *v, k, 1, 2),
-            Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::AlreadyExist { key }))) if key == k
+            Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::AlreadyExist { key, existing_start_ts})))
+            if key == k  && existing_start_ts == 1.into()
         );
         must_commit(&mut engine, k, 1, 2);
         assert_matches!(
             must_flush_insert_err(&mut engine, k, *v, k, 3, 1),
-            Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::AlreadyExist { key }))) if key == k
+            Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::AlreadyExist { key, existing_start_ts})))
+            if key == k  && existing_start_ts == 1.into()
         );
     }
 

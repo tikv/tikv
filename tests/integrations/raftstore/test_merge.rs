@@ -10,7 +10,7 @@ use kvproto::{
 };
 use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
-use raftstore::store::{Callback, LocksStatus};
+use raftstore::store::{metrics::RAFT_ENABLE_UNPERSISTED_APPLY_GAUGE, Callback, LocksStatus};
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
 use tikv::storage::{kv::SnapshotExt, Snapshot};
@@ -23,6 +23,9 @@ fn test_node_base_merge() {
     let mut cluster = new_cluster(0, 3);
     cluster.cfg.rocksdb.titan.enabled = Some(true);
     configure_for_merge(&mut cluster.cfg);
+    cluster.cfg.raft_store.max_apply_unpersisted_log_limit = 1024;
+
+    RAFT_ENABLE_UNPERSISTED_APPLY_GAUGE.set(0);
 
     cluster.run();
 
@@ -32,6 +35,8 @@ fn test_node_base_merge() {
         must_get_equal(&cluster.get_engine(i + 1), b"k1", b"v1");
         must_get_equal(&cluster.get_engine(i + 1), b"k3", b"v3");
     }
+
+    assert_eq!(RAFT_ENABLE_UNPERSISTED_APPLY_GAUGE.get(), 1);
 
     let pd_client = Arc::clone(&cluster.pd_client);
     let region = pd_client.get_region(b"k1").unwrap();
@@ -57,6 +62,11 @@ fn test_node_base_merge() {
         "{:?}",
         resp
     );
+
+    // write new key to both region to tigger enable unpersisted apply flag changes.
+    cluster.must_put(b"k0", b"v2");
+    cluster.must_put(b"k3", b"v3");
+    assert_eq!(RAFT_ENABLE_UNPERSISTED_APPLY_GAUGE.get(), 2);
 
     pd_client.must_merge(left.get_id(), right.get_id());
 
@@ -100,6 +110,7 @@ fn test_node_base_merge() {
     }
 
     cluster.must_put(b"k4", b"v4");
+    assert_eq!(RAFT_ENABLE_UNPERSISTED_APPLY_GAUGE.get(), 1);
 }
 
 #[test_case(test_raftstore_v2::new_node_cluster)]
@@ -1440,6 +1451,8 @@ fn test_merge_snapshot_demote() {
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_propose_in_memory_pessimistic_locks() {
+    let peer_size_limit = 512 << 10;
+    let instance_size_limit = 100 << 20;
     let mut cluster = new_cluster(0, 2);
     configure_for_merge(&mut cluster.cfg);
     cluster.run();
@@ -1475,7 +1488,11 @@ fn test_propose_in_memory_pessimistic_locks() {
     txn_ext
         .pessimistic_locks
         .write()
-        .insert(vec![(Key::from_raw(b"k1"), l1.clone())])
+        .insert(
+            vec![(Key::from_raw(b"k1"), l1.clone())],
+            peer_size_limit,
+            instance_size_limit,
+        )
         .unwrap();
 
     // Insert lock l2 into the right region
@@ -1493,7 +1510,11 @@ fn test_propose_in_memory_pessimistic_locks() {
     txn_ext
         .pessimistic_locks
         .write()
-        .insert(vec![(Key::from_raw(b"k3"), l2.clone())])
+        .insert(
+            vec![(Key::from_raw(b"k3"), l2.clone())],
+            peer_size_limit,
+            instance_size_limit,
+        )
         .unwrap();
 
     // Merge left region into the right region
@@ -1571,6 +1592,8 @@ fn test_merge_pessimistic_locks_when_gap_is_too_large() {
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_merge_pessimistic_locks_repeated_merge() {
+    let peer_size_limit = 512 << 10;
+    let instance_size_limit = 100 << 20;
     let mut cluster = new_cluster(0, 2);
     configure_for_merge(&mut cluster.cfg);
     cluster.cfg.pessimistic_txn.pipelined = true;
@@ -1604,7 +1627,11 @@ fn test_merge_pessimistic_locks_repeated_merge() {
     txn_ext
         .pessimistic_locks
         .write()
-        .insert(vec![(Key::from_raw(b"k1"), lock.clone())])
+        .insert(
+            vec![(Key::from_raw(b"k1"), lock.clone())],
+            peer_size_limit,
+            instance_size_limit,
+        )
         .unwrap();
 
     // Filter MsgAppend, so the proposed PrepareMerge will not succeed

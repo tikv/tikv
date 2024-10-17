@@ -23,7 +23,11 @@ use kvproto::{
 use online_config::OnlineConfig;
 use raftstore::{coprocessor::CoprocessorHost, router::CdcRaftRouter};
 use test_raftstore::*;
-use tikv::{config::CdcConfig, server::DEFAULT_CLUSTER_ID, storage::kv::LocalTablets};
+use tikv::{
+    config::{CdcConfig, ResolvedTsConfig},
+    server::DEFAULT_CLUSTER_ID,
+    storage::kv::LocalTablets,
+};
 use tikv_util::{
     config::ReadableDuration,
     memory::MemoryQuota,
@@ -130,7 +134,7 @@ fn create_event_feed(
 }
 
 pub struct TestSuiteBuilder {
-    cluster: Option<Cluster<RocksEngine, ServerCluster<RocksEngine>>>,
+    cluster: Option<Cluster<ServerCluster>>,
     memory_quota: Option<usize>,
 }
 
@@ -143,10 +147,7 @@ impl TestSuiteBuilder {
     }
 
     #[must_use]
-    pub fn cluster(
-        mut self,
-        cluster: Cluster<RocksEngine, ServerCluster<RocksEngine>>,
-    ) -> TestSuiteBuilder {
+    pub fn cluster(mut self, cluster: Cluster<ServerCluster>) -> TestSuiteBuilder {
         self.cluster = Some(cluster);
         self
     }
@@ -163,7 +164,7 @@ impl TestSuiteBuilder {
 
     pub fn build_with_cluster_runner<F>(self, mut runner: F) -> TestSuite
     where
-        F: FnMut(&mut Cluster<RocksEngine, ServerCluster<RocksEngine>>),
+        F: FnMut(&mut Cluster<ServerCluster>),
     {
         init();
         let memory_quota = self.memory_quota.unwrap_or(usize::MAX);
@@ -197,7 +198,7 @@ impl TestSuiteBuilder {
             let scheduler = worker.scheduler();
             let cdc_ob = cdc::CdcObserver::new(scheduler.clone());
             obs.insert(id, cdc_ob.clone());
-            sim.coprocessor_hooks.entry(id).or_default().push(Box::new(
+            sim.coprocessor_hosts.entry(id).or_default().push(Box::new(
                 move |host: &mut CoprocessorHost<RocksEngine>| {
                     cdc_ob.register_to(host);
                 },
@@ -217,6 +218,7 @@ impl TestSuiteBuilder {
             let mut cdc_endpoint = cdc::Endpoint::new(
                 DEFAULT_CLUSTER_ID,
                 &cfg,
+                &ResolvedTsConfig::default(),
                 false,
                 cluster.cfg.storage.api_version(),
                 pd_cli.clone(),
@@ -252,7 +254,7 @@ impl TestSuiteBuilder {
 }
 
 pub struct TestSuite {
-    pub cluster: Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    pub cluster: Cluster<ServerCluster>,
     pub endpoints: HashMap<u64, LazyWorker<Task>>,
     pub obs: HashMap<u64, CdcObserver>,
     tikv_cli: HashMap<u64, TikvClient>,
@@ -338,6 +340,51 @@ impl TestSuite {
             prewrite_resp.errors.is_empty(),
             "{:?}",
             prewrite_resp.get_errors()
+        );
+    }
+
+    pub fn must_kv_flush(
+        &mut self,
+        region_id: u64,
+        muts: Vec<Mutation>,
+        pk: Vec<u8>,
+        ts: TimeStamp,
+        generation: u64,
+    ) {
+        self.must_kv_flush_with_source(region_id, muts, pk, ts, generation, 0);
+    }
+
+    pub fn must_kv_flush_with_source(
+        &mut self,
+        region_id: u64,
+        muts: Vec<Mutation>,
+        pk: Vec<u8>,
+        ts: TimeStamp,
+        generation: u64,
+        txn_source: u64,
+    ) {
+        let mut flush_req = FlushRequest::default();
+        let mut context = self.get_context(region_id);
+        context.set_txn_source(txn_source);
+        flush_req.set_context(context);
+        flush_req.set_mutations(muts.into_iter().collect());
+        flush_req.primary_key = pk;
+        flush_req.start_ts = ts.into_inner();
+        flush_req.generation = generation;
+        flush_req.lock_ttl = flush_req.start_ts + 1;
+        let flush_resp = self
+            .get_tikv_client(region_id)
+            .kv_flush(&flush_req)
+            .unwrap();
+        assert!(
+            !flush_resp.has_region_error(),
+            "{:?}",
+            flush_resp.get_region_error()
+        );
+        assert!(
+            flush_resp.errors.is_empty(),
+            "{:?}",
+            flush_resp.get_errors()
         );
     }
 
@@ -470,6 +517,26 @@ impl TestSuite {
         );
     }
 
+    pub fn must_release_pessimistic_lock(
+        &mut self,
+        region_id: u64,
+        pk: Vec<u8>,
+        start_ts: TimeStamp,
+        for_update_ts: TimeStamp,
+    ) {
+        let mut req = PessimisticRollbackRequest::default();
+        req.set_context(self.get_context(region_id));
+        req.start_version = start_ts.into_inner();
+        req.for_update_ts = for_update_ts.into_inner();
+        req.set_keys(vec![pk].into_iter().collect());
+        let resp = self
+            .get_tikv_client(region_id)
+            .kv_pessimistic_rollback(&req)
+            .unwrap();
+        assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+        assert!(resp.errors.is_empty(), "{:?}", resp.get_errors());
+    }
+
     pub fn must_kv_pessimistic_prewrite(
         &mut self,
         region_id: u64,
@@ -504,6 +571,27 @@ impl TestSuite {
         );
     }
 
+    pub fn must_kv_txn_heartbeat(
+        &mut self,
+        region_id: u64,
+        pk: Vec<u8>,
+        ts: TimeStamp,
+        advise_lock_ttl: TimeStamp,
+    ) {
+        let mut heartbeat_req = TxnHeartBeatRequest::default();
+        heartbeat_req.set_context(self.get_context(region_id));
+        heartbeat_req.primary_lock = pk;
+        heartbeat_req.start_version = ts.into_inner();
+        heartbeat_req.advise_lock_ttl = advise_lock_ttl.into_inner();
+        let heartbeat_resp = self
+            .get_tikv_client(region_id)
+            .kv_txn_heart_beat(&heartbeat_req)
+            .unwrap();
+        assert!(!heartbeat_resp.has_region_error());
+        assert!(!heartbeat_resp.has_error());
+        assert_eq!(heartbeat_resp.lock_ttl, advise_lock_ttl.into_inner());
+    }
+
     pub fn async_kv_commit(
         &mut self,
         region_id: u64,
@@ -518,6 +606,23 @@ impl TestSuite {
         commit_req.commit_version = commit_ts.into_inner();
         self.get_tikv_client(region_id)
             .kv_commit_async(&commit_req)
+            .unwrap()
+    }
+
+    pub fn async_kv_txn_heartbeat(
+        &mut self,
+        region_id: u64,
+        pk: Vec<u8>,
+        ts: TimeStamp,
+        advise_lock_ttl: TimeStamp,
+    ) -> ClientUnaryReceiver<TxnHeartBeatResponse> {
+        let mut heartbeat_req = TxnHeartBeatRequest::default();
+        heartbeat_req.set_context(self.get_context(region_id));
+        heartbeat_req.primary_lock = pk;
+        heartbeat_req.start_version = ts.into_inner();
+        heartbeat_req.advise_lock_ttl = advise_lock_ttl.into_inner();
+        self.get_tikv_client(region_id)
+            .kv_txn_heart_beat_async(&heartbeat_req)
             .unwrap()
     }
 

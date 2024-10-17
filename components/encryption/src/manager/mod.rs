@@ -640,7 +640,7 @@ impl DataKeyManager {
         self.open_file_with_writer(path, file_writer, true /* create */)
     }
 
-    pub fn open_file_with_writer<P: AsRef<Path>, W: io::Write>(
+    pub fn open_file_with_writer<P: AsRef<Path>, W>(
         &self,
         path: P,
         writer: W,
@@ -948,6 +948,19 @@ impl DataKeyManager {
             self.dicts.link_file(src_fname, dst_fname, true)?;
         }
         Ok(())
+    }
+
+    // same logic in raft_log_engine/src/engine#rename
+    pub fn rename_file(&self, src_name: &PathBuf, dst_name: &PathBuf) -> IoResult<()> {
+        let src_str = src_name.to_str().unwrap();
+        let dst_str = dst_name.to_str().unwrap();
+        self.link_file(src_str, dst_str)?;
+        let r = file_system::rename(src_name, dst_name);
+        let del_file = if r.is_ok() { src_str } else { dst_str };
+        if let Err(e) = self.delete_file(del_file, None) {
+            warn!("fail to remove encryption metadata after renaming file"; "err" => ?e);
+        }
+        r
     }
 }
 

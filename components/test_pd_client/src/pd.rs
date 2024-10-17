@@ -581,6 +581,20 @@ impl PdCluster {
             .and_then(|k| self.regions.get(k).cloned()))
     }
 
+    fn scan_regions(&self, start: &[u8], end: &[u8], limit: i32) -> Vec<metapb::Region> {
+        let mut regions = vec![];
+        for (_, region) in self.regions.range((Excluded(start.to_vec()), Unbounded)) {
+            if !end.is_empty() && region.start_key.as_slice() >= end {
+                break;
+            }
+            regions.push(region.clone());
+            if regions.len() as i32 >= limit {
+                break;
+            }
+        }
+        regions
+    }
+
     fn get_region_approximate_size(&self, region_id: u64) -> Option<u64> {
         self.region_approximate_size.get(&region_id).cloned()
     }
@@ -923,12 +937,12 @@ pub struct TestPdClient {
     feature_gate: FeatureGate,
     trigger_leader_info_loss: AtomicBool,
 
-    pub gc_safepoints: RwLock<Vec<GcSafePoint>>,
+    pub gc_safepoints: RwLock<Vec<ServiceSafePoint>>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct GcSafePoint {
-    pub serivce: String,
+pub struct ServiceSafePoint {
+    pub service: String,
     pub ttl: Duration,
     pub safepoint: TimeStamp,
 }
@@ -1656,6 +1670,28 @@ impl PdClient for TestPdClient {
         }
     }
 
+    fn scan_regions(
+        &self,
+        start_key: &[u8],
+        end_key: &[u8],
+        limit: i32,
+    ) -> Result<Vec<pdpb::Region>> {
+        self.check_bootstrap()?;
+
+        let result: Vec<_> = self
+            .cluster
+            .rl()
+            .scan_regions(start_key, end_key, limit)
+            .into_iter()
+            .map(|r| {
+                let mut res = pdpb::Region::new();
+                res.set_region(r);
+                res
+            })
+            .collect();
+        Ok(result)
+    }
+
     fn get_cluster_config(&self) -> Result<metapb::Cluster> {
         self.check_bootstrap()?;
         Ok(self.cluster.rl().meta.clone())
@@ -1938,8 +1974,8 @@ impl PdClient for TestPdClient {
         ttl: Duration,
     ) -> PdFuture<()> {
         if ttl.as_secs() > 0 {
-            self.gc_safepoints.wl().push(GcSafePoint {
-                serivce: name,
+            self.gc_safepoints.wl().push(ServiceSafePoint {
+                service: name,
                 ttl,
                 safepoint,
             });

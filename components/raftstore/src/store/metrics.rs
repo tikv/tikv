@@ -324,6 +324,20 @@ make_static_metric! {
     pub struct LoadBaseSplitEventCounterVec: IntCounter {
         "type" => LoadBaseSplitEventType,
     }
+
+    pub struct StoreBusyOnApplyRegionsGaugeVec: IntGauge {
+        "type" => {
+            busy_apply_peers,
+            completed_apply_peers,
+        },
+    }
+
+    pub struct StoreBusyStateGaugeVec: IntGauge {
+        "type" => {
+            raftstore_busy,
+            applystore_busy,
+        },
+    }
 }
 
 lazy_static! {
@@ -705,13 +719,6 @@ lazy_static! {
         "Total number of checking stale peers."
     ).unwrap();
 
-    pub static ref INGEST_SST_DURATION_SECONDS: Histogram =
-        register_histogram!(
-            "tikv_snapshot_ingest_sst_duration_seconds",
-            "Bucketed histogram of rocksdb ingestion durations.",
-            exponential_buckets(0.005, 2.0, 20).unwrap()
-        ).unwrap();
-
     pub static ref RAFT_INVALID_PROPOSAL_COUNTER_VEC: IntCounterVec =
         register_int_counter_vec!(
             "tikv_raftstore_raft_invalid_proposal_total",
@@ -787,8 +794,8 @@ lazy_static! {
         exponential_buckets(1.0, 2.0, 20).unwrap()
     ).unwrap();
 
-    pub static ref RAFT_DISABLE_UNPERSISTED_APPLY_GAUGE: IntGauge = register_int_gauge!(
-        "tikv_raft_disable_unpersisted_apply",
+    pub static ref RAFT_ENABLE_UNPERSISTED_APPLY_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_raft_enable_unpersisted_apply_regions",
         "The number of regions that disable apply unpersisted raft log."
     ).unwrap();
 
@@ -971,4 +978,20 @@ lazy_static! {
         "The events of the lease to denying new admin commands being proposed by snapshot br.",
         &["event"]
     ).unwrap();
+
+    pub static ref STORE_BUSY_ON_APPLY_REGIONS_GAUGE_VEC: StoreBusyOnApplyRegionsGaugeVec =
+        register_static_int_gauge_vec!(
+            StoreBusyOnApplyRegionsGaugeVec,
+            "tikv_raftstore_busy_on_apply_region_total",
+            "Total number of regions busy on apply or complete apply.",
+            &["type"]
+        ).unwrap();
+
+    pub static ref STORE_PROCESS_BUSY_GAUGE_VEC: StoreBusyStateGaugeVec =
+        register_static_int_gauge_vec!(
+            StoreBusyStateGaugeVec,
+            "tikv_raftstore_process_busy",
+            "Is raft process busy or not",
+            &["type"]
+        ).unwrap();
 }

@@ -92,6 +92,7 @@ impl TopNHeap {
                             Json => JsonRef,
                             Enum => EnumRef,
                             Set => SetRef,
+                            VectorFloat32 => VectorFloat32Ref,
                         ],
                         match dest_vector_value {
                             VectorValue::TT(dest_column) => {

@@ -1,6 +1,10 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{CfName, IterOptions, ReadOptions, CF_DEFAULT, DATA_KEY_PREFIX_LEN};
+use engine_rocks::PerfContext;
+use engine_traits::{
+    CfName, IterMetricsCollector, IterOptions, MetricsExt, ReadOptions, CF_DEFAULT,
+    DATA_KEY_PREFIX_LEN,
+};
 use txn_types::{Key, TimeStamp, Value};
 
 use crate::storage::kv::{Error, ErrorInner, Iterator, Result, Snapshot};
@@ -227,6 +231,26 @@ impl<I: Iterator> Iterator for RawMvccIterator<I> {
         self.cur_value
             .as_deref()
             .unwrap_or_else(|| self.inner.value())
+    }
+}
+
+pub struct RawMvccIterMetricsCollector;
+
+impl IterMetricsCollector for RawMvccIterMetricsCollector {
+    fn internal_delete_skipped_count(&self) -> u64 {
+        PerfContext::get().internal_delete_skipped_count()
+    }
+
+    fn internal_key_skipped_count(&self) -> u64 {
+        PerfContext::get().internal_key_skipped_count()
+    }
+}
+
+impl<I: Iterator> MetricsExt for RawMvccIterator<I> {
+    type Collector = RawMvccIterMetricsCollector;
+
+    fn metrics_collector(&self) -> Self::Collector {
+        RawMvccIterMetricsCollector {}
     }
 }
 

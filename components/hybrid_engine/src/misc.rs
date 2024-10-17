@@ -1,13 +1,16 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{KvEngine, MiscExt, RangeCacheEngine, Result, WriteBatchExt};
+use engine_traits::{
+    CacheRegion, EvictReason, KvEngine, MiscExt, RegionCacheEngine, RegionEvent, Result,
+    WriteBatchExt,
+};
 
 use crate::{engine::HybridEngine, hybrid_metrics::HybridEngineStatisticsReporter};
 
 impl<EK, EC> MiscExt for HybridEngine<EK, EC>
 where
     EK: KvEngine,
-    EC: RangeCacheEngine,
+    EC: RegionCacheEngine,
     HybridEngine<EK, EC>: WriteBatchExt,
 {
     type StatisticsReporter = HybridEngineStatisticsReporter;
@@ -35,6 +38,13 @@ where
         strategy: engine_traits::DeleteStrategy,
         ranges: &[engine_traits::Range<'_>],
     ) -> Result<bool> {
+        for r in ranges {
+            self.region_cache_engine()
+                .on_region_event(RegionEvent::EvictByRange {
+                    range: CacheRegion::new(0, 0, r.start_key.to_vec(), r.end_key.to_vec()),
+                    reason: EvictReason::DeleteRange,
+                });
+        }
         self.disk_engine()
             .delete_ranges_cf(wopts, cf, strategy, ranges)
     }
@@ -139,5 +149,74 @@ where
     type DiskEngine = EK::DiskEngine;
     fn get_disk_engine(&self) -> &Self::DiskEngine {
         self.disk_engine().get_disk_engine()
+    }
+}
+
+#[cfg(test)]
+pub mod tests {
+    use engine_traits::{
+        CacheRegion, DeleteStrategy, MiscExt, Mutable, Range, RegionCacheEngine, WriteBatch,
+        WriteBatchExt, WriteOptions, CF_DEFAULT,
+    };
+    use in_memory_engine::{test_util::new_region, InMemoryEngineConfig};
+
+    use crate::util::hybrid_engine_for_tests;
+
+    #[test]
+    fn test_delete_range() {
+        let r1 = new_region(1, b"k00", b"k10");
+        let r2 = new_region(2, b"k20", b"k30");
+        let r3 = new_region(3, b"k40", b"k50");
+        let r1_clone = r1.clone();
+        let r2_clone = r2.clone();
+        let r3_clone = r3.clone();
+        let (_path, hybrid_engine) = hybrid_engine_for_tests(
+            "temp",
+            InMemoryEngineConfig::config_for_test(),
+            move |memory_engine| {
+                memory_engine.new_region(r1_clone);
+                memory_engine.new_region(r2_clone);
+                memory_engine.new_region(r3_clone);
+            },
+        )
+        .unwrap();
+
+        let cache_r1 = CacheRegion::from_region(&r1);
+        let cache_r2 = CacheRegion::from_region(&r2);
+        let cache_r3 = CacheRegion::from_region(&r3);
+
+        let mut write_batch = hybrid_engine.write_batch();
+        write_batch.prepare_for_region(cache_r1.clone());
+        write_batch.put(b"zk02", b"val").unwrap();
+        write_batch.put(b"zk03", b"val").unwrap();
+        write_batch.prepare_for_region(cache_r2.clone());
+        write_batch.put(b"zk22", b"val").unwrap();
+        write_batch.put(b"zk23", b"val").unwrap();
+        write_batch.prepare_for_region(cache_r3.clone());
+        write_batch.put(b"zk42", b"val").unwrap();
+        write_batch.put(b"zk43", b"val").unwrap();
+        write_batch.write().unwrap();
+
+        hybrid_engine
+            .delete_ranges_cf(
+                &WriteOptions::default(),
+                CF_DEFAULT,
+                DeleteStrategy::DeleteByRange,
+                &[Range::new(b"zk00", b"zk15"), Range::new(b"zk22", b"zk27")],
+            )
+            .unwrap();
+
+        hybrid_engine
+            .region_cache_engine()
+            .snapshot(cache_r1.clone(), 1000, 1000)
+            .unwrap_err();
+        hybrid_engine
+            .region_cache_engine()
+            .snapshot(cache_r2.clone(), 1000, 1000)
+            .unwrap_err();
+        hybrid_engine
+            .region_cache_engine()
+            .snapshot(cache_r3.clone(), 1000, 1000)
+            .unwrap();
     }
 }

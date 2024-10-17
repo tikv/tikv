@@ -4,6 +4,7 @@ pub mod tablet_flow_controller;
 
 use std::time::Duration;
 
+use online_config::ConfigChange;
 pub use singleton_flow_controller::EngineFlowController;
 pub use tablet_flow_controller::TabletFlowController;
 
@@ -48,6 +49,14 @@ impl FlowController {
             FlowController::Tablet(ref controller) => controller.unconsume(region_id, bytes),
         }
     }
+
+    pub fn update_config(&self, change: ConfigChange) -> online_config::Result<()> {
+        match self {
+            FlowController::Singleton(ref controller) => controller.update_config(change),
+            FlowController::Tablet(ref controller) => controller.update_config(change),
+        }
+    }
+
     pub fn enable(&self, enable: bool) {
         match self {
             FlowController::Singleton(ref controller) => controller.enable(enable),

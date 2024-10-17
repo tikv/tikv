@@ -19,8 +19,8 @@ use bytes::Bytes;
 use collections::{HashMap, HashSet};
 use crossbeam::{atomic::AtomicCell, channel::TrySendError};
 use engine_traits::{
-    CacheRange, Engines, KvEngine, PerfContext, RaftEngine, Snapshot, SnapshotContext, WriteBatch,
-    WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    Engines, KvEngine, PerfContext, RaftEngine, Snapshot, WriteBatch, WriteOptions, CF_DEFAULT,
+    CF_LOCK, CF_WRITE,
 };
 use error_code::ErrorCodeExt;
 use fail::fail_point;
@@ -43,7 +43,7 @@ use kvproto::{
     },
 };
 use parking_lot::RwLockUpgradableReadGuard;
-use pd_client::INVALID_ID;
+use pd_client::{Feature, INVALID_ID};
 use protobuf::Message;
 use raft::{
     self,
@@ -58,6 +58,7 @@ use tikv_util::{
     box_err,
     codec::number::decode_u64,
     debug, error, info,
+    store::find_peer_by_id,
     sys::disk::DiskUsage,
     time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant, InstantExt},
     warn,
@@ -65,7 +66,7 @@ use tikv_util::{
     Either,
 };
 use time::{Duration as TimeDuration, Timespec};
-use tracker::GLOBAL_TRACKERS;
+use tracker::{TrackerTokenArray, GLOBAL_TRACKERS};
 use txn_types::{TimeStamp, WriteBatchFlags};
 use uuid::Uuid;
 
@@ -89,7 +90,7 @@ use crate::{
         RoleChange,
     },
     errors::RAFTSTORE_IS_BUSY,
-    router::RaftStoreRouter,
+    router::{RaftStoreRouter, ReadContext},
     store::{
         async_io::{read::ReadTask, write::WriteMsg, write_router::WriteRouter},
         fsm::{
@@ -119,6 +120,9 @@ const SHRINK_CACHE_CAPACITY: usize = 64;
 // 1s
 const MIN_BCAST_WAKE_UP_INTERVAL: u64 = 1_000;
 const REGION_READ_PROGRESS_CAP: usize = 128;
+
+const SNAP_GEN_PRECHECK_FEATURE: Feature = Feature::require(8, 2, 0);
+
 #[doc(hidden)]
 pub const MAX_COMMITTED_SIZE_PER_READY: u64 = 16 * 1024 * 1024;
 
@@ -917,6 +921,10 @@ where
     /// * `Some(false)` => initial state, not be recorded.
     /// * `Some(true)` => busy on apply, and already recorded.
     pub busy_on_apply: Option<bool>,
+    /// The index of last commited idx in the leader. It's used to check whether
+    /// this peer has raft log gaps and whether should be marked busy on
+    /// apply.
+    pub last_leader_committed_idx: Option<u64>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -966,7 +974,9 @@ where
             pre_vote: cfg.prevote,
             max_committed_size_per_ready: MAX_COMMITTED_SIZE_PER_READY,
             priority: if peer.is_witness { -1 } else { 0 },
-            max_apply_unpersisted_log_limit: cfg.max_apply_unpersisted_log_limit,
+            // always disable applying unpersisted log at initialization,
+            // will enable it after applying to the current last_index.
+            max_apply_unpersisted_log_limit: 0,
             ..Default::default()
         };
 
@@ -1065,6 +1075,7 @@ where
             unsafe_recovery_state: None,
             snapshot_recovery_state: None,
             busy_on_apply: Some(false),
+            last_leader_committed_idx: None,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -1180,7 +1191,7 @@ where
     #[inline]
     pub fn maybe_update_apply_unpersisted_log_state(&mut self, applied_index: u64) {
         if self.min_safe_index_for_unpersisted_apply > 0
-            && self.min_safe_index_for_unpersisted_apply < applied_index
+            && self.min_safe_index_for_unpersisted_apply <= applied_index
         {
             if self.max_apply_unpersisted_log_limit > 0
                 && self
@@ -1190,7 +1201,7 @@ where
                     .max_apply_unpersisted_log_limit
                     == 0
             {
-                RAFT_DISABLE_UNPERSISTED_APPLY_GAUGE.dec();
+                RAFT_ENABLE_UNPERSISTED_APPLY_GAUGE.inc();
             }
             self.raft_group
                 .raft
@@ -1200,7 +1211,7 @@ where
     }
 
     #[inline]
-    fn disable_apply_unpersisted_log(&mut self, min_enable_index: u64) {
+    pub fn disable_apply_unpersisted_log(&mut self, min_enable_index: u64) {
         self.min_safe_index_for_unpersisted_apply =
             std::cmp::max(self.min_safe_index_for_unpersisted_apply, min_enable_index);
         if self
@@ -1211,7 +1222,7 @@ where
             > 0
         {
             self.raft_group.raft.set_max_apply_unpersisted_log_limit(0);
-            RAFT_DISABLE_UNPERSISTED_APPLY_GAUGE.inc();
+            RAFT_ENABLE_UNPERSISTED_APPLY_GAUGE.dec();
         }
     }
 
@@ -1689,6 +1700,26 @@ where
         self.raft_group.mut_store()
     }
 
+    #[inline]
+    pub fn approximate_size(&self) -> Option<u64> {
+        self.split_check_trigger.approximate_size
+    }
+
+    #[inline]
+    pub fn approximate_keys(&self) -> Option<u64> {
+        self.split_check_trigger.approximate_keys
+    }
+
+    #[inline]
+    pub fn set_approximate_size(&mut self, approximate_size: Option<u64>) {
+        self.split_check_trigger.approximate_size = approximate_size;
+    }
+
+    #[inline]
+    pub fn set_approximate_keys(&mut self, approximate_keys: Option<u64>) {
+        self.split_check_trigger.approximate_keys = approximate_keys;
+    }
+
     /// Whether the snapshot is handling.
     /// See the comments of `check_snap_status` for more details.
     #[inline]
@@ -1779,7 +1810,7 @@ where
                 "send raft msg";
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
-                "msg_type" => ?msg_type,
+                "msg_type" => %util::MsgType(&msg),
                 "msg_size" => msg.get_message().compute_size(),
                 "to" => to_peer_id,
                 "disk_usage" => ?msg.get_disk_usage(),
@@ -1932,9 +1963,7 @@ where
             }
         }
         if for_balance {
-            if let Some(gen_task) = self.mut_store().mut_gen_snap_task() {
-                gen_task.set_for_balance();
-            }
+            self.get_store().set_gen_snap_task_for_balance();
         }
         Ok(())
     }
@@ -2637,6 +2666,57 @@ where
         }
     }
 
+    /// Cancel the snapshot generation task under the following conditions:
+    ///
+    /// 1. The requesting peer is removed by a configuration change.
+    /// 2. The requesting peer becomes unreachable, e.g., TiKV goes down or a
+    ///    network partition occurs.
+    pub fn maybe_cancel_gen_snap_task(&self, unreachable_store_id: Option<u64>) {
+        let to_peer = match self.get_store().get_gen_snap_task().as_ref() {
+            Some(task) => task.to_peer.clone(),
+            None => return,
+        };
+        let cancel_by_unreachable_store =
+            unreachable_store_id.map_or(false, |s| to_peer.get_store_id() == s);
+        let cancel_by_peer_not_found = find_peer_by_id(self.region(), to_peer.get_id()).is_none();
+        if cancel_by_unreachable_store || cancel_by_peer_not_found {
+            self.get_store().cancel_generating_snap(None);
+            warn!(
+                "cancel generate snap task";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer_id(),
+                "to_peer" => ?to_peer,
+                "cancel_by_peer_not_found" => cancel_by_peer_not_found,
+                "cancel_by_unreachable_store" => cancel_by_unreachable_store,
+            );
+        }
+    }
+
+    pub fn handle_gen_snap_task<T: Transport>(&mut self, ctx: &mut PollContext<EK, ER, T>) {
+        // Check if gen snap task need to be cancelled, otherwise it will block
+        // snapshot and subsequent conf changes.
+        self.maybe_cancel_gen_snap_task(None);
+
+        if self.get_store().has_gen_snap_task() {
+            // If the snapshot gen precheck feature is enabled, the leader needs
+            // to complete a precheck with the target follower before the
+            // snapshot generation.
+            if ctx.feature_gate.can_enable(SNAP_GEN_PRECHECK_FEATURE) {
+                // Continuously send snap gen precheck requests to the follower
+                // until an approval is received.
+                if let Some(to_peer) = self.get_store().need_gen_snap_precheck() {
+                    self.send_snap_gen_precheck_request(ctx, &to_peer);
+                }
+            } else {
+                let gen_task = self.mut_store().take_gen_snap_task().unwrap();
+                self.pending_request_snapshot_count
+                    .fetch_add(1, Ordering::SeqCst);
+                ctx.apply_router
+                    .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
+            }
+        }
+    }
+
     pub fn handle_raft_ready_append<T: Transport>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
@@ -2698,13 +2778,7 @@ where
 
         if !self.raft_group.has_ready() {
             fail_point!("before_no_ready_gen_snap_task", |_| None);
-            // Generating snapshot task won't set ready for raft group.
-            if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
-                self.pending_request_snapshot_count
-                    .fetch_add(1, Ordering::SeqCst);
-                ctx.apply_router
-                    .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
-            }
+            self.handle_gen_snap_task(ctx);
             return None;
         }
 
@@ -2781,12 +2855,7 @@ where
         // needs to be sent to the apply system.
         // Always sending snapshot task behind apply task, so it gets latest
         // snapshot.
-        if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
-            self.pending_request_snapshot_count
-                .fetch_add(1, Ordering::SeqCst);
-            ctx.apply_router
-                .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
-        }
+        self.handle_gen_snap_task(ctx);
 
         let state_role = ready.ss().map(|ss| ss.raft_state);
         let has_new_entries = !ready.entries().is_empty();
@@ -2920,7 +2989,13 @@ where
             if for_witness {
                 // inform next round to check apply status
                 ctx.router
-                    .send_casual_msg(snap_region.get_id(), CasualMessage::SnapshotApplied)
+                    .send_casual_msg(
+                        snap_region.get_id(),
+                        CasualMessage::SnapshotApplied {
+                            peer_id: self.peer.get_id(),
+                            tombstone: false,
+                        },
+                    )
                     .unwrap();
             }
             // When applying snapshot, there is no log applied and not compacted yet.
@@ -3030,6 +3105,13 @@ where
                             // In this case the apply can be guaranteed to be successful. Invoke the
                             // on_committed callback if necessary.
                             p.cb.invoke_committed();
+
+                            debug!("raft log is committed";
+                                "req_info" => TrackerTokenArray::new(p.cb.write_trackers()
+                                    .into_iter()
+                                    .filter_map(|time_tracker| time_tracker.as_tracker_token())
+                                    .collect::<Vec<_>>().as_slice())
+                            );
                         }
                         p
                     })
@@ -3833,7 +3915,12 @@ where
         self.should_wake_up = true;
     }
 
-    fn pre_transfer_leader(&mut self, peer: &metapb::Peer) -> bool {
+    fn pre_transfer_leader<T: Transport>(
+        &mut self,
+        peer: &metapb::Peer,
+        extra_msgs: Vec<ExtraMessage>,
+        ctx: &mut PollContext<EK, ER, T>,
+    ) -> bool {
         // Checks if safe to transfer leader.
         if self.raft_group.raft.has_pending_conf() {
             info!(
@@ -3859,6 +3946,17 @@ where
         // forbids setting it for MsgTransferLeader messages.
         msg.set_log_term(self.term());
         self.raft_group.raft.msgs.push(msg);
+
+        extra_msgs.into_iter().for_each(|extra_msg| {
+            let mut msg = RaftMessage::default();
+            msg.set_region_id(self.region_id);
+            msg.set_from_peer(self.peer.clone());
+            msg.set_to_peer(peer.clone());
+            msg.set_region_epoch(self.region().get_region_epoch().clone());
+            msg.set_extra_msg(extra_msg);
+            self.send_raft_messages(ctx, vec![msg]);
+        });
+
         true
     }
 
@@ -4712,27 +4810,29 @@ where
     ///    to do the remaining work.
     ///
     /// See also: tikv/rfcs#37.
-    fn propose_transfer_leader<T>(
+    fn propose_transfer_leader<T: Transport>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
         req: RaftCmdRequest,
         cb: Callback<EK::Snapshot>,
     ) -> bool {
         let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
-        if let Err(err) = ctx
+        let extra_msgs = match ctx
             .coprocessor_host
             .pre_transfer_leader(self.region(), transfer_leader)
         {
-            warn!("Coprocessor rejected transfer leader."; "err" => ?err,
+            Err(err) => {
+                warn!("Coprocessor rejected transfer leader."; "err" => ?err,
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
                 "transferee" => transfer_leader.get_peer().get_id());
-            let mut resp = RaftCmdResponse::new();
-            *resp.mut_header().mut_error() = Error::from(err).into();
-            cb.invoke_with_response(resp);
-            return false;
-        }
-
+                let mut resp = RaftCmdResponse::new();
+                *resp.mut_header().mut_error() = Error::from(err).into();
+                cb.invoke_with_response(resp);
+                return false;
+            }
+            Ok(msgs) => msgs,
+        };
         ctx.raft_metrics.propose.transfer_leader.inc();
 
         let prs = self.raft_group.raft.prs();
@@ -4764,7 +4864,7 @@ where
         let transferred = if peer.id == self.peer.id {
             false
         } else {
-            self.pre_transfer_leader(peer)
+            self.pre_transfer_leader(peer, extra_msgs, ctx)
         };
 
         // transfer leader command doesn't need to replicate log and apply, so we
@@ -4901,9 +5001,9 @@ where
         Ok(propose_index)
     }
 
-    fn handle_read<E: ReadExecutor<Tablet = EK>>(
+    fn handle_read<T>(
         &self,
-        reader: &mut E,
+        ctx: &mut PollContext<EK, ER, T>,
         req: RaftCmdRequest,
         check_epoch: bool,
         read_index: Option<u64>,
@@ -4951,16 +5051,23 @@ where
             }
         }
 
-        let snap_ctx = if let Ok(read_ts) = decode_u64(&mut req.get_header().get_flag_data()) {
-            Some(SnapshotContext {
-                range: Some(CacheRange::from_region(&region)),
-                read_ts,
-            })
+        let read_ctx = if let Ok(read_ts) = decode_u64(&mut req.get_header().get_flag_data()) {
+            ReadContext::new(None, Some(read_ts))
         } else {
-            None
+            ReadContext::new(None, None)
         };
 
-        let mut resp = reader.execute(&req, &Arc::new(region), read_index, snap_ctx, None);
+        let mut reader = PollContextReader {
+            engines: &ctx.engines,
+        };
+        let mut resp = reader.execute(
+            &read_ctx,
+            &req,
+            &Arc::new(region),
+            read_index,
+            None,
+            &ctx.coprocessor_host,
+        );
         if let Some(snap) = resp.snapshot.as_mut() {
             snap.txn_ext = Some(self.txn_ext.clone());
             snap.bucket_meta = self
@@ -5147,7 +5254,7 @@ where
 
     // Check disk usages for the peer itself and other peers in the raft group.
     // The return value indicates whether the proposal is allowed or not.
-    fn check_normal_proposal_with_disk_full_opt<T>(
+    fn check_normal_proposal_with_disk_full_opt<T: Transport>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
         disk_full_opt: DiskFullOpt,
@@ -5183,7 +5290,7 @@ where
                         "peer_id" => self.peer.get_id(),
                         "target_peer_id" => p.get_id(),
                     );
-                    self.pre_transfer_leader(&p);
+                    self.pre_transfer_leader(&p, vec![], ctx);
                 }
             }
         } else {
@@ -5319,6 +5426,37 @@ where
                 self.snapshot_recovery_state = None;
             }
         }
+    }
+
+    pub fn update_last_leader_committed_idx(&mut self, committed_index: u64) {
+        if self.is_leader() {
+            // Ignore.
+            return;
+        }
+
+        let local_committed_index = self.get_store().commit_index();
+        if committed_index < local_committed_index {
+            warn!(
+                "stale committed index";
+                "region_id" => self.region().get_id(),
+                "peer_id" => self.peer_id(),
+                "last_committed_index" => committed_index,
+                "local_index" => local_committed_index,
+            );
+        } else {
+            self.last_leader_committed_idx = Some(committed_index);
+            debug!(
+                "update last committed index from leader";
+                "region_id" => self.region().get_id(),
+                "peer_id" => self.peer_id(),
+                "last_committed_index" => committed_index,
+                "local_index" => local_committed_index,
+            );
+        }
+    }
+
+    pub fn needs_update_last_leader_committed_idx(&self) -> bool {
+        self.busy_on_apply.is_some() && self.last_leader_committed_idx.is_none()
     }
 }
 
@@ -5476,8 +5614,8 @@ where
             pending_peers: self.collect_pending_peers(ctx),
             written_bytes: self.peer_stat.written_bytes,
             written_keys: self.peer_stat.written_keys,
-            approximate_size: self.split_check_trigger.approximate_size,
-            approximate_keys: self.split_check_trigger.approximate_keys,
+            approximate_size: self.approximate_size(),
+            approximate_keys: self.approximate_keys(),
             replication_status: self.region_replication_status(ctx),
             wait_data_peers: self.wait_data_peers.clone(),
         });
@@ -5514,7 +5652,7 @@ where
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
             "msg_type" => ?ty,
-            "to" => to.get_id()
+            "to" => ?to
         );
         send_msg.set_extra_msg(msg);
         send_msg.set_to_peer(to.clone());
@@ -5640,8 +5778,30 @@ where
         }
     }
 
+    pub fn send_snap_gen_precheck_request<T: Transport>(
+        &mut self,
+        ctx: &mut PollContext<EK, ER, T>,
+        to_peer: &metapb::Peer,
+    ) {
+        let mut extra_msg = ExtraMessage::default();
+        extra_msg.set_type(ExtraMessageType::MsgSnapGenPrecheckRequest);
+        self.send_extra_message(extra_msg, &mut ctx.trans, to_peer);
+    }
+
+    pub fn send_snap_gen_precheck_response<T: Transport>(
+        &mut self,
+        ctx: &mut PollContext<EK, ER, T>,
+        to_peer: &metapb::Peer,
+        passed: bool,
+    ) {
+        let mut extra_msg = ExtraMessage::default();
+        extra_msg.set_type(ExtraMessageType::MsgSnapGenPrecheckResponse);
+        extra_msg.set_snap_gen_precheck_passed(passed);
+        self.send_extra_message(extra_msg, &mut ctx.trans, to_peer);
+    }
+
     pub fn send_want_rollback_merge<T: Transport>(
-        &self,
+        &mut self,
         premerge_commit: u64,
         ctx: &mut PollContext<EK, ER, T>,
     ) {
@@ -5755,7 +5915,7 @@ where
             != self.max_apply_unpersisted_log_limit
         {
             if self.max_apply_unpersisted_log_limit == 0 {
-                self.raft_group.raft.set_max_apply_unpersisted_log_limit(0);
+                self.disable_apply_unpersisted_log(0);
             } else if self.is_leader() {
                 // Currently only enable unpersisted apply on leader.
                 self.maybe_update_apply_unpersisted_log_state(
@@ -5892,7 +6052,11 @@ where
     }
 }
 
-impl<EK, ER, T> ReadExecutor for PollContext<EK, ER, T>
+struct PollContextReader<'a, EK, ER> {
+    engines: &'a Engines<EK, ER>,
+}
+
+impl<'a, EK, ER> ReadExecutor for PollContextReader<'a, EK, ER>
 where
     EK: KvEngine,
     ER: RaftEngine,
@@ -5903,12 +6067,8 @@ where
         &self.engines.kv
     }
 
-    fn get_snapshot(
-        &mut self,
-        snap_ctx: Option<SnapshotContext>,
-        _: &Option<LocalReadContext<'_, EK>>,
-    ) -> Arc<EK::Snapshot> {
-        Arc::new(self.engines.kv.snapshot(snap_ctx))
+    fn get_snapshot(&mut self, _: &Option<LocalReadContext<'_, EK>>) -> Arc<EK::Snapshot> {
+        Arc::new(self.engines.kv.snapshot())
     }
 }
 

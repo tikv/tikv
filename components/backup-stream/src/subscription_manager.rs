@@ -86,25 +86,21 @@ impl ResolvedRegions {
     /// Note: Maybe we can compute the global checkpoint internal and getting
     /// the interface clear. However we must take the `min_ts` or we cannot
     /// provide valid global checkpoint if there isn't any region checkpoint.
-    pub fn new(checkpoint: TimeStamp, checkpoints: Vec<ResolveResult>) -> Self {
+    pub const fn new(checkpoint: TimeStamp, checkpoints: Vec<ResolveResult>) -> Self {
         Self {
             items: checkpoints,
             checkpoint,
         }
     }
 
-    /// take the region checkpoints from the structure.
-    #[deprecated = "please use `take_resolve_result` instead."]
-    pub fn take_region_checkpoints(&mut self) -> Vec<(Region, TimeStamp)> {
-        std::mem::take(&mut self.items)
-            .into_iter()
-            .map(|x| (x.region, x.checkpoint))
-            .collect()
-    }
-
     /// take the resolve result from this struct.
     pub fn take_resolve_result(&mut self) -> Vec<ResolveResult> {
         std::mem::take(&mut self.items)
+    }
+
+    /// Get the resolve results.
+    pub fn resolve_results(&self) -> &[ResolveResult] {
+        &self.items
     }
 
     /// get the global checkpoint.
@@ -141,8 +137,6 @@ trait InitialScan: Clone + Sync + Send + 'static {
         start_ts: TimeStamp,
         handle: ObserveHandle,
     ) -> Result<Statistics>;
-
-    fn handle_fatal_error(&self, region: &Region, err: Error);
 }
 
 #[async_trait::async_trait]
@@ -170,19 +164,6 @@ where
         fail::fail_point!("scan_after_get_snapshot");
         let stat = self.do_initial_scan(region, h, start_ts, snap).await?;
         Ok(stat)
-    }
-
-    fn handle_fatal_error(&self, region: &Region, err: Error) {
-        try_send!(
-            self.scheduler,
-            Task::FatalError(
-                TaskSelector::ByRange(
-                    region.get_start_key().to_owned(),
-                    region.get_end_key().to_owned()
-                ),
-                Box::new(err),
-            )
-        );
     }
 }
 
@@ -323,6 +304,8 @@ pub struct RegionSubscriptionManager<S, R> {
     messenger: WeakSender<ObserveOp>,
     scan_pool_handle: ScanPoolHandle,
     scans: Arc<FutureWaitGroup>,
+
+    advance_ts_interval: Duration,
 }
 
 /// Create a pool for doing initial scanning.
@@ -358,6 +341,7 @@ where
         meta_cli: MetadataClient<S>,
         scan_pool_size: usize,
         resolver: BackupStreamResolver<HChkLd, E>,
+        advance_ts_interval: Duration,
     ) -> (Sender<ObserveOp>, future![()])
     where
         E: KvEngine,
@@ -377,6 +361,7 @@ where
             scans: FutureWaitGroup::new(),
             failure_count: HashMap::new(),
             memory_manager: Arc::clone(&initial_loader.quota),
+            advance_ts_interval,
         };
         let fut = op.region_operator_loop(rx, resolver);
         (tx, fut)
@@ -447,13 +432,20 @@ where
                     self.on_observe_result(region, handle, err).await;
                 }
                 ObserveOp::ResolveRegions { callback, min_ts } => {
+                    fail::fail_point!("subscription_manager_resolve_regions");
                     let now = Instant::now();
                     let timedout = self.wait(Duration::from_secs(5)).await;
                     if timedout {
                         warn!("waiting for initial scanning done timed out, forcing progress!";
                             "take" => ?now.saturating_elapsed(), "timedout" => %timedout);
                     }
-                    let regions = resolver.resolve(self.subs.current_regions(), min_ts).await;
+                    let regions = resolver
+                        .resolve(
+                            self.subs.current_regions(),
+                            min_ts,
+                            Some(self.advance_ts_interval),
+                        )
+                        .await;
                     let cps = self.subs.resolve_with(min_ts, regions);
                     let min_region = cps.iter().min_by_key(|rs| rs.checkpoint);
                     // If there isn't any region observed, the `min_ts` can be used as resolved ts
@@ -839,6 +831,8 @@ mod test {
         time::Duration,
     };
 
+    use dashmap::DashMap;
+    use encryption::BackupEncryptionManager;
     use engine_test::{kv::KvTestEngine, raft::RaftTestEngine};
     use kvproto::{
         brpb::{Noop, StorageBackend, StreamBackupTaskInfo},
@@ -849,7 +843,10 @@ mod test {
         router::{CdcRaftRouter, ServerRaftStoreRouter},
         RegionInfo,
     };
-    use tikv::{config::BackupStreamConfig, storage::Statistics};
+    use tikv::{
+        config::BackupStreamConfig,
+        storage::{txn::txn_status_cache::TxnStatusCache, Statistics},
+    };
     use tikv_util::{box_err, info, memory::MemoryQuota, worker::dummy_scheduler};
     use tokio::{sync::mpsc::Sender, task::JoinHandle};
     use txn_types::TimeStamp;
@@ -886,14 +883,10 @@ mod test {
         async fn do_initial_scan(
             &self,
             region: &Region,
-            start_ts: txn_types::TimeStamp,
-            handle: raftstore::coprocessor::ObserveHandle,
-        ) -> crate::errors::Result<tikv::storage::Statistics> {
+            start_ts: TimeStamp,
+            handle: ObserveHandle,
+        ) -> crate::errors::Result<Statistics> {
             (self.0)(region, start_ts, handle)
-        }
-
-        fn handle_fatal_error(&self, region: &Region, err: crate::errors::Error) {
-            panic!("fatal {:?} {}", region, err)
         }
     }
 
@@ -907,7 +900,7 @@ mod test {
         use super::ScanCmd;
         use crate::{subscription_manager::spawn_executors, utils::FutureWaitGroup};
 
-        fn should_finish_in(f: impl FnOnce() + Send + 'static, d: std::time::Duration) {
+        fn should_finish_in(f: impl FnOnce() + Send + 'static, d: Duration) {
             let (tx, rx) = futures::channel::oneshot::channel();
             std::thread::spawn(move || {
                 f();
@@ -1042,10 +1035,17 @@ mod test {
             let meta_cli = SlashEtcStore::default();
             let meta_cli = MetadataClient::new(meta_cli, 1);
             let (scheduler, mut output) = dummy_scheduler();
-            let subs = SubscriptionTracer::default();
+            let subs = SubscriptionTracer(
+                Arc::new(DashMap::new()),
+                Arc::new(TxnStatusCache::new_for_test()),
+            );
             let memory_manager = Arc::new(MemoryQuota::new(1024));
             let (tx, mut rx) = tokio::sync::mpsc::channel(8);
-            let router = RouterInner::new(scheduler.clone(), BackupStreamConfig::default().into());
+            let router = RouterInner::new(
+                scheduler.clone(),
+                BackupStreamConfig::default().into(),
+                BackupEncryptionManager::default(),
+            );
             let mut task = StreamBackupTaskInfo::new();
             task.set_name(task_name.to_owned());
             task.set_storage({
@@ -1076,6 +1076,7 @@ mod test {
                 messenger: tx.downgrade(),
                 scan_pool_handle: spawn_executors_to(init, pool.handle()),
                 scans: FutureWaitGroup::new(),
+                advance_ts_interval: Duration::from_secs(1),
             };
             let events = Arc::new(Mutex::new(vec![]));
             let ob_events = Arc::clone(&events);

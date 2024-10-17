@@ -2,7 +2,6 @@
 
 use std::{
     fmt::Write,
-    path::Path,
     sync::Arc,
     thread,
     time::{Duration, Instant},
@@ -141,12 +140,12 @@ pub fn put_cf_till_size<T: Simulator<EK>, EK: KvEngine>(
 }
 
 pub fn configure_for_encryption(config: &mut Config) {
-    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let master_key = test_util::new_test_file_master_key(config.cfg_dir.as_ref().unwrap().path());
 
     let cfg = &mut config.security.encryption;
     cfg.data_encryption_method = EncryptionMethod::Aes128Ctr;
     cfg.data_key_rotation_period = ReadableDuration(Duration::from_millis(100));
-    cfg.master_key = test_util::new_test_file_master_key(manifest_dir);
+    cfg.master_key = master_key;
 }
 
 pub fn configure_for_snapshot(config: &mut Config) {
@@ -199,17 +198,31 @@ pub fn wait_for_synced(
         .get(&node_id)
         .unwrap()
         .clone();
-    let leader = cluster.leader_of_region(region_id).unwrap();
-    let epoch = cluster.get_region_epoch(region_id);
-    let mut ctx = Context::default();
-    ctx.set_region_id(region_id);
-    ctx.set_peer(leader);
-    ctx.set_region_epoch(epoch);
-    let snap_ctx = SnapContext {
-        pb_ctx: &ctx,
-        ..Default::default()
+
+    let mut count = 0;
+    let snapshot = loop {
+        count += 1;
+        let leader = cluster.leader_of_region(region_id).unwrap();
+        let epoch = cluster.get_region_epoch(region_id);
+        let mut ctx = Context::default();
+        ctx.set_region_id(region_id);
+        ctx.set_peer(leader);
+        ctx.set_region_epoch(epoch);
+        let snap_ctx = SnapContext {
+            pb_ctx: &ctx,
+            ..Default::default()
+        };
+        match storage.snapshot(snap_ctx) {
+            Ok(s) => break s,
+            Err(e) => {
+                if count <= 5 {
+                    continue;
+                }
+                panic!("all retry failed: {:?}", e);
+            }
+        }
     };
-    let snapshot = storage.snapshot(snap_ctx).unwrap();
+
     let txn_ext = snapshot.txn_ext.clone().unwrap();
     for retry in 0..10 {
         if txn_ext.is_max_ts_synced() {

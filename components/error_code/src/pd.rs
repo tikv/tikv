@@ -12,5 +12,7 @@ define_error_codes!(
     REGION_NOT_FOUND => ("RegionNotFound", "", ""),
     STORE_TOMBSTONE => ("StoreTombstone", "", ""),
     DATA_COMPACTED => ("DataCompacted","",""),
+    STALE_SERVICE_GC_SAFE_POINT => ("StaleServiceGcSafePoint", "", ""),
+
     UNKNOWN => ("Unknown", "", "")
 );

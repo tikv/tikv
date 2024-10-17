@@ -81,6 +81,11 @@ impl CachedEntries {
     pub fn take_entries(&self) -> (Vec<Entry>, usize) {
         mem::take(&mut *self.entries.lock().unwrap())
     }
+
+    #[cfg(test)]
+    pub fn has_entries(&self) -> bool {
+        !self.entries.lock().unwrap().0.is_empty()
+    }
 }
 
 struct EntryCache {
@@ -236,10 +241,16 @@ impl EntryCache {
 
         // Clean cached entries which have been already sent to apply threads. For
         // example, if entries [1, 10), [10, 20), [20, 30) are sent to apply threads and
-        // `compact_to(15)` is called, only [20, 30) will still be kept in cache.
+        // `compact_to(15)` is called:
+        // - if persisted >= 19, then only [20, 30) will still be kept in cache.
+        // - if persisted < 19, then [10, 20), [20, 30) will still be kept in cache.
         let old_trace_cap = self.trace.capacity();
         while let Some(cached_entries) = self.trace.pop_front() {
-            if cached_entries.range.start >= idx {
+            // Do not evict cached entries if not all of them are persisted.
+            // After PR #16626, it is possible that applying entries are not
+            // yet fully persisted. Therefore, it should not free these
+            // entries until they are completely persisted.
+            if cached_entries.range.start >= idx || cached_entries.range.end > self.persisted + 1 {
                 self.trace.push_front(cached_entries);
                 let trace_len = self.trace.len();
                 let trace_cap = self.trace.capacity();
@@ -324,26 +335,8 @@ impl EntryCache {
     fn trace_cached_entries(&mut self, entries: CachedEntries) {
         let dangle_size = {
             let mut guard = entries.entries.lock().unwrap();
-
-            let last_idx = guard.0.last().map(|e| e.index).unwrap();
-            let cache_front = match self.cache.front().map(|e| e.index) {
-                Some(i) => i,
-                None => u64::MAX,
-            };
-
-            let dangle_range = if last_idx < cache_front {
-                // All entries are not in entry cache.
-                0..guard.0.len()
-            } else if let Ok(i) = guard.0.binary_search_by(|e| e.index.cmp(&cache_front)) {
-                // Some entries are in entry cache.
-                0..i
-            } else {
-                // All entries are in entry cache.
-                0..0
-            };
-
             let mut size = 0;
-            for e in &guard.0[dangle_range] {
+            for e in &guard.0 {
                 size += bytes_capacity(&e.data) + bytes_capacity(&e.context);
             }
             guard.1 = size;
@@ -405,7 +398,7 @@ pub enum RaftlogFetchState {
     Fetched(Box<RaftlogFetchResult>),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(PartialEq)]
 pub struct RaftlogFetchResult {
     pub ents: raft::Result<Vec<Entry>>,
     // because entries may be empty, so store the original low index that the task issued
@@ -418,6 +411,19 @@ pub struct RaftlogFetchResult {
     pub tried_cnt: usize,
     // the term when the task issued
     pub term: u64,
+}
+
+impl std::fmt::Debug for RaftlogFetchResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // avoid dumping entries content
+        f.debug_struct("RaftlogFetchResult")
+            .field("low", &self.low)
+            .field("max_size", &self.max_size)
+            .field("hit_size_limit", &self.hit_size_limit)
+            .field("tried_cnt", &self.tried_cnt)
+            .field("term", &self.term)
+            .finish()
+    }
 }
 
 #[derive(Default)]
@@ -1248,6 +1254,8 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
 
     /// Evict entries from the cache.
     pub fn evict_entry_cache(&mut self, half: bool) {
+        fail_point!("mock_evict_entry_cache", |_| {});
+
         if !self.is_entry_cache_empty() {
             let cache = &mut self.cache;
             let cache_len = cache.cache.len();
@@ -1384,7 +1392,7 @@ pub mod tests {
         // Test trace an entry which is still in cache.
         let cached_entries = CachedEntries::new(vec![new_padded_entry(102, 3, 5)]);
         cache.trace_cached_entries(cached_entries);
-        check_mem_size_change(0);
+        check_mem_size_change(5);
 
         // Test compare `cached_last` with `trunc_to_idx` in `EntryCache::append_impl`.
         cache.append(0, 0, &[new_padded_entry(103, 4, 7)]);
@@ -1398,7 +1406,7 @@ pub mod tests {
         // Test compact the last traced dangle entry.
         cache.persisted = 102;
         cache.compact_to(103);
-        check_mem_size_change(-5);
+        check_mem_size_change(-10);
 
         // Test compact all entries.
         cache.persisted = 103;
@@ -1883,5 +1891,64 @@ pub mod tests {
         store.maybe_warm_up_entry_cache(res);
         // Cache should be warmed up.
         assert_eq!(store.entry_cache_first_index().unwrap(), 5);
+    }
+
+    #[test]
+    fn test_evict_cached_entries() {
+        let ents = vec![new_entry(3, 3)];
+        let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
+        let worker = LazyWorker::new("snap-manager");
+        let sched = worker.scheduler();
+        let (dummy_scheduler, _) = dummy_scheduler();
+        let mut store = new_storage_from_ents(sched, dummy_scheduler, &td, &ents);
+
+        // initial cache
+        for i in 4..10 {
+            append_ents(&mut store, &[new_entry(i, 4)]);
+        }
+
+        let cached_entries = vec![
+            CachedEntries::new(vec![new_entry(4, 4)]),
+            CachedEntries::new(vec![new_entry(5, 4)]),
+            CachedEntries::new(vec![new_entry(6, 4), new_entry(7, 4), new_entry(8, 4)]),
+            CachedEntries::new(vec![new_entry(9, 4)]),
+        ];
+        for ents in &cached_entries {
+            store.trace_cached_entries(ents.clone());
+        }
+        assert_eq!(store.cache.first_index().unwrap(), 4);
+
+        store.evict_entry_cache(false);
+        assert_eq!(store.cache.first_index().unwrap(), 4);
+        assert!(cached_entries[0].has_entries());
+
+        store.cache.persisted = 4;
+        store.evict_entry_cache(false);
+        assert_eq!(store.cache.first_index().unwrap(), 5);
+        assert!(!cached_entries[0].has_entries());
+        assert!(cached_entries[1].has_entries());
+
+        store.cache.persisted = 5;
+        store.evict_entry_cache(false);
+        assert_eq!(store.cache.first_index().unwrap(), 6);
+        assert!(!cached_entries[1].has_entries());
+        assert!(cached_entries[2].has_entries());
+
+        for idx in [6, 7] {
+            store.cache.persisted = idx;
+            store.evict_entry_cache(false);
+            assert_eq!(store.cache.first_index().unwrap(), idx + 1);
+            assert!(cached_entries[2].has_entries());
+        }
+
+        store.cache.persisted = 8;
+        store.evict_entry_cache(false);
+        assert_eq!(store.cache.first_index().unwrap(), 9);
+        assert!(!cached_entries[2].has_entries());
+
+        store.cache.persisted = 9;
+        store.evict_entry_cache(false);
+        assert!(store.cache.first_index().is_none());
+        assert!(!cached_entries[3].has_entries());
     }
 }

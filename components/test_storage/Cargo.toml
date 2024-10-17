@@ -25,9 +25,9 @@ test-engines-panic = [
 api_version = { workspace = true }
 collections = { workspace = true }
 engine_rocks = { workspace = true }
+engine_traits = { workspace = true }
 futures = "0.3"
 kvproto = { workspace = true }
-pd_client = { workspace = true }
 raftstore = { workspace = true }
 test_raftstore = { workspace = true }
 tikv = { workspace = true }

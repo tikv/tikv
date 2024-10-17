@@ -23,15 +23,19 @@ use engine_rocks::{
 };
 use engine_traits::{
     data_cf_offset, CachedTablet, CfOptions, CfOptionsExt, FlowControlFactorsExt, KvEngine,
-    RaftEngine, RangeCacheEngine, StatisticsReporter, TabletRegistry, CF_DEFAULT, DATA_CFS,
+    RaftEngine, RegionCacheEngine, StatisticsReporter, TabletRegistry, CF_DEFAULT, DATA_CFS,
 };
 use error_code::ErrorCodeExt;
 use file_system::{get_io_rate_limiter, set_io_rate_limiter, BytesFetcher, File, IoBudgetAdjustor};
 use grpcio::Environment;
 use hybrid_engine::HybridEngine;
+use in_memory_engine::{
+    flush_in_memory_engine_statistics, InMemoryEngineContext, InMemoryEngineStatistics,
+    RegionCacheMemoryEngine,
+};
 use pd_client::{PdClient, RpcClient};
 use raft_log_engine::RaftLogEngine;
-use region_cache_memory_engine::{EngineConfig, RangeCacheMemoryEngine};
+use raftstore::{coprocessor::RegionInfoProvider, store::CasualRouter};
 use security::SecurityManager;
 use tikv::{
     config::{ConfigController, DbConfigManger, DbType, TikvConfig},
@@ -216,8 +220,9 @@ impl TikvServerCore {
             }
         }
 
-        let disk_stats = fs2::statvfs(&self.config.storage.data_dir).unwrap();
-        let mut capacity = disk_stats.total_space();
+        let (disk_cap, disk_avail) =
+            disk::get_disk_space_stats(&self.config.storage.data_dir).unwrap();
+        let mut capacity = disk_cap;
         if self.config.raft_store.capacity.0 > 0 {
             capacity = cmp::min(capacity, self.config.raft_store.capacity.0);
         }
@@ -225,11 +230,7 @@ impl TikvServerCore {
         let kv_reserved_size =
             calculate_reserved_space(capacity, self.config.storage.reserve_space.0);
         disk::set_disk_reserved_space(kv_reserved_size);
-        reserve_physical_space(
-            &self.config.storage.data_dir,
-            disk_stats.available_space(),
-            kv_reserved_size,
-        );
+        reserve_physical_space(&self.config.storage.data_dir, disk_avail, kv_reserved_size);
 
         let raft_data_dir = if self.config.raft_engine.enable {
             self.config.raft_engine.config().dir
@@ -240,18 +241,13 @@ impl TikvServerCore {
         let separated_raft_mount_path =
             path_in_diff_mount_point(&self.config.storage.data_dir, &raft_data_dir);
         if separated_raft_mount_path {
-            let raft_disk_stats = fs2::statvfs(&raft_data_dir).unwrap();
+            let (raft_disk_cap, raft_disk_avail) =
+                disk::get_disk_space_stats(&raft_data_dir).unwrap();
             // reserve space for raft engine if raft engine is deployed separately
-            let raft_reserved_size = calculate_reserved_space(
-                raft_disk_stats.total_space(),
-                self.config.storage.reserve_raft_space.0,
-            );
+            let raft_reserved_size =
+                calculate_reserved_space(raft_disk_cap, self.config.storage.reserve_raft_space.0);
             disk::set_raft_disk_reserved_space(raft_reserved_size);
-            reserve_physical_space(
-                &raft_data_dir,
-                raft_disk_stats.available_space(),
-                raft_reserved_size,
-            );
+            reserve_physical_space(&raft_data_dir, raft_disk_avail, raft_reserved_size);
         }
     }
 
@@ -569,19 +565,19 @@ impl EnginesResourceInfo {
         }
 
         let mut normalized_pending_bytes = 0;
-        for (i, (pending, limit)) in compaction_pending_bytes
+        for (i, (pending, evict_threshold)) in compaction_pending_bytes
             .iter()
             .zip(soft_pending_compaction_bytes_limit)
             .enumerate()
         {
-            if limit > 0 {
+            if evict_threshold > 0 {
                 normalized_pending_bytes = cmp::max(
                     normalized_pending_bytes,
-                    (*pending * EnginesResourceInfo::SCALE_FACTOR / limit) as u32,
+                    (*pending * EnginesResourceInfo::SCALE_FACTOR / evict_threshold) as u32,
                 );
                 let base = self.base_max_compactions[i];
                 if base > 0 {
-                    let level = *pending as f32 / limit as f32;
+                    let level = *pending as f32 / evict_threshold as f32;
                     // 50% -> 1, 70% -> 2, 85% -> 3, 95% -> 6, 98% -> 1024.
                     let delta1 = if level > 0.98 {
                         1024
@@ -615,7 +611,7 @@ impl EnginesResourceInfo {
                             "cf" => cf,
                             "n" => base + delta,
                             "pending_bytes" => *pending,
-                            "soft_limit" => limit,
+                            "evict_threshold" => evict_threshold,
                             "level0_ratio" => level0_ratio[i],
                         );
                     }
@@ -699,30 +695,31 @@ impl<T: fmt::Display + Send + 'static> Stop for LazyWorker<T> {
     }
 }
 
-pub trait KvEngineBuilder: KvEngine {
-    fn build(disk_engine: RocksEngine, pd_client: Option<Arc<RpcClient>>) -> Self;
-}
-
-impl KvEngineBuilder for RocksEngine {
-    fn build(disk_engine: RocksEngine, _pd_client: Option<Arc<RpcClient>>) -> Self {
-        disk_engine
+pub fn build_hybrid_engine(
+    region_cache_engine_context: InMemoryEngineContext,
+    disk_engine: RocksEngine,
+    pd_client: Option<Arc<RpcClient>>,
+    region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
+    casual_router: Box<dyn CasualRouter<RocksEngine>>,
+) -> HybridEngine<RocksEngine, RegionCacheMemoryEngine> {
+    // todo(SpadeA): add config for it
+    let mut memory_engine = RegionCacheMemoryEngine::with_region_info_provider(
+        region_cache_engine_context.clone(),
+        region_info_provider,
+        Some(casual_router),
+    );
+    memory_engine.set_disk_engine(disk_engine.clone());
+    if let Some(pd_client) = pd_client.as_ref() {
+        memory_engine.start_hint_service(
+            <RegionCacheMemoryEngine as RegionCacheEngine>::RangeHintService::from(
+                pd_client.clone(),
+            ),
+        )
     }
-}
 
-impl KvEngineBuilder for HybridEngine<RocksEngine, RangeCacheMemoryEngine> {
-    fn build(disk_engine: RocksEngine, pd_client: Option<Arc<RpcClient>>) -> Self {
-        // todo(SpadeA): add config for it
-        let mut memory_engine = RangeCacheMemoryEngine::new(EngineConfig::default());
-        memory_engine.set_disk_engine(disk_engine.clone());
-        if let Some(pd_client) = pd_client.as_ref() {
-            memory_engine.start_hint_service(
-                <RangeCacheMemoryEngine as RangeCacheEngine>::RangeHintService::from(
-                    pd_client.clone(),
-                ),
-            )
-        }
-        HybridEngine::new(disk_engine, memory_engine)
-    }
+    memory_engine.start_cross_check(disk_engine.clone(), region_cache_engine_context.pd_client());
+
+    HybridEngine::new(disk_engine, memory_engine)
 }
 
 pub trait ConfiguredRaftEngine: RaftEngine {
@@ -843,6 +840,7 @@ const DEFAULT_ENGINE_METRICS_RESET_INTERVAL: Duration = Duration::from_millis(60
 pub struct EngineMetricsManager<EK: KvEngine, ER: RaftEngine> {
     tablet_registry: TabletRegistry<EK>,
     kv_statistics: Option<Arc<RocksStatistics>>,
+    in_memory_engine_statistics: Option<Arc<InMemoryEngineStatistics>>,
     kv_is_titan: bool,
     raft_engine: ER,
     raft_statistics: Option<Arc<RocksStatistics>>,
@@ -853,6 +851,7 @@ impl<EK: KvEngine, ER: RaftEngine> EngineMetricsManager<EK, ER> {
     pub fn new(
         tablet_registry: TabletRegistry<EK>,
         kv_statistics: Option<Arc<RocksStatistics>>,
+        in_memory_engine_statistics: Option<Arc<InMemoryEngineStatistics>>,
         kv_is_titan: bool,
         raft_engine: ER,
         raft_statistics: Option<Arc<RocksStatistics>>,
@@ -860,6 +859,7 @@ impl<EK: KvEngine, ER: RaftEngine> EngineMetricsManager<EK, ER> {
         EngineMetricsManager {
             tablet_registry,
             kv_statistics,
+            in_memory_engine_statistics,
             kv_is_titan,
             raft_engine,
             raft_statistics,
@@ -885,6 +885,9 @@ impl<EK: KvEngine, ER: RaftEngine> EngineMetricsManager<EK, ER> {
         if let Some(s) = self.raft_statistics.as_ref() {
             flush_engine_statistics(s, "raft", false);
         }
+        if let Some(s) = self.in_memory_engine_statistics.as_ref() {
+            flush_in_memory_engine_statistics(s);
+        }
         if now.saturating_duration_since(self.last_reset) >= DEFAULT_ENGINE_METRICS_RESET_INTERVAL {
             if let Some(s) = self.kv_statistics.as_ref() {
                 s.reset();
@@ -894,5 +897,342 @@ impl<EK: KvEngine, ER: RaftEngine> EngineMetricsManager<EK, ER> {
             }
             self.last_reset = now;
         }
+    }
+}
+
+fn calculate_disk_usage(a: disk::DiskUsage, b: disk::DiskUsage) -> disk::DiskUsage {
+    match (a, b) {
+        (disk::DiskUsage::AlreadyFull, _) => disk::DiskUsage::AlreadyFull,
+        (_, disk::DiskUsage::AlreadyFull) => disk::DiskUsage::AlreadyFull,
+        (disk::DiskUsage::AlmostFull, _) => disk::DiskUsage::AlmostFull,
+        (_, disk::DiskUsage::AlmostFull) => disk::DiskUsage::AlmostFull,
+        (disk::DiskUsage::Normal, disk::DiskUsage::Normal) => disk::DiskUsage::Normal,
+    }
+}
+
+/// A checker to inspect the disk usage of kv engine and raft engine.
+/// The caller should call `inspect` periodically to get the disk usage status
+/// manually.
+#[derive(Clone)]
+pub struct DiskUsageChecker {
+    /// The path of kv engine.
+    kvdb_path: String,
+    /// The path of raft engine.
+    raft_path: String,
+    /// The path of auxiliary directory of raft engine if specified.
+    raft_auxiliary_path: Option<String>,
+    /// Whether the main directory of raft engine is separated from kv engine.
+    separated_raft_mount_path: bool,
+    /// Whether the auxiliary directory of raft engine is separated from kv
+    /// engine.
+    separated_raft_auxiliary_mount_path: bool,
+    /// Whether the auxiliary directory of raft engine is both separated from
+    /// the main directory of raft engine and kv engine.
+    separated_raft_auxiliary_and_kvdb_mount_path: bool,
+    /// The threshold of disk usage of kv engine to trigger the almost full
+    /// status.
+    kvdb_almost_full_thd: u64,
+    /// The threshold of disk usage of raft engine to trigger the almost full
+    /// status.
+    raft_almost_full_thd: u64,
+    /// The specified disk capacity for the whole disk.
+    config_disk_capacity: u64,
+}
+
+impl DiskUsageChecker {
+    pub fn new(
+        kvdb_path: String,
+        raft_path: String,
+        raft_auxiliary_path: Option<String>,
+        separated_raft_mount_path: bool,
+        separated_raft_auxiliary_mount_path: bool,
+        separated_raft_auxiliary_and_kvdb_mount_path: bool,
+        kvdb_almost_full_thd: u64,
+        raft_almost_full_thd: u64,
+        config_disk_capacity: u64,
+    ) -> Self {
+        DiskUsageChecker {
+            kvdb_path,
+            raft_path,
+            raft_auxiliary_path,
+            separated_raft_mount_path,
+            separated_raft_auxiliary_mount_path,
+            separated_raft_auxiliary_and_kvdb_mount_path,
+            kvdb_almost_full_thd,
+            raft_almost_full_thd,
+            config_disk_capacity,
+        }
+    }
+
+    /// Inspect the disk usage of kv engine and raft engine.
+    /// The `kvdb_used_size` is the used size of kv engine, and the
+    /// `raft_used_size` is the used size of raft engine.
+    ///
+    /// Returns the disk usage status of the whole disk, kv engine and raft
+    /// engine, the whole disk capacity and available size.
+    pub fn inspect(
+        &self,
+        kvdb_used_size: u64,
+        raft_used_size: u64,
+    ) -> (
+        disk::DiskUsage, // whole disk status
+        disk::DiskUsage, // kvdb disk status
+        disk::DiskUsage, // raft disk status
+        u64,             // whole capacity
+        u64,             // whole available
+    ) {
+        // By default, the almost full threshold of kv engine is half of the
+        // configured value.
+        let kvdb_already_full_thd = self.kvdb_almost_full_thd / 2;
+        let raft_already_full_thd = self.raft_almost_full_thd / 2;
+        // Check the disk space of raft engine.
+        let raft_disk_status = {
+            if !self.separated_raft_mount_path || self.raft_almost_full_thd == 0 {
+                disk::DiskUsage::Normal
+            } else {
+                let (raft_disk_cap, raft_disk_avail) = match disk::get_disk_space_stats(
+                    &self.raft_path,
+                ) {
+                    Err(e) => {
+                        error!(
+                            "get disk stat for raft engine failed";
+                            "raft_engine_path" => &self.raft_path,
+                            "err" => ?e
+                        );
+                        return (
+                            disk::DiskUsage::Normal,
+                            disk::DiskUsage::Normal,
+                            disk::DiskUsage::Normal,
+                            0,
+                            0,
+                        );
+                    }
+                    Ok((cap, avail)) => {
+                        if !self.separated_raft_auxiliary_mount_path {
+                            // If the auxiliary directory of raft engine is not separated from
+                            // kv engine, returns u64::MAX to indicate that the disk space of
+                            // the raft engine should not be checked.
+                            (std::u64::MAX, std::u64::MAX)
+                        } else if self.separated_raft_auxiliary_and_kvdb_mount_path {
+                            // If the auxiliary directory of raft engine is separated from kv
+                            // engine and the main directory of
+                            // raft engine, the disk space of
+                            // the auxiliary directory should be
+                            // checked.
+                            assert!(self.raft_auxiliary_path.is_some());
+                            let (auxiliary_disk_cap, auxiliary_disk_avail) =
+                                match disk::get_disk_space_stats(
+                                    self.raft_auxiliary_path.as_ref().unwrap(),
+                                ) {
+                                    Err(e) => {
+                                        error!(
+                                            "get auxiliary disk stat for raft engine failed";
+                                            "raft_engine_path" => self.raft_auxiliary_path.as_ref().unwrap(),
+                                            "err" => ?e
+                                        );
+                                        (0_u64, 0_u64)
+                                    }
+                                    Ok((total, avail)) => (total, avail),
+                                };
+                            (cap + auxiliary_disk_cap, avail + auxiliary_disk_avail)
+                        } else {
+                            (cap, avail)
+                        }
+                    }
+                };
+                let raft_disk_available = cmp::min(
+                    raft_disk_cap
+                        .checked_sub(raft_used_size)
+                        .unwrap_or_default(),
+                    raft_disk_avail,
+                );
+                if raft_disk_available <= raft_already_full_thd {
+                    disk::DiskUsage::AlreadyFull
+                } else if raft_disk_available <= self.raft_almost_full_thd {
+                    disk::DiskUsage::AlmostFull
+                } else {
+                    disk::DiskUsage::Normal
+                }
+            }
+        };
+        // Check the disk space of kv engine.
+        let (disk_cap, disk_avail) = match disk::get_disk_space_stats(&self.kvdb_path) {
+            Err(e) => {
+                error!(
+                    "get disk stat for kv store failed";
+                    "kv_path" => &self.kvdb_path,
+                    "err" => ?e
+                );
+                return (
+                    disk::DiskUsage::Normal,
+                    disk::DiskUsage::Normal,
+                    disk::DiskUsage::Normal,
+                    0,
+                    0,
+                );
+            }
+            Ok((total, avail)) => (total, avail),
+        };
+        let capacity = if self.config_disk_capacity == 0 || disk_cap < self.config_disk_capacity {
+            disk_cap
+        } else {
+            self.config_disk_capacity
+        };
+        let available = cmp::min(
+            capacity.checked_sub(kvdb_used_size).unwrap_or_default(),
+            disk_avail,
+        );
+        let cur_kv_disk_status = if available <= kvdb_already_full_thd {
+            disk::DiskUsage::AlreadyFull
+        } else if available <= self.kvdb_almost_full_thd {
+            disk::DiskUsage::AlmostFull
+        } else {
+            disk::DiskUsage::Normal
+        };
+        let cur_disk_status = calculate_disk_usage(raft_disk_status, cur_kv_disk_status);
+        (
+            cur_disk_status,
+            cur_kv_disk_status,
+            raft_disk_status,
+            capacity,
+            available,
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_disk_usage_checker() {
+        let kvdb_path = "/tmp/tikv-kvdb".to_owned();
+        let raft_path = "/tmp/tikv-raft".to_owned();
+        let raft_spill_path = "/tmp/tikv-raft/spill".to_owned();
+
+        // Case 1: mock the kvdb and raft engine are not separated.
+        fail::cfg("mock_disk_space_stats", "return(10000,5000)").unwrap();
+        let disk_usage_checker = DiskUsageChecker::new(
+            kvdb_path.clone(),
+            raft_path.clone(),
+            Some(raft_spill_path.clone()),
+            false,
+            true,
+            false,
+            100,
+            100,
+            1000,
+        );
+        let (disk_status, kvdb_status, raft_status, ..) = disk_usage_checker.inspect(4000, 1000);
+        assert_eq!(disk_status, disk::DiskUsage::AlreadyFull);
+        assert_eq!(kvdb_status, disk::DiskUsage::AlreadyFull);
+        assert_eq!(raft_status, disk::DiskUsage::Normal);
+
+        let disk_usage_checker = DiskUsageChecker::new(
+            kvdb_path.clone(),
+            raft_path.clone(),
+            Some(raft_spill_path.clone()),
+            false,
+            true,
+            false,
+            100,
+            100,
+            4100,
+        );
+        let (disk_status, kvdb_status, raft_status, ..) = disk_usage_checker.inspect(4000, 1000);
+        assert_eq!(raft_status, disk::DiskUsage::Normal);
+        assert_eq!(kvdb_status, disk::DiskUsage::AlmostFull);
+        assert_eq!(disk_status, disk::DiskUsage::AlmostFull);
+        let (disk_status, kvdb_status, raft_status, ..) = disk_usage_checker.inspect(3999, 1000);
+        assert_eq!(raft_status, disk::DiskUsage::Normal);
+        assert_eq!(kvdb_status, disk::DiskUsage::Normal);
+        assert_eq!(disk_status, disk::DiskUsage::Normal);
+        fail::remove("mock_disk_space_stats");
+
+        // Case 2: mock the kvdb and raft engine are separated.
+        fail::cfg(
+            "mock_disk_space_stats",
+            "1*return(500,200)->1*return(5000,2000)->1*return(500,200)->1*return(5000,2000)->1*return(500,200)->1*return(5000,2000)",
+        )
+        .unwrap();
+        let disk_usage_checker = DiskUsageChecker::new(
+            kvdb_path.clone(),
+            raft_path.clone(),
+            Some(raft_spill_path.clone()),
+            true,
+            true,
+            false,
+            100,
+            100,
+            6000,
+        );
+        let (disk_status, kvdb_status, raft_status, ..) = disk_usage_checker.inspect(4000, 450);
+        assert_eq!(raft_status, disk::DiskUsage::AlreadyFull);
+        assert_eq!(kvdb_status, disk::DiskUsage::Normal);
+        assert_eq!(disk_status, disk::DiskUsage::AlreadyFull);
+        let (disk_status, kvdb_status, raft_status, ..) = disk_usage_checker.inspect(4000, 400);
+        assert_eq!(raft_status, disk::DiskUsage::AlmostFull);
+        assert_eq!(kvdb_status, disk::DiskUsage::Normal);
+        assert_eq!(disk_status, disk::DiskUsage::AlmostFull);
+        let (disk_status, kvdb_status, raft_status, ..) = disk_usage_checker.inspect(4000, 399);
+        assert_eq!(raft_status, disk::DiskUsage::Normal);
+        assert_eq!(kvdb_status, disk::DiskUsage::Normal);
+        assert_eq!(disk_status, disk::DiskUsage::Normal);
+        fail::remove("mock_disk_space_stats");
+
+        fail::cfg(
+            "mock_disk_space_stats",
+            "1*return(500,200)->1*return(5000,2000)->1*return(500,200)->1*return(5000,2000)->1*return(500,200)->1*return(5000,2000)",
+        )
+        .unwrap();
+        let disk_usage_checker = DiskUsageChecker::new(
+            kvdb_path.clone(),
+            raft_path.clone(),
+            Some(raft_spill_path.clone()),
+            true,
+            false,
+            false,
+            100,
+            100,
+            6000,
+        );
+        let (disk_status, kvdb_status, raft_status, ..) = disk_usage_checker.inspect(4000, 450);
+        assert_eq!(raft_status, disk::DiskUsage::Normal);
+        assert_eq!(kvdb_status, disk::DiskUsage::Normal);
+        assert_eq!(disk_status, disk::DiskUsage::Normal);
+        let (disk_status, kvdb_status, raft_status, ..) = disk_usage_checker.inspect(4000, 500);
+        assert_eq!(raft_status, disk::DiskUsage::Normal);
+        assert_eq!(kvdb_status, disk::DiskUsage::Normal);
+        assert_eq!(disk_status, disk::DiskUsage::Normal);
+        let (disk_status, kvdb_status, raft_status, ..) = disk_usage_checker.inspect(4900, 500);
+        assert_eq!(raft_status, disk::DiskUsage::Normal);
+        assert_eq!(kvdb_status, disk::DiskUsage::AlmostFull);
+        assert_eq!(disk_status, disk::DiskUsage::AlmostFull);
+        fail::remove("mock_disk_space_stats");
+
+        // Case 3: mock the kvdb and raft engine are separated and the auxiliary
+        // directory of raft engine is separated from the main directory of
+        // raft.
+        fail::cfg(
+            "mock_disk_space_stats",
+            "1*return(500,200)->1*return(100,20)->1*return(5000,2000)",
+        )
+        .unwrap();
+        let disk_usage_checker = DiskUsageChecker::new(
+            kvdb_path.clone(),
+            raft_path.clone(),
+            Some(raft_spill_path.clone()),
+            true,
+            true,
+            true,
+            100,
+            100,
+            6000,
+        );
+        let (disk_status, kvdb_status, raft_status, ..) = disk_usage_checker.inspect(4000, 450);
+        assert_eq!(raft_status, disk::DiskUsage::Normal);
+        assert_eq!(kvdb_status, disk::DiskUsage::Normal);
+        assert_eq!(disk_status, disk::DiskUsage::Normal);
+        fail::remove("mock_disk_space_stats");
     }
 }

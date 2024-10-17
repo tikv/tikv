@@ -286,6 +286,14 @@ pub fn extract_region_error_from_error(e: &Error) -> Option<errorpb::Error> {
             err.set_max_timestamp_not_synced(Default::default());
             Some(err)
         }
+        Error(box ErrorInner::Txn(
+            e @ TxnError(box TxnErrorInner::RawKvMaxTimestampNotSynced { .. }),
+        )) => {
+            let mut err = errorpb::Error::default();
+            err.set_max_timestamp_not_synced(Default::default());
+            err.set_message(format!("{}", e));
+            Some(err)
+        }
         Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::FlashbackNotPrepared(
             region_id,
         )))) => {
@@ -377,7 +385,7 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
             key_error.set_retryable(format!("{:?}", err));
         }
         Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-            box MvccErrorInner::AlreadyExist { key },
+            box MvccErrorInner::AlreadyExist { key, .. },
         ))))) => {
             let mut exist = kvrpcpb::AlreadyExist::default();
             exist.set_key(key.clone());

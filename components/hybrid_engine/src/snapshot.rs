@@ -1,18 +1,26 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fmt::{self, Debug, Formatter};
-
-use engine_traits::{
-    is_data_cf, CfNamesExt, IterOptions, Iterable, KvEngine, Peekable, RangeCacheEngine,
-    ReadOptions, Result, Snapshot, SnapshotMiscExt, CF_DEFAULT,
+use std::{
+    any::Any,
+    fmt::{self, Debug, Formatter},
 };
 
-use crate::{db_vector::HybridDbVector, engine_iterator::HybridEngineIterator};
+use engine_traits::{
+    is_data_cf, CfNamesExt, IterOptions, Iterable, KvEngine, Peekable, ReadOptions,
+    RegionCacheEngine, Result, Snapshot, SnapshotMiscExt, CF_DEFAULT,
+};
+use in_memory_engine::RegionCacheMemoryEngine;
+use raftstore::coprocessor::ObservedSnapshot;
+
+use crate::{
+    db_vector::HybridDbVector, engine_iterator::HybridEngineIterator,
+    observer::RegionCacheSnapshotPin,
+};
 
 pub struct HybridEngineSnapshot<EK, EC>
 where
     EK: KvEngine,
-    EC: RangeCacheEngine,
+    EC: RegionCacheEngine,
 {
     disk_snap: EK::Snapshot,
     region_cache_snap: Option<EC::Snapshot>,
@@ -21,7 +29,7 @@ where
 impl<EK, EC> HybridEngineSnapshot<EK, EC>
 where
     EK: KvEngine,
-    EC: RangeCacheEngine,
+    EC: RegionCacheEngine,
 {
     pub fn new(disk_snap: EK::Snapshot, region_cache_snap: Option<EC::Snapshot>) -> Self {
         HybridEngineSnapshot {
@@ -43,17 +51,41 @@ where
     }
 }
 
+impl<EK> HybridEngineSnapshot<EK, RegionCacheMemoryEngine>
+where
+    EK: KvEngine,
+{
+    pub fn from_observed_snapshot(
+        disk_snap: EK::Snapshot,
+        snap_pin: Option<Box<dyn ObservedSnapshot>>,
+    ) -> Self {
+        let mut region_cache_snap = None;
+        if let Some(snap_pin) = snap_pin {
+            let snap_any: Box<dyn Any> = snap_pin;
+            let region_cache_snap_pin: Box<RegionCacheSnapshotPin> = snap_any.downcast().unwrap();
+            region_cache_snap = region_cache_snap_pin.snap;
+        }
+        HybridEngineSnapshot {
+            disk_snap,
+            region_cache_snap,
+        }
+    }
+}
+
 impl<EK, EC> Snapshot for HybridEngineSnapshot<EK, EC>
 where
     EK: KvEngine,
-    EC: RangeCacheEngine,
+    EC: RegionCacheEngine,
 {
+    fn region_cache_engine_hit(&self) -> bool {
+        self.region_cache_snap.is_some()
+    }
 }
 
 impl<EK, EC> Debug for HybridEngineSnapshot<EK, EC>
 where
     EK: KvEngine,
-    EC: RangeCacheEngine,
+    EC: RegionCacheEngine,
 {
     fn fmt(&self, fmt: &mut Formatter<'_>) -> fmt::Result {
         write!(fmt, "Hybrid Engine Snapshot Impl")
@@ -63,7 +95,7 @@ where
 impl<EK, EC> Iterable for HybridEngineSnapshot<EK, EC>
 where
     EK: KvEngine,
-    EC: RangeCacheEngine,
+    EC: RegionCacheEngine,
 {
     type Iterator = HybridEngineIterator<EK, EC>;
 
@@ -82,7 +114,7 @@ where
 impl<EK, EC> Peekable for HybridEngineSnapshot<EK, EC>
 where
     EK: KvEngine,
-    EC: RangeCacheEngine,
+    EC: RegionCacheEngine,
 {
     type DbVector = HybridDbVector<EK, EC>;
 
@@ -108,7 +140,7 @@ where
 impl<EK, EC> CfNamesExt for HybridEngineSnapshot<EK, EC>
 where
     EK: KvEngine,
-    EC: RangeCacheEngine,
+    EC: RegionCacheEngine,
 {
     fn cf_names(&self) -> Vec<&str> {
         self.disk_snap.cf_names()
@@ -118,7 +150,7 @@ where
 impl<EK, EC> SnapshotMiscExt for HybridEngineSnapshot<EK, EC>
 where
     EK: KvEngine,
-    EC: RangeCacheEngine,
+    EC: RegionCacheEngine,
 {
     fn sequence_number(&self) -> u64 {
         self.disk_snap.sequence_number()
@@ -129,56 +161,55 @@ where
 mod tests {
 
     use engine_traits::{
-        CacheRange, IterOptions, Iterable, Iterator, KvEngine, Mutable, SnapshotContext,
-        WriteBatch, WriteBatchExt, CF_DEFAULT,
+        CacheRegion, IterOptions, Iterable, Iterator, Mutable, SnapshotContext, WriteBatch,
+        WriteBatchExt, CF_DEFAULT,
     };
-    use region_cache_memory_engine::{range_manager::RangeCacheStatus, EngineConfig};
+    use in_memory_engine::{test_util::new_region, InMemoryEngineConfig, RegionCacheStatus};
 
     use crate::util::hybrid_engine_for_tests;
 
     #[test]
     fn test_iterator() {
-        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
+        let region = new_region(1, b"", b"z");
+        let cache_region = CacheRegion::from_region(&region);
         let mut iter_opt = IterOptions::default();
-        iter_opt.set_upper_bound(&range.end, 0);
-        iter_opt.set_lower_bound(&range.start, 0);
+        iter_opt.set_upper_bound(&cache_region.end, 0);
+        iter_opt.set_lower_bound(&cache_region.start, 0);
 
-        let range_clone = range.clone();
+        let region_clone = region.clone();
         let (_path, hybrid_engine) = hybrid_engine_for_tests(
             "temp",
-            EngineConfig::config_for_test(),
+            InMemoryEngineConfig::config_for_test(),
             move |memory_engine| {
-                memory_engine.new_range(range_clone.clone());
-                {
-                    let mut core = memory_engine.core().write();
-                    core.mut_range_manager().set_safe_point(&range_clone, 5);
-                }
+                memory_engine.new_region(region_clone);
+                memory_engine.core().region_manager().set_safe_point(1, 5);
             },
         )
         .unwrap();
-        let snap = hybrid_engine.snapshot(None);
+        let snap = hybrid_engine.new_snapshot(None);
         {
             let mut iter = snap.iterator_opt(CF_DEFAULT, iter_opt.clone()).unwrap();
             assert!(!iter.seek_to_first().unwrap());
         }
         let mut write_batch = hybrid_engine.write_batch();
+        write_batch.prepare_for_region(cache_region.clone());
         write_batch
             .cache_write_batch
-            .set_range_cache_status(RangeCacheStatus::Cached);
-        write_batch.put(b"hello", b"world").unwrap();
+            .set_region_cache_status(RegionCacheStatus::Cached);
+        write_batch.put(b"zhello", b"world").unwrap();
         let seq = write_batch.write().unwrap();
         assert!(seq > 0);
         let ctx = SnapshotContext {
-            range: Some(range.clone()),
+            region: Some(cache_region.clone()),
             read_ts: 10,
         };
-        let snap = hybrid_engine.snapshot(Some(ctx));
+        let snap = hybrid_engine.new_snapshot(Some(ctx));
         {
             let mut iter = snap.iterator_opt(CF_DEFAULT, iter_opt).unwrap();
             assert!(iter.seek_to_first().unwrap());
             let actual_key = iter.key();
             let actual_value = iter.value();
-            assert_eq!(actual_key, b"hello");
+            assert_eq!(actual_key, b"zhello");
             assert_eq!(actual_value, b"world");
         }
     }

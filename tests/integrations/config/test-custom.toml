@@ -18,6 +18,7 @@ max-days = 3
 [memory]
 enable-heap-profiling = false
 profiling-sample-per-bytes = "1MB"
+enable-thread-exclusive-arena = false
 
 [readpool.unified]
 min-thread-count = 5
@@ -219,6 +220,8 @@ evict-cache-on-memory-ratio = 0.8
 cmd-batch = false
 cmd-batch-concurrent-ready-max-count = 123
 raft-write-size-limit = "34MB"
+raft-write-batch-size-hint = "1MB"
+raft-write-wait-duration = "444us"
 waterfall-metrics = true
 io-reschedule-concurrent-max-count = 1234
 io-reschedule-hotpot-duration = "4321s"
@@ -263,9 +266,6 @@ create-if-missing = false
 max-open-files = 12345
 stats-dump-period = "12m"
 compaction-readahead-size = "1KB"
-info-log-max-size = "1KB"
-info-log-roll-time = "12s"
-info-log-keep-log-file-num = 1000
 info-log-dir = "/var"
 rate-bytes-per-sec = "1KB"
 rate-limiter-refill-period = "10ms"
@@ -506,9 +506,6 @@ create-if-missing = false
 max-open-files = 12345
 stats-dump-period = "12m"
 compaction-readahead-size = "1KB"
-info-log-max-size = "1KB"
-info-log-roll-time = "1s"
-info-log-keep-log-file-num = 1000
 info-log-dir = "/var"
 max-sub-compactions = 12
 writable-file-max-buffer-size = "12MB"
@@ -688,3 +685,4 @@ split.split-contained-score = 0.5
 
 [resource-control]
 enabled = false
+priority-ctl-strategy = "aggressive"

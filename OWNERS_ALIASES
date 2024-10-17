@@ -1,0 +1,15 @@
+# Sort the member alphabetically.
+aliases:
+  sig-critical-approvers-config-components:
+    - BenMeadowcroft
+    - yudongusa
+    - zhangjinpeng87
+  sig-critical-approvers-config-src:
+    - BenMeadowcroft
+    - cfzjywxk
+    - yudongusa
+    - zhangjinpeng87
+  sig-critical-approvers-config-cdc:
+    - BenMeadowcroft
+    - flowbehappy
+    - yudongusa

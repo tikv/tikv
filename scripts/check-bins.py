@@ -13,8 +13,11 @@ import sys, json, os, time, re
 WHITE_LIST = {
     "online_config", "online_config_derive", "tidb_query_codegen",
     "panic_hook", "fuzz", "fuzzer_afl", "fuzzer_honggfuzz", "fuzzer_libfuzzer",
-    "coprocessor_plugin_api", "example_coprocessor_plugin", "memory_trace_macros", "case_macros",
-    "tracker", "test_raftstore_macro", "crypto"
+    "coprocessor_plugin_api", "example_coprocessor_plugin", "memory_trace_macros",
+    "tracker", "test_raftstore_macro", "crypto",
+    # Whitelist crossbeam test and example binary names.
+    "crossbeam_skiplist", "crossbeam_skiplist_simple",
+    "crossbeam_skiplist_base", "crossbeam_skiplist_map", "crossbeam_skiplist_set",
 }
 
 JEMALLOC_SYMBOL = ["je_arena_boot", " malloc"]
@@ -66,15 +69,16 @@ def is_jemalloc_enabled(features):
 def check_sse(executable):
     p = os.popen("nm -n " + executable)
     lines = p.readlines()
-    segments = [(pos, pos + 1) for (pos, l) in enumerate(lines) if "Fast_CRC32" in l]
+    segments = [(pos, pos + 1) for (pos, l) in enumerate(lines) if "crc32c_3way" in l]
     if len(segments) == 0:
         pr("error: %s does not contain sse4.2\n" % executable)
         print("fix this by building tikv with ROCKSDB_SYS_SSE=1")
         sys.exit(1)
 
-    # Make sure the `Fast_CRC32` uses the sse4.2 instruction `crc32`
+    # Make sure the `crc32c_3way` uses the sse4.2 instruction `crc32`
     # f2.*0f 38 is the opcode of `crc32`, see SSE4 Programming Reference.
     opcode_pattern = re.compile(".*f2.*0f 38.*crc32")
+    matched = False
     for start, end in segments:
         s_addr = lines[start].split()[0]
         e_addr = lines[end].split()[0]
@@ -83,10 +87,10 @@ def check_sse(executable):
             if opcode_pattern.search(l):
                 matched = True
                 break
-        else:
-            pr("error %s does not contain sse4.2\n" % executable)
-            print("fix this by building tikv with ROCKSDB_SYS_SSE=1")
-            sys.exit(1)
+    if not matched:
+        pr("error %s does not contain sse4.2\n" % executable)
+        print("fix this by building tikv with ROCKSDB_SYS_SSE=1")
+        sys.exit(1)
 
 def is_openssl_vendored_enabled(features):
     return "openssl-vendored" in features

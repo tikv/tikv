@@ -37,7 +37,7 @@ use std::{
 
 use collections::HashMap;
 use engine_traits::{
-    CfName, IterOptions, KvEngine as LocalEngine, Mutable, MvccProperties, ReadOptions,
+    CfName, IterOptions, KvEngine as LocalEngine, MetricsExt, Mutable, MvccProperties, ReadOptions,
     TabletRegistry, WriteBatch, CF_DEFAULT, CF_LOCK,
 };
 use error_code::{self, ErrorCode, ErrorCodeExt};
@@ -367,6 +367,14 @@ pub trait Engine: Send + Clone + 'static {
     /// future is polled or not.
     fn async_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::SnapshotRes;
 
+    type IMSnap: Snapshot;
+    type IMSnapshotRes: Future<Output = Result<Self::IMSnap>> + Send + 'static;
+    /// Get a snapshot asynchronously.
+    ///
+    /// Note the snapshot is queried immediately no matter whether the returned
+    /// future is polled or not.
+    fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes;
+
     /// Precheck request which has write with it's context.
     fn precheck_write_with_ctx(&self, _ctx: &Context) -> Result<()> {
         Ok(())
@@ -532,13 +540,20 @@ pub trait SnapshotExt {
     fn get_buckets(&self) -> Option<Arc<BucketMeta>> {
         None
     }
+
+    /// Whether the snapshot acquired hit the cached range in the range cache
+    /// engine. It always returns false if the range cahce engine is not
+    /// enabled.
+    fn region_cache_engine_hit(&self) -> bool {
+        false
+    }
 }
 
 pub struct DummySnapshotExt;
 
 impl SnapshotExt for DummySnapshotExt {}
 
-pub trait Iterator: Send {
+pub trait Iterator: Send + MetricsExt {
     fn next(&mut self) -> Result<bool>;
     fn prev(&mut self) -> Result<bool>;
     fn seek(&mut self, key: &Key) -> Result<bool>;
@@ -705,6 +720,24 @@ pub fn snapshot<E: Engine>(
 ) -> impl std::future::Future<Output = Result<E::Snap>> {
     let begin = Instant::now();
     let val = engine.async_snapshot(ctx);
+    // make engine not cross yield point
+    async move {
+        let result = val.await;
+        with_tls_tracker(|tracker| {
+            tracker.metrics.get_snapshot_nanos += begin.elapsed().as_nanos() as u64;
+        });
+        fail_point!("after-snapshot");
+        result
+    }
+}
+
+/// Get an in memory snapshot of `engine`.
+pub fn in_memory_snapshot<E: Engine>(
+    engine: &mut E,
+    ctx: SnapContext<'_>,
+) -> impl std::future::Future<Output = Result<E::IMSnap>> {
+    let begin = Instant::now();
+    let val = engine.async_in_memory_snapshot(ctx);
     // make engine not cross yield point
     async move {
         let result = val.await;
