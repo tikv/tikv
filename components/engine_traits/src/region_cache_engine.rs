@@ -120,8 +120,6 @@ pub struct CacheRegion {
     pub start: Vec<u8>,
     // data end key of the region range, equals to data_end_key(region.end_key).
     pub end: Vec<u8>,
-    // does not schedule a load if the region is in flashback
-    pub in_flash_back: bool,
 }
 
 impl Debug for CacheRegion {
@@ -131,7 +129,6 @@ impl Debug for CacheRegion {
             .field("epoch", &self.epoch_version)
             .field("range_start", &log_wrappers::Value(&self.start))
             .field("range_end", &log_wrappers::Value(&self.end))
-            .field("in_flash_back", &self.in_flash_back)
             .finish()
     }
 }
@@ -148,7 +145,6 @@ impl CacheRegion {
             epoch_version,
             start: start.into(),
             end: end.into(),
-            in_flash_back: false,
         }
     }
 
@@ -158,7 +154,6 @@ impl CacheRegion {
             end: enc_end_key(region),
             id: region.id,
             epoch_version: region.get_region_epoch().version,
-            in_flash_back: region.is_in_flashback,
         }
     }
 }
@@ -200,7 +195,6 @@ impl CacheRegion {
                 epoch_version: 0,
                 start: self.start.clone(),
                 end: other.start.clone(),
-                in_flash_back: false,
             })
         } else {
             None
@@ -211,7 +205,6 @@ impl CacheRegion {
                 epoch_version: 0,
                 start: other.end.clone(),
                 end: self.end.clone(),
-                in_flash_back: false,
             })
         } else {
             None

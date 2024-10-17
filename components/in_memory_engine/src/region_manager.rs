@@ -170,7 +170,7 @@ impl CacheRegionMeta {
         );
         // if the new region's range is contained by the current region, we can directly
         // update to the new one.
-        self.region.contains_range(region) && !region.in_flash_back
+        self.region.contains_range(region)
     }
 
     pub(crate) fn safe_point(&self) -> u64 {

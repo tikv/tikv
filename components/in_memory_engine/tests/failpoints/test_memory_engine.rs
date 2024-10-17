@@ -164,7 +164,6 @@ fn test_clean_up_tombstone() {
     let config = Arc::new(VersionTrack::new(InMemoryEngineConfig::config_for_test()));
     let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(config.clone()));
     let region = new_region(1, b"".to_vec(), b"z".to_vec());
-    let cache_region = CacheRegion::from_region(&region);
     let (tx, rx) = sync_channel(0);
     fail::cfg_callback("clean_lock_tombstone_done", move || {
         tx.send(true).unwrap();
@@ -173,7 +172,7 @@ fn test_clean_up_tombstone() {
 
     engine.new_region(region.clone());
     let mut wb = engine.write_batch();
-    wb.prepare_for_region(cache_region.clone());
+    wb.prepare_for_region(region.clone());
     wb.put_cf("lock", b"k", b"val").unwrap();
     wb.put_cf("lock", b"k1", b"val").unwrap();
     wb.put_cf("lock", b"k2", b"val").unwrap();
@@ -185,7 +184,7 @@ fn test_clean_up_tombstone() {
     wb.write().unwrap();
 
     let mut wb = engine.write_batch();
-    wb.prepare_for_region(cache_region.clone());
+    wb.prepare_for_region(region.clone());
     wb.put_cf("lock", b"k", b"val").unwrap(); // seq 120
     wb.put_cf("lock", b"k1", b"val").unwrap(); // seq 121
     wb.put_cf("lock", b"k2", b"val").unwrap(); // seq 122
@@ -278,9 +277,9 @@ fn test_evict_with_loading_range() {
 
     let mut wb = engine.write_batch();
     // prepare range to trigger loading
-    wb.prepare_for_region(cache_region1.clone());
-    wb.prepare_for_region(cache_region2.clone());
-    wb.prepare_for_region(cache_region3.clone());
+    wb.prepare_for_region(r1.clone());
+    wb.prepare_for_region(r2.clone());
+    wb.prepare_for_region(r3.clone());
     wb.set_sequence_number(10).unwrap();
     wb.write().unwrap();
 
@@ -335,12 +334,12 @@ fn test_cached_write_batch_cleared_when_load_failed() {
 
     let mut wb = engine.write_batch();
     // range1 starts to load
-    wb.prepare_for_region(CacheRegion::from_region(&r1));
+    wb.prepare_for_region(r1.clone());
     rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
     wb.put(b"zk05", b"val").unwrap();
     wb.put(b"zk06", b"val").unwrap();
-    wb.prepare_for_region(CacheRegion::from_region(&r2));
+    wb.prepare_for_region(r2.clone());
     wb.put(b"zk25", b"val").unwrap();
     wb.set_sequence_number(100).unwrap();
     wb.write().unwrap();
@@ -414,9 +413,9 @@ fn test_concurrency_between_delete_range_and_write_to_memory() {
 
     let engine_clone = engine.clone();
     let (range_prepared_tx, range_prepared_rx) = sync_channel(0);
-    let region1_clone = cache_region1.clone();
-    let region2_clone = cache_region2.clone();
-    let region3_clone = cache_region3.clone();
+    let region1_clone = r1.clone();
+    let region2_clone = r2.clone();
+    let region3_clone = r3.clone();
     let handle = std::thread::spawn(move || {
         let mut wb = engine_clone.write_batch();
         wb.prepare_for_region(region1_clone);
@@ -561,7 +560,7 @@ fn test_double_delete_range_schedule() {
 
     let mut wb = engine.write_batch();
     // prepare range to trigger loading
-    wb.prepare_for_region(CacheRegion::from_region(&r3));
+    wb.prepare_for_region(r3.clone());
     wb.set_sequence_number(10).unwrap();
     wb.write().unwrap();
 
@@ -626,7 +625,7 @@ fn test_load_with_gc() {
     let range = CacheRegion::from_region(&region);
     engine.load_region(range.clone()).unwrap();
     let mut wb = engine.write_batch();
-    wb.prepare_for_region(range.clone());
+    wb.prepare_for_region(region.clone());
     wb.set_sequence_number(100).unwrap();
     wb.write().unwrap();
 
@@ -697,7 +696,7 @@ fn test_region_split_before_batch_loading_start() {
 
     // use write batch to trigger scheduling pending region loading task.
     let mut wb = engine.write_batch();
-    wb.prepare_for_region(cache_region.clone());
+    wb.prepare_for_region(region.clone());
     wb.set_sequence_number(10).unwrap();
     wb.put(b"zk00", b"val2").unwrap();
     wb.put(b"zk10", b"val2").unwrap();
@@ -766,7 +765,7 @@ fn test_cb_on_eviction() {
     engine.new_region(region.clone());
 
     let mut wb = engine.write_batch();
-    wb.prepare_for_region(cache_region.clone());
+    wb.prepare_for_region(region.clone());
     wb.set_sequence_number(10).unwrap();
     wb.put(b"a", b"val1").unwrap();
     wb.put(b"b", b"val2").unwrap();

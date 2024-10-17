@@ -1827,7 +1827,7 @@ mod tests {
                 b"k20".to_vec(),
                 1_000_000,
                 0,
-                2000_000 - 1,
+                2_000_000 - 1,
             ),
             // mvcc amp 50, filtered by mvcc amp
             (3, b"k20".to_vec(), b"k30".to_vec(), 0, 100_000, 2_000 - 1),
