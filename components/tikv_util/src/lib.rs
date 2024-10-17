@@ -65,6 +65,7 @@ pub mod timer;
 pub mod topn;
 pub mod worker;
 pub mod yatp_pool;
+pub mod resizable_threadpool;
 
 static PANIC_WHEN_UNEXPECTED_KEY_OR_DATA: AtomicBool = AtomicBool::new(false);
 
