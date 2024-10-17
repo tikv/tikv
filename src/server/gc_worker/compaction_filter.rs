@@ -237,10 +237,7 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             "ratio_threshold" => ratio_threshold,
         );
 
-        if db
-            .as_ref()
-            .map_or(false, RocksEngine::is_stalled_or_stopped)
-        {
+        if db.as_ref().map_or(false, RocksEngine::is_write_stopped) {
             debug!("skip gc in compaction filter because the DB is stalled");
             return None;
         }

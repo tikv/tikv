@@ -74,7 +74,7 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
         if gc_context
             .db
             .as_ref()
-            .map_or(false, RocksEngine::is_stalled_or_stopped)
+            .map_or(false, RocksEngine::is_write_stopped)
         {
             debug!("skip gc in compaction filter because the DB is stalled");
             return None;

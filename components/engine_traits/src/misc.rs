@@ -166,7 +166,7 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt + WriteBatchExt {
 
     fn get_range_stats(&self, cf: &str, start: &[u8], end: &[u8]) -> Result<Option<RangeStats>>;
 
-    fn is_stalled_or_stopped(&self) -> bool;
+    fn is_write_stopped(&self) -> bool;
 
     /// Returns size and creation time of active memtable if there's one.
     fn get_active_memtable_stats_cf(
