@@ -4771,6 +4771,14 @@ where
         &mut self,
         reply_cmd: bool, // whether it is a reply to a TransferLeader command
     ) {
+        info!(
+            "ack transfer leader";
+            "region_id" => self.region_id,
+            "from_peer" => self.peer_id(),
+            "to_peer" => self.leader_id(),
+            "reply_cmd" => reply_cmd,
+        );
+
         let mut msg = eraftpb::Message::new();
         msg.set_from(self.peer_id());
         msg.set_to(self.leader_id());

@@ -3693,6 +3693,15 @@ where
     // Both the request and response for transfer-leader share the MessageType
     // `MsgTransferLeader`.
     fn on_transfer_leader_msg(&mut self, msg: &eraftpb::Message, peer_disk_usage: DiskUsage) {
+        info!(
+            "received transferring leader";
+            "region_id" => self.fsm.region_id(),
+            "peer_id" => self.fsm.peer.peer_id(),
+            "from" => msg.get_from(),
+            "term" => self.fsm.peer.term(),
+            "msg_term" => msg.get_log_term(),
+        );
+
         // log_term is set by original leader, represents the term last log is written
         // in, which should be equal to the original leader's term.
         if msg.get_log_term() != self.fsm.peer.term() {
