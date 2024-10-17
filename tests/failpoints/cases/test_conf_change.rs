@@ -12,7 +12,8 @@ use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
-use tikv_util::{config::ReadableDuration, HandyRwLock};
+use test_util::init_log_for_test;
+use tikv_util::{config::ReadableDuration, logger::init_log, HandyRwLock};
 
 #[test_case(test_raftstore::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
@@ -346,17 +347,23 @@ fn test_applied_conf_change_on_target_peer_allows_transfer_leader() {
     fail::cfg("apply_on_conf_change_3_1", "pause").unwrap();
 
     pd_client.remove_peer(region_id, new_peer(2, 2));
+    // Wait for remove_peer.
     sleep_ms(300);
     // Peer 2 is still exists since the leader hasn't applied the ConfChange
     // yet.
     pd_client.must_have_peer(region_id, new_peer(2, 2));
 
     // Use async_put for insertion here to avoid timeout errors, as synchronize put
-    // would fail due to the leader's apply process being paused.
+    // would hang due to the leader's apply process being paused.
     cluster.async_put(b"k2", b"v2");
 
     pd_client.transfer_leader(region_id, new_peer(3, 3), vec![]);
-    pd_client.region_leader_must_not_be(region_id, new_peer(3, 3));
+    // Wait for transfer_leader.
+    sleep_ms(300);
+    assert_eq!(
+        pd_client.check_region_leader(region_id, new_peer(3, 3)),
+        false
+    );
 
     pd_client.transfer_leader(region_id, new_peer(4, 4), vec![]);
     pd_client.region_leader_must_be(region_id, new_peer(4, 4));
@@ -364,4 +371,39 @@ fn test_applied_conf_change_on_target_peer_allows_transfer_leader() {
     // Verify the data completeness on the new leader.
     must_get_equal(&cluster.get_engine(4), b"k1", b"v1");
     must_get_equal(&cluster.get_engine(4), b"k2", b"v2");
+}
+
+// This test verifies that a leader transfer is rejected when the target peer
+// has been demoted to a learner but the leader has not yet applied this
+// configuration change.
+#[test]
+fn test_applied_conf_change_on_target_learner_rejects_transfer_leader() {
+    let mut cluster = new_server_cluster(0, 3);
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+    let region_id = cluster.run_conf_change();
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+    pd_client.region_leader_must_be(region_id, new_peer(1, 1));
+
+    fail::cfg("apply_on_conf_change_1_1", "pause").unwrap();
+
+    // Demote peer-2 to be a learner.
+    cluster.pd_client.joint_confchange(
+        region_id,
+        vec![(ConfChangeType::AddLearnerNode, new_learner_peer(2, 2))],
+    );
+    // Wait for joint_confchange.
+    sleep_ms(300);
+
+    pd_client.transfer_leader(region_id, new_peer(2, 2), vec![]);
+    // Wait for transfer_leader.
+    sleep_ms(300);
+    assert_eq!(
+        pd_client.check_region_leader(region_id, new_peer(2, 2)),
+        false
+    );
+
+    pd_client.transfer_leader(region_id, new_peer(3, 3), vec![]);
+    pd_client.region_leader_must_be(region_id, new_peer(3, 3));
 }
