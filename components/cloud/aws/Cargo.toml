@@ -11,13 +11,13 @@ failpoints = ["fail/failpoints"]
 [dependencies]
 async-trait = "0.1"
 
-aws-config = { version = "1.2.1", features = [], default-features = false}
-aws-credential-types = { version = "1.2.0", features = ["hardcoded-credentials"] }
-aws-sdk-kms = { version = "1.22.0", features = [], default-features = false }
-aws-sdk-s3 = { version = "1.16.0", features = ["rt-tokio"], default-features = false }
-aws-smithy-runtime = { version = "1.4.0", features = [ "client", "connector-hyper-0-14-x" ], default-features = false }
-aws-smithy-runtime-api = { version = "1.5.0", features = [], default-features = false }
-aws-smithy-types = { version = "1.1.8", features = ["byte-stream-poll-next"] }
+aws-config = { version = "1", features = [], default-features = false}
+aws-credential-types = { version = "1", features = ["hardcoded-credentials"] }
+aws-sdk-kms = { version = "1", features = [], default-features = false }
+aws-sdk-s3 = { version = "1", features = ["rt-tokio"], default-features = false }
+aws-smithy-runtime = { version = "1", features = [ "client", "connector-hyper-0-14-x" ], default-features = false }
+aws-smithy-runtime-api = { version = "1", features = [], default-features = false }
+aws-smithy-types = { version = "1", features = ["byte-stream-poll-next"] }
 
 base64 = "0.13.0"
 bytes = "1.0"
