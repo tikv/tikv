@@ -14,7 +14,9 @@ async-trait = "0.1"
 aws-config = { version = "1", features = [], default-features = false}
 aws-credential-types = { version = "1", features = ["hardcoded-credentials"] }
 aws-sdk-kms = { version = "1", features = [], default-features = false }
-aws-sdk-s3 = { version = "1", features = ["rt-tokio"], default-features = false }
+# Note: 1.47.0 is the latest version that supports rustc 1.77...
+# We may update this after we update our rustc.
+aws-sdk-s3 = { version = "=1.47.0", features = ["rt-tokio"], default-features = false }
 aws-smithy-runtime = { version = "1", features = [ "client", "connector-hyper-0-14-x" ], default-features = false }
 aws-smithy-runtime-api = { version = "1", features = [], default-features = false }
 aws-smithy-types = { version = "1", features = ["byte-stream-poll-next"] }

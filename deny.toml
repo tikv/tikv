@@ -11,8 +11,8 @@ deny = [
     { name = "md-5", wrappers = ["aws-smithy-checksums"]},
     { name = "sha1", wrappers = ["aws-smithy-checksums"]},
     { name = "sha-1" },
-    # We allow sha2 for oauth2 crate, because it does use sha2 in TiKV use case.
-    { name = "sha2", wrappers = ["oauth2", "aws-sigv4", "aws-smithy-checksums"] },
+    # We allow sha2 for oauth2 and aws rust sdk crate, because it does use sha2 in TiKV use case.
+    { name = "sha2", wrappers = ["oauth2", "aws-sigv4", "aws-smithy-checksums", "aws-sdk-s3"] },
     { name = "sha3" },
     # Symmetric encryption
     { name = "aes" },
@@ -27,7 +27,7 @@ deny = [
     { name = "ecdsa" },
     { name = "ed25519" },
     # Message authentication codes
-    { name = "hmac", wrappers = ["aws-sigv4"]},
+    { name = "hmac", wrappers = ["aws-sigv4", "aws-sdk-s3"]},
     # We prefer the system native TLS or OpenSSL.
     { name = "rustls" },
     { name = "ring" },
