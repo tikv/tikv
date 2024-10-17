@@ -300,7 +300,9 @@ pub fn dummy_scheduler<T: Display + Send>() -> (Scheduler<T>, ReceiverWrapper<T>
 #[derive(Copy, Clone)]
 pub struct Builder<S: Into<String>> {
     name: S,
-    thread_count: usize,
+    core_thread_count: usize,
+    min_thread_count: Option<usize>,
+    max_thread_count: Option<usize>,
     pending_capacity: usize,
 }
 
@@ -308,7 +310,9 @@ impl<S: Into<String>> Builder<S> {
     pub fn new(name: S) -> Self {
         Builder {
             name,
-            thread_count: 1,
+            core_thread_count: 1,
+            min_thread_count: None,
+            max_thread_count: None,
             pending_capacity: usize::MAX,
         }
     }
@@ -322,21 +326,32 @@ impl<S: Into<String>> Builder<S> {
 
     #[must_use]
     pub fn thread_count(mut self, thread_count: usize) -> Self {
-        self.thread_count = thread_count;
+        self.core_thread_count = thread_count;
+        self
+    }
+
+    #[must_use]
+    pub fn thread_count_limits(mut self, min_thread_count: usize, max_thread_count: usize) -> Self {
+        self.min_thread_count = Some(min_thread_count);
+        self.max_thread_count = Some(max_thread_count);
         self
     }
 
     pub fn create(self) -> Worker {
         let pool = YatpPoolBuilder::new(DefaultTicker::default())
             .name_prefix(self.name)
-            .thread_count(self.thread_count, self.thread_count, self.thread_count)
+            .thread_count(
+                self.min_thread_count.unwrap_or(self.core_thread_count),
+                self.core_thread_count,
+                self.max_thread_count.unwrap_or(self.core_thread_count),
+            )
             .build_future_pool();
         Worker {
             stop: Arc::new(AtomicBool::new(false)),
             pool,
             counter: Arc::new(AtomicUsize::new(0)),
             pending_capacity: self.pending_capacity,
-            thread_count: self.thread_count,
+            thread_count: self.core_thread_count,
         }
     }
 }
