@@ -7,7 +7,7 @@ use std::{
     io, mem,
     sync::{
         atomic::Ordering,
-        mpsc::{self, Receiver, Sender},
+        mpsc::{self, Receiver, Sender, SyncSender},
         Arc,
     },
     thread::{Builder, JoinHandle},
@@ -51,6 +51,7 @@ use tikv_util::{
 use txn_types::TimeStamp;
 use yatp::Remote;
 
+use super::split_controller::AutoSplitControllerContext;
 use crate::{
     coprocessor::CoprocessorHost,
     router::RaftStoreRouter,
@@ -486,8 +487,8 @@ where
     scheduler: Scheduler<Task<EK, ER>>,
     handle: Option<JoinHandle<()>>,
     timer: Option<Sender<bool>>,
-    read_stats_sender: Option<Sender<ReadStats>>,
-    cpu_stats_sender: Option<Sender<Arc<RawRecords>>>,
+    read_stats_sender: Option<SyncSender<ReadStats>>,
+    cpu_stats_sender: Option<SyncSender<Arc<RawRecords>>>,
     collect_store_infos_interval: Duration,
     load_base_split_check_interval: Duration,
     collect_tick_interval: Duration,
@@ -551,10 +552,14 @@ where
         let (timer_tx, timer_rx) = mpsc::channel();
         self.timer = Some(timer_tx);
 
-        let (read_stats_sender, read_stats_receiver) = mpsc::channel();
+        // The upper bound of buffered stats messages.
+        // It prevents unexpected memory buildup when AutoSplitController
+        // runs slowly.
+        const STATS_LIMIT: usize = 128;
+        let (read_stats_sender, read_stats_receiver) = mpsc::sync_channel(STATS_LIMIT);
         self.read_stats_sender = Some(read_stats_sender);
 
-        let (cpu_stats_sender, cpu_stats_receiver) = mpsc::channel();
+        let (cpu_stats_sender, cpu_stats_receiver) = mpsc::sync_channel(STATS_LIMIT);
         self.cpu_stats_sender = Some(cpu_stats_sender);
 
         let scheduler = self.scheduler.clone();
@@ -572,6 +577,8 @@ where
                 // make sure the record won't be disturbed.
                 let mut collect_store_infos_thread_stats = ThreadInfoStatistics::new();
                 let mut load_base_split_thread_stats = ThreadInfoStatistics::new();
+                let mut auto_split_controller_ctx = AutoSplitControllerContext::new(STATS_LIMIT);
+                
                 while let Err(mpsc::RecvTimeoutError::Timeout) =
                     timer_rx.recv_timeout(tick_interval)
                 {
@@ -584,6 +591,7 @@ where
                     if is_enable_tick(timer_cnt, load_base_split_check_interval) {
                         StatsMonitor::load_base_split(
                             &mut auto_split_controller,
+                            &mut auto_split_controller_ctx,
                             &read_stats_receiver,
                             &cpu_stats_receiver,
                             &mut load_base_split_thread_stats,
@@ -630,6 +638,7 @@ where
 
     pub fn load_base_split(
         auto_split_controller: &mut AutoSplitController,
+        auto_split_controller_ctx: &mut AutoSplitControllerContext,
         read_stats_receiver: &Receiver<ReadStats>,
         cpu_stats_receiver: &Receiver<Arc<RawRecords>>,
         thread_stats: &mut ThreadInfoStatistics,
@@ -648,17 +657,12 @@ where
             }
             SplitConfigChange::Noop => {}
         }
-        let mut read_stats_vec = vec![];
-        while let Ok(read_stats) = read_stats_receiver.try_recv() {
-            read_stats_vec.push(read_stats);
-        }
-        let mut cpu_stats_vec = vec![];
-        while let Ok(cpu_stats) = cpu_stats_receiver.try_recv() {
-            cpu_stats_vec.push(cpu_stats);
-        }
-        thread_stats.record();
-        let (top_qps, split_infos) =
-            auto_split_controller.flush(read_stats_vec, cpu_stats_vec, thread_stats);
+        let (top_qps, split_infos) = auto_split_controller.flush(
+            auto_split_controller_ctx,
+            read_stats_receiver,
+            cpu_stats_receiver,
+            thread_stats,
+        );
         auto_split_controller.clear();
         let task = Task::AutoSplit { split_infos };
         if let Err(e) = scheduler.schedule(task) {
@@ -667,6 +671,7 @@ where
                 "err" => ?e,
             );
         }
+        auto_split_controller_ctx.maybe_gc();
         for i in 0..TOP_N {
             if i < top_qps.len() {
                 READ_QPS_TOPN
@@ -708,12 +713,12 @@ where
     }
 
     #[inline(always)]
-    fn get_read_stats_sender(&self) -> &Option<Sender<ReadStats>> {
+    fn get_read_stats_sender(&self) -> &Option<SyncSender<ReadStats>> {
         &self.read_stats_sender
     }
 
     #[inline(always)]
-    fn get_cpu_stats_sender(&self) -> &Option<Sender<Arc<RawRecords>>> {
+    fn get_cpu_stats_sender(&self) -> &Option<SyncSender<Arc<RawRecords>>> {
         &self.cpu_stats_sender
     }
 }
@@ -1619,7 +1624,7 @@ where
         }
         if !read_stats.region_infos.is_empty() {
             if let Some(sender) = self.stats_monitor.get_read_stats_sender() {
-                if sender.send(read_stats).is_err() {
+                if sender.try_send(read_stats).is_err() {
                     warn!("send read_stats failed, are we shutting down?")
                 }
             }
@@ -1771,7 +1776,7 @@ where
     fn handle_region_cpu_records(&mut self, records: Arc<RawRecords>) {
         // Send Region CPU info to AutoSplitController inside the stats_monitor.
         if let Some(cpu_stats_sender) = self.stats_monitor.get_cpu_stats_sender() {
-            if cpu_stats_sender.send(records.clone()).is_err() {
+            if cpu_stats_sender.try_send(records.clone()).is_err() {
                 warn!("send region cpu info failed, are we shutting down?")
             }
         }
