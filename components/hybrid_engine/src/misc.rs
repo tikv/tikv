@@ -186,13 +186,13 @@ pub mod tests {
         let cache_r3 = CacheRegion::from_region(&r3);
 
         let mut write_batch = hybrid_engine.write_batch();
-        write_batch.prepare_for_region(r1.clone());
+        write_batch.prepare_for_region(&r1);
         write_batch.put(b"zk02", b"val").unwrap();
         write_batch.put(b"zk03", b"val").unwrap();
-        write_batch.prepare_for_region(r2.clone());
+        write_batch.prepare_for_region(&r2);
         write_batch.put(b"zk22", b"val").unwrap();
         write_batch.put(b"zk23", b"val").unwrap();
-        write_batch.prepare_for_region(r3.clone());
+        write_batch.prepare_for_region(&r3);
         write_batch.put(b"zk42", b"val").unwrap();
         write_batch.put(b"zk43", b"val").unwrap();
         write_batch.write().unwrap();

@@ -172,7 +172,7 @@ fn test_clean_up_tombstone() {
 
     engine.new_region(region.clone());
     let mut wb = engine.write_batch();
-    wb.prepare_for_region(region.clone());
+    wb.prepare_for_region(&region);
     wb.put_cf("lock", b"k", b"val").unwrap();
     wb.put_cf("lock", b"k1", b"val").unwrap();
     wb.put_cf("lock", b"k2", b"val").unwrap();
@@ -184,7 +184,7 @@ fn test_clean_up_tombstone() {
     wb.write().unwrap();
 
     let mut wb = engine.write_batch();
-    wb.prepare_for_region(region.clone());
+    wb.prepare_for_region(&region);
     wb.put_cf("lock", b"k", b"val").unwrap(); // seq 120
     wb.put_cf("lock", b"k1", b"val").unwrap(); // seq 121
     wb.put_cf("lock", b"k2", b"val").unwrap(); // seq 122
@@ -277,9 +277,9 @@ fn test_evict_with_loading_range() {
 
     let mut wb = engine.write_batch();
     // prepare range to trigger loading
-    wb.prepare_for_region(r1.clone());
-    wb.prepare_for_region(r2.clone());
-    wb.prepare_for_region(r3.clone());
+    wb.prepare_for_region(&r1);
+    wb.prepare_for_region(&r2);
+    wb.prepare_for_region(&r3);
     wb.set_sequence_number(10).unwrap();
     wb.write().unwrap();
 
@@ -334,12 +334,12 @@ fn test_cached_write_batch_cleared_when_load_failed() {
 
     let mut wb = engine.write_batch();
     // range1 starts to load
-    wb.prepare_for_region(r1.clone());
+    wb.prepare_for_region(&r1);
     rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
     wb.put(b"zk05", b"val").unwrap();
     wb.put(b"zk06", b"val").unwrap();
-    wb.prepare_for_region(r2.clone());
+    wb.prepare_for_region(&r2);
     wb.put(b"zk25", b"val").unwrap();
     wb.set_sequence_number(100).unwrap();
     wb.write().unwrap();
@@ -418,20 +418,20 @@ fn test_concurrency_between_delete_range_and_write_to_memory() {
     let region3_clone = r3.clone();
     let handle = std::thread::spawn(move || {
         let mut wb = engine_clone.write_batch();
-        wb.prepare_for_region(region1_clone);
+        wb.prepare_for_region(&region1_clone);
         wb.put_cf(CF_LOCK, b"zk02", b"val").unwrap();
         wb.put_cf(CF_LOCK, b"zk03", b"val").unwrap();
         wb.put_cf(CF_LOCK, b"zk04", b"val").unwrap();
         wb.set_sequence_number(100).unwrap();
 
         let mut wb2 = engine_clone.write_batch();
-        wb2.prepare_for_region(region2_clone);
+        wb2.prepare_for_region(&region2_clone);
         wb.put_cf(CF_LOCK, b"zk22", b"val").unwrap();
         wb.put_cf(CF_LOCK, b"zk23", b"val").unwrap();
         wb2.set_sequence_number(200).unwrap();
 
         let mut wb3 = engine_clone.write_batch();
-        wb3.prepare_for_region(region3_clone);
+        wb3.prepare_for_region(&region3_clone);
         wb3.set_sequence_number(300).unwrap();
 
         range_prepared_tx.send(true).unwrap();
@@ -560,7 +560,7 @@ fn test_double_delete_range_schedule() {
 
     let mut wb = engine.write_batch();
     // prepare range to trigger loading
-    wb.prepare_for_region(r3.clone());
+    wb.prepare_for_region(&r3);
     wb.set_sequence_number(10).unwrap();
     wb.write().unwrap();
 
@@ -625,7 +625,7 @@ fn test_load_with_gc() {
     let range = CacheRegion::from_region(&region);
     engine.load_region(range.clone()).unwrap();
     let mut wb = engine.write_batch();
-    wb.prepare_for_region(region.clone());
+    wb.prepare_for_region(&region);
     wb.set_sequence_number(100).unwrap();
     wb.write().unwrap();
 
@@ -696,7 +696,7 @@ fn test_region_split_before_batch_loading_start() {
 
     // use write batch to trigger scheduling pending region loading task.
     let mut wb = engine.write_batch();
-    wb.prepare_for_region(region.clone());
+    wb.prepare_for_region(&region);
     wb.set_sequence_number(10).unwrap();
     wb.put(b"zk00", b"val2").unwrap();
     wb.put(b"zk10", b"val2").unwrap();
@@ -765,7 +765,7 @@ fn test_cb_on_eviction() {
     engine.new_region(region.clone());
 
     let mut wb = engine.write_batch();
-    wb.prepare_for_region(region.clone());
+    wb.prepare_for_region(&region);
     wb.set_sequence_number(10).unwrap();
     wb.put(b"a", b"val1").unwrap();
     wb.put(b"b", b"val2").unwrap();

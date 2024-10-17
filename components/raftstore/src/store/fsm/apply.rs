@@ -543,7 +543,7 @@ where
     pub fn prepare_for(&mut self, delegate: &mut ApplyDelegate<EK>) {
         self.applied_batch
             .push_batch(&delegate.observe_info, delegate.region.get_id());
-        self.kv_wb.prepare_for_region(delegate.region.clone());
+        self.kv_wb.prepare_for_region(&delegate.region);
     }
 
     /// Commits all changes have done for delegate. `persistent` indicates

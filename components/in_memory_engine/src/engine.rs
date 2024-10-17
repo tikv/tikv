@@ -793,7 +793,7 @@ pub mod tests {
         assert!(engine.core.region_manager.is_active());
 
         let mut wb = engine.write_batch();
-        wb.prepare_for_region(region.clone());
+        wb.prepare_for_region(&region);
         wb.put(b"zk00", b"v1").unwrap();
         wb.put(b"zk10", b"v1").unwrap();
         wb.put(b"zk20", b"v1").unwrap();
@@ -810,7 +810,7 @@ pub mod tests {
         );
 
         let mut wb = engine.write_batch();
-        wb.prepare_for_region(region.clone());
+        wb.prepare_for_region(&region);
         wb.put(b"zk10", b"v2").unwrap();
         wb.set_sequence_number(10).unwrap();
 
@@ -877,7 +877,7 @@ pub mod tests {
         engine.new_region(region.clone());
 
         let mut wb = engine.write_batch();
-        wb.prepare_for_region(region.clone());
+        wb.prepare_for_region(&region);
         wb.set_sequence_number(10).unwrap();
         wb.put(b"a", b"val1").unwrap();
         wb.put(b"b", b"val2").unwrap();

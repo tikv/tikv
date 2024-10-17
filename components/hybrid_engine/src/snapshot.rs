@@ -192,7 +192,7 @@ mod tests {
             assert!(!iter.seek_to_first().unwrap());
         }
         let mut write_batch = hybrid_engine.write_batch();
-        write_batch.prepare_for_region(region.clone());
+        write_batch.prepare_for_region(&region);
         write_batch
             .cache_write_batch
             .set_region_cache_status(RegionCacheStatus::Cached);

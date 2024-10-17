@@ -102,7 +102,7 @@ impl WriteBatch for HybridObservableWriteBatch {
     fn rollback_to_save_point(&mut self) -> Result<()> {
         self.cache_write_batch.rollback_to_save_point()
     }
-    fn prepare_for_region(&mut self, region: metapb::Region) {
+    fn prepare_for_region(&mut self, region: &metapb::Region) {
         self.cache_write_batch.prepare_for_region(region);
     }
 }

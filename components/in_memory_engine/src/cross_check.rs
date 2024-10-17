@@ -996,7 +996,7 @@ mod tests {
 
         {
             let mut wb = engine.write_batch();
-            wb.prepare_for_region(region);
+            wb.prepare_for_region(&region);
             let mut disk_wb = rocks_engine.write_batch();
 
             prepare_data(&mut wb, &mut disk_wb);

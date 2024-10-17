@@ -138,7 +138,7 @@ where
             let mut epoch = RegionEpoch::default();
             epoch.version = cached_region.epoch_version;
             region.set_region_epoch(epoch);
-            batch.prepare_for_region(region);
+            batch.prepare_for_region(&region);
         }
         f(&mut batch)?;
         let _ = batch.write()?;

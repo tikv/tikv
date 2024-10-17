@@ -141,5 +141,5 @@ pub trait WriteBatch: Mutable {
 
     /// It declares that the following consecutive write will be within this
     /// region.
-    fn prepare_for_region(&mut self, _: metapb::Region) {}
+    fn prepare_for_region(&mut self, _: &metapb::Region) {}
 }
