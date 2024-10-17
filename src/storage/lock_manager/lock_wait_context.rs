@@ -26,7 +26,7 @@ use txn_types::Key;
 use crate::storage::{
     errors::SharedError,
     lock_manager::{lock_waiting_queue::LockWaitQueues, LockManager, LockWaitToken},
-    types::PessimisticLockKeyResult,
+    types::{GuardedStorageCallback, PessimisticLockKeyResult},
     Error as StorageError, PessimisticLockResults, ProcessResult, StorageCallback,
 };
 
@@ -39,7 +39,7 @@ pub struct LockWaitContextInner {
     /// The callback for finishing the current AcquirePessimisticLock request.
     /// Usually, requests are accepted from RPC, and in this case calling
     /// the callback means returning the response to the client via RPC.
-    cb: StorageCallback,
+    cb: GuardedStorageCallback,
 }
 
 /// The content of the `LockWaitContext` that needs to be shared among all
@@ -122,7 +122,7 @@ pub struct LockWaitContextSharedState {
 }
 
 impl LockWaitContextSharedState {
-    fn new(lock_wait_token: LockWaitToken, key: Key, cb: StorageCallback) -> Self {
+    fn new(lock_wait_token: LockWaitToken, key: Key, cb: GuardedStorageCallback) -> Self {
         let inner = LockWaitContextInner { cb };
         let (tx, rx) = mpsc::channel();
         Self {
@@ -193,7 +193,7 @@ impl<L: LockManager> LockWaitContext<L> {
         key: Key,
         lock_wait_queues: LockWaitQueues<L>,
         lock_wait_token: LockWaitToken,
-        cb: StorageCallback,
+        cb: GuardedStorageCallback,
         allow_lock_with_conflict: bool,
     ) -> Self {
         Self {
@@ -216,10 +216,11 @@ impl<L: LockManager> LockWaitContext<L> {
     /// failed), this will be useful for handling the result of the first
     /// write batch. But currently, the first write batch of a lock-waiting
     /// request is always empty, so the callback is just noop.
-    pub fn get_callback_for_first_write_batch(&self) -> StorageCallback {
+    pub fn get_callback_for_first_write_batch(&self) -> GuardedStorageCallback {
         StorageCallback::Boolean(Box::new(|res| {
             res.unwrap();
         }))
+        .into()
     }
 
     /// Get the callback that should be called when the request is woken up on a
@@ -349,7 +350,13 @@ mod tests {
     ) {
         let (cb, rx) = create_storage_cb();
         let token = lock_wait_queues.get_lock_mgr().allocate_token();
-        let ctx = LockWaitContext::new(key.clone(), lock_wait_queues.clone(), token, cb, false);
+        let ctx = LockWaitContext::new(
+            key.clone(),
+            lock_wait_queues.clone(),
+            token,
+            cb.into(),
+            false,
+        );
         (token, ctx, rx)
     }
 
