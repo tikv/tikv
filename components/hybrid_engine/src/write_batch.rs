@@ -3,9 +3,10 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use engine_traits::{
-    is_data_cf, CacheRegion, KvEngine, Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions,
+    is_data_cf, KvEngine, Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions,
 };
 use in_memory_engine::{RegionCacheMemoryEngine, RegionCacheWriteBatch};
+use kvproto::metapb;
 
 use crate::engine::HybridEngine;
 
@@ -100,7 +101,7 @@ impl<EK: KvEngine> WriteBatch for HybridEngineWriteBatch<EK> {
         self.cache_write_batch.merge(other.cache_write_batch)
     }
 
-    fn prepare_for_region(&mut self, r: CacheRegion) {
+    fn prepare_for_region(&mut self, r: &metapb::Region) {
         self.cache_write_batch.prepare_for_region(r);
     }
 }
@@ -175,7 +176,7 @@ mod tests {
         .unwrap();
         let cache_region = CacheRegion::from_region(&region);
         let mut write_batch = hybrid_engine.write_batch();
-        write_batch.prepare_for_region(cache_region.clone());
+        write_batch.prepare_for_region(&region);
         write_batch
             .cache_write_batch
             .set_region_cache_status(RegionCacheStatus::Cached);
@@ -248,10 +249,10 @@ mod tests {
         .unwrap();
 
         let mut wb = hybrid_engine.write_batch();
-        wb.prepare_for_region(cache_region1.clone());
+        wb.prepare_for_region(&region1);
         wb.put(b"zk05", b"val").unwrap();
         wb.put(b"zk08", b"val2").unwrap();
-        wb.prepare_for_region(cache_region2.clone());
+        wb.prepare_for_region(&region2);
         wb.put(b"zk25", b"val3").unwrap();
         wb.put(b"zk27", b"val4").unwrap();
         wb.write().unwrap();
@@ -276,9 +277,9 @@ mod tests {
 
         let mut wb = hybrid_engine.write_batch();
         // all ranges overlapped with it will be evicted
-        wb.prepare_for_region(cache_region1.clone());
+        wb.prepare_for_region(&region1);
         wb.delete_range(b"zk05", b"zk08").unwrap();
-        wb.prepare_for_region(cache_region2.clone());
+        wb.prepare_for_region(&region2);
         wb.delete_range(b"zk20", b"zk21").unwrap();
         wb.write().unwrap();
 
