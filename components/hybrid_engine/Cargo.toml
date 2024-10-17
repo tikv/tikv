@@ -6,7 +6,7 @@ publish = false
 license = "Apache-2.0"
 
 [features]
-testexport = []
+testexport = ["raftstore/testexport"]
 failpoints = ["fail/failpoints"]
 
 [[test]]
@@ -31,7 +31,7 @@ prometheus-static-metric = "0.5"
 lazy_static = "1.4.0"
 crossbeam = { workspace = true }
 fail = "0.5"
-raftstore = { workspace = true, features = ["testexport"] }
+raftstore = { workspace = true }
 raft = { workspace = true }
 kvproto = { workspace = true }
 
