@@ -58,7 +58,7 @@ use tikv_util::{
     box_err,
     codec::number::decode_u64,
     debug, error, info,
-    store::find_peer_by_id,
+    store::{find_peer_by_id, is_learner},
     sys::disk::DiskUsage,
     time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant, InstantExt},
     warn,
@@ -3984,8 +3984,7 @@ where
             info!(
                 "not ready to transfer leader; target peer has an unapplied conf change";
                 "region_id" => self.region_id,
-                "store_id" => self.peer.get_store_id(),
-                "peer_id" => peer_id,
+                "target_peer_id" => peer_id,
                 "pending_conf_index" => self.raft_group.raft.pending_conf_index,
                 "leader_applied_index" => self.raft_group.raft.raft_log.applied,
                 "target_applied_index" => index
@@ -4686,7 +4685,7 @@ where
     ) -> bool {
         let pending_snapshot = self.is_handling_snapshot() || self.has_pending_snapshot();
         // shouldn't transfer leader to witness peer or non-witness waiting data
-        if self.is_witness() || self.wait_data
+        if self.is_witness() || is_learner(&self.peer) || self.wait_data
             || pending_snapshot
             || msg.get_from() != self.leader_id()
             // Transfer leader to node with disk full will lead to write availablity downback.
@@ -4703,6 +4702,7 @@ where
                 "pending_snapshot" => pending_snapshot,
                 "disk_usage" => ?ctx.self_disk_usage,
                 "is_witness" => self.is_witness(),
+                "is_learner" => is_learner(&self.peer),
                 "wait_data" => self.wait_data,
             );
             return true;
