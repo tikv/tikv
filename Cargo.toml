@@ -475,7 +475,7 @@ overflow-checks = false
 rpath = false
 
 [profile.release]
-opt-level = 1
+opt-level = 3
 debug = false
 codegen-units = 1
 lto = "thin"
@@ -486,7 +486,7 @@ overflow-checks = false
 rpath = false
 
 [profile.release.package.server]
-opt-level = 1
+opt-level = 4
 codegen-units = 1
 
 [profile.test]

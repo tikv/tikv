@@ -81,7 +81,7 @@ impl RegionState {
 
 // read_ts -> ref_count
 #[derive(Default, Debug)]
-pub struct SnapshotList(pub BTreeMap<u64, u64>);
+pub(crate) struct SnapshotList(pub(crate) BTreeMap<u64, u64>);
 
 impl SnapshotList {
     pub(crate) fn new_snapshot(&mut self, read_ts: u64) {
