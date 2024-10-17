@@ -122,12 +122,28 @@ impl<E: KvEngine> Initializer<E> {
         fail_point!("cdc_before_initialize");
         let _permit = concurrency_semaphore.acquire().await;
 
+        let region_id = self.region_id;
+        let downstream_id = self.downstream_id;
+        let observe_id = self.observe_handle.id;
+        // when there are a lot of pending incremental scan tasks, they may be stopped,
+        // check the state here to accelerate tasks cancel process.
+        if self.downstream_state.load() == DownstreamState::Stopped {
+            info!("cdc async incremental scan canceled before start";
+                "region_id" => region_id,
+                "downstream_id" => ?downstream_id,
+                "observe_id" => ?observe_id,
+                "conn_id" => ?self.conn_id);
+            return Err(Error::Other(box_err!("scan canceled")));
+        }
+
         // To avoid holding too many snapshots and holding them too long,
         // we need to acquire scan concurrency permit before taking snapshot.
         let sched = self.sched.clone();
-        let region_id = self.region_id;
         let region_epoch = self.region_epoch.clone();
+<<<<<<< HEAD
         let downstream_id = self.downstream_id;
+=======
+>>>>>>> c40977bb27 (cdc: cancel incremental scan tasks in time (#17670))
         let downstream_state = self.downstream_state.clone();
         let (cb, fut) = tikv_util::future::paired_future_callback();
         let sink = self.sink.clone();
