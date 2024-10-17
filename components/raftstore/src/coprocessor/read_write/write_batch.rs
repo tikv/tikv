@@ -113,6 +113,10 @@ impl<WB: WriteBatch> WriteBatch for WriteBatchWrapper<WB> {
         unimplemented!("WriteBatchWrapper does not support merge")
     }
 
+    fn batch_handle_begin(&mut self) {
+        self.write_batch.batch_handle_begin();
+    }
+
     fn prepare_for_region(&mut self, region: CacheRegion) {
         if let Some(w) = self.observable_write_batch.as_mut() {
             w.prepare_for_region(region)

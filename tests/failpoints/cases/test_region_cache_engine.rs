@@ -8,7 +8,7 @@ use std::{
 use engine_rocks::RocksSstWriterBuilder;
 use engine_traits::{
     CacheRegion, EvictReason, RegionCacheEngine, RegionCacheEngineExt, SstWriter, SstWriterBuilder,
-    CF_DEFAULT, DATA_CFS,
+    CF_DEFAULT, CF_LOCK, DATA_CFS,
 };
 use file_system::calc_crc32_bytes;
 use in_memory_engine::test_util::new_region;
@@ -24,8 +24,8 @@ use test_coprocessor::{
     handle_request, init_data_with_details_pd_client, DagChunkSpliter, DagSelect, ProductTable,
 };
 use test_raftstore::{
-    get_tso, new_peer, new_server_cluster_with_hybrid_engine_with_no_region_cache, Cluster,
-    ServerCluster,
+    get_tso, make_cb, new_compute_hash_request, new_peer, new_put_cf_cmd, new_request,
+    new_server_cluster_with_hybrid_engine_with_no_region_cache, Cluster, ServerCluster, Simulator,
 };
 use test_util::eventually;
 use tidb_query_datatype::{
@@ -798,4 +798,41 @@ fn test_delete_range() {
 
     delete_range(false);
     delete_range(true);
+}
+
+#[test]
+fn test_x() {
+    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
+    cluster.run();
+
+    let r = cluster.get_region(b"");
+    let store_id = r.get_peers()[0].store_id;
+    let mut req1 = new_request(
+        r.id,
+        r.get_region_epoch().clone(),
+        vec![new_put_cf_cmd(CF_LOCK, b"k01", b"val1")],
+        false,
+    );
+    req1.mut_header().set_peer(r.get_peers()[0].clone());
+    let mut req2 = new_compute_hash_request(r.id, r.get_region_epoch());
+    req2.mut_header().set_peer(r.get_peers()[0].clone());
+
+    let mut req3 = new_request(
+        r.id,
+        r.get_region_epoch().clone(),
+        vec![new_put_cf_cmd(CF_LOCK, b"k02", b"val2")],
+        false,
+    );
+    req3.mut_header().set_peer(r.get_peers()[0].clone());
+
+    let mut rxs = vec![];
+    for r in &[req1, req2, req3] {
+        let (cb, rx) = make_cb(&r);
+        cluster
+            .sim
+            .read()
+            .unwrap()
+            .async_command_on_node(store_id, r.clone(), cb);
+        rxs.push(rx);
+    }
 }

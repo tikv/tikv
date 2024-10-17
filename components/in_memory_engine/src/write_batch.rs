@@ -6,6 +6,7 @@ use std::{
 };
 
 use bytes::Bytes;
+use collections::{hash_map_with_capacity, HashMap};
 use crossbeam::epoch;
 use engine_traits::{
     CacheRegion, EvictReason, MiscExt, Mutable, RegionCacheEngine, Result, WriteBatch,
@@ -43,6 +44,8 @@ const AMOUNT_TO_CLEAN_TOMBSTONE: u64 = ReadableSize::mb(16).0;
 // The value of the delete entry in the in-memory engine. It's just a emptry
 // slice.
 const DELETE_ENTRY_VAL: &[u8] = b"";
+const DEFAULT_BATCH_COUNT: usize = 64;
+const MAX_BATCH_COUNT: usize = 256;
 
 // `prepare_for_region` should be called before raft command apply for each peer
 // delegate. It sets `region_cache_status` which is used to determine whether
@@ -54,6 +57,7 @@ pub struct RegionCacheWriteBatch {
     // `pending_range_in_loading_buffer` which is cached in the memory engine and will be consumed
     // after the snapshot has been loaded.
     region_cache_status: RegionCacheStatus,
+    region_cache_status_map: HashMap<u64, RegionCacheStatus>,
     buffer: Vec<RegionCacheWriteBatchEntry>,
     engine: RegionCacheMemoryEngine,
     save_points: Vec<usize>,
@@ -82,6 +86,7 @@ impl From<&RegionCacheMemoryEngine> for RegionCacheWriteBatch {
     fn from(engine: &RegionCacheMemoryEngine) -> Self {
         Self {
             region_cache_status: RegionCacheStatus::NotInCache,
+            region_cache_status_map: hash_map_with_capacity(DEFAULT_BATCH_COUNT),
             buffer: Vec::new(),
             engine: engine.clone(),
             save_points: Vec::new(),
@@ -99,6 +104,7 @@ impl RegionCacheWriteBatch {
     pub fn with_capacity(engine: &RegionCacheMemoryEngine, cap: usize) -> Self {
         Self {
             region_cache_status: RegionCacheStatus::NotInCache,
+            region_cache_status_map: hash_map_with_capacity(DEFAULT_BATCH_COUNT),
             buffer: Vec::with_capacity(cap),
             // cache_buffer should need small capacity
             engine: engine.clone(),
@@ -470,13 +476,39 @@ impl WriteBatch for RegionCacheWriteBatch {
         Ok(())
     }
 
+    fn batch_handle_begin(&mut self) {
+        self.region_cache_status_map.clear();
+        if self.region_cache_status_map.capacity() > MAX_BATCH_COUNT {
+            self.region_cache_status_map.shrink_to(DEFAULT_BATCH_COUNT);
+        }
+    }
+
     fn prepare_for_region(&mut self, region: CacheRegion) {
         let time = Instant::now();
         // record last region for clearing region in written flags.
         self.record_last_written_region();
 
+        // Region may call this method(`prepare_for_region`) more than once and we use
+        // the region status that the region calls this method at the first time to
+        // avoid the race condition like this:
+        //              TH1                            TH2
+        // 1. prepare_for_region for region 1,
+        //   and status is NotInCache
+        // 2. write key 1
+        //                                      3. LoadRegion region 1
+        // ...
+        // 4. prepare_for_region for region 1
+        //  and schedule load
+        // 5. write_impl
+        //
+        // The load of region 1 is scheduled with snapshot acquired at time 4 where the
+        // key 1 is neither not written in rocksdb nor plan to write in ime.
+        let region_cache_status = *self
+            .region_cache_status_map
+            .entry(region.id)
+            .or_insert(self.engine.prepare_for_apply(&region));
         // TODO: remote range.
-        self.set_region_cache_status(self.engine.prepare_for_apply(&region));
+        self.set_region_cache_status(region_cache_status);
         self.current_region = Some(region);
         self.current_region_evicted = false;
         self.prepare_for_write_duration += time.saturating_elapsed();
