@@ -461,9 +461,23 @@ impl<R: RaftExtension + 'static> Runner<R> {
             };
             self.snap_mgr.set_speed_limit(limit);
             self.snap_mgr.set_max_total_snap_size(max_total_size);
+<<<<<<< HEAD
             info!("refresh snapshot manager config";
             "speed_limit"=> limit,
             "max_total_snap_size"=> max_total_size);
+=======
+            self.snap_mgr
+                .set_min_ingest_cf_limit(incoming.snap_min_ingest_size);
+            info!(
+                "refresh snapshot manager config";
+                "speed_limit" => limit,
+                "max_total_snap_size" => max_total_size,
+                "min_ingest_cf_size" => ?incoming.snap_min_ingest_size);
+            if incoming.concurrent_recv_snap_limit > 0 {
+                self.snap_mgr
+                    .set_concurrent_recv_snap_limit(incoming.concurrent_recv_snap_limit);
+            }
+>>>>>>> 12e03b787c (raftstore: directly write kvs rafther than ingestion when merging small regions. (#17408))
             self.cfg = incoming.clone();
         }
     }
