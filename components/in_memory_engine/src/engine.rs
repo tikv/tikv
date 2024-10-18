@@ -17,6 +17,7 @@ use engine_traits::{
     CacheRegion, EvictReason, FailedReason, IterOptions, Iterable, KvEngine, RegionCacheEngine,
     RegionCacheEngineExt, RegionEvent, Result, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
+use fail::fail_point;
 use kvproto::metapb::Region;
 use pd_client::PdClient;
 use raftstore::{coprocessor::RegionInfoProvider, store::CasualRouter};
@@ -265,6 +266,7 @@ impl RegionCacheMemoryEngineCore {
                 regions_map.load_region(region.clone()).unwrap();
                 region_meta = regions_map.mut_region_meta(region.id).unwrap();
             } else {
+                fail_point!("ime_fail_to_schedule_load");
                 info!("ime remove outdated pending region";
                     "pending_region" => ?meta.get_region(),
                     "new_region" => ?region);
