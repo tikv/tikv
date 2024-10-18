@@ -48,6 +48,7 @@ online_config = { workspace = true }
 libc = "0.2"
 rand = "0.8"
 tokio = { version = "1.5", features = ["rt-multi-thread"] }
+smallvec = "1.4"
 
 [dev-dependencies]
 tempfile = "3.0"
