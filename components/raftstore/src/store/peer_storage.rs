@@ -234,7 +234,7 @@ where
 
     snap_state: RefCell<SnapState>,
     gen_snap_task: RefCell<Option<GenSnapTask>>,
-    region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+    region_scheduler: Scheduler<RegionTask>,
     snap_tried_cnt: RefCell<usize>,
 
     entry_storage: EntryStorage<EK, ER>,
@@ -304,7 +304,7 @@ where
     pub fn new(
         engines: Engines<EK, ER>,
         region: &metapb::Region,
-        region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+        region_scheduler: Scheduler<RegionTask>,
         raftlog_fetch_scheduler: Scheduler<ReadTask<EK>>,
         peer_id: u64,
         tag: String,
@@ -1268,21 +1268,18 @@ pub mod tests {
     };
 
     use super::*;
-    use crate::{
-        coprocessor::CoprocessorHost,
-        store::{
-            async_io::{read::ReadRunner, write::write_to_db_for_test},
-            bootstrap_store,
-            entry_storage::tests::validate_cache,
-            fsm::apply::compact_raft_log,
-            initial_region, prepare_bootstrap_cluster,
-            worker::{make_region_worker_raftstore_cfg, RegionRunner, RegionTask},
-            AsyncReadNotifier, FetchedLogs, GenSnapRes,
-        },
+    use crate::store::{
+        async_io::{read::ReadRunner, write::write_to_db_for_test},
+        bootstrap_store,
+        entry_storage::tests::validate_cache,
+        fsm::apply::compact_raft_log,
+        initial_region, prepare_bootstrap_cluster,
+        worker::{RegionTask, SnapGenRunner, SnapGenTask},
+        AsyncReadNotifier, FetchedLogs, GenSnapRes,
     };
 
     fn new_storage(
-        region_scheduler: Scheduler<RegionTask<KvTestSnapshot>>,
+        region_scheduler: Scheduler<RegionTask>,
         raftlog_fetch_scheduler: Scheduler<ReadTask<KvTestEngine>>,
         path: &TempDir,
     ) -> PeerStorage<KvTestEngine, RaftTestEngine> {
@@ -1315,7 +1312,7 @@ pub mod tests {
     }
 
     pub fn new_storage_from_ents(
-        region_scheduler: Scheduler<RegionTask<KvTestSnapshot>>,
+        region_scheduler: Scheduler<RegionTask>,
         raftlog_fetch_scheduler: Scheduler<ReadTask<KvTestEngine>>,
         path: &TempDir,
         ents: &[Entry],
@@ -1647,7 +1644,7 @@ pub mod tests {
     fn generate_and_schedule_snapshot(
         gen_task: GenSnapTask,
         engines: &Engines<KvTestEngine, RaftTestEngine>,
-        sched: &Scheduler<RegionTask<KvTestSnapshot>>,
+        sched: &Scheduler<SnapGenTask<KvTestSnapshot>>,
     ) -> Result<()> {
         let apply_state: RaftApplyState = engines
             .kv
@@ -1687,21 +1684,22 @@ pub mod tests {
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
         mgr.init().unwrap();
-        let mut worker = Worker::new("region-worker").lazy_build("region-worker");
-        let sched = worker.scheduler();
+        let (sched, _) = dummy_scheduler();
         let (dummy_scheduler, _) = dummy_scheduler();
         let mut s = new_storage_from_ents(sched.clone(), dummy_scheduler, &td, &ents);
         let (router, _) = mpsc::sync_channel(100);
-        let cfg = make_region_worker_raftstore_cfg(true);
-        let runner = RegionRunner::new(
+
+        let mut snap_gen_worker = LazyWorker::new("snap-generator");
+        let snap_gen_sched = snap_gen_worker.scheduler();
+        let snap_gen_runner = SnapGenRunner::new(
             s.engines.kv.clone(),
             mgr,
-            cfg,
-            CoprocessorHost::<KvTestEngine>::default(),
             router,
             Option::<Arc<TestPdClient>>::None,
+            snap_gen_worker.pool(),
         );
-        worker.start_with_timer(runner);
+        snap_gen_worker.start(snap_gen_runner);
+
         let to_peer_id = s.peer_id;
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
 
@@ -1723,7 +1721,7 @@ pub mod tests {
         assert_eq!(*s.snap_tried_cnt.borrow(), 1);
 
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
-        generate_and_schedule_snapshot(gen_task, &s.engines, &sched).unwrap();
+        generate_and_schedule_snapshot(gen_task, &s.engines, &snap_gen_sched).unwrap();
         let snap = match *s.snap_state.borrow() {
             SnapState::Generating { ref receiver, .. } => {
                 receiver.recv_timeout(Duration::from_secs(3)).unwrap()
@@ -1791,11 +1789,11 @@ pub mod tests {
         assert_eq!(*s.snap_tried_cnt.borrow(), 1);
 
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
-        generate_and_schedule_snapshot(gen_task, &s.engines, &sched).unwrap();
+        generate_and_schedule_snapshot(gen_task, &s.engines, &snap_gen_sched).unwrap();
         match *s.snap_state.borrow() {
             SnapState::Generating { ref receiver, .. } => {
                 receiver.recv_timeout(Duration::from_secs(3)).unwrap();
-                worker.stop();
+                snap_gen_worker.stop();
                 match receiver.recv_timeout(Duration::from_secs(3)) {
                     Err(RecvTimeoutError::Disconnected) => {}
                     res => panic!("unexpected result: {:?}", res),
@@ -1806,7 +1804,7 @@ pub mod tests {
         // Disconnected channel should trigger another try.
         assert_eq!(s.snapshot(0, to_peer_id).unwrap_err(), unavailable);
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
-        generate_and_schedule_snapshot(gen_task, &s.engines, &sched).unwrap_err();
+        generate_and_schedule_snapshot(gen_task, &s.engines, &snap_gen_sched).unwrap_err();
         assert_eq!(*s.snap_tried_cnt.borrow(), 2);
 
         for cnt in 2..super::MAX_SNAP_TRY_CNT + 10 {
@@ -1821,7 +1819,7 @@ pub mod tests {
             // Scheduled job failed should trigger .
             assert_eq!(s.snapshot(0, to_peer_id).unwrap_err(), unavailable);
             let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
-            generate_and_schedule_snapshot(gen_task, &s.engines, &sched).unwrap_err();
+            generate_and_schedule_snapshot(gen_task, &s.engines, &snap_gen_sched).unwrap_err();
         }
 
         // When retry too many times, it should report a different error.
@@ -1842,10 +1840,9 @@ pub mod tests {
         mgr.init().unwrap();
         mgr.set_enable_multi_snapshot_files(true);
         mgr.set_max_per_file_size(500);
-        let mut worker = Worker::new("region-worker").lazy_build("region-worker");
-        let sched = worker.scheduler();
+        let (sched, _) = dummy_scheduler();
         let (dummy_scheduler, _) = dummy_scheduler();
-        let s = new_storage_from_ents(sched.clone(), dummy_scheduler, &td, &ents);
+        let s = new_storage_from_ents(sched, dummy_scheduler, &td, &ents);
         let (router, _) = mpsc::sync_channel(100);
         let mut pd_client = TestPdClient::new();
         let labels = vec![StoreLabel {
@@ -1856,22 +1853,24 @@ pub mod tests {
         let store = new_store(1, labels);
         pd_client.add_store(store);
         let pd_mock = Arc::new(pd_client);
-        let cfg = make_region_worker_raftstore_cfg(true);
-        let runner = RegionRunner::new(
+
+        let mut snap_gen_worker = LazyWorker::new("snap-generator");
+        let snap_gen_sched = snap_gen_worker.scheduler();
+        let snap_gen_runner = SnapGenRunner::new(
             s.engines.kv.clone(),
             mgr,
-            cfg,
-            CoprocessorHost::<KvTestEngine>::default(),
             router,
             Some(pd_mock),
+            snap_gen_worker.pool(),
         );
-        worker.start_with_timer(runner);
+        snap_gen_worker.start(snap_gen_runner);
+
         let snap = s.snapshot(0, 1);
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
         assert_eq!(snap.unwrap_err(), unavailable);
         assert_eq!(*s.snap_tried_cnt.borrow(), 1);
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
-        generate_and_schedule_snapshot(gen_task, &s.engines, &sched).unwrap();
+        generate_and_schedule_snapshot(gen_task, &s.engines, &snap_gen_sched).unwrap();
         let snap = match *s.snap_state.borrow() {
             SnapState::Generating { ref receiver, .. } => {
                 receiver.recv_timeout(Duration::from_secs(3)).unwrap()
@@ -1912,21 +1911,22 @@ pub mod tests {
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
         mgr.init().unwrap();
-        let mut worker = Worker::new("region-worker").lazy_build("region-worker");
-        let sched = worker.scheduler();
+
+        let (sched, _) = dummy_scheduler();
         let (dummy_scheduler, _) = dummy_scheduler();
-        let mut s = new_storage_from_ents(sched.clone(), dummy_scheduler, &td, &ents);
-        let cfg = make_region_worker_raftstore_cfg(true);
+        let mut s = new_storage_from_ents(sched, dummy_scheduler, &td, &ents);
         let (router, _) = mpsc::sync_channel(100);
-        let runner = RegionRunner::new(
+
+        let mut snap_gen_worker = LazyWorker::new("snap-generator");
+        let snap_gen_sched = snap_gen_worker.scheduler();
+        let snap_gen_runner = SnapGenRunner::new(
             s.engines.kv.clone(),
             mgr,
-            cfg,
-            CoprocessorHost::<KvTestEngine>::default(),
             router,
             Option::<Arc<TestPdClient>>::None,
+            snap_gen_worker.pool(),
         );
-        worker.start_with_timer(runner);
+        snap_gen_worker.start(snap_gen_runner);
 
         let mut r = s.region().clone();
         r.mut_peers().push(new_peer(2, 2));
@@ -1945,7 +1945,7 @@ pub mod tests {
             assert_eq!(snap.unwrap_err(), unavailable);
             assert_eq!(*s.snap_tried_cnt.borrow(), 1);
             let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
-            generate_and_schedule_snapshot(gen_task, &s.engines, &sched).unwrap();
+            generate_and_schedule_snapshot(gen_task, &s.engines, &snap_gen_sched).unwrap();
             let snap = match *s.snap_state.borrow() {
                 SnapState::Generating { ref receiver, .. } => {
                     receiver.recv_timeout(Duration::from_secs(3)).unwrap()
@@ -1992,24 +1992,25 @@ pub mod tests {
         let snap_dir = Builder::new().prefix("snap").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
         mgr.init().unwrap();
-        let mut worker = LazyWorker::new("snap-manager");
-        let sched = worker.scheduler();
+        let (sched, _) = dummy_scheduler();
         let (dummy_scheduler, _) = dummy_scheduler();
         let s1 = new_storage_from_ents(sched.clone(), dummy_scheduler.clone(), &td1, &ents);
         let (router, _) = mpsc::sync_channel(100);
-        let cfg = make_region_worker_raftstore_cfg(true);
-        let runner = RegionRunner::new(
+
+        let mut snap_gen_worker = LazyWorker::new("snap-generator");
+        let snap_gen_sched = snap_gen_worker.scheduler();
+        let snap_gen_runner = SnapGenRunner::new(
             s1.engines.kv.clone(),
             mgr,
-            cfg,
-            CoprocessorHost::<KvTestEngine>::default(),
             router,
             Option::<Arc<TestPdClient>>::None,
+            snap_gen_worker.pool(),
         );
-        worker.start(runner);
+        snap_gen_worker.start(snap_gen_runner);
+
         s1.snapshot(0, 1).unwrap_err();
         let gen_task = s1.gen_snap_task.borrow_mut().take().unwrap();
-        generate_and_schedule_snapshot(gen_task, &s1.engines, &sched).unwrap();
+        generate_and_schedule_snapshot(gen_task, &s1.engines, &snap_gen_sched).unwrap();
 
         let snap1 = match *s1.snap_state.borrow() {
             SnapState::Generating { ref receiver, .. } => {
@@ -2019,7 +2020,7 @@ pub mod tests {
         };
         assert_eq!(s1.truncated_index(), 3);
         assert_eq!(s1.truncated_term(), 3);
-        worker.stop();
+        snap_gen_worker.stop();
 
         let td2 = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let mut s2 = new_storage(sched.clone(), dummy_scheduler.clone(), &td2);
