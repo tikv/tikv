@@ -34,6 +34,7 @@ use hyper::{
     service::{make_service_fn, service_fn},
     Body, Method, Request, Response, Server, StatusCode,
 };
+use in_memory_engine::RegionCacheMemoryEngine;
 use kvproto::resource_manager::ResourceGroup;
 use metrics::STATUS_REQUEST_DURATION;
 use online_config::OnlineConfig;
@@ -95,6 +96,7 @@ pub struct StatusServer<R> {
     security_config: Arc<SecurityConfig>,
     resource_manager: Option<Arc<ResourceGroupManager>>,
     grpc_service_mgr: GrpcServiceManager,
+    in_memory_engine: Option<RegionCacheMemoryEngine>,
 }
 
 impl<R> StatusServer<R>
@@ -108,6 +110,7 @@ where
         router: R,
         resource_manager: Option<Arc<ResourceGroupManager>>,
         grpc_service_mgr: GrpcServiceManager,
+        in_memory_engine: Option<RegionCacheMemoryEngine>,
     ) -> Result<Self> {
         let thread_pool = Builder::new_multi_thread()
             .enable_all()
@@ -130,6 +133,7 @@ where
             security_config,
             resource_manager,
             grpc_service_mgr,
+            in_memory_engine,
         })
     }
 
@@ -613,6 +617,7 @@ where
         let router = self.router.clone();
         let resource_manager = self.resource_manager.clone();
         let grpc_service_mgr = self.grpc_service_mgr.clone();
+        let in_memory_engine = self.in_memory_engine.clone();
         // Start to serve.
         let server = builder.serve(make_service_fn(move |conn: &C| {
             let x509 = conn.get_x509();
@@ -620,6 +625,7 @@ where
             let cfg_controller = cfg_controller.clone();
             let router = router.clone();
             let resource_manager = resource_manager.clone();
+            let in_memory_engine = in_memory_engine.clone();
             let grpc_service_mgr = grpc_service_mgr.clone();
             async move {
                 // Create a status service.
@@ -630,6 +636,7 @@ where
                     let router = router.clone();
                     let resource_manager = resource_manager.clone();
                     let grpc_service_mgr = grpc_service_mgr.clone();
+                    let in_memory_engine = in_memory_engine.clone();
                     async move {
                         let path = req.uri().path().to_owned();
                         let method = req.method().to_owned();
@@ -734,6 +741,7 @@ where
                                 Self::handle_resume_grpc(grpc_service_mgr)
                             }
                             (Method::GET, "/async_tasks") => Self::dump_async_trace(),
+                            (Method::GET, "debug/ime/cached_regions") => Self::handle_dumple_cached_regions(in_memory_engine.as_ref()),
                             _ => {
                                 is_unknown_path = true;
                                 Ok(make_response(StatusCode::NOT_FOUND, "path not found"))
@@ -816,6 +824,73 @@ where
             )),
         }
     }
+
+    fn handle_dumple_cached_regions(
+        engine: Option<&RegionCacheMemoryEngine>,
+    ) -> hyper::Result<Response<Body>> {
+        // We use this function to workaround the false-positive check in
+        // `scripts/check-redact-log`.
+        fn to_hex_string(data: &[u8]) -> String {
+            hex::ToHex::encode_hex_upper(&data)
+        }
+
+        let Some(engine) = engine else {
+            return Ok(make_response(
+                StatusCode::BAD_REQUEST,
+                "In memory engine is not enabled",
+            ));
+        };
+        let body = {
+            let regions_map = engine.core().region_manager().regions_map().read();
+            let mut cached_regions = Vec::with_capacity(regions_map.regions().len());
+            for r in regions_map.regions().values() {
+                let rg_meta = CachedRegion {
+                    id: r.get_region().id,
+                    epoch_version: r.get_region().epoch_version,
+                    start: to_hex_string(keys::origin_key(&r.get_region().start)),
+                    end: to_hex_string(keys::origin_key(&r.get_region().end)),
+                    in_gc: r.is_in_gc(),
+                    safe_point: r.safe_point(),
+                    state: format!("{:?}", r.get_state()),
+                    is_written: r.is_written(),
+                };
+                cached_regions.push(rg_meta);
+            }
+            // order by region range.
+            cached_regions.sort();
+            match serde_json::to_vec(&cached_regions) {
+                Ok(body) => body,
+                Err(err) => {
+                    return Ok(make_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("fails to json: {}", err),
+                    ));
+                }
+            }
+        };
+        match Response::builder()
+            .header("content-type", "application/json")
+            .body(hyper::Body::from(body))
+        {
+            Ok(resp) => Ok(resp),
+            Err(err) => Ok(make_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("fails to build response: {}", err),
+            )),
+        }
+    }
+}
+
+#[derive(Serialize, Ord, PartialOrd, PartialEq, Eq)]
+struct CachedRegion {
+    start: String,
+    end: String,
+    id: u64,
+    epoch_version: u64,
+    in_gc: bool,
+    safe_point: u64,
+    state: String,
+    is_written: bool,
 }
 
 #[derive(Serialize)]
@@ -1170,6 +1245,7 @@ mod tests {
             MockRouter,
             None,
             GrpcServiceManager::dummy(),
+            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1218,6 +1294,7 @@ mod tests {
             MockRouter,
             None,
             GrpcServiceManager::dummy(),
+            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1270,6 +1347,7 @@ mod tests {
                 MockRouter,
                 None,
                 GrpcServiceManager::dummy(),
+                None,
             )
             .unwrap();
             let addr = "127.0.0.1:0".to_owned();
@@ -1332,6 +1410,7 @@ mod tests {
             MockRouter,
             None,
             GrpcServiceManager::dummy(),
+            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1448,6 +1527,7 @@ mod tests {
             MockRouter,
             None,
             GrpcServiceManager::dummy(),
+            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1492,6 +1572,7 @@ mod tests {
             MockRouter,
             None,
             GrpcServiceManager::dummy(),
+            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1528,6 +1609,7 @@ mod tests {
             MockRouter,
             None,
             GrpcServiceManager::dummy(),
+            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1600,6 +1682,7 @@ mod tests {
             MockRouter,
             None,
             GrpcServiceManager::dummy(),
+            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1630,6 +1713,7 @@ mod tests {
             MockRouter,
             None,
             GrpcServiceManager::dummy(),
+            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1663,6 +1747,7 @@ mod tests {
             MockRouter,
             None,
             GrpcServiceManager::dummy(),
+            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1714,6 +1799,7 @@ mod tests {
             MockRouter,
             None,
             GrpcServiceManager::dummy(),
+            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1769,6 +1855,7 @@ mod tests {
             MockRouter,
             None,
             GrpcServiceManager::dummy(),
+            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1823,6 +1910,7 @@ mod tests {
                 MockRouter,
                 None,
                 GrpcServiceManager::dummy(),
+                None,
             )
             .unwrap();
             let addr = "127.0.0.1:0".to_owned();
@@ -1860,6 +1948,7 @@ mod tests {
                 MockRouter,
                 None,
                 GrpcServiceManager::dummy(),
+                None,
             )
             .unwrap();
             let addr = "127.0.0.1:0".to_owned();
