@@ -123,7 +123,7 @@ impl MiscExt for PanicEngine {
         panic!()
     }
 
-    fn is_stalled_or_stopped(&self) -> bool {
+    fn is_write_stopped(&self) -> bool {
         panic!()
     }
 
