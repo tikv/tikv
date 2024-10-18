@@ -3965,7 +3965,7 @@ impl TikvConfig {
 
         // Now, only support cross check in in-memory engine when compaction filter is
         // enabled.
-        if self.in_memory_engine.enabled
+        if self.in_memory_engine.enable
             && !self.in_memory_engine.cross_check_interval.is_zero()
             && !self.gc.enable_compaction_filter
         {
