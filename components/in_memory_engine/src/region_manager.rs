@@ -264,7 +264,7 @@ impl CacheRegionMeta {
         }
     }
 
-    pub fn region_snapshot_list(&self) -> &Mutex<SnapshotList> {
+    pub(crate) fn region_snapshot_list(&self) -> &Mutex<SnapshotList> {
         &self.region_snapshot_list
     }
 }

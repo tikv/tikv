@@ -831,7 +831,7 @@ where
         // We use this function to workaround the false-positive check in
         // `scripts/check-redact-log`.
         fn to_hex_string(data: &[u8]) -> String {
-            hex::ToHex::encode_hex_upper(data)
+            hex::ToHex::encode_hex_upper(&data)
         }
 
         let Some(engine) = engine else {
