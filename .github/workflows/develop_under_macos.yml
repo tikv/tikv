@@ -1,0 +1,20 @@
+on: [
+    push,
+    pull_request
+]
+name: make sure can develop under macOS
+concurrency:
+  group: ${{ github.ref }}-${{ github.workflow }}
+  cancel-in-progress: true
+jobs:
+  can_build:
+    strategy:
+      matrix:
+        platform: [ macos-10.15, macos-11.0 ]
+    name: make sure can build under macOS
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v2
+      - uses: Swatinem/rust-cache@v1
+      - run: CARGO_INCREMENTAL=1 make clippy
+
