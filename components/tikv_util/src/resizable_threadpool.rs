@@ -76,6 +76,25 @@ impl ResizableRuntime
     }
 }
 
+
+#[derive(Clone)]
+pub struct ResizableRuntimeHandle {
+    inner: Arc<ResizableRuntime>,
+}
+
+impl ResizableRuntimeHandle {
+    pub fn new(runtime: Arc<ResizableRuntime>) -> Self {
+        ResizableRuntimeHandle { inner: runtime }
+    }
+
+    pub fn spawn<Func>(&self, f: Func)
+    where
+        Func: Future<Output = ()> + Send + 'static,
+    {
+        self.inner.spawn(f);
+    }
+}
+
 pub trait TokioRuntimeCreator {
     fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResult<Runtime>;
 }

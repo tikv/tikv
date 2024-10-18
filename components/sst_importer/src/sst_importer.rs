@@ -38,7 +38,7 @@ use tikv_util::{
     memory::{MemoryQuota, OwnedAllocated},
     sys::{thread::ThreadBuildWrapper, SysQuota},
     time::{Instant, Limiter},
-    Either, HandyRwLock,
+    Either, HandyRwLock, resizable_threadpool::ResizableRuntimeHandle,
 };
 use tokio::{
     runtime::{Handle, Runtime},
@@ -263,7 +263,7 @@ impl<E: KvEngine> SstImporter<E> {
         }
     }
 
-    pub fn start_switch_mode_check(&self, executor: &Handle, db: Option<E>) {
+    pub fn start_switch_mode_check(&self, executor: &ResizableRuntimeHandle, db: Option<E>) {
         match &self.switcher {
             Either::Left(switcher) => switcher.start(executor, db.unwrap()),
             Either::Right(switcher) => switcher.start(executor),

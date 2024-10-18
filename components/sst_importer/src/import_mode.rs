@@ -12,7 +12,7 @@ use engine_traits::{CfOptions, DbOptions, KvEngine};
 use futures_util::compat::Future01CompatExt;
 use kvproto::import_sstpb::*;
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
-use tokio::runtime::Handle;
+use tikv_util::resizable_threadpool::ResizableRuntimeHandle;
 
 use super::{Config, Result};
 
@@ -88,7 +88,7 @@ impl ImportModeSwitcher {
         ImportModeSwitcher { inner, is_import }
     }
 
-    pub fn start<E: KvEngine>(&self, executor: &Handle, db: E) {
+    pub fn start<E: KvEngine>(&self, executor: &ResizableRuntimeHandle, db: E) {
         // spawn a background future to put TiKV back into normal mode after timeout
         let inner = self.inner.clone();
         let switcher = Arc::downgrade(&inner);
@@ -311,6 +311,7 @@ mod tests {
             .unwrap();
 
         let switcher = ImportModeSwitcher::new(&cfg);
+        //TODO: (Ris)change type of threads.handle() to ResizableRuntimeHandle
         switcher.start(threads.handle(), db.clone());
         check_import_options(&db, &normal_db_options, &normal_cf_options);
         assert!(switcher.enter_import_mode(&db, mf).unwrap());

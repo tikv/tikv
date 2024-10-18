@@ -2,7 +2,7 @@ use file_system::IoType;
 use tokio::{io::Result as TokioResult, runtime::Runtime};
 use tikv_util::{sys::thread::ThreadBuildWrapper, resizable_threadpool::TokioRuntimeCreator};
 
-struct ImportRuntimeCreator;
+pub struct ImportRuntimeCreator;
 
 impl TokioRuntimeCreator for ImportRuntimeCreator {
     fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResult<Runtime> {

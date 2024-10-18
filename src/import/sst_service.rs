@@ -7,9 +7,7 @@ use std::{
     time::Duration, cell::RefCell,
 };
 
-use crossbeam::utils;
 use engine_traits::{CompactExt, CF_DEFAULT, CF_WRITE};
-use file_system::{set_io_type, IoType};
 use futures::{sink::SinkExt, stream::TryStreamExt, FutureExt, TryFutureExt};
 use grpcio::{
     ClientStreamingSink, RequestStream, RpcContext, ServerStreamingSink, UnarySink, WriteFlags,
@@ -38,12 +36,10 @@ use tikv_kv::{Engine, LocalTablets, Modify, WriteData};
 use tikv_util::{
     config::ReadableSize,
     future::{create_stream_with_buffer, paired_future_callback},
-    sys::{
-        disk::{get_disk_status, DiskUsage},
-    },
+    sys::disk::{get_disk_status, DiskUsage},
     time::{Instant, Limiter},
     HandyRwLock,
-    resizable_threadpool::ResizableRuntime,
+    resizable_threadpool::{ResizableRuntime, TokioRuntimeCreator, ResizableRuntimeHandle},
 };
 use tokio::{time::sleep};
 use txn_types::{Key, WriteRef, WriteType};
@@ -57,6 +53,7 @@ use crate::{
     send_rpc_response,
     server::CONFIG_ROCKSDB_GAUGE,
     storage::{self, errors::extract_region_error_from_error},
+    import::utils as ImportUtils,
 };
 
 /// The concurrency of sending raft request for every `apply` requests.
@@ -121,7 +118,7 @@ pub struct ImportSstService<E: Engine> {
     tablets: LocalTablets<E::Local>,
     engine: E,
     //TODO: (Ris) change to ResizableRuntime
-    threads: RefCell<ResizableRuntime>,
+    threads: Arc<ResizableRuntime>,
     importer: Arc<SstImporter<E::Local>>,
     limiter: Limiter,
     ingest_latch: Arc<IngestLatch>,
@@ -325,11 +322,14 @@ impl<E: Engine> ImportSstService<E> {
     ) -> Self {
         let props = tikv_util::thread_group::current_properties();
         let eng = Mutex::new(engine.clone());
-        let threads = RefCell::new(ResizableRuntime::new("import", ||{}, utils::));
+        let threads = Arc::new(ResizableRuntime::new("import", |x|{}, ImportUtils::ImportRuntimeCreator::create_tokio_runtime));
+        let handle = |threads: Arc<ResizableRuntime>| {
+            return ResizableRuntimeHandle::new(threads.clone());
+        };
         if let LocalTablets::Singleton(tablet) = &tablets {
-            importer.start_switch_mode_check(threads.handle(), Some(tablet.clone()));
+            importer.start_switch_mode_check(&handle(threads), Some(tablet.clone()));
         } else {
-            importer.start_switch_mode_check(threads.handle(), None);
+            importer.start_switch_mode_check(&handle(threads), None);
         }
 
         let writer = raft_writer::ThrottledTlsEngineWriter::default();

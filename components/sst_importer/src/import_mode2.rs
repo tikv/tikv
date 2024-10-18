@@ -8,8 +8,7 @@ use std::{
 use collections::{HashMap, HashSet};
 use futures_util::compat::Future01CompatExt;
 use kvproto::{import_sstpb::Range, metapb::Region};
-use tikv_util::timer::GLOBAL_TIMER_HANDLE;
-use tokio::runtime::Handle;
+use tikv_util::{timer::GLOBAL_TIMER_HANDLE, resizable_threadpool::ResizableRuntimeHandle};
 
 use super::Config;
 
@@ -58,7 +57,7 @@ impl ImportModeSwitcherV2 {
 
     // Periodically perform timeout check to change import mode of some regions back
     // to normal mode.
-    pub fn start(&self, executor: &Handle) {
+    pub fn start(&self, executor: &ResizableRuntimeHandle) {
         // spawn a background future to put regions back into normal mode after timeout
         let inner = self.inner.clone();
         let switcher = Arc::downgrade(&inner);
