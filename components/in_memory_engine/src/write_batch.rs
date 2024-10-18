@@ -6,12 +6,12 @@ use std::{
 };
 
 use bytes::Bytes;
-use collections::{hash_map_with_capacity, HashMap};
 use crossbeam::epoch;
 use engine_traits::{
     CacheRegion, EvictReason, MiscExt, Mutable, RegionCacheEngine, Result, WriteBatch,
     WriteBatchExt, WriteOptions, CF_DEFAULT,
 };
+use smallvec::SmallVec;
 use tikv_util::{box_err, config::ReadableSize, error, info, time::Instant, warn};
 
 use crate::{
@@ -44,8 +44,6 @@ const AMOUNT_TO_CLEAN_TOMBSTONE: u64 = ReadableSize::mb(16).0;
 // The value of the delete entry in the in-memory engine. It's just a emptry
 // slice.
 const DELETE_ENTRY_VAL: &[u8] = b"";
-const DEFAULT_BATCH_COUNT: usize = 64;
-const MAX_BATCH_COUNT: usize = 256;
 
 // `prepare_for_region` should be called before raft command apply for each peer
 // delegate. It sets `region_cache_status` which is used to determine whether
@@ -57,7 +55,6 @@ pub struct RegionCacheWriteBatch {
     // `pending_range_in_loading_buffer` which is cached in the memory engine and will be consumed
     // after the snapshot has been loaded.
     region_cache_status: RegionCacheStatus,
-    region_cache_status_map: HashMap<u64, RegionCacheStatus>,
     buffer: Vec<RegionCacheWriteBatchEntry>,
     engine: RegionCacheMemoryEngine,
     save_points: Vec<usize>,
@@ -70,6 +67,14 @@ pub struct RegionCacheWriteBatch {
 
     // record the total durations of the prepare work for write in the write batch
     prepare_for_write_duration: Duration,
+
+    // Now, we have an assumption that in one round of batch system process, although the same
+    // region can call `prepare_for_region` multiple times, it can only call sequentially. This is
+    // say, we will not have this: prepare_for_region(region1), prepare_for_region(region2),
+    // prepare_for_region(region1).  In case to avoid this asssumption being broken, we record the
+    // regions that have called prepare_for_region and ensure that if the region is not the
+    // `currnet_region`, it is not recorded in this vec.
+    prepared_regions: SmallVec<[u64; 10]>,
 }
 
 impl std::fmt::Debug for RegionCacheWriteBatch {
@@ -86,7 +91,6 @@ impl From<&RegionCacheMemoryEngine> for RegionCacheWriteBatch {
     fn from(engine: &RegionCacheMemoryEngine) -> Self {
         Self {
             region_cache_status: RegionCacheStatus::NotInCache,
-            region_cache_status_map: hash_map_with_capacity(DEFAULT_BATCH_COUNT),
             buffer: Vec::new(),
             engine: engine.clone(),
             save_points: Vec::new(),
@@ -96,6 +100,7 @@ impl From<&RegionCacheMemoryEngine> for RegionCacheWriteBatch {
             prepare_for_write_duration: Duration::default(),
             current_region: None,
             written_regions: vec![],
+            prepared_regions: SmallVec::new(),
         }
     }
 }
@@ -104,7 +109,6 @@ impl RegionCacheWriteBatch {
     pub fn with_capacity(engine: &RegionCacheMemoryEngine, cap: usize) -> Self {
         Self {
             region_cache_status: RegionCacheStatus::NotInCache,
-            region_cache_status_map: hash_map_with_capacity(DEFAULT_BATCH_COUNT),
             buffer: Vec::with_capacity(cap),
             // cache_buffer should need small capacity
             engine: engine.clone(),
@@ -115,6 +119,7 @@ impl RegionCacheWriteBatch {
             prepare_for_write_duration: Duration::default(),
             current_region: None,
             written_regions: vec![],
+            prepared_regions: SmallVec::new(),
         }
     }
 
@@ -449,6 +454,7 @@ impl WriteBatch for RegionCacheWriteBatch {
         self.current_region = None;
         self.written_regions.clear();
         self.prepare_for_write_duration = Duration::ZERO;
+        self.prepared_regions.clear();
     }
 
     fn set_save_point(&mut self) {
@@ -476,39 +482,23 @@ impl WriteBatch for RegionCacheWriteBatch {
         Ok(())
     }
 
-    fn batch_handle_begin(&mut self) {
-        self.region_cache_status_map.clear();
-        if self.region_cache_status_map.capacity() > MAX_BATCH_COUNT {
-            self.region_cache_status_map.shrink_to(DEFAULT_BATCH_COUNT);
-        }
-    }
-
     fn prepare_for_region(&mut self, region: CacheRegion) {
+        if let Some(current_region) = &self.current_region
+            && current_region == &region
+        {
+            return;
+        }
         let time = Instant::now();
+        // verify that the region is not prepared before
+        self.prepared_regions
+            .iter()
+            .for_each(|id| assert_ne!(*id, region.id));
+        self.prepared_regions.push(region.id);
         // record last region for clearing region in written flags.
         self.record_last_written_region();
 
-        // Region may call this method(`prepare_for_region`) more than once and we use
-        // the region status that the region calls this method at the first time to
-        // avoid the race condition like this:
-        //              TH1                            TH2
-        // 1. prepare_for_region for region 1,
-        //   and status is NotInCache
-        // 2. write key 1
-        //                                      3. LoadRegion region 1
-        // ...
-        // 4. prepare_for_region for region 1
-        //  and schedule load
-        // 5. write_impl
-        //
-        // The load of region 1 is scheduled with snapshot acquired at time 4 where the
-        // key 1 is neither not written in rocksdb nor plan to write in ime.
-        let region_cache_status = *self
-            .region_cache_status_map
-            .entry(region.id)
-            .or_insert(self.engine.prepare_for_apply(&region));
         // TODO: remote range.
-        self.set_region_cache_status(region_cache_status);
+        self.set_region_cache_status(self.engine.prepare_for_apply(&region));
         self.current_region = Some(region);
         self.current_region_evicted = false;
         self.prepare_for_write_duration += time.saturating_elapsed();
@@ -1004,5 +994,30 @@ mod tests {
             let meta_by_range = regions_map.region_meta_by_end_key(&r_new.end).unwrap();
             assert_eq!(meta_by_range.get_region(), &r_new);
         }
+    }
+
+    #[test]
+    fn test_dirty_data_exist_when_prepare_for_region() {
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(InMemoryEngineConfig::config_for_test()),
+        )));
+        let r = new_region(1, b"", b"z");
+        let cache_region = CacheRegion::from_region(&r);
+        let mut wb = RegionCacheWriteBatch::from(&engine);
+        wb.prepare_for_region(cache_region.clone());
+
+        engine
+            .core()
+            .region_manager()
+            .load_region(cache_region.clone())
+            .unwrap();
+        wb.prepare_for_region(cache_region.clone());
+        wb.put(b"k1", b"val1").unwrap();
+        wb.put(b"k2", b"val2").unwrap();
+        wb.set_sequence_number(100).unwrap();
+
+        wb.write().unwrap();
+
+        assert!(engine.core().engine().data[0].is_empty());
     }
 }

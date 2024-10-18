@@ -137,9 +137,6 @@ pub trait WriteBatch: Mutable {
     where
         Self: Sized;
 
-    /// Called at the very begin when plan to handle some regions
-    fn batch_handle_begin(&mut self) {}
-
     /// It declares that the following consecutive write will be within this
     /// region.
     fn prepare_for_region(&mut self, _: CacheRegion) {}

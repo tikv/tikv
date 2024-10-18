@@ -4687,7 +4687,6 @@ where
             self.apply_ctx.yield_msg_size = incoming.apply_yield_write_size.0;
             update_cfg(&incoming.apply_batch_system);
         }
-        self.apply_ctx.kv_wb.batch_handle_begin();
     }
 
     fn handle_control(&mut self, control: &mut ControlFsm) -> Option<usize> {

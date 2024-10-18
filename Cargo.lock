@@ -2588,6 +2588,7 @@ dependencies = [
  "serde_json",
  "slog",
  "slog-global",
+ "smallvec",
  "strum 0.20.0",
  "tempfile",
  "test_pd",
