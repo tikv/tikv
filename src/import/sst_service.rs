@@ -4,11 +4,10 @@ use std::{
     collections::{HashMap, VecDeque},
     convert::identity,
     sync::{Arc, Mutex},
-    time::Duration,
+    time::Duration, cell::RefCell,
 };
 
 use engine_traits::{CompactExt, CF_DEFAULT, CF_WRITE};
-use file_system::{set_io_type, IoType};
 use futures::{sink::SinkExt, stream::TryStreamExt, FutureExt, TryFutureExt};
 use grpcio::{
     ClientStreamingSink, RequestStream, RpcContext, ServerStreamingSink, UnarySink, WriteFlags,
@@ -37,14 +36,12 @@ use tikv_kv::{Engine, LocalTablets, Modify, WriteData};
 use tikv_util::{
     config::ReadableSize,
     future::{create_stream_with_buffer, paired_future_callback},
-    sys::{
-        disk::{get_disk_status, DiskUsage},
-        thread::ThreadBuildWrapper,
-    },
+    sys::disk::{get_disk_status, DiskUsage},
     time::{Instant, Limiter},
     HandyRwLock,
+    resizable_threadpool::{ResizableRuntime, TokioRuntimeCreator, ResizableRuntimeHandle},
 };
-use tokio::{runtime::Runtime, time::sleep};
+use tokio::{time::sleep};
 use txn_types::{Key, WriteRef, WriteType};
 
 use super::{
@@ -56,6 +53,7 @@ use crate::{
     send_rpc_response,
     server::CONFIG_ROCKSDB_GAUGE,
     storage::{self, errors::extract_region_error_from_error},
+    import::utils as ImportUtils,
 };
 
 /// The concurrency of sending raft request for every `apply` requests.
@@ -119,7 +117,8 @@ pub struct ImportSstService<E: Engine> {
     cfg: ConfigManager,
     tablets: LocalTablets<E::Local>,
     engine: E,
-    threads: Arc<Runtime>,
+    //TODO: (Ris) change to ResizableRuntime
+    threads: Arc<ResizableRuntime>,
     importer: Arc<SstImporter<E::Local>>,
     limiter: Limiter,
     ingest_latch: Arc<IngestLatch>,
@@ -323,28 +322,14 @@ impl<E: Engine> ImportSstService<E> {
     ) -> Self {
         let props = tikv_util::thread_group::current_properties();
         let eng = Mutex::new(engine.clone());
-        let threads = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(cfg.num_threads)
-            .enable_all()
-            .thread_name("sst-importer")
-            .with_sys_and_custom_hooks(
-                move || {
-                    tikv_util::thread_group::set_properties(props.clone());
-
-                    set_io_type(IoType::Import);
-                    tikv_kv::set_tls_engine(eng.lock().unwrap().clone());
-                },
-                move || {
-                    // SAFETY: we have set the engine at some lines above with type `E`.
-                    unsafe { tikv_kv::destroy_tls_engine::<E>() };
-                },
-            )
-            .build()
-            .unwrap();
+        let threads = Arc::new(ResizableRuntime::new("import", |x|{}, ImportUtils::ImportRuntimeCreator::create_tokio_runtime));
+        let handle = |threads: Arc<ResizableRuntime>| {
+            return ResizableRuntimeHandle::new(threads.clone());
+        };
         if let LocalTablets::Singleton(tablet) = &tablets {
-            importer.start_switch_mode_check(threads.handle(), Some(tablet.clone()));
+            importer.start_switch_mode_check(&handle(threads), Some(tablet.clone()));
         } else {
-            importer.start_switch_mode_check(threads.handle(), None);
+            importer.start_switch_mode_check(&handle(threads), None);
         }
 
         let writer = raft_writer::ThrottledTlsEngineWriter::default();
