@@ -828,9 +828,9 @@ where
     fn handle_dumple_cached_regions(
         engine: Option<&RegionCacheMemoryEngine>,
     ) -> hyper::Result<Response<Body>> {
-        // We use this function to workaround the false-positive `hex::encode_upper` log
-        // checker.
-        fn to_hex_string(data: &[u8]) -> string {
+        // We use this function to workaround the false-positive check in
+        // `scripts/check-redact-log`.
+        fn to_hex_string(data: &[u8]) -> String {
             hex::ToHex::encode_hex_upper(data)
         }
 
