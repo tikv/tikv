@@ -318,18 +318,18 @@ fn test_handle_conf_change_when_apply_fsm_resume_pending_state() {
 }
 
 // This test simulates a scenario where a configuration change has been applied
-// on the target peer, allowing a leader transfer to that target peer even if
-// the change hasn't been applied on the current leader.
+// on the target peer, allowing a leader transfer to that peer even if the
+// change hasn't been applied on the current leader.
 //
 // The setup involves a 4-node cluster where peer-1 starts as the leader. A
-// configuration change is initiated to remove peer-2. This configuration
-// change commits successfully but only applies on peer-4. Meanwhile, it
-// remains pending on the leader (peer-1) and on peer-3.
+// configuration change is initiated to remove peer-2. This change commits
+// successfully but only applies on peer-2 and peer-4.
 //
-// The expected result is that under these circumstances, a leader transfer
-// cannot occur to peer-3 due to its unapplied configuration change. However,
-// a transfer to peer-4 should succeed since it has already applied the
-// change.
+// The expected result for leader transfer is:
+//   - It will fail to peer-2 because it has been removed.
+//   - It will fail to peer-3 because it has unapplied configuration change.
+//   - It will succeed to peer-4 because it has already applied the
+//     configuration change.
 #[test]
 fn test_applied_conf_change_on_target_peer_allows_transfer_leader() {
     let mut cluster = new_server_cluster(0, 4);
@@ -355,6 +355,14 @@ fn test_applied_conf_change_on_target_peer_allows_transfer_leader() {
     // Use async_put for insertion here to avoid timeout errors, as synchronize put
     // would hang due to the leader's apply process being paused.
     let _ = cluster.async_put(b"k2", b"v2");
+
+    pd_client.transfer_leader(region_id, new_peer(2, 2), vec![]);
+    // Wait for transfer_leader.
+    sleep_ms(300);
+    assert_eq!(
+        pd_client.check_region_leader(region_id, new_peer(2, 2)),
+        false
+    );
 
     pd_client.transfer_leader(region_id, new_peer(3, 3), vec![]);
     // Wait for transfer_leader.
