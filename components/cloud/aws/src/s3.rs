@@ -182,7 +182,10 @@ impl S3Storage {
             let creds = Credentials::from_keys(
                 (*access_key_pair.access_key).to_owned(),
                 (*access_key_pair.secret_access_key).to_owned(),
-                None,
+                access_key_pair
+                    .session_token
+                    .as_deref()
+                    .map(|s| s.to_owned()),
             );
             Self::maybe_assume_role(config, client, creds)
         } else {
