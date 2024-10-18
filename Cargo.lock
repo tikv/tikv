@@ -4812,7 +4812,7 @@ dependencies = [
 [[package]]
 name = "rusoto_core"
 version = "0.46.0"
-source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#cc733208600bdb15a13940d6930c1fbd4ab604f2"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#2b142c1792062a7a3a8317610d78dd141ab4223d"
 dependencies = [
  "async-trait",
  "base64 0.13.0",
@@ -4836,7 +4836,7 @@ dependencies = [
 [[package]]
 name = "rusoto_credential"
 version = "0.46.0"
-source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#cc733208600bdb15a13940d6930c1fbd4ab604f2"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#2b142c1792062a7a3a8317610d78dd141ab4223d"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4853,7 +4853,7 @@ dependencies = [
 [[package]]
 name = "rusoto_kms"
 version = "0.46.0"
-source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#cc733208600bdb15a13940d6930c1fbd4ab604f2"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#2b142c1792062a7a3a8317610d78dd141ab4223d"
 dependencies = [
  "async-trait",
  "bytes",
@@ -4866,7 +4866,7 @@ dependencies = [
 [[package]]
 name = "rusoto_mock"
 version = "0.46.0"
-source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#cc733208600bdb15a13940d6930c1fbd4ab604f2"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#2b142c1792062a7a3a8317610d78dd141ab4223d"
 dependencies = [
  "async-trait",
  "chrono",
@@ -4880,7 +4880,7 @@ dependencies = [
 [[package]]
 name = "rusoto_s3"
 version = "0.46.0"
-source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#cc733208600bdb15a13940d6930c1fbd4ab604f2"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#2b142c1792062a7a3a8317610d78dd141ab4223d"
 dependencies = [
  "async-trait",
  "bytes",
@@ -4894,7 +4894,7 @@ dependencies = [
 [[package]]
 name = "rusoto_signature"
 version = "0.46.0"
-source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#cc733208600bdb15a13940d6930c1fbd4ab604f2"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#2b142c1792062a7a3a8317610d78dd141ab4223d"
 dependencies = [
  "base64 0.13.0",
  "bytes",
@@ -4916,7 +4916,7 @@ dependencies = [
 [[package]]
 name = "rusoto_sts"
 version = "0.46.0"
-source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#cc733208600bdb15a13940d6930c1fbd4ab604f2"
+source = "git+https://github.com/tikv/rusoto?branch=gh1482-s3-addr-styles#2b142c1792062a7a3a8317610d78dd141ab4223d"
 dependencies = [
  "async-trait",
  "bytes",
