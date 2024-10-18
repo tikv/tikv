@@ -220,7 +220,7 @@ impl RegionStatsManager {
         };
 
         info!(
-            "IME mvcc amplification reduction filter";
+            "ime mvcc amplification reduction filter";
             "mvcc_amplification_to_filter" => mvcc_amplification_to_filter,
         );
 
@@ -377,7 +377,7 @@ impl RegionStatsManager {
         // Evict two regions each time to reduce the probability that an un-dropped
         // ongoing snapshot blocks the process
         for regions in evict_candidates.chunks(2) {
-            let mut deleteable_regions = vec![];
+            let mut deletable_regions = vec![];
 
             let (tx, mut rx) = mpsc::channel(3);
             for r in regions {
@@ -387,7 +387,7 @@ impl RegionStatsManager {
                 );
 
                 let tx_clone = tx.clone();
-                deleteable_regions.extend(evict_region(
+                deletable_regions.extend(evict_region(
                     &CacheRegion::from_region(r),
                     EvictReason::MemoryLimitReached,
                     // This callback will be executed when eviction finishes at `on_delete_regions`
@@ -400,12 +400,12 @@ impl RegionStatsManager {
                 ));
                 self.handle_region_evicted(r);
             }
-            if !deleteable_regions.is_empty() {
+            if !deletable_regions.is_empty() {
                 if let Err(e) = delete_range_scheduler
-                    .schedule_force(BackgroundTask::DeleteRegions(deleteable_regions))
+                    .schedule_force(BackgroundTask::DeleteRegions(deletable_regions))
                 {
                     error!(
-                        "ime schedule deletet range failed";
+                        "ime schedule delete regions failed";
                         "err" => ?e,
                     );
                     assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));

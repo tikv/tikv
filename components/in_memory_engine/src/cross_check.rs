@@ -63,7 +63,7 @@ impl CrossChecker {
 
     fn cross_check_range(&self, range_snap: &RegionCacheSnapshot, rocks_snap: &RocksSnapshot) {
         info!(
-            "cross check region";
+            "ime cross check region";
             "region" => ?range_snap.snapshot_meta().region,
         );
         let opts = iter_option(
@@ -195,7 +195,7 @@ impl CrossChecker {
                     Ok(write) => write,
                     Err(e) => {
                         panic!(
-                            "cross check fail(parse error); 
+                            "cross check fail(parse error);
                             cache_region={:?}; cache_key={:?}, cache_val={:?}; sequence_numer={}; Error={:?}",
                             range_snap.snapshot_meta().region,
                             log_wrappers::Value(mem_iter.key()),
@@ -239,7 +239,7 @@ impl CrossChecker {
                         Ok(write) => write,
                         Err(e) => {
                             panic!(
-                                "cross check fail(parse error); 
+                                "cross check fail(parse error);
                                 cache_region={:?}; cache_key={:?}, cache_val={:?}; sequence_numer={}; Error={:?}",
                                 range_snap.snapshot_meta().region,
                                 log_wrappers::Value(mem_iter.key()),
@@ -302,7 +302,7 @@ impl CrossChecker {
         }
 
         info!(
-            "cross check range done";
+            "ime cross check range done";
             "region" => ?range_snap.snapshot_meta().region,
         );
     }
@@ -345,7 +345,7 @@ impl CrossChecker {
                 // CF_LOCK should always have the same view
                 if disk_key != mem_key {
                     panic!(
-                        "cross check fail(key not equal): lock cf not match; 
+                        "cross check fail(key not equal): lock cf not match;
                         cache_region={:?}; cache_key={:?}, disk_key={:?}; sequence_numer={};",
                         cached_region,
                         log_wrappers::Value(mem_key),
@@ -355,7 +355,7 @@ impl CrossChecker {
                 }
                 if mem_iter.value() != disk_iter.value() {
                     panic!(
-                        "cross check fail(value not equal): lock cf not match; 
+                        "cross check fail(value not equal): lock cf not match;
                         cache_region={:?}; key={:?}, mem_value={:?} disk_key={:?};",
                         cached_region,
                         log_wrappers::Value(mem_key),
@@ -369,7 +369,7 @@ impl CrossChecker {
             if disk_key == mem_key {
                 if mem_iter.value() != disk_iter.value() {
                     panic!(
-                        "cross check fail(value not equal): write cf not match; 
+                        "cross check fail(value not equal): write cf not match;
                         cache_region={:?}; key={:?}, mem_value={:?} disk_key={:?};",
                         cached_region,
                         log_wrappers::Value(mem_key),
@@ -387,7 +387,7 @@ impl CrossChecker {
                 Ok(write) => write,
                 Err(e) => {
                     panic!(
-                        "cross check fail(parse error); 
+                        "cross check fail(parse error);
                         cache_region={:?}; cache_key={:?}, cache_val={:?}; sequence_numer={}; Error={:?}",
                         cached_region,
                         log_wrappers::Value(mem_iter.key()),
@@ -404,7 +404,7 @@ impl CrossChecker {
                         || write.write_type == WriteType::Lock
                     {
                         info!(
-                            "cross check: meet gced rollback or lock";
+                            "ime cross check: meet gced rollback or lock";
                             "cache_key" => log_wrappers::Value(mem_key),
                             "disk_key" => log_wrappers::Value(disk_key),
                             "cache_region" => ?cached_region,
@@ -564,7 +564,7 @@ impl CrossChecker {
             // IME and rocks enigne should have the same data view for CF_LOCK
             if *cf == CF_LOCK {
                 panic!(
-                    "cross check fail(key should exist): lock cf not match; 
+                    "cross check fail(key should exist): lock cf not match;
                     cache_region={:?}; disk_key={:?}; sequence_numer={};",
                     cached_region,
                     log_wrappers::Value(disk_iter.key()),
@@ -604,7 +604,7 @@ impl CrossChecker {
                 Ok(write) => write,
                 Err(e) => {
                     panic!(
-                        "cross check fail(parse error); 
+                        "cross check fail(parse error);
                         cache_region={:?}; cache_key={:?}, cache_val={:?}; sequence_numer={}; Error={:?}",
                         cached_region,
                         log_wrappers::Value(mem_iter.key()),
@@ -657,7 +657,7 @@ impl CrossChecker {
     ) -> bool {
         if write.write_type == WriteType::Rollback || write.write_type == WriteType::Lock {
             info!(
-                "meet gced rollback or lock";
+                "ime meet gced rollback or lock";
                 "disk_key" => log_wrappers::Value(disk_key),
                 "cache_region" => ?cached_region,
                 "seqno" => mem_iter.sequence_number,
@@ -717,7 +717,7 @@ impl CrossChecker {
                         || write.write_type == WriteType::Lock
                     {
                         info!(
-                            "meet gced rollback or lock";
+                            "ime meet gced rollback or lock";
                             "disk_key" => log_wrappers::Value(disk_key),
                             "cache_region" => ?cached_region,
                             "seqno" => mem_iter.sequence_number,
@@ -801,7 +801,7 @@ impl Runnable for CrossChecker {
             Ok(Ok(ts)) => ts,
             err => {
                 error!(
-                    "schedule range cache engine gc failed ";
+                    "ime schedule gc failed ";
                     "timeout_duration" => ?tso_timeout,
                     "error" => ?err,
                 );
@@ -823,7 +823,7 @@ impl Runnable for CrossChecker {
                     Ok(range_snap) => Some(range_snap),
                     Err(_) => {
                         warn!(
-                            "failed to get snap in cross check";
+                            "ime failed to get snap in cross check";
                             "range" => ?range,
                         );
                         None
@@ -842,7 +842,7 @@ impl Runnable for CrossChecker {
             .into_iter()
             .for_each(|r| self.cross_check_range(&r, &snap));
         info!(
-            "cross check finished";
+            "ime cross check finished";
             "duration" => ?now.saturating_elapsed(),
         );
     }

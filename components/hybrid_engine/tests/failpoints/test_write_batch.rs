@@ -15,8 +15,8 @@ fn test_sequence_number_unique() {
         hybrid_engine_for_tests("temp", InMemoryEngineConfig::config_for_test(), |_| {}).unwrap();
 
     let (tx, rx) = sync_channel(0);
-    fail::cfg_callback("on_completes_batch_loading", move || {
-        fail::cfg("on_start_loading_region", "pause").unwrap();
+    fail::cfg_callback("ime_on_completes_batch_loading", move || {
+        fail::cfg("ime_on_start_loading_region", "pause").unwrap();
         tx.send(true).unwrap();
     })
     .unwrap();

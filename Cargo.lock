@@ -1234,6 +1234,7 @@ name = "crossbeam-skiplist"
 version = "0.1.3"
 dependencies = [
  "crossbeam-epoch",
+ "crossbeam-skiplist 0.1.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "crossbeam-utils",
 ]
 
