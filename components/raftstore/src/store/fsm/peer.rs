@@ -3694,7 +3694,7 @@ where
     // `MsgTransferLeader`.
     fn on_transfer_leader_msg(&mut self, msg: &eraftpb::Message, peer_disk_usage: DiskUsage) {
         info!(
-            "received transferring leader";
+            "received transfer leader";
             "region_id" => self.fsm.region_id(),
             "peer_id" => self.fsm.peer.peer_id(),
             "from" => msg.get_from(),
