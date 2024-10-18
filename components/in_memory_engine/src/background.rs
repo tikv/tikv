@@ -2318,12 +2318,12 @@ pub mod tests {
         };
 
         let test_data = [
-            (b"k05".as_slice(), b"val1".as_slice(), 10, 11, 10, false),
-            (b"k05", b"val2", 12, 13, 14, false),
-            (b"k05".as_slice(), b"val1".as_slice(), 14, 15, 18, false),
-            (b"k15".as_slice(), b"val1".as_slice(), 10, 11, 10, false),
-            (b"k15", b"val2", 12, 13, 14, false),
-            (b"k15".as_slice(), b"val1".as_slice(), 14, 15, 18, false),
+            (b"k05".as_slice(), b"val1".as_slice(), 10, 11, 10),
+            (b"k05", b"val2", 12, 13, 14),
+            (b"k05", b"val1", 14, 15, 18),
+            (b"k15", b"val1", 10, 11, 10),
+            (b"k15", b"val2", 12, 13, 14),
+            (b"k15", b"val1", 14, 15, 18),
         ];
 
         for d in test_data {
@@ -2333,7 +2333,7 @@ pub mod tests {
                 d.2,
                 d.3,
                 d.4,
-                d.5,
+                false,
                 &default,
                 &write,
                 memory_controller.clone(),
