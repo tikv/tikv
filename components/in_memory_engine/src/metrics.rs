@@ -41,6 +41,7 @@ make_auto_flush_static_metric! {
         memory_limit_reached,
         disabled,
         apply_snapshot,
+        flashback,
         manual,
     }
 
@@ -214,6 +215,9 @@ pub(crate) fn observe_eviction_duration(secs: f64, evict_reason: EvictReason) {
             .observe(secs),
         EvictReason::ApplySnapshot => IN_MEMORY_ENGINE_EVICTION_DURATION_HISTOGRAM_STATIC
             .apply_snapshot
+            .observe(secs),
+        EvictReason::Flashback => IN_MEMORY_ENGINE_EVICTION_DURATION_HISTOGRAM_STATIC
+            .flashback
             .observe(secs),
         EvictReason::Manual => IN_MEMORY_ENGINE_EVICTION_DURATION_HISTOGRAM_STATIC
             .manual

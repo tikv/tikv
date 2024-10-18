@@ -16,7 +16,7 @@ use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};
 use kvproto::{
     import_sstpb::SstMeta,
     kvrpcpb::Context,
-    raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request},
+    raft_cmdpb::{AdminCmdType, CmdType, RaftCmdRequest, RaftRequestHeader, Request},
 };
 use protobuf::Message;
 use tempfile::tempdir;
@@ -798,4 +798,82 @@ fn test_delete_range() {
 
     delete_range(false);
     delete_range(true);
+}
+
+#[test]
+fn test_evict_on_flashback() {
+    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
+    cluster.cfg.raft_store.apply_batch_system.pool_size = 1;
+    cluster.run();
+
+    let table = ProductTable::new();
+
+    must_copr_load_data(&mut cluster, &table, 1);
+    must_copr_load_data(&mut cluster, &table, 2);
+    must_copr_load_data(&mut cluster, &table, 3);
+
+    let r = cluster.get_region(b"");
+    {
+        let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
+        region_cache_engine
+            .core()
+            .region_manager()
+            .load_region(CacheRegion::from_region(&r))
+            .unwrap();
+    }
+
+    cluster.must_send_wait_flashback_msg(r.id, AdminCmdType::PrepareFlashback);
+    cluster.must_send_wait_flashback_msg(r.id, AdminCmdType::FinishFlashback);
+
+    let (tx, rx) = unbounded();
+    fail::cfg_callback("on_region_cache_iterator_seek", move || {
+        tx.send(true).unwrap();
+    })
+    .unwrap();
+
+    must_copr_point_get(&mut cluster, &table, 1);
+    rx.try_recv().unwrap_err();
+
+    must_copr_point_get(&mut cluster, &table, 2);
+    rx.try_recv().unwrap_err();
+
+    must_copr_point_get(&mut cluster, &table, 3);
+    rx.try_recv().unwrap_err();
+}
+
+#[test]
+fn test_load_during_flashback() {
+    fail::cfg("background_check_load_pending_interval", "return(1000)").unwrap();
+    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
+    cluster.cfg.raft_store.apply_batch_system.pool_size = 1;
+    cluster.run();
+
+    let table = ProductTable::new();
+
+    must_copr_load_data(&mut cluster, &table, 1);
+    let r = cluster.get_region(b"");
+    cluster.must_send_wait_flashback_msg(r.id, AdminCmdType::PrepareFlashback);
+    let (tx, rx) = unbounded();
+    fail::cfg_callback("ime_fail_to_schedule_load", move || {
+        tx.send(true).unwrap();
+    })
+    .unwrap();
+    {
+        let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
+        region_cache_engine
+            .core()
+            .region_manager()
+            .load_region(CacheRegion::from_region(&r))
+            .unwrap();
+    }
+    rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    {
+        let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
+        assert!(
+            !region_cache_engine
+                .core()
+                .region_manager()
+                .contains_region(r.id)
+        );
+    }
 }
