@@ -93,6 +93,7 @@ pub enum BackgroundTask {
             RocksEngine,
             Arc<dyn PdClient>,
             Duration,
+            Box<dyn Fn() -> Option<u64> + Send>,
         ),
     ),
     SetRocksEngine(RocksEngine),
@@ -1255,10 +1256,21 @@ impl Runnable for BackgroundRunner {
 
                 self.lock_cleanup_remote.spawn(f);
             }
-            BackgroundTask::TurnOnCrossCheck((engine, rocks_engine, pd_client, check_interval)) => {
+            BackgroundTask::TurnOnCrossCheck((
+                engine,
+                rocks_engine,
+                pd_client,
+                check_interval,
+                get_tikv_safe_point,
+            )) => {
                 let cross_check_worker = Worker::new("cross-check-worker");
-                let cross_check_runner =
-                    CrossChecker::new(pd_client, engine, rocks_engine, check_interval);
+                let cross_check_runner = CrossChecker::new(
+                    pd_client,
+                    engine,
+                    rocks_engine,
+                    check_interval,
+                    get_tikv_safe_point,
+                );
                 let _ =
                     cross_check_worker.start_with_timer("cross-check-runner", cross_check_runner);
                 self.cross_check_worker = Some(cross_check_worker);
