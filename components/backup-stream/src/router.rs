@@ -540,6 +540,8 @@ impl RouterInner {
                         {
                             Some(key.clone())
                         } else {
+                            error!("received plaintext data key config but not valid type";
+                                "type" => ?key.cipher_type);
                             None
                         };
                         Ok(BackupEncryptionManager::new(

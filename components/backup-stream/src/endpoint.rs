@@ -37,7 +37,7 @@ use tikv_util::{
     memory::MemoryQuota,
     sys::thread::ThreadBuildWrapper,
     time::{Instant, Limiter},
-    warn,
+    warn, error,
     worker::{Runnable, Scheduler},
     HandyRwLock,
 };
@@ -228,7 +228,7 @@ where
         let safepoint_name = self.pause_guard_id_for_task(task);
         let safepoint_ttl = self.pause_guard_duration();
         let code = err.error_code().code.to_owned();
-        let msg = err.to_string();
+        let err_msg = err.to_string();
         let t = task.to_owned();
         let f = async move {
             let err_fut = async {
@@ -246,10 +246,11 @@ where
                     }
                     _ => Err(err),
                 })?;
+                warn!("pausing task due to error"; "task" => ?t.clone(), "err" => err_msg.clone());
                 meta_cli.pause(&t).await?;
                 let mut last_error = StreamBackupError::new();
                 last_error.set_error_code(code);
-                last_error.set_error_message(msg.clone());
+                last_error.set_error_message(err_msg.clone());
                 last_error.set_store_id(store_id);
                 last_error.set_happen_at(TimeStamp::physical_now());
                 meta_cli.report_last_error(&t, last_error).await?;
@@ -265,7 +266,7 @@ where
                         sched,
                         Task::FatalError(
                             TaskSelector::ByName(name),
-                            Box::new(annotate!(err_report, "origin error: {}", msg))
+                            Box::new(annotate!(err_report, "origin error: {}", err_msg))
                         )
                     );
                 });
@@ -722,6 +723,7 @@ where
                 Ok(())
             };
             if let Err(e) = run.await {
+                error!("error registering stream task"; "task" => ?task_name_clone, "error" => %e);
                 self.on_fatal_error_of_task(&task_name_clone, &Box::new(e))
                     .await;
             }
@@ -1012,7 +1014,7 @@ where
     }
 
     pub fn run_task(&mut self, task: Task) {
-        debug!("run backup stream task"; "task" => ?task, "store_id" => %self.store_id);
+        info!("run backup stream task"; "task" => ?task, "store_id" => %self.store_id);
         let now = Instant::now_coarse();
         let label = task.label();
         defer! {
