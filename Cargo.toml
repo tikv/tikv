@@ -486,8 +486,8 @@ overflow-checks = false
 rpath = false
 
 [profile.release.package.server]
-opt-level = 4
-codegen-units = 1
+opt-level = 1
+codegen-units = 4
 
 [profile.test]
 opt-level = 0

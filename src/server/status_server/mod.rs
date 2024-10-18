@@ -741,7 +741,7 @@ where
                                 Self::handle_resume_grpc(grpc_service_mgr)
                             }
                             (Method::GET, "/async_tasks") => Self::dump_async_trace(),
-                            (Method::GET, "/cached_regions") => Self::handle_dumple_cached_regions(in_memory_engine.as_ref()),
+                            (Method::GET, "debug/ime/cached_regions") => Self::handle_dumple_cached_regions(in_memory_engine.as_ref()),
                             _ => {
                                 is_unknown_path = true;
                                 Ok(make_response(StatusCode::NOT_FOUND, "path not found"))
