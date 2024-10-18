@@ -503,8 +503,8 @@ overflow-checks = false
 rpath = false
 
 [profile.release.package.server]
-opt-level = 1
-codegen-units = 4
+opt-level = 4
+codegen-units = 1
 
 [profile.test]
 opt-level = 0
