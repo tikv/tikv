@@ -15,6 +15,10 @@ impl RocksEngineIterator {
     pub fn from_raw(iter: DBIterator<Arc<DB>>) -> RocksEngineIterator {
         RocksEngineIterator(iter)
     }
+
+    pub fn sequence(&self) -> Option<u64> {
+        self.0.sequence()
+    }
 }
 
 pub struct RocksIterMetricsCollector;

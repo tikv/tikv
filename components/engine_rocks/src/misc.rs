@@ -747,7 +747,6 @@ mod tests {
             .unwrap_or_else(|err| panic!("{:?}", err));
         // Create prefix bloom filter for memtable.
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1_f64);
-        cf_opts.set_level_compaction_dynamic_level_bytes(false);
         let cf = "default";
         let db = new_engine_opt(path_str, opts, vec![(cf, cf_opts)]).unwrap();
         let mut wb = db.write_batch();
