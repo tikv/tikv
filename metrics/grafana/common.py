@@ -53,7 +53,13 @@ class Expr(object):
             ) [by (<by_labels>,)] [extra_expr]
     """
 
-    metric: str = attr.ib(validator=instance_of(str))
+    def metric_validator(instance, attribute, value):
+        if not isinstance(value, (str, Expr)):
+            raise TypeError(
+                f"'{attribute.name}' must be an instance of 'str' or 'Expr'"
+            )
+
+    metric: Union[str, Expr] = attr.ib(validator=metric_validator)
     aggr_op: str = attr.ib(
         default="",
         validator=in_(
@@ -155,7 +161,11 @@ class Expr(object):
         return self
 
     def append_by_labels(self, label: str) -> "Expr":
-        self.by_labels.append(label)
+        if isinstance(self.metric, Expr):
+            # append the label to the inner expr
+            self.metric.append_by_labels(label)
+        else:
+            self.by_labels = self.by_labels + [label]
         return self
 
 
@@ -186,7 +196,7 @@ class OpExpr:
 
 
 def expr_aggr(
-    metric: str,
+    metric: Union[str, Expr],
     aggr_op: str,
     aggr_param: str = "",
     label_selectors: list[str] = [],
@@ -551,7 +561,7 @@ def expr_histogram_quantile(
     )
     # histogram_quantile({quantile}, {sum_rate_of_buckets})
     return expr_aggr(
-        metric=f"{sum_rate_of_buckets}",
+        metric=sum_rate_of_buckets,
         aggr_op="histogram_quantile",
         aggr_param=f"{quantile}",
         label_selectors=[],
