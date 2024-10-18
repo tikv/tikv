@@ -7,6 +7,7 @@ use std::{
 
 use engine_rocks::RocksEngine;
 use grpcio::{EnvBuilder, ResourceQuota};
+use online_config::ConfigManager;
 use raft_log_engine::RaftLogEngine;
 use raftstore::store::{fsm::create_raft_batch_system, SnapManager};
 use security::SecurityManager;
@@ -23,6 +24,14 @@ use tikv_util::{
     config::{ReadableSize, VersionTrack},
     worker::{LazyWorker, Scheduler, Worker},
 };
+
+struct MockCfgManager;
+
+impl ConfigManager for MockCfgManager {
+    fn dispatch(&mut self, _: online_config::ConfigChange) -> online_config::Result<()> {
+        Ok(())
+    }
+}
 
 fn start_server(
     cfg: TikvConfig,
@@ -57,6 +66,7 @@ fn start_server(
             snap_worker_scheduler,
             server_config.clone(),
             ResourceQuota::new(None),
+            Box::new(MockCfgManager),
         )),
     );
     let snap_runner = SnapHandler::new(

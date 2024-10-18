@@ -39,6 +39,30 @@ const DEFAULT_ENDPOINT_REQUEST_MAX_HANDLE_SECS: u64 = 60;
 // Number of rows in each chunk for streaming coprocessor.
 const DEFAULT_ENDPOINT_STREAM_BATCH_ROW_LIMIT: usize = 128;
 
+// By default, endpoint memory quota will be set to 12.5% of system memory.
+//
+// TPCC check test shows that:
+// * The actual endpoint memory usage is about 3 times to memory quota.
+// * Setting memory quota too low can lead to ServerIsBusy errors, which slow
+//   down performance.
+// * With 1000 warehouses and 1000 threads, the peak memory usage of the TPCC
+//   check is 11.5 GiB, which is too large for common scenario 16GiB memory,
+//   because default block cache takes about 45% memory (7.2GiB).
+//
+// The 12.5% default quota is a balance between efficient memory usage and
+// maintaining performance under load.
+const DEFAULT_ENDPOINT_MEMORY_QUOTA_RATIO: f64 = 0.125;
+
+lazy_static! {
+    static ref DEFAULT_ENDPOINT_MEMORY_QUOTA: ReadableSize = {
+        let total_mem = SysQuota::memory_limit_in_bytes();
+        let quota = (total_mem as f64) * DEFAULT_ENDPOINT_MEMORY_QUOTA_RATIO;
+        // In order to ensure that coprocessor can function properly under low
+        // memory conditions, we use 500MB as the minimum default value.
+        ReadableSize(cmp::max(ReadableSize::mb(500).0, quota as _))
+    };
+}
+
 // At least 4 long coprocessor requests are allowed to run concurrently.
 const MIN_ENDPOINT_MAX_CONCURRENCY: usize = 4;
 
@@ -146,6 +170,7 @@ pub struct Config {
     #[serde(with = "perf_level_serde")]
     #[online_config(skip)]
     pub end_point_perf_level: PerfLevel,
+    pub end_point_memory_quota: ReadableSize,
     #[serde(alias = "snap-max-write-bytes-per-sec")]
     pub snap_io_max_bytes_per_sec: ReadableSize,
     pub snap_max_total_size: ReadableSize,
@@ -252,6 +277,7 @@ impl Default for Config {
             ),
             end_point_max_concurrency: cmp::max(cpu_num as usize, MIN_ENDPOINT_MAX_CONCURRENCY),
             end_point_perf_level: PerfLevel::Uninitialized,
+            end_point_memory_quota: *DEFAULT_ENDPOINT_MEMORY_QUOTA,
             snap_io_max_bytes_per_sec: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_SEC),
             snap_max_total_size: ReadableSize(0),
             stats_concurrency: 1,
@@ -360,6 +386,11 @@ impl Config {
             ));
         }
 
+        if self.end_point_memory_quota == *DEFAULT_ENDPOINT_MEMORY_QUOTA {
+            info!("using default coprocessor quota";
+                "quota" => ?*DEFAULT_ENDPOINT_MEMORY_QUOTA);
+        }
+
         if self.max_grpc_send_msg_len <= 0 {
             return Err(box_err!(
                 "server.max-grpc-send-msg-len must be bigger than 0."
@@ -412,6 +443,7 @@ pub struct ServerConfigManager {
     tx: Scheduler<SnapTask>,
     config: Arc<VersionTrack<Config>>,
     grpc_mem_quota: ResourceQuota,
+    copr_config_manager: Box<dyn ConfigManager>,
 }
 
 unsafe impl Send for ServerConfigManager {}
@@ -422,32 +454,38 @@ impl ServerConfigManager {
         tx: Scheduler<SnapTask>,
         config: Arc<VersionTrack<Config>>,
         grpc_mem_quota: ResourceQuota,
+        copr_config_manager: Box<dyn ConfigManager>,
     ) -> ServerConfigManager {
         ServerConfigManager {
             tx,
             config,
             grpc_mem_quota,
+            copr_config_manager,
         }
     }
 }
 
 impl ConfigManager for ServerConfigManager {
     fn dispatch(&mut self, c: ConfigChange) -> std::result::Result<(), Box<dyn std::error::Error>> {
-        {
-            let change = c.clone();
-            self.config.update(move |cfg| cfg.update(change))?;
-            if let Some(value) = c.get("grpc_memory_pool_quota") {
-                let mem_quota: ReadableSize = value.clone().into();
-                // the resize is done inplace indeed, but grpc-rs's api need self, so we just
-                // clone it here, but this no extra side effect here.
-                self.grpc_mem_quota
-                    .clone()
-                    .resize_memory(mem_quota.0 as usize);
-            }
-            if let Err(e) = self.tx.schedule(SnapTask::RefreshConfigEvent) {
-                error!("server configuration manager schedule refresh snapshot work task failed"; "err"=> ?e);
-            }
+        let change = c.clone();
+        self.config.update(move |cfg| cfg.update(change))?;
+        if let Some(value) = c.get("grpc_memory_pool_quota") {
+            let mem_quota: ReadableSize = value.clone().into();
+            // the resize is done inplace indeed, but grpc-rs's api need self, so we just
+            // clone it here, but this no extra side effect here.
+            self.grpc_mem_quota
+                .clone()
+                .resize_memory(mem_quota.0 as usize);
         }
+        if let Err(e) = self.tx.schedule(SnapTask::RefreshConfigEvent) {
+            error!("server configuration manager schedule refresh snapshot work task failed"; "err"=> ?e);
+        }
+
+        // Dispatch coprocessor config.
+        if let Err(e) = self.copr_config_manager.dispatch(c.clone()) {
+            error!("server configuration manager fails to update coprocessor config"; "err"=> ?e);
+        }
+
         info!("server configuration changed"; "change" => ?c);
         Ok(())
     }

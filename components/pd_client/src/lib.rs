@@ -23,7 +23,10 @@ use kvproto::{
     replication_modepb::{RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus},
 };
 use pdpb::QueryStats;
-use tikv_util::time::{Instant, UnixSecs};
+use tikv_util::{
+    memory::HeapSize,
+    time::{Instant, UnixSecs},
+};
 use txn_types::TimeStamp;
 
 pub use self::{
@@ -124,6 +127,12 @@ impl BucketMeta {
         self.sizes[idx - 1] += self.sizes[idx];
         self.keys.remove(idx);
         self.sizes.remove(idx);
+    }
+}
+
+impl HeapSize for BucketMeta {
+    fn approximate_heap_size(&self) -> usize {
+        self.keys.approximate_heap_size() + self.sizes.approximate_heap_size()
     }
 }
 
