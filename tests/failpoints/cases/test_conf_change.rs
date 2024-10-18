@@ -12,8 +12,7 @@ use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
-use test_util::init_log_for_test;
-use tikv_util::{config::ReadableDuration, logger::init_log, HandyRwLock};
+use tikv_util::{config::ReadableDuration, HandyRwLock};
 
 #[test_case(test_raftstore::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
@@ -355,7 +354,7 @@ fn test_applied_conf_change_on_target_peer_allows_transfer_leader() {
 
     // Use async_put for insertion here to avoid timeout errors, as synchronize put
     // would hang due to the leader's apply process being paused.
-    cluster.async_put(b"k2", b"v2");
+    let _ = cluster.async_put(b"k2", b"v2");
 
     pd_client.transfer_leader(region_id, new_peer(3, 3), vec![]);
     // Wait for transfer_leader.
