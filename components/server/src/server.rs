@@ -46,7 +46,8 @@ use hybrid_engine::observer::{
     RegionCacheWriteBatchObserver,
 };
 use in_memory_engine::{
-    config::InMemoryEngineConfigManager, InMemoryEngineContext, InMemoryEngineStatistics, RegionCacheMemoryEngine,
+    config::InMemoryEngineConfigManager, InMemoryEngineContext, InMemoryEngineStatistics,
+    RegionCacheMemoryEngine,
 };
 use kvproto::{
     brpb::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
@@ -1595,7 +1596,11 @@ where
     fn init_raw_engines(
         &mut self,
         flow_listener: engine_rocks::FlowListener,
-    ) -> (Engines<RocksEngine, CER>, Arc<EnginesResourceInfo>, Option<RegionCacheMemoryEngine>) {
+    ) -> (
+        Engines<RocksEngine, CER>,
+        Arc<EnginesResourceInfo>,
+        Option<RegionCacheMemoryEngine>,
+    ) {
         let block_cache = self.core.config.storage.block_cache.build_shared_cache();
         let env = self
             .core
@@ -1658,7 +1663,7 @@ where
         let in_memory_engine_context =
             InMemoryEngineContext::new(in_memory_engine_config.clone(), self.pd_client.clone());
         let in_memory_engine_statistics = in_memory_engine_context.statistics();
-        let ime_engine =  if self.core.config.in_memory_engine.enable {
+        let ime_engine = if self.core.config.in_memory_engine.enable {
             let in_memory_engine = build_hybrid_engine(
                 in_memory_engine_context,
                 kv_engine.clone(),
