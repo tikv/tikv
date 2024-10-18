@@ -962,7 +962,7 @@ mod tests {
         ));
         engine.set_disk_engine(rocks_engine.clone());
 
-        let r1 = CacheRegion::new(1, 0, b"k00", b"k10");
+        let r1 = CacheRegion::new(1, 0, b"zk00", b"zk10");
 
         engine.core().region_manager().load_region(r1).unwrap();
 
