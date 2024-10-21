@@ -75,7 +75,6 @@ impl MetaFile {
             }
             log_files.push(g);
         }
-        drop(meta_file);
 
         Self {
             name,
@@ -228,7 +227,7 @@ impl<'a> Default for LoadFromExt<'a> {
 ///
 /// For now, it supports load all metadata only, by consuming the stream.
 /// [`StreamyMetaStorage`] is a [`Stream`] that yields `Result<MetaFile>`.
-pub struct StreamyMetaStorage<'a> {
+pub struct StreamMetaStorage<'a> {
     // NOTE: we want to keep the order of incoming meta files, so calls with the same argument can
     // generate the same compactions.
     prefetch: VecDeque<
@@ -295,7 +294,7 @@ impl<F: Future> FusedFuture for Prefetch<F> {
     }
 }
 
-impl<'a> Stream for StreamyMetaStorage<'a> {
+impl<'a> Stream for StreamMetaStorage<'a> {
     type Item = Result<MetaFile>;
 
     fn poll_next(
@@ -314,7 +313,7 @@ impl<'a> Stream for StreamyMetaStorage<'a> {
     }
 }
 
-impl<'a> StreamyMetaStorage<'a> {
+impl<'a> StreamMetaStorage<'a> {
     /// Poll the next event.
     fn poll_fetch_or_finish(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<MetaFile>>> {
         loop {
@@ -640,7 +639,7 @@ pub fn hash_meta_edit(meta_edit: &brpb::MetaEdit) -> u64 {
 mod test {
     use futures::stream::TryStreamExt;
 
-    use super::{LoadFromExt, MetaFile, StreamyMetaStorage};
+    use super::{LoadFromExt, MetaFile, StreamMetaStorage};
     use crate::test_util::{gen_step, KvGen, LogFileBuilder, TmpStorage};
 
     async fn construct_storage(
@@ -689,7 +688,7 @@ mod test {
         let test_for_concurrency = |n| async move {
             let mut ext = LoadFromExt::default();
             ext.max_concurrent_fetch = n;
-            let sst = StreamyMetaStorage::load_from_ext(st.storage().as_ref(), ext);
+            let sst = StreamMetaStorage::load_from_ext(st.storage().as_ref(), ext);
             let mut result = sst.try_collect::<Vec<_>>().await.unwrap();
             result.sort_by(|a, b| a.name.cmp(&b.name));
             assert_eq!(&result, mfs);
@@ -712,7 +711,7 @@ mod test {
 
         let mut ext = LoadFromExt::default();
         ext.meta_prefix = "my-fantastic-meta-dir";
-        let sst = StreamyMetaStorage::load_from_ext(st.storage().as_ref(), ext);
+        let sst = StreamMetaStorage::load_from_ext(st.storage().as_ref(), ext);
         let mut result = sst.try_collect::<Vec<_>>().await.unwrap();
         result.sort_by(|a, b| a.name.cmp(&b.name));
         assert_eq!(result, mfs);

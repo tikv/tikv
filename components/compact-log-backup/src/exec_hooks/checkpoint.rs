@@ -48,7 +48,7 @@ impl Checkpoint {
             .strip_suffix(b".cmeta")
             .map(|v| v.split(|c| *c == b'_').collect::<Vec<_>>())
             .unwrap_or_default();
-        if segs.len() != 3 || segs[2].len() != 16 {
+        if segs.len() < 3 || segs[2].len() != 16 {
             let err_msg =
                 format!("Checkpoint: here is a file we cannot get hash, skipping it. name = {key}");
             return Err(ErrorKind::Other(err_msg).into());

@@ -16,7 +16,7 @@ use crate::{
         SubcompactionStartCtx,
     },
     statistic::prom,
-    storage::StreamyMetaStorage,
+    storage::StreamMetaStorage,
     util::storage_url,
     ErrorKind,
 };
@@ -124,7 +124,7 @@ impl ExecHooks for Observability {
         };
 
         cx.async_rt.spawn(sigusr1_handler);
-        self.meta_len = StreamyMetaStorage::count_objects(cx.storage).await?;
+        self.meta_len = StreamMetaStorage::count_objects(cx.storage).await?;
 
         info!("About to start compaction."; &cx.this.cfg, 
             "url" => cx.storage.url().map(|v| v.to_string()).unwrap_or_else(|err| format!("<err: {err}>")));

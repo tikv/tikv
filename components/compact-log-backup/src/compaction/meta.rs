@@ -16,7 +16,7 @@ use crate::{
     errors::Result,
     storage::{
         LoadFromExt, LogFile, LogFileId, MetaFile, MigartionStorageWrapper, PhysicalLogFile,
-        StreamyMetaStorage,
+        StreamMetaStorage,
     },
 };
 
@@ -266,7 +266,7 @@ impl CompactionRunInfoBuilder {
         s: &dyn ExternalStorage,
     ) -> Result<Vec<ExpiringFilesOfMeta>> {
         let ext = LoadFromExt::default();
-        let mut storage = StreamyMetaStorage::load_from_ext(s, ext);
+        let mut storage = StreamMetaStorage::load_from_ext(s, ext);
 
         let mut result = vec![];
         while let Some(item) = storage.try_next().await? {

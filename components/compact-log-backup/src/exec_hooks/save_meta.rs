@@ -114,11 +114,26 @@ impl ExecHooks for SaveMeta {
         self.collector.add_subcompaction(cx.result);
         self.stats.update_subcompaction(cx.result);
 
+        let first_version = cx
+            .result
+            .meta
+            .region_meta_hints
+            .first()
+            .map(|h| {
+                format!(
+                    "_{}_{}",
+                    h.get_region_epoch().get_version(),
+                    h.get_region_epoch().get_conf_ver()
+                )
+            })
+            .unwrap_or_default();
         let meta_name = format!(
-            "{}_{}_{}.cmeta",
+            "{}_{}_{}_{}{}.cmeta",
             util::aligned_u64(cx.result.origin.input_min_ts),
             util::aligned_u64(cx.result.origin.input_max_ts),
-            util::aligned_u64(cx.result.origin.crc64())
+            util::aligned_u64(cx.result.origin.crc64()),
+            cx.result.origin.region_id,
+            first_version
         );
         let meta_name = format!("{}/{}/{}", cx.this.out_prefix, META_OUT_REL, meta_name);
         let mut metas = brpb::LogFileSubcompactions::new();
