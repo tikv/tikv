@@ -513,7 +513,7 @@ impl<E: KvEngine> Initializer<E> {
     }
 
     fn ts_filter_is_helpful<S: Snapshot>(&self, snap: &S) -> bool {
-        fail_point!("ts_filter_is_helpful_always_true", |_| return true);
+        fail_point!("ts_filter_is_helpful_always_true", |_| true);
 
         if self.ts_filter_ratio < f64::EPSILON {
             return false;
@@ -586,10 +586,9 @@ impl InitializeStats {
     fn add(&mut self, other: &InitializeStats) {
         self.old_value.add(&other.old_value);
         self.scan.emit += other.scan.emit;
-        self.scan
-            .disk_read
-            .as_mut()
-            .map(|x| *x += other.scan.disk_read.unwrap_or_default());
+        if let Some(x) = self.scan.disk_read.as_mut() {
+            *x += other.scan.disk_read.unwrap_or_default();
+        }
         self.scan.perf_delta += other.scan.perf_delta;
     }
 }
