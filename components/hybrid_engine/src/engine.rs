@@ -4,6 +4,8 @@ use engine_traits::{
     CacheRegion, FailedReason, KvEngine, Mutable, Peekable, ReadOptions, RegionCacheEngine, Result,
     SnapshotContext, SnapshotMiscExt, SyncMutable, WriteBatch, WriteBatchExt,
 };
+use keys::DATA_PREFIX_KEY;
+use kvproto::metapb::{self, RegionEpoch};
 
 use crate::{
     metrics::{
@@ -126,8 +128,17 @@ where
         F: FnOnce(&mut <Self as WriteBatchExt>::WriteBatch) -> Result<()>,
     {
         let mut batch = self.write_batch();
-        if let Some(region) = self.region_cache_engine.get_region_for_key(key) {
-            batch.prepare_for_region(region);
+        if let Some(cached_region) = self.region_cache_engine.get_region_for_key(key) {
+            // CacheRegion does not contains enough information for Region so the transfer
+            // is not accurate but this method is not called in production code.
+            let mut region = metapb::Region::default();
+            region.set_id(cached_region.id);
+            region.set_start_key(cached_region.start[DATA_PREFIX_KEY.len()..].to_vec());
+            region.set_end_key(cached_region.end[DATA_PREFIX_KEY.len()..].to_vec());
+            let mut epoch = RegionEpoch::default();
+            epoch.version = cached_region.epoch_version;
+            region.set_region_epoch(epoch);
+            batch.prepare_for_region(&region);
         }
         f(&mut batch)?;
         let _ = batch.write()?;
