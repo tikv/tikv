@@ -10,7 +10,7 @@ use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
 use engine_rocks::RocksSnapshot;
 use engine_store_ffi::core::DebugStruct;
-use engine_traits::{Engines, MiscExt, Peekable, SnapshotContext};
+use engine_traits::{Engines, MiscExt, Peekable};
 use health_controller::HealthController;
 use kvproto::{
     metapb,
@@ -22,7 +22,7 @@ use raft::{eraftpb::MessageType, SnapshotStatus};
 use raftstore::{
     coprocessor::{config::SplitCheckConfigManager, CoprocessorHost},
     errors::Error as RaftError,
-    router::{LocalReadRouter, RaftStoreRouter, ServerRaftStoreRouter},
+    router::{LocalReadRouter, RaftStoreRouter, ReadContext, ServerRaftStoreRouter},
     store::{
         config::RaftstoreConfigManager,
         copy_snapshot,
@@ -376,7 +376,9 @@ impl Simulator<TiFlashEngine> for NodeCluster {
             engines.kv.clone(),
             StoreMetaDelegate::new(store_meta.clone(), engines.kv.clone()),
             router.clone(),
+            coprocessor_host.clone(),
         );
+
         let cfg_controller = ConfigController::new(cfg.tikv.clone());
 
         let split_check_runner =
@@ -529,7 +531,6 @@ impl Simulator<TiFlashEngine> for NodeCluster {
 
     fn async_read(
         &mut self,
-        snap_ctx: Option<SnapshotContext>,
         node_id: u64,
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
@@ -551,7 +552,8 @@ impl Simulator<TiFlashEngine> for NodeCluster {
         }
         let mut guard = self.trans.core.lock().unwrap();
         let router = guard.routers.get_mut(&node_id).unwrap();
-        router.read(snap_ctx, batch_id, request, cb).unwrap();
+        let read_ctx = ReadContext::new(batch_id, None);
+        router.read(read_ctx, request, cb).unwrap();
     }
 
     fn send_raft_msg(&mut self, msg: raft_serverpb::RaftMessage) -> Result<()> {

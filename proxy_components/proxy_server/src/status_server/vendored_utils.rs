@@ -50,6 +50,7 @@ pub fn deactivate_prof() -> ProfResult<()> {
 
 extern crate libc;
 
+#[allow(unused_variables)]
 fn print_error_message(s: &str, r: ::std::os::raw::c_int) {
     #[cfg(not(any(target_os = "android", target_os = "dragonfly", target_os = "macos")))]
     {

@@ -12,7 +12,7 @@ use std::{
 pub(crate) use details::RocksEngine;
 pub use details::RocksEngine as MixedModeEngine;
 use engine_rocks::RocksSnapshot;
-use engine_traits::{Checkpointable, Checkpointer, Error, KvEngine, Result, SnapshotContext};
+use engine_traits::{Checkpointable, Checkpointer, Error, KvEngine, Result};
 use rocksdb::DB;
 
 use crate::{

@@ -10,7 +10,6 @@ use std::{
 
 use collections::{HashMap, HashSet};
 use encryption::DataKeyManager;
-use engine_traits::SnapshotContext;
 // mock cluster
 use engine_traits::{Engines, KvEngine, CF_DEFAULT};
 use file_system::IoRateLimiter;
@@ -35,8 +34,8 @@ use raftstore::{
         initial_region,
         msg::StoreTick,
         prepare_bootstrap_cluster, Callback, CasualMessage, CasualRouter, RaftCmdExtraOpts,
-        RaftRouter, SnapManager, StoreMsg, StoreRouter, WriteResponse, INIT_EPOCH_CONF_VER,
-        INIT_EPOCH_VER,
+        RaftRouter, ReadResponse, SnapManager, StoreMsg, StoreRouter, WriteResponse,
+        INIT_EPOCH_CONF_VER, INIT_EPOCH_VER,
     },
     Error, Result,
 };
@@ -44,13 +43,15 @@ use resource_control::ResourceGroupManager;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use test_raftstore::{
-    is_error_response, make_cb, new_admin_request, new_delete_cmd, new_peer, new_put_cf_cmd,
+    is_error_response, new_admin_request, new_delete_cmd, new_peer, new_put_cf_cmd,
     new_region_leader_cmd, new_request, new_status_request, new_store, new_tikv_config,
     new_transfer_leader_cmd, sleep_ms,
 };
 use tikv::server::Result as ServerResult;
 use tikv_util::{
-    debug, error, safe_panic,
+    debug, error,
+    mpsc::future,
+    safe_panic,
     thread_group::GroupProperties,
     time::{Instant, ThreadReadId},
     warn, HandyRwLock,
@@ -63,6 +64,61 @@ use super::{
     transport_simulate::{Filter, FilterFactory},
     util::*,
 };
+
+#[derive(Default)]
+struct CallbackLeakDetector {
+    called: bool,
+}
+
+impl Drop for CallbackLeakDetector {
+    fn drop(&mut self) {
+        if self.called {
+            return;
+        }
+
+        debug!("before capture");
+        let bt = std::backtrace::Backtrace::capture();
+        warn!("callback is dropped"; "backtrace" => ?bt);
+    }
+}
+
+pub fn check_raft_cmd_request(cmd: &RaftCmdRequest) -> bool {
+    let mut is_read = cmd.has_status_request();
+    let mut is_write = cmd.has_admin_request();
+    for req in cmd.get_requests() {
+        match req.get_cmd_type() {
+            CmdType::Get | CmdType::Snap | CmdType::ReadIndex => is_read = true,
+            CmdType::Put | CmdType::Delete | CmdType::DeleteRange | CmdType::IngestSst => {
+                is_write = true
+            }
+            CmdType::Invalid | CmdType::Prewrite => panic!("Invalid RaftCmdRequest: {:?}", cmd),
+        }
+    }
+    assert!(is_read ^ is_write, "Invalid RaftCmdRequest: {:?}", cmd);
+    is_read
+}
+
+pub fn make_cb<EK: KvEngine>(
+    cmd: &RaftCmdRequest,
+) -> (Callback<EK::Snapshot>, future::Receiver<RaftCmdResponse>) {
+    let is_read = check_raft_cmd_request(cmd);
+    let (tx, rx) = future::bounded(1, future::WakePolicy::Immediately);
+    let mut detector = CallbackLeakDetector::default();
+    let cb = if is_read {
+        Callback::read(Box::new(move |resp: ReadResponse<EK::Snapshot>| {
+            detector.called = true;
+            // we don't care error actually.
+            let _ = tx.send(resp.response);
+        }))
+    } else {
+        Callback::write(Box::new(move |resp: WriteResponse| {
+            detector.called = true;
+            // we don't care error actually.
+            let _ = tx.send(resp.response);
+        }))
+    };
+    (cb, rx)
+}
 
 // We simulate 3 or 5 nodes, each has a store.
 // Sometimes, we use fixed id to test, which means the id
@@ -118,21 +174,19 @@ pub trait Simulator<EK: KvEngine> {
 
     fn read(
         &mut self,
-        snap_ctx: Option<SnapshotContext>,
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
         timeout: Duration,
     ) -> Result<RaftCmdResponse> {
         let node_id = request.get_header().get_peer().get_store_id();
         let (cb, mut rx) = make_cb::<EK>(&request);
-        self.async_read(snap_ctx, node_id, batch_id, request, cb);
+        self.async_read(node_id, batch_id, request, cb);
         rx.recv_timeout(timeout)
             .map_err(|_| Error::Timeout(format!("request timeout for {:?}", timeout)))
     }
 
     fn async_read(
         &mut self,
-        snap_ctx: Option<SnapshotContext>,
         node_id: u64,
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
@@ -404,7 +458,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
             }
         }
         let ret = if is_read {
-            self.sim.wl().read(None, None, request.clone(), timeout)
+            self.sim.wl().read(None, request.clone(), timeout)
         } else {
             self.sim.rl().call_command(request.clone(), timeout)
         };

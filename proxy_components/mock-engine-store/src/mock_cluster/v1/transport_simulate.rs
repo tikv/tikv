@@ -11,18 +11,18 @@ use std::{
 
 use collections::{HashMap, HashSet};
 use crossbeam::channel::TrySendError;
-use engine_traits::{KvEngine, SnapshotContext};
+use engine_traits::KvEngine;
 use kvproto::{raft_cmdpb::RaftCmdRequest, raft_serverpb::RaftMessage};
 use raft::eraftpb::MessageType;
 use raftstore::{
-    router::{LocalReadRouter, RaftStoreRouter},
+    router::{LocalReadRouter, RaftStoreRouter, ReadContext},
     store::{
         Callback, CasualMessage, CasualRouter, PeerMsg, ProposalRouter, RaftCommand,
         SignificantMsg, SignificantRouter, StoreMsg, StoreRouter, Transport,
     },
     DiscardReason, Error, Result as RaftStoreResult, Result,
 };
-use tikv_util::{error, time::ThreadReadId, Either, HandyRwLock};
+use tikv_util::{error, Either, HandyRwLock};
 
 pub fn check_messages(msgs: &[RaftMessage]) -> Result<()> {
     if msgs.is_empty() {
@@ -257,12 +257,11 @@ impl<EK: KvEngine, C: RaftStoreRouter<EK>> RaftStoreRouter<EK> for SimulateTrans
 impl<EK: KvEngine, C: LocalReadRouter<EK>> LocalReadRouter<EK> for SimulateTransport<C, EK> {
     fn read(
         &mut self,
-        snap_ctx: Option<SnapshotContext>,
-        read_id: Option<ThreadReadId>,
+        ctx: ReadContext,
         req: RaftCmdRequest,
         cb: Callback<EK::Snapshot>,
     ) -> RaftStoreResult<()> {
-        self.ch.read(snap_ctx, read_id, req, cb)
+        self.ch.read(ctx, req, cb)
     }
 
     fn release_snapshot_cache(&mut self) {

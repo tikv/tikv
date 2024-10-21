@@ -103,7 +103,7 @@ use tikv::{
 };
 use tikv_util::{
     check_environment_variables,
-    config::{ensure_dir_exist, ReadableDuration, ReadableSize, VersionTrack},
+    config::{ensure_dir_exist, ReadableDuration, VersionTrack},
     error,
     quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
     sys::{disk, register_memory_usage_high_water, thread::ThreadBuildWrapper, SysQuota},
@@ -703,7 +703,7 @@ impl<ER: RaftEngine, F: KvFormat> TiKvServer<ER, F> {
         // Initialize raftstore channels.
         let (router, system) = fsm::create_raft_batch_system(&config.raft_store, &resource_manager);
 
-        let mut coprocessor_host = Some(CoprocessorHost::new(
+        let coprocessor_host = Some(CoprocessorHost::new(
             router.clone(),
             config.coprocessor.clone(),
         ));
