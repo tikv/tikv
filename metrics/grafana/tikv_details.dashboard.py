@@ -4643,6 +4643,55 @@ def InMemoryEngine() -> RowPanel:
             ),
         ]
     )
+    layout.row(
+        [
+            graph_panel(
+                title="Oldest Auto GC SafePoint",
+                description="Unlike the safe point used for TiKV's Auto GC, the safe point for in-memory engine is per region and we display the oldest one here",
+                yaxes=yaxes(left_format=UNITS.DATE_TIME_ISO),
+                targets=[
+                    target(
+                        expr=expr_max(
+                            "tikv_in_memory_engine_oldest_safe_point",
+                        )
+                        .extra("/ (2^18)")
+                        .skip_default_instance_selector(),
+                        additional_groupby=True,
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Newest Auto GC SafePoint",
+                description="Unlike the safe point used for TiKV's Auto GC, the safe point for in-memory engine is per region and we display the newest one here",
+                yaxes=yaxes(left_format=UNITS.DATE_TIME_ISO),
+                targets=[
+                    target(
+                        expr=expr_max(
+                            "tikv_in_memory_engine_newest_safe_point",
+                        )
+                        .extra("/ (2^18)")
+                        .skip_default_instance_selector(),
+                        additional_groupby=True,
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Auto GC SafePoint Gap",
+                description="The gap between tikv auto gc safe point and in-memory engine oldest safe point",
+                yaxes=yaxes(left_format=UNITS.MILLI_SECONDS),
+                targets=[
+                    target(
+                        expr=expr_max(
+                            "tikv_safe_point_gap_with_in_memory_engine",
+                        )
+                        .extra("/ (2^18)")
+                        .skip_default_instance_selector(),
+                        additional_groupby=True,
+                    ),
+                ],
+            ),
+        ]
+    )
     return layout.row_panel
 
 
