@@ -538,7 +538,7 @@ mod tests {
     use kvproto::metapb::{Region, RegionEpoch};
     use online_config::{ConfigChange, ConfigManager, ConfigValue};
     use tempfile::Builder;
-    use tikv_util::config::VersionTrack;
+    use tikv_util::{config::VersionTrack, store::new_peer};
 
     use super::*;
     use crate::{
@@ -972,6 +972,7 @@ mod tests {
         let mut epoch = RegionEpoch::new();
         epoch.version = 1;
         r_new.set_region_epoch(epoch);
+        r_new.set_peers(vec![new_peer(1, 1)].into());
         r_new.set_start_key(b"k00".to_vec());
         r_new.set_end_key(b"k05".to_vec());
         let mut wb = RegionCacheWriteBatch::from(&engine);
