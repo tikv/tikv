@@ -1,6 +1,6 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{fmt, sync::Arc, time::Duration};
+use std::{borrow::Cow, fmt, sync::Arc, time::Duration};
 
 use bytes::Bytes;
 use crossbeam::{
@@ -93,6 +93,7 @@ pub enum BackgroundTask {
             RocksEngine,
             Arc<dyn PdClient>,
             Duration,
+            Box<dyn Fn() -> Option<u64> + Send>,
         ),
     ),
     SetRocksEngine(RocksEngine),
@@ -481,6 +482,7 @@ impl BackgroundRunnerCore {
         safe_point: u64,
         oldest_seqno: u64,
     ) -> FilterMetrics {
+        let mut gc_region = Cow::Borrowed(region);
         let safe_point = {
             let region_manager = self.engine.region_manager();
             // We should also consider the ongoing snapshot of the historical regions
@@ -498,6 +500,11 @@ impl BackgroundRunnerCore {
                 || !region.contains_range(region_meta.get_region())
             {
                 return FilterMetrics::default();
+            }
+
+            // check if region epoch vesion changes.
+            if region.epoch_version != region_meta.get_region().epoch_version {
+                gc_region = Cow::Owned(region_meta.get_region().clone());
             }
 
             let min_snapshot = region_meta
@@ -536,14 +543,16 @@ impl BackgroundRunnerCore {
             skiplist_engine.cf_handle(CF_DEFAULT),
             skiplist_engine.cf_handle(CF_WRITE),
         );
-        filter.filter_keys_in_region(region);
-        self.engine.region_manager().on_gc_region_finished(region);
+        filter.filter_keys_in_region(&gc_region);
+        self.engine
+            .region_manager()
+            .on_gc_region_finished(&gc_region);
 
         let duration = start.saturating_elapsed();
         IN_MEMORY_ENGINE_GC_TIME_HISTOGRAM.observe(duration.as_secs_f64());
         info!(
             "ime region gc complete";
-            "region" => ?region,
+            "region" => ?gc_region.as_ref(),
             "gc_duration" => ?duration,
             "total_version" => filter.metrics.total,
             "filtered_version" => filter.metrics.filtered,
@@ -1246,10 +1255,21 @@ impl Runnable for BackgroundRunner {
 
                 self.lock_cleanup_remote.spawn(f);
             }
-            BackgroundTask::TurnOnCrossCheck((engine, rocks_engine, pd_client, check_interval)) => {
+            BackgroundTask::TurnOnCrossCheck((
+                engine,
+                rocks_engine,
+                pd_client,
+                check_interval,
+                get_tikv_safe_point,
+            )) => {
                 let cross_check_worker = Worker::new("cross-check-worker");
-                let cross_check_runner =
-                    CrossChecker::new(pd_client, engine, rocks_engine, check_interval);
+                let cross_check_runner = CrossChecker::new(
+                    pd_client,
+                    engine,
+                    rocks_engine,
+                    check_interval,
+                    get_tikv_safe_point,
+                );
                 let _ =
                     cross_check_worker.start_with_timer("cross-check-runner", cross_check_runner);
                 self.cross_check_worker = Some(cross_check_worker);
@@ -2285,6 +2305,79 @@ pub mod tests {
 
         assert_eq!(2, element_count(&default));
         assert_eq!(2, element_count(&write));
+    }
+
+    // test the condition that target region is split after scan need gc region and
+    // before the gc task actual start.
+    #[test]
+    fn test_gc_after_region_split() {
+        let config = InMemoryEngineConfig::config_for_test();
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(config),
+        )));
+        let memory_controller = engine.memory_controller();
+        let (write, default, region) = {
+            let region = CacheRegion::new(1, 0, b"zk00", b"zk20");
+            engine.core.region_manager().new_region(region.clone());
+
+            let engine = engine.core.engine();
+            (
+                engine.cf_handle(CF_WRITE),
+                engine.cf_handle(CF_DEFAULT),
+                region,
+            )
+        };
+
+        let test_data = [
+            (b"k05".as_slice(), b"val1".as_slice(), 10, 11, 10),
+            (b"k05", b"val2", 12, 13, 14),
+            (b"k05", b"val1", 14, 15, 18),
+            (b"k15", b"val1", 10, 11, 10),
+            (b"k15", b"val2", 12, 13, 14),
+            (b"k15", b"val1", 14, 15, 18),
+        ];
+
+        for d in test_data {
+            put_data(
+                d.0,
+                d.1,
+                d.2,
+                d.3,
+                d.4,
+                false,
+                &default,
+                &write,
+                memory_controller.clone(),
+            );
+        }
+
+        assert_eq!(6, element_count(&default));
+        assert_eq!(6, element_count(&write));
+
+        let config = Arc::new(VersionTrack::new(InMemoryEngineConfig::config_for_test()));
+        let (worker, _) = BackgroundRunner::new(
+            engine.core.clone(),
+            memory_controller.clone(),
+            None,
+            config,
+            Arc::new(MockPdClient {}),
+            None,
+        );
+
+        // triggers region split.
+        let new_regions = vec![
+            CacheRegion::new(1, 2, "zk00", "zk10"),
+            CacheRegion::new(2, 2, "zk10", "zk20"),
+        ];
+        engine.on_region_event(RegionEvent::Split {
+            source: region.clone(),
+            new_regions,
+        });
+
+        // still use the original region to do gc, should only gc the region with the
+        // same id.
+        let filter = worker.core.gc_region(&region, 100, 100);
+        assert_eq!(2, filter.filtered);
     }
 
     #[test]

@@ -6246,7 +6246,6 @@ def RocksDB() -> RowPanel:
                             label_selectors=['db="$db"'],
                         ),
                         legend_format="{{instance}}",
-                        additional_groupby=True,
                     ),
                 ],
             ),

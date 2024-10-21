@@ -189,6 +189,7 @@ yatp = { workspace = true }
 [dev-dependencies]
 api_version = { workspace = true, features = ["testexport"] }
 engine_test = { workspace = true }
+example_coprocessor_plugin = { workspace = true }                              # must, used for testing coprocessor plugin
 hyper-openssl = "0.9"
 panic_hook = { workspace = true }
 raftstore = { workspace = true, features = ["testexport"] }
@@ -317,9 +318,25 @@ members = [
 default-members = ["cmd/tikv-server", "cmd/tikv-ctl"]
 
 [workspace.metadata.cargo-machete]
-ignored = ["slog", "slog-global", "serde", "prometheus", "slog_derive", "strum", "error_code", "fuzz-targets", "libfuzzer-sys"]
+ignored = [
+  "slog",
+  "slog-global",
+  "serde",
+  "prometheus",
+  "slog_derive",
+  "strum",
+  "error_code",
+  "fuzz-targets",
+  "libfuzzer-sys",
+]
 [package.metadata.cargo-machete]
-ignored = ["encryption", "engine_panic", "hybrid_engine", "hyper-tls", "match-template"]
+ignored = [
+  "encryption",
+  "engine_panic",
+  "hybrid_engine",
+  "hyper-tls",
+  "match-template",
+]
 
 [workspace.dependencies]
 api_version = { path = "components/api_version" }
