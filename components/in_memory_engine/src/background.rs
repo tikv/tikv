@@ -1,6 +1,6 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{fmt::Display, sync::Arc, time::Duration};
+use std::{borrow::Cow, fmt, sync::Arc, time::Duration};
 
 use bytes::Bytes;
 use crossbeam::{
@@ -12,9 +12,13 @@ use engine_traits::{
     CacheRegion, EvictReason, IterOptions, Iterable, Iterator, MiscExt, RangeHintService,
     SnapshotMiscExt, CF_DEFAULT, CF_WRITE, DATA_CFS,
 };
+use fail::fail_point;
 use keys::{origin_end_key, origin_key};
 use pd_client::{PdClient, RpcClient};
-use raftstore::coprocessor::RegionInfoProvider;
+use raftstore::{
+    coprocessor::RegionInfoProvider,
+    store::{CasualMessage, CasualRouter},
+};
 use slog_global::{error, info, warn};
 use strum::EnumCount;
 use tikv_util::{
@@ -89,13 +93,15 @@ pub enum BackgroundTask {
             RocksEngine,
             Arc<dyn PdClient>,
             Duration,
+            Box<dyn Fn() -> Option<u64> + Send>,
         ),
     ),
     SetRocksEngine(RocksEngine),
+    CheckLoadPendingRegions(Scheduler<BackgroundTask>),
 }
 
-impl Display for BackgroundTask {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for BackgroundTask {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self {
             BackgroundTask::Gc(t) => t.fmt(f),
             BackgroundTask::LoadRegion(..) => f.debug_struct("LoadTask").finish(),
@@ -110,7 +116,16 @@ impl Display for BackgroundTask {
                 .finish(),
             BackgroundTask::TurnOnCrossCheck(_) => f.debug_struct("TurnOnCrossCheck").finish(),
             BackgroundTask::SetRocksEngine(_) => f.debug_struct("SetDiskEngine").finish(),
+            BackgroundTask::CheckLoadPendingRegions(_) => {
+                f.debug_struct("CheckLoadPendingRegions").finish()
+            }
         }
+    }
+}
+
+impl fmt::Debug for BackgroundTask {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self)
     }
 }
 
@@ -119,8 +134,8 @@ pub struct GcTask {
     pub safe_point: u64,
 }
 
-impl Display for GcTask {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for GcTask {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("GcTask")
             .field("safe_point", &self.safe_point)
             .finish()
@@ -227,6 +242,7 @@ impl BgWorkManager {
         config: Arc<VersionTrack<InMemoryEngineConfig>>,
         memory_controller: Arc<MemoryController>,
         region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
+        raft_casual_router: Option<Box<dyn CasualRouter<RocksEngine>>>,
     ) -> Self {
         let worker = Worker::new("ime-bg");
         let (runner, delete_range_scheduler) = BackgroundRunner::new(
@@ -235,6 +251,7 @@ impl BgWorkManager {
             region_info_provider.clone(),
             config.clone(),
             pd_client.clone(),
+            raft_casual_router,
         );
         let scheduler = worker.start_with_timer("ime-bg-runner", runner);
 
@@ -257,6 +274,10 @@ impl BgWorkManager {
             }
             task => self.scheduler.schedule_force(task),
         }
+    }
+
+    pub(crate) fn background_scheduler(&self) -> &Scheduler<BackgroundTask> {
+        &self.scheduler
     }
 
     pub fn start_bg_hint_service(&self, range_hint_service: PdRangeHintService) {
@@ -337,12 +358,20 @@ impl BgWorkManager {
         // blocking task.
         // TODO: Spawn non-blocking tasks and make full use of the ticker.
         let interval = Duration::from_millis(100);
+        let check_load_pending_interval = (|| {
+            fail_point!("background_check_load_pending_interval", |t| {
+                let t = t.unwrap().parse::<u64>().unwrap();
+                Duration::from_millis(t)
+            });
+            Duration::from_secs(5)
+        })();
         ticker.spawn_interval_task(interval, move || {
-            let mut gc_interval = config.value().gc_interval.0;
-            let mut gc_ticker = tick(gc_interval);
+            let mut gc_run_interval = config.value().gc_run_interval.0;
+            let mut gc_ticker = tick(gc_run_interval);
             let mut load_evict_interval = config.value().load_evict_interval.0;
             let mut load_evict_ticker = tick(load_evict_interval);
-            let mut tso_timeout = std::cmp::min(gc_interval, TIMTOUT_FOR_TSO);
+            let mut tso_timeout = std::cmp::min(gc_run_interval, TIMTOUT_FOR_TSO);
+            let check_pending_region_ticker = tick(check_load_pending_interval);
             'LOOP: loop {
                 select! {
                     recv(gc_ticker) -> _ => {
@@ -357,7 +386,7 @@ impl BgWorkManager {
                                 continue 'LOOP;
                             }
                         };
-                        let safe_point = now.physical() - gc_interval.as_millis() as u64;
+                        let safe_point = now.physical() - gc_run_interval.as_millis() as u64;
                         let safe_point = TimeStamp::compose(safe_point, 0).into_inner();
                         if let Err(e) = scheduler.schedule(BackgroundTask::Gc(GcTask {safe_point})) {
                             error!(
@@ -365,16 +394,16 @@ impl BgWorkManager {
                                 "err" => ?e,
                             );
                         }
-                        let cur_gc_interval = config.value().gc_interval.0;
-                        if cur_gc_interval != gc_interval {
-                            tso_timeout = std::cmp::min(gc_interval, TIMTOUT_FOR_TSO);
+                        let cur_gc_run_interval = config.value().gc_run_interval.0;
+                        if cur_gc_run_interval != gc_run_interval {
+                            tso_timeout = std::cmp::min(gc_run_interval, TIMTOUT_FOR_TSO);
                             info!(
-                                "ime gc-interval changed";
-                                "from" => ?gc_interval,
-                                "to" => ?cur_gc_interval,
+                                "ime gc-run-interval changed";
+                                "from" => ?gc_run_interval,
+                                "to" => ?cur_gc_run_interval,
                             );
-                            gc_interval = cur_gc_interval;
-                            gc_ticker = tick(gc_interval);
+                            gc_run_interval = cur_gc_run_interval;
+                            gc_ticker = tick(gc_run_interval);
                         }
                     },
                     recv(load_evict_ticker) -> _ => {
@@ -395,6 +424,15 @@ impl BgWorkManager {
                             load_evict_ticker = tick(load_evict_interval);
                         }
                     },
+                    recv(check_pending_region_ticker) -> _ => {
+                        let s = scheduler.clone();
+                        if let Err(e) = scheduler.schedule(BackgroundTask::CheckLoadPendingRegions(s)) {
+                            error!(
+                                "ime schedule check pending regions failed";
+                                "err" => ?e,
+                            );
+                        }
+                    }
                     recv(rx) -> r => {
                         if let Err(e) = r {
                             error!(
@@ -449,6 +487,7 @@ impl BackgroundRunnerCore {
         safe_point: u64,
         oldest_seqno: u64,
     ) -> FilterMetrics {
+        let mut gc_region = Cow::Borrowed(region);
         let safe_point = {
             let region_manager = self.engine.region_manager();
             // We should also consider the ongoing snapshot of the historical regions
@@ -466,6 +505,11 @@ impl BackgroundRunnerCore {
                 || !region.contains_range(region_meta.get_region())
             {
                 return FilterMetrics::default();
+            }
+
+            // check if region epoch vesion changes.
+            if region.epoch_version != region_meta.get_region().epoch_version {
+                gc_region = Cow::Owned(region_meta.get_region().clone());
             }
 
             let min_snapshot = region_meta
@@ -504,14 +548,16 @@ impl BackgroundRunnerCore {
             skiplist_engine.cf_handle(CF_DEFAULT),
             skiplist_engine.cf_handle(CF_WRITE),
         );
-        filter.filter_keys_in_region(region);
-        self.engine.region_manager().on_gc_region_finished(region);
+        filter.filter_keys_in_region(&gc_region);
+        self.engine
+            .region_manager()
+            .on_gc_region_finished(&gc_region);
 
         let duration = start.saturating_elapsed();
         IN_MEMORY_ENGINE_GC_TIME_HISTOGRAM.observe(duration.as_secs_f64());
         info!(
             "ime region gc complete";
-            "region" => ?region,
+            "region" => ?gc_region.as_ref(),
             "gc_duration" => ?duration,
             "total_version" => filter.metrics.total,
             "filtered_version" => filter.metrics.filtered,
@@ -643,8 +689,8 @@ impl BackgroundRunnerCore {
 
     /// Periodically load top regions.
     ///
-    /// If the soft limit is exceeded, evict (some) regions no longer considered
-    /// top.
+    /// If the evict threshold is exceeded, evict (some) regions no longer
+    /// considered top.
     ///
     /// See: [`RegionStatsManager::collect_changes_regions`] for
     /// algorithm details.
@@ -711,11 +757,11 @@ impl BackgroundRunnerCore {
                 break;
             }
         }
-        if !self.memory_controller.reached_stop_load_limit() {
-            let expected_new_count = (self
+        if !self.memory_controller.reached_stop_load_threshold() {
+            let expected_new_count = self
                 .memory_controller
-                .soft_limit_threshold()
-                .saturating_sub(self.memory_controller.mem_usage()))
+                .evict_threshold()
+                .saturating_sub(self.memory_controller.mem_usage())
                 / region_stats_manager.expected_region_size();
             let expected_new_count = usize::max(expected_new_count, 1);
             let mut regions_map = self.engine.region_manager().regions_map.write();
@@ -777,6 +823,7 @@ pub struct BackgroundRunner {
     last_seqno: u64,
     // RocksEngine is used to get the oldest snapshot sequence number.
     rocks_engine: Option<RocksEngine>,
+    raft_casual_router: Option<Box<dyn CasualRouter<RocksEngine>>>,
 }
 
 impl Drop for BackgroundRunner {
@@ -799,6 +846,7 @@ impl BackgroundRunner {
         region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
         config: Arc<VersionTrack<InMemoryEngineConfig>>,
         pd_client: Arc<dyn PdClient>,
+        raft_casual_router: Option<Box<dyn CasualRouter<RocksEngine>>>,
     ) -> (Self, Scheduler<BackgroundTask>) {
         let region_load_worker = Builder::new("ime-load")
             // Range load now is implemented sequentially, so we must use exactly one thread to handle it.
@@ -853,6 +901,7 @@ impl BackgroundRunner {
                 cross_check_worker: None,
                 last_seqno: 0,
                 rocks_engine: None,
+                raft_casual_router,
             },
             delete_range_scheduler,
         )
@@ -916,7 +965,7 @@ impl Runnable for BackgroundRunner {
                 let core = self.core.clone();
                 let delete_range_scheduler = self.delete_range_scheduler.clone();
                 let pd_client = self.pd_client.clone();
-                let gc_interval = self.config.value().gc_interval.0;
+                let gc_run_interval = self.config.value().gc_run_interval.0;
                 let f = async move {
                     fail::fail_point!("before_start_loading_region");
                     fail::fail_point!("on_start_loading_region");
@@ -935,7 +984,7 @@ impl Runnable for BackgroundRunner {
                     }
                     let skiplist_engine = core.engine.engine.clone();
 
-                    if core.memory_controller.reached_stop_load_limit() {
+                    if core.memory_controller.reached_stop_load_threshold() {
                         // We are running out of memory, so cancel the load.
                         is_canceled = true;
                     }
@@ -981,11 +1030,11 @@ impl Runnable for BackgroundRunner {
 
                                         // todo(SpadeA): we can batch acquire the memory size
                                         // here.
-                                        if let MemoryUsage::HardLimitReached(n) =
+                                        if let MemoryUsage::CapacityReached(n) =
                                             core.memory_controller.acquire(mem_size)
                                         {
                                             warn!(
-                                                "ime stop loading snapshot due to memory reaching hard limit";
+                                                "ime stop loading snapshot due to memory reaching capacity";
                                                 "region" => ?region,
                                                 "memory_usage(MB)" => ReadableSize(n as u64).as_mb_f64(),
                                             );
@@ -1006,7 +1055,7 @@ impl Runnable for BackgroundRunner {
                             }
                         }
                         // gc the range
-                        let tso_timeout = std::cmp::min(gc_interval, TIMTOUT_FOR_TSO);
+                        let tso_timeout = std::cmp::min(gc_run_interval, TIMTOUT_FOR_TSO);
                         let now = match block_on_timeout(pd_client.get_tso(), tso_timeout) {
                             Ok(Ok(ts)) => ts,
                             err => {
@@ -1027,7 +1076,7 @@ impl Runnable for BackgroundRunner {
 
                             let safe_point = now
                                 .physical()
-                                .saturating_sub(gc_interval.as_millis() as u64);
+                                .saturating_sub(gc_run_interval.as_millis() as u64);
                             TimeStamp::compose(safe_point, 0).into_inner()
                         })();
 
@@ -1074,7 +1123,7 @@ impl Runnable for BackgroundRunner {
                     "ime start memory usage check and evict";
                     "mem_usage(MB)" => ReadableSize(mem_usage_before_check as u64).as_mb()
                 );
-                if mem_usage_before_check > self.core.memory_controller.soft_limit_threshold() {
+                if mem_usage_before_check > self.core.memory_controller.evict_threshold() {
                     let delete_range_scheduler = self.delete_range_scheduler.clone();
                     let core = self.core.clone();
                     let task = async move {
@@ -1098,7 +1147,7 @@ impl Runnable for BackgroundRunner {
                             };
 
                             region_stats_manager
-                                .evict_on_soft_limit_reached(
+                                .evict_on_evict_threshold_reached(
                                     evict_fn,
                                     &delete_range_scheduler,
                                     cached_region_ids,
@@ -1207,13 +1256,69 @@ impl Runnable for BackgroundRunner {
 
                 self.lock_cleanup_remote.spawn(f);
             }
-            BackgroundTask::TurnOnCrossCheck((engine, rocks_engine, pd_client, check_interval)) => {
+            BackgroundTask::TurnOnCrossCheck((
+                engine,
+                rocks_engine,
+                pd_client,
+                check_interval,
+                get_tikv_safe_point,
+            )) => {
                 let cross_check_worker = Worker::new("cross-check-worker");
-                let cross_check_runner =
-                    CrossChecker::new(pd_client, engine, rocks_engine, check_interval);
+                let cross_check_runner = CrossChecker::new(
+                    pd_client,
+                    engine,
+                    rocks_engine,
+                    check_interval,
+                    get_tikv_safe_point,
+                );
                 let _ =
                     cross_check_worker.start_with_timer("cross-check-runner", cross_check_runner);
                 self.cross_check_worker = Some(cross_check_worker);
+            }
+            BackgroundTask::CheckLoadPendingRegions(s) => {
+                if let Some(router) = &self.raft_casual_router
+                    && let Some(e) = &self.rocks_engine
+                {
+                    let pending_regions: Vec<_> = self
+                        .core
+                        .engine
+                        .region_manager()
+                        .regions_map()
+                        .read()
+                        .regions()
+                        .values()
+                        .filter_map(|meta| {
+                            if meta.get_state() == RegionState::Pending {
+                                Some(meta.get_region().id)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+
+                    for region_id in pending_regions {
+                        let scheduler = s.clone();
+                        let rocks_engine = e.clone();
+                        let ime_engine = self.core.engine.clone();
+                        if let Err(e) = router.send(
+                            region_id,
+                            CasualMessage::InMemoryEngineLoadRegion {
+                                region_id,
+                                trigger_load_cb: Box::new(move |r| {
+                                    let cache_region = CacheRegion::from_region(r);
+                                    _ = ime_engine.prepare_for_apply(
+                                        &cache_region,
+                                        Some(&rocks_engine),
+                                        &scheduler,
+                                        false,
+                                    );
+                                }),
+                            },
+                        ) {
+                            warn!("ime send load pending cache region msg failed"; "err" => ?e);
+                        }
+                    }
+                }
             }
         }
     }
@@ -1599,7 +1704,7 @@ pub mod tests {
     use super::*;
     use crate::{
         background::BackgroundRunner,
-        config::RegionCacheConfigManager,
+        config::InMemoryEngineConfigManager,
         engine::{SkiplistEngine, SkiplistHandle},
         keys::{
             construct_key, construct_region_key, construct_value, encode_key, encode_seek_key,
@@ -1704,8 +1809,8 @@ pub mod tests {
 
     fn dummy_controller(skip_engine: SkiplistEngine) -> Arc<MemoryController> {
         let mut config = InMemoryEngineConfig::config_for_test();
-        config.soft_limit_threshold = Some(ReadableSize(u64::MAX));
-        config.hard_limit_threshold = Some(ReadableSize(u64::MAX));
+        config.evict_threshold = Some(ReadableSize(u64::MAX));
+        config.capacity = Some(ReadableSize(u64::MAX));
         let config = Arc::new(VersionTrack::new(config));
         Arc::new(MemoryController::new(config, skip_engine))
     }
@@ -1937,6 +2042,7 @@ pub mod tests {
             None,
             config,
             Arc::new(MockPdClient {}),
+            None,
         );
         worker.core.gc_region(&cache_region, 40, 100);
 
@@ -2011,6 +2117,7 @@ pub mod tests {
             None,
             config,
             Arc::new(MockPdClient {}),
+            None,
         );
 
         let cache_region = CacheRegion::from_region(&region);
@@ -2171,6 +2278,7 @@ pub mod tests {
             None,
             config,
             Arc::new(MockPdClient {}),
+            None,
         );
         let filter = worker.core.gc_region(&region1, 100, 100);
         assert_eq!(2, filter.filtered);
@@ -2188,6 +2296,7 @@ pub mod tests {
             None,
             config,
             Arc::new(MockPdClient {}),
+            None,
         );
         worker.core.gc_region(&region2, 100, 100);
         assert_eq!(2, filter.filtered);
@@ -2197,6 +2306,79 @@ pub mod tests {
 
         assert_eq!(2, element_count(&default));
         assert_eq!(2, element_count(&write));
+    }
+
+    // test the condition that target region is split after scan need gc region and
+    // before the gc task actual start.
+    #[test]
+    fn test_gc_after_region_split() {
+        let config = InMemoryEngineConfig::config_for_test();
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(config),
+        )));
+        let memory_controller = engine.memory_controller();
+        let (write, default, region) = {
+            let region = CacheRegion::new(1, 0, b"zk00", b"zk20");
+            engine.core.region_manager().new_region(region.clone());
+
+            let engine = engine.core.engine();
+            (
+                engine.cf_handle(CF_WRITE),
+                engine.cf_handle(CF_DEFAULT),
+                region,
+            )
+        };
+
+        let test_data = [
+            (b"k05".as_slice(), b"val1".as_slice(), 10, 11, 10),
+            (b"k05", b"val2", 12, 13, 14),
+            (b"k05", b"val1", 14, 15, 18),
+            (b"k15", b"val1", 10, 11, 10),
+            (b"k15", b"val2", 12, 13, 14),
+            (b"k15", b"val1", 14, 15, 18),
+        ];
+
+        for d in test_data {
+            put_data(
+                d.0,
+                d.1,
+                d.2,
+                d.3,
+                d.4,
+                false,
+                &default,
+                &write,
+                memory_controller.clone(),
+            );
+        }
+
+        assert_eq!(6, element_count(&default));
+        assert_eq!(6, element_count(&write));
+
+        let config = Arc::new(VersionTrack::new(InMemoryEngineConfig::config_for_test()));
+        let (worker, _) = BackgroundRunner::new(
+            engine.core.clone(),
+            memory_controller.clone(),
+            None,
+            config,
+            Arc::new(MockPdClient {}),
+            None,
+        );
+
+        // triggers region split.
+        let new_regions = vec![
+            CacheRegion::new(1, 2, "zk00", "zk10"),
+            CacheRegion::new(2, 2, "zk10", "zk20"),
+        ];
+        engine.on_region_event(RegionEvent::Split {
+            source: region.clone(),
+            new_regions,
+        });
+
+        // still use the original region to do gc, should only gc the region with the
+        // same id.
+        let filter = worker.core.gc_region(&region, 100, 100);
+        assert_eq!(2, filter.filtered);
     }
 
     #[test]
@@ -2234,6 +2416,7 @@ pub mod tests {
             None,
             config,
             Arc::new(MockPdClient {}),
+            None,
         );
 
         let filter = worker
@@ -2332,6 +2515,7 @@ pub mod tests {
             None,
             config,
             Arc::new(MockPdClient {}),
+            None,
         );
         let cache_region = CacheRegion::from_region(&region);
         let s1 = engine.snapshot(cache_region.clone(), 10, u64::MAX);
@@ -2480,6 +2664,7 @@ pub mod tests {
             None,
             config,
             Arc::new(MockPdClient {}),
+            None,
         );
 
         let regions: Vec<_> = engine
@@ -2628,6 +2813,7 @@ pub mod tests {
             None,
             config,
             Arc::new(MockPdClient {}),
+            None,
         );
         let regions = runner.core.regions_for_gc();
         assert_eq!(2, regions.len());
@@ -2687,6 +2873,7 @@ pub mod tests {
                 InMemoryEngineConfig::config_for_test(),
             ))),
             Some(region_info_provider.clone()),
+            None,
         );
         let path = Builder::new()
             .prefix("test_load_from_pd_hint_service")
@@ -2813,9 +3000,9 @@ pub mod tests {
     #[test]
     fn test_snapshot_load_reaching_stop_limit() {
         let mut config = InMemoryEngineConfig::config_for_test();
-        config.stop_load_limit_threshold = Some(ReadableSize(500));
-        config.soft_limit_threshold = Some(ReadableSize(1000));
-        config.hard_limit_threshold = Some(ReadableSize(1500));
+        config.stop_load_threshold = Some(ReadableSize(500));
+        config.evict_threshold = Some(ReadableSize(1000));
+        config.capacity = Some(ReadableSize(1500));
         let config = Arc::new(VersionTrack::new(config));
         let mut engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(config));
         let path = Builder::new()
@@ -2871,11 +3058,11 @@ pub mod tests {
     }
 
     #[test]
-    fn test_snapshot_load_reaching_hard_limit() {
+    fn test_snapshot_load_reaching_capacity() {
         let mut config = InMemoryEngineConfig::config_for_test();
-        config.stop_load_limit_threshold = Some(ReadableSize(1000));
-        config.soft_limit_threshold = Some(ReadableSize(1000));
-        config.hard_limit_threshold = Some(ReadableSize(1500));
+        config.stop_load_threshold = Some(ReadableSize(1000));
+        config.evict_threshold = Some(ReadableSize(1000));
+        config.capacity = Some(ReadableSize(1500));
         let config = Arc::new(VersionTrack::new(config));
         let mut engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(config));
         let path = Builder::new()
@@ -2911,7 +3098,7 @@ pub mod tests {
         rocks_engine.put_cf(CF_DEFAULT, &key, b"val").unwrap();
         rocks_engine.put_cf(CF_LOCK, &key, b"val").unwrap();
         rocks_engine.put_cf(CF_WRITE, &key, b"val").unwrap();
-        // 840*2 > hard limit 1500, so the load will fail and the loaded keys should be
+        // 840*2 > capacity 1500, so the load will fail and the loaded keys should be
         // removed
 
         let region3 = new_region(3, construct_region_key(5), construct_region_key(6));
@@ -2946,10 +3133,10 @@ pub mod tests {
     }
 
     #[test]
-    fn test_soft_hard_limit_change() {
+    fn test_memory_config_change() {
         let mut config = InMemoryEngineConfig::config_for_test();
-        config.soft_limit_threshold = Some(ReadableSize(1000));
-        config.hard_limit_threshold = Some(ReadableSize(1500));
+        config.evict_threshold = Some(ReadableSize(1000));
+        config.capacity = Some(ReadableSize(1500));
         let config = Arc::new(VersionTrack::new(config));
         let mut engine =
             RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(config.clone()));
@@ -2989,17 +3176,14 @@ pub mod tests {
         rocks_engine.put_cf(CF_DEFAULT, &key, b"val").unwrap();
         rocks_engine.put_cf(CF_LOCK, &key, b"val").unwrap();
         rocks_engine.put_cf(CF_WRITE, &key, b"val").unwrap();
-        // 840*2 > hard limit 1500, so the load will fail and the loaded keys should be
+        // 840*2 > capacity 1500, so the load will fail and the loaded keys should be
         // removed. However now we change the memory quota to 2000, so the range2 can be
         // cached.
-        let mut config_manager = RegionCacheConfigManager(config.clone());
+        let mut config_manager = InMemoryEngineConfigManager(config.clone());
         let mut config_change = ConfigChange::new();
-        config_change.insert(
-            String::from("hard_limit_threshold"),
-            ConfigValue::Size(2000),
-        );
+        config_change.insert(String::from("capacity"), ConfigValue::Size(2000));
         config_manager.dispatch(config_change).unwrap();
-        assert_eq!(config.value().hard_limit_threshold(), 2000);
+        assert_eq!(config.value().capacity(), 2000);
 
         let cache_region2 = CacheRegion::from_region(&region2);
         engine.load_region(cache_region2.clone()).unwrap();
@@ -3058,7 +3242,7 @@ pub mod tests {
         }
 
         let mut config = InMemoryEngineConfig::config_for_test();
-        config.gc_interval = ReadableDuration(Duration::from_millis(100));
+        config.gc_run_interval = ReadableDuration(Duration::from_millis(100));
         config.load_evict_interval = ReadableDuration(Duration::from_millis(200));
         let config = Arc::new(VersionTrack::new(config));
         let start_time = TimeStamp::compose(TimeStamp::physical_now(), 0);
@@ -3067,8 +3251,9 @@ pub mod tests {
         let (scheduler, mut rx) = dummy_scheduler();
         let (ticker, stop) = BgWorkManager::start_tick(scheduler, pd_client, config.clone());
 
-        let Some(BackgroundTask::Gc(GcTask { safe_point })) =
-            rx.recv_timeout(10 * config.value().gc_interval.0).unwrap()
+        let Some(BackgroundTask::Gc(GcTask { safe_point })) = rx
+            .recv_timeout(10 * config.value().gc_run_interval.0)
+            .unwrap()
         else {
             panic!("must be a GcTask");
         };

@@ -105,8 +105,6 @@ dependencies = [
  "log_wrappers",
  "match-template",
  "panic_hook",
- "thiserror",
- "tikv_alloc",
  "tikv_util",
  "txn_types",
 ]
@@ -169,8 +167,9 @@ dependencies = [
 
 [[package]]
 name = "async-speed-limit"
-version = "0.4.1"
-source = "git+https://github.com/tikv/async-speed-limit?branch=master#a113aef3cc24bf7fa5faf2b7025abaf02fc53fe3"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97c1688bb8e4eb3dcd68a8b0e5a81deae887c67362bb482a902b785e83ac2edc"
 dependencies = [
  "futures-core",
  "futures-io",
@@ -255,14 +254,8 @@ dependencies = [
  "fail",
  "futures 0.3.15",
  "futures-util",
- "grpcio",
- "http",
- "hyper",
- "hyper-tls",
  "kvproto",
- "lazy_static",
  "md5",
- "prometheus",
  "rusoto_core",
  "rusoto_credential",
  "rusoto_kms",
@@ -290,7 +283,6 @@ dependencies = [
  "azure_storage_blobs",
  "base64 0.13.0",
  "cloud",
- "fail",
  "futures 0.3.15",
  "futures-util",
  "kvproto",
@@ -449,27 +441,21 @@ dependencies = [
  "lazy_static",
  "log_wrappers",
  "online_config",
- "pd_client",
  "prometheus",
  "raft",
  "raftstore",
  "rand 0.8.5",
  "resource_control",
- "security",
- "serde",
- "serde_derive",
  "slog",
  "slog-global",
  "tempfile",
  "thiserror",
- "tidb_query_common",
  "tikv",
  "tikv_alloc",
  "tikv_util",
  "tokio",
  "tokio-stream",
  "txn_types",
- "yatp",
 ]
 
 [[package]]
@@ -478,12 +464,9 @@ version = "0.1.0"
 dependencies = [
  "async-compression",
  "async-trait",
- "bytes",
  "chrono",
  "concurrency_manager",
  "crc64fast",
- "crossbeam",
- "crossbeam-channel",
  "dashmap",
  "encryption",
  "encryption_export",
@@ -496,10 +479,8 @@ dependencies = [
  "fail",
  "file_system",
  "futures 0.3.15",
- "futures-io",
  "grpcio",
  "hex 0.4.2",
- "indexmap 1.6.2",
  "kvproto",
  "lazy_static",
  "log_wrappers",
@@ -513,9 +494,7 @@ dependencies = [
  "raft",
  "raftstore",
  "rand 0.8.5",
- "regex",
  "resolved_ts",
- "security",
  "slog",
  "slog-global",
  "tempdir",
@@ -527,7 +506,6 @@ dependencies = [
  "thiserror",
  "tidb_query_datatype",
  "tikv",
- "tikv_alloc",
  "tikv_kv",
  "tikv_util",
  "tokio",
@@ -539,7 +517,6 @@ dependencies = [
  "url",
  "uuid 0.8.2",
  "walkdir",
- "yatp",
 ]
 
 [[package]]
@@ -558,7 +535,6 @@ checksum = "a4a4ddaa51a5bc52a6948f74c06d20aaaddb71924eab79b8c97a8c556e942d6a"
 name = "batch-system"
 version = "0.1.0"
 dependencies = [
- "collections",
  "criterion",
  "crossbeam",
  "dashmap",
@@ -571,7 +547,6 @@ dependencies = [
  "prometheus",
  "resource_control",
  "serde",
- "serde_derive",
  "slog",
  "slog-global",
  "tikv_alloc",
@@ -794,30 +769,22 @@ checksum = "926013f2860c46252efceabb19f4a6b308197505082c609025aa6706c011d427"
 name = "causal_ts"
 version = "0.0.1"
 dependencies = [
- "api_version",
  "async-trait",
  "criterion",
- "engine_rocks",
- "engine_traits",
  "enum_dispatch",
  "error_code",
- "fail",
  "futures 0.3.15",
- "kvproto",
  "lazy_static",
- "log_wrappers",
  "parking_lot 0.12.1",
  "pd_client",
  "prometheus",
  "prometheus-static-metric",
- "raft",
  "serde",
  "serde_derive",
  "slog",
  "slog-global",
  "test_pd_client",
  "thiserror",
- "tikv_alloc",
  "tikv_util",
  "tokio",
  "txn_types",
@@ -848,7 +815,6 @@ dependencies = [
  "engine_traits",
  "fail",
  "futures 0.3.15",
- "futures-timer",
  "getset",
  "grpcio",
  "keys",
@@ -867,7 +833,6 @@ dependencies = [
  "semver 1.0.4",
  "slog",
  "slog-global",
- "tempfile",
  "test_pd_client",
  "test_raftstore",
  "test_util",
@@ -988,17 +953,16 @@ dependencies = [
  "async-trait",
  "derive_more",
  "error_code",
- "fail",
+ "futures 0.3.15",
  "futures-io",
  "kvproto",
  "lazy_static",
- "openssl",
  "prometheus",
  "protobuf",
- "rusoto_core",
  "thiserror",
  "tikv_util",
  "url",
+ "uuid 0.8.2",
 ]
 
 [[package]]
@@ -1271,7 +1235,6 @@ version = "0.1.3"
 dependencies = [
  "crossbeam-epoch",
  "crossbeam-utils",
- "rand 0.8.5",
 ]
 
 [[package]]
@@ -1295,7 +1258,6 @@ name = "crypto"
 version = "0.0.1"
 dependencies = [
  "openssl",
- "openssl-sys",
  "slog",
  "slog-global",
 ]
@@ -1470,12 +1432,10 @@ version = "0.0.1"
 dependencies = [
  "async-trait",
  "byteorder",
- "bytes",
  "cloud",
  "crc32fast",
  "crossbeam",
  "crypto",
- "derive_more",
  "error_code",
  "fail",
  "file_system",
@@ -1497,7 +1457,6 @@ dependencies = [
  "tempfile",
  "test_util",
  "thiserror",
- "tikv_alloc",
  "tikv_util",
  "tokio",
  "toml",
@@ -1508,17 +1467,13 @@ dependencies = [
 name = "encryption_export"
 version = "0.0.1"
 dependencies = [
- "async-trait",
  "aws",
  "azure",
  "cloud",
- "derive_more",
  "encryption",
- "error_code",
  "file_system",
  "gcp",
  "kvproto",
- "openssl",
  "protobuf",
  "rust-ini",
  "slog",
@@ -1535,8 +1490,6 @@ dependencies = [
  "engine_traits",
  "kvproto",
  "raft",
- "tikv_alloc",
- "tikv_util",
  "tracker",
  "txn_types",
 ]
@@ -1567,7 +1520,6 @@ dependencies = [
  "regex",
  "rocksdb",
  "serde",
- "serde_derive",
  "slog",
  "slog-global",
  "slog_derive",
@@ -1585,16 +1537,12 @@ name = "engine_rocks_helper"
 version = "0.1.0"
 dependencies = [
  "engine_rocks",
- "engine_test",
  "engine_traits",
  "fail",
- "futures 0.3.15",
  "keys",
  "kvproto",
  "lazy_static",
- "pd_client",
  "prometheus",
- "protobuf",
  "raftstore",
  "slog",
  "slog-global",
@@ -1606,7 +1554,6 @@ dependencies = [
 name = "engine_test"
 version = "0.0.1"
 dependencies = [
- "collections",
  "encryption",
  "engine_panic",
  "engine_rocks",
@@ -1614,8 +1561,6 @@ dependencies = [
  "file_system",
  "raft_log_engine",
  "tempfile",
- "tikv_alloc",
- "tikv_util",
 ]
 
 [[package]]
@@ -1629,35 +1574,17 @@ dependencies = [
  "file_system",
  "keys",
  "kvproto",
- "lazy_static",
  "log_wrappers",
  "protobuf",
  "raft",
  "serde",
- "serde_derive",
  "slog",
  "slog-global",
  "thiserror",
- "tikv_alloc",
  "tikv_util",
  "toml",
  "tracker",
  "txn_types",
-]
-
-[[package]]
-name = "engine_traits_tests"
-version = "0.0.1"
-dependencies = [
- "encryption",
- "encryption_export",
- "engine_test",
- "engine_traits",
- "kvproto",
- "panic_hook",
- "tempfile",
- "test_util",
- "tikv_alloc",
 ]
 
 [[package]]
@@ -1749,11 +1676,9 @@ dependencies = [
 name = "error_code"
 version = "0.0.1"
 dependencies = [
- "grpcio",
  "kvproto",
  "lazy_static",
  "raft",
- "serde",
  "tikv_alloc",
 ]
 
@@ -1778,9 +1703,9 @@ dependencies = [
  "async-trait",
  "aws",
  "azure",
+ "chrono",
  "cloud",
  "encryption",
- "engine_traits",
  "file_system",
  "futures 0.3.15",
  "futures-io",
@@ -1788,11 +1713,12 @@ dependencies = [
  "gcp",
  "kvproto",
  "lazy_static",
- "matches",
  "openssl",
  "prometheus",
  "rand 0.8.5",
  "rust-ini",
+ "serde",
+ "serde_json",
  "slog",
  "slog-global",
  "structopt",
@@ -1802,6 +1728,8 @@ dependencies = [
  "tokio",
  "tokio-util",
  "url",
+ "uuid 0.8.2",
+ "walkdir",
 ]
 
 [[package]]
@@ -1854,8 +1782,6 @@ dependencies = [
  "prometheus-static-metric",
  "rand 0.8.5",
  "serde",
- "slog",
- "slog-global",
  "strum 0.20.0",
  "tempfile",
  "thread_local",
@@ -2208,7 +2134,6 @@ dependencies = [
  "base64 0.13.0",
  "cloud",
  "crc32c",
- "crypto",
  "futures-util",
  "http",
  "hyper",
@@ -2401,7 +2326,6 @@ dependencies = [
  "ordered-float",
  "parking_lot 0.12.1",
  "prometheus",
- "prometheus-static-metric",
  "slog",
  "slog-global",
  "tikv_util",
@@ -2538,9 +2462,9 @@ dependencies = [
  "engine_traits",
  "fail",
  "in_memory_engine",
+ "keys",
  "kvproto",
  "lazy_static",
- "log_wrappers",
  "online_config",
  "prometheus",
  "prometheus-static-metric",
@@ -2661,14 +2585,12 @@ dependencies = [
  "rand 0.8.5",
  "security",
  "serde",
- "serde_derive",
  "serde_json",
  "slog",
  "slog-global",
  "strum 0.20.0",
  "tempfile",
  "test_pd",
- "test_pd_client",
  "test_util",
  "thiserror",
  "tikv_util",
@@ -2958,7 +2880,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#c92c467a3ab0b60484a0db83fcf89366791716cd"
+source = "git+https://github.com/tikv/rust-rocksdb.git#78b26b39bc179a0358ad0e5611b9d9934edabefd"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -2977,7 +2899,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#c92c467a3ab0b60484a0db83fcf89366791716cd"
+source = "git+https://github.com/tikv/rust-rocksdb.git#78b26b39bc179a0358ad0e5611b9d9934edabefd"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3547,7 +3469,6 @@ dependencies = [
  "chrono",
  "online_config_derive",
  "serde",
- "serde_derive",
  "toml",
 ]
 
@@ -3738,7 +3659,6 @@ dependencies = [
  "grpcio",
  "kvproto",
  "lazy_static",
- "log",
  "log_wrappers",
  "prometheus",
  "prometheus-static-metric",
@@ -4254,14 +4174,8 @@ dependencies = [
  "engine_traits",
  "file_system",
  "kvproto",
- "lazy_static",
- "num_cpus",
- "online_config",
- "protobuf",
  "raft",
  "raft-engine",
- "serde",
- "serde_derive",
  "slog",
  "slog-global",
  "tempfile",
@@ -4293,23 +4207,19 @@ dependencies = [
  "error_code",
  "fail",
  "file_system",
- "fs2",
  "futures 0.3.15",
  "futures-util",
  "getset",
- "grpcio-health",
  "health_controller",
  "into_other",
  "itertools",
  "keys",
  "kvproto",
  "lazy_static",
- "log",
  "log_wrappers",
  "memory_trace_macros",
  "online_config",
  "openssl",
- "ordered-float",
  "panic_hook",
  "parking_lot 0.12.1",
  "pd_client",
@@ -4330,7 +4240,6 @@ dependencies = [
  "smallvec",
  "sst_importer",
  "strum 0.20.0",
- "strum_macros 0.24.3",
  "tempfile",
  "test_sst_importer",
  "thiserror",
@@ -4362,7 +4271,6 @@ dependencies = [
  "error_code",
  "fail",
  "file_system",
- "fs2",
  "futures 0.3.15",
  "health_controller",
  "keys",
@@ -4381,7 +4289,6 @@ dependencies = [
  "service",
  "slog",
  "slog-global",
- "smallvec",
  "sst_importer",
  "tempfile",
  "test_pd",
@@ -4669,18 +4576,15 @@ version = "0.0.1"
 dependencies = [
  "collections",
  "concurrency_manager",
- "crossbeam",
  "engine_rocks",
  "engine_traits",
  "fail",
  "futures 0.3.15",
  "grpcio",
- "hex 0.4.2",
  "kvproto",
  "lazy_static",
  "log_wrappers",
  "online_config",
- "panic_hook",
  "pd_client",
  "prometheus",
  "protobuf",
@@ -4705,10 +4609,8 @@ dependencies = [
 name = "resource_control"
 version = "0.0.1"
 dependencies = [
- "byteorder",
  "collections",
  "crossbeam",
- "crossbeam-skiplist 0.1.3",
  "dashmap",
  "fail",
  "file_system",
@@ -4728,7 +4630,6 @@ dependencies = [
  "slog-global",
  "strum 0.20.0",
  "test_pd",
- "test_pd_client",
  "tikv_util",
  "tokio-timer",
  "yatp",
@@ -4744,12 +4645,9 @@ dependencies = [
  "grpcio",
  "kvproto",
  "lazy_static",
- "libc 0.2.151",
- "log",
  "online_config",
  "pdqselect",
  "pin-project",
- "procinfo",
  "prometheus",
  "rand 0.8.5",
  "serde",
@@ -4803,7 +4701,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#c92c467a3ab0b60484a0db83fcf89366791716cd"
+source = "git+https://github.com/tikv/rust-rocksdb.git#78b26b39bc179a0358ad0e5611b9d9934edabefd"
 dependencies = [
  "libc 0.2.151",
  "librocksdb_sys",
@@ -5073,13 +4971,10 @@ dependencies = [
  "collections",
  "encryption",
  "grpcio",
- "kvproto",
  "log_wrappers",
  "serde",
  "serde_derive",
- "serde_json",
  "tempfile",
- "tikv_util",
 ]
 
 [[package]]
@@ -5293,15 +5188,12 @@ dependencies = [
  "file_system",
  "futures 0.3.15",
  "grpcio",
- "grpcio-health",
  "health_controller",
- "hex 0.4.2",
  "hybrid_engine",
  "in_memory_engine",
  "keys",
  "kvproto",
  "libc 0.2.151",
- "log",
  "log_wrappers",
  "pd_client",
  "prometheus",
@@ -5325,8 +5217,6 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "tokio",
- "toml",
- "txn_types",
  "yatp",
 ]
 
@@ -5491,33 +5381,26 @@ name = "snap_recovery"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "encryption",
  "encryption_export",
  "engine_rocks",
  "engine_traits",
  "futures 0.3.15",
  "grpcio",
- "itertools",
  "keys",
  "kvproto",
  "lazy_static",
- "log",
  "pd_client",
  "prometheus",
  "prometheus-static-metric",
- "protobuf",
  "raft_log_engine",
  "raftstore",
  "slog",
  "slog-global",
- "structopt",
  "tempfile",
  "thiserror",
  "tikv",
- "tikv_alloc",
  "tikv_util",
  "tokio",
- "toml",
  "txn_types",
 ]
 
@@ -5691,19 +5574,6 @@ dependencies = [
  "heck 0.3.1",
  "proc-macro2",
  "quote",
- "syn 1.0.103",
-]
-
-[[package]]
-name = "strum_macros"
-version = "0.24.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e385be0d24f186b4ce2f9982191e7101bb737312ad61c1f2f984f34bcf85d59"
-dependencies = [
- "heck 0.4.1",
- "proc-macro2",
- "quote",
- "rustversion",
  "syn 1.0.103",
 ]
 
@@ -5891,12 +5761,10 @@ dependencies = [
  "api_version",
  "backup",
  "collections",
- "concurrency_manager",
  "crc64fast",
  "engine_rocks",
  "engine_traits",
  "external_storage",
- "file_system",
  "futures 0.3.15",
  "futures-executor",
  "futures-util",
@@ -5905,7 +5773,6 @@ dependencies = [
  "protobuf",
  "raftstore",
  "rand 0.8.5",
- "tempfile",
  "test_raftstore",
  "tidb_query_common",
  "tikv",
@@ -5917,11 +5784,9 @@ dependencies = [
 name = "test_coprocessor"
 version = "0.0.1"
 dependencies = [
- "api_version",
  "codec",
  "collections",
  "concurrency_manager",
- "engine_rocks",
  "futures 0.3.15",
  "kvproto",
  "pd_client",
@@ -5971,7 +5836,6 @@ dependencies = [
  "slog",
  "slog-global",
  "tikv_util",
- "tokio",
  "tokio-timer",
  "txn_types",
 ]
@@ -5988,14 +5852,12 @@ dependencies = [
  "crossbeam",
  "encryption_export",
  "engine_rocks",
- "engine_rocks_helper",
  "engine_test",
  "engine_traits",
  "fail",
  "file_system",
  "futures 0.3.15",
  "grpcio",
- "grpcio-health",
  "health_controller",
  "hybrid_engine",
  "in_memory_engine",
@@ -6022,7 +5884,6 @@ dependencies = [
  "tikv",
  "tikv_util",
  "tokio",
- "tokio-timer",
  "txn_types",
 ]
 
@@ -6031,17 +5892,13 @@ name = "test_raftstore-v2"
 version = "0.0.1"
 dependencies = [
  "api_version",
- "backtrace",
  "causal_ts",
  "collections",
  "concurrency_manager",
- "crossbeam",
  "encryption_export",
  "engine_rocks",
- "engine_rocks_helper",
  "engine_test",
  "engine_traits",
- "fail",
  "file_system",
  "futures 0.3.15",
  "grpcio",
@@ -6049,7 +5906,6 @@ dependencies = [
  "health_controller",
  "keys",
  "kvproto",
- "lazy_static",
  "log_wrappers",
  "pd_client",
  "protobuf",
@@ -6072,7 +5928,6 @@ dependencies = [
  "tikv",
  "tikv_util",
  "tokio",
- "tokio-timer",
  "txn_types",
 ]
 
@@ -6113,7 +5968,6 @@ dependencies = [
  "engine_traits",
  "futures 0.3.15",
  "kvproto",
- "pd_client",
  "raftstore",
  "test_raftstore",
  "tikv",
@@ -6153,7 +6007,6 @@ dependencies = [
  "batch-system",
  "byteorder",
  "causal_ts",
- "cdc",
  "collections",
  "concurrency_manager",
  "crc64fast",
@@ -6178,15 +6031,12 @@ dependencies = [
  "in_memory_engine",
  "keys",
  "kvproto",
- "libc 0.2.151",
  "log_wrappers",
  "more-asserts",
  "online_config",
- "panic_hook",
  "paste",
  "pd_client",
  "perfcnt",
- "procinfo",
  "profiler",
  "protobuf",
  "raft",
@@ -6203,7 +6053,6 @@ dependencies = [
  "service",
  "slog",
  "slog-global",
- "sst_importer",
  "tempfile",
  "test_backup",
  "test_coprocessor",
@@ -6215,11 +6064,9 @@ dependencies = [
  "test_sst_importer",
  "test_storage",
  "test_util",
- "tidb_query_aggr",
  "tidb_query_common",
  "tidb_query_datatype",
  "tidb_query_executors",
- "tidb_query_expr",
  "tikv",
  "tikv_kv",
  "tikv_util",
@@ -6309,7 +6156,6 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "api_version",
- "async-trait",
  "byteorder",
  "derive_more",
  "error_code",
@@ -6396,7 +6242,6 @@ dependencies = [
  "tikv_util",
  "tipb",
  "tipb_helper",
- "yatp",
 ]
 
 [[package]]
@@ -6445,8 +6290,6 @@ dependencies = [
  "async-stream",
  "async-trait",
  "backtrace",
- "batch-system",
- "byteorder",
  "causal_ts",
  "chrono",
  "codec",
@@ -6456,7 +6299,6 @@ dependencies = [
  "crc32fast",
  "crc64fast",
  "crossbeam",
- "crypto",
  "dashmap",
  "encryption",
  "encryption_export",
@@ -6464,7 +6306,6 @@ dependencies = [
  "engine_rocks",
  "engine_test",
  "engine_traits",
- "engine_traits_tests",
  "error_code",
  "example_coprocessor_plugin",
  "fail",
@@ -6486,7 +6327,6 @@ dependencies = [
  "hyper-openssl",
  "hyper-tls",
  "in_memory_engine",
- "into_other",
  "itertools",
  "keyed_priority_queue",
  "keys",
@@ -6497,7 +6337,6 @@ dependencies = [
  "log",
  "log_wrappers",
  "match-template",
- "memory_trace_macros",
  "mime",
  "more-asserts",
  "mur3",
@@ -6514,7 +6353,6 @@ dependencies = [
  "pin-project",
  "pnet_datalink",
  "pprof",
- "procinfo",
  "prometheus",
  "prometheus-static-metric",
  "protobuf",
@@ -6544,10 +6382,8 @@ dependencies = [
  "sync_wrapper",
  "sysinfo",
  "tempfile",
- "test_sst_importer",
  "test_util",
  "thiserror",
- "tidb_query_aggr",
  "tidb_query_common",
  "tidb_query_datatype",
  "tidb_query_executors",
@@ -6576,18 +6412,13 @@ name = "tikv-ctl"
 version = "0.0.1"
 dependencies = [
  "api_version",
- "backup",
  "cc",
- "cdc",
  "clap 2.33.0",
  "collections",
- "concurrency_manager",
- "crossbeam",
  "crypto",
  "encryption_export",
  "engine_rocks",
  "engine_traits",
- "error_code",
  "file_system",
  "futures 0.3.15",
  "gag",
@@ -6595,11 +6426,9 @@ dependencies = [
  "hex 0.4.2",
  "keys",
  "kvproto",
- "libc 0.2.151",
  "log",
  "log_wrappers",
  "pd_client",
- "prometheus",
  "protobuf",
  "raft",
  "raft-engine",
@@ -6610,13 +6439,10 @@ dependencies = [
  "security",
  "serde_json",
  "server",
- "signal-hook",
  "slog",
  "slog-global",
  "structopt",
- "tempfile",
  "tikv",
- "tikv_alloc",
  "tikv_util",
  "time 0.1.43",
  "tokio",
@@ -6663,12 +6489,6 @@ dependencies = [
  "cc",
  "clap 2.33.0",
  "crypto",
- "encryption_export",
- "engine_traits",
- "keys",
- "kvproto",
- "raft-engine",
- "regex",
  "serde_json",
  "server",
  "tikv",
@@ -6699,12 +6519,9 @@ dependencies = [
 name = "tikv_kv"
 version = "0.1.0"
 dependencies = [
- "backtrace",
  "collections",
- "encryption",
  "engine_panic",
  "engine_rocks",
- "engine_test",
  "engine_traits",
  "error_code",
  "fail",
@@ -6742,7 +6559,6 @@ dependencies = [
  "codec",
  "collections",
  "cpu-time",
- "crc32fast",
  "crossbeam",
  "crossbeam-skiplist 0.1.3",
  "derive_more",
@@ -6764,7 +6580,6 @@ dependencies = [
  "num-traits",
  "num_cpus",
  "online_config",
- "openssl",
  "page_size",
  "panic_hook",
  "parking_lot_core 0.9.1",
@@ -6796,7 +6611,6 @@ dependencies = [
  "toml",
  "tracker",
  "url",
- "utime",
  "yatp",
 ]
 
@@ -7049,7 +6863,6 @@ dependencies = [
 name = "tracker"
 version = "0.0.1"
 dependencies = [
- "collections",
  "crossbeam-utils",
  "kvproto",
  "lazy_static",
@@ -7183,17 +6996,6 @@ dependencies = [
  "matches",
  "percent-encoding",
  "serde",
-]
-
-[[package]]
-name = "utime"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "055058552ca15c566082fc61da433ae678f78986a6f16957e33162d1b218792a"
-dependencies = [
- "kernel32-sys",
- "libc 0.2.151",
- "winapi 0.2.8",
 ]
 
 [[package]]

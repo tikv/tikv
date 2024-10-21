@@ -11,8 +11,6 @@ futures = "0.3"
 grpcio = { workspace = true }
 kvproto = { workspace = true }
 lazy_static = "1.3"
-libc = "0.2"
-log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 online_config = { workspace = true }
 pdqselect = "0.1"
 pin-project = "1.0"
@@ -22,9 +20,6 @@ serde_derive = "1.0"
 slog = { workspace = true }
 slog-global = { workspace = true }
 tikv_util = { workspace = true }
-
-[target.'cfg(target_os = "linux")'.dependencies]
-procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "7693954bd1dd86eb1709572fd7b62fd5f7ff2ea1" }
 
 [dev-dependencies]
 rand = "0.8"
