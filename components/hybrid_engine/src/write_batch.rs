@@ -3,18 +3,19 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use engine_traits::{
-    is_data_cf, CacheRange, KvEngine, Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions,
+    is_data_cf, KvEngine, Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions,
 };
-use range_cache_memory_engine::{RangeCacheMemoryEngine, RangeCacheWriteBatch};
+use in_memory_engine::{RegionCacheMemoryEngine, RegionCacheWriteBatch};
+use kvproto::metapb;
 
 use crate::engine::HybridEngine;
 
 pub struct HybridEngineWriteBatch<EK: KvEngine> {
     disk_write_batch: EK::WriteBatch,
-    pub(crate) cache_write_batch: RangeCacheWriteBatch,
+    pub(crate) cache_write_batch: RegionCacheWriteBatch,
 }
 
-impl<EK> WriteBatchExt for HybridEngine<EK, RangeCacheMemoryEngine>
+impl<EK> WriteBatchExt for HybridEngine<EK, RegionCacheMemoryEngine>
 where
     EK: KvEngine,
 {
@@ -24,14 +25,14 @@ where
     fn write_batch(&self) -> Self::WriteBatch {
         HybridEngineWriteBatch {
             disk_write_batch: self.disk_engine().write_batch(),
-            cache_write_batch: self.range_cache_engine().write_batch(),
+            cache_write_batch: self.region_cache_engine().write_batch(),
         }
     }
 
     fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch {
         HybridEngineWriteBatch {
             disk_write_batch: self.disk_engine().write_batch_with_cap(cap),
-            cache_write_batch: self.range_cache_engine().write_batch_with_cap(cap),
+            cache_write_batch: self.region_cache_engine().write_batch_with_cap(cap),
         }
     }
 }
@@ -100,8 +101,8 @@ impl<EK: KvEngine> WriteBatch for HybridEngineWriteBatch<EK> {
         self.cache_write_batch.merge(other.cache_write_batch)
     }
 
-    fn prepare_for_range(&mut self, range: CacheRange) {
-        self.cache_write_batch.prepare_for_range(range);
+    fn prepare_for_region(&mut self, r: &metapb::Region) {
+        self.cache_write_batch.prepare_for_region(r);
     }
 }
 
@@ -152,69 +153,65 @@ mod tests {
     use std::time::Duration;
 
     use engine_traits::{
-        CacheRange, KvEngine, Mutable, Peekable, RangeCacheEngine, SnapshotContext, WriteBatch,
+        CacheRegion, Mutable, Peekable, RegionCacheEngine, SnapshotContext, WriteBatch,
         WriteBatchExt,
     };
-    use range_cache_memory_engine::{RangeCacheEngineConfig, RangeCacheStatus};
+    use in_memory_engine::{test_util::new_region, InMemoryEngineConfig, RegionCacheStatus};
 
     use crate::util::hybrid_engine_for_tests;
 
     #[test]
     fn test_write_to_both_engines() {
-        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
-        let range_clone = range.clone();
+        let region = new_region(1, b"", b"z");
+        let region_clone = region.clone();
         let (_path, hybrid_engine) = hybrid_engine_for_tests(
             "temp",
-            RangeCacheEngineConfig::config_for_test(),
+            InMemoryEngineConfig::config_for_test(),
             move |memory_engine| {
-                memory_engine.new_range(range_clone.clone());
-                {
-                    let mut core = memory_engine.core().write();
-                    core.mut_range_manager().set_safe_point(&range_clone, 5);
-                }
+                let id = region_clone.id;
+                memory_engine.new_region(region_clone);
+                memory_engine.core().region_manager().set_safe_point(id, 5);
             },
         )
         .unwrap();
+        let cache_region = CacheRegion::from_region(&region);
         let mut write_batch = hybrid_engine.write_batch();
-        write_batch.prepare_for_range(range.clone());
+        write_batch.prepare_for_region(&region);
         write_batch
             .cache_write_batch
-            .set_range_cache_status(RangeCacheStatus::Cached);
-        write_batch.put(b"hello", b"world").unwrap();
+            .set_region_cache_status(RegionCacheStatus::Cached);
+        write_batch.put(b"zhello", b"world").unwrap();
         let seq = write_batch.write().unwrap();
         assert!(seq > 0);
-        let actual: &[u8] = &hybrid_engine.get_value(b"hello").unwrap().unwrap();
+        let actual: &[u8] = &hybrid_engine.get_value(b"zhello").unwrap().unwrap();
         assert_eq!(b"world", &actual);
         let ctx = SnapshotContext {
-            range: Some(range.clone()),
+            region: Some(cache_region.clone()),
             read_ts: 10,
         };
-        let snap = hybrid_engine.snapshot(Some(ctx));
-        let actual: &[u8] = &snap.get_value(b"hello").unwrap().unwrap();
+        let snap = hybrid_engine.new_snapshot(Some(ctx));
+        let actual: &[u8] = &snap.get_value(b"zhello").unwrap().unwrap();
         assert_eq!(b"world", &actual);
-        let actual: &[u8] = &snap.disk_snap().get_value(b"hello").unwrap().unwrap();
+        let actual: &[u8] = &snap.disk_snap().get_value(b"zhello").unwrap().unwrap();
         assert_eq!(b"world", &actual);
         let actual: &[u8] = &snap
-            .range_cache_snap()
+            .region_cache_snap()
             .unwrap()
-            .get_value(b"hello")
+            .get_value(b"zhello")
             .unwrap()
             .unwrap();
         assert_eq!(b"world", &actual);
     }
 
     #[test]
-    fn test_range_cache_memory_engine() {
+    fn test_in_memory_engine() {
         let (_path, hybrid_engine) = hybrid_engine_for_tests(
             "temp",
-            RangeCacheEngineConfig::config_for_test(),
+            InMemoryEngineConfig::config_for_test(),
             |memory_engine| {
-                let range = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
-                memory_engine.new_range(range.clone());
-                {
-                    let mut core = memory_engine.core().write();
-                    core.mut_range_manager().set_safe_point(&range, 10);
-                }
+                let region = new_region(1, b"k00", b"k10");
+                memory_engine.new_region(region);
+                memory_engine.core().region_manager().set_safe_point(1, 10);
             },
         )
         .unwrap();
@@ -234,44 +231,45 @@ mod tests {
 
     #[test]
     fn test_delete_range() {
-        let range1 = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
-        let range2 = CacheRange::new(b"k20".to_vec(), b"k30".to_vec());
+        let region1 = new_region(1, b"k00", b"k10");
+        let region2 = new_region(2, b"k20", b"k30");
+        let cache_region1 = CacheRegion::from_region(&region1);
+        let cache_region2 = CacheRegion::from_region(&region2);
 
-        let range1_clone = range1.clone();
-        let range2_clone = range2.clone();
+        let region1_clone = region1.clone();
+        let region2_clone = region2.clone();
         let (_path, hybrid_engine) = hybrid_engine_for_tests(
             "temp",
-            RangeCacheEngineConfig::config_for_test(),
+            InMemoryEngineConfig::config_for_test(),
             move |memory_engine| {
-                memory_engine.new_range(range1_clone);
-                memory_engine.new_range(range2_clone);
+                memory_engine.new_region(region1_clone);
+                memory_engine.new_region(region2_clone);
             },
         )
         .unwrap();
 
         let mut wb = hybrid_engine.write_batch();
-        wb.prepare_for_range(range1.clone());
-        wb.put(b"k05", b"val").unwrap();
-        wb.put(b"k08", b"val2").unwrap();
-        wb.prepare_for_range(range2.clone());
-        wb.put(b"k25", b"val3").unwrap();
-        wb.put(b"k27", b"val4").unwrap();
+        wb.prepare_for_region(&region1);
+        wb.put(b"zk05", b"val").unwrap();
+        wb.put(b"zk08", b"val2").unwrap();
+        wb.prepare_for_region(&region2);
+        wb.put(b"zk25", b"val3").unwrap();
+        wb.put(b"zk27", b"val4").unwrap();
         wb.write().unwrap();
 
         hybrid_engine
-            .range_cache_engine()
-            .snapshot(range1.clone(), 1000, 1000)
+            .region_cache_engine()
+            .snapshot(cache_region1.clone(), 1000, 1000)
             .unwrap();
         hybrid_engine
-            .range_cache_engine()
-            .snapshot(range2.clone(), 1000, 1000)
+            .region_cache_engine()
+            .snapshot(cache_region2.clone(), 1000, 1000)
             .unwrap();
         assert_eq!(
             4,
             hybrid_engine
-                .range_cache_engine()
+                .region_cache_engine()
                 .core()
-                .read()
                 .engine()
                 .cf_handle("default")
                 .len()
@@ -279,33 +277,26 @@ mod tests {
 
         let mut wb = hybrid_engine.write_batch();
         // all ranges overlapped with it will be evicted
-        wb.delete_range(b"k05", b"k21").unwrap();
+        wb.prepare_for_region(&region1);
+        wb.delete_range(b"zk05", b"zk08").unwrap();
+        wb.prepare_for_region(&region2);
+        wb.delete_range(b"zk20", b"zk21").unwrap();
         wb.write().unwrap();
 
         hybrid_engine
-            .range_cache_engine()
-            .snapshot(range1, 1000, 1000)
+            .region_cache_engine()
+            .snapshot(cache_region1.clone(), 1000, 1000)
             .unwrap_err();
         hybrid_engine
-            .range_cache_engine()
-            .snapshot(range2, 1000, 1000)
+            .region_cache_engine()
+            .snapshot(cache_region2.clone(), 1000, 1000)
             .unwrap_err();
-        let m_engine = hybrid_engine.range_cache_engine();
+        let m_engine = hybrid_engine.region_cache_engine();
 
-        let mut times = 0;
-        while times < 10 {
-            if m_engine
-                .core()
-                .read()
-                .engine()
-                .cf_handle("default")
-                .is_empty()
-            {
-                return;
-            }
-            times += 1;
-            std::thread::sleep(Duration::from_millis(200));
-        }
-        panic!("data is not empty");
+        test_util::eventually(
+            Duration::from_millis(100),
+            Duration::from_millis(2000),
+            || m_engine.core().engine().cf_handle("default").is_empty(),
+        );
     }
 }

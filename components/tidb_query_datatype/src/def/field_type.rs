@@ -47,12 +47,14 @@ pub enum FieldTypeTp {
     VarString = 0xfd,
     String = 0xfe,
     Geometry = 0xff,
+    TiDbVectorFloat32 = 0xe1,
 }
 
 impl FieldTypeTp {
     pub fn from_i32(i: i32) -> Option<FieldTypeTp> {
         if (i >= FieldTypeTp::Unspecified as i32 && i <= FieldTypeTp::Bit as i32)
             || (i >= FieldTypeTp::Json as i32 && i <= FieldTypeTp::Geometry as i32)
+            || (i == FieldTypeTp::TiDbVectorFloat32 as i32)
         {
             Some(unsafe { ::std::mem::transmute::<i32, FieldTypeTp>(i) })
         } else {
@@ -115,6 +117,8 @@ pub enum Collation {
     Latin1Bin = -47,
     GbkBin = -87,
     GbkChineseCi = -28,
+    Gb18030ChineseCi = -248,
+    Gb18030Bin = -249,
 }
 
 impl Collation {
@@ -132,6 +136,8 @@ impl Collation {
             -224 | -192 => Ok(Collation::Utf8Mb4UnicodeCi),
             -87 => Ok(Collation::GbkBin),
             -28 => Ok(Collation::GbkChineseCi),
+            -248 => Ok(Collation::Gb18030ChineseCi),
+            -249 => Ok(Collation::Gb18030Bin),
             -255 => Ok(Collation::Utf8Mb40900AiCi),
             -309 => Ok(Collation::Utf8Mb40900Bin),
             n if n >= 0 => Ok(Collation::Utf8Mb4BinNoPadding),
@@ -161,6 +167,7 @@ pub enum Charset {
     Gbk,
     Binary,
     Ascii,
+    Gb18030,
 }
 
 impl Charset {
@@ -172,6 +179,7 @@ impl Charset {
             "gbk" => Ok(Charset::Gbk),
             "binary" => Ok(Charset::Binary),
             "ascii" => Ok(Charset::Ascii),
+            "gb18030" => Ok(Charset::Gb18030),
             _ => Err(DataTypeError::UnsupportedCharset {
                 name: String::from(name),
             }),
@@ -550,6 +558,8 @@ mod tests {
             (-224, Some(Collation::Utf8Mb4UnicodeCi)),
             (-28, Some(Collation::GbkChineseCi)),
             (-87, Some(Collation::GbkBin)),
+            (-248, Some(Collation::Gb18030ChineseCi)),
+            (-249, Some(Collation::Gb18030Bin)),
         ];
 
         for (collate, expected) in cases {
@@ -575,6 +585,7 @@ mod tests {
             ("binary", Some(Charset::Binary)),
             ("latin1", Some(Charset::Latin1)),
             ("ascii", Some(Charset::Ascii)),
+            ("gb18030", Some(Charset::Gb18030)),
             ("somethingwrong", None),
         ];
 

@@ -7,7 +7,7 @@ use std::{cell::RefCell, mem, sync::Arc};
 use collections::HashMap;
 use engine_traits::{PerfContext, PerfContextExt, PerfContextKind, PerfLevel};
 use kvproto::{kvrpcpb::KeyRange, metapb, pdpb::QueryKind};
-use pd_client::BucketMeta;
+use pd_client::{BucketMeta, RegionWriteCfCopDetail};
 use prometheus::*;
 use prometheus_static_metric::*;
 use raftstore::store::{util::build_key_range, ReadStats};
@@ -84,6 +84,11 @@ pub fn tls_collect_read_flow(
             end,
             &statistics.write.flow_stats,
             &statistics.data.flow_stats,
+            &RegionWriteCfCopDetail::new(
+                statistics.write.next,
+                statistics.write.prev,
+                statistics.write.processed_keys,
+            ),
         );
     });
 }
@@ -148,6 +153,7 @@ make_auto_flush_static_metric! {
         flashback_to_version_rollback_lock,
         flashback_to_version_write,
         flush,
+        update_txn_status_cache,
         raw_get,
         raw_batch_get,
         raw_scan,

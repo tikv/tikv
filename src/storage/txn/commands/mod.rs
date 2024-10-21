@@ -310,6 +310,7 @@ impl From<TxnHeartBeatRequest> for TypedCommand<TxnStatus> {
             Key::from_raw(req.get_primary_lock()),
             req.get_start_version().into(),
             req.get_advise_lock_ttl(),
+            req.get_min_commit_ts(),
             req.take_context(),
         )
     }
@@ -463,6 +464,35 @@ pub struct WriteResult {
     pub known_txn_status: Vec<(TimeStamp, TimeStamp)>,
 }
 
+impl WriteResult {
+    pub fn new(
+        ctx: Context,
+        to_be_write: WriteData,
+        rows: usize,
+        pr: ProcessResult,
+        lock_info: Vec<WriteResultLockInfo>,
+        released_locks: ReleasedLocks,
+        new_acquired_locks: Vec<LockInfo>,
+        lock_guards: Vec<KeyHandleGuard>,
+        response_policy: ResponsePolicy,
+        known_txn_status: Vec<(TimeStamp, TimeStamp)>,
+    ) -> Self {
+        Self {
+            ctx,
+            to_be_write,
+            rows,
+            pr,
+            lock_info,
+            released_locks,
+            new_acquired_locks,
+            lock_guards,
+            response_policy,
+            known_txn_status,
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct WriteResultLockInfo {
     pub lock_digest: lock_manager::LockDigest,
     pub key: Key,
@@ -504,7 +534,7 @@ impl WriteResultLockInfo {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct ReleasedLocks(Vec<ReleasedLock>);
 
 impl ReleasedLocks {
@@ -613,7 +643,7 @@ pub struct WriteContext<'a, L: LockManager> {
     pub async_apply_prewrite: bool,
     pub raw_ext: Option<RawExt>,
     // use for apiv2
-    pub txn_status_cache: &'a TxnStatusCache,
+    pub txn_status_cache: Arc<TxnStatusCache>,
 }
 
 pub struct ReaderWithStats<'a, S: Snapshot> {
@@ -901,7 +931,7 @@ pub mod test_util {
             statistics,
             async_apply_prewrite: false,
             raw_ext: None,
-            txn_status_cache: &TxnStatusCache::new_for_test(),
+            txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
         };
         let ret = cmd.cmd.process_write(snap, context)?;
         let res = match ret.pr {
@@ -1062,7 +1092,7 @@ pub mod test_util {
             statistics,
             async_apply_prewrite: false,
             raw_ext: None,
-            txn_status_cache: &TxnStatusCache::new_for_test(),
+            txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
         };
 
         let ret = cmd.cmd.process_write(snap, context)?;
@@ -1088,7 +1118,7 @@ pub mod test_util {
             statistics,
             async_apply_prewrite: false,
             raw_ext: None,
-            txn_status_cache: &TxnStatusCache::new_for_test(),
+            txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
         };
 
         let ret = cmd.cmd.process_write(snap, context)?;

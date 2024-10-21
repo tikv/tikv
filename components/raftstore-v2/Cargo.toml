@@ -37,7 +37,6 @@ engine_traits = { workspace = true }
 error_code = { workspace = true }
 fail = "0.5"
 file_system = { workspace = true }
-fs2 = "0.4"
 futures = { version = "0.3", features = ["compat"] }
 health_controller = { workspace = true }
 keys = { workspace = true }
@@ -55,7 +54,6 @@ resource_control = { workspace = true }
 resource_metering = { workspace = true }
 service = { workspace = true }
 slog = "2.3"
-smallvec = "1.4"
 sst_importer = { workspace = true }
 thiserror = "1.0"
 tikv_util = { workspace = true }

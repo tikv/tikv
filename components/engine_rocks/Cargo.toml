@@ -45,7 +45,6 @@ protobuf = "2"
 raft = { workspace = true }
 regex = "1"
 serde = "1.0"
-serde_derive = "1.0"
 slog = { workspace = true }
 slog-global = { workspace = true }
 slog_derive = "0.2"

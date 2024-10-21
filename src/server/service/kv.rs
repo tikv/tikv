@@ -28,8 +28,9 @@ use protobuf::RepeatedField;
 use raft::eraftpb::MessageType;
 use raftstore::{
     store::{
+        get_memory_usage_entry_cache,
         memory::{MEMTRACE_APPLYS, MEMTRACE_RAFT_ENTRIES, MEMTRACE_RAFT_MESSAGES},
-        metrics::{MESSAGE_RECV_BY_STORE, RAFT_ENTRIES_CACHES_GAUGE},
+        metrics::MESSAGE_RECV_BY_STORE,
         CheckLeaderTask,
     },
     Error as RaftStoreError, Result as RaftStoreResult,
@@ -81,7 +82,7 @@ pub struct Service<E: Engine, L: LockManager, F: KvFormat> {
     storage: Storage<E, L, F>,
     // For handling coprocessor requests.
     copr: Endpoint<E>,
-    // For handling corprocessor v2 requests.
+    // For handling coprocessor v2 requests.
     copr_v2: coprocessor_v2::Endpoint,
     // For handling snapshot.
     snap_scheduler: Scheduler<SnapTask>,
@@ -455,6 +456,13 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         future_buffer_batch_get,
         BufferBatchGetRequest,
         BufferBatchGetResponse
+    );
+
+    handle_request!(
+        broadcast_txn_status,
+        future_broadcast_txn_status,
+        BroadcastTxnStatusRequest,
+        BroadcastTxnStatusResponse
     );
 
     fn kv_import(&mut self, _: RpcContext<'_>, _: ImportRequest, _: UnarySink<ImportResponse>) {
@@ -1465,6 +1473,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
         RawCoprocessor, future_raw_coprocessor(copr_v2, storage), coprocessor;
         PessimisticLock, future_acquire_pessimistic_lock(storage), kv_pessimistic_lock;
         PessimisticRollback, future_pessimistic_rollback(storage), kv_pessimistic_rollback;
+        BroadcastTxnStatus, future_broadcast_txn_status(storage), broadcast_txn_status;
     }
 
     Ok(())
@@ -2265,6 +2274,26 @@ fn future_raw_coprocessor<E: Engine, L: LockManager, F: KvFormat>(
     async move { Ok(ret.await) }
 }
 
+fn future_broadcast_txn_status<E: Engine, L: LockManager, F: KvFormat>(
+    storage: &Storage<E, L, F>,
+    mut req: BroadcastTxnStatusRequest,
+) -> impl Future<Output = ServerResult<BroadcastTxnStatusResponse>> {
+    let (cb, f) = paired_future_callback();
+    let res = storage.update_txn_status_cache(
+        req.take_context(),
+        req.take_txn_status().into_iter().collect(),
+        cb,
+    );
+
+    async move {
+        let _ = match res {
+            Err(e) => Err(e),
+            Ok(_) => f.await?,
+        };
+        Ok(BroadcastTxnStatusResponse::default())
+    }
+}
+
 macro_rules! txn_command_future {
     ($fn_name: ident, $req_ty: ident, $resp_ty: ident, ($req: ident) {$($prelude: stmt)*}; ($v: ident, $resp: ident, $tracker: ident) $else_branch: block) => {
         txn_command_future!(inner $fn_name, $req_ty, $resp_ty, ($req) {$($prelude)*}; ($v, $resp, $tracker) {
@@ -2567,7 +2596,7 @@ fn needs_reject_raft_append(reject_messages_on_memory_ratio: f64) -> bool {
     let mut usage = 0;
     if memory_usage_reaches_high_water(&mut usage) {
         let raft_msg_usage = (MEMTRACE_RAFT_ENTRIES.sum() + MEMTRACE_RAFT_MESSAGES.sum()) as u64;
-        let cached_entries = RAFT_ENTRIES_CACHES_GAUGE.get() as u64;
+        let cached_entries = get_memory_usage_entry_cache();
         let applying_entries = MEMTRACE_APPLYS.sum() as u64;
         if (raft_msg_usage + cached_entries + applying_entries) as f64
             > usage as f64 * reject_messages_on_memory_ratio

@@ -43,6 +43,7 @@ use file_system::{get_io_rate_limiter, BytesFetcher, MetricsManager as IOMetrics
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
 use health_controller::HealthController;
+use in_memory_engine::InMemoryEngineStatistics;
 use kvproto::{
     debugpb::create_debug, diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
 };
@@ -62,7 +63,6 @@ use raftstore::{
         SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
     },
 };
-use range_cache_memory_engine::{RangeCacheEngineContext, RangeCacheMemoryEngineStatistics};
 use resource_control::{
     ResourceGroupManager, ResourceManagerService, MIN_PRIORITY_UPDATE_INTERVAL,
 };
@@ -94,13 +94,16 @@ use tikv::{
         self,
         config_manager::StorageConfigManger,
         kv::LocalTablets,
-        txn::flow_controller::{EngineFlowController, FlowController},
+        txn::{
+            flow_controller::{EngineFlowController, FlowController},
+            txn_status_cache::TxnStatusCache,
+        },
         Engine, Storage,
     },
 };
 use tikv_util::{
     check_environment_variables,
-    config::{ensure_dir_exist, ReadableDuration, VersionTrack},
+    config::{ensure_dir_exist, ReadableDuration, ReadableSize, VersionTrack},
     error,
     quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
     sys::{disk, register_memory_usage_high_water, thread::ThreadBuildWrapper, SysQuota},
@@ -475,6 +478,29 @@ impl<CER: ConfiguredRaftEngine, F: KvFormat> TiKvServer<CER, F> {
         );
         self.raft_statistics = raft_statistics;
 
+        // Region stats manager collects region heartbeat for use by in-memory engine.
+        let region_stats_manager_enabled_cb: Arc<dyn Fn() -> bool + Send + Sync> =
+            if cfg!(feature = "memory-engine") {
+                let cfg_controller_clone = self.cfg_controller.clone().unwrap();
+                Arc::new(move || cfg_controller_clone.get_current().in_memory_engine.enable)
+            } else {
+                Arc::new(|| false)
+            };
+
+        let in_memory_engine_config = self.core.config.in_memory_engine.clone();
+        let in_memory_engine_config = Arc::new(VersionTrack::new(in_memory_engine_config));
+        let in_memory_engine_config_clone = in_memory_engine_config.clone();
+        let region_info_accessor = RegionInfoAccessor::new(
+            self.coprocessor_host.as_mut().unwrap(),
+            region_stats_manager_enabled_cb,
+            Box::new(move || {
+                in_memory_engine_config_clone
+                    .value()
+                    .mvcc_amplification_threshold
+            }),
+        );
+        self.region_info_accessor = Some(region_info_accessor);
+
         match raft_engine.as_ps_engine() {
             None => {}
             Some(ps_engine) => {
@@ -486,7 +512,7 @@ impl<CER: ConfiguredRaftEngine, F: KvFormat> TiKvServer<CER, F> {
         let builder = KvEngineFactoryBuilder::new(env, &self.core.config, block_cache, self.core.encryption_key_manager.clone())
             // TODO(tiflash) check if we need a old version of RocksEngine, or if we need to upgrade
             // .compaction_filter_router(self.router.clone())
-            .region_info_accessor(self.region_info_accessor.clone())
+            .region_info_accessor(self.region_info_accessor.clone().unwrap())
             .sst_recovery_sender(self.init_sst_recovery_sender())
             .flow_listener(flow_listener);
         let factory = Box::new(builder.build());
@@ -494,14 +520,7 @@ impl<CER: ConfiguredRaftEngine, F: KvFormat> TiKvServer<CER, F> {
             .create_shared_db(&self.core.store_path)
             .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
 
-        let range_cache_engine_config = Arc::new(VersionTrack::new(
-            self.core.config.range_cache_engine.clone(),
-        ));
-        let range_cache_engine_context =
-            RangeCacheEngineContext::new(range_cache_engine_config.clone(), self.pd_client.clone());
-        let range_cache_engine_statistics = range_cache_engine_context.statistics();
         self.kv_statistics = Some(factory.rocks_statistics());
-        self.range_cache_engine_statistics = Some(range_cache_engine_statistics);
 
         let helper =
             engine_store_ffi::ffi::gen_engine_store_server_helper(engine_store_server_helper);
@@ -571,10 +590,10 @@ struct TiKvServer<ER: RaftEngine, F: KvFormat> {
     snap_mgr: Option<SnapManager>, // Will be filled in `init_servers`.
     engines: Option<TiKvEngines<TiFlashEngine, ER>>,
     kv_statistics: Option<Arc<RocksStatistics>>,
-    range_cache_engine_statistics: Option<Arc<RangeCacheMemoryEngineStatistics>>,
+    in_memory_engine_statistics: Option<Arc<InMemoryEngineStatistics>>,
     raft_statistics: Option<Arc<RocksStatistics>>,
     servers: Option<Servers<TiFlashEngine, ER, F>>,
-    region_info_accessor: RegionInfoAccessor,
+    region_info_accessor: Option<RegionInfoAccessor>,
     coprocessor_host: Option<CoprocessorHost<TiFlashEngine>>,
     concurrency_manager: ConcurrencyManager,
     env: Arc<Environment>,
@@ -689,24 +708,6 @@ impl<ER: RaftEngine, F: KvFormat> TiKvServer<ER, F> {
             config.coprocessor.clone(),
         ));
 
-        // Region stats manager collects region heartbeat for use by in-memory engine.
-        let region_stats_manager_enabled_cb: Arc<dyn Fn() -> bool + Send + Sync> =
-            if cfg!(feature = "memory-engine") {
-                let cfg_controller_clone = cfg_controller.clone();
-                Arc::new(move || {
-                    cfg_controller_clone
-                        .get_current()
-                        .range_cache_engine
-                        .enabled
-                })
-            } else {
-                Arc::new(|| false)
-            };
-        let region_info_accessor = RegionInfoAccessor::new(
-            coprocessor_host.as_mut().unwrap(),
-            region_stats_manager_enabled_cb,
-        );
-
         // Initialize concurrency manager
         let latest_ts = block_on(pd_client.get_tso()).expect("failed to get timestamp from PD");
         let concurrency_manager = ConcurrencyManager::new(latest_ts);
@@ -745,10 +746,10 @@ impl<ER: RaftEngine, F: KvFormat> TiKvServer<ER, F> {
             snap_mgr: None,
             engines: None,
             kv_statistics: None,
-            range_cache_engine_statistics: None,
+            in_memory_engine_statistics: None,
             raft_statistics: None,
             servers: None,
-            region_info_accessor,
+            region_info_accessor: None,
             coprocessor_host,
             concurrency_manager,
             env,
@@ -815,10 +816,11 @@ impl<ER: RaftEngine, F: KvFormat> TiKvServer<ER, F> {
                     engines.kv.clone(),
                     StoreMetaDelegate::new(store_meta.clone(), engines.kv.clone()),
                     self.router.clone(),
+                    self.coprocessor_host.as_ref().unwrap().clone(),
                 ),
             ),
             engines.kv.clone(),
-            self.region_info_accessor.region_leaders(),
+            self.region_info_accessor.as_ref().unwrap().region_leaders(),
         );
 
         self.engines = Some(TiKvEngines {
@@ -837,7 +839,7 @@ impl<ER: RaftEngine, F: KvFormat> TiKvServer<ER, F> {
             self.core.flow_info_sender.take().unwrap(),
             self.core.config.gc.clone(),
             self.pd_client.feature_gate().clone(),
-            Arc::new(self.region_info_accessor.clone()),
+            Arc::new(self.region_info_accessor.clone().unwrap()),
         );
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
@@ -992,8 +994,14 @@ impl<ER: RaftEngine, F: KvFormat> TiKvServer<ER, F> {
             wake_up_delay_duration_ms: Arc::new(AtomicU64::new(
                 ReadableDuration::millis(20).as_millis(),
             )),
+            // See from_engine_and_lock_mgr
+            in_memory_peer_size_limit: Arc::new(AtomicU64::new(512 << 10)),
+            in_memory_instance_size_limit: Arc::new(AtomicU64::new(100 << 20)),
         };
 
+        let txn_status_cache = Arc::new(TxnStatusCache::new(
+            self.core.config.storage.txn_status_cache_capacity,
+        ));
         let storage = Storage::<_, _, F>::from_engine(
             engines.engine.clone(),
             &self.core.config.storage,
@@ -1011,6 +1019,7 @@ impl<ER: RaftEngine, F: KvFormat> TiKvServer<ER, F> {
                 .as_ref()
                 .map(|m| m.derive_controller("scheduler-worker-pool".to_owned(), true)),
             self.resource_manager.clone(),
+            txn_status_cache.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create raft storage: {}", e));
 
@@ -1372,14 +1381,17 @@ impl<ER: RaftEngine, F: KvFormat> TiKvServer<ER, F> {
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
 
         gc_worker
-            .start(node.id())
+            .start(node.id(), self.coprocessor_host.as_ref().cloned().unwrap())
             .unwrap_or_else(|e| fatal!("failed to start gc worker: {}", e));
+        // if let Err(e) = gc_worker.start_auto_gc(auto_gc_config, safe_point) {
+        //     fatal!("failed to start auto_gc on storage, error: {}", e);
+        // }
 
         initial_metric(&self.core.config.metric);
         if self.core.config.storage.enable_ttl {
             ttl_checker.start_with_timer(TtlChecker::new(
                 self.engines.as_ref().unwrap().engine.kv_engine().unwrap(),
-                self.region_info_accessor.clone(),
+                self.region_info_accessor.clone().unwrap(),
                 self.core.config.storage.ttl_check_poll_interval.into(),
             ));
             self.core.to_stop.push(ttl_checker);
@@ -1430,7 +1442,7 @@ impl<ER: RaftEngine, F: KvFormat> TiKvServer<ER, F> {
             servers.importer.clone(),
             None,
             self.resource_manager.clone(),
-            Arc::new(self.region_info_accessor.clone()),
+            Arc::new(self.region_info_accessor.clone().unwrap()),
         );
 
         if servers
@@ -1483,7 +1495,7 @@ impl<ER: RaftEngine, F: KvFormat> TiKvServer<ER, F> {
         let mut engine_metrics = EngineMetricsManager::<RocksEngine, ER>::new(
             self.tablet_registry.clone().unwrap(),
             self.kv_statistics.clone(),
-            self.range_cache_engine_statistics.clone(),
+            self.in_memory_engine_statistics.clone(),
             self.core.config.rocksdb.titan.enabled.map_or(false, |v| v),
             self.engines.as_ref().unwrap().engines.raft.clone(),
             self.raft_statistics.clone(),
@@ -1664,7 +1676,7 @@ impl<ER: RaftEngine, F: KvFormat> TiKvServer<ER, F> {
             .unwrap_or_else(|e| fatal!("failed to stop server: {}", e));
 
         servers.node.stop();
-        self.region_info_accessor.stop();
+        self.region_info_accessor.as_ref().unwrap().stop();
 
         servers.lock_mgr.stop();
 

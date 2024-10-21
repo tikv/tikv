@@ -146,13 +146,13 @@ fn test_ingest_sst() {
     );
     must_ingest_sst(&import, ctx.clone(), meta.clone());
 
-    for _ in 0..10 {
+    for _ in 0..50 {
         let region_keys = cluster
             .pd_client
             .get_region_approximate_keys(ctx.get_region_id())
             .unwrap_or_default();
         if region_keys != 255 {
-            std::thread::sleep(std::time::Duration::from_millis(50));
+            std::thread::sleep(std::time::Duration::from_millis(10));
             continue;
         }
 

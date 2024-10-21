@@ -126,8 +126,8 @@ impl RocksEngine {
 impl KvEngine for RocksEngine {
     type Snapshot = RocksSnapshot;
 
-    fn snapshot(&self, x: Option<SnapshotContext>) -> RocksSnapshot {
-        self.rocks.snapshot(x)
+    fn snapshot(&self) -> RocksSnapshot {
+        self.rocks.snapshot()
     }
 
     fn sync(&self) -> Result<()> {

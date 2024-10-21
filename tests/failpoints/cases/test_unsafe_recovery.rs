@@ -2,7 +2,7 @@
 
 use std::{iter::FromIterator, sync::Arc, time::Duration};
 
-use engine_traits::{RaftEngineReadOnly, CF_RAFT};
+use engine_traits::{Peekable, RaftEngineReadOnly, CF_RAFT};
 use futures::executor::block_on;
 use kvproto::{
     metapb, pdpb,
@@ -583,10 +583,7 @@ fn test_unsafe_recovery_apply_before_persist() {
         cluster.must_put(format!("k{}", i).as_bytes(), b"v2");
     }
 
-    fn get_applied_index<EK: KvEngineWithRocks, T: Simulator<EK>>(
-        cluster: &Cluster<EK, T>,
-        store_id: u64,
-    ) -> u64 {
+    fn get_applied_index<T: Simulator>(cluster: &Cluster<T>, store_id: u64) -> u64 {
         let state: RaftApplyState = cluster.engines[&store_id]
             .kv
             .get_msg_cf(CF_RAFT, &keys::apply_state_key(1))

@@ -2,11 +2,8 @@
 
 // #[PerformanceCriticalPath]
 use std::{
-    cmp::PartialOrd,
-    collections::VecDeque,
-    ops::{Add, AddAssign, Sub, SubAssign},
     sync::{
-        atomic::{AtomicBool, AtomicU32, Ordering},
+        atomic::{AtomicU32, Ordering},
         mpsc::{self, Receiver, RecvTimeoutError, SyncSender},
         Arc,
     },
@@ -19,9 +16,11 @@ use collections::HashMap;
 use engine_rocks::FlowInfo;
 use engine_traits::{CfNamesExt, FlowControlFactorsExt};
 use getset::{CopyGetters, Setters};
-use num_traits::cast::{AsPrimitive, FromPrimitive};
+use online_config::{ConfigChange, OnlineConfig};
 use rand::Rng;
 use tikv_util::{
+    config::VersionTrack,
+    smoother::{Smoother, Trend, SMOOTHER_STALE_RECORD_THRESHOLD, SMOOTHER_TIME_RANGE_THRESHOLD},
     sys::thread::StdThreadBuildWrapper,
     time::{Instant, Limiter},
 };
@@ -37,13 +36,6 @@ const MIN_THROTTLE_SPEED: f64 = 16.0 * 1024.0; // 16KB
 const MAX_THROTTLE_SPEED: f64 = 200.0 * 1024.0 * 1024.0; // 200MB
 
 const EMA_FACTOR: f64 = 0.6; // EMA stands for Exponential Moving Average
-
-#[derive(PartialEq, Debug)]
-enum Trend {
-    Increasing,
-    Decreasing,
-    NoTrend,
-}
 
 /// Flow controller is used to throttle the write rate at scheduler level,
 /// aiming to substitute the write stall mechanism of RocksDB. It features in
@@ -74,9 +66,9 @@ enum Trend {
 pub struct EngineFlowController {
     discard_ratio: Arc<AtomicU32>,
     limiter: Arc<Limiter>,
-    enabled: Arc<AtomicBool>,
     tx: Option<SyncSender<Msg>>,
     handle: Option<std::thread::JoinHandle<()>>,
+    config_tracker: Arc<VersionTrack<FlowControlConfig>>,
 }
 
 pub(super) enum Msg {
@@ -109,9 +101,9 @@ impl EngineFlowController {
         Self {
             discard_ratio: Arc::new(AtomicU32::new(0)),
             limiter: Arc::new(Limiter::new(f64::INFINITY)),
-            enabled: Arc::new(AtomicBool::new(false)),
             tx: None,
             handle: None,
+            config_tracker: Arc::new(VersionTrack::default()),
         }
     }
 
@@ -126,22 +118,21 @@ impl EngineFlowController {
                 .build(),
         );
         let discard_ratio = Arc::new(AtomicU32::new(0));
-        let checker = FlowChecker::new(config, engine, discard_ratio.clone(), limiter.clone());
+        let config_tracker = Arc::new(VersionTrack::new(config.clone()));
+        let checker = FlowChecker::new(
+            config_tracker.clone(),
+            engine,
+            discard_ratio.clone(),
+            limiter.clone(),
+        );
         let (tx, rx) = mpsc::sync_channel(5);
-
-        tx.send(if config.enable {
-            Msg::Enable
-        } else {
-            Msg::Disable
-        })
-        .unwrap();
 
         Self {
             discard_ratio,
             limiter,
-            enabled: Arc::new(AtomicBool::new(config.enable)),
             tx: Some(tx),
             handle: Some(checker.start(rx, flow_info_receiver)),
+            config_tracker,
         }
     }
 }
@@ -172,7 +163,6 @@ impl EngineFlowController {
     }
 
     pub fn enable(&self, enable: bool) {
-        self.enabled.store(enable, Ordering::Relaxed);
         if let Some(tx) = &self.tx {
             if enable {
                 tx.send(Msg::Enable).unwrap();
@@ -183,7 +173,11 @@ impl EngineFlowController {
     }
 
     pub fn enabled(&self) -> bool {
-        self.enabled.load(Ordering::Relaxed)
+        self.config_tracker.value().enable
+    }
+
+    pub fn update_config(&self, config_change: ConfigChange) -> online_config::Result<()> {
+        self.config_tracker.update(|cfg| cfg.update(config_change))
     }
 
     #[cfg(test)]
@@ -193,179 +187,6 @@ impl EngineFlowController {
 
     pub fn is_unlimited(&self, _region_id: u64) -> bool {
         self.limiter.speed_limit() == f64::INFINITY
-    }
-}
-
-const SMOOTHER_STALE_RECORD_THRESHOLD: u64 = 300; // 5min
-const SMOOTHER_TIME_RANGE_THRESHOLD: u64 = 60; // 1min
-
-// Smoother is a sliding window used to provide steadier flow statistics.
-struct Smoother<T, const CAP: usize, const STALE_DUR: u64, const MIN_TIME_SPAN: u64>
-where
-    T: Default
-        + Add<Output = T>
-        + Sub<Output = T>
-        + AddAssign
-        + SubAssign
-        + PartialOrd
-        + AsPrimitive<f64>
-        + FromPrimitive,
-{
-    records: VecDeque<(T, Instant)>,
-    total: T,
-}
-
-impl<T, const CAP: usize, const STALE_DUR: u64, const MIN_TIME_SPAN: u64> Default
-    for Smoother<T, CAP, STALE_DUR, MIN_TIME_SPAN>
-where
-    T: Default
-        + Add<Output = T>
-        + Sub<Output = T>
-        + AddAssign
-        + SubAssign
-        + PartialOrd
-        + AsPrimitive<f64>
-        + FromPrimitive,
-{
-    fn default() -> Self {
-        Self {
-            records: VecDeque::with_capacity(CAP),
-            total: Default::default(),
-        }
-    }
-}
-
-impl<T, const CAP: usize, const STALE_DUR: u64, const MIN_TIME_SPAN: u64>
-    Smoother<T, CAP, STALE_DUR, MIN_TIME_SPAN>
-where
-    T: Default
-        + Add<Output = T>
-        + Sub<Output = T>
-        + AddAssign
-        + SubAssign
-        + PartialOrd
-        + AsPrimitive<f64>
-        + FromPrimitive,
-{
-    pub fn observe(&mut self, record: T) {
-        self.observe_with_time(record, Instant::now_coarse());
-    }
-
-    pub fn observe_with_time(&mut self, record: T, time: Instant) {
-        if self.records.len() == CAP {
-            let v = self.records.pop_front().unwrap().0;
-            self.total -= v;
-        }
-
-        self.total += record;
-
-        self.records.push_back((record, time));
-        self.remove_stale_records();
-    }
-
-    fn remove_stale_records(&mut self) {
-        // make sure there are two records left at least
-        while self.records.len() > 2 {
-            if self.records.front().unwrap().1.saturating_elapsed_secs() > STALE_DUR as f64 {
-                let v = self.records.pop_front().unwrap().0;
-                self.total -= v;
-            } else {
-                break;
-            }
-        }
-    }
-
-    pub fn get_recent(&self) -> T {
-        if self.records.is_empty() {
-            return T::default();
-        }
-        self.records.back().unwrap().0
-    }
-
-    pub fn get_avg(&self) -> f64 {
-        if self.records.is_empty() {
-            return 0.0;
-        }
-        self.total.as_() / self.records.len() as f64
-    }
-
-    pub fn get_max(&self) -> T {
-        if self.records.is_empty() {
-            return T::default();
-        }
-        self.records
-            .iter()
-            .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap())
-            .unwrap()
-            .0
-    }
-
-    pub fn get_percentile_90(&mut self) -> T {
-        if self.records.is_empty() {
-            return FromPrimitive::from_u64(0).unwrap();
-        }
-        let mut v: Vec<_> = self.records.iter().collect();
-        v.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-        v[((self.records.len() - 1) as f64 * 0.90) as usize].0
-    }
-
-    pub fn trend(&self) -> Trend {
-        if self.records.len() <= 1 {
-            return Trend::NoTrend;
-        }
-
-        // If the lastest record is too old, no trend
-        if self.records.back().unwrap().1.saturating_elapsed_secs() > STALE_DUR as f64 {
-            return Trend::NoTrend;
-        }
-
-        let (mut left, mut left_cnt) = (T::default(), 0);
-        let (mut right, mut right_cnt) = (T::default(), 0);
-
-        // The time span matters
-        if MIN_TIME_SPAN > 0 {
-            // If the records doesn't cover a enough time span, no trend
-            let time_span = self.records.front().unwrap().1.saturating_elapsed_secs()
-                - self.records.back().unwrap().1.saturating_elapsed_secs();
-            if time_span < MIN_TIME_SPAN as f64 {
-                return Trend::NoTrend;
-            }
-
-            // Split the record into left and right by the middle of time range
-            for r in self.records.iter() {
-                let elapsed_secs = r.1.saturating_elapsed_secs();
-                if elapsed_secs > time_span / 2.0 {
-                    left += r.0;
-                    left_cnt += 1;
-                } else {
-                    right += r.0;
-                    right_cnt += 1;
-                }
-            }
-        } else {
-            let half = self.records.len() / 2;
-            for (i, r) in self.records.iter().enumerate() {
-                if i < half {
-                    left += r.0;
-                    left_cnt += 1;
-                } else {
-                    right += r.0;
-                    right_cnt += 1;
-                }
-            }
-        }
-
-        // Decide if there is a trend by the two averages.
-        // Adding 2 here is to give a tolerance
-        let (l_avg, r_avg) = (left.as_() / left_cnt as f64, right.as_() / right_cnt as f64);
-        if r_avg > l_avg + 2.0 {
-            return Trend::Increasing;
-        }
-        if l_avg > r_avg + 2.0 {
-            return Trend::Decreasing;
-        }
-
-        Trend::NoTrend
     }
 }
 
@@ -489,10 +310,7 @@ impl<E: FlowControlFactorsExt + CfNamesExt> FlowControlFactorStore for E {
 
 #[derive(CopyGetters, Setters)]
 pub(super) struct FlowChecker<E: FlowControlFactorStore + Send + 'static> {
-    pub soft_pending_compaction_bytes_limit: u64,
-    hard_pending_compaction_bytes_limit: u64,
-    memtables_threshold: u64,
-    l0_files_threshold: u64,
+    config_tracker: Arc<VersionTrack<FlowControlConfig>>,
 
     // CfFlowChecker for each CF.
     cf_checkers: HashMap<String, CfFlowChecker>,
@@ -520,7 +338,7 @@ pub(super) struct FlowChecker<E: FlowControlFactorStore + Send + 'static> {
 
 impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
     pub fn new(
-        config: &FlowControlConfig,
+        config: Arc<VersionTrack<FlowControlConfig>>,
         engine: E,
         discard_ratio: Arc<AtomicU32>,
         limiter: Arc<Limiter>,
@@ -530,7 +348,7 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
 
     pub fn new_with_region_id(
         region_id: u64,
-        config: &FlowControlConfig,
+        config_tracker: Arc<VersionTrack<FlowControlConfig>>,
         engine: E,
         discard_ratio: Arc<AtomicU32>,
         limiter: Arc<Limiter>,
@@ -544,10 +362,7 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
 
         Self {
             region_id,
-            soft_pending_compaction_bytes_limit: config.soft_pending_compaction_bytes_limit.0,
-            hard_pending_compaction_bytes_limit: config.hard_pending_compaction_bytes_limit.0,
-            memtables_threshold: config.memtables_threshold,
-            l0_files_threshold: config.l0_files_threshold,
+            config_tracker,
             engine,
             discard_ratio,
             limiter,
@@ -561,15 +376,12 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
         }
     }
 
-    pub fn on_flow_info_msg(
-        &mut self,
-        enabled: bool,
-        flow_info: Result<FlowInfo, RecvTimeoutError>,
-    ) {
+    pub fn on_flow_info_msg(&mut self, flow_info: Result<FlowInfo, RecvTimeoutError>) {
+        let current_cfg = self.config_tracker.value().clone();
         match flow_info {
             Ok(FlowInfo::L0(cf, l0_bytes, ..)) => {
                 self.collect_l0_consumption_stats(&cf, l0_bytes);
-                if enabled {
+                if current_cfg.enable {
                     self.on_l0_change(cf)
                 }
             }
@@ -577,48 +389,59 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
                 if diff_bytes > 0 {
                     // Intra L0 merges some deletion records, so regard it as a L0 compaction.
                     self.collect_l0_consumption_stats(&cf, diff_bytes);
-                    if enabled {
+                    if current_cfg.enable {
                         self.on_l0_change(cf);
                     }
                 }
             }
             Ok(FlowInfo::Flush(cf, flush_bytes, ..)) => {
                 self.collect_l0_production_stats(&cf, flush_bytes);
-                if enabled {
+                if current_cfg.enable {
                     self.on_memtable_change(&cf);
                     self.on_l0_change(cf)
                 }
             }
             Ok(FlowInfo::Compaction(cf, ..)) => {
-                if enabled {
+                if current_cfg.enable {
                     self.on_pending_compaction_bytes_change(cf);
                 }
             }
             Ok(FlowInfo::BeforeUnsafeDestroyRange(..)) => {
-                if !enabled {
+                if !current_cfg.enable {
+                    return;
+                }
+                if self.wait_for_destroy_range_finish {
+                    // Concurrent unsafe destroy range, ignore the second one
+                    info!("concurrent unsafe destroy range, ignore");
                     return;
                 }
                 self.wait_for_destroy_range_finish = true;
-                let soft = (self.soft_pending_compaction_bytes_limit as f64).log2();
-                for cf_checker in self.cf_checkers.values_mut() {
+                let soft = (current_cfg.soft_pending_compaction_bytes_limit.0 as f64).log2();
+                for (cf, cf_checker) in &mut self.cf_checkers {
                     if let Some(long_term_pending_bytes) =
                         cf_checker.long_term_pending_bytes.as_ref()
                     {
                         let v = long_term_pending_bytes.get_avg();
                         if v <= soft {
+                            info!(
+                                "before unsafe destroy range";
+                                "cf" => cf,
+                                "pending_bytes" => v
+                            );
                             cf_checker.pending_bytes_before_unsafe_destroy_range = Some(v);
                         }
                     }
                 }
             }
             Ok(FlowInfo::AfterUnsafeDestroyRange(..)) => {
-                if !enabled {
+                if !current_cfg.enable {
                     return;
                 }
                 self.wait_for_destroy_range_finish = false;
                 for (cf, cf_checker) in &mut self.cf_checkers {
                     if let Some(before) = cf_checker.pending_bytes_before_unsafe_destroy_range {
-                        let soft = (self.soft_pending_compaction_bytes_limit as f64).log2();
+                        let soft =
+                            (current_cfg.soft_pending_compaction_bytes_limit.0 as f64).log2();
                         let after = (self.engine.pending_compaction_bytes(self.region_id, cf)
                             as f64)
                             .log2();
@@ -629,9 +452,13 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
                             SCHED_THROTTLE_ACTION_COUNTER
                                 .with_label_values(&[cf, "pending_bytes_jump"])
                                 .inc();
-                        } else {
-                            cf_checker.pending_bytes_before_unsafe_destroy_range = None;
                         }
+                        info!(
+                            "after unsafe destroy range";
+                            "cf" => cf,
+                            "before" => before,
+                            "after" => after
+                        );
                     }
                 }
             }
@@ -649,17 +476,13 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
             .spawn_wrapper(move || {
                 let mut checker = self;
                 let mut deadline = std::time::Instant::now();
-                let mut enabled = true;
                 loop {
                     match rx.try_recv() {
                         Ok(Msg::Close) => break,
                         Ok(Msg::Disable) => {
-                            enabled = false;
                             checker.reset_statistics();
                         }
-                        Ok(Msg::Enable) => {
-                            enabled = true;
-                        }
+                        Ok(Msg::Enable) => {}
                         Err(_) => {}
                     }
 
@@ -672,7 +495,7 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
                         SCHED_WRITE_FLOW_GAUGE.set(rate as i64);
                         deadline = std::time::Instant::now() + TICK_DURATION;
                     } else {
-                        checker.on_flow_info_msg(enabled, msg);
+                        checker.on_flow_info_msg(msg);
                     }
                 }
             })
@@ -745,8 +568,9 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
         pending_compaction_bytes: u64,
         cf: String,
     ) {
-        let hard = (self.hard_pending_compaction_bytes_limit as f64).log2();
-        let soft = (self.soft_pending_compaction_bytes_limit as f64).log2();
+        let control_cfg = self.config_tracker.value().clone();
+        let hard = (control_cfg.hard_pending_compaction_bytes_limit.0 as f64).log2();
+        let soft = (control_cfg.soft_pending_compaction_bytes_limit.0 as f64).log2();
         // Because pending compaction bytes changes dramatically, take the
         // logarithm of pending compaction bytes to make the values fall into
         // a relative small range
@@ -778,7 +602,17 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
 
             let pending_compaction_bytes = long_term_pending_bytes.get_avg();
             let ignore = if let Some(before) = checker.pending_bytes_before_unsafe_destroy_range {
+                // It assumes that the long term average will eventually come down below the
+                // soft limit. If the general traffic flow increases during destroy, the long
+                // term average may never come down and the flow control will be turned off for
+                // a long time, which would be a rather rare case, so just ignore it.
                 if pending_compaction_bytes <= before && !self.wait_for_destroy_range_finish {
+                    info!(
+                        "pending compaction bytes is back to normal";
+                        "cf" => &cf,
+                        "pending_compaction_bytes" => pending_compaction_bytes,
+                        "before" => before
+                    );
                     checker.pending_bytes_before_unsafe_destroy_range = None;
                 }
                 true
@@ -828,10 +662,11 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
         let prev = checker.last_num_memtables.get_recent();
         checker.last_num_memtables.observe(num_memtables);
 
+        let memtables_threshold = self.config_tracker.value().memtables_threshold;
         // do special check on start, see the comment of the variable definition for
         // detail.
         if checker.on_start_memtable {
-            if num_memtables < self.memtables_threshold
+            if num_memtables < memtables_threshold
                 || checker.last_num_memtables.trend() == Trend::Increasing
             {
                 // the write is accumulating, still need to throttle
@@ -850,8 +685,7 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
 
         let checker = self.cf_checkers.get_mut(cf).unwrap();
         let is_throttled = self.limiter.speed_limit() != f64::INFINITY;
-        let should_throttle =
-            checker.last_num_memtables.get_avg() > self.memtables_threshold as f64;
+        let should_throttle = checker.last_num_memtables.get_avg() > memtables_threshold as f64;
         let throttle = if !is_throttled && should_throttle {
             SCHED_THROTTLE_ACTION_COUNTER
                 .with_label_values(&[cf, "memtable_init"])
@@ -864,7 +698,7 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
                 self.throttle_cf = Some(cf.to_string());
                 x as f64
             }
-        } else if is_throttled && (!should_throttle || num_memtables < self.memtables_threshold) {
+        } else if is_throttled && (!should_throttle || num_memtables < memtables_threshold) {
             // should not throttle memtable
             if checker.memtable_init_speed {
                 checker.memtable_init_speed = false;
@@ -958,11 +792,12 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
     fn on_l0_change(&mut self, cf: String) {
         let checker = self.cf_checkers.get_mut(&cf).unwrap();
         let num_l0_files = checker.long_term_num_l0_files.get_recent();
+        let l0_files_threshold = self.config_tracker.value().l0_files_threshold;
 
         // do special check on start, see the comment of the variable definition for
         // detail.
         if checker.on_start_l0_files {
-            if num_l0_files < self.l0_files_threshold
+            if num_l0_files < l0_files_threshold
                 || checker.long_term_num_l0_files.trend() == Trend::Increasing
             {
                 // the write is accumulating, still need to throttle
@@ -999,7 +834,7 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
         }
 
         let is_throttled = self.limiter.speed_limit() != f64::INFINITY;
-        let should_throttle = checker.long_term_num_l0_files.get_recent() > self.l0_files_threshold;
+        let should_throttle = checker.long_term_num_l0_files.get_recent() > l0_files_threshold;
 
         let throttle = if !is_throttled && should_throttle {
             SCHED_THROTTLE_ACTION_COUNTER
@@ -1055,6 +890,7 @@ pub(super) mod tests {
 
     use engine_rocks::RocksCfOptions;
     use engine_traits::{CfOptionsExt, Result};
+    use online_config::ConfigValue;
 
     use super::{super::FlowController, *};
 
@@ -1128,10 +964,16 @@ pub(super) mod tests {
         assert_eq!(flow_controller.consume(region_id, 1000), Duration::ZERO);
 
         // disable flow controller
-        flow_controller.enable(false);
+        let change = std::collections::HashMap::from_iter([(
+            "enable".to_string(),
+            ConfigValue::Bool(false),
+        )]);
+        flow_controller.update_config(change).unwrap();
         assert_eq!(flow_controller.enabled(), false);
         // re-enable flow controller
-        flow_controller.enable(true);
+        let change =
+            std::collections::HashMap::from_iter([("enable".to_string(), ConfigValue::Bool(true))]);
+        flow_controller.update_config(change).unwrap();
         assert_eq!(flow_controller.enabled(), true);
         assert_eq!(flow_controller.should_drop(region_id), false);
         assert_eq!(flow_controller.is_unlimited(region_id), true);
@@ -1192,6 +1034,26 @@ pub(super) mod tests {
         assert_eq!(flow_controller.is_unlimited(region_id), false);
         assert_ne!(flow_controller.consume(region_id, 2000), Duration::ZERO);
 
+        // increase the threshold.
+        let change = std::collections::HashMap::from_iter([(
+            "memtables_threshold".to_string(),
+            ConfigValue::U64(10),
+        )]);
+        flow_controller.update_config(change).unwrap();
+        send_flow_info(tx, region_id);
+        assert_eq!(flow_controller.should_drop(region_id), false);
+        assert_eq!(flow_controller.is_unlimited(region_id), true);
+
+        // decrease the threshold.
+        let change = std::collections::HashMap::from_iter([(
+            "memtables_threshold".to_string(),
+            ConfigValue::U64(5),
+        )]);
+        flow_controller.update_config(change).unwrap();
+        send_flow_info(tx, region_id);
+        assert_eq!(flow_controller.should_drop(region_id), false);
+        assert_eq!(flow_controller.is_unlimited(region_id), false);
+
         // not throttle once the number of memtables falls below the threshold
         stub.0.num_memtables.store(1, Ordering::Relaxed);
         send_flow_info(tx, region_id);
@@ -1239,6 +1101,16 @@ pub(super) mod tests {
         assert_eq!(flow_controller.should_drop(region_id), false);
         assert_eq!(flow_controller.is_unlimited(region_id), false);
         assert_ne!(flow_controller.consume(region_id, 2000), Duration::ZERO);
+
+        // increase the threshold.
+        let change = std::collections::HashMap::from_iter([(
+            "l0_files_threshold".to_string(),
+            ConfigValue::U64(50),
+        )]);
+        flow_controller.update_config(change).unwrap();
+        send_flow_info(tx, region_id);
+        assert_eq!(flow_controller.should_drop(region_id), false);
+        assert_eq!(flow_controller.is_unlimited(region_id), true);
     }
 
     #[test]
@@ -1260,7 +1132,7 @@ pub(super) mod tests {
         // exceeds the threshold
         stub.0
             .pending_compaction_bytes
-            .store(1000 * 1024 * 1024 * 1024, Ordering::Relaxed);
+            .store(500 * 1024 * 1024 * 1024, Ordering::Relaxed);
         send_flow_info(tx, region_id);
         // on start check forbids flow control
         assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
@@ -1272,9 +1144,25 @@ pub(super) mod tests {
 
         stub.0
             .pending_compaction_bytes
-            .store(1000 * 1024 * 1024 * 1024, Ordering::Relaxed);
+            .store(500 * 1024 * 1024 * 1024, Ordering::Relaxed);
         send_flow_info(tx, region_id);
         assert!(flow_controller.discard_ratio(region_id) > f64::EPSILON);
+
+        // increase the threshold.
+        let change = std::collections::HashMap::from_iter([(
+            "soft_pending_compaction_bytes_limit".to_string(),
+            ConfigValue::Size(600 * 1024 * 1024 * 1024),
+        )]);
+        flow_controller.update_config(change).unwrap();
+        send_flow_info(tx, region_id);
+        assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
+
+        // reset to default value.
+        let change = std::collections::HashMap::from_iter([(
+            "soft_pending_compaction_bytes_limit".to_string(),
+            ConfigValue::Size(192 * 1024 * 1024 * 1024),
+        )]);
+        flow_controller.update_config(change).unwrap();
 
         stub.0
             .pending_compaction_bytes
@@ -1299,6 +1187,14 @@ pub(super) mod tests {
         stub.0
             .pending_compaction_bytes
             .store(10000000 * 1024 * 1024 * 1024, Ordering::Relaxed);
+        send_flow_info(tx, region_id);
+        assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
+
+        // after unsafe destroy range, pending compaction bytes may jump back to a lower
+        // value
+        stub.0
+            .pending_compaction_bytes
+            .store(100 * 1024 * 1024 * 1024, Ordering::Relaxed);
         tx.send(FlowInfo::Compaction("default".to_string(), region_id))
             .unwrap();
         tx.send(FlowInfo::AfterUnsafeDestroyRange(region_id))
@@ -1311,13 +1207,23 @@ pub(super) mod tests {
             flow_controller.discard_ratio(region_id)
         );
 
-        // unfreeze the control
+        // the long term average pending compaction bytes is still high, shouldn't
+        // unfreeze the jump control
+        stub.0
+            .pending_compaction_bytes
+            .store(100 * 1024 * 1024 * 1024, Ordering::Relaxed);
+        send_flow_info(tx, region_id);
+        assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
+
+        // the long term average pending compaction bytes falls below the threshold,
+        // should unfreeze the jump control
         stub.0
             .pending_compaction_bytes
             .store(1024 * 1024, Ordering::Relaxed);
         send_flow_info(tx, region_id);
         assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
 
+        // exceeds the threshold, should perform throttle
         stub.0
             .pending_compaction_bytes
             .store(1000000000 * 1024 * 1024 * 1024, Ordering::Relaxed);
@@ -1357,135 +1263,5 @@ pub(super) mod tests {
             .store(10000000000 * 1024 * 1024 * 1024, Ordering::Relaxed);
         send_flow_info(&tx, region_id);
         assert!(flow_controller.discard_ratio(region_id) > f64::EPSILON);
-    }
-
-    #[test]
-    fn test_smoother() {
-        let mut smoother = Smoother::<u64, 5, SMOOTHER_STALE_RECORD_THRESHOLD, 0>::default();
-        smoother.observe(1);
-        smoother.observe(6);
-        smoother.observe(2);
-        smoother.observe(3);
-        smoother.observe(4);
-        smoother.observe(5);
-        smoother.observe(0);
-
-        assert!((smoother.get_avg() - 2.8).abs() < f64::EPSILON);
-        assert_eq!(smoother.get_recent(), 0);
-        assert_eq!(smoother.get_max(), 5);
-        assert_eq!(smoother.get_percentile_90(), 4);
-        assert_eq!(smoother.trend(), Trend::NoTrend);
-
-        let mut smoother = Smoother::<f64, 5, SMOOTHER_STALE_RECORD_THRESHOLD, 0>::default();
-        smoother.observe(1.0);
-        smoother.observe(6.0);
-        smoother.observe(2.0);
-        smoother.observe(3.0);
-        smoother.observe(4.0);
-        smoother.observe(5.0);
-        smoother.observe(9.0);
-        assert!((smoother.get_avg() - 4.6).abs() < f64::EPSILON);
-        assert!((smoother.get_recent() - 9.0).abs() < f64::EPSILON);
-        assert!((smoother.get_max() - 9.0).abs() < f64::EPSILON);
-        assert!((smoother.get_percentile_90() - 5.0).abs() < f64::EPSILON);
-        assert_eq!(smoother.trend(), Trend::Increasing);
-    }
-
-    #[test]
-    fn test_smoother_trend() {
-        // The time range is not enough
-        let mut smoother = Smoother::<
-            u64,
-            6,
-            SMOOTHER_STALE_RECORD_THRESHOLD,
-            SMOOTHER_TIME_RANGE_THRESHOLD,
-        >::default();
-        let now = Instant::now_coarse();
-        smoother.observe_with_time(
-            1,
-            now.sub(Duration::from_secs(SMOOTHER_TIME_RANGE_THRESHOLD - 1)),
-        );
-        smoother.observe_with_time(
-            1,
-            now.sub(Duration::from_secs(SMOOTHER_TIME_RANGE_THRESHOLD - 2)),
-        );
-        smoother.observe_with_time(
-            1,
-            now.sub(Duration::from_secs(SMOOTHER_TIME_RANGE_THRESHOLD - 3)),
-        );
-        smoother.observe_with_time(4, now.sub(Duration::from_secs(2)));
-        smoother.observe_with_time(4, now.sub(Duration::from_secs(1)));
-        smoother.observe_with_time(4, now);
-        assert_eq!(smoother.trend(), Trend::NoTrend);
-
-        // Increasing trend, the left range contains 3 records, the right range contains
-        // 1 records.
-        let mut smoother = Smoother::<
-            f64,
-            6,
-            SMOOTHER_STALE_RECORD_THRESHOLD,
-            SMOOTHER_TIME_RANGE_THRESHOLD,
-        >::default();
-        smoother.observe_with_time(
-            1.0,
-            now.sub(Duration::from_secs(SMOOTHER_TIME_RANGE_THRESHOLD + 1)),
-        );
-        smoother.observe_with_time(
-            1.0,
-            now.sub(Duration::from_secs(SMOOTHER_TIME_RANGE_THRESHOLD)),
-        );
-        smoother.observe_with_time(
-            1.0,
-            now.sub(Duration::from_secs(SMOOTHER_TIME_RANGE_THRESHOLD - 1)),
-        );
-        smoother.observe_with_time(4.0, now);
-        assert_eq!(smoother.trend(), Trend::Increasing);
-
-        // Decreasing trend, the left range contains 1 records, the right range contains
-        // 3 records.
-        let mut smoother = Smoother::<
-            f32,
-            6,
-            SMOOTHER_STALE_RECORD_THRESHOLD,
-            SMOOTHER_TIME_RANGE_THRESHOLD,
-        >::default();
-        smoother.observe_with_time(
-            4.0,
-            now.sub(Duration::from_secs(SMOOTHER_TIME_RANGE_THRESHOLD + 1)),
-        );
-        smoother.observe_with_time(1.0, now.sub(Duration::from_secs(2)));
-        smoother.observe_with_time(2.0, now.sub(Duration::from_secs(1)));
-        smoother.observe_with_time(1.0, now);
-        assert_eq!(smoother.trend(), Trend::Decreasing);
-
-        // No trend, the left range contains 1 records, the right range contains 3
-        // records.
-        let mut smoother = Smoother::<
-            f32,
-            6,
-            SMOOTHER_STALE_RECORD_THRESHOLD,
-            SMOOTHER_TIME_RANGE_THRESHOLD,
-        >::default();
-        smoother.observe_with_time(
-            1.0,
-            now.sub(Duration::from_secs(SMOOTHER_TIME_RANGE_THRESHOLD + 1)),
-        );
-        smoother.observe_with_time(1.0, now.sub(Duration::from_secs(2)));
-        smoother.observe_with_time(3.0, now.sub(Duration::from_secs(1)));
-        smoother.observe_with_time(2.0, now);
-        assert_eq!(smoother.trend(), Trend::NoTrend);
-
-        // No trend, because the latest record is too old
-        let mut smoother = Smoother::<
-            u32,
-            6,
-            SMOOTHER_STALE_RECORD_THRESHOLD,
-            SMOOTHER_TIME_RANGE_THRESHOLD,
-        >::default();
-        smoother.observe_with_time(
-            1,
-            now.sub(Duration::from_secs(SMOOTHER_STALE_RECORD_THRESHOLD + 1)),
-        );
-        assert_eq!(smoother.trend(), Trend::NoTrend);
     }
 }

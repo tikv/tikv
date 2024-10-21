@@ -6,7 +6,7 @@ publish = false
 license = "Apache-2.0"
 
 [features]
-testexport = []
+testexport = ["raftstore/testexport"]
 failpoints = ["fail/failpoints"]
 
 [[test]]
@@ -19,14 +19,17 @@ crossbeam = { workspace = true }
 engine_rocks = { workspace = true }
 engine_traits = { workspace = true }
 fail = "0.5"
+in_memory_engine = { workspace = true }
+keys = { workspace = true }
 kvproto = { workspace = true }
 lazy_static = "1.4.0"
 online_config = { workspace = true }
-prometheus = { version = "0.13", default-features = false, features = ["nightly"] }
+prometheus = { version = "0.13", default-features = false, features = [
+    "nightly",
+] }
 prometheus-static-metric = "0.5"
 raft = { workspace = true }
 raftstore = { workspace = true }
-range_cache_memory_engine = { workspace = true }
 slog = { workspace = true }
 slog-global = { workspace = true }
 tempfile = "3.0"
@@ -35,3 +38,4 @@ txn_types = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3.0"
+test_util = { workspace = true }
