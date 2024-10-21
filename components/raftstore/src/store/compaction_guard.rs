@@ -507,6 +507,7 @@ mod tests {
         cf_opts.set_max_bytes_for_level_base(MAX_OUTPUT_FILE_SIZE);
         cf_opts.set_max_bytes_for_level_multiplier(5);
         cf_opts.set_target_file_size_base(MAX_OUTPUT_FILE_SIZE);
+        cf_opts.set_level_compaction_dynamic_level_bytes(false);
         cf_opts.set_sst_partitioner_factory(RocksSstPartitionerFactory(
             CompactionGuardGeneratorFactory::new(
                 CF_DEFAULT,

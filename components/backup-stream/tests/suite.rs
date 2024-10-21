@@ -307,7 +307,7 @@ impl Suite {
 
         let ob = BackupStreamObserver::new(worker.scheduler());
         let ob2 = ob.clone();
-        s.coprocessor_hooks
+        s.coprocessor_hosts
             .entry(id)
             .or_default()
             .push(Box::new(move |host| {

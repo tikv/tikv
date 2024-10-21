@@ -2,6 +2,7 @@
 use std::{
     error::Error as StdError,
     io,
+    pin::Pin,
     time::{Duration, SystemTime},
 };
 
@@ -16,13 +17,20 @@ use aws_sdk_s3::{
 };
 use bytes::Bytes;
 use cloud::{
-    blob::{BlobConfig, BlobStorage, BucketConf, PutResource, StringNonEmpty},
+    blob::{
+        none_to_empty, BlobConfig, BlobObject, BlobStorage, BucketConf, DeletableStorage,
+        IterableStorage, PutResource, StringNonEmpty,
+    },
     metrics::CLOUD_REQUEST_HISTOGRAM_VEC,
-    none_to_empty,
 };
 use fail::fail_point;
-use futures::{executor::block_on, FutureExt, Stream, TryStreamExt};
-use futures_util::io::{AsyncRead, AsyncReadExt};
+use futures::{executor::block_on, stream::Stream};
+use futures_util::{
+    future::{FutureExt, LocalBoxFuture},
+    io::{AsyncRead, AsyncReadExt},
+    stream::TryStreamExt,
+    StreamExt,
+};
 pub use kvproto::brpb::S3 as InputConfig;
 use thiserror::Error;
 use tikv_util::{
@@ -37,6 +45,7 @@ use crate::util::{self, retry_and_count, SdkError};
 
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(900);
 pub const STORAGE_VENDOR_NAME_AWS: &str = "aws";
+const DEFAULT_SEP: char = '/';
 
 #[derive(Clone)]
 pub struct AccessKeyPair {
@@ -292,9 +301,20 @@ impl S3Storage {
 
     fn maybe_prefix_key(&self, key: &str) -> String {
         if let Some(prefix) = &self.config.bucket.prefix {
-            return format!("{}/{}", *prefix, key);
+            return format!("{}{}{}", *prefix, DEFAULT_SEP, key);
         }
         key.to_owned()
+    }
+
+    fn strip_prefix_if_needed(&self, key: String) -> String {
+        if let Some(prefix) = &self.config.bucket.prefix {
+            if key.starts_with(prefix.as_str()) {
+                return key[prefix.len()..]
+                    .trim_start_matches(DEFAULT_SEP)
+                    .to_owned();
+            }
+        }
+        key
     }
 
     fn get_range(&self, name: &str, range: Option<String>) -> cloud::blob::BlobStream<'_> {
@@ -707,7 +727,7 @@ impl BlobStorage for S3Storage {
     async fn put(
         &self,
         name: &str,
-        mut reader: PutResource,
+        mut reader: PutResource<'_>,
         content_length: u64,
     ) -> io::Result<()> {
         let key = self.maybe_prefix_key(name);
@@ -735,6 +755,77 @@ impl BlobStorage for S3Storage {
     fn get_part(&self, name: &str, off: u64, len: u64) -> cloud::blob::BlobStream<'_> {
         // inclusive, bytes=0-499 -> [0, 499]
         self.get_range(name, Some(format!("bytes={}-{}", off, off + len - 1)))
+    }
+}
+
+impl DeletableStorage for S3Storage {
+    fn delete(&self, name: &str) -> LocalBoxFuture<'_, io::Result<()>> {
+        let key = self.maybe_prefix_key(name);
+        async move {
+            let now = Instant::now();
+            let res = self
+                .client
+                .delete_object()
+                .bucket(self.config.bucket.bucket.to_string())
+                .key(key.clone())
+                .send()
+                .await;
+            CLOUD_REQUEST_HISTOGRAM_VEC
+                .with_label_values(&["s3", "delete_object"])
+                .observe(now.saturating_elapsed().as_secs_f64());
+            match res {
+                Ok(_) => Ok(()),
+                Err(e) => Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("failed to delete object {}", e),
+                )),
+            }
+        }
+        .boxed_local()
+    }
+}
+
+impl IterableStorage for S3Storage {
+    fn iter_prefix(
+        &self,
+        prefix: &str,
+    ) -> Pin<Box<dyn Stream<Item = std::result::Result<BlobObject, io::Error>> + '_>> {
+        let builder = self
+            .client
+            .list_objects_v2()
+            .bucket(self.config.bucket.bucket.to_string())
+            .prefix(self.maybe_prefix_key(prefix));
+        let mut page_stream = builder.into_paginator().send();
+        let stream = futures::stream::poll_fn(move |cx| page_stream.poll_next(cx));
+
+        stream
+            .map_ok(|page| {
+                page.contents
+                    .map(|cs| {
+                        futures::stream::iter(cs.into_iter().map(|v| {
+                            Ok(BlobObject {
+                                key: v.key.map(|k| self.strip_prefix_if_needed(k)).ok_or_else(
+                                    || {
+                                        io::Error::new(
+                                            io::ErrorKind::InvalidData,
+                                            "object key is empty",
+                                        )
+                                    },
+                                )?,
+                            })
+                        }))
+                        .left_stream()
+                    })
+                    .unwrap_or_else(|| futures::stream::empty().right_stream())
+            })
+            .map_err(|err| {
+                io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("sdk encounters an unexpected error: {:?}", err),
+                )
+            })
+            .try_flatten()
+            .boxed_local()
     }
 }
 
