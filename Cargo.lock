@@ -6308,6 +6308,7 @@ dependencies = [
  "engine_test",
  "engine_traits",
  "error_code",
+ "example_coprocessor_plugin",
  "fail",
  "file_system",
  "flate2",
