@@ -3982,7 +3982,7 @@ where
         // https://github.com/tikv/tikv/issues/17363#issuecomment-2404227253.
         if self.raft_group.raft.pending_conf_index > index {
             info!(
-                "not ready to transfer leader; target peer has an unapplied conf change";
+                "not ready to transfer leader, target peer has an unapplied conf change";
                 "region_id" => self.region_id,
                 "target_peer_id" => peer_id,
                 "pending_conf_index" => self.raft_group.raft.pending_conf_index,
