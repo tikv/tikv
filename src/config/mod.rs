@@ -421,6 +421,7 @@ macro_rules! cf_config {
             // `periodic_compaction_seconds` in Rocksdb is 30 days as default.
             #[online_config(skip)]
             pub periodic_compaction_seconds: Option<ReadableDuration>,
+            pub bottommost_file_compaction_delay: u32,
             #[online_config(submodule)]
             pub titan: TitanCfConfig,
         }
@@ -706,6 +707,7 @@ macro_rules! build_cf_opt {
                 .0
                 .as_secs(),
         );
+        cf_opts.set_bottommost_file_compaction_delay($opt.bottommost_file_compaction_delay);
         cf_opts
     }};
 }
@@ -779,6 +781,7 @@ impl Default for DefaultCfConfig {
             max_compactions: None,
             ttl: None,
             periodic_compaction_seconds: None,
+            bottommost_file_compaction_delay: 3600,
             titan: TitanCfConfig::default(),
             write_buffer_limit: None,
         }
@@ -949,6 +952,7 @@ impl Default for WriteCfConfig {
             max_compactions: None,
             ttl: None,
             periodic_compaction_seconds: None,
+            bottommost_file_compaction_delay: 3600,
             titan: TitanCfConfig::default_for_disabled(),
             write_buffer_limit: None,
         }
@@ -1069,6 +1073,7 @@ impl Default for LockCfConfig {
             max_compactions: None,
             ttl: None,
             periodic_compaction_seconds: None,
+            bottommost_file_compaction_delay: 0,
             titan: TitanCfConfig::default_for_disabled(),
             write_buffer_limit: None,
         }
@@ -1167,6 +1172,7 @@ impl Default for RaftCfConfig {
             max_compactions: None,
             ttl: None,
             periodic_compaction_seconds: None,
+            bottommost_file_compaction_delay: 0,
             titan: TitanCfConfig::default_for_disabled(),
             write_buffer_limit: None,
         }
@@ -1761,6 +1767,7 @@ impl Default for RaftDefaultCfConfig {
             max_compactions: None,
             ttl: None,
             periodic_compaction_seconds: None,
+            bottommost_file_compaction_delay: 0,
             titan: TitanCfConfig::default(),
             write_buffer_limit: None,
         }

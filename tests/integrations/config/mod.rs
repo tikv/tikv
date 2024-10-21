@@ -397,6 +397,7 @@ fn test_serde_custom_tikv_config() {
                 max_compactions: Some(3),
                 ttl: Some(ReadableDuration::days(10)),
                 periodic_compaction_seconds: Some(ReadableDuration::days(10)),
+                bottommost_file_compaction_delay: 3600,
                 write_buffer_limit: None,
             },
             writecf: WriteCfConfig {
@@ -472,6 +473,7 @@ fn test_serde_custom_tikv_config() {
                 max_compactions: Some(3),
                 ttl: Some(ReadableDuration::days(10)),
                 periodic_compaction_seconds: Some(ReadableDuration::days(10)),
+                bottommost_file_compaction_delay: 3600,
                 write_buffer_limit: None,
             },
             lockcf: LockCfConfig {
@@ -547,6 +549,7 @@ fn test_serde_custom_tikv_config() {
                 max_compactions: Some(3),
                 ttl: Some(ReadableDuration::days(10)),
                 periodic_compaction_seconds: Some(ReadableDuration::days(10)),
+                bottommost_file_compaction_delay: 0,
                 write_buffer_limit: Some(ReadableSize::mb(16)),
             },
             raftcf: RaftCfConfig {
@@ -622,6 +625,7 @@ fn test_serde_custom_tikv_config() {
                 max_compactions: Some(3),
                 ttl: Some(ReadableDuration::days(10)),
                 periodic_compaction_seconds: Some(ReadableDuration::days(10)),
+                bottommost_file_compaction_delay: 0,
                 write_buffer_limit: None,
             },
             titan: titan_db_config.clone(),
@@ -715,6 +719,7 @@ fn test_serde_custom_tikv_config() {
                 max_compactions: Some(3),
                 ttl: None,
                 periodic_compaction_seconds: None,
+                bottommost_file_compaction_delay: 0,
                 write_buffer_limit: None,
             },
             titan: titan_db_config,
