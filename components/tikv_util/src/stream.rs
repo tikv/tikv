@@ -13,7 +13,6 @@ use std::{
 use bytes::Bytes;
 use futures::stream::{self, Stream};
 use futures_util::io::AsyncRead;
-use http::status::StatusCode;
 use tokio::runtime::Builder;
 
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(32);
