@@ -68,12 +68,13 @@ pub struct RegionCacheWriteBatch {
     // record the total durations of the prepare work for write in the write batch
     prepare_for_write_duration: Duration,
 
-    // Now, we have an assumption that in one round of batch system process, although the same
-    // region can call `prepare_for_region` multiple times, it can only call sequentially. This is
-    // say, we will not have this: prepare_for_region(region1), prepare_for_region(region2),
-    // prepare_for_region(region1).  In case to avoid this asssumption being broken, we record the
-    // regions that have called prepare_for_region and ensure that if the region is not the
-    // `currnet_region`, it is not recorded in this vec.
+    // Now, we have an assumption that in one round of batch system process (PollHandler::begin ->
+    // ... -> PollHandler::end), although the same region can call `prepare_for_region`
+    // multiple times, it can only call sequentially. This is say, we will not have this:
+    // prepare_for_region(region1), prepare_for_region(region2), prepare_for_region(region1).
+    // In case to avoid this asssumption being broken, we record the regions that have called
+    // prepare_for_region and ensure that if the region is not the `currnet_region`, it is not
+    // recorded in this vec.
     prepared_regions: SmallVec<[u64; 10]>,
 }
 
@@ -490,9 +491,7 @@ impl WriteBatch for RegionCacheWriteBatch {
         }
         let time = Instant::now();
         // verify that the region is not prepared before
-        self.prepared_regions
-            .iter()
-            .for_each(|id| assert_ne!(*id, region.id));
+        assert!(!self.prepared_regions.iter().any(|id| *id == region.id));
         self.prepared_regions.push(region.id);
         // record last region for clearing region in written flags.
         self.record_last_written_region();
