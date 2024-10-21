@@ -807,7 +807,7 @@ fn test_evict_on_flashback() {
     cluster.must_send_wait_flashback_msg(r.id, AdminCmdType::FinishFlashback);
 
     let (tx, rx) = unbounded();
-    fail::cfg_callback("on_region_cache_iterator_seek", move || {
+    fail::cfg_callback("ime_on_iterator_seek", move || {
         tx.send(true).unwrap();
     })
     .unwrap();
@@ -824,7 +824,7 @@ fn test_evict_on_flashback() {
 
 #[test]
 fn test_load_during_flashback() {
-    fail::cfg("background_check_load_pending_interval", "return(1000)").unwrap();
+    fail::cfg("ime_background_check_load_pending_interval", "return(1000)").unwrap();
     let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 1;
     cluster.run();
