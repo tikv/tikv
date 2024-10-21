@@ -4934,15 +4934,14 @@ where
             _ => peers.choose(&mut rand::thread_rng()).unwrap(),
         };
 
-        let transferred = if peer.id == self.peer.id {
-            false
-        } else if self
-            .cmd_epoch_checker
-            .propose_check_epoch(&req, self.term())
-            .is_some()
+        // Note that if there exists a pending mutually exclusive command, we should
+        // reject the transfer leader command.
+        let transferred = if peer.id == self.peer.id
+            || self
+                .cmd_epoch_checker
+                .propose_check_epoch(&req, self.term())
+                .is_some()
         {
-            // If there exists a pending mutually exclusive command, we should reject the
-            // transfer leader command.
             false
         } else {
             self.pre_transfer_leader(peer, extra_msgs, ctx)
