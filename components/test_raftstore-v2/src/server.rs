@@ -471,7 +471,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
             Default::default(),
             Arc::new(region_info_accessor.clone()),
         );
-        gc_worker.start(node_id).unwrap();
+        gc_worker.start(node_id, coprocessor_host.clone()).unwrap();
 
         let txn_status_cache = Arc::new(TxnStatusCache::new_for_test());
         let rts_worker = if cfg.resolved_ts.enable {

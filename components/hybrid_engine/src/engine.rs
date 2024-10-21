@@ -224,7 +224,7 @@ mod tests {
     use engine_rocks::util::new_engine;
     use engine_traits::{CacheRegion, SnapshotContext, CF_DEFAULT, CF_LOCK, CF_WRITE};
     use in_memory_engine::{
-        config::RegionCacheConfigManager, test_util::new_region, InMemoryEngineConfig,
+        config::InMemoryEngineConfigManager, test_util::new_region, InMemoryEngineConfig,
         InMemoryEngineContext, RegionCacheMemoryEngine,
     };
     use online_config::{ConfigChange, ConfigManager, ConfigValue};
@@ -268,11 +268,11 @@ mod tests {
         let s = hybrid_engine.new_snapshot(Some(snap_ctx.clone()));
         assert!(!s.region_cache_snapshot_available());
 
-        let mut config_manager = RegionCacheConfigManager(config.clone());
+        let mut config_manager = InMemoryEngineConfigManager(config.clone());
         let mut config_change = ConfigChange::new();
-        config_change.insert(String::from("enabled"), ConfigValue::Bool(false));
+        config_change.insert(String::from("enable"), ConfigValue::Bool(false));
         config_manager.dispatch(config_change).unwrap();
-        assert!(!config.value().enabled);
+        assert!(!config.value().enable);
         snap_ctx.read_ts = 15;
         let s = hybrid_engine.new_snapshot(Some(snap_ctx));
         assert!(!s.region_cache_snapshot_available());

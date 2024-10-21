@@ -930,7 +930,7 @@ where
             store_id,
         );
         gc_worker
-            .start(store_id)
+            .start(store_id, self.coprocessor_host.as_ref().cloned().unwrap())
             .unwrap_or_else(|e| fatal!("failed to start gc worker: {}", e));
         if let Err(e) = gc_worker.start_auto_gc(auto_gc_config, safe_point) {
             fatal!("failed to start auto_gc on storage, error: {}", e);

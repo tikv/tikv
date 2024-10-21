@@ -1059,7 +1059,7 @@ pub enum LoadFailedReason {
     Evicting,
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone, Copy)]
 pub enum RegionCacheStatus {
     NotInCache,
     Cached,

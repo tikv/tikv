@@ -319,6 +319,13 @@ pub fn new_region_leader_cmd() -> StatusRequest {
     cmd
 }
 
+pub fn new_compute_hash_request(region_id: u64, epoch: &RegionEpoch) -> RaftCmdRequest {
+    let mut admin = AdminRequest::default();
+    admin.set_cmd_type(AdminCmdType::ComputeHash);
+    let request = new_admin_request(region_id, epoch, admin);
+    request
+}
+
 pub fn new_admin_request(
     region_id: u64,
     epoch: &RegionEpoch,
