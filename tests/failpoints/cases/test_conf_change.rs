@@ -354,7 +354,7 @@ fn test_applied_conf_change_on_target_peer_allows_transfer_leader() {
 
     // Use async_put for insertion here to avoid timeout errors, as synchronize put
     // would hang due to the leader's apply process being paused.
-    let _ = cluster.async_put(b"k2", b"v2");
+    let _ = cluster.async_put(b"k2", b"v2").unwrap();
 
     pd_client.transfer_leader(region_id, new_peer(2, 2), vec![]);
     // Wait for transfer_leader.
