@@ -369,6 +369,11 @@ impl<S: Snapshot> CmdEpochChecker<S> {
     /// Returns None if passing the epoch check, otherwise returns a index which
     /// is the last admin cmd index conflicted with this proposal.
     fn propose_check_epoch(&mut self, req: &RaftCmdRequest, term: u64) -> Option<u64> {
+        fail_point!(
+            "on_skip_propose_check_epoch",
+            req.get_admin_request().get_cmd_type() == AdminCmdType::TransferLeader,
+            |_| None
+        );
         self.maybe_update_term(term);
         let (check_ver, check_conf_ver) = if !req.has_admin_request() {
             (NORMAL_REQ_CHECK_VER, NORMAL_REQ_CHECK_CONF_VER)
