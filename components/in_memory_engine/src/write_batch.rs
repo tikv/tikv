@@ -11,11 +11,8 @@ use engine_traits::{
     CacheRegion, EvictReason, MiscExt, Mutable, RegionCacheEngine, Result, WriteBatch,
     WriteBatchExt, WriteOptions, CF_DEFAULT,
 };
-<<<<<<< HEAD
-use smallvec::SmallVec;
-=======
 use kvproto::metapb;
->>>>>>> master
+use smallvec::SmallVec;
 use tikv_util::{box_err, config::ReadableSize, error, info, time::Instant, warn};
 
 use crate::{
@@ -496,7 +493,7 @@ impl WriteBatch for RegionCacheWriteBatch {
         }
         let time = Instant::now();
         // verify that the region is not prepared before
-        if let Some(region_id) = self.prepared_regions.iter().find(|id| *id == region.id) {
+        if let Some(region_id) = self.prepared_regions.iter().find(|id| **id == region.id) {
             panic!(
                 "region {} is prepared for write before, but it is not the current region",
                 region_id
@@ -1025,14 +1022,14 @@ mod tests {
         let r = new_region(1, b"", b"z");
         let cache_region = CacheRegion::from_region(&r);
         let mut wb = RegionCacheWriteBatch::from(&engine);
-        wb.prepare_for_region(cache_region.clone());
+        wb.prepare_for_region(&r);
 
         engine
             .core()
             .region_manager()
             .load_region(cache_region.clone())
             .unwrap();
-        wb.prepare_for_region(cache_region.clone());
+        wb.prepare_for_region(&r);
         wb.put(b"k1", b"val1").unwrap();
         wb.put(b"k2", b"val2").unwrap();
         wb.set_sequence_number(100).unwrap();

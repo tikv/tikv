@@ -8,7 +8,7 @@ use std::{
 use engine_rocks::RocksSstWriterBuilder;
 use engine_traits::{
     CacheRegion, EvictReason, RegionCacheEngine, RegionCacheEngineExt, SstWriter, SstWriterBuilder,
-    CF_DEFAULT, CF_LOCK, DATA_CFS,
+    CF_DEFAULT, DATA_CFS,
 };
 use file_system::calc_crc32_bytes;
 use in_memory_engine::test_util::new_region;
@@ -24,8 +24,8 @@ use test_coprocessor::{
     handle_request, init_data_with_details_pd_client, DagChunkSpliter, DagSelect, ProductTable,
 };
 use test_raftstore::{
-    get_tso, make_cb, new_compute_hash_request, new_peer, new_put_cf_cmd, new_request,
-    new_server_cluster_with_hybrid_engine_with_no_region_cache, Cluster, ServerCluster, Simulator,
+    get_tso, new_peer, new_server_cluster_with_hybrid_engine_with_no_region_cache, Cluster,
+    ServerCluster,
 };
 use test_util::eventually;
 use tidb_query_datatype::{
