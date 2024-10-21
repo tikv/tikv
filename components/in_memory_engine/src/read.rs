@@ -2047,7 +2047,7 @@ mod tests {
         engine.new_region(region.clone());
 
         let mut wb = engine.write_batch();
-        wb.prepare_for_region(range.clone());
+        wb.prepare_for_region(&region);
         put_entries(&mut wb);
         wb.set_sequence_number(wb_sequence).unwrap();
         wb.write().unwrap();
@@ -2109,8 +2109,7 @@ mod tests {
 
         let mut wb = engine.write_batch();
         let region = new_region(1, b"", b"z");
-        let cache_region = CacheRegion::from_region(&region);
-        wb.prepare_for_region(cache_region);
+        wb.prepare_for_region(&region);
         wb.put(b"zb", b"f").unwrap();
         wb.set_sequence_number(200).unwrap();
 

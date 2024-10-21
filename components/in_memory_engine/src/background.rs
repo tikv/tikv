@@ -1310,6 +1310,7 @@ impl Runnable for BackgroundRunner {
                                         Some(&rocks_engine),
                                         &scheduler,
                                         false,
+                                        r.is_in_flashback,
                                     );
                                 }),
                             },
@@ -2744,8 +2745,8 @@ pub mod tests {
             .region_manager()
             .load_region(region2.clone())
             .unwrap();
-        engine.prepare_for_apply(&region1);
-        engine.prepare_for_apply(&region2);
+        engine.prepare_for_apply(&region1, false);
+        engine.prepare_for_apply(&region2, false);
 
         // concurrent write to rocksdb, but the key will not be loaded in the memory
         // engine
@@ -2922,7 +2923,7 @@ pub mod tests {
             },
         );
         let cache_region = CacheRegion::from_region(&region);
-        engine.prepare_for_apply(&cache_region);
+        engine.prepare_for_apply(&cache_region, false);
 
         // Wait for the range to be loaded.
         test_util::eventually(
@@ -3036,7 +3037,7 @@ pub mod tests {
         for r in [&region1, &region2] {
             let cache_region = CacheRegion::from_region(r);
             engine.load_region(cache_region.clone()).unwrap();
-            engine.prepare_for_apply(&cache_region);
+            engine.prepare_for_apply(&cache_region, false);
         }
 
         // ensure all ranges are finshed
@@ -3113,7 +3114,7 @@ pub mod tests {
         for r in [&region1, &region2, &region3] {
             let cache_region = CacheRegion::from_region(r);
             engine.load_region(cache_region.clone()).unwrap();
-            engine.prepare_for_apply(&cache_region);
+            engine.prepare_for_apply(&cache_region, false);
         }
 
         // ensure all ranges are finshed
@@ -3163,7 +3164,7 @@ pub mod tests {
         rocks_engine.put_cf(CF_WRITE, &key, b"val").unwrap();
         // After loading range1, the memory usage should be 140*6=840
         engine.load_region(cache_region1.clone()).unwrap();
-        engine.prepare_for_apply(&cache_region1);
+        engine.prepare_for_apply(&cache_region1, false);
 
         let region2 = new_region(2, construct_region_key(3), construct_region_key(5));
         let key = construct_key(3, 10);
@@ -3186,7 +3187,7 @@ pub mod tests {
 
         let cache_region2 = CacheRegion::from_region(&region2);
         engine.load_region(cache_region2.clone()).unwrap();
-        engine.prepare_for_apply(&cache_region2);
+        engine.prepare_for_apply(&cache_region2, false);
 
         // ensure all ranges are finshed
         test_util::eventually(Duration::from_millis(100), Duration::from_secs(2), || {
