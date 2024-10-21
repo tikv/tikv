@@ -953,10 +953,7 @@ pub fn new_server_cluster(id: u64, count: usize) -> Cluster<ServerCluster> {
     Cluster::new(id, count, sim, pd_client, ApiVersion::V1)
 }
 
-pub fn new_server_cluster_with_hybrid_engine_with_no_region_cache(
-    id: u64,
-    count: usize,
-) -> Cluster<ServerCluster> {
+pub fn new_server_cluster_with_hybrid_engine(id: u64, count: usize) -> Cluster<ServerCluster> {
     let pd_client = Arc::new(TestPdClient::new(id, false));
     let sim = Arc::new(RwLock::new(ServerCluster::new(Arc::clone(&pd_client))));
     let mut cluster = Cluster::new(id, count, sim, pd_client, ApiVersion::V1);
