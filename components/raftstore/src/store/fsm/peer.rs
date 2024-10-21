@@ -3731,6 +3731,14 @@ where
                             "peer_id" => self.fsm.peer_id(),
                             "to" => ?from,
                         );
+                        // As all the locks are proposed, we can safely propose the
+                        // `TransferLeader` command now. So, the previous
+                        // `TransferLeader` command, recorded as a
+                        // mutually exclusive command, should be cleared to
+                        // avoid deadlock in `ready_to_transfer_leader`.
+                        self.fsm
+                            .peer
+                            .clear_pending_admin_cmds_if_needed(Duration::default());
                         let mut cmd = new_admin_request(
                             self.fsm.peer.region().get_id(),
                             self.fsm.peer.peer.clone(),
