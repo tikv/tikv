@@ -491,7 +491,12 @@ impl WriteBatch for RegionCacheWriteBatch {
         }
         let time = Instant::now();
         // verify that the region is not prepared before
-        assert!(!self.prepared_regions.iter().any(|id| *id == region.id));
+        if let Some(region_id) = self.prepared_regions.iter().find(|id| *id == region.id) {
+            panic!(
+                "region {} is prepared for write before, but it is not the current region",
+                region_id
+            );
+        }
         self.prepared_regions.push(region.id);
         // record last region for clearing region in written flags.
         self.record_last_written_region();
