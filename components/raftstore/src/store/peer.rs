@@ -302,6 +302,7 @@ pub struct ProposedAdminCmd<S: Snapshot> {
     cmd_type: AdminCmdType,
     epoch_state: AdminCmdEpochState,
     index: u64,
+    timestamp: Instant,
     cbs: Vec<Callback<S>>,
 }
 
@@ -315,6 +316,7 @@ impl<S: Snapshot> ProposedAdminCmd<S> {
             cmd_type,
             epoch_state,
             index,
+            timestamp: Instant::now(),
             cbs: Vec::new(),
         }
     }
@@ -378,6 +380,31 @@ impl<S: Snapshot> CmdEpochChecker<S> {
         self.last_conflict_index(check_ver, check_conf_ver)
     }
 
+    /// Check if the given admin cmd can be proposed on the basis of its epoch
+    /// and previous proposed admin cmds.
+    fn propose_check_admin_cmd_epoch(&mut self, cmd_type: AdminCmdType, term: u64) -> Option<u64> {
+        let mock_admin_cmd = {
+            let mut req = RaftCmdRequest::default();
+            let mut admin_req = raft_cmdpb::AdminRequest::default();
+            admin_req.set_cmd_type(cmd_type);
+            req.set_admin_request(admin_req);
+            req
+        };
+        self.propose_check_epoch(&mock_admin_cmd, term)
+    }
+
+    fn forcely_post_propose(&mut self, cmd_type: AdminCmdType, index: u64, term: u64) {
+        self.maybe_update_term(term);
+        if let Some(cmd) = self.proposed_admin_cmd.back() {
+            assert!(cmd.index < index);
+        }
+        self.proposed_admin_cmd.push_back(ProposedAdminCmd::new(
+            cmd_type,
+            admin_cmd_epoch_lookup(cmd_type),
+            index,
+        ));
+    }
+
     fn post_propose(&mut self, cmd_type: AdminCmdType, index: u64, term: u64) {
         self.maybe_update_term(term);
         let epoch_state = admin_cmd_epoch_lookup(cmd_type);
@@ -387,18 +414,7 @@ impl<S: Snapshot> CmdEpochChecker<S> {
         );
 
         if epoch_state.change_conf_ver || epoch_state.change_ver {
-            if let Some(cmd) = self.proposed_admin_cmd.back() {
-                assert!(cmd.index < index);
-            }
-            self.proposed_admin_cmd
-                .push_back(ProposedAdminCmd::new(cmd_type, epoch_state, index));
-        } else if epoch_state.check_ver || epoch_state.check_conf_ver {
-            let proposed = ProposedAdminCmd::new(cmd_type, epoch_state, index);
-            // Although the command does not change the epoch, it should be checked whether
-            // it is mutually exclusive with other commands which change the epoch.
-            if proposed.is_mutually_exclusive() {
-                self.proposed_admin_cmd.push_back(proposed);
-            }
+            self.forcely_post_propose(cmd_type, index, term);
         }
     }
 
@@ -426,6 +442,21 @@ impl<S: Snapshot> CmdEpochChecker<S> {
             .rev()
             .find(|cmd| cmd.cmd_type == cmd_type)
             .map(|cmd| cmd.index)
+    }
+
+    /// Returns whether the last proposed admin cmd is mutually exclusive.
+    fn is_last_cmd_mutually_exclusive(&self) -> bool {
+        self.proposed_admin_cmd
+            .back()
+            .map_or(false, |cmd| cmd.is_mutually_exclusive())
+    }
+
+    fn last_mutually_exclusive_cmd_details(&self) -> Option<(AdminCmdType, u64, u64, Instant)> {
+        self.proposed_admin_cmd
+            .iter()
+            .rev()
+            .find(|cmd| cmd.is_mutually_exclusive())
+            .map(|cmd| (cmd.cmd_type, cmd.index, self.term, cmd.timestamp))
     }
 
     fn advance_apply(&mut self, index: u64, term: u64, region: &metapb::Region) {
@@ -3982,7 +4013,7 @@ where
     }
 
     pub fn ready_to_transfer_leader<T>(
-        &self,
+        &mut self,
         ctx: &mut PollContext<EK, ER, T>,
         mut index: u64,
         peer: &metapb::Peer,
@@ -4018,6 +4049,27 @@ where
         if last_index >= index + ctx.cfg.leader_transfer_max_log_lag {
             return Some("log gap");
         }
+
+        // To prevent unexpected behaviors in rare scenarios (e.g. #12410 and #17602.),
+        // we should check if there is any pending conf change before
+        // transferring leader.
+        if self
+            .cmd_epoch_checker
+            .propose_check_admin_cmd_epoch(AdminCmdType::TransferLeader, self.term())
+            .is_some()
+        {
+            return Some("pending mutually exclusive cmd");
+        }
+        // Mock a transfer leader proposal to check epoch with the last index.
+        // Although the command does not change the epoch, it should be checked
+        // whether it is mutually exclusive with other commands which
+        // change the epoch.
+        self.cmd_epoch_checker.forcely_post_propose(
+            AdminCmdType::TransferLeader,
+            last_index,
+            self.term(),
+        );
+
         None
     }
 
@@ -4884,6 +4936,14 @@ where
 
         let transferred = if peer.id == self.peer.id {
             false
+        } else if self
+            .cmd_epoch_checker
+            .propose_check_epoch(&req, self.term())
+            .is_some()
+        {
+            // If there exists a pending mutually exclusive command, we should reject the
+            // transfer leader command.
+            false
         } else {
             self.pre_transfer_leader(peer, extra_msgs, ctx)
         };
@@ -5478,6 +5538,29 @@ where
 
     pub fn needs_update_last_leader_committed_idx(&self) -> bool {
         self.busy_on_apply.is_some() && self.last_leader_committed_idx.is_none()
+    }
+
+    /// Clear the pending admin cmds if the last cmd is a mutually exclusive cmd
+    /// and it's timeout.
+    ///
+    /// Note that the mutually exclusive cmd may block the subsequent cmds, so
+    /// we should clear it if it's timeout.
+    pub fn clear_pending_admin_cmds_if_needed(&mut self, timeout: Duration) {
+        if !self.cmd_epoch_checker.is_last_cmd_mutually_exclusive() {
+            return;
+        }
+        // If the last cmd is a mutually exclusive cmd, we should check whether it's
+        // timeout to avoid blocking the subsequent cmds. Typically, the mutually
+        // exclusive cmd is a mocked `TransferLeader` command, which may block the
+        // subsequent ConfChange cmd if it's not committed for a long time.
+        let (_, index, term, start_ts) = self
+            .cmd_epoch_checker
+            .last_mutually_exclusive_cmd_details()
+            .unwrap();
+        if self.term() == term && start_ts.elapsed() >= timeout {
+            let region = self.region().clone();
+            self.cmd_epoch_checker.advance_apply(index, term, &region);
+        }
     }
 }
 
@@ -6540,7 +6623,7 @@ mod tests {
             );
             // Transfer leader admin cmd should not be ignored to avoid the later propose
             // on batch split before the transfer leader is applied.
-            epoch_checker.post_propose(AdminCmdType::TransferLeader, 5, 10);
+            epoch_checker.forcely_post_propose(AdminCmdType::TransferLeader, 5, 10);
             assert_eq!(epoch_checker.proposed_admin_cmd.len(), 1);
             // If there exists a transfer leader admin cmd, other admin cmds which needs to
             // check epoch.check_conf_change should be ignored.

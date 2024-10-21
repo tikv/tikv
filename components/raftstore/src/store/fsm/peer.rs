@@ -2298,6 +2298,11 @@ where
             return;
         }
 
+        // Clear the pending admin commands if the relative commands are time-out.
+        self.fsm
+            .peer
+            .clear_pending_admin_cmds_if_needed(self.ctx.cfg.raft_store_max_leader_lease.into());
+
         self.fsm.peer.retry_pending_reads(&self.ctx.cfg);
 
         self.check_force_leader();
