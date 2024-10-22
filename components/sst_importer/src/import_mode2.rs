@@ -8,7 +8,7 @@ use std::{
 use collections::{HashMap, HashSet};
 use futures_util::compat::Future01CompatExt;
 use kvproto::{import_sstpb::Range, metapb::Region};
-use tikv_util::timer::GLOBAL_TIMER_HANDLE;
+use tikv_util::{resizable_threadpool::ResizableRuntimeHandle, timer::GLOBAL_TIMER_HANDLE};
 use tokio::runtime::Handle;
 
 use super::Config;
@@ -59,6 +59,47 @@ impl ImportModeSwitcherV2 {
     // Periodically perform timeout check to change import mode of some regions back
     // to normal mode.
     pub fn start(&self, executor: &Handle) {
+        // spawn a background future to put regions back into normal mode after timeout
+        let inner = self.inner.clone();
+        let switcher = Arc::downgrade(&inner);
+        let timer_loop = async move {
+            let mut prev_ranges = vec![];
+            // loop until the switcher has been dropped
+            while let Some(switcher) = switcher.upgrade() {
+                let next_check = {
+                    let now = Instant::now();
+                    let mut switcher = switcher.lock().unwrap();
+                    for range in prev_ranges.drain(..) {
+                        if let Some(next_check) = switcher.import_mode_ranges.get(&range) {
+                            if now >= *next_check {
+                                switcher.clear_import_mode_range(range);
+                            }
+                        }
+                    }
+
+                    let mut min_next_check = now + switcher.timeout;
+                    for (range, next_check) in &switcher.import_mode_ranges {
+                        if *next_check <= min_next_check {
+                            if *next_check < min_next_check {
+                                min_next_check = *next_check;
+                                prev_ranges.clear();
+                            }
+                            prev_ranges.push(range.clone());
+                        }
+                    }
+                    min_next_check
+                };
+
+                let ok = GLOBAL_TIMER_HANDLE.delay(next_check).compat().await.is_ok();
+                if !ok {
+                    warn!("failed to delay with global timer");
+                }
+            }
+        };
+        executor.spawn(timer_loop);
+    }
+
+    pub fn start_resizable_threads(&self, executor: &ResizableRuntimeHandle) {
         // spawn a background future to put regions back into normal mode after timeout
         let inner = self.inner.clone();
         let switcher = Arc::downgrade(&inner);

@@ -39,14 +39,12 @@ use tikv_util::{
     },
     future::RescheduleChecker,
     memory::{MemoryQuota, OwnedAllocated},
+    resizable_threadpool::ResizableRuntimeHandle,
     sys::{thread::ThreadBuildWrapper, SysQuota},
     time::{Instant, Limiter},
     Either, HandyRwLock,
 };
-use tokio::{
-    runtime::{Handle, Runtime},
-    sync::OnceCell,
-};
+use tokio::{runtime::Runtime, sync::OnceCell};
 use txn_types::{Key, TimeStamp, WriteRef};
 
 use crate::{
@@ -267,10 +265,10 @@ impl<E: KvEngine> SstImporter<E> {
         }
     }
 
-    pub fn start_switch_mode_check(&self, executor: &Handle, db: Option<E>) {
+    pub fn start_switch_mode_check(&self, executor: &ResizableRuntimeHandle, db: Option<E>) {
         match &self.switcher {
-            Either::Left(switcher) => switcher.start(executor, db.unwrap()),
-            Either::Right(switcher) => switcher.start(executor),
+            Either::Left(switcher) => switcher.start_resizable_threads(executor, db.unwrap()),
+            Either::Right(switcher) => switcher.start_resizable_threads(executor),
         }
     }
 

@@ -1,16 +1,15 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
-
 use api_version::{dispatch_api_version, ApiV2, KeyMode, KvFormat};
 use file_system::IoType;
-use futures::Future;
 use kvproto::kvrpcpb::ApiVersion;
-use tikv_util::{error, sys::thread::ThreadBuildWrapper};
+use tikv_util::{
+    error, resizable_threadpool::TokioRuntimeCreator, sys::thread::ThreadBuildWrapper,
+};
 use tokio::{io::Result as TokioResult, runtime::Runtime};
 use txn_types::{Key, TimeStamp};
 
-use crate::{metrics::*, Result};
+use crate::Result;
 
 // BACKUP_V1_TO_V2_TS is used as causal timestamp to backup RawKV api version
 // V1/V1Ttl data and save to V2 format. Use 1 other than 0 because 0 is not a
@@ -19,88 +18,6 @@ pub const BACKUP_V1_TO_V2_TS: u64 = 1;
 /// DaemonRuntime is a "background" runtime, which contains "daemon" tasks:
 /// any task spawn into it would run until finish even the runtime isn't
 /// referenced.
-pub struct DaemonRuntime(Option<Runtime>);
-
-impl DaemonRuntime {
-    /// spawn a daemon task to the runtime.
-    pub fn spawn(self: &Arc<Self>, f: impl Future<Output = ()> + Send + 'static) {
-        let wkr = self.clone();
-        self.0.as_ref().unwrap().spawn(async move {
-            f.await;
-            drop(wkr)
-        });
-    }
-
-    /// create a daemon runtime from some runtime.
-    pub fn from_runtime(rt: Runtime) -> Arc<Self> {
-        Arc::new(Self(Some(rt)))
-    }
-}
-
-impl Drop for DaemonRuntime {
-    fn drop(&mut self) {
-        // it is safe because all tasks should be finished.
-        self.0.take().unwrap().shutdown_background()
-    }
-}
-pub struct ControlThreadPool {
-    pub(crate) size: usize,
-    workers: Option<Arc<DaemonRuntime>>,
-}
-
-impl ControlThreadPool {
-    pub fn new() -> Self {
-        ControlThreadPool {
-            size: 0,
-            workers: None,
-        }
-    }
-
-    pub fn spawn<F>(&self, func: F)
-    where
-        F: Future<Output = ()> + Send + 'static,
-    {
-        self.workers
-            .as_ref()
-            .expect("ControlThreadPool: please call adjust_with() before spawn()")
-            .spawn(func);
-    }
-
-    /// Lazily adjust the thread pool's size
-    ///
-    /// Resizing if the thread pool need to expend or there
-    /// are too many idle threads. Otherwise do nothing.
-    pub fn adjust_with(&mut self, new_size: usize) {
-        if self.size >= new_size && self.size - new_size <= 10 {
-            return;
-        }
-        // TODO: after tokio supports adjusting thread pool size(https://github.com/tokio-rs/tokio/issues/3329),
-        //   adapt it.
-        let workers = create_tokio_runtime(new_size, "bkwkr")
-            .expect("failed to create tokio runtime for backup worker.");
-        self.workers = Some(DaemonRuntime::from_runtime(workers));
-        self.size = new_size;
-        BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64);
-    }
-}
-
-/// Create a standard tokio runtime.
-/// (which allows io and time reactor, involve thread memory accessor),
-/// and set the I/O type to export.
-pub fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResult<Runtime> {
-    tokio::runtime::Builder::new_multi_thread()
-        .thread_name(thread_name)
-        .enable_io()
-        .enable_time()
-        .with_sys_and_custom_hooks(
-            || {
-                file_system::set_io_type(IoType::Export);
-            },
-            || {},
-        )
-        .worker_threads(thread_count)
-        .build()
-}
 
 #[derive(Debug, Copy, Clone)]
 pub struct KeyValueCodec {
@@ -261,6 +178,28 @@ impl KeyValueCodec {
                 API::convert_raw_user_key_range_version_from(self.cur_api_ver, start_key, end_key)?;
             Ok((start, end))
         })
+    }
+}
+
+pub struct BackupRuntimeCreator;
+
+impl TokioRuntimeCreator for BackupRuntimeCreator {
+    /// Create a standard tokio runtime.
+    /// (which allows io and time reactor, involve thread memory accessor),
+    /// and set the I/O type to export.
+    fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResult<Runtime> {
+        tokio::runtime::Builder::new_multi_thread()
+            .thread_name(thread_name)
+            .enable_io()
+            .enable_time()
+            .with_sys_and_custom_hooks(
+                || {
+                    file_system::set_io_type(IoType::Export);
+                },
+                || {},
+            )
+            .worker_threads(thread_count)
+            .build()
     }
 }
 
