@@ -45,6 +45,17 @@ make_auto_flush_static_metric! {
         manual,
     }
 
+    pub label_enum OperationType {
+        put,
+        delete,
+    }
+
+    pub label_enum CF {
+        default,
+        lock,
+        write,
+    }
+
     pub struct GcFilteredCountVec: LocalIntCounter {
         "type" => KeyCountType,
     }
@@ -55,6 +66,11 @@ make_auto_flush_static_metric! {
 
     pub struct EvictionDurationVec: LocalHistogram {
         "type" => EvictReasonType,
+    }
+
+    pub struct OperationTypeForCF: LocalIntCounter {
+        "type" => OperationType,
+        "cf" => CF,
     }
 }
 
@@ -127,6 +143,11 @@ lazy_static! {
         exponential_buckets(0.00001, 2.0, 26).unwrap()
     )
     .unwrap();
+    pub static ref IN_MEMORY_ENGINE_KV_OPERATIONS: IntCounterVec = register_int_counter_vec!(
+        "tikv_in_memory_engine_kv_operations",
+        "Number of kv operations",
+        &["type", "cf"]
+    )
 }
 
 lazy_static! {
@@ -140,6 +161,8 @@ lazy_static! {
         IN_MEMORY_ENGINE_EVICTION_DURATION_HISTOGRAM,
         EvictionDurationVec
     );
+    pub static ref IN_MEMORY_ENGINE_OPERATION_STATIC: OperationTypeForCF =
+        auto_flush_from!(IN_MEMORY_ENGINE_KV_OPERATIONS, OperationTypeForCF);
 }
 
 pub fn flush_in_memory_engine_statistics(statistics: &Arc<InMemoryEngineStatistics>) {

@@ -20,7 +20,7 @@ use crate::{
     keys::{encode_key, InternalBytes, ValueType, ENC_KEY_SEQ_LENGTH},
     memory_controller::{MemoryController, MemoryUsage},
     metrics::{
-        IN_MEMORY_ENGINE_PREPARE_FOR_WRITE_DURATION_HISTOGRAM,
+        IN_MEMORY_ENGINE_OPERATION_STATIC, IN_MEMORY_ENGINE_PREPARE_FOR_WRITE_DURATION_HISTOGRAM,
         IN_MEMORY_ENGINE_WRITE_DURATION_HISTOGRAM,
     },
     region_manager::RegionCacheStatus,
@@ -176,17 +176,41 @@ impl RegionCacheWriteBatch {
         let start = Instant::now();
         let mut lock_modification: u64 = 0;
         let engine = self.engine.core.engine();
+
+        // record the number of insertions and deletions for each cf
+        let mut put = vec![0, 0, 0];
+        let mut delete = vec![0, 0, 0];
         // Some entries whose ranges may be marked as evicted above, but it does not
         // matter, they will be deleted later.
         std::mem::take(&mut self.buffer).into_iter().for_each(|e| {
             if is_lock_cf(e.cf) {
                 lock_modification += e.data_size() as u64;
             }
+            if e.is_insertion() {
+                put[cf_to_id(e.cf)] += 1;
+            } else {
+                delete[cf_to_id(e.cf)] += 1;
+            }
+
             e.write_to_memory(seq, &engine, self.memory_controller.clone(), guard);
             seq += 1;
         });
         let duration = start.saturating_elapsed_secs();
         IN_MEMORY_ENGINE_WRITE_DURATION_HISTOGRAM.observe(duration);
+        for i in 0..3 {
+            if put[i] > 0 {
+                IN_MEMORY_ENGINE_OPERATION_STATIC
+                    .put
+                    .with_label_values(&[id_to_cf(i)])
+                    .inc_by(put[i] as u64);
+            }
+            if delete[i] > 0 {
+                IN_MEMORY_ENGINE_OPERATION_STATIC
+                    .delete
+                    .with_label_values(&[id_to_cf(i)])
+                    .inc_by(delete[i] as u64);
+            }
+        }
 
         fail::fail_point!("ime_on_region_cache_write_batch_write_consumed");
         fail::fail_point!("ime_before_clear_regions_in_being_written");
@@ -336,6 +360,10 @@ pub(crate) struct RegionCacheWriteBatchEntry {
 }
 
 impl RegionCacheWriteBatchEntry {
+    pub fn is_insertion(&self) -> bool {
+        matches!(self.inner, WriteBatchEntryInternal::PutValue(_))
+    }
+
     pub fn put_value(cf: &str, key: &[u8], value: &[u8]) -> Self {
         Self {
             cf: cf_to_id(cf),
