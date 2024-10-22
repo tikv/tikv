@@ -1350,7 +1350,7 @@ impl RunnableWithTimer for BackgroundRunner {
             if let Ok(Ok(tikv_safe_point)) =
                 block_on_timeout(self.pd_client.get_gc_safe_point(), Duration::from_secs(5))
             {
-                if tikv_safe_point < oldest_safe_point {
+                if tikv_safe_point > oldest_safe_point {
                     warn!(
                         "ime oldest auto gc safe point is older than tikv's auto gc safe point";
                         "tikv_safe_point" => tikv_safe_point,
@@ -1358,7 +1358,8 @@ impl RunnableWithTimer for BackgroundRunner {
                     );
                 }
 
-                let gap = TimeStamp::new(oldest_safe_point - tikv_safe_point).physical();
+                let gap =
+                    TimeStamp::new(oldest_safe_point.saturating_sub(tikv_safe_point)).physical();
                 // If gap is too larger (more than a year), it means tikv safe point is not
                 // initialized, so we does not update the metrics now.
                 if gap < Duration::from_secs(365 * 24 * 3600).as_millis() as u64 {
