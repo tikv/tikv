@@ -1351,18 +1351,18 @@ impl RunnableWithTimer for BackgroundRunner {
                 block_on_timeout(self.pd_client.get_gc_safe_point(), Duration::from_secs(5))
             {
                 if tikv_safe_point < oldest_safe_point {
-                    let gap = TimeStamp::new(oldest_safe_point - tikv_safe_point).physical();
-                    // If gap is too larger (more than a year), it means tikv safe point is not
-                    // initialized, so we does not update the metrics now.
-                    if gap < Duration::from_secs(365 * 24 * 3600).as_millis() as u64 {
-                        SAFE_POINT_GAP.set((oldest_safe_point - tikv_safe_point) as i64);
-                    }
-                } else {
                     warn!(
                         "ime oldest auto gc safe point is older than tikv's auto gc safe point";
                         "tikv_safe_point" => tikv_safe_point,
                         "ime_oldest_safe_point" => oldest_safe_point,
                     );
+                }
+
+                let gap = TimeStamp::new(oldest_safe_point - tikv_safe_point).physical();
+                // If gap is too larger (more than a year), it means tikv safe point is not
+                // initialized, so we does not update the metrics now.
+                if gap < Duration::from_secs(365 * 24 * 3600).as_millis() as u64 {
+                    SAFE_POINT_GAP.set(oldest_safe_point as i64 - tikv_safe_point as i64);
                 }
             }
         }
