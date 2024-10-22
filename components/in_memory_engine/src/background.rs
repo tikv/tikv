@@ -13,7 +13,6 @@ use engine_traits::{
     SnapshotMiscExt, CF_DEFAULT, CF_WRITE, DATA_CFS,
 };
 use fail::fail_point;
-use futures::executor::block_on;
 use keys::{origin_end_key, origin_key};
 use pd_client::{PdClient, RpcClient};
 use raftstore::{
@@ -1348,7 +1347,9 @@ impl RunnableWithTimer for BackgroundRunner {
         if oldest_safe_point != u64::MAX {
             IN_MEMORY_ENGINE_OLDEST_SAFE_POINT.set(oldest_safe_point as i64);
             IN_MEMORY_ENGINE_NEWEST_SAFE_POINT.set(newest_safe_point as i64);
-            if let Ok(tikv_safe_point) = block_on(self.pd_client.get_gc_safe_point()) {
+            if let Ok(Ok(tikv_safe_point)) =
+                block_on_timeout(self.pd_client.get_gc_safe_point(), Duration::from_secs(5))
+            {
                 if tikv_safe_point < oldest_safe_point {
                     let gap = TimeStamp::new(oldest_safe_point - tikv_safe_point).physical();
                     // If gap is too larger (more than a year), it means tikv safe point is not
@@ -1358,7 +1359,7 @@ impl RunnableWithTimer for BackgroundRunner {
                     }
                 } else {
                     warn!(
-                        "ime oldest auto gc safe point is olrder than tikv's auto gc safe point";
+                        "ime oldest auto gc safe point is older than tikv's auto gc safe point";
                         "tikv_safe_point" => tikv_safe_point,
                         "ime_oldest_safe_point" => oldest_safe_point,
                     );
