@@ -2387,7 +2387,7 @@ mod tests {
         let r = cfg_mgr.dispatch(change);
 
         r.unwrap();
-        assert_eq!((*cfg_mgr.rl()).num_threads, cfg_new.num_threads);
+        assert_eq!(cfg_mgr.rl().num_threads, cfg_new.num_threads);
         assert_eq!(COUNTER.load(Ordering::SeqCst), cfg_mgr.rl().num_threads);
     }
 
