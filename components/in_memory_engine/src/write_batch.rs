@@ -485,24 +485,24 @@ impl WriteBatch for RegionCacheWriteBatch {
     }
 
     fn prepare_for_region(&mut self, region: &metapb::Region) {
-        let cached_region = CacheRegion::from_region(region);
         if let Some(current_region) = &self.current_region
-            && current_region == &cached_region
+            && current_region.id == region.id
         {
             return;
         }
         let time = Instant::now();
         // verify that the region is not prepared before
-        if let Some(region_id) = self.prepared_regions.iter().find(|id| **id == region.id) {
+        if self.prepared_regions.contains(&region.id) {
             panic!(
                 "region {} is prepared for write before, but it is not the current region",
-                region_id
+                region.id
             );
         }
         self.prepared_regions.push(region.id);
         // record last region for clearing region in written flags.
         self.record_last_written_region();
 
+        let cached_region = CacheRegion::from_region(region);
         // TODO: remote range.
         self.set_region_cache_status(
             self.engine
