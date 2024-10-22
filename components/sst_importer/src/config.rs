@@ -7,7 +7,9 @@ use std::{
 };
 
 use online_config::{self, OnlineConfig};
-use tikv_util::{config::ReadableDuration, HandyRwLock, resizable_threadpool::ResizableRuntimeHandle};
+use tikv_util::{
+    config::ReadableDuration, resizable_threadpool::ResizableRuntimeHandle, HandyRwLock,
+};
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
@@ -64,14 +66,13 @@ impl Config {
 pub struct ConfigManager {
     pub config: Arc<RwLock<Config>>,
     threads: ResizableRuntimeHandle,
-
 }
 
 impl ConfigManager {
     pub fn new(cfg: Config, threads: ResizableRuntimeHandle) -> Self {
         ConfigManager {
             config: Arc::new(RwLock::new(cfg)),
-            threads
+            threads,
         }
     }
 }

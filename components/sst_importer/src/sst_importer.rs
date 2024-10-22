@@ -44,7 +44,7 @@ use tikv_util::{
     time::{Instant, Limiter},
     Either, HandyRwLock,
 };
-use tokio::{runtime::Runtime, sync::OnceCell, io::Result as TokioResult};
+use tokio::{io::Result as TokioResult, runtime::Runtime, sync::OnceCell};
 use txn_types::{Key, TimeStamp, WriteRef};
 
 use crate::{
@@ -1639,7 +1639,11 @@ mod tests {
     use tempfile::{Builder, TempDir};
     use test_sst_importer::*;
     use test_util::new_test_key_manager;
-    use tikv_util::{codec::stream_event::EventEncoder, stream::block_on_external_io, resizable_threadpool::{ResizableRuntime, TokioRuntimeCreator}};
+    use tikv_util::{
+        codec::stream_event::EventEncoder,
+        resizable_threadpool::{ResizableRuntime, TokioRuntimeCreator},
+        stream::block_on_external_io,
+    };
     use tokio::io::{AsyncWrite, AsyncWriteExt};
     use tokio_util::compat::{FuturesAsyncWriteCompatExt, TokioAsyncWriteCompatExt};
     use txn_types::{Value, WriteType};
@@ -2334,7 +2338,7 @@ mod tests {
                     .build()
             }
         }
-        let mut threads = ResizableRuntime::new(
+        let threads = ResizableRuntime::new(
             "test",
             |_| {},
             TestImportRuntimeCreator::create_tokio_runtime,

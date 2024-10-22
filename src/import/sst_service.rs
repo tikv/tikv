@@ -342,7 +342,7 @@ impl<E: Engine> ImportSstService<E> {
             }
         });
 
-        let cfg_mgr = ConfigManager::new(cfg,handle.clone());
+        let cfg_mgr = ConfigManager::new(cfg, handle.clone());
         handle.spawn(Self::tick(importer.clone(), cfg_mgr.clone()));
 
         ImportSstService {
