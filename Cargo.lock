@@ -2881,7 +2881,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#50354af084e72d3a00f2704ce28671e2cb1b03cc"
+source = "git+https://github.com/v01dstar/rust-rocksdb?branch=revert-ingest-check#e72ff723483fd9453819ff8a0b08327025132765"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -2900,7 +2900,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#50354af084e72d3a00f2704ce28671e2cb1b03cc"
+source = "git+https://github.com/v01dstar/rust-rocksdb?branch=revert-ingest-check#e72ff723483fd9453819ff8a0b08327025132765"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4702,7 +4702,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#50354af084e72d3a00f2704ce28671e2cb1b03cc"
+source = "git+https://github.com/v01dstar/rust-rocksdb?branch=revert-ingest-check#e72ff723483fd9453819ff8a0b08327025132765"
 dependencies = [
  "libc 0.2.151",
  "librocksdb_sys",
