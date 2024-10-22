@@ -183,7 +183,7 @@ impl RegionCacheWriteBatch {
         // record last region before flush.
         self.record_last_written_region();
 
-        fail::fail_point!("on_region_cache_write_batch_write_impl");
+        fail::fail_point!("ime_on_region_cache_write_batch_write_impl");
         let guard = &epoch::pin();
         let start = Instant::now();
         let mut lock_modification: u64 = 0;
@@ -200,8 +200,8 @@ impl RegionCacheWriteBatch {
         let duration = start.saturating_elapsed_secs();
         IN_MEMORY_ENGINE_WRITE_DURATION_HISTOGRAM.observe(duration);
 
-        fail::fail_point!("in_memory_engine_write_batch_consumed");
-        fail::fail_point!("before_clear_ranges_in_being_written");
+        fail::fail_point!("ime_on_region_cache_write_batch_write_consumed");
+        fail::fail_point!("ime_before_clear_regions_in_being_written");
 
         if !self.written_regions.is_empty() {
             self.engine
@@ -246,14 +246,14 @@ impl RegionCacheWriteBatch {
 
         if !self.engine.enabled() {
             let region = self.current_region.as_ref().unwrap();
-            info!("ime range cache is disabled, evict the range"; "region" => ?region);
+            info!("ime is disabled, evict the range"; "region" => ?region);
             self.evict_current_region(EvictReason::Disabled);
             return;
         }
         let memory_expect = entry_size();
         if !self.memory_acquire(memory_expect) {
             let region = self.current_region.as_ref().unwrap();
-            info!("ime memory acquire failed due to reaching hard limit"; "region" => ?region);
+            info!("ime memory acquire failed due to reaches capacity"; "region" => ?region);
             self.evict_current_region(EvictReason::MemoryLimitReached);
             return;
         }
@@ -280,13 +280,13 @@ impl RegionCacheWriteBatch {
         }
     }
 
-    // return false means the memory usage reaches to hard limit and we have no
+    // return false means the memory usage reaches to capacity and we have no
     // quota to write to the engine
     fn memory_acquire(&mut self, mem_required: usize) -> bool {
         match self.memory_controller.acquire(mem_required) {
             MemoryUsage::CapacityReached(n) => {
                 warn!(
-                    "ime the memory usage of in-memory engine reaches to hard limit";
+                    "ime the memory usage reaches capacity";
                     "region" => ?self.current_region.as_ref().unwrap(),
                     "memory_usage(MB)" => ReadableSize(n as u64).as_mb_f64(),
                 );
@@ -936,20 +936,20 @@ mod tests {
             .snapshot(CacheRegion::from_region(&r1), 1000, 1000)
             .unwrap();
 
-        // disable the range cache
+        // disable the ime
         let mut config_manager = InMemoryEngineConfigManager(config.clone());
         let mut config_change = ConfigChange::new();
         config_change.insert(String::from("enable"), ConfigValue::Bool(false));
         config_manager.dispatch(config_change).unwrap();
 
         wb.write_impl(1000).unwrap();
-        // existing snapshot can still work after the range cache is disabled, but new
+        // existing snapshot can still work after the ime is disabled, but new
         // snapshot will fail to create
         assert!(snap1.get_value(b"zkk00").unwrap().is_none());
 
         let mut wb = RegionCacheWriteBatch::from(&engine);
+        // put should trigger the evict and it won't write into ime
         wb.prepare_for_region(&r1);
-        // put should trigger the evict and it won't write into range cache
         wb.put(b"zkk01", &val1).unwrap();
         wb.write_impl(1000).unwrap();
 
@@ -959,10 +959,10 @@ mod tests {
         let snap2 = engine
             .snapshot(CacheRegion::from_region(&r2), 1000, 1000)
             .unwrap();
-        // if no new write, the range cache can still be used.
+        // if no new write, the ime can still be used.
         assert_eq!(snap2.get_value(b"zkk11").unwrap().unwrap(), &val1);
 
-        // enable the range cache again
+        // enable the ime again
         let mut config_manager = InMemoryEngineConfigManager(config.clone());
         let mut config_change = ConfigChange::new();
         config_change.insert(String::from("enable"), ConfigValue::Bool(true));
