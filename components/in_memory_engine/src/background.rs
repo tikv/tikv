@@ -1739,9 +1739,8 @@ pub mod tests {
     use crossbeam::epoch;
     use engine_rocks::util::new_engine;
     use engine_traits::{
-        CacheRegion, IterOptions, Iterable, Iterator, KvEngine, Mutable, RegionCacheEngine,
-        RegionCacheEngineExt, RegionEvent, SyncMutable, WriteBatch, WriteBatchExt, CF_DEFAULT,
-        CF_LOCK, CF_WRITE, DATA_CFS,
+        CacheRegion, IterOptions, Iterable, Iterator, RegionCacheEngine, RegionCacheEngineExt,
+        RegionEvent, SyncMutable, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
     };
     use futures::future::ready;
     use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};
