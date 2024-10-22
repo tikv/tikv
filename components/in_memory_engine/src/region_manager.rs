@@ -200,7 +200,7 @@ impl CacheRegionMeta {
         valid_new_states.contains(&new_state)
     }
 
-    pub fn set_state(&mut self, new_state: RegionState) {
+    pub(crate) fn set_state(&mut self, new_state: RegionState) {
         assert!(self.validate_update_region_state(new_state));
         info!(
             "ime update region meta state";
