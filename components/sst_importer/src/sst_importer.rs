@@ -1616,7 +1616,8 @@ mod tests {
     use std::{
         io::{self, Cursor},
         ops::Sub,
-        usize, sync::atomic::{AtomicUsize, Ordering},
+        sync::atomic::{AtomicUsize, Ordering},
+        usize,
     };
 
     use async_compression::tokio::write::ZstdEncoder;
@@ -2375,7 +2376,7 @@ mod tests {
         let handle = ResizableRuntimeHandle::new(threads);
         let mut cfg_mgr = ImportConfigManager::new(Config::default(), handle);
 
-        assert_eq!(COUNTER.load(Ordering::SeqCst), (*cfg_mgr.rl()).num_threads);
+        assert_eq!(COUNTER.load(Ordering::SeqCst), cfg_mgr.rl().num_threads);
         assert_eq!(cfg_mgr.rl().num_threads, Config::default().num_threads);
 
         let cfg_new = Config {
@@ -2385,9 +2386,9 @@ mod tests {
         let change = Config::default().diff(&cfg_new);
         let r = cfg_mgr.dispatch(change);
 
-        assert!(r.is_ok());
+        r.unwrap();
         assert_eq!((*cfg_mgr.rl()).num_threads, cfg_new.num_threads);
-        assert_eq!(COUNTER.load(Ordering::SeqCst), (*cfg_mgr.rl()).num_threads);
+        assert_eq!(COUNTER.load(Ordering::SeqCst), cfg_mgr.rl().num_threads);
     }
 
     #[test]
