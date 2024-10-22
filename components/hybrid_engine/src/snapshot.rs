@@ -62,8 +62,9 @@ where
         let mut region_cache_snap = None;
         if let Some(snap_pin) = snap_pin {
             let snap_any: Box<dyn Any> = snap_pin;
-            let region_cache_snap_pin: Box<RegionCacheSnapshotPin> = snap_any.downcast().unwrap();
-            region_cache_snap = region_cache_snap_pin.snap;
+            let mut region_cache_snap_pin: Box<RegionCacheSnapshotPin> =
+                snap_any.downcast().unwrap();
+            region_cache_snap = region_cache_snap_pin.take();
         }
         HybridEngineSnapshot {
             disk_snap,
