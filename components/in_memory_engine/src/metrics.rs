@@ -147,6 +147,20 @@ lazy_static! {
         "tikv_in_memory_engine_kv_operations",
         "Number of kv operations",
         &["type", "cf"]
+    ).unwrap();
+    pub static ref IN_MEMORY_ENGINE_OLDEST_SAFE_POINT: IntGauge = register_int_gauge!(
+        "tikv_in_memory_engine_oldest_safe_point",
+        "The oldest safe point in the in-memory engine",
+    )
+    .unwrap();
+    pub static ref IN_MEMORY_ENGINE_NEWEST_SAFE_POINT: IntGauge = register_int_gauge!(
+        "tikv_in_memory_engine_newest_safe_point",
+        "The newest safe point in the in-memory engine",
+    )
+    .unwrap();
+    pub static ref SAFE_POINT_GAP: IntGauge = register_int_gauge!(
+        "tikv_safe_point_gap_with_in_memory_engine",
+        "The gap between tikv auto gc safe point and the oldest auto gc safe point in the in-memory engine",
     )
     .unwrap();
 }
