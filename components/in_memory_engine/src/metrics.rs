@@ -148,6 +148,7 @@ lazy_static! {
         "Number of kv operations",
         &["type", "cf"]
     )
+    .unwrap();
 }
 
 lazy_static! {
@@ -246,4 +247,36 @@ pub(crate) fn observe_eviction_duration(secs: f64, evict_reason: EvictReason) {
             .manual
             .observe(secs),
     }
+}
+
+pub(crate) fn count_operations_for_cfs(put_operations: &[u64], delete_operations: &[u64]) {
+    // according to `cf_to_id`, we have 0 for CF_DEFAULT, 1 for CF_LOCK, and 2 for
+    // CF_WRITE
+    assert_eq!(put_operations.len(), 3);
+    assert_eq!(delete_operations.len(), 3);
+    IN_MEMORY_ENGINE_OPERATION_STATIC
+        .put
+        .default
+        .inc_by(put_operations[0]);
+    IN_MEMORY_ENGINE_OPERATION_STATIC
+        .put
+        .lock
+        .inc_by(put_operations[1]);
+    IN_MEMORY_ENGINE_OPERATION_STATIC
+        .put
+        .write
+        .inc_by(put_operations[2]);
+
+    IN_MEMORY_ENGINE_OPERATION_STATIC
+        .delete
+        .default
+        .inc_by(delete_operations[0]);
+    IN_MEMORY_ENGINE_OPERATION_STATIC
+        .delete
+        .lock
+        .inc_by(delete_operations[1]);
+    IN_MEMORY_ENGINE_OPERATION_STATIC
+        .delete
+        .write
+        .inc_by(delete_operations[2]);
 }
