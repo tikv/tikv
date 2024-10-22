@@ -485,6 +485,8 @@ impl WriteBatch for RegionCacheWriteBatch {
     }
 
     fn prepare_for_region(&mut self, region: &metapb::Region) {
+        // If the region is already prepared for write, we do not need to prepare it
+        // again. See comments for the `prepared_regions` field for more details.
         if let Some(current_region) = &self.current_region
             && current_region.id == region.id
         {
