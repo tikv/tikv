@@ -43,7 +43,8 @@ use crate::{
     metrics::{
         IN_MEMORY_ENGINE_CACHE_COUNT, IN_MEMORY_ENGINE_GC_FILTERED_STATIC,
         IN_MEMORY_ENGINE_GC_TIME_HISTOGRAM, IN_MEMORY_ENGINE_LOAD_TIME_HISTOGRAM,
-        IN_MEMORY_ENGINE_MEMORY_USAGE,
+        IN_MEMORY_ENGINE_MEMORY_USAGE, IN_MEMORY_ENGINE_NEWEST_SAFE_POINT,
+        IN_MEMORY_ENGINE_OLDEST_SAFE_POINT, SAFE_POINT_GAP,
     },
     region_label::{
         LabelRule, RegionLabelChangedCallback, RegionLabelRulesManager, RegionLabelServiceBuilder,
@@ -1330,10 +1331,40 @@ impl RunnableWithTimer for BackgroundRunner {
         IN_MEMORY_ENGINE_MEMORY_USAGE.set(mem_usage as i64);
 
         let mut count_by_state = [0; RegionState::COUNT];
+        let mut oldest_safe_point = u64::MAX;
+        let mut newest_safe_point = u64::MIN;
         {
             let regions_map = self.core.engine.region_manager().regions_map.read();
             for m in regions_map.regions().values() {
                 count_by_state[m.get_state() as usize] += 1;
+                if m.get_state() == RegionState::Active && m.safe_point() != 0 {
+                    oldest_safe_point = u64::min(oldest_safe_point, m.safe_point());
+                    newest_safe_point = u64::max(newest_safe_point, m.safe_point());
+                }
+            }
+        }
+
+        if oldest_safe_point != u64::MAX {
+            IN_MEMORY_ENGINE_OLDEST_SAFE_POINT.set(oldest_safe_point as i64);
+            IN_MEMORY_ENGINE_NEWEST_SAFE_POINT.set(newest_safe_point as i64);
+            if let Ok(Ok(tikv_safe_point)) =
+                block_on_timeout(self.pd_client.get_gc_safe_point(), Duration::from_secs(5))
+            {
+                if tikv_safe_point > oldest_safe_point {
+                    warn!(
+                        "ime oldest auto gc safe point is older than tikv's auto gc safe point";
+                        "tikv_safe_point" => tikv_safe_point,
+                        "ime_oldest_safe_point" => oldest_safe_point,
+                    );
+                }
+
+                let gap =
+                    TimeStamp::new(oldest_safe_point.saturating_sub(tikv_safe_point)).physical();
+                // If gap is too larger (more than a year), it means tikv safe point is not
+                // initialized, so we does not update the metrics now.
+                if gap < Duration::from_secs(365 * 24 * 3600).as_millis() as u64 {
+                    SAFE_POINT_GAP.set(oldest_safe_point as i64 - tikv_safe_point as i64);
+                }
             }
         }
 
