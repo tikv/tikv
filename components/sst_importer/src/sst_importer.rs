@@ -44,7 +44,7 @@ use tikv_util::{
     time::{Instant, Limiter},
     Either, HandyRwLock,
 };
-use tokio::{runtime::Runtime, sync::OnceCell};
+use tokio::{runtime::Runtime, sync::OnceCell, io::Result as TokioResult};
 use txn_types::{Key, TimeStamp, WriteRef};
 
 use crate::{
@@ -1639,7 +1639,7 @@ mod tests {
     use tempfile::{Builder, TempDir};
     use test_sst_importer::*;
     use test_util::new_test_key_manager;
-    use tikv_util::{codec::stream_event::EventEncoder, stream::block_on_external_io};
+    use tikv_util::{codec::stream_event::EventEncoder, stream::block_on_external_io, resizable_threadpool::{ResizableRuntime, TokioRuntimeCreator}};
     use tokio::io::{AsyncWrite, AsyncWriteExt};
     use tokio_util::compat::{FuturesAsyncWriteCompatExt, TokioAsyncWriteCompatExt};
     use txn_types::{Value, WriteType};
@@ -2286,8 +2286,23 @@ mod tests {
         };
         let change = cfg.diff(&cfg_new);
 
+        struct TestImportRuntimeCreator;
+        impl TokioRuntimeCreator for TestImportRuntimeCreator {
+            fn create_tokio_runtime(_: usize, _: &str) -> TokioResult<Runtime> {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+            }
+        }
+        let threads = ResizableRuntime::new(
+            "test",
+            |_| {},
+            TestImportRuntimeCreator::create_tokio_runtime,
+        );
+        let handle = ResizableRuntimeHandle::new(threads);
+
         // create config manager and update config.
-        let mut cfg_mgr = ImportConfigManager::new(cfg);
+        let mut cfg_mgr = ImportConfigManager::new(cfg, handle);
         cfg_mgr.dispatch(change).unwrap();
         importer.update_config_memory_use_ratio(&cfg_mgr);
 
@@ -2310,7 +2325,23 @@ mod tests {
             ..Default::default()
         };
         let change = cfg.diff(&cfg_new);
-        let mut cfg_mgr = ImportConfigManager::new(cfg);
+
+        struct TestImportRuntimeCreator;
+        impl TokioRuntimeCreator for TestImportRuntimeCreator {
+            fn create_tokio_runtime(_: usize, _: &str) -> TokioResult<Runtime> {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+            }
+        }
+        let mut threads = ResizableRuntime::new(
+            "test",
+            |_| {},
+            TestImportRuntimeCreator::create_tokio_runtime,
+        );
+        let handle = ResizableRuntimeHandle::new(threads);
+
+        let mut cfg_mgr = ImportConfigManager::new(cfg, handle);
         let r = cfg_mgr.dispatch(change);
         assert!(r.is_err());
     }
