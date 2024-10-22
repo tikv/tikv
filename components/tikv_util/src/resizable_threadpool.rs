@@ -68,6 +68,9 @@ impl ResizableRuntime {
 
     /// Lazily adjust the thread pool's size
     pub fn adjust_with(&mut self, new_size: usize) {
+        if self.size == new_size {
+            return;
+        }
         // TODO: after tokio supports adjusting thread pool size(https://github.com/tokio-rs/tokio/issues/3329),
         //   adapt it.
         let pool = (self.replace_pool_rule)(new_size, &self.thread_name)

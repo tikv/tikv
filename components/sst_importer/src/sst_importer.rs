@@ -1616,7 +1616,7 @@ mod tests {
     use std::{
         io::{self, Cursor},
         ops::Sub,
-        usize,
+        usize, sync::atomic::{AtomicUsize, Ordering},
     };
 
     use async_compression::tokio::write::ZstdEncoder;
@@ -1651,6 +1651,8 @@ mod tests {
 
     use super::*;
     use crate::{import_file::ImportPath, *};
+
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
     fn do_test_import_dir(key_manager: Option<Arc<DataKeyManager>>) {
         let temp_dir = Builder::new().prefix("test_import_dir").tempdir().unwrap();
@@ -2348,6 +2350,44 @@ mod tests {
         let mut cfg_mgr = ImportConfigManager::new(cfg, handle);
         let r = cfg_mgr.dispatch(change);
         assert!(r.is_err());
+    }
+
+    #[test]
+    fn test_update_import_num_threads() {
+        struct TestImportRuntimeCreator;
+        impl TokioRuntimeCreator for TestImportRuntimeCreator {
+            fn create_tokio_runtime(_: usize, _: &str) -> TokioResult<Runtime> {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+            }
+        }
+
+        fn after_adjust(new_size: usize) {
+            COUNTER.store(new_size, Ordering::SeqCst);
+        }
+
+        let threads = ResizableRuntime::new(
+            "test",
+            after_adjust,
+            TestImportRuntimeCreator::create_tokio_runtime,
+        );
+        let handle = ResizableRuntimeHandle::new(threads);
+        let mut cfg_mgr = ImportConfigManager::new(Config::default(), handle);
+
+        assert_eq!(COUNTER.load(Ordering::SeqCst), (*cfg_mgr.rl()).num_threads);
+        assert_eq!(cfg_mgr.rl().num_threads, Config::default().num_threads);
+
+        let cfg_new = Config {
+            num_threads: 10,
+            ..Default::default()
+        };
+        let change = Config::default().diff(&cfg_new);
+        let r = cfg_mgr.dispatch(change);
+
+        assert!(r.is_ok());
+        assert_eq!((*cfg_mgr.rl()).num_threads, cfg_new.num_threads);
+        assert_eq!(COUNTER.load(Ordering::SeqCst), (*cfg_mgr.rl()).num_threads);
     }
 
     #[test]
