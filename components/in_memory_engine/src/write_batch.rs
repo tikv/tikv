@@ -11,6 +11,7 @@ use engine_traits::{
     CacheRegion, EvictReason, MiscExt, Mutable, RegionCacheEngine, Result, WriteBatch,
     WriteBatchExt, WriteOptions, CF_DEFAULT,
 };
+use kvproto::metapb;
 use tikv_util::{box_err, config::ReadableSize, error, info, time::Instant, warn};
 
 use crate::{
@@ -170,7 +171,7 @@ impl RegionCacheWriteBatch {
         // record last region before flush.
         self.record_last_written_region();
 
-        fail::fail_point!("on_region_cache_write_batch_write_impl");
+        fail::fail_point!("ime_on_region_cache_write_batch_write_impl");
         let guard = &epoch::pin();
         let start = Instant::now();
         let mut lock_modification: u64 = 0;
@@ -187,8 +188,8 @@ impl RegionCacheWriteBatch {
         let duration = start.saturating_elapsed_secs();
         IN_MEMORY_ENGINE_WRITE_DURATION_HISTOGRAM.observe(duration);
 
-        fail::fail_point!("in_memory_engine_write_batch_consumed");
-        fail::fail_point!("before_clear_ranges_in_being_written");
+        fail::fail_point!("ime_on_region_cache_write_batch_write_consumed");
+        fail::fail_point!("ime_before_clear_regions_in_being_written");
 
         if !self.written_regions.is_empty() {
             self.engine
@@ -233,14 +234,14 @@ impl RegionCacheWriteBatch {
 
         if !self.engine.enabled() {
             let region = self.current_region.as_ref().unwrap();
-            info!("ime range cache is disabled, evict the range"; "region" => ?region);
+            info!("ime is disabled, evict the range"; "region" => ?region);
             self.evict_current_region(EvictReason::Disabled);
             return;
         }
         let memory_expect = entry_size();
         if !self.memory_acquire(memory_expect) {
             let region = self.current_region.as_ref().unwrap();
-            info!("ime memory acquire failed due to reaching hard limit"; "region" => ?region);
+            info!("ime memory acquire failed due to reaches capacity"; "region" => ?region);
             self.evict_current_region(EvictReason::MemoryLimitReached);
             return;
         }
@@ -267,13 +268,13 @@ impl RegionCacheWriteBatch {
         }
     }
 
-    // return false means the memory usage reaches to hard limit and we have no
+    // return false means the memory usage reaches to capacity and we have no
     // quota to write to the engine
     fn memory_acquire(&mut self, mem_required: usize) -> bool {
         match self.memory_controller.acquire(mem_required) {
             MemoryUsage::CapacityReached(n) => {
                 warn!(
-                    "ime the memory usage of in-memory engine reaches to hard limit";
+                    "ime the memory usage reaches capacity";
                     "region" => ?self.current_region.as_ref().unwrap(),
                     "memory_usage(MB)" => ReadableSize(n as u64).as_mb_f64(),
                 );
@@ -470,14 +471,18 @@ impl WriteBatch for RegionCacheWriteBatch {
         Ok(())
     }
 
-    fn prepare_for_region(&mut self, region: CacheRegion) {
+    fn prepare_for_region(&mut self, region: &metapb::Region) {
         let time = Instant::now();
         // record last region for clearing region in written flags.
         self.record_last_written_region();
 
+        let cached_region = CacheRegion::from_region(region);
         // TODO: remote range.
-        self.set_region_cache_status(self.engine.prepare_for_apply(&region));
-        self.current_region = Some(region);
+        self.set_region_cache_status(
+            self.engine
+                .prepare_for_apply(&cached_region, region.is_in_flashback),
+        );
+        self.current_region = Some(cached_region);
         self.current_region_evicted = false;
         self.prepare_for_write_duration += time.saturating_elapsed();
     }
@@ -530,9 +535,10 @@ mod tests {
     use engine_traits::{
         CacheRegion, FailedReason, Peekable, RegionCacheEngine, WriteBatch, DATA_CFS,
     };
+    use kvproto::metapb::{Region, RegionEpoch};
     use online_config::{ConfigChange, ConfigManager, ConfigValue};
     use tempfile::Builder;
-    use tikv_util::config::VersionTrack;
+    use tikv_util::{config::VersionTrack, store::new_peer};
 
     use super::*;
     use crate::{
@@ -565,7 +571,7 @@ mod tests {
         engine.core.region_manager().set_safe_point(r.id, 10);
 
         let mut wb = RegionCacheWriteBatch::from(&engine);
-        wb.prepare_for_region(CacheRegion::from_region(&r));
+        wb.prepare_for_region(&r);
         wb.put(b"aaa", b"bbb").unwrap();
         wb.set_sequence_number(1).unwrap();
         assert_eq!(wb.write().unwrap(), 1);
@@ -585,7 +591,7 @@ mod tests {
         engine.core.region_manager().set_safe_point(r.id, 10);
 
         let mut wb = RegionCacheWriteBatch::from(&engine);
-        wb.prepare_for_region(CacheRegion::from_region(&r));
+        wb.prepare_for_region(&r);
         wb.put(b"aaa", b"bbb").unwrap();
         wb.set_save_point();
         wb.put(b"aaa", b"ccc").unwrap();
@@ -613,12 +619,12 @@ mod tests {
         engine.core.region_manager().set_safe_point(r.id, 10);
 
         let mut wb = RegionCacheWriteBatch::from(&engine);
-        wb.prepare_for_region(CacheRegion::from_region(&r));
+        wb.prepare_for_region(&r);
         wb.put(b"zaaa", b"bbb").unwrap();
         wb.set_sequence_number(1).unwrap();
         _ = wb.write();
         wb.clear();
-        wb.prepare_for_region(CacheRegion::from_region(&r));
+        wb.prepare_for_region(&r);
         wb.put(b"zbbb", b"ccc").unwrap();
         wb.delete(b"zaaa").unwrap();
         wb.set_sequence_number(2).unwrap();
@@ -655,7 +661,7 @@ mod tests {
             let mut r1_new = new_region(1, b"k01".to_vec(), b"k06".to_vec());
             r1_new.mut_region_epoch().version = 2;
             let mut wb = RegionCacheWriteBatch::from(&engine);
-            wb.prepare_for_region(CacheRegion::from_region(&r1_new));
+            wb.prepare_for_region(&r1_new);
             assert!(
                 engine
                     .core
@@ -683,7 +689,7 @@ mod tests {
         r1_new.mut_region_epoch().version = 2;
         let cache_r1_new = CacheRegion::from_region(&r1_new);
         let mut wb = RegionCacheWriteBatch::from(&engine);
-        wb.prepare_for_region(cache_r1_new.clone());
+        wb.prepare_for_region(&r1_new);
         {
             let regions_map = engine.core.region_manager().regions_map.read();
             let region_meta = regions_map.region_meta(1).unwrap();
@@ -715,7 +721,7 @@ mod tests {
         assert_eq!(skip_engine.node_count(), 2);
 
         let mut wb = RegionCacheWriteBatch::from(&engine);
-        wb.prepare_for_region(cache_r1_new.clone());
+        wb.prepare_for_region(&r1_new);
         wb.put(b"zk01", b"val2").unwrap();
         wb.set_sequence_number(6).unwrap();
         wb.write().unwrap();
@@ -731,7 +737,7 @@ mod tests {
                 .set_state(RegionState::PendingEvict);
         }
         let mut wb = RegionCacheWriteBatch::from(&engine);
-        wb.prepare_for_region(cache_r1_new.clone());
+        wb.prepare_for_region(&r1_new);
         wb.put(b"zk02", b"val2").unwrap();
         wb.set_sequence_number(7).unwrap();
         wb.write().unwrap();
@@ -780,16 +786,16 @@ mod tests {
 
         let val1: Vec<u8> = vec![0; 150];
         let mut wb = RegionCacheWriteBatch::from(&engine);
-        wb.prepare_for_region(CacheRegion::from_region(&regions[0]));
+        wb.prepare_for_region(&regions[0]);
         // memory required:
         // 4(key) + 8(sequencen number) + 150(value) + 16(2 Arc<MemoryController) = 178
         wb.put(b"zk01", &val1).unwrap();
-        wb.prepare_for_region(CacheRegion::from_region(&regions[1]));
+        wb.prepare_for_region(&regions[1]);
         // Now, 356
         wb.put(b"zk11", &val1).unwrap();
         assert_eq!(356, memory_controller.mem_usage());
         assert_eq!(wb.count(), 2);
-        wb.prepare_for_region(CacheRegion::from_region(&regions[2]));
+        wb.prepare_for_region(&regions[2]);
 
         // Now, 534
         wb.put(b"zk21", &val1).unwrap();
@@ -806,7 +812,7 @@ mod tests {
         assert_eq!(562, memory_controller.mem_usage());
         assert_eq!(wb.count(), 4);
 
-        wb.prepare_for_region(CacheRegion::from_region(&regions[3]));
+        wb.prepare_for_region(&regions[3]);
         // The memory capacity is enough for the following two inserts
         // Now, 740
         let val3: Vec<u8> = vec![3; 150];
@@ -816,7 +822,7 @@ mod tests {
 
         // The memory will fail to acquire
         let val4: Vec<u8> = vec![3; 300];
-        wb.prepare_for_region(CacheRegion::from_region(&regions[4]));
+        wb.prepare_for_region(&regions[4]);
         wb.put(b"zk41", &val4).unwrap();
 
         // We should have allocated 740 as calculated above
@@ -896,26 +902,26 @@ mod tests {
 
         let val1: Vec<u8> = (0..150).map(|_| 0).collect();
         let mut wb = RegionCacheWriteBatch::from(&engine);
-        wb.prepare_for_region(CacheRegion::from_region(&r2));
+        wb.prepare_for_region(&r2);
         wb.put(b"zkk11", &val1).unwrap();
         let snap1 = engine
             .snapshot(CacheRegion::from_region(&r1), 1000, 1000)
             .unwrap();
 
-        // disable the range cache
+        // disable the ime
         let mut config_manager = InMemoryEngineConfigManager(config.clone());
         let mut config_change = ConfigChange::new();
         config_change.insert(String::from("enable"), ConfigValue::Bool(false));
         config_manager.dispatch(config_change).unwrap();
 
         wb.write_impl(1000).unwrap();
-        // existing snapshot can still work after the range cache is disabled, but new
+        // existing snapshot can still work after the ime is disabled, but new
         // snapshot will fail to create
         assert!(snap1.get_value(b"zkk00").unwrap().is_none());
 
         let mut wb = RegionCacheWriteBatch::from(&engine);
-        wb.prepare_for_region(CacheRegion::from_region(&r1));
-        // put should trigger the evict and it won't write into range cache
+        // put should trigger the evict and it won't write into ime
+        wb.prepare_for_region(&r1);
         wb.put(b"zkk01", &val1).unwrap();
         wb.write_impl(1000).unwrap();
 
@@ -925,10 +931,10 @@ mod tests {
         let snap2 = engine
             .snapshot(CacheRegion::from_region(&r2), 1000, 1000)
             .unwrap();
-        // if no new write, the range cache can still be used.
+        // if no new write, the ime can still be used.
         assert_eq!(snap2.get_value(b"zkk11").unwrap().unwrap(), &val1);
 
-        // enable the range cache again
+        // enable the ime again
         let mut config_manager = InMemoryEngineConfigManager(config.clone());
         let mut config_change = ConfigChange::new();
         config_change.insert(String::from("enable"), ConfigValue::Bool(true));
@@ -956,14 +962,22 @@ mod tests {
         ));
         engine.set_disk_engine(rocks_engine.clone());
 
-        let r1 = CacheRegion::new(1, 0, b"k00", b"k10");
+        let r1 = CacheRegion::new(1, 0, b"zk00", b"zk10");
 
         engine.core().region_manager().load_region(r1).unwrap();
 
         // load a region with a newer epoch and small range, should trigger replace.
-        let r_new = CacheRegion::new(1, 1, b"k00", b"k05");
+        let mut r_new = Region::default();
+        r_new.set_id(1);
+        let mut epoch = RegionEpoch::new();
+        epoch.version = 1;
+        r_new.set_region_epoch(epoch);
+        r_new.set_peers(vec![new_peer(1, 1)].into());
+        r_new.set_start_key(b"k00".to_vec());
+        r_new.set_end_key(b"k05".to_vec());
         let mut wb = RegionCacheWriteBatch::from(&engine);
-        wb.prepare_for_region(r_new.clone());
+        wb.prepare_for_region(&r_new);
+        let r_new = CacheRegion::from_region(&r_new);
 
         {
             let regions_map = engine.core.region_manager.regions_map().read();
