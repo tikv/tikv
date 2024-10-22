@@ -12,6 +12,7 @@ use engine_traits::{
     WriteBatchExt, WriteOptions, CF_DEFAULT,
 };
 use kvproto::metapb;
+use smallvec::SmallVec;
 use tikv_util::{box_err, config::ReadableSize, error, info, time::Instant, warn};
 
 use crate::{
@@ -67,6 +68,15 @@ pub struct RegionCacheWriteBatch {
 
     // record the total durations of the prepare work for write in the write batch
     prepare_for_write_duration: Duration,
+
+    // Now, we have an assumption that in one round of batch system process (PollHandler::begin ->
+    // ... -> PollHandler::end), although the same region can call `prepare_for_region`
+    // multiple times, it can only call sequentially. This is say, we will not have this:
+    // prepare_for_region(region1), prepare_for_region(region2), prepare_for_region(region1).
+    // In case to avoid this asssumption being broken, we record the regions that have called
+    // prepare_for_region and ensure that if the region is not the `currnet_region`, it is not
+    // recorded in this vec.
+    prepared_regions: SmallVec<[u64; 10]>,
 }
 
 impl std::fmt::Debug for RegionCacheWriteBatch {
@@ -92,6 +102,7 @@ impl From<&RegionCacheMemoryEngine> for RegionCacheWriteBatch {
             prepare_for_write_duration: Duration::default(),
             current_region: None,
             written_regions: vec![],
+            prepared_regions: SmallVec::new(),
         }
     }
 }
@@ -110,6 +121,7 @@ impl RegionCacheWriteBatch {
             prepare_for_write_duration: Duration::default(),
             current_region: None,
             written_regions: vec![],
+            prepared_regions: SmallVec::new(),
         }
     }
 
@@ -444,6 +456,7 @@ impl WriteBatch for RegionCacheWriteBatch {
         self.current_region = None;
         self.written_regions.clear();
         self.prepare_for_write_duration = Duration::ZERO;
+        self.prepared_regions.clear();
     }
 
     fn set_save_point(&mut self) {
@@ -472,7 +485,22 @@ impl WriteBatch for RegionCacheWriteBatch {
     }
 
     fn prepare_for_region(&mut self, region: &metapb::Region) {
+        // If the region is already prepared for write, we do not need to prepare it
+        // again. See comments for the `prepared_regions` field for more details.
+        if let Some(current_region) = &self.current_region
+            && current_region.id == region.id
+        {
+            return;
+        }
         let time = Instant::now();
+        // verify that the region is not prepared before
+        if self.prepared_regions.contains(&region.id) {
+            panic!(
+                "region {} is prepared for write before, but it is not the current region",
+                region.id
+            );
+        }
+        self.prepared_regions.push(region.id);
         // record last region for clearing region in written flags.
         self.record_last_written_region();
 
@@ -986,5 +1014,30 @@ mod tests {
             let meta_by_range = regions_map.region_meta_by_end_key(&r_new.end).unwrap();
             assert_eq!(meta_by_range.get_region(), &r_new);
         }
+    }
+
+    #[test]
+    fn test_dirty_data_exist_when_prepare_for_region() {
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(InMemoryEngineConfig::config_for_test()),
+        )));
+        let r = new_region(1, b"", b"z");
+        let cache_region = CacheRegion::from_region(&r);
+        let mut wb = RegionCacheWriteBatch::from(&engine);
+        wb.prepare_for_region(&r);
+
+        engine
+            .core()
+            .region_manager()
+            .load_region(cache_region.clone())
+            .unwrap();
+        wb.prepare_for_region(&r);
+        wb.put(b"k1", b"val1").unwrap();
+        wb.put(b"k2", b"val2").unwrap();
+        wb.set_sequence_number(100).unwrap();
+
+        wb.write().unwrap();
+
+        assert!(engine.core().engine().data[0].is_empty());
     }
 }
