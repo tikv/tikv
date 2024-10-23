@@ -3739,6 +3739,7 @@ where
                             "region_id" => self.fsm.region_id(),
                             "peer_id" => self.fsm.peer_id(),
                             "to" => ?from,
+                            "last_index" => self.fsm.peer.get_store().last_index(),
                         );
                         let mut cmd = new_admin_request(
                             self.fsm.peer.region().get_id(),
@@ -5838,7 +5839,7 @@ where
                 let is_admin_request = msg.has_admin_request();
                 info_or_debug!(
                     is_admin_request;
-                    "failed to propose";
+                    "failed to pre propose";
                     "region_id" => self.region_id(),
                     "peer_id" => self.fsm.peer_id(),
                     "message" => ?msg,
@@ -5871,8 +5872,21 @@ where
         let mut resp = RaftCmdResponse::default();
         let term = self.fsm.peer.term();
         bind_term(&mut resp, term);
-        if self.fsm.peer.propose(self.ctx, cb, msg, resp, diskfullopt) {
+        if self
+            .fsm
+            .peer
+            .propose(self.ctx, cb, &mut msg, resp, diskfullopt)
+        {
             self.fsm.has_ready = true;
+        } else {
+            let is_admin_request = msg.has_admin_request();
+            info_or_debug!(
+                is_admin_request;
+                "failed to propose";
+                "region_id" => self.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "message" => ?msg,
+            );
         }
 
         if self.fsm.peer.should_wake_up {
