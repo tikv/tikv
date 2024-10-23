@@ -4375,6 +4375,40 @@ def InMemoryEngine() -> RowPanel:
     layout.row(
         [
             graph_panel(
+                title="Read MBps",
+                description="The total bytes of read in RocksDB and in-memory engine(the same with panel Cluster/MBps for read)",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_engine_flow_bytes",
+                            label_selectors=['type=~"bytes_read|iter_bytes_read"'],
+                        ),
+                        legend_format=r"rocksdb-{{instance}}",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_in_memory_engine_flow",
+                            label_selectors=['type=~"bytes_read|iter_bytes_read"'],
+                        ),
+                        legend_format=r"in-memory-engine-{{instance}}",
+                    ),
+                ],
+            ),
+            graph_panel_histogram_quantiles(
+                title="Coprocessor Handle duration",
+                description="The time consumed when handling coprocessor requests",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_coprocessor_request_handle_seconds",
+                by_labels=["req"],
+                hide_avg=True,
+                hide_count=True,
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
                 title="Snapshot Type Count",
                 description="Count of each snapshot type",
                 targets=[
