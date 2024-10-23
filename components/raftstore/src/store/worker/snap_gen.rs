@@ -23,7 +23,6 @@ use tikv_util::{
     worker::Runnable,
     yatp_pool::FuturePool,
 };
-use tokio::sync::Semaphore;
 
 use super::metrics::*;
 use crate::store::{self, snap::Result, transport::CasualRouter, CasualMessage, SnapManager};
@@ -170,7 +169,6 @@ where
     router: R,
     pd_client: Option<Arc<T>>,
     pool: FuturePool,
-    semaphore: Arc<Semaphore>,
 }
 
 impl<EK, R, T> Runner<EK, R, T>
@@ -193,7 +191,6 @@ where
             router,
             pd_client,
             pool,
-            semaphore: Arc::new(Semaphore::new(SNAP_GENERATOR_MAX_POOL_SIZE)),
         }
     }
 }
@@ -246,14 +243,7 @@ where
                 };
 
                 let scheduled_time = Instant::now_coarse();
-                let semaphore = self.semaphore.clone();
                 self.pool.spawn(async move {
-                    // Use a semaphore to limit the number of snapshot
-                    // generation tasks running in parallel. This helps ensure
-                    // some tasks are completed first, preventing task
-                    // accumulation.
-                    let _permit = semaphore.acquire().await;
-
                     SNAP_GEN_WAIT_DURATION_HISTOGRAM
                         .observe(scheduled_time.saturating_elapsed_secs());
 
