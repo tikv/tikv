@@ -1,3 +1,5 @@
+// Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::{
     fs::File,
     io::Read,
@@ -16,7 +18,7 @@ use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};
 use kvproto::{
     import_sstpb::SstMeta,
     kvrpcpb::Context,
-    raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request},
+    raft_cmdpb::{AdminCmdType, CmdType, RaftCmdRequest, RaftRequestHeader, Request},
 };
 use protobuf::Message;
 use tempfile::tempdir;
@@ -48,6 +50,7 @@ fn copr_point_get(
     let key_range = table.get_record_range_one(row_id);
     let req = DagSelect::from(table)
         .key_ranges(vec![key_range])
+        .start_ts(get_tso(&cluster.pd_client).into())
         .build_with(ctx, &[0]);
     let cop_resp = handle_request(&endpoint, req);
     assert!(!cop_resp.has_region_error(), "{:?}", cop_resp);
@@ -98,8 +101,37 @@ fn must_copr_load_data(cluster: &mut Cluster<ServerCluster>, table: &ProductTabl
         &[(row_id, Some(&format!("name:{}", row_id)), row_id)],
         true,
         &cluster.cfg.tikv.server,
-        None,
+        Some(cluster.pd_client.clone()),
     );
+}
+
+fn async_put(
+    cluster: &mut Cluster<ServerCluster>,
+    table: &ProductTable,
+    row_id: i64,
+) -> std::thread::JoinHandle<()> {
+    let cfg = cluster.cfg.tikv.server.clone();
+    let pd_client = cluster.pd_client.clone();
+    let key = table.get_table_prefix();
+    let split_key = Key::from_raw(&key).into_encoded();
+    let ctx = cluster.get_ctx(&split_key);
+    let engine = cluster.sim.rl().storages[&ctx.get_peer().get_store_id()].clone();
+    let table_ = table.clone();
+    let (tx, rx) = unbounded();
+    let handle = std::thread::spawn(move || {
+        tx.send(()).unwrap();
+        let _ = init_data_with_details_pd_client(
+            ctx,
+            engine,
+            &table_,
+            &[(row_id, Some(&format!("name:{}", row_id)), row_id)],
+            true,
+            &cfg,
+            Some(pd_client),
+        );
+    });
+    rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    handle
 }
 
 #[test]
@@ -127,7 +159,7 @@ fn test_put_copr_get() {
     let product = ProductTable::new();
     must_copr_load_data(&mut cluster, &product, 1);
     let (tx, rx) = unbounded();
-    fail::cfg_callback("on_region_cache_iterator_seek", move || {
+    fail::cfg_callback("ime_on_iterator_seek", move || {
         tx.send(true).unwrap();
     })
     .unwrap();
@@ -161,7 +193,7 @@ fn test_load() {
     }
 
     let (tx, rx) = unbounded();
-    fail::cfg_callback("on_snapshot_load_finished", move || {
+    fail::cfg_callback("ime_on_snapshot_load_finished", move || {
         tx.send(true).unwrap();
     })
     .unwrap();
@@ -200,7 +232,7 @@ fn test_load() {
     rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
     let (tx, rx) = unbounded();
-    fail::cfg_callback("on_region_cache_iterator_seek", move || {
+    fail::cfg_callback("ime_on_iterator_seek", move || {
         tx.send(true).unwrap();
     })
     .unwrap();
@@ -225,7 +257,7 @@ fn test_load_with_split() {
     // let channel to make load process block at finishing loading snapshot
     let (tx2, rx2) = sync_channel(0);
     let rx2 = Arc::new(Mutex::new(rx2));
-    fail::cfg_callback("on_snapshot_load_finished", move || {
+    fail::cfg_callback("ime_on_snapshot_load_finished", move || {
         tx.send(true).unwrap();
         let _ = rx2.lock().unwrap().recv().unwrap();
     })
@@ -271,7 +303,7 @@ fn test_load_with_split() {
     tx2.send(true).unwrap();
 
     let (tx, rx) = unbounded();
-    fail::cfg_callback("on_region_cache_iterator_seek", move || {
+    fail::cfg_callback("ime_on_iterator_seek", move || {
         tx.send(true).unwrap();
     })
     .unwrap();
@@ -320,30 +352,7 @@ fn test_load_with_split2() {
         let _ = handle_put_pause_rx.recv();
     })
     .unwrap();
-    let mut async_put = |table: &ProductTable, row_id| {
-        let engine = cluster.sim.rl().storages[&1].clone();
-        let cfg = cluster.cfg.tikv.server.clone();
-        let key = table.get_table_prefix();
-        let split_key = Key::from_raw(&key).into_encoded();
-        let ctx = cluster.get_ctx(&split_key);
-        let table_ = table.clone();
-        let (tx, rx) = unbounded();
-        let handle = std::thread::spawn(move || {
-            tx.send(()).unwrap();
-            let _ = init_data_with_details_pd_client(
-                ctx,
-                engine,
-                &table_,
-                &[(row_id, Some(&format!("name:{}", row_id)), row_id)],
-                true,
-                &cfg,
-                None,
-            );
-        });
-        rx.recv_timeout(Duration::from_secs(5)).unwrap();
-        handle
-    };
-    let handle1 = async_put(&product1, 2);
+    let handle1 = async_put(&mut cluster, &product1, 2);
     handle_put_rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
     std::thread::sleep(Duration::from_secs(1));
@@ -356,12 +365,12 @@ fn test_load_with_split2() {
         .unwrap();
 
     let (tx, rx) = sync_channel(1);
-    fail::cfg_callback("on_snapshot_load_finished", move || {
+    fail::cfg_callback("ime_on_snapshot_load_finished", move || {
         tx.send(true).unwrap();
     })
     .unwrap();
 
-    let handle2 = async_put(&product2, 9);
+    let handle2 = async_put(&mut cluster, &product2, 9);
     let _ = rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
     drop(handle_put_pause_tx);
@@ -384,7 +393,7 @@ fn test_load_with_split2() {
     handle2.join().unwrap();
 
     let (tx, rx) = unbounded();
-    fail::cfg_callback("on_region_cache_iterator_seek", move || {
+    fail::cfg_callback("ime_on_iterator_seek", move || {
         tx.send(true).unwrap();
     })
     .unwrap();
@@ -394,8 +403,8 @@ fn test_load_with_split2() {
     // ["", table2) should not cached.
     must_copr_load_data(&mut cluster, &product1, 3);
     let (tx, rx) = unbounded();
-    fail::remove("on_region_cache_iterator_seek");
-    fail::cfg_callback("on_region_cache_iterator_seek", move || {
+    fail::remove("ime_on_iterator_seek");
+    fail::cfg_callback("ime_on_iterator_seek", move || {
         tx.send(true).unwrap();
     })
     .unwrap();
@@ -415,7 +424,8 @@ fn test_load_with_eviction() {
     let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
     // Load the whole range as if it is not splitted. Loading process should handle
     // it correctly.
-    let cache_range = CacheRegion::new(1, 0, DATA_MIN_KEY, DATA_MAX_KEY);
+    let r = cluster.get_region(b"");
+    let cache_range = CacheRegion::from_region(&r);
     region_cache_engine
         .core()
         .region_manager()
@@ -430,29 +440,9 @@ fn test_load_with_eviction() {
     let r = cluster.get_region(&split_key);
     cluster.must_split(&r, &split_key);
 
-    fail::cfg("on_region_cache_write_batch_write_impl", "pause").unwrap();
-    let mut async_put = |table: &ProductTable, row_id| {
-        let engine = cluster.sim.rl().storages[&1].clone();
-        let cfg = cluster.cfg.tikv.server.clone();
-        let pd_client = cluster.pd_client.clone();
-        let key = table.get_table_prefix();
-        let split_key = Key::from_raw(&key).into_encoded();
-        let ctx = cluster.get_ctx(&split_key);
-        let table_ = table.clone();
-        std::thread::spawn(move || {
-            let _ = init_data_with_details_pd_client(
-                ctx,
-                engine,
-                &table_,
-                &[(row_id, Some(&format!("name:{}", row_id)), row_id)],
-                true,
-                &cfg,
-                Some(pd_client),
-            );
-        })
-    };
-    let handle1 = async_put(&product1, 1);
-    let handle2 = async_put(&product2, 15);
+    fail::cfg("ime_on_region_cache_write_batch_write_impl", "pause").unwrap();
+    let handle1 = async_put(&mut cluster, &product1, 1);
+    let handle2 = async_put(&mut cluster, &product2, 1);
 
     {
         let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
@@ -474,28 +464,19 @@ fn test_load_with_eviction() {
         );
     }
 
-    fail::remove("on_region_cache_write_batch_write_impl");
+    fail::remove("ime_on_region_cache_write_batch_write_impl");
     handle1.join().unwrap();
     handle2.join().unwrap();
 
     for (table, is_cached) in &[(product1, true), (product2, false)] {
-        fail::remove("on_region_cache_iterator_seek");
+        fail::remove("ime_on_iterator_seek");
         let (tx, rx) = unbounded();
-        fail::cfg_callback("on_region_cache_iterator_seek", move || {
+        fail::cfg_callback("ime_on_iterator_seek", move || {
             tx.send(true).unwrap();
         })
         .unwrap();
 
-        let key = table.get_table_prefix();
-        let table_key = Key::from_raw(&key).into_encoded();
-        let ctx = cluster.get_ctx(&table_key);
-        let endpoint = cluster.sim.rl().copr_endpoints[&1].clone();
-        let req = DagSelect::from(table).build_with(ctx, &[0]);
-        let cop_resp = handle_request(&endpoint, req);
-        let mut resp = SelectResponse::default();
-        resp.merge_from_bytes(cop_resp.get_data()).unwrap();
-        assert!(!cop_resp.has_region_error(), "{:?}", cop_resp);
-        assert!(cop_resp.get_other_error().is_empty(), "{:?}", cop_resp);
+        must_copr_point_get(&mut cluster, table, 1);
 
         if *is_cached {
             rx.try_recv().unwrap();
@@ -682,7 +663,7 @@ fn test_pre_load_when_transfer_ledaer() {
     cluster.run();
 
     let (tx, rx) = unbounded();
-    fail::cfg_callback("on_completes_batch_loading", move || {
+    fail::cfg_callback("ime_on_completes_batch_loading", move || {
         tx.send(true).unwrap();
     })
     .unwrap();
@@ -708,7 +689,7 @@ fn test_pre_load_when_transfer_ledaer() {
 
 #[test]
 fn test_background_loading_pending_region() {
-    fail::cfg("background_check_load_pending_interval", "return(1000)").unwrap();
+    fail::cfg("ime_background_check_load_pending_interval", "return(1000)").unwrap();
 
     let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
     cluster.run();
@@ -737,7 +718,7 @@ fn test_delete_range() {
         cluster.run();
 
         let (tx, rx) = sync_channel(0);
-        fail::cfg_callback("on_snapshot_load_finished", move || {
+        fail::cfg_callback("ime_on_snapshot_load_finished", move || {
             tx.send(true).unwrap();
         })
         .unwrap();
@@ -759,7 +740,7 @@ fn test_delete_range() {
         rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
         let (tx, rx) = unbounded();
-        fail::cfg_callback("on_region_cache_iterator_seek", move || {
+        fail::cfg_callback("ime_on_iterator_seek", move || {
             tx.send(true).unwrap();
         })
         .unwrap();
@@ -801,38 +782,79 @@ fn test_delete_range() {
 }
 
 #[test]
-fn test_x() {
+fn test_evict_on_flashback() {
     let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
+    cluster.cfg.raft_store.apply_batch_system.pool_size = 1;
     cluster.run();
 
+    let table = ProductTable::new();
+
+    must_copr_load_data(&mut cluster, &table, 1);
+    must_copr_load_data(&mut cluster, &table, 2);
+    must_copr_load_data(&mut cluster, &table, 3);
+
     let r = cluster.get_region(b"");
-    let store_id = r.get_peers()[0].store_id;
-    let mut req1 = new_request(
-        r.id,
-        r.get_region_epoch().clone(),
-        vec![new_put_cf_cmd(CF_LOCK, b"k01", b"val1")],
-        false,
-    );
-    req1.mut_header().set_peer(r.get_peers()[0].clone());
-    let mut req2 = new_compute_hash_request(r.id, r.get_region_epoch());
-    req2.mut_header().set_peer(r.get_peers()[0].clone());
+    {
+        let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
+        region_cache_engine
+            .core()
+            .region_manager()
+            .load_region(CacheRegion::from_region(&r))
+            .unwrap();
+    }
 
-    let mut req3 = new_request(
-        r.id,
-        r.get_region_epoch().clone(),
-        vec![new_put_cf_cmd(CF_LOCK, b"k02", b"val2")],
-        false,
-    );
-    req3.mut_header().set_peer(r.get_peers()[0].clone());
+    cluster.must_send_wait_flashback_msg(r.id, AdminCmdType::PrepareFlashback);
+    cluster.must_send_wait_flashback_msg(r.id, AdminCmdType::FinishFlashback);
 
-    let mut rxs = vec![];
-    for r in &[req1, req2, req3] {
-        let (cb, rx) = make_cb(&r);
-        cluster
-            .sim
-            .read()
-            .unwrap()
-            .async_command_on_node(store_id, r.clone(), cb);
-        rxs.push(rx);
+    let (tx, rx) = unbounded();
+    fail::cfg_callback("ime_on_iterator_seek", move || {
+        tx.send(true).unwrap();
+    })
+    .unwrap();
+
+    must_copr_point_get(&mut cluster, &table, 1);
+    rx.try_recv().unwrap_err();
+
+    must_copr_point_get(&mut cluster, &table, 2);
+    rx.try_recv().unwrap_err();
+
+    must_copr_point_get(&mut cluster, &table, 3);
+    rx.try_recv().unwrap_err();
+}
+
+#[test]
+fn test_load_during_flashback() {
+    fail::cfg("ime_background_check_load_pending_interval", "return(1000)").unwrap();
+    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
+    cluster.cfg.raft_store.apply_batch_system.pool_size = 1;
+    cluster.run();
+
+    let table = ProductTable::new();
+
+    must_copr_load_data(&mut cluster, &table, 1);
+    let r = cluster.get_region(b"");
+    cluster.must_send_wait_flashback_msg(r.id, AdminCmdType::PrepareFlashback);
+    let (tx, rx) = unbounded();
+    fail::cfg_callback("ime_fail_to_schedule_load", move || {
+        tx.send(true).unwrap();
+    })
+    .unwrap();
+    {
+        let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
+        region_cache_engine
+            .core()
+            .region_manager()
+            .load_region(CacheRegion::from_region(&r))
+            .unwrap();
+    }
+    rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    {
+        let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
+        assert!(
+            !region_cache_engine
+                .core()
+                .region_manager()
+                .contains_region(r.id)
+        );
     }
 }

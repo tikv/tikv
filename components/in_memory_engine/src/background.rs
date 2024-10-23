@@ -2,6 +2,7 @@
 
 use core::slice::SlicePattern;
 use std::{
+    borrow::Cow,
     fmt,
     sync::{atomic::Ordering, Arc},
     time::Duration,
@@ -48,7 +49,8 @@ use crate::{
     metrics::{
         IN_MEMORY_ENGINE_CACHE_COUNT, IN_MEMORY_ENGINE_GC_FILTERED_STATIC,
         IN_MEMORY_ENGINE_GC_TIME_HISTOGRAM, IN_MEMORY_ENGINE_LOAD_TIME_HISTOGRAM,
-        IN_MEMORY_ENGINE_MEMORY_USAGE,
+        IN_MEMORY_ENGINE_MEMORY_USAGE, IN_MEMORY_ENGINE_NEWEST_SAFE_POINT,
+        IN_MEMORY_ENGINE_OLDEST_SAFE_POINT, SAFE_POINT_GAP,
     },
     region_label::{
         LabelRule, RegionLabelChangedCallback, RegionLabelRulesManager, RegionLabelServiceBuilder,
@@ -209,9 +211,9 @@ impl PdRangeHintService {
                 }
                 for key_range in &label_rule.data {
                     match CacheRegion::try_from(key_range) {
-                        Ok(cache_range) => {
-                            info!("ime requested to cache range"; "range" => ?&cache_range);
-                            range_manager_load_cb(&cache_range, is_add);
+                        Ok(cache_region) => {
+                            info!("ime requested to cache range"; "range" => ?&cache_region);
+                            range_manager_load_cb(&cache_region, is_add);
                         }
                         Err(e) => {
                             error!("ime unable to convert key_range rule to cache range"; "error" => ?e);
@@ -228,7 +230,6 @@ impl PdRangeHintService {
             pd_client,
         )
         .rule_filter_fn(|label_rule| {
-            info!("dbg rule"; "rule" => ?label_rule);
             label_rule
                 .labels
                 .iter()
@@ -290,29 +291,29 @@ impl BgWorkManager {
         let region_info_provider = self.region_info_provider.clone();
         range_hint_service.start(
             self.worker.remote(),
-            move |cache_range: &CacheRegion, is_add: bool| {
+            move |range: &CacheRegion, is_add: bool| {
                 let region_manager = core.region_manager();
                 if !is_add {
                     region_manager
                         .regions_map()
                         .write()
-                        .remove_manual_load_range(cache_range.clone());
-                    region_manager.evict_region(cache_range, EvictReason::Manual, None);
+                        .remove_manual_load_range(range.clone());
+                    region_manager.evict_region(range, EvictReason::Manual, None);
                     return;
                 }
 
                 region_manager
                     .regions_map()
                     .write()
-                    .add_manual_load_range(cache_range.clone());
+                    .add_manual_load_range(range.clone());
 
                 let Some(ref info_provider) = region_info_provider else {
                     warn!("ime region info provider is none, skip manual load range.");
                     return;
                 };
 
-                let start = origin_key(&cache_range.start);
-                let end = origin_end_key(&cache_range.end);
+                let start = origin_key(&range.start);
+                let end = origin_end_key(&range.end);
                 let regions = match info_provider.get_regions_in_range(start, end) {
                     Ok(r) => r,
                     Err(e) => {
@@ -337,14 +338,10 @@ impl BgWorkManager {
                 }
                 info!(
                     "ime manual load summary";
-                    "range" => ?cache_range,
+                    "range" => ?range,
                     "success" => total - failed,
                     "failed" => failed,
                 );
-                // TODO (afeinberg): This does not actually load the range. The
-                // load happens the apply thread begins to apply
-                // raft entries. To force this (for read-only
-                // use-cases) we should propose a No-Op command.
             },
         );
     }
@@ -364,7 +361,7 @@ impl BgWorkManager {
         // TODO: Spawn non-blocking tasks and make full use of the ticker.
         let interval = Duration::from_millis(100);
         let check_load_pending_interval = (|| {
-            fail_point!("background_check_load_pending_interval", |t| {
+            fail_point!("ime_background_check_load_pending_interval", |t| {
                 let t = t.unwrap().parse::<u64>().unwrap();
                 Duration::from_millis(t)
             });
@@ -384,7 +381,7 @@ impl BgWorkManager {
                             Ok(Ok(ts)) => ts,
                             err => {
                                 error!(
-                                    "ime schedule region cache engine gc failed ";
+                                    "ime schedule gc failed ";
                                     "timeout_duration" => ?tso_timeout,
                                     "error" => ?err,
                                 );
@@ -395,7 +392,7 @@ impl BgWorkManager {
                         let safe_point = TimeStamp::compose(safe_point, 0).into_inner();
                         if let Err(e) = scheduler.schedule(BackgroundTask::Gc(GcTask {safe_point})) {
                             error!(
-                                "ime schedule region cache engine gc failed";
+                                "ime schedule gc failed";
                                 "err" => ?e,
                             );
                         }
@@ -441,7 +438,7 @@ impl BgWorkManager {
                     recv(rx) -> r => {
                         if let Err(e) = r {
                             error!(
-                                "ime receive error in region cache engine gc ticker";
+                                "ime receive error in gc ticker";
                                 "err" => ?e,
                             );
                         }
@@ -492,6 +489,7 @@ impl BackgroundRunnerCore {
         safe_point: u64,
         oldest_seqno: u64,
     ) -> FilterMetrics {
+        let mut gc_region = Cow::Borrowed(region);
         let safe_point = {
             let region_manager = self.engine.region_manager();
             // We should also consider the ongoing snapshot of the historical regions
@@ -509,6 +507,11 @@ impl BackgroundRunnerCore {
                 || !region.contains_range(region_meta.get_region())
             {
                 return FilterMetrics::default();
+            }
+
+            // check if region epoch vesion changes.
+            if region.epoch_version != region_meta.get_region().epoch_version {
+                gc_region = Cow::Owned(region_meta.get_region().clone());
             }
 
             let min_snapshot = region_meta
@@ -547,14 +550,16 @@ impl BackgroundRunnerCore {
             skiplist_engine.cf_handle(CF_DEFAULT),
             skiplist_engine.cf_handle(CF_WRITE),
         );
-        filter.filter_keys_in_region(region);
-        self.engine.region_manager().on_gc_region_finished(region);
+        filter.filter_keys_in_region(&gc_region);
+        self.engine
+            .region_manager()
+            .on_gc_region_finished(&gc_region);
 
         let duration = start.saturating_elapsed();
         IN_MEMORY_ENGINE_GC_TIME_HISTOGRAM.observe(duration.as_secs_f64());
         info!(
             "ime region gc complete";
-            "region" => ?region,
+            "region" => ?gc_region.as_ref(),
             "gc_duration" => ?duration,
             "total_version" => filter.metrics.total,
             "filtered_version" => filter.metrics.filtered,
@@ -586,8 +591,8 @@ impl BackgroundRunnerCore {
         delete_range_scheduler: &Scheduler<BackgroundTask>,
         safe_point: u64,
     ) -> bool {
-        fail::fail_point!("on_snapshot_load_finished");
-        fail::fail_point!("on_snapshot_load_finished2");
+        fail::fail_point!("ime_on_snapshot_load_finished");
+        fail::fail_point!("ime_on_snapshot_load_finished2");
         // We still need to check whether the snapshot is canceled during the load
         let mut regions_map = self.engine.region_manager().regions_map.write();
         let region_meta = regions_map.mut_region_meta(region.id).unwrap();
@@ -621,13 +626,13 @@ impl BackgroundRunnerCore {
         drop(regions_map);
 
         if !remove_regions.is_empty() {
-            fail::fail_point!("in_memory_engine_snapshot_load_canceled");
+            fail::fail_point!("ime_snapshot_load_canceled");
 
             if let Err(e) =
                 delete_range_scheduler.schedule_force(BackgroundTask::DeleteRegions(remove_regions))
             {
                 error!(
-                    "ime schedule delete range failed";
+                    "ime schedule delete regions failed";
                     "err" => ?e,
                 );
                 assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
@@ -636,7 +641,7 @@ impl BackgroundRunnerCore {
             return false;
         }
 
-        fail::fail_point!("on_completes_batch_loading");
+        fail::fail_point!("ime_on_completes_batch_loading");
         true
     }
 
@@ -677,7 +682,7 @@ impl BackgroundRunnerCore {
             delete_range_scheduler.schedule_force(BackgroundTask::DeleteRegions(remove_regions))
         {
             error!(
-                "ime schedule delete range failed";
+                "ime schedule delete regions failed";
                 "err" => ?e,
             );
             assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
@@ -715,13 +720,17 @@ impl BackgroundRunnerCore {
 
         let evict_count = regions_to_evict.len();
         let mut regions_to_delete = Vec::with_capacity(evict_count);
-        info!("ime load_evict"; "regions_to_load" => ?&regions_to_load, "regions_to_evict" => ?&regions_to_evict);
+        info!(
+            "ime load_evict";
+            "regions_to_load" => ?&regions_to_load,
+            "regions_to_evict" => ?&regions_to_evict,
+        );
         let (tx, mut rx) = mpsc::channel(evict_count + 1);
         for evict_region in regions_to_evict {
             let cache_region = CacheRegion::from_region(&evict_region);
             let tx_clone = tx.clone();
             // Bound is set to 1 so that the sender side will not be blocked
-            let deleteable_regions = self.engine.region_manager().evict_region(
+            let deletable_regions = self.engine.region_manager().evict_region(
                 &cache_region,
                 EvictReason::AutoEvict,
                 Some(Box::new(move || {
@@ -733,9 +742,9 @@ impl BackgroundRunnerCore {
             info!(
                 "ime load_evict: auto evict";
                 "region_to_evict" => ?&cache_region,
-                "evicted_regions" => ?&deleteable_regions,
+                "evicted_regions" => ?&deletable_regions,
             );
-            regions_to_delete.extend(deleteable_regions);
+            regions_to_delete.extend(deletable_regions);
         }
 
         if !regions_to_delete.is_empty() {
@@ -743,7 +752,7 @@ impl BackgroundRunnerCore {
                 .schedule_force(BackgroundTask::DeleteRegions(regions_to_delete))
             {
                 error!(
-                    "ime schedule deletet range failed";
+                    "ime schedule delete range failed";
                     "err" => ?e,
                 );
                 assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
@@ -912,11 +921,11 @@ impl Runnable for BackgroundRunner {
         match task {
             BackgroundTask::SetRocksEngine(rocks_engine) => {
                 self.rocks_engine = Some(rocks_engine);
-                fail::fail_point!("in_memory_engine_set_rocks_engine");
+                fail::fail_point!("ime_set_rocks_engine");
             }
             BackgroundTask::Gc(t) => {
                 let seqno = (|| {
-                    fail::fail_point!("in_memory_engine_gc_oldest_seqno", |t| {
+                    fail::fail_point!("ime_gc_oldest_seqno", |t| {
                         Some(t.unwrap().parse::<u64>().unwrap())
                     });
 
@@ -936,7 +945,7 @@ impl Runnable for BackgroundRunner {
                 };
 
                 info!(
-                    "ime start a new round of gc for range cache engine";
+                    "ime start a new round of gc";
                     "safe_point" => t.safe_point,
                     "oldest_sequence" => seqno,
                 );
@@ -964,8 +973,8 @@ impl Runnable for BackgroundRunner {
                 let pd_client = self.pd_client.clone();
                 let gc_run_interval = self.config.value().gc_run_interval.0;
                 let f = async move {
-                    fail::fail_point!("before_start_loading_region");
-                    fail::fail_point!("on_start_loading_region");
+                    fail::fail_point!("ime_before_start_loading_region");
+                    fail::fail_point!("ime_on_start_loading_region");
                     let mut is_canceled = false;
                     {
                         let regions_map = core.engine.region_manager().regions_map.read();
@@ -995,7 +1004,7 @@ impl Runnable for BackgroundRunner {
                         return;
                     }
 
-                    info!("ime Loading region"; "region" => ?&region);
+                    info!("ime loading region"; "region" => ?&region);
                     let start = Instant::now();
                     let iter_opt = IterOptions::new(
                         Some(KeyBuilder::from_slice(&region.start, 0, 0)),
@@ -1077,7 +1086,7 @@ impl Runnable for BackgroundRunner {
                         };
 
                         let safe_point = (|| {
-                            fail::fail_point!("in_memory_engine_safe_point_in_loading", |t| {
+                            fail::fail_point!("ime_safe_point_in_loading", |t| {
                                 t.unwrap().parse::<u64>().unwrap()
                             });
 
@@ -1107,12 +1116,12 @@ impl Runnable for BackgroundRunner {
                             let duration = start.saturating_elapsed();
                             IN_MEMORY_ENGINE_LOAD_TIME_HISTOGRAM.observe(duration.as_secs_f64());
                             info!(
-                                "ime Loading region finished";
+                                "ime loading region finished";
                                 "region" => ?region,
                                 "duration(sec)" => ?duration,
                             );
                         } else {
-                            info!("ime Loading region canceled";"region" => ?region);
+                            info!("ime loading region canceled";"region" => ?region);
                         }
                     } else {
                         info!(
@@ -1289,7 +1298,7 @@ impl Runnable for BackgroundRunner {
                         "current_count" => lock_handle.len(),
                     );
 
-                    fail::fail_point!("clean_lock_tombstone_done");
+                    fail::fail_point!("ime_clean_lock_tombstone_done");
                 };
 
                 self.lock_cleanup_remote.spawn(f);
@@ -1349,6 +1358,7 @@ impl Runnable for BackgroundRunner {
                                         Some(&rocks_engine),
                                         &scheduler,
                                         false,
+                                        r.is_in_flashback,
                                     );
                                 }),
                             },
@@ -1368,10 +1378,40 @@ impl RunnableWithTimer for BackgroundRunner {
         IN_MEMORY_ENGINE_MEMORY_USAGE.set(mem_usage as i64);
 
         let mut count_by_state = [0; RegionState::COUNT];
+        let mut oldest_safe_point = u64::MAX;
+        let mut newest_safe_point = u64::MIN;
         {
             let regions_map = self.core.engine.region_manager().regions_map.read();
             for m in regions_map.regions().values() {
                 count_by_state[m.get_state() as usize] += 1;
+                if m.get_state() == RegionState::Active && m.safe_point() != 0 {
+                    oldest_safe_point = u64::min(oldest_safe_point, m.safe_point());
+                    newest_safe_point = u64::max(newest_safe_point, m.safe_point());
+                }
+            }
+        }
+
+        if oldest_safe_point != u64::MAX {
+            IN_MEMORY_ENGINE_OLDEST_SAFE_POINT.set(oldest_safe_point as i64);
+            IN_MEMORY_ENGINE_NEWEST_SAFE_POINT.set(newest_safe_point as i64);
+            if let Ok(Ok(tikv_safe_point)) =
+                block_on_timeout(self.pd_client.get_gc_safe_point(), Duration::from_secs(5))
+            {
+                if tikv_safe_point > oldest_safe_point {
+                    warn!(
+                        "ime oldest auto gc safe point is older than tikv's auto gc safe point";
+                        "tikv_safe_point" => tikv_safe_point,
+                        "ime_oldest_safe_point" => oldest_safe_point,
+                    );
+                }
+
+                let gap =
+                    TimeStamp::new(oldest_safe_point.saturating_sub(tikv_safe_point)).physical();
+                // If gap is too larger (more than a year), it means tikv safe point is not
+                // initialized, so we does not update the metrics now.
+                if gap < Duration::from_secs(365 * 24 * 3600).as_millis() as u64 {
+                    SAFE_POINT_GAP.set(oldest_safe_point as i64 - tikv_safe_point as i64);
+                }
             }
         }
 
@@ -1412,7 +1452,7 @@ impl DeleteRangeRunner {
         }
         self.engine.region_manager().on_delete_regions(regions);
 
-        fail::fail_point!("in_memory_engine_delete_range_done");
+        fail::fail_point!("ime_delete_range_done");
 
         #[cfg(test)]
         flush_epoch();
@@ -1424,7 +1464,7 @@ impl Runnable for DeleteRangeRunner {
     fn run(&mut self, task: Self::Task) {
         match task {
             BackgroundTask::DeleteRegions(regions) => {
-                fail::fail_point!("on_in_memory_engine_delete_range");
+                fail::fail_point!("ime_on_delete_range");
                 let (mut regions_to_delay, regions_to_delete) = {
                     let region_manager = self.engine.region_manager();
                     let regions_map = region_manager.regions_map.read();
@@ -1587,7 +1627,7 @@ impl Filter {
             let v = iter.value();
             if let Err(e) = self.filter_key(k.as_bytes(), v.as_bytes()) {
                 warn!(
-                    "ime Something Wrong in memory engine GC";
+                    "ime something wrong GC";
                     "error" => ?e,
                 );
             }
@@ -2432,6 +2472,79 @@ pub mod tests {
         assert_eq!(2, element_count(&write));
     }
 
+    // test the condition that target region is split after scan need gc region and
+    // before the gc task actual start.
+    #[test]
+    fn test_gc_after_region_split() {
+        let config = InMemoryEngineConfig::config_for_test();
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(config),
+        )));
+        let memory_controller = engine.memory_controller();
+        let (write, default, region) = {
+            let region = CacheRegion::new(1, 0, b"zk00", b"zk20");
+            engine.core.region_manager().new_region(region.clone());
+
+            let engine = engine.core.engine();
+            (
+                engine.cf_handle(CF_WRITE),
+                engine.cf_handle(CF_DEFAULT),
+                region,
+            )
+        };
+
+        let test_data = [
+            (b"k05".as_slice(), b"val1".as_slice(), 10, 11, 10),
+            (b"k05", b"val2", 12, 13, 14),
+            (b"k05", b"val1", 14, 15, 18),
+            (b"k15", b"val1", 10, 11, 10),
+            (b"k15", b"val2", 12, 13, 14),
+            (b"k15", b"val1", 14, 15, 18),
+        ];
+
+        for d in test_data {
+            put_data(
+                d.0,
+                d.1,
+                d.2,
+                d.3,
+                d.4,
+                false,
+                &default,
+                &write,
+                memory_controller.clone(),
+            );
+        }
+
+        assert_eq!(6, element_count(&default));
+        assert_eq!(6, element_count(&write));
+
+        let config = Arc::new(VersionTrack::new(InMemoryEngineConfig::config_for_test()));
+        let (worker, _) = BackgroundRunner::new(
+            engine.core.clone(),
+            memory_controller.clone(),
+            None,
+            config,
+            Arc::new(MockPdClient {}),
+            None,
+        );
+
+        // triggers region split.
+        let new_regions = vec![
+            CacheRegion::new(1, 2, "zk00", "zk10"),
+            CacheRegion::new(2, 2, "zk10", "zk20"),
+        ];
+        engine.on_region_event(RegionEvent::Split {
+            source: region.clone(),
+            new_regions,
+        });
+
+        // still use the original region to do gc, should only gc the region with the
+        // same id.
+        let filter = worker.core.gc_region(&region, 100, 100);
+        assert_eq!(2, filter.filtered);
+    }
+
     #[test]
     fn test_gc_for_overwrite_write() {
         let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
@@ -2796,8 +2909,8 @@ pub mod tests {
             .region_manager()
             .load_region(region2.clone())
             .unwrap();
-        engine.prepare_for_apply(&region1);
-        engine.prepare_for_apply(&region2);
+        engine.prepare_for_apply(&region1, false);
+        engine.prepare_for_apply(&region2, false);
 
         // concurrent write to rocksdb, but the key will not be loaded in the memory
         // engine
@@ -2974,7 +3087,7 @@ pub mod tests {
             },
         );
         let cache_region = CacheRegion::from_region(&region);
-        engine.prepare_for_apply(&cache_region);
+        engine.prepare_for_apply(&cache_region, false);
 
         // Wait for the range to be loaded.
         test_util::eventually(
@@ -3088,7 +3201,7 @@ pub mod tests {
         for r in [&region1, &region2] {
             let cache_region = CacheRegion::from_region(r);
             engine.load_region(cache_region.clone()).unwrap();
-            engine.prepare_for_apply(&cache_region);
+            engine.prepare_for_apply(&cache_region, false);
         }
 
         // ensure all ranges are finshed
@@ -3165,7 +3278,7 @@ pub mod tests {
         for r in [&region1, &region2, &region3] {
             let cache_region = CacheRegion::from_region(r);
             engine.load_region(cache_region.clone()).unwrap();
-            engine.prepare_for_apply(&cache_region);
+            engine.prepare_for_apply(&cache_region, false);
         }
 
         // ensure all ranges are finshed
@@ -3215,7 +3328,7 @@ pub mod tests {
         rocks_engine.put_cf(CF_WRITE, &key, b"val").unwrap();
         // After loading range1, the memory usage should be 140*6=840
         engine.load_region(cache_region1.clone()).unwrap();
-        engine.prepare_for_apply(&cache_region1);
+        engine.prepare_for_apply(&cache_region1, false);
 
         let region2 = new_region(2, construct_region_key(3), construct_region_key(5));
         let key = construct_key(3, 10);
@@ -3238,7 +3351,7 @@ pub mod tests {
 
         let cache_region2 = CacheRegion::from_region(&region2);
         engine.load_region(cache_region2.clone()).unwrap();
-        engine.prepare_for_apply(&cache_region2);
+        engine.prepare_for_apply(&cache_region2, false);
 
         // ensure all ranges are finshed
         test_util::eventually(Duration::from_millis(100), Duration::from_secs(2), || {

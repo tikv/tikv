@@ -41,6 +41,7 @@ make_auto_flush_static_metric! {
         memory_limit_reached,
         disabled,
         apply_snapshot,
+        flashback,
         manual,
     }
 
@@ -124,6 +125,21 @@ lazy_static! {
         "tikv_in_memory_engine_seek_duration",
         "Histogram of seek duration",
         exponential_buckets(0.00001, 2.0, 26).unwrap()
+    )
+    .unwrap();
+    pub static ref IN_MEMORY_ENGINE_OLDEST_SAFE_POINT: IntGauge = register_int_gauge!(
+        "tikv_in_memory_engine_oldest_safe_point",
+        "The oldest safe point in the in-memory engine",
+    )
+    .unwrap();
+    pub static ref IN_MEMORY_ENGINE_NEWEST_SAFE_POINT: IntGauge = register_int_gauge!(
+        "tikv_in_memory_engine_newest_safe_point",
+        "The newest safe point in the in-memory engine",
+    )
+    .unwrap();
+    pub static ref SAFE_POINT_GAP: IntGauge = register_int_gauge!(
+        "tikv_safe_point_gap_with_in_memory_engine",
+        "The gap between tikv auto gc safe point and the oldest auto gc safe point in the in-memory engine",
     )
     .unwrap();
 }
@@ -214,6 +230,9 @@ pub(crate) fn observe_eviction_duration(secs: f64, evict_reason: EvictReason) {
             .observe(secs),
         EvictReason::ApplySnapshot => IN_MEMORY_ENGINE_EVICTION_DURATION_HISTOGRAM_STATIC
             .apply_snapshot
+            .observe(secs),
+        EvictReason::Flashback => IN_MEMORY_ENGINE_EVICTION_DURATION_HISTOGRAM_STATIC
+            .flashback
             .observe(secs),
         EvictReason::Manual => IN_MEMORY_ENGINE_EVICTION_DURATION_HISTOGRAM_STATIC
             .manual

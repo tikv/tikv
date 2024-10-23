@@ -848,7 +848,7 @@ impl Runnable for CrossChecker {
             Ok(Ok(ts)) => ts,
             err => {
                 error!(
-                    "schedule range cache engine gc failed ";
+                    "ime schedule gc failed ";
                     "timeout_duration" => ?tso_timeout,
                     "error" => ?err,
                 );
@@ -870,7 +870,7 @@ impl Runnable for CrossChecker {
                     Ok(range_snap) => Some(range_snap),
                     Err(_) => {
                         warn!(
-                            "failed to get snap in cross check";
+                            "ime failed to get snap in cross check";
                             "range" => ?range,
                         );
                         None
@@ -1054,7 +1054,7 @@ mod tests {
 
         {
             let mut wb = engine.write_batch();
-            wb.prepare_for_region(cache_region.clone());
+            wb.prepare_for_region(&region);
             let mut disk_wb = rocks_engine.write_batch();
 
             prepare_data(&mut wb, &mut disk_wb);
