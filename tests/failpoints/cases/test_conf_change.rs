@@ -380,11 +380,36 @@ fn test_applied_conf_change_on_target_peer_allows_transfer_leader() {
     must_get_equal(&cluster.get_engine(4), b"k2", b"v2");
 }
 
+// Similar to the above test, but with some pessimistic locks on the leader.
+#[test]
+fn test_applied_conf_change_on_target_peer_allows_transfer_leader_pessimistic_lock() {
+    let mut cluster = new_server_cluster(0, 4);
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+    let region_id = cluster.run_conf_change();
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+    pd_client.region_leader_must_be(region_id, new_peer(1, 1));
+
+    fail::cfg("apply_on_conf_change_1_1", "pause").unwrap();
+    fail::cfg("propose_locks_before_transfer_leader", "return").unwrap();
+
+    pd_client.remove_peer(region_id, new_peer(2, 2));
+    // Wait for remove_peer.
+    sleep_ms(300);
+    // Peer 2 is still exists since the leader hasn't applied the ConfChange
+    // yet.
+    pd_client.must_have_peer(region_id, new_peer(2, 2));
+
+    pd_client.transfer_leader(region_id, new_peer(3, 3), vec![]);
+    pd_client.region_leader_must_be(region_id, new_peer(3, 3));
+}
+
 // This test verifies that a leader transfer is rejected when the target peer
 // has been demoted to a learner but the leader has not yet applied this
 // configuration change.
 #[test]
-fn test_applied_conf_change_on_target_learner_rejects_transfer_leader() {
+fn test_applied_conf_change_on_learner_rejects_transfer_leader() {
     let mut cluster = new_server_cluster(0, 3);
     let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
