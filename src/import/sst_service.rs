@@ -36,7 +36,7 @@ use tikv_kv::{Engine, LocalTablets, Modify, WriteData};
 use tikv_util::{
     config::ReadableSize,
     future::{create_stream_with_buffer, paired_future_callback},
-    resizable_threadpool::{ResizableRuntime, ResizableRuntimeHandle, TokioRuntimeReplaceRule},
+    resizable_threadpool::{ResizableRuntime, ResizableRuntimeHandle},
     sys::disk::{get_disk_status, DiskUsage},
     time::{Instant, Limiter},
     HandyRwLock,
@@ -323,8 +323,8 @@ impl<E: Engine> ImportSstService<E> {
         // let eng = Mutex::new(engine.clone());
         let mut threads = ResizableRuntime::new(
             "import",
-            |_| {},
-            ImportUtils::ImportRuntimeCreator::create_tokio_runtime,
+            Box::new(ImportUtils::create_tokio_runtime),
+            Box::new(|_| ())
         );
         threads.adjust_with(cfg.num_threads);
         let handle = ResizableRuntimeHandle::new(threads);

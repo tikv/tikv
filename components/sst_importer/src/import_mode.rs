@@ -280,11 +280,17 @@ mod tests {
     use test_sst_importer::{new_test_engine, new_test_engine_with_options};
     use tikv_util::{
         config::ReadableDuration,
-        resizable_threadpool::{ResizableRuntime, TokioRuntimeReplaceRule},
+        resizable_threadpool::ResizableRuntime,
     };
     use tokio::runtime::Runtime;
 
     use super::*;
+
+    fn create_tokio_runtime(_: usize, _: &str) -> TokioResult<Runtime> {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+    }
 
     fn check_import_options<E>(
         db: &E,
@@ -343,18 +349,10 @@ mod tests {
 
         let cfg = Config::default();
 
-        struct TestImportRuntimeCreator;
-        impl TokioRuntimeReplaceRule for TestImportRuntimeCreator {
-            fn create_tokio_runtime(_: usize, _: &str) -> TokioResult<Runtime> {
-                tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-            }
-        }
         let mut threads = ResizableRuntime::new(
             "test",
-            |_| {},
-            TestImportRuntimeCreator::create_tokio_runtime,
+            Box::new(create_tokio_runtime),
+            Box::new(|_| {}),
         );
         threads.adjust_with(cfg.num_threads);
         let switcher = ImportModeSwitcher::new(&cfg);
@@ -390,18 +388,10 @@ mod tests {
             ..Config::default()
         };
 
-        struct TestImportRuntimeCreator;
-        impl TokioRuntimeReplaceRule for TestImportRuntimeCreator {
-            fn create_tokio_runtime(_: usize, _: &str) -> TokioResult<Runtime> {
-                tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-            }
-        }
         let mut threads = ResizableRuntime::new(
             "test",
-            |_| {},
-            TestImportRuntimeCreator::create_tokio_runtime,
+            Box::new(create_tokio_runtime),
+            Box::new(|_| {}),
         );
         threads.adjust_with(4);
         let switcher = ImportModeSwitcher::new(&cfg);

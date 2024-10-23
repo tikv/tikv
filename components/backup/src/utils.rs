@@ -4,7 +4,7 @@ use api_version::{dispatch_api_version, ApiV2, KeyMode, KvFormat};
 use file_system::IoType;
 use kvproto::kvrpcpb::ApiVersion;
 use tikv_util::{
-    error, resizable_threadpool::TokioRuntimeReplaceRule, sys::thread::ThreadBuildWrapper,
+    error, sys::thread::ThreadBuildWrapper,
 };
 use tokio::{io::Result as TokioResult, runtime::Runtime};
 use txn_types::{Key, TimeStamp};
@@ -181,26 +181,22 @@ impl KeyValueCodec {
     }
 }
 
-pub struct BackupRuntimeCreator;
-
-impl TokioRuntimeReplaceRule for BackupRuntimeCreator {
-    /// Create a standard tokio runtime.
-    /// (which allows io and time reactor, involve thread memory accessor),
-    /// and set the I/O type to export.
-    fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResult<Runtime> {
-        tokio::runtime::Builder::new_multi_thread()
-            .thread_name(thread_name)
-            .enable_io()
-            .enable_time()
-            .with_sys_and_custom_hooks(
-                || {
-                    file_system::set_io_type(IoType::Export);
-                },
-                || {},
-            )
-            .worker_threads(thread_count)
-            .build()
-    }
+/// Create a standard tokio runtime.
+/// (which allows io and time reactor, involve thread memory accessor),
+/// and set the I/O type to export.
+pub(crate) fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResult<Runtime> {
+    tokio::runtime::Builder::new_multi_thread()
+        .thread_name(thread_name)
+        .enable_io()
+        .enable_time()
+        .with_sys_and_custom_hooks(
+            || {
+                file_system::set_io_type(IoType::Export);
+            },
+            || {},
+        )
+        .worker_threads(thread_count)
+        .build()
 }
 
 #[cfg(test)]

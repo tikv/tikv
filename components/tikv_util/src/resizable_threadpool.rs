@@ -28,46 +28,43 @@ impl DaemonRuntime {
 
 impl Drop for DaemonRuntime {
     fn drop(&mut self) {
-        // it is safe because all tasks should be finished.
-        self.0.take().unwrap().shutdown_background()
+        if let Some(runtime) = self.0.take() {
+            runtime.shutdown_background();
+        }
     }
 }
 
-pub struct ResizableRuntime<ReplaceRule>
-    where ReplaceRule: TokioRuntimeReplaceRule
-    {
+pub struct ResizableRuntime {
     pub size: usize,
     thread_name: String,
     pool: Option<Arc<DaemonRuntime>>,
-    after_adjust: fn(usize),
-    replace_pool_rule: ReplaceRule,
+    replace_pool_rule: Box<dyn Fn(usize, &str) -> TokioResult<Runtime> + Send + Sync>,
+    after_adjust: Box<dyn Fn(usize) + Send + Sync>,
 }
 
-impl<ReplaceRule> ResizableRuntime
-    where ReplaceRule: TokioRuntimeReplaceRule
-    {
+impl ResizableRuntime {
     pub fn new(
         thread_name: &str,
-        after_adjust: fn(usize),
-        replace_pool_rule: ReplaceRule,
+        replace_pool_rule: Box<dyn Fn(usize, &str) -> TokioResult<Runtime> + Send + Sync>,
+        after_adjust: Box<dyn Fn(usize) + Send + Sync>,
     ) -> Self {
         ResizableRuntime {
             size: 0,
             thread_name: thread_name.to_owned(),
             pool: None,
-            after_adjust,
             replace_pool_rule,
+            after_adjust,
         }
     }
 
-    pub fn spawn<Fut>(&self, fut: Fut)
+    pub fn spawn<Func>(&self, func: Func)
     where
-        Fut: Future<Output = ()> + Send + 'static,
+        Func: Future<Output = ()> + Send + 'static,
     {
         self.pool
             .as_ref()
             .expect("ResizableRuntime: please call adjust_with() before spawn()")
-            .spawn(fut);
+            .spawn(func);
     }
 
     /// Lazily adjust the thread pool's size
@@ -77,7 +74,7 @@ impl<ReplaceRule> ResizableRuntime
         }
         // TODO: after tokio supports adjusting thread pool size(https://github.com/tokio-rs/tokio/issues/3329),
         //   adapt it.
-        let pool = ReplaceRule::create_tokio_runtime(new_size, &self.thread_name)
+        let pool = (self.replace_pool_rule)(new_size, &self.thread_name)
             .expect("failed to create tokio runtime for backup worker.");
         self.pool = Some(DaemonRuntime::from_runtime(pool));
         self.size = new_size;
@@ -110,12 +107,12 @@ impl ResizableRuntimeHandle {
         }
     }
 
-    pub fn spawn<Func>(&self, f: Func)
+    pub fn spawn<Fut>(&self, fut: Fut)
     where
-        Func: Future<Output = ()> + Send + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
     {
         let inner = self.inner.read().unwrap();
-        inner.spawn(f);
+        inner.spawn(fut);
     }
 
     pub fn adjust_with(&self, new_size: usize) {
@@ -132,10 +129,6 @@ impl ResizableRuntimeHandle {
     }
 }
 
-pub trait TokioRuntimeReplaceRule {
-    fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResult<Runtime>;
-}
-
 #[cfg(test)]
 mod test {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -144,21 +137,19 @@ mod test {
 
     static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
-    struct TestImportRuntimeCreator;
-    impl TokioRuntimeReplaceRule for TestImportRuntimeCreator {
-        fn create_tokio_runtime(_: usize, _: &str) -> TokioResult<Runtime> {
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-        }
-    }
-
     #[test]
     fn test_adjust_thread_num() {
-        fn after_adjust(new_size: usize) {
-            COUNTER.store(new_size, Ordering::SeqCst);
-        }
-        let mut threads = ResizableRuntime::new("test", after_adjust, TestImportRuntimeCreator);
+        let replace_pool_rule = |thread_count: usize, thread_name: &str| {
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(thread_count)
+                .thread_name(thread_name)
+                .enable_all()
+                .build()
+                .unwrap();
+            Ok(rt)
+        };
+        let after_adjust = |new_size: usize| {COUNTER.store(new_size, Ordering::SeqCst);};
+        let mut threads = ResizableRuntime::new("test", Box::new(replace_pool_rule), Box::new(after_adjust),);
         threads.adjust_with(4);
         assert_eq!(COUNTER.load(Ordering::SeqCst), 4);
         threads.adjust_with(8);
