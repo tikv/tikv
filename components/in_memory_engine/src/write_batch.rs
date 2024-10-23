@@ -459,6 +459,13 @@ impl WriteBatch for RegionCacheWriteBatch {
         self.prepared_regions.clear();
     }
 
+    fn clear_empty(&mut self) {
+        if !self.prepared_regions.is_empty() {
+            error!("after empty write batch, prepared_regions is not empty";
+                "regions" => ?self.prepared_regions);
+        }
+    }
+
     fn set_save_point(&mut self) {
         self.save_points.push(self.buffer.len())
     }

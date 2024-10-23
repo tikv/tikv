@@ -121,6 +121,12 @@ pub trait WriteBatch: Mutable {
     /// It may be reused afterward as an empty batch.
     fn clear(&mut self);
 
+    /// Do extra clean up for empty write batch.
+    ///
+    /// NOTE: some impl need to do some clean up at the end even when no kv is
+    /// written.
+    fn clear_empty(&mut self) {}
+
     /// Push a save point onto the save point stack
     fn set_save_point(&mut self);
 

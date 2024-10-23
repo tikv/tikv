@@ -89,6 +89,13 @@ impl<WB: WriteBatch> WriteBatch for WriteBatchWrapper<WB> {
         self.write_batch.clear();
     }
 
+    fn clear_empty(&mut self) {
+        if let Some(w) = self.observable_write_batch.as_mut() {
+            w.clear_empty();
+        }
+        self.write_batch.clear_empty();
+    }
+
     fn set_save_point(&mut self) {
         if let Some(w) = self.observable_write_batch.as_mut() {
             w.set_save_point()

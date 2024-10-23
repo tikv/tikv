@@ -629,6 +629,8 @@ where
             }
             self.kv_wb_last_bytes = 0;
             self.kv_wb_last_keys = 0;
+        } else {
+            self.kv_wb_mut().clear_empty();
         }
         if !self.delete_ssts.is_empty() {
             let tag = self.tag.clone();
