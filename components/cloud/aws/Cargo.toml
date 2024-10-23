@@ -53,3 +53,4 @@ uuid = { version = "0.8", features = ["v4"] }
 aws-smithy-runtime = { version = "1.4.0", features = ["test-util", "client"] }
 base64 = "0.13"
 futures = "0.3"
+tokio = {version = "1.5", features = ["macros"]}

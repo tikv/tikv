@@ -7,24 +7,23 @@ use aws_config::{
     environment::EnvironmentVariableRegionProvider,
     meta::region::{self, ProvideRegion, RegionProviderChain},
     profile::ProfileFileRegionProvider,
-    web_identity_token::WebIdentityTokenCredentialsProvider,
+    provider_config::ProviderConfig,
     ConfigLoader, Region,
 };
 use aws_credential_types::provider::{error::CredentialsError, ProvideCredentials};
+use aws_sdk_kms::config::SharedHttpClient;
 use aws_sdk_s3::config::HttpClient;
 use aws_smithy_runtime::client::http::hyper_014::HyperClientBuilder;
 use cloud::metrics;
-use futures::{executor::block_on, Future, TryFutureExt};
+use futures::{Future, TryFutureExt};
 use hyper::Client;
 use hyper_tls::HttpsConnector;
 use tikv_util::{
-    stream::{retry_ext, RetryError, RetryExt},
+    stream::{block_on_external_io, retry_ext, RetryError, RetryExt},
     warn,
 };
 
-#[allow(dead_code)] // This will be used soon, please remove the allow.
 const READ_BUF_SIZE: usize = 1024 * 1024 * 2;
-const AWS_WEB_IDENTITY_TOKEN_FILE: &str = "AWS_WEB_IDENTITY_TOKEN_FILE";
 
 const DEFAULT_REGION: &str = "us-east-1";
 
@@ -41,7 +40,7 @@ impl From<CredentialsErrorWrapper> for CredentialsError {
 
 impl std::fmt::Display for CredentialsErrorWrapper {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)?;
+        write!(f, "{:?}", self.0)?;
         Ok(())
     }
 }
@@ -52,7 +51,7 @@ impl RetryError for CredentialsErrorWrapper {
     }
 }
 
-pub fn new_http_client() -> impl HttpClient + 'static {
+pub fn new_http_client() -> SharedHttpClient {
     let mut hyper_builder = Client::builder();
     hyper_builder.http1_read_buf_exact_size(READ_BUF_SIZE);
 
@@ -61,8 +60,13 @@ pub fn new_http_client() -> impl HttpClient + 'static {
         .build(HttpsConnector::new())
 }
 
-pub fn new_credentials_provider() -> DefaultCredentialsProvider {
-    block_on(DefaultCredentialsProvider::new())
+pub fn new_credentials_provider(http: impl HttpClient + 'static) -> DefaultCredentialsProvider {
+    let fut = DefaultCredentialsProvider::new(http);
+    if let Ok(hnd) = tokio::runtime::Handle::try_current() {
+        tokio::task::block_in_place(move || hnd.block_on(fut))
+    } else {
+        block_on_external_io(fut)
+    }
 }
 
 pub fn is_retryable<T>(error: &SdkError<T>) -> bool {
@@ -163,18 +167,17 @@ impl ProvideRegion for DefaultRegionProvider {
 
 #[derive(Debug)]
 pub struct DefaultCredentialsProvider {
-    web_identity_provider: WebIdentityTokenCredentialsProvider,
     default_provider: DefaultCredentialsChain,
 }
 
 impl DefaultCredentialsProvider {
-    async fn new() -> Self {
-        let default_provider = DefaultCredentialsChain::builder().build().await;
-        let web_identity_provider = WebIdentityTokenCredentialsProvider::builder().build();
-        Self {
-            web_identity_provider,
-            default_provider,
-        }
+    async fn new(cli: impl HttpClient + 'static) -> Self {
+        let cfg = ProviderConfig::default().with_http_client(cli);
+        let default_provider = DefaultCredentialsChain::builder()
+            .configure(cfg)
+            .build()
+            .await;
+        Self { default_provider }
     }
 }
 
@@ -186,53 +189,30 @@ impl ProvideCredentials for DefaultCredentialsProvider {
         Self: 'a,
     {
         aws_credential_types::provider::future::ProvideCredentials::new(async move {
-            // use web identity provider first for the kubernetes environment.
-            let cred = if std::env::var(AWS_WEB_IDENTITY_TOKEN_FILE).is_ok() {
-                // we need invoke assume_role in web identity provider
-                // this API may failed sometimes.
-                // according to AWS experience, it's better to retry it with 10 times
-                // exponential backoff for every error, because we cannot
-                // distinguish the error type.
-                retry_and_count(
-                    || {
-                        #[cfg(test)]
-                        fail::fail_point!("cred_err", |_| {
-                            let cause: Box<dyn StdError + Send + Sync + 'static> =
-                                String::from("injected error").into();
-                            Box::pin(futures::future::err(CredentialsErrorWrapper(
-                                CredentialsError::provider_error(cause),
-                            )))
-                                as std::pin::Pin<Box<dyn futures::Future<Output = _> + Send>>
-                        });
+            // Add exponential backoff for every error, because we cannot
+            // distinguish the error type.
+            let cred = retry_and_count(
+                || {
+                    #[cfg(test)]
+                    fail::fail_point!("cred_err", |_| {
+                        let cause: Box<dyn StdError + Send + Sync + 'static> =
+                            String::from("injected error").into();
+                        Box::pin(futures::future::err(CredentialsErrorWrapper(
+                            CredentialsError::provider_error(cause),
+                        )))
+                            as std::pin::Pin<Box<dyn futures::Future<Output = _> + Send>>
+                    });
 
-                        let res = self
-                            .web_identity_provider
-                            .provide_credentials()
-                            .map_err(|err| CredentialsErrorWrapper(err));
-
-                        #[cfg(test)]
-                        return Box::pin(res);
-                        #[cfg(not(test))]
-                        res
-                    },
-                    "get_cred_over_the_cloud",
-                )
-                .await
-                .map_err(|err| err.0)
-            } else {
-                // Add exponential backoff for every error, because we cannot
-                // distinguish the error type.
-                retry_and_count(
-                    || {
+                    Box::pin(
                         self.default_provider
                             .provide_credentials()
-                            .map_err(|e| CredentialsErrorWrapper(e))
-                    },
-                    "get_cred_on_premise",
-                )
-                .await
-                .map_err(|e| e.0)
-            };
+                            .map_err(|e| CredentialsErrorWrapper(e)),
+                    )
+                },
+                "get_cred_on_premise",
+            )
+            .await
+            .map_err(|e| e.0);
 
             cred.map_err(|e| {
                 let msg = e
@@ -257,7 +237,9 @@ mod tests {
     #[cfg(feature = "failpoints")]
     #[tokio::test]
     async fn test_default_provider() {
-        let default_provider = DefaultCredentialsProvider::new().await;
+        const AWS_WEB_IDENTITY_TOKEN_FILE: &str = "AWS_WEB_IDENTITY_TOKEN_FILE";
+
+        let default_provider = DefaultCredentialsProvider::new(new_http_client()).await;
         std::env::set_var(AWS_WEB_IDENTITY_TOKEN_FILE, "tmp");
         // mock k8s env with web_identitiy_provider
         fail::cfg("cred_err", "return").unwrap();

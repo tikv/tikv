@@ -184,7 +184,7 @@ impl S3Storage {
 
     fn new_with_client<Http>(config: Config, client: Http) -> io::Result<Self>
     where
-        Http: HttpClient + 'static,
+        Http: HttpClient + Clone + 'static,
     {
         // static credentials are used with minio
         if let Some(access_key_pair) = &config.access_key_pair {
@@ -198,7 +198,7 @@ impl S3Storage {
             );
             Self::maybe_assume_role(config, client, creds)
         } else {
-            let creds = util::new_credentials_provider();
+            let creds = util::new_credentials_provider(client.clone());
             Self::maybe_assume_role(config, client, creds)
         }
     }

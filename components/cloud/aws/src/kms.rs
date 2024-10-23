@@ -79,7 +79,7 @@ impl AwsKms {
 
     pub fn new(config: Config) -> Result<AwsKms> {
         let client = util::new_http_client();
-        let creds = util::new_credentials_provider();
+        let creds = util::new_credentials_provider(client.clone());
         match config.aws.as_ref() {
             Some(aws_config) => {
                 if let (Some(access_key), Some(secret_access_key)) = (
