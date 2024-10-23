@@ -5860,20 +5860,19 @@ where
         let mut resp = RaftCmdResponse::default();
         let term = self.fsm.peer.term();
         bind_term(&mut resp, term);
-        if self
-            .fsm
-            .peer
-            .propose(self.ctx, cb, &mut msg, resp, diskfullopt)
-        {
+        // Save important details from `msg` so we can log them later if the proposal
+        // fails. This is a workaround because `msg` gets moved when proposed.
+        let is_admin_request = msg.has_admin_request();
+        let admin_cmd_type = is_admin_request.then(|| msg.get_admin_request().get_cmd_type());
+        if self.fsm.peer.propose(self.ctx, cb, msg, resp, diskfullopt) {
             self.fsm.has_ready = true;
         } else {
-            let is_admin_request = msg.has_admin_request();
             info_or_debug!(
                 is_admin_request;
                 "failed to propose";
                 "region_id" => self.region_id(),
                 "peer_id" => self.fsm.peer_id(),
-                "message" => ?msg,
+                "admin_cmd_type" => ?admin_cmd_type,
             );
         }
 

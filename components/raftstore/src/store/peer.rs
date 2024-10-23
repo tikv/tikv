@@ -3775,7 +3775,7 @@ where
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
         mut cb: Callback<EK::Snapshot>,
-        req: &mut RaftCmdRequest,
+        req: RaftCmdRequest,
         mut err_resp: RaftCmdResponse,
         mut disk_full_opt: DiskFullOpt,
     ) -> bool {
