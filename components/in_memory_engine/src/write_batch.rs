@@ -448,6 +448,22 @@ impl WriteBatch for RegionCacheWriteBatch {
     }
 
     fn clear(&mut self) {
+        // `current_region` is some means `write_impl` is not called, so we need to
+        // clear the `in_written` flag.
+        // This can happen when apply fsm do `commit`(e.g. after handling Msg::Change),
+        // and then do not handle other kvs. Thus, the write batch is empty,
+        // and `write_impl` is not called.
+        if self.current_region.is_some() {
+            self.record_last_written_region();
+        }
+        if !self.written_regions.is_empty() {
+            // region's `in_written` is not cleaned as `write_impl` is not called,
+            // so we should do it here.
+            self.engine
+                .core
+                .region_manager()
+                .clear_regions_in_being_written(&self.written_regions);
+        }
         self.region_cache_status = RegionCacheStatus::NotInCache;
         self.buffer.clear();
         self.save_points.clear();
@@ -457,13 +473,6 @@ impl WriteBatch for RegionCacheWriteBatch {
         self.written_regions.clear();
         self.prepare_for_write_duration = Duration::ZERO;
         self.prepared_regions.clear();
-    }
-
-    fn clear_empty(&mut self) {
-        if !self.prepared_regions.is_empty() {
-            error!("after empty write batch, prepared_regions is not empty";
-                "regions" => ?self.prepared_regions);
-        }
     }
 
     fn set_save_point(&mut self) {
