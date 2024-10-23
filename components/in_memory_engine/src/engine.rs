@@ -17,6 +17,7 @@ use engine_traits::{
     CacheRegion, EvictReason, FailedReason, IterOptions, Iterable, KvEngine, RegionCacheEngine,
     RegionCacheEngineExt, RegionEvent, Result, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
+use fail::fail_point;
 use kvproto::metapb::Region;
 use pd_client::PdClient;
 use raftstore::{coprocessor::RegionInfoProvider, store::CasualRouter};
@@ -217,6 +218,7 @@ impl RegionCacheMemoryEngineCore {
         rocks_engine: Option<&RocksEngine>,
         scheduler: &Scheduler<BackgroundTask>,
         should_set_in_written: bool,
+        in_flashback: bool,
     ) -> RegionCacheStatus {
         if !self.region_manager.is_active() {
             return RegionCacheStatus::NotInCache;
@@ -251,11 +253,11 @@ impl RegionCacheMemoryEngineCore {
             return RegionCacheStatus::NotInCache;
         };
 
-        if region_meta.get_region().epoch_version < region.epoch_version {
+        if region_meta.get_region().epoch_version < region.epoch_version || in_flashback {
             let meta = regions_map.remove_region(region.id);
             assert_eq!(meta.get_state(), RegionState::Pending);
             // try update outdated region.
-            if meta.can_be_updated_to(region) {
+            if !in_flashback && meta.can_be_updated_to(region) {
                 info!("ime update outdated pending region";
                     "current_meta" => ?meta,
                     "new_region" => ?region);
@@ -264,6 +266,7 @@ impl RegionCacheMemoryEngineCore {
                 regions_map.load_region(region.clone()).unwrap();
                 region_meta = regions_map.mut_region_meta(region.id).unwrap();
             } else {
+                fail_point!("ime_fail_to_schedule_load");
                 info!("ime remove outdated pending region";
                     "pending_region" => ?meta.get_region(),
                     "new_region" => ?region);
@@ -358,7 +361,6 @@ impl RegionCacheMemoryEngine {
         region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
         raft_casual_router: Option<Box<dyn CasualRouter<RocksEngine>>>,
     ) -> Self {
-        info!("ime init region cache memory engine");
         let core = Arc::new(RegionCacheMemoryEngineCore::new());
         let skiplist_engine = core.engine().clone();
 
@@ -408,15 +410,15 @@ impl RegionCacheMemoryEngine {
         evict_reason: EvictReason,
         cb: Option<Box<dyn AsyncFnOnce + Send + Sync>>,
     ) {
-        let deleteable_regions = self
+        let deletable_regions = self
             .core
             .region_manager
             .evict_region(region, evict_reason, cb);
-        if !deleteable_regions.is_empty() {
+        if !deletable_regions.is_empty() {
             // The region can be deleted directly.
             if let Err(e) = self
                 .bg_worker_manager()
-                .schedule_task(BackgroundTask::DeleteRegions(deleteable_regions))
+                .schedule_task(BackgroundTask::DeleteRegions(deletable_regions))
             {
                 error!(
                     "ime schedule delete region failed";
@@ -429,12 +431,17 @@ impl RegionCacheMemoryEngine {
 
     // It handles the pending region and check whether to buffer write for this
     // region.
-    pub(crate) fn prepare_for_apply(&self, region: &CacheRegion) -> RegionCacheStatus {
+    pub(crate) fn prepare_for_apply(
+        &self,
+        region: &CacheRegion,
+        in_flashback: bool,
+    ) -> RegionCacheStatus {
         self.core.prepare_for_apply(
             region,
             self.rocks_engine.as_ref(),
             self.bg_work_manager.background_scheduler(),
             true,
+            in_flashback,
         )
     }
 
@@ -450,7 +457,12 @@ impl RegionCacheMemoryEngine {
         self.statistics.clone()
     }
 
-    pub fn start_cross_check(&self, rocks_engine: RocksEngine, pd_client: Arc<dyn PdClient>) {
+    pub fn start_cross_check(
+        &self,
+        rocks_engine: RocksEngine,
+        pd_client: Arc<dyn PdClient>,
+        get_tikv_safe_point: Box<dyn Fn() -> Option<u64> + Send>,
+    ) {
         let cross_check_interval = self.config.value().cross_check_interval;
         if !cross_check_interval.is_zero() {
             if let Err(e) =
@@ -460,6 +472,7 @@ impl RegionCacheMemoryEngine {
                         rocks_engine,
                         pd_client,
                         cross_check_interval.0,
+                        get_tikv_safe_point,
                     )))
             {
                 error!(
@@ -545,7 +558,7 @@ impl RegionCacheEngineExt for RegionCacheMemoryEngine {
                         .overlap_with_manual_load_range(&region)
                     {
                         info!(
-                            "try to load region in manual load range";
+                            "ime try to load region in manual load range";
                             "region" => ?region,
                         );
                         if let Err(e) = self.load_region(region.clone()) {
@@ -656,7 +669,7 @@ pub mod tests {
 
         let mut region2 = new_region(1, b"k1", b"k5");
         region2.mut_region_epoch().version = 2;
-        engine.prepare_for_apply(&CacheRegion::from_region(&region2));
+        engine.prepare_for_apply(&CacheRegion::from_region(&region2), false);
         assert_eq!(
             count_region(engine.core.region_manager(), |m| {
                 matches!(m.get_state(), Pending | Loading)
@@ -670,7 +683,7 @@ pub mod tests {
 
         let mut region2 = new_region(1, b"k2", b"k5");
         region2.mut_region_epoch().version = 2;
-        engine.prepare_for_apply(&CacheRegion::from_region(&region2));
+        engine.prepare_for_apply(&CacheRegion::from_region(&region2), false);
         assert_eq!(
             count_region(engine.core.region_manager(), |m| {
                 matches!(m.get_state(), Pending | Loading)
@@ -787,7 +800,7 @@ pub mod tests {
         assert!(engine.core.region_manager.is_active());
 
         let mut wb = engine.write_batch();
-        wb.prepare_for_region(cache_region.clone());
+        wb.prepare_for_region(&region);
         wb.put(b"zk00", b"v1").unwrap();
         wb.put(b"zk10", b"v1").unwrap();
         wb.put(b"zk20", b"v1").unwrap();
@@ -804,7 +817,7 @@ pub mod tests {
         );
 
         let mut wb = engine.write_batch();
-        wb.prepare_for_region(cache_region.clone());
+        wb.prepare_for_region(&region);
         wb.put(b"zk10", b"v2").unwrap();
         wb.set_sequence_number(10).unwrap();
 
@@ -871,7 +884,7 @@ pub mod tests {
         engine.new_region(region.clone());
 
         let mut wb = engine.write_batch();
-        wb.prepare_for_region(cache_region.clone());
+        wb.prepare_for_region(&region);
         wb.set_sequence_number(10).unwrap();
         wb.put(b"a", b"val1").unwrap();
         wb.put(b"b", b"val2").unwrap();

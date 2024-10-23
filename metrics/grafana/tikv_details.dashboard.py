@@ -4643,6 +4643,79 @@ def InMemoryEngine() -> RowPanel:
             ),
         ]
     )
+    layout.row(
+        [
+            graph_panel(
+                title="Oldest Auto GC SafePoint",
+                description="Unlike the auto gc safe point used for TiKV, the safe point for in-memory engine is per region and this is the oldest one",
+                yaxes=yaxes(left_format=UNITS.DATE_TIME_ISO),
+                targets=[
+                    target(
+                        expr=expr_max(
+                            "tikv_in_memory_engine_oldest_safe_point",
+                        )
+                        .extra("/ (2^18)")
+                        .skip_default_instance_selector(),
+                        additional_groupby=True,
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Newest Auto GC SafePoint",
+                description="Unlike the auto gc safe point used for TiKV, the safe point for in-memory engine is per region and this is the newest one",
+                yaxes=yaxes(left_format=UNITS.DATE_TIME_ISO),
+                targets=[
+                    target(
+                        expr=expr_max(
+                            "tikv_in_memory_engine_newest_safe_point",
+                        )
+                        .extra("/ (2^18)")
+                        .skip_default_instance_selector(),
+                        additional_groupby=True,
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Auto GC SafePoint Gap",
+                description="The gap between newest auto gc safe point and oldest auto gc safe point of regions cached in the in-memroy engine",
+                yaxes=yaxes(left_format=UNITS.MILLI_SECONDS),
+                targets=[
+                    target(
+                        expr=expr_operator(
+                            expr_sum(
+                                "tikv_in_memory_engine_newest_safe_point",
+                            )
+                            .extra("/ (2^18)")
+                            .skip_default_instance_selector(),
+                            "-",
+                            expr_sum(
+                                "tikv_in_memory_engine_oldest_safe_point",
+                            )
+                            .extra("/ (2^18)")
+                            .skip_default_instance_selector(),
+                        ),
+                        additional_groupby=True,
+                        legend_format="{{instance}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Auto GC SafePoint Gap With TiKV",
+                description="The gap between tikv auto gc safe point and in-memory engine oldest auto gc safe point",
+                yaxes=yaxes(left_format=UNITS.MILLI_SECONDS),
+                targets=[
+                    target(
+                        expr=expr_max(
+                            "tikv_safe_point_gap_with_in_memory_engine",
+                        )
+                        .extra("/ (2^18)")
+                        .skip_default_instance_selector(),
+                        additional_groupby=True,
+                    ),
+                ],
+            ),
+        ]
+    )
     return layout.row_panel
 
 
@@ -6246,7 +6319,6 @@ def RocksDB() -> RowPanel:
                             label_selectors=['db="$db"'],
                         ),
                         legend_format="{{instance}}",
-                        additional_groupby=True,
                     ),
                 ],
             ),
