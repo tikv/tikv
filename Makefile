@@ -80,6 +80,7 @@ endif
 # Disable portable on macOS to sidestep the compiler bug in clang 4.9
 ifeq ($(shell uname -s),Darwin)
 ROCKSDB_SYS_PORTABLE=0
+ROCKSDB_SYS_SSE=0
 RUST_TEST_THREADS ?= 2
 endif
 
