@@ -190,8 +190,8 @@ impl RegionCacheWriteBatch {
         let engine = self.engine.core.engine();
 
         // record the number of insertions and deletions for each cf
-        let mut put: Vec<u64> = vec![0, 0, 0];
-        let mut delete: Vec<u64> = vec![0, 0, 0];
+        let mut put = [0, 0, 0];
+        let mut delete = [0, 0, 0];
         // Some entries whose ranges may be marked as evicted above, but it does not
         // matter, they will be deleted later.
         std::mem::take(&mut self.buffer).into_iter().for_each(|e| {
