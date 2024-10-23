@@ -4,7 +4,7 @@ use api_version::{dispatch_api_version, ApiV2, KeyMode, KvFormat};
 use file_system::IoType;
 use kvproto::kvrpcpb::ApiVersion;
 use tikv_util::{
-    error, resizable_threadpool::TokioRuntimeCreator, sys::thread::ThreadBuildWrapper,
+    error, resizable_threadpool::TokioRuntimeReplaceRule, sys::thread::ThreadBuildWrapper,
 };
 use tokio::{io::Result as TokioResult, runtime::Runtime};
 use txn_types::{Key, TimeStamp};
@@ -183,7 +183,7 @@ impl KeyValueCodec {
 
 pub struct BackupRuntimeCreator;
 
-impl TokioRuntimeCreator for BackupRuntimeCreator {
+impl TokioRuntimeReplaceRule for BackupRuntimeCreator {
     /// Create a standard tokio runtime.
     /// (which allows io and time reactor, involve thread memory accessor),
     /// and set the I/O type to export.

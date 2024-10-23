@@ -33,19 +33,23 @@ impl Drop for DaemonRuntime {
     }
 }
 
-pub struct ResizableRuntime {
+pub struct ResizableRuntime<ReplaceRule>
+    where ReplaceRule: TokioRuntimeReplaceRule
+    {
     pub size: usize,
     thread_name: String,
     pool: Option<Arc<DaemonRuntime>>,
     after_adjust: fn(usize),
-    replace_pool_rule: fn(usize, &str) -> TokioResult<Runtime>,
+    replace_pool_rule: ReplaceRule,
 }
 
-impl ResizableRuntime {
+impl<ReplaceRule> ResizableRuntime
+    where ReplaceRule: TokioRuntimeReplaceRule
+    {
     pub fn new(
         thread_name: &str,
         after_adjust: fn(usize),
-        replace_pool_rule: fn(usize, &str) -> TokioResult<Runtime>,
+        replace_pool_rule: ReplaceRule,
     ) -> Self {
         ResizableRuntime {
             size: 0,
@@ -56,14 +60,14 @@ impl ResizableRuntime {
         }
     }
 
-    pub fn spawn<Func>(&self, func: Func)
+    pub fn spawn<Fut>(&self, fut: Fut)
     where
-        Func: Future<Output = ()> + Send + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
     {
         self.pool
             .as_ref()
             .expect("ResizableRuntime: please call adjust_with() before spawn()")
-            .spawn(func);
+            .spawn(fut);
     }
 
     /// Lazily adjust the thread pool's size
@@ -73,7 +77,7 @@ impl ResizableRuntime {
         }
         // TODO: after tokio supports adjusting thread pool size(https://github.com/tokio-rs/tokio/issues/3329),
         //   adapt it.
-        let pool = (self.replace_pool_rule)(new_size, &self.thread_name)
+        let pool = ReplaceRule::create_tokio_runtime(new_size, &self.thread_name)
             .expect("failed to create tokio runtime for backup worker.");
         self.pool = Some(DaemonRuntime::from_runtime(pool));
         self.size = new_size;
@@ -128,7 +132,7 @@ impl ResizableRuntimeHandle {
     }
 }
 
-pub trait TokioRuntimeCreator {
+pub trait TokioRuntimeReplaceRule {
     fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResult<Runtime>;
 }
 
@@ -140,21 +144,21 @@ mod test {
 
     static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
-    #[test]
-    fn test_adjust_thread_num() {
-        let replace_pool_rule = |thread_count: usize, thread_name: &str| {
-            let rt = tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(thread_count)
-                .thread_name(thread_name)
+    struct TestImportRuntimeCreator;
+    impl TokioRuntimeReplaceRule for TestImportRuntimeCreator {
+        fn create_tokio_runtime(_: usize, _: &str) -> TokioResult<Runtime> {
+            tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .unwrap();
-            Ok(rt)
-        };
+        }
+    }
+
+    #[test]
+    fn test_adjust_thread_num() {
         fn after_adjust(new_size: usize) {
             COUNTER.store(new_size, Ordering::SeqCst);
         }
-        let mut threads = ResizableRuntime::new("test", after_adjust, replace_pool_rule);
+        let mut threads = ResizableRuntime::new("test", after_adjust, TestImportRuntimeCreator);
         threads.adjust_with(4);
         assert_eq!(COUNTER.load(Ordering::SeqCst), 4);
         threads.adjust_with(8);

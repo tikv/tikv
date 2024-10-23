@@ -280,7 +280,7 @@ mod tests {
     use test_sst_importer::{new_test_engine, new_test_engine_with_options};
     use tikv_util::{
         config::ReadableDuration,
-        resizable_threadpool::{ResizableRuntime, TokioRuntimeCreator},
+        resizable_threadpool::{ResizableRuntime, TokioRuntimeReplaceRule},
     };
     use tokio::runtime::Runtime;
 
@@ -344,7 +344,7 @@ mod tests {
         let cfg = Config::default();
 
         struct TestImportRuntimeCreator;
-        impl TokioRuntimeCreator for TestImportRuntimeCreator {
+        impl TokioRuntimeReplaceRule for TestImportRuntimeCreator {
             fn create_tokio_runtime(_: usize, _: &str) -> TokioResult<Runtime> {
                 tokio::runtime::Builder::new_current_thread()
                     .enable_all()
@@ -391,7 +391,7 @@ mod tests {
         };
 
         struct TestImportRuntimeCreator;
-        impl TokioRuntimeCreator for TestImportRuntimeCreator {
+        impl TokioRuntimeReplaceRule for TestImportRuntimeCreator {
             fn create_tokio_runtime(_: usize, _: &str) -> TokioResult<Runtime> {
                 tokio::runtime::Builder::new_current_thread()
                     .enable_all()

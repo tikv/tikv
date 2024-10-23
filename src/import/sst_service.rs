@@ -36,7 +36,7 @@ use tikv_kv::{Engine, LocalTablets, Modify, WriteData};
 use tikv_util::{
     config::ReadableSize,
     future::{create_stream_with_buffer, paired_future_callback},
-    resizable_threadpool::{ResizableRuntime, ResizableRuntimeHandle, TokioRuntimeCreator},
+    resizable_threadpool::{ResizableRuntime, ResizableRuntimeHandle, TokioRuntimeReplaceRule},
     sys::disk::{get_disk_status, DiskUsage},
     time::{Instant, Limiter},
     HandyRwLock,

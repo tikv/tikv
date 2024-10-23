@@ -1642,7 +1642,7 @@ mod tests {
     use test_util::new_test_key_manager;
     use tikv_util::{
         codec::stream_event::EventEncoder,
-        resizable_threadpool::{ResizableRuntime, TokioRuntimeCreator},
+        resizable_threadpool::{ResizableRuntime, TokioRuntimeReplaceRule},
         stream::block_on_external_io,
     };
     use tokio::io::{AsyncWrite, AsyncWriteExt};
@@ -2294,7 +2294,7 @@ mod tests {
         let change = cfg.diff(&cfg_new);
 
         struct TestImportRuntimeCreator;
-        impl TokioRuntimeCreator for TestImportRuntimeCreator {
+        impl TokioRuntimeReplaceRule for TestImportRuntimeCreator {
             fn create_tokio_runtime(_: usize, _: &str) -> TokioResult<Runtime> {
                 tokio::runtime::Builder::new_current_thread()
                     .enable_all()
@@ -2334,7 +2334,7 @@ mod tests {
         let change = cfg.diff(&cfg_new);
 
         struct TestImportRuntimeCreator;
-        impl TokioRuntimeCreator for TestImportRuntimeCreator {
+        impl TokioRuntimeReplaceRule for TestImportRuntimeCreator {
             fn create_tokio_runtime(_: usize, _: &str) -> TokioResult<Runtime> {
                 tokio::runtime::Builder::new_current_thread()
                     .enable_all()
@@ -2356,7 +2356,7 @@ mod tests {
     #[test]
     fn test_update_import_num_threads() {
         struct TestImportRuntimeCreator;
-        impl TokioRuntimeCreator for TestImportRuntimeCreator {
+        impl TokioRuntimeReplaceRule for TestImportRuntimeCreator {
             fn create_tokio_runtime(_: usize, _: &str) -> TokioResult<Runtime> {
                 tokio::runtime::Builder::new_current_thread()
                     .enable_all()
