@@ -160,14 +160,13 @@ where
 
 #[cfg(test)]
 mod tests {
-
     use engine_traits::{
-        CacheRegion, IterOptions, Iterable, Iterator, Mutable, SnapshotContext, WriteBatch,
-        WriteBatchExt, CF_DEFAULT,
+        CacheRegion, IterOptions, Iterable, Iterator, Mutable, WriteBatch, WriteBatchExt,
+        CF_DEFAULT,
     };
     use in_memory_engine::{test_util::new_region, InMemoryEngineConfig, RegionCacheStatus};
 
-    use crate::util::hybrid_engine_for_tests;
+    use crate::{engine::SnapshotContext, util::hybrid_engine_for_tests};
 
     #[test]
     fn test_iterator() {

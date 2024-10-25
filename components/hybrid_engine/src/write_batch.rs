@@ -149,16 +149,14 @@ impl<EK: KvEngine> Mutable for HybridEngineWriteBatch<EK> {
 
 #[cfg(test)]
 mod tests {
-
     use std::time::Duration;
 
     use engine_traits::{
-        CacheRegion, Mutable, Peekable, RegionCacheEngine, SnapshotContext, WriteBatch,
-        WriteBatchExt,
+        CacheRegion, Mutable, Peekable, RegionCacheEngine, WriteBatch, WriteBatchExt,
     };
     use in_memory_engine::{test_util::new_region, InMemoryEngineConfig, RegionCacheStatus};
 
-    use crate::util::hybrid_engine_for_tests;
+    use crate::{engine::SnapshotContext, util::hybrid_engine_for_tests};
 
     #[test]
     fn test_write_to_both_engines() {
@@ -183,7 +181,11 @@ mod tests {
         write_batch.put(b"zhello", b"world").unwrap();
         let seq = write_batch.write().unwrap();
         assert!(seq > 0);
-        let actual: &[u8] = &hybrid_engine.get_value(b"zhello").unwrap().unwrap();
+        let actual: &[u8] = &hybrid_engine
+            .disk_engine()
+            .get_value(b"zhello")
+            .unwrap()
+            .unwrap();
         assert_eq!(b"world", &actual);
         let ctx = SnapshotContext {
             region: Some(cache_region.clone()),

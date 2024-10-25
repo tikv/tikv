@@ -3,29 +3,13 @@
 #![allow(unused_variables)]
 #![feature(let_chains)]
 
-mod cf_names;
-mod cf_options;
-mod checkpoint;
-mod compact;
-mod db_options;
 mod db_vector;
 mod engine;
 mod engine_iterator;
-mod flow_control_factors;
-mod hybrid_metrics;
-mod import;
-mod iterable;
 mod metrics;
-mod misc;
-mod mvcc_properties;
 pub mod observer;
-mod perf_context;
-mod range_properties;
 mod region_cache_engine;
 mod snapshot;
-mod sst;
-mod table_properties;
-mod ttl_properties;
 pub mod util;
 mod write_batch;
 
