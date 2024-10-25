@@ -21,6 +21,13 @@ use kvproto::{
     raft_cmdpb::{AdminCmdType, CmdType, RaftCmdRequest, RaftRequestHeader, Request},
 };
 use protobuf::Message;
+use raftstore::{
+    coprocessor::ObserveHandle,
+    store::{
+        fsm::{apply::ChangeObserver, ApplyTask},
+        msg::Callback,
+    },
+};
 use tempfile::tempdir;
 use test_coprocessor::{
     handle_request, init_data_with_details_pd_client, DagChunkSpliter, DagSelect, ProductTable,
@@ -889,7 +896,6 @@ fn test_apply_prepared_but_not_write() {
 
     // first pause apply fsm.
     fail::cfg("before_handle_normal", "pause").unwrap();
-    fail::cfg("send_fake_apply_change_after_send_to_apply_1", "1*return()").unwrap();
 
     let (tx, rx) = unbounded();
     fail::cfg_callback("after_write_to_db_skip_write_node_1", move || {
@@ -904,8 +910,23 @@ fn test_apply_prepared_but_not_write() {
         vec![new_put_cf_cmd(CF_DEFAULT, b"k20", b"v1")],
         false,
     );
-    let result = cluster.call_command_on_leader(req, Duration::from_millis(10));
+    let result = cluster.call_command_on_leader(req, Duration::from_millis(20));
     assert!(result.is_err());
+
+    // schedule a Msg::Change to trigger a explicit commit, it will lead to a empty
+    // flush at the end of this poll.
+    let apply_router = cluster.get_apply_router(1).unwrap();
+    apply_router.schedule_task(
+        r2.id,
+        ApplyTask::Change {
+            cmd: ChangeObserver::from_rts(r2.id, ObserveHandle::default()),
+            region_epoch: r2.get_region_epoch().clone(),
+            cb: Callback::Read {
+                cb: Box::new(|_| {}),
+                tracker: Default::default(),
+            },
+        },
+    );
 
     // resume apply fsm to let it handle raft entries and the fake `Change` msg.
     fail::remove("before_handle_normal");

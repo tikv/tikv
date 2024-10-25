@@ -888,6 +888,10 @@ impl Simulator for ServerCluster {
     fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RaftTestEngine>> {
         self.metas.get(&node_id).map(|m| m.raw_router.clone())
     }
+
+    fn get_apply_router(&self, node_id: u64) -> Option<ApplyRouter<RocksEngine>> {
+        self.metas.get(&node_id).map(|m| m.raw_apply_router.clone())
+    }
 }
 
 impl Cluster<ServerCluster> {

@@ -3158,27 +3158,6 @@ where
             RAFT_APPLY_AHEAD_PERSIST_HISTOGRAM.observe(apply_ahead_delta as f64);
         }
         fail_point!("after_send_to_apply_1003", self.peer_id() == 1003, |_| {});
-        fail_point!(
-            "send_fake_apply_change_after_send_to_apply_1",
-            self.peer_id() == 1,
-            |_| {
-                println!("after send to apply, send a fake change task");
-                ctx.apply_router.schedule_task(
-                    self.region_id,
-                    ApplyTask::Change {
-                        cmd: crate::store::fsm::apply::ChangeObserver::from_rts(
-                            self.region_id,
-                            crate::coprocessor::ObserveHandle::default(),
-                        ),
-                        region_epoch: self.region().get_region_epoch().clone(),
-                        cb: crate::store::msg::Callback::Read {
-                            cb: Box::new(|_| {}),
-                            tracker: Default::default(),
-                        },
-                    },
-                );
-            }
-        );
     }
 
     /// Check long uncommitted proposals and log some info to help find why.
