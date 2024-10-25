@@ -858,3 +858,23 @@ fn test_load_during_flashback() {
         );
     }
 }
+
+#[test]
+fn test_eviction_when_destroy_peer() {
+    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
+    cluster.run();
+
+    let t1 = ProductTable::new();
+    must_copr_load_data(&mut cluster, &t1, 1);
+    let t2 = ProductTable::new();
+    must_copr_load_data(&mut cluster, &t2, 1);
+
+    let key = t2.get_table_prefix();
+    let split_key = Key::from_raw(&key).into_encoded();
+    let r = cluster.get_region(&split_key);
+    cluster.must_split(&r, &split_key);
+
+    // let router = cluster.get_router(1).unwrap();
+    // let msg = Box::<RaftMessage>::default();
+    // router.send_raft_message(msg)
+}
