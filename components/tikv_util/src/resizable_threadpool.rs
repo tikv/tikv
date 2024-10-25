@@ -57,14 +57,14 @@ impl ResizableRuntime {
         }
     }
 
-    pub fn spawn<Func>(&self, func: Func)
+    pub fn spawn<Fut>(&self, func: Fut)
     where
-        Func: Future<Output = ()> + Send + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
     {
         self.pool
             .as_ref()
             .expect("ResizableRuntime: please call adjust_with() before spawn()")
-            .spawn(func);
+            .spawn(fut);
     }
 
     /// Lazily adjust the thread pool's size
