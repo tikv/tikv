@@ -5,9 +5,11 @@ use prometheus::{register_int_counter_vec, IntCounterVec};
 use prometheus_static_metric::{auto_flush_from, make_auto_flush_static_metric};
 
 make_auto_flush_static_metric! {
+    // We may acquire ime snapshot even not in coprocessor request. We count it as wasted.
     pub label_enum SnapshotType {
         rocksdb,
-        region_cache_engine,
+        in_memory_engine,
+        wasted,
     }
 
     pub struct SnapshotTypeCountVec: LocalIntCounter {
