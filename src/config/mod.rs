@@ -781,7 +781,7 @@ impl Default for DefaultCfConfig {
             max_compactions: None,
             ttl: None,
             periodic_compaction_seconds: None,
-            bottommost_file_compaction_delay: 3600,
+            bottommost_file_compaction_delay: 0,
             titan: TitanCfConfig::default(),
             write_buffer_limit: None,
         }
@@ -952,7 +952,7 @@ impl Default for WriteCfConfig {
             max_compactions: None,
             ttl: None,
             periodic_compaction_seconds: None,
-            bottommost_file_compaction_delay: 3600,
+            bottommost_file_compaction_delay: 0,
             titan: TitanCfConfig::default_for_disabled(),
             write_buffer_limit: None,
         }
