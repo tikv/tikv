@@ -319,8 +319,6 @@ impl<E: Engine> ImportSstService<E> {
         resource_manager: Option<Arc<ResourceGroupManager>>,
         region_info_accessor: Arc<RegionInfoAccessor>,
     ) -> Self {
-        // let props = tikv_util::thread_group::current_properties();
-        // let eng = Mutex::new(engine.clone());
         let mut threads = ResizableRuntime::new(
             "import",
             Box::new(ImportUtils::create_tokio_runtime),
