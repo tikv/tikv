@@ -910,8 +910,9 @@ fn test_apply_prepared_but_not_write() {
         vec![new_put_cf_cmd(CF_DEFAULT, b"k20", b"v1")],
         false,
     );
-    let result = cluster.call_command_on_leader(req, Duration::from_millis(20));
-    assert!(result.is_err());
+    cluster
+        .call_command_on_leader(req, Duration::from_millis(20))
+        .unwrap_err();
 
     // schedule a Msg::Change to trigger a explicit commit, it will lead to a empty
     // flush at the end of this poll.
@@ -942,16 +943,18 @@ fn test_apply_prepared_but_not_write() {
         vec![new_put_cf_cmd(CF_DEFAULT, b"k1", b"v2")],
         false,
     );
-    let result = cluster.call_command_on_leader(req, Duration::from_millis(10));
-    assert!(result.is_err());
+    cluster
+        .call_command_on_leader(req, Duration::from_millis(10))
+        .unwrap_err();
     let req = test_raftstore::util::new_request(
         r2.id,
         r2.get_region_epoch().clone(),
         vec![new_put_cf_cmd(CF_DEFAULT, b"k20", b"v2")],
         false,
     );
-    let result = cluster.call_command_on_leader(req, Duration::from_millis(10));
-    assert!(result.is_err());
+    cluster
+        .call_command_on_leader(req, Duration::from_millis(10))
+        .unwrap_err();
 
     // resume apply fsm, should handle new writes successfully.
     fail::remove("before_handle_normal");
