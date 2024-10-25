@@ -57,7 +57,7 @@ impl ResizableRuntime {
         }
     }
 
-    pub fn spawn<Fut>(&self, func: Fut)
+    pub fn spawn<Fut>(&self, fut: Fut)
     where
         Fut: Future<Output = ()> + Send + 'static,
     {

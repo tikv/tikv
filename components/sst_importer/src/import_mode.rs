@@ -88,37 +88,37 @@ impl ImportModeSwitcher {
         ImportModeSwitcher { inner, is_import }
     }
 
-    pub fn start<E: KvEngine>(&self, executor: &Handle, db: E) {
-        // spawn a background future to put TiKV back into normal mode after timeout
-        let inner = self.inner.clone();
-        let switcher = Arc::downgrade(&inner);
-        let timer_loop = async move {
-            // loop until the switcher has been dropped
-            while let Some(switcher) = switcher.upgrade() {
-                let next_check = {
-                    let mut switcher = switcher.lock().unwrap();
-                    let now = Instant::now();
-                    if now >= switcher.next_check {
-                        if switcher.is_import.load(Ordering::Acquire) {
-                            let mf = switcher.metrics_fn;
-                            if let Err(e) = switcher.enter_normal_mode(&db, mf) {
-                                error!(?e; "failed to put TiKV back into normal mode");
-                            }
-                        }
-                        switcher.next_check = now + switcher.timeout
-                    }
-                    switcher.next_check
-                };
+    // pub fn start<E: KvEngine>(&self, executor: &Handle, db: E) {
+    //     // spawn a background future to put TiKV back into normal mode after timeout
+    //     let inner = self.inner.clone();
+    //     let switcher = Arc::downgrade(&inner);
+    //     let timer_loop = async move {
+    //         // loop until the switcher has been dropped
+    //         while let Some(switcher) = switcher.upgrade() {
+    //             let next_check = {
+    //                 let mut switcher = switcher.lock().unwrap();
+    //                 let now = Instant::now();
+    //                 if now >= switcher.next_check {
+    //                     if switcher.is_import.load(Ordering::Acquire) {
+    //                         let mf = switcher.metrics_fn;
+    //                         if let Err(e) = switcher.enter_normal_mode(&db, mf) {
+    //                             error!(?e; "failed to put TiKV back into normal mode");
+    //                         }
+    //                     }
+    //                     switcher.next_check = now + switcher.timeout
+    //                 }
+    //                 switcher.next_check
+    //             };
 
-                let ok = GLOBAL_TIMER_HANDLE.delay(next_check).compat().await.is_ok();
+    //             let ok = GLOBAL_TIMER_HANDLE.delay(next_check).compat().await.is_ok();
 
-                if !ok {
-                    warn!("failed to delay with global timer");
-                }
-            }
-        };
-        executor.spawn(timer_loop);
-    }
+    //             if !ok {
+    //                 warn!("failed to delay with global timer");
+    //             }
+    //         }
+    //     };
+    //     executor.spawn(timer_loop);
+    // }
 
     // start_resizable_threads only serves for resizable runtime
     pub fn start_resizable_threads<E: KvEngine>(&self, executor: &ResizableRuntimeHandle, db: E) {
