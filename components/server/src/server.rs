@@ -47,6 +47,7 @@ use hybrid_engine::observer::{
 };
 use in_memory_engine::{
     config::InMemoryEngineConfigManager, InMemoryEngineContext, InMemoryEngineStatistics,
+    RegionCacheMemoryEngine,
 };
 use kvproto::{
     brpb::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
@@ -169,7 +170,7 @@ fn run_impl<CER, F>(
     tikv.core.init_encryption();
     let fetcher = tikv.core.init_io_utility();
     let listener = tikv.core.init_flow_receiver();
-    let (engines, engines_info) = tikv.init_raw_engines(listener);
+    let (engines, engines_info, in_memory_engine) = tikv.init_raw_engines(listener);
     tikv.init_engines(engines.clone());
     let server_config = tikv.init_servers();
     tikv.register_services();
@@ -177,7 +178,7 @@ fn run_impl<CER, F>(
     tikv.init_cgroup_monitor();
     tikv.init_storage_stats_task(engines);
     tikv.run_server(server_config);
-    tikv.run_status_server();
+    tikv.run_status_server(in_memory_engine);
     tikv.core.init_quota_tuning_task(tikv.quota_limiter.clone());
 
     // Build a background worker for handling signals.
@@ -1507,7 +1508,7 @@ where
             .unwrap_or_else(|e| fatal!("failed to start server: {}", e));
     }
 
-    fn run_status_server(&mut self) {
+    fn run_status_server(&mut self, in_memory_engine: Option<RegionCacheMemoryEngine>) {
         // Create a status server.
         let status_enabled = !self.core.config.server.status_addr.is_empty();
         if status_enabled {
@@ -1518,6 +1519,7 @@ where
                 self.engines.as_ref().unwrap().engine.raft_extension(),
                 self.resource_manager.clone(),
                 self.grpc_service_mgr.clone(),
+                in_memory_engine,
             ) {
                 Ok(status_server) => Box::new(status_server),
                 Err(e) => {
@@ -1594,7 +1596,11 @@ where
     fn init_raw_engines(
         &mut self,
         flow_listener: engine_rocks::FlowListener,
-    ) -> (Engines<RocksEngine, CER>, Arc<EnginesResourceInfo>) {
+    ) -> (
+        Engines<RocksEngine, CER>,
+        Arc<EnginesResourceInfo>,
+        Option<RegionCacheMemoryEngine>,
+    ) {
         let block_cache = self.core.config.storage.block_cache.build_shared_cache();
         let env = self
             .core
@@ -1657,7 +1663,7 @@ where
         let in_memory_engine_context =
             InMemoryEngineContext::new(in_memory_engine_config.clone(), self.pd_client.clone());
         let in_memory_engine_statistics = in_memory_engine_context.statistics();
-        if self.core.config.in_memory_engine.enable {
+        let ime_engine = if self.core.config.in_memory_engine.enable {
             let in_memory_engine = build_hybrid_engine(
                 in_memory_engine_context,
                 kv_engine.clone(),
@@ -1676,6 +1682,9 @@ where
             let snapshot_observer =
                 HybridSnapshotObserver::new(in_memory_engine.region_cache_engine().clone());
             snapshot_observer.register_to(self.coprocessor_host.as_mut().unwrap());
+            Some(in_memory_engine.region_cache_engine().clone())
+        } else {
+            None
         };
         let in_memory_engine_config_manager = InMemoryEngineConfigManager(in_memory_engine_config);
         self.kv_statistics = Some(factory.rocks_statistics());
@@ -1713,7 +1722,7 @@ where
             180, // max_samples_to_preserve
         ));
 
-        (engines, engines_info)
+        (engines, engines_info, ime_engine)
     }
 }
 
