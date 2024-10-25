@@ -227,10 +227,6 @@ impl ServerCluster {
         self.addrs.get(node_id).unwrap()
     }
 
-    pub fn get_apply_router(&self, node_id: u64) -> ApplyRouter<RocksEngine> {
-        self.metas.get(&node_id).unwrap().raw_apply_router.clone()
-    }
-
     pub fn get_server_router(&self, node_id: u64) -> SimulateStoreTransport {
         self.metas.get(&node_id).unwrap().sim_router.clone()
     }

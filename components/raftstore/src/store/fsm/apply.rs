@@ -592,7 +592,6 @@ where
                 });
             self.pending_ssts = vec![];
         }
-
         if !self.kv_wb_mut().is_empty() {
             self.perf_context.start_observe();
             let mut write_opts = engine_traits::WriteOptions::new();
@@ -636,8 +635,8 @@ where
                 self.store_id == 1,
                 |_| { unreachable!() }
             );
-            // We call `clear` here because some WriteBatch impl may have some interal state
-            // that need to be reset even if the write batch is empty.
+            // We call `clear` here because some WriteBatch impl may have some internal
+            // state that need to be reset even if the write batch is empty.
             // Please refer to `RegionCacheWriteBatch::clear` for more details.
             self.kv_wb_mut().clear();
         }
