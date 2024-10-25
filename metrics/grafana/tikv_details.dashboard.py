@@ -4375,6 +4375,25 @@ def InMemoryEngine() -> RowPanel:
     layout.row(
         [
             graph_panel(
+                title="OPS",
+                description="Operation per second for cf",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_in_memory_engine_kv_operations",
+                            by_labels=["instance", "type"],
+                        ),
+                        legend_format="{{type}}-{{instance}}",
+                        additional_groupby=True,
+                    ),
+                ],
+            )
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
                 title="Region Cache Hit",
                 description="Count of region cache hit",
                 targets=[
