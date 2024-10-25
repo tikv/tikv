@@ -70,7 +70,6 @@ pub struct ConfigManager {
 
 impl ConfigManager {
     pub fn new(cfg: Config, threads: ResizableRuntimeHandle) -> Self {
-        threads.adjust_with(cfg.num_threads);
         ConfigManager {
             config: Arc::new(RwLock::new(cfg)),
             threads,

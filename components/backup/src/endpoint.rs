@@ -883,9 +883,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
             Box::new(utils::create_tokio_runtime),
             Box::new(|new_size| BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64)),
         );
-        let rt =
-            utils::create_tokio_runtime(config.io_thread_size, "backup-io")
-                .unwrap();
+        let rt = utils::create_tokio_runtime(config.io_thread_size, "backup-io").unwrap();
         let config_manager = ConfigManager(Arc::new(RwLock::new(config)));
         let softlimit = SoftLimitKeeper::new(config_manager.clone());
         rt.spawn(softlimit.clone().run());
@@ -2559,7 +2557,7 @@ pub mod tests {
         assert!(endpoint.pool.borrow().size == 10);
 
         endpoint.get_config_manager().set_num_threads(3);
-        req.set_start_key(vec![b'3']); 
+        req.set_start_key(vec![b'3']);
         let (task, _) = Task::new(req, tx).unwrap();
         endpoint.handle_backup_task(task);
         assert!(endpoint.pool.borrow().size == 3);

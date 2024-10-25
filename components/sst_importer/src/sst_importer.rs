@@ -1641,8 +1641,7 @@ mod tests {
     use test_sst_importer::*;
     use test_util::new_test_key_manager;
     use tikv_util::{
-        codec::stream_event::EventEncoder,
-        resizable_threadpool::ResizableRuntime,
+        codec::stream_event::EventEncoder, resizable_threadpool::ResizableRuntime,
         stream::block_on_external_io,
     };
     use tokio::io::{AsyncWrite, AsyncWriteExt};
@@ -2299,11 +2298,8 @@ mod tests {
         };
         let change = cfg.diff(&cfg_new);
 
-        let mut threads = ResizableRuntime::new(
-            "test",
-            Box::new(create_tokio_runtime),
-            Box::new(|_| {}),
-        );
+        let mut threads =
+            ResizableRuntime::new("test", Box::new(create_tokio_runtime), Box::new(|_| {}));
         let handle = ResizableRuntimeHandle::new(threads);
 
         // create config manager and update config.
@@ -2331,11 +2327,8 @@ mod tests {
         };
         let change = cfg.diff(&cfg_new);
 
-        let mut threads = ResizableRuntime::new(
-            "test",
-            Box::new(create_tokio_runtime),
-            Box::new(|_| {}),
-        );
+        let threads =
+            ResizableRuntime::new("test", Box::new(create_tokio_runtime), Box::new(|_| {}));
         let handle = ResizableRuntimeHandle::new(threads);
 
         let mut cfg_mgr = ImportConfigManager::new(cfg, handle);
@@ -2348,7 +2341,9 @@ mod tests {
         let threads = ResizableRuntime::new(
             "test",
             Box::new(create_tokio_runtime),
-            Box::new(|new_size: usize| {COUNTER.store(new_size, Ordering::SeqCst);}),
+            Box::new(|new_size: usize| {
+                COUNTER.store(new_size, Ordering::SeqCst);
+            }),
         );
         let handle = ResizableRuntimeHandle::new(threads);
         let mut cfg_mgr = ImportConfigManager::new(Config::default(), handle);

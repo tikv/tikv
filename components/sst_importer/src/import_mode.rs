@@ -87,39 +87,7 @@ impl ImportModeSwitcher {
         }));
         ImportModeSwitcher { inner, is_import }
     }
-
-    // pub fn start<E: KvEngine>(&self, executor: &Handle, db: E) {
-    //     // spawn a background future to put TiKV back into normal mode after timeout
-    //     let inner = self.inner.clone();
-    //     let switcher = Arc::downgrade(&inner);
-    //     let timer_loop = async move {
-    //         // loop until the switcher has been dropped
-    //         while let Some(switcher) = switcher.upgrade() {
-    //             let next_check = {
-    //                 let mut switcher = switcher.lock().unwrap();
-    //                 let now = Instant::now();
-    //                 if now >= switcher.next_check {
-    //                     if switcher.is_import.load(Ordering::Acquire) {
-    //                         let mf = switcher.metrics_fn;
-    //                         if let Err(e) = switcher.enter_normal_mode(&db, mf) {
-    //                             error!(?e; "failed to put TiKV back into normal mode");
-    //                         }
-    //                     }
-    //                     switcher.next_check = now + switcher.timeout
-    //                 }
-    //                 switcher.next_check
-    //             };
-
-    //             let ok = GLOBAL_TIMER_HANDLE.delay(next_check).compat().await.is_ok();
-
-    //             if !ok {
-    //                 warn!("failed to delay with global timer");
-    //             }
-    //         }
-    //     };
-    //     executor.spawn(timer_loop);
-    // }
-
+    
     // start_resizable_threads only serves for resizable runtime
     pub fn start_resizable_threads<E: KvEngine>(&self, executor: &ResizableRuntimeHandle, db: E) {
         // spawn a background future to put TiKV back into normal mode after timeout
@@ -278,10 +246,7 @@ mod tests {
     use engine_traits::{KvEngine, CF_DEFAULT};
     use tempfile::Builder;
     use test_sst_importer::{new_test_engine, new_test_engine_with_options};
-    use tikv_util::{
-        config::ReadableDuration,
-        resizable_threadpool::ResizableRuntime,
-    };
+    use tikv_util::{config::ReadableDuration, resizable_threadpool::ResizableRuntime};
     use tokio::runtime::Runtime;
 
     use super::*;
@@ -349,11 +314,8 @@ mod tests {
 
         let cfg = Config::default();
 
-        let mut threads = ResizableRuntime::new(
-            "test",
-            Box::new(create_tokio_runtime),
-            Box::new(|_| {}),
-        );
+        let mut threads =
+            ResizableRuntime::new("test", Box::new(create_tokio_runtime), Box::new(|_| {}));
         threads.adjust_with(cfg.num_threads);
         let switcher = ImportModeSwitcher::new(&cfg);
         switcher.start_resizable_threads(&ResizableRuntimeHandle::new(threads), db.clone());
@@ -388,11 +350,8 @@ mod tests {
             ..Config::default()
         };
 
-        let mut threads = ResizableRuntime::new(
-            "test",
-            Box::new(create_tokio_runtime),
-            Box::new(|_| {}),
-        );
+        let mut threads =
+            ResizableRuntime::new("test", Box::new(create_tokio_runtime), Box::new(|_| {}));
         threads.adjust_with(4);
         let switcher = ImportModeSwitcher::new(&cfg);
         let handle = ResizableRuntimeHandle::new(threads);

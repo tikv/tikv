@@ -3,9 +3,7 @@
 use api_version::{dispatch_api_version, ApiV2, KeyMode, KvFormat};
 use file_system::IoType;
 use kvproto::kvrpcpb::ApiVersion;
-use tikv_util::{
-    error, sys::thread::ThreadBuildWrapper,
-};
+use tikv_util::{error, sys::thread::ThreadBuildWrapper};
 use tokio::{io::Result as TokioResult, runtime::Runtime};
 use txn_types::{Key, TimeStamp};
 

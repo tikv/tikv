@@ -324,9 +324,10 @@ impl<E: Engine> ImportSstService<E> {
         let mut threads = ResizableRuntime::new(
             "import",
             Box::new(ImportUtils::create_tokio_runtime),
-            Box::new(|_| ())
+            Box::new(|_| ()),
         );
-        threads.adjust_with(cfg.num_threads);
+        // There would be 4 initial threads running forever.
+        threads.adjust_with(4);
         let handle = ResizableRuntimeHandle::new(threads);
         if let LocalTablets::Singleton(tablet) = &tablets {
             importer.start_switch_mode_check(&handle.clone(), Some(tablet.clone()));
@@ -344,6 +345,8 @@ impl<E: Engine> ImportSstService<E> {
 
         let cfg_mgr = ConfigManager::new(cfg, handle.clone());
         handle.spawn(Self::tick(importer.clone(), cfg_mgr.clone()));
+        // Drop the initial pool to accept new tasks
+        handle.adjust_with(cfg_mgr.rl().num_threads);
 
         ImportSstService {
             cfg: cfg_mgr,

@@ -148,8 +148,11 @@ mod test {
                 .unwrap();
             Ok(rt)
         };
-        let after_adjust = |new_size: usize| {COUNTER.store(new_size, Ordering::SeqCst);};
-        let mut threads = ResizableRuntime::new("test", Box::new(replace_pool_rule), Box::new(after_adjust),);
+        let after_adjust = |new_size: usize| {
+            COUNTER.store(new_size, Ordering::SeqCst);
+        };
+        let mut threads =
+            ResizableRuntime::new("test", Box::new(replace_pool_rule), Box::new(after_adjust));
         threads.adjust_with(4);
         assert_eq!(COUNTER.load(Ordering::SeqCst), 4);
         threads.adjust_with(8);
