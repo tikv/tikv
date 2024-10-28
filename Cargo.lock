@@ -829,6 +829,7 @@ dependencies = [
  "protobuf",
  "raft",
  "raftstore",
+ "rand 0.8.5",
  "resolved_ts",
  "security",
  "semver 1.0.4",
