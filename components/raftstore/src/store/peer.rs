@@ -335,8 +335,15 @@ impl<S: Snapshot> ProposedAdminCmd<S> {
     /// mutually exclusive, it may cause unexpected behaviors in rare scenarios
     /// (e.g. #12410 and #17602.)
     fn is_mutually_exclusive_with(&self, cmd_type: AdminCmdType) -> bool {
-        self.cmd_type == AdminCmdType::TransferLeader
-            && matches!(cmd_type, AdminCmdType::Split | AdminCmdType::BatchSplit)
+        // Note: the incoming `TransferLeader` command will be denied only when the
+        // previous `TransferLeader` command is finished. Meanwhile, as
+        // `admin_cmd_epoch_lookup` defines, the later `TransferLeader` will be
+        // denied if the region has pending `Split` or `BatchSplit` commands.
+        self.is_special_marker()
+            && matches!(
+                cmd_type,
+                AdminCmdType::TransferLeader | AdminCmdType::Split | AdminCmdType::BatchSplit
+            )
     }
 
     /// Returns true if the command can tolerate the given command.
