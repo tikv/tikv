@@ -442,7 +442,7 @@ impl<E: Engine> Endpoint<E> {
         .await?;
         let latest_buckets = snapshot.ext().get_buckets();
 
-        let region_cache_snap = snapshot.ext().region_cache_engine_hit();
+        let region_cache_snap = snapshot.ext().in_memory_engine_hit();
         tracker.adjust_snapshot_type(region_cache_snap);
 
         // Check if the buckets version is latest.

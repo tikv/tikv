@@ -62,7 +62,7 @@ impl<'a, S: Snapshot> SnapshotExt for RegionSnapshotExt<'a, S> {
         self.snapshot.bucket_meta.clone()
     }
 
-    fn region_cache_engine_hit(&self) -> bool {
+    fn in_memory_engine_hit(&self) -> bool {
         self.snapshot.get_snapshot().region_cache_engine_hit()
     }
 }

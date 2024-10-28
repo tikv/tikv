@@ -151,8 +151,6 @@ impl<WB: WriteBatch> Mutable for WriteBatchWrapper<WB> {
     }
 
     fn delete_range(&mut self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
-        // delete_range in range cache engine means eviction -- all ranges overlapped
-        // with [begin_key, end_key] will be evicted.
         if let Some(w) = self.observable_write_batch.as_mut() {
             w.delete_range_cf(CF_DEFAULT, begin_key, end_key)?;
         }
@@ -160,8 +158,6 @@ impl<WB: WriteBatch> Mutable for WriteBatchWrapper<WB> {
     }
 
     fn delete_range_cf(&mut self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
-        // delete_range in range cache engine means eviction -- all ranges overlapped
-        // with [begin_key, end_key] will be evicted.
         if let Some(w) = self.observable_write_batch.as_mut() {
             w.delete_range_cf(cf, begin_key, end_key)?;
         }

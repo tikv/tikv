@@ -174,7 +174,7 @@ fn test_put_copr_get() {
 
     must_copr_point_get(&mut cluster, &product, 1);
 
-    // verify it's read from range cache engine
+    // verify it's read from in memory engine
     rx.try_recv().unwrap();
 }
 
@@ -248,7 +248,7 @@ fn test_load() {
     for table in &tables {
         must_copr_point_get(&mut cluster, table, 1);
 
-        // verify it's read from range cache engine
+        // verify it's read from in memory engine
         assert!(rx.try_recv().unwrap());
     }
 }
@@ -319,7 +319,7 @@ fn test_load_with_split() {
     for table in &tables {
         must_copr_point_get(&mut cluster, table, 1);
 
-        // verify it's read from range cache engine
+        // verify it's read from in memory engine
         assert!(rx.try_recv().unwrap());
     }
 }
@@ -753,7 +753,7 @@ fn test_delete_range() {
         })
         .unwrap();
         must_copr_point_get(&mut cluster, &product, 1);
-        // verify it's read from range cache engine
+        // verify it's read from in memory engine
         rx.try_recv().unwrap();
 
         if unsafe_destroy_range {

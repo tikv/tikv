@@ -132,7 +132,7 @@ impl<EK: KvEngine> Mutable for HybridEngineWriteBatch<EK> {
 
     fn delete_range(&mut self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         self.disk_write_batch.delete_range(begin_key, end_key)?;
-        // delete_range in range cache engine means eviction -- all ranges overlapped
+        // delete_range in in memory engine means eviction -- all ranges overlapped
         // with [begin_key, end_key] will be evicted.
         self.cache_write_batch.delete_range(begin_key, end_key)
     }
@@ -140,7 +140,7 @@ impl<EK: KvEngine> Mutable for HybridEngineWriteBatch<EK> {
     fn delete_range_cf(&mut self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         self.disk_write_batch
             .delete_range_cf(cf, begin_key, end_key)?;
-        // delete_range in range cache engine means eviction -- all ranges overlapped
+        // delete_range in in memory engine means eviction -- all ranges overlapped
         // with [begin_key, end_key] will be evicted.
         self.cache_write_batch
             .delete_range_cf(cf, begin_key, end_key)
