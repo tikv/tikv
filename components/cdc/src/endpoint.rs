@@ -767,6 +767,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 observe_id,
                 err,
             } => {
+                CDC_SCHEDULER_PENDING_TASKS.with_label_values(&["deregister::delegate"]).dec();
                 let mut delegate = match self.capture_regions.entry(region_id) {
                     HashMapEntry::Vacant(_) => return,
                     HashMapEntry::Occupied(x) => {
@@ -785,7 +786,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                     }
                 }
                 self.deregister_observe(region_id, delegate.handle.id);
-                CDC_SCHEDULER_PENDING_TASKS.with_label_values(&["deregister::delegate"]).dec();
             }
         }
     }

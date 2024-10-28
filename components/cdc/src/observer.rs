@@ -150,6 +150,7 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
             if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
                 error!("cdc schedule cdc task failed"; "error" => ?e)
             }
+            error!("cdc alloc memory for multi batch failed"; "in_use" => self.memory_quota.in_use())
         }
 
         CDC_SCHEDULER_PENDING_TASKS.with_label_values(&["multi_batch"]).inc();
