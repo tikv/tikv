@@ -1,18 +1,13 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{
-    CacheRegion, FailedReason, KvEngine, Mutable, Peekable, ReadOptions, RegionCacheEngine, Result,
-    SnapshotContext, SnapshotMiscExt, SyncMutable, WriteBatch, WriteBatchExt,
+    KvEngine, Mutable, Peekable, ReadOptions, RegionCacheEngine, Result, SnapshotContext,
+    SnapshotMiscExt, SyncMutable, WriteBatch, WriteBatchExt,
 };
 use keys::DATA_PREFIX_KEY;
 use kvproto::metapb::{self, RegionEpoch};
 
-use crate::{
-    metrics::{
-        IN_MEMORY_ENGINE_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC, SNAPSHOT_TYPE_COUNT_STATIC,
-    },
-    snapshot::HybridEngineSnapshot,
-};
+use crate::snapshot::HybridEngineSnapshot;
 
 /// This engine is structured with both a disk engine and an region cache
 /// engine. The disk engine houses the complete database data, whereas the
@@ -52,41 +47,6 @@ where
     }
 }
 
-pub fn new_in_memory_snapshot<EC: RegionCacheEngine>(
-    region_cache_engine: &EC,
-    region: CacheRegion,
-    read_ts: u64,
-    sequence_number: u64,
-) -> Option<EC::Snapshot> {
-    match region_cache_engine.snapshot(region, read_ts, sequence_number) {
-        Ok(snap) => {
-            SNAPSHOT_TYPE_COUNT_STATIC.region_cache_engine.inc();
-            Some(snap)
-        }
-        Err(FailedReason::TooOldRead) => {
-            IN_MEMORY_ENGINE_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
-                .too_old_read
-                .inc();
-            SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
-            None
-        }
-        Err(FailedReason::NotCached) => {
-            IN_MEMORY_ENGINE_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
-                .not_cached
-                .inc();
-            SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
-            None
-        }
-        Err(FailedReason::EpochNotMatch) => {
-            IN_MEMORY_ENGINE_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
-                .epoch_not_match
-                .inc();
-            SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
-            None
-        }
-    }
-}
-
 impl<EK, EC> HybridEngine<EK, EC>
 where
     EK: KvEngine,
@@ -104,12 +64,13 @@ where
         let region_cache_snap = if !self.region_cache_engine.enabled() {
             None
         } else if let Some(ctx) = ctx {
-            new_in_memory_snapshot(
-                &self.region_cache_engine,
-                ctx.region.unwrap(),
-                ctx.read_ts,
-                disk_snap.sequence_number(),
-            )
+            self.region_cache_engine
+                .snapshot(
+                    ctx.region.unwrap(),
+                    ctx.read_ts,
+                    disk_snap.sequence_number(),
+                )
+                .ok()
         } else {
             None
         };

@@ -4375,6 +4375,21 @@ def InMemoryEngine() -> RowPanel:
     layout.row(
         [
             graph_panel(
+                title="OPS",
+                description="Operation per second for cf",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_in_memory_engine_kv_operations",
+                            by_labels=["instance", "type"],
+                        ),
+                        legend_format="{{type}}-{{instance}}",
+                        additional_groupby=True,
+                    ),
+                ],
+            ),
+            graph_panel(
                 title="Read MBps",
                 description="The total bytes of read in RocksDB and in-memory engine(the same with panel Cluster/MBps for read)",
                 yaxes=yaxes(left_format=UNITS.BYTES_IEC),
@@ -4409,43 +4424,52 @@ def InMemoryEngine() -> RowPanel:
     layout.row(
         [
             graph_panel(
-                title="Snapshot Type Count",
-                description="Count of each snapshot type",
+                title="Region Cache Hit",
+                description="Count of region cache hit",
                 targets=[
                     target(
                         expr=expr_sum_rate(
                             "tikv_snapshot_type_count",
-                            by_labels=["type"],
+                            label_selectors=['type="in_memory_engine"'],
+                            by_labels=["instance"],
                         ),
-                        legend_format="{{type}}",
+                        legend_format="count-{{instance}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Region Cache Hit Rate",
+                description="Region cache hit rate",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_operator(
+                            expr_sum_rate(
+                                "tikv_snapshot_type_count",
+                                label_selectors=['type="in_memory_engine"'],
+                                by_labels=["instance"],
+                            ),
+                            "/",
+                            expr_sum_rate(
+                                "tikv_snapshot_type_count",
+                                by_labels=["instance"],
+                            ),
+                        ),
+                        legend_format="rate-{{instance}}",
                         additional_groupby=True,
                     ),
                 ],
             ),
             graph_panel(
-                title="Snapshot Failed Reason",
-                description="Reasons for why rance cache snapshot is not acquired",
+                title="Region Cache Miss Reason",
+                description="Reasons for region cache miss",
                 targets=[
                     target(
                         expr=expr_sum_rate(
                             "tikv_in_memory_engine_snapshot_acquire_failed_reason_count",
-                            by_labels=["type"],
-                        ),
-                        legend_format="{{type}}",
-                        additional_groupby=True,
-                    ),
-                ],
-            ),
-            graph_panel(
-                title="Region Count",
-                description="The count of different types of region",
-                targets=[
-                    target(
-                        expr=expr_avg(
-                            "tikv_in_memory_engine_cache_count",
                             by_labels=["instance", "type"],
                         ),
-                        legend_format="{{instance}}--{{type}}",
+                        legend_format="{{type}}-{{instance}}",
                     ),
                 ],
             ),
@@ -4463,6 +4487,19 @@ def InMemoryEngine() -> RowPanel:
                             "tikv_in_memory_engine_memory_usage_bytes",
                             by_labels=["instance"],
                         ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Region Count",
+                description="The count of different types of region",
+                targets=[
+                    target(
+                        expr=expr_avg(
+                            "tikv_in_memory_engine_cache_count",
+                            by_labels=["instance", "type"],
+                        ),
+                        legend_format="{{instance}}--{{type}}",
                     ),
                 ],
             ),
