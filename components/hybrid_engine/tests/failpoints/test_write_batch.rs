@@ -15,8 +15,8 @@ fn test_sequence_number_unique() {
         hybrid_engine_for_tests("temp", InMemoryEngineConfig::config_for_test(), |_| {}).unwrap();
 
     let (tx, rx) = sync_channel(0);
-    fail::cfg_callback("on_completes_batch_loading", move || {
-        fail::cfg("on_start_loading_region", "pause").unwrap();
+    fail::cfg_callback("ime_on_completes_batch_loading", move || {
+        fail::cfg("ime_on_start_loading_region", "pause").unwrap();
         tx.send(true).unwrap();
     })
     .unwrap();
@@ -47,17 +47,17 @@ fn test_sequence_number_unique() {
     // while we block the batch loading of region3, it's new KVs are still directly
     // written into the skiplist.
     let mut wb = hybrid_engine.write_batch();
-    wb.prepare_for_region(CacheRegion::from_region(&r));
+    wb.prepare_for_region(&r);
     wb.put(b"zk", b"val").unwrap(); // seq 3
     wb.delete(b"zk").unwrap(); // seq 4
     wb.put(b"zk2", b"val").unwrap(); // seq 5
 
-    wb.prepare_for_region(CacheRegion::from_region(&r2));
+    wb.prepare_for_region(&r2);
     wb.put(b"zk6", b"val").unwrap(); // seq 6
     wb.delete(b"zk5").unwrap(); // seq 7
     wb.put(b"zk5", b"val2").unwrap(); // seq 8
 
-    wb.prepare_for_region(CacheRegion::from_region(&r3));
+    wb.prepare_for_region(&r3);
     wb.put(b"zk8", b"val").unwrap(); // seq 9
     wb.put(b"zk7", b"val2").unwrap(); // seq 10
 

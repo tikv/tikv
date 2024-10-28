@@ -55,7 +55,9 @@ pub enum EvictReason {
     Merge,
     Disabled,
     ApplySnapshot,
+    Flashback,
     Manual,
+    PeerDestroy,
 }
 
 /// RegionCacheEngine works as a region cache caching some regions (in Memory or

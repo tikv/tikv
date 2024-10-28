@@ -62,8 +62,9 @@ where
         let mut region_cache_snap = None;
         if let Some(snap_pin) = snap_pin {
             let snap_any: Box<dyn Any> = snap_pin;
-            let region_cache_snap_pin: Box<RegionCacheSnapshotPin> = snap_any.downcast().unwrap();
-            region_cache_snap = region_cache_snap_pin.snap;
+            let mut region_cache_snap_pin: Box<RegionCacheSnapshotPin> =
+                snap_any.downcast().unwrap();
+            region_cache_snap = region_cache_snap_pin.take();
         }
         HybridEngineSnapshot {
             disk_snap,
@@ -192,7 +193,7 @@ mod tests {
             assert!(!iter.seek_to_first().unwrap());
         }
         let mut write_batch = hybrid_engine.write_batch();
-        write_batch.prepare_for_region(cache_region.clone());
+        write_batch.prepare_for_region(&region);
         write_batch
             .cache_write_batch
             .set_region_cache_status(RegionCacheStatus::Cached);

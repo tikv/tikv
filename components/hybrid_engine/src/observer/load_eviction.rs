@@ -10,10 +10,10 @@ use kvproto::{
 };
 use raft::StateRole;
 use raftstore::coprocessor::{
-    dispatcher::BoxExtraMessageObserver, AdminObserver, ApplyCtxInfo, ApplySnapshotObserver,
-    BoxAdminObserver, BoxApplySnapshotObserver, BoxQueryObserver, BoxRoleObserver, Cmd,
-    Coprocessor, CoprocessorHost, ExtraMessageObserver, ObserverContext, QueryObserver,
-    RegionState, RoleObserver,
+    dispatcher::{BoxDestroyPeerObserver, BoxExtraMessageObserver},
+    AdminObserver, ApplyCtxInfo, ApplySnapshotObserver, BoxAdminObserver, BoxApplySnapshotObserver,
+    BoxQueryObserver, BoxRoleObserver, Cmd, Coprocessor, CoprocessorHost, DestroyPeerObserver,
+    ExtraMessageObserver, ObserverContext, QueryObserver, RegionState, RoleObserver,
 };
 use tikv_util::info;
 
@@ -53,6 +53,10 @@ impl LoadEvictionObserver {
         coprocessor_host
             .registry
             .register_extra_message_observer(priority, BoxExtraMessageObserver::new(self.clone()));
+        // Eviction the cached region when the peer is destroyed.
+        coprocessor_host
+            .registry
+            .register_destroy_peer_observer(priority, BoxDestroyPeerObserver::new(self.clone()));
     }
 
     fn post_exec_cmd(
@@ -174,6 +178,21 @@ impl QueryObserver for LoadEvictionObserver {
 }
 
 impl AdminObserver for LoadEvictionObserver {
+    fn pre_exec_admin(
+        &self,
+        ctx: &mut ObserverContext<'_>,
+        req: &kvproto::raft_cmdpb::AdminRequest,
+        _: u64,
+        _: u64,
+    ) -> bool {
+        if req.cmd_type == AdminCmdType::PrepareFlashback {
+            let cache_region = CacheRegion::from_region(ctx.region());
+            self.evict_region(cache_region, EvictReason::Flashback);
+        }
+
+        false
+    }
+
     fn post_exec_admin(
         &self,
         ctx: &mut ObserverContext<'_>,
@@ -250,6 +269,15 @@ impl ExtraMessageObserver for LoadEvictionObserver {
         if extra_msg.get_type() == ExtraMessageType::MsgPreLoadRegionRequest {
             self.cache_engine.load_region(r);
         }
+    }
+}
+
+impl DestroyPeerObserver for LoadEvictionObserver {
+    fn on_destroy_peer(&self, r: &Region) {
+        self.cache_engine.on_region_event(RegionEvent::Eviction {
+            region: CacheRegion::from_region(r),
+            reason: EvictReason::PeerDestroy,
+        });
     }
 }
 
