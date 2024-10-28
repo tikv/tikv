@@ -295,21 +295,6 @@ impl fmt::Debug for Task {
     }
 }
 
-pub trait TaskSize {
-    fn approximate_size(&self) -> usize {
-        0
-    }
-}
-
-impl TaskSize for Task {
-    fn approximate_size(&self) -> usize {
-        match self {
-            Task::MultiBatch { multi, .. } => multi.iter().map(|b| b.size()).sum(),
-            _ => 0,
-        }
-    }
-}
-
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct ResolvedRegion {
     region_id: u64,
@@ -1001,6 +986,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
     pub fn on_multi_batch(&mut self, multi: Vec<CmdBatch>, old_value_cb: OldValueCallback) {
         fail_point!("cdc_before_handle_multi_batch", |_| {});
         let mut statistics = Statistics::default();
+        let size = multi.iter().map(|b| b.size()).sum();
         for batch in multi {
             let region_id = batch.region_id;
             let mut deregister = None;
@@ -1029,6 +1015,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             }
         }
         flush_oldvalue_stats(&statistics, TAG_DELTA_CHANGE);
+        self.sink_memory_quota.free(size);
+
     }
 
     fn finish_scan_locks(
@@ -1235,10 +1223,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
             Task::MultiBatch {
                 multi,
                 old_value_cb,
-            } => {
-                self.on_multi_batch(multi, old_value_cb);
-                self.sink_memory_quota.free(task.approximate_size());
-            }
+            } => self.on_multi_batch(multi, old_value_cb),
             Task::OpenConn { conn } => self.on_open_conn(conn),
             Task::SetConnVersion {
                 conn_id,
