@@ -12,7 +12,7 @@ use tikv::storage::Statistics;
 use tikv_util::{error, memory::MemoryQuota, warn, worker::Scheduler};
 
 use crate::{
-    endpoint::{Deregister, Task, TaskSize},
+    endpoint::{Deregister, Task},
     old_value::{self, OldValueCache},
     Error as CdcError,
 };
@@ -132,11 +132,14 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
             old_value::get_old_value(&snapshot, key, query_ts, old_value_cache, statistics)
         };
 
+        let region_id = cmd_batches[0].region_id;
+        let observe_id = cmd_batches[0].cdc_id;
+        let size = cmd_batches.iter().map(|b| b.size()).sum();
         let task = Task::MultiBatch {
             multi: cmd_batches,
             old_value_cb: Box::new(get_old_value),
         };
-        if let Err(e) = self.memory_quota.alloc(task.approximate_size()) {
+        if let Err(e) = self.memory_quota.alloc(size) {
             let deregister = Deregister::Delegate {
                 region_id,
                 observe_id,

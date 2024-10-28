@@ -769,7 +769,10 @@ where
         }
 
         // Register cdc.
-        let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
+        let cdc_memory_quota = Arc::new(MemoryQuota::new(
+            self.core.config.cdc.sink_memory_quota.0 as _,
+        ));
+        let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone(),  cdc_memory_quota.clone());
         cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
         // Register cdc config manager.
         cfg_controller.register(
