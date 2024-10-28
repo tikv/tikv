@@ -23,23 +23,30 @@ impl RegionCacheWriteBatchObserver {
             .registry
             .register_write_batch_observer(BoxWriteBatchObserver::new(self.clone()));
     }
+
+    pub(crate) fn new_observable_write_batch(&self) -> HybridObservableWriteBatch {
+        HybridObservableWriteBatch {
+            cache_write_batch: RegionCacheWriteBatch::from(&self.cache_engine),
+        }
+    }
 }
 
 impl Coprocessor for RegionCacheWriteBatchObserver {}
 
 impl WriteBatchObserver for RegionCacheWriteBatchObserver {
     fn create_observable_write_batch(&self) -> Box<dyn ObservableWriteBatch> {
-        Box::new(HybridObservableWriteBatch {
-            cache_write_batch: RegionCacheWriteBatch::from(&self.cache_engine),
-        })
+        Box::new(self.new_observable_write_batch())
     }
 }
 
-struct HybridObservableWriteBatch {
-    cache_write_batch: RegionCacheWriteBatch,
+pub(crate) struct HybridObservableWriteBatch {
+    pub(crate) cache_write_batch: RegionCacheWriteBatch,
 }
 
 impl ObservableWriteBatch for HybridObservableWriteBatch {
+    fn prepare_for_region(&mut self, region: &metapb::Region) {
+        self.cache_write_batch.prepare_for_region(region);
+    }
     fn write_opt_seq(&mut self, opts: &WriteOptions, seq_num: u64) {
         self.cache_write_batch.set_sequence_number(seq_num).unwrap();
         self.cache_write_batch.write_opt(opts).unwrap();
@@ -101,9 +108,6 @@ impl WriteBatch for HybridObservableWriteBatch {
     }
     fn rollback_to_save_point(&mut self) -> Result<()> {
         self.cache_write_batch.rollback_to_save_point()
-    }
-    fn prepare_for_region(&mut self, region: &metapb::Region) {
-        self.cache_write_batch.prepare_for_region(region);
     }
 }
 

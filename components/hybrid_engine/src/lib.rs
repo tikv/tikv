@@ -11,7 +11,6 @@ pub mod observer;
 mod region_cache_engine;
 mod snapshot;
 pub mod util;
-mod write_batch;
 
 pub use engine::HybridEngine;
 pub use snapshot::HybridEngineSnapshot;

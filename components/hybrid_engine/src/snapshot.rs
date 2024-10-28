@@ -78,7 +78,7 @@ where
     EK: KvEngine,
     EC: RegionCacheEngine,
 {
-    fn region_cache_engine_hit(&self) -> bool {
+    fn in_memory_engine_hit(&self) -> bool {
         self.region_cache_snap.is_some()
     }
 }
@@ -165,8 +165,12 @@ mod tests {
         CF_DEFAULT,
     };
     use in_memory_engine::{test_util::new_region, InMemoryEngineConfig, RegionCacheStatus};
+    use raftstore::coprocessor::WriteBatchWrapper;
 
-    use crate::{engine::SnapshotContext, util::hybrid_engine_for_tests};
+    use crate::{
+        engine::SnapshotContext, observer::RegionCacheWriteBatchObserver,
+        util::hybrid_engine_for_tests,
+    };
 
     #[test]
     fn test_iterator() {
@@ -191,11 +195,17 @@ mod tests {
             let mut iter = snap.iterator_opt(CF_DEFAULT, iter_opt.clone()).unwrap();
             assert!(!iter.seek_to_first().unwrap());
         }
-        let mut write_batch = hybrid_engine.write_batch();
-        write_batch.prepare_for_region(&region);
-        write_batch
+        let engine = hybrid_engine.region_cache_engine().clone();
+        let observer = RegionCacheWriteBatchObserver::new(engine.clone());
+        let mut ob_wb = observer.new_observable_write_batch();
+        ob_wb.cache_write_batch.prepare_for_region(&region);
+        ob_wb
             .cache_write_batch
             .set_region_cache_status(RegionCacheStatus::Cached);
+        let mut write_batch = WriteBatchWrapper::new(
+            hybrid_engine.disk_engine().write_batch(),
+            Some(Box::new(ob_wb)),
+        );
         write_batch.put(b"zhello", b"world").unwrap();
         let seq = write_batch.write().unwrap();
         assert!(seq > 0);

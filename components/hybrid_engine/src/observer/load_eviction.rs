@@ -397,7 +397,7 @@ mod tests {
         region.set_id(1);
         region.mut_peers().push(Peer::default());
         let mut ctx = ObserverContext::new(&region);
-        let role_change = RoleChange::new(StateRole::Leader);
+        let role_change = RoleChange::new_for_test(StateRole::Leader);
         observer.on_role_change(&mut ctx, &role_change);
         let cached_region = CacheRegion::from_region(&region);
         let expected = RegionEvent::TryLoad {

@@ -1,13 +1,17 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::mpsc::sync_channel;
+use std::{sync::mpsc::sync_channel, time::Duration};
 
 use crossbeam::epoch;
-use engine_traits::{CacheRegion, Mutable, WriteBatch, WriteBatchExt};
-use hybrid_engine::util::hybrid_engine_for_tests;
+use engine_traits::{CacheRegion, Mutable, Peekable, RegionCacheEngine, WriteBatch, WriteBatchExt};
 use in_memory_engine::{
-    decode_key, test_util::new_region, InMemoryEngineConfig, InternalKey, ValueType,
+    decode_key, test_util::new_region, InMemoryEngineConfig, InternalKey, RegionCacheStatus,
+    ValueType,
 };
+use raftstore::coprocessor::{WriteBatchObserver, WriteBatchWrapper};
+
+use super::RegionCacheWriteBatchObserver;
+use crate::{engine::SnapshotContext, util::hybrid_engine_for_tests};
 
 #[test]
 fn test_sequence_number_unique() {
@@ -21,12 +25,18 @@ fn test_sequence_number_unique() {
     })
     .unwrap();
 
+    let engine = hybrid_engine.region_cache_engine().clone();
+    let observer = RegionCacheWriteBatchObserver::new(engine.clone());
+
     // first write some data, these data should be handled by batch loading.
-    let mut wb = hybrid_engine.write_batch();
+    let mut wb = WriteBatchWrapper::new(
+        hybrid_engine.disk_engine().write_batch(),
+        Some(observer.create_observable_write_batch()),
+    );
+
     wb.put(b"zk5", b"val").unwrap(); // seq 1
     wb.put(b"zk7", b"val").unwrap(); // seq 2
 
-    let engine = hybrid_engine.region_cache_engine().clone();
     let r = new_region(1, b"k", b"k5");
     engine.new_region(r.clone());
     wb.write().unwrap();
@@ -46,7 +56,10 @@ fn test_sequence_number_unique() {
     // after the put.
     // while we block the batch loading of region3, it's new KVs are still directly
     // written into the skiplist.
-    let mut wb = hybrid_engine.write_batch();
+    let mut wb = WriteBatchWrapper::new(
+        hybrid_engine.disk_engine().write_batch(),
+        Some(observer.create_observable_write_batch()),
+    );
     wb.prepare_for_region(&r);
     wb.put(b"zk", b"val").unwrap(); // seq 3
     wb.delete(b"zk").unwrap(); // seq 4

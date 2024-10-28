@@ -63,7 +63,7 @@ impl<'a, S: Snapshot> SnapshotExt for RegionSnapshotExt<'a, S> {
     }
 
     fn in_memory_engine_hit(&self) -> bool {
-        self.snapshot.get_snapshot().region_cache_engine_hit()
+        self.snapshot.get_snapshot().in_memory_engine_hit()
     }
 }
 
