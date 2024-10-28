@@ -16,6 +16,7 @@ use crate::{
     old_value::{self, OldValueCache},
     Error as CdcError,
 };
+use crate::metrics::CDC_SCHEDULER_PENDING_TASKS;
 
 /// An Observer for CDC.
 ///
@@ -145,10 +146,13 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
                 observe_id,
                 err: CdcError::MemoryQuotaExceeded(e),
             };
+            CDC_SCHEDULER_PENDING_TASKS.with_label_values(&["deregister::delegate"]).inc();
             if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
                 error!("cdc schedule cdc task failed"; "error" => ?e)
             }
         }
+
+        CDC_SCHEDULER_PENDING_TASKS.with_label_values(&["multi_batch"]).inc();
         if let Err(e) = self.sched.schedule(task) {
             warn!("cdc schedule task failed"; "error" => ?e);
         }
@@ -180,6 +184,7 @@ impl RoleObserver for CdcObserver {
                     observe_id,
                     err: CdcError::request(store_err.into()),
                 };
+                CDC_SCHEDULER_PENDING_TASKS.with_label_values(&["deregister::delegate"]).inc();
                 if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
                     error!("cdc schedule cdc task failed"; "error" => ?e);
                 }
@@ -209,6 +214,7 @@ impl RegionChangeObserver for CdcObserver {
                         observe_id,
                         err: CdcError::request(store_err.into()),
                     };
+                    CDC_SCHEDULER_PENDING_TASKS.with_label_values(&["deregister::delegate"]).inc();
                     if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
                         error!("cdc schedule cdc task failed"; "error" => ?e);
                     }
