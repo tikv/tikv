@@ -527,7 +527,8 @@ fn test_read_index_after_transfer_leader() {
     // which is not handled by peer 2, so `propose_check_epoch` on` peer 2 will
     // fail and reject the leader transfer.
     assert_eq!(cluster.leader_of_region(region_id).unwrap().get_id(), 2);
-    // Pause the `propose_check_epoch` to make the leader transfer succeed.
+    // Pause the `propose_check_epoch` to make the leader transfer pass through
+    // the epoch check.
     let on_skip_propose_check_epoch = "on_skip_propose_check_epoch";
     fail::cfg(on_skip_propose_check_epoch, "return").unwrap();
     cluster.transfer_leader(region_id, new_peer(1, 1));

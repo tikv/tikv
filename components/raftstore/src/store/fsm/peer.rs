@@ -3734,7 +3734,7 @@ where
                         // As all the locks are proposed, we can safely propose the
                         // `TransferLeader` command now. So, the previous
                         // `TransferLeader` command, recorded as a
-                        // mutually exclusive command, should be cleared to
+                        // special marker command, should be cleared to
                         // avoid deadlock in `ready_to_transfer_leader`.
                         self.fsm
                             .peer

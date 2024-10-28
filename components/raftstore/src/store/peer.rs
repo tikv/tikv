@@ -321,15 +321,38 @@ impl<S: Snapshot> ProposedAdminCmd<S> {
         }
     }
 
-    /// Returns true if the command is mutually exclusive with other commands.
-    ///
+    /// Returns true if the command is a special command which should be
+    /// treated specially.
+    fn is_special_marker(&self) -> bool {
+        self.cmd_type == AdminCmdType::TransferLeader
+    }
+
+    /// Returns true if the command is mutually exclusive with the given
+    /// command.
     /// Typically, although the `TransferLeader` command does not change the
     /// `conf_ver`, it should be mutually exclusive with other commands which
     /// change the `conf_ver`, such as `Split` and `BatchSplit`. If it's not
     /// mutually exclusive, it may cause unexpected behaviors in rare scenarios
     /// (e.g. #12410 and #17602.)
-    fn is_mutually_exclusive(&self) -> bool {
+    fn is_mutually_exclusive_with(&self, cmd_type: AdminCmdType) -> bool {
         self.cmd_type == AdminCmdType::TransferLeader
+            && matches!(cmd_type, AdminCmdType::Split | AdminCmdType::BatchSplit)
+    }
+
+    /// Returns true if the command can coexist with the given command.
+    ///
+    /// As `raft-rs` defines, `TransferLeader` and `ChangePeer` commands are
+    /// safely mutual with each other.
+    fn can_coexist_with(&self, cmd_type: AdminCmdType) -> bool {
+        (self.cmd_type == AdminCmdType::TransferLeader
+            && matches!(
+                cmd_type,
+                AdminCmdType::ChangePeer | AdminCmdType::ChangePeerV2
+            ))
+            || (matches!(
+                self.cmd_type,
+                AdminCmdType::ChangePeer | AdminCmdType::ChangePeerV2
+            ) && cmd_type == AdminCmdType::TransferLeader)
     }
 }
 
@@ -375,14 +398,18 @@ impl<S: Snapshot> CmdEpochChecker<S> {
             |_| None
         );
         self.maybe_update_term(term);
-        let (check_ver, check_conf_ver) = if !req.has_admin_request() {
-            (NORMAL_REQ_CHECK_VER, NORMAL_REQ_CHECK_CONF_VER)
+        let (cmd_type, check_ver, check_conf_ver) = if !req.has_admin_request() {
+            (
+                AdminCmdType::default(), // dummy value
+                NORMAL_REQ_CHECK_VER,
+                NORMAL_REQ_CHECK_CONF_VER,
+            )
         } else {
             let cmd_type = req.get_admin_request().get_cmd_type();
             let epoch_state = admin_cmd_epoch_lookup(cmd_type);
-            (epoch_state.check_ver, epoch_state.check_conf_ver)
+            (cmd_type, epoch_state.check_ver, epoch_state.check_conf_ver)
         };
-        self.last_conflict_index(check_ver, check_conf_ver)
+        self.last_conflict_index(cmd_type, check_ver, check_conf_ver)
     }
 
     /// Check if the given admin cmd can be proposed on the basis of its epoch
@@ -414,7 +441,7 @@ impl<S: Snapshot> CmdEpochChecker<S> {
         self.maybe_update_term(term);
         let epoch_state = admin_cmd_epoch_lookup(cmd_type);
         assert!(
-            self.last_conflict_index(epoch_state.check_ver, epoch_state.check_conf_ver)
+            self.last_conflict_index(cmd_type, epoch_state.check_ver, epoch_state.check_conf_ver)
                 .is_none()
         );
 
@@ -423,16 +450,24 @@ impl<S: Snapshot> CmdEpochChecker<S> {
         }
     }
 
-    fn last_conflict_index(&self, check_ver: bool, check_conf_ver: bool) -> Option<u64> {
+    fn last_conflict_index(
+        &self,
+        cmd_type: AdminCmdType,
+        check_ver: bool,
+        check_conf_ver: bool,
+    ) -> Option<u64> {
         self.proposed_admin_cmd
             .iter()
             .rev()
             .find(|cmd| {
-                (check_ver && cmd.epoch_state.change_ver)
-                    || (check_conf_ver
-                        // If it's a mutually exclusive command, it should be checked with all
-                        // commands which change the `conf_ver`.
-                        && (cmd.epoch_state.change_conf_ver || cmd.is_mutually_exclusive()))
+                if cmd.can_coexist_with(cmd_type) {
+                    false
+                } else if cmd.is_mutually_exclusive_with(cmd_type) {
+                    true
+                } else {
+                    check_ver && cmd.epoch_state.change_ver
+                        || check_conf_ver && cmd.epoch_state.change_conf_ver
+                }
             })
             .map(|cmd| cmd.index)
     }
@@ -449,18 +484,18 @@ impl<S: Snapshot> CmdEpochChecker<S> {
             .map(|cmd| cmd.index)
     }
 
-    /// Returns whether the last proposed admin cmd is mutually exclusive.
-    fn is_last_cmd_mutually_exclusive(&self) -> bool {
+    /// Returns whether the last proposed admin cmd is a special marker.
+    fn is_last_cmd_special_marker(&self) -> bool {
         self.proposed_admin_cmd
             .back()
-            .map_or(false, |cmd| cmd.is_mutually_exclusive())
+            .map_or(false, |cmd| cmd.is_special_marker())
     }
 
     fn last_mutually_exclusive_cmd_details(&self) -> Option<(AdminCmdType, u64, u64, Instant)> {
         self.proposed_admin_cmd
             .iter()
             .rev()
-            .find(|cmd| cmd.is_mutually_exclusive())
+            .find(|cmd| cmd.is_special_marker())
             .map(|cmd| (cmd.cmd_type, cmd.index, self.term, cmd.timestamp))
     }
 
@@ -5544,19 +5579,19 @@ where
         self.busy_on_apply.is_some() && self.last_leader_committed_idx.is_none()
     }
 
-    /// Clear the pending admin cmds if the last cmd is a mutually exclusive cmd
+    /// Clear the pending admin cmds if the last cmd is a special marker cmd
     /// and it's timeout.
     ///
-    /// Note that the mutually exclusive cmd may block the subsequent cmds, so
+    /// Note that the spefical marker cmd may block the subsequent cmds, so
     /// we should clear it if it's timeout.
     pub fn clear_pending_admin_cmds_if_needed(&mut self, timeout: Duration) {
-        if !self.cmd_epoch_checker.is_last_cmd_mutually_exclusive() {
+        if !self.cmd_epoch_checker.is_last_cmd_special_marker() {
             return;
         }
-        // If the last cmd is a mutually exclusive cmd, we should check whether it's
-        // timeout to avoid blocking the subsequent cmds. Typically, the mutually
-        // exclusive cmd is a mocked `TransferLeader` command, which may block the
-        // subsequent ConfChange cmd if it's not committed for a long time.
+        // If the last cmd is a special marker cmd, we should check whether it's
+        // timeout to avoid blocking the subsequent cmds. Typically, the special
+        // cmd is a mocked `TransferLeader` command, which may block the subsequent
+        // `Split` cmd if it's not committed for a long time.
         let (_, index, term, start_ts) = self
             .cmd_epoch_checker
             .last_mutually_exclusive_cmd_details()
@@ -6635,11 +6670,12 @@ mod tests {
             assert_eq!(epoch_checker.propose_check_epoch(&normal_cmd, 10), None);
             assert_eq!(
                 epoch_checker.propose_check_epoch(&prepare_merge_admin, 10),
-                Some(5)
+                None,
             );
+            // `ConfChange` should has no conflict with `TransferLeader`.
             assert_eq!(
                 epoch_checker.propose_check_epoch(&change_peer_admin, 10),
-                Some(5)
+                None
             );
             // Change term to 11
             assert_eq!(epoch_checker.propose_check_epoch(&split_admin, 11), None);
@@ -6649,6 +6685,18 @@ mod tests {
             assert_eq!(
                 epoch_checker.propose_check_epoch(&transfer_leader_admin, 11),
                 Some(6)
+            );
+            assert_eq!(
+                epoch_checker.propose_check_epoch(&change_peer_admin, 11),
+                None,
+            );
+            // New term should clear the proposed admin cmd.
+            epoch_checker.post_propose(AdminCmdType::ChangePeerV2, 7, 12);
+            assert_eq!(epoch_checker.proposed_admin_cmd.len(), 1);
+            // TransferLeader admin cmd should be ignored.
+            assert_eq!(
+                epoch_checker.propose_check_epoch(&transfer_leader_admin, 12),
+                None
             );
         }
         // Test basic propose check
