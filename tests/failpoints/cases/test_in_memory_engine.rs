@@ -19,6 +19,7 @@ use kvproto::{
     import_sstpb::SstMeta,
     kvrpcpb::Context,
     raft_cmdpb::{AdminCmdType, CmdType, RaftCmdRequest, RaftRequestHeader, Request},
+    raft_serverpb::RaftMessage,
 };
 use protobuf::Message;
 use tempfile::tempdir;
@@ -865,16 +866,55 @@ fn test_eviction_when_destroy_peer() {
     cluster.run();
 
     let t1 = ProductTable::new();
-    must_copr_load_data(&mut cluster, &t1, 1);
     let t2 = ProductTable::new();
-    must_copr_load_data(&mut cluster, &t2, 1);
 
     let key = t2.get_table_prefix();
     let split_key = Key::from_raw(&key).into_encoded();
     let r = cluster.get_region(&split_key);
     cluster.must_split(&r, &split_key);
+    let r = cluster.get_region(&split_key);
 
-    // let router = cluster.get_router(1).unwrap();
-    // let msg = Box::<RaftMessage>::default();
-    // router.send_raft_message(msg)
+    let (tx, rx) = sync_channel(0);
+    fail::cfg_callback("ime_on_snapshot_load_finished", move || {
+        tx.send(true).unwrap();
+    })
+    .unwrap();
+    {
+        let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
+        let cache_region = CacheRegion::from_region(&r);
+        region_cache_engine
+            .core()
+            .region_manager()
+            .load_region(cache_region)
+            .unwrap();
+    }
+
+    must_copr_load_data(&mut cluster, &t1, 1);
+    must_copr_load_data(&mut cluster, &t2, 1);
+
+    rx.recv_timeout(Duration::from_secs(2)).unwrap();
+
+    let (tx, rx) = sync_channel(0);
+    fail::cfg_callback("destroy_peer", move || {
+        tx.send(true).unwrap();
+    })
+    .unwrap();
+
+    let router = cluster.get_router(1).unwrap();
+    let mut raft_msg = RaftMessage::default();
+    raft_msg.set_region_id(r.get_id());
+    raft_msg.set_is_tombstone(true);
+    raft_msg.set_from_peer(new_peer(0, 0));
+    raft_msg.set_to_peer(r.get_peers()[0].clone());
+    let mut epoch = r.get_region_epoch().clone();
+    epoch.set_version(epoch.get_version() + 1);
+    raft_msg.set_region_epoch(epoch);
+    router.send_raft_message(raft_msg).unwrap();
+
+    rx.recv_timeout(Duration::from_secs(2)).unwrap();
+
+    {
+        let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
+        assert!(!region_cache_engine.region_cached(&r));
+    }
 }
