@@ -227,10 +227,6 @@ impl ServerCluster {
         self.addrs.get(node_id).unwrap()
     }
 
-    pub fn get_apply_router(&self, node_id: u64) -> ApplyRouter<RocksEngine> {
-        self.metas.get(&node_id).unwrap().raw_apply_router.clone()
-    }
-
     pub fn get_server_router(&self, node_id: u64) -> SimulateStoreTransport {
         self.metas.get(&node_id).unwrap().sim_router.clone()
     }
@@ -887,6 +883,10 @@ impl Simulator for ServerCluster {
 
     fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RaftTestEngine>> {
         self.metas.get(&node_id).map(|m| m.raw_router.clone())
+    }
+
+    fn get_apply_router(&self, node_id: u64) -> Option<ApplyRouter<RocksEngine>> {
+        self.metas.get(&node_id).map(|m| m.raw_apply_router.clone())
     }
 }
 

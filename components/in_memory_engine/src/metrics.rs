@@ -43,6 +43,7 @@ make_auto_flush_static_metric! {
         apply_snapshot,
         flashback,
         manual,
+        destroy_peer,
     }
 
     pub label_enum OperationType {
@@ -259,6 +260,9 @@ pub(crate) fn observe_eviction_duration(secs: f64, evict_reason: EvictReason) {
             .observe(secs),
         EvictReason::Manual => IN_MEMORY_ENGINE_EVICTION_DURATION_HISTOGRAM_STATIC
             .manual
+            .observe(secs),
+        EvictReason::PeerDestroy => IN_MEMORY_ENGINE_EVICTION_DURATION_HISTOGRAM_STATIC
+            .destroy_peer
             .observe(secs),
     }
 }

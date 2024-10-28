@@ -39,7 +39,7 @@ use raftstore::{
         fsm::{
             create_raft_batch_system,
             store::{StoreMeta, PENDING_MSG_CAP},
-            RaftBatchSystem, RaftRouter,
+            ApplyRouter, RaftBatchSystem, RaftRouter,
         },
         transport::CasualRouter,
         *,
@@ -103,6 +103,7 @@ pub trait Simulator {
     fn get_snap_dir(&self, node_id: u64) -> String;
     fn get_snap_mgr(&self, node_id: u64) -> &SnapManager;
     fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RaftTestEngine>>;
+    fn get_apply_router(&self, node_id: u64) -> Option<ApplyRouter<RocksEngine>>;
     fn add_send_filter(&mut self, node_id: u64, filter: Box<dyn Filter>);
     fn clear_send_filters(&mut self, node_id: u64);
     fn add_recv_filter(&mut self, node_id: u64, filter: Box<dyn Filter>);
@@ -1899,6 +1900,10 @@ impl<T: Simulator> Cluster<T> {
 
     pub fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RaftTestEngine>> {
         self.sim.rl().get_router(node_id)
+    }
+
+    pub fn get_apply_router(&self, node_id: u64) -> Option<ApplyRouter<RocksEngine>> {
+        self.sim.rl().get_apply_router(node_id)
     }
 
     pub fn refresh_region_bucket_keys(
