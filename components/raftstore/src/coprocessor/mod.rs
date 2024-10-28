@@ -611,6 +611,11 @@ pub trait UpdateSafeTsObserver: Coprocessor {
     fn on_update_safe_ts(&self, _: u64, _: u64, _: u64) {}
 }
 
+pub trait DestroyPeerObserver: Coprocessor {
+    /// Hook to call when destroying a peer.
+    fn on_destroy_peer(&self, _: &Region) {}
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

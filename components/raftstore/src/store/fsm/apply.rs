@@ -629,6 +629,16 @@ where
             }
             self.kv_wb_last_bytes = 0;
             self.kv_wb_last_keys = 0;
+        } else {
+            fail_point!(
+                "after_write_to_db_skip_write_node_1",
+                self.store_id == 1,
+                |_| { unreachable!() }
+            );
+            // We call `clear` here because some WriteBatch impl may have some internal
+            // state that need to be reset even if the write batch is empty.
+            // Please refer to `RegionCacheWriteBatch::clear` for more details.
+            self.kv_wb_mut().clear();
         }
         if !self.delete_ssts.is_empty() {
             let tag = self.tag.clone();
@@ -4720,6 +4730,7 @@ where
             }
             handle_result = HandleResult::KeepProcessing;
         }
+        fail_point!("before_handle_normal");
         fail_point!("before_handle_normal_3", normal.delegate.id() == 3, |_| {
             HandleResult::KeepProcessing
         });
