@@ -9,10 +9,10 @@ use kvproto::metapb::{Peer, Region};
 use raft::StateRole;
 use raftstore::{coprocessor::*, store::RegionSnapshot, Error as RaftStoreError};
 use tikv::storage::Statistics;
-use tikv_util::{error, warn, worker::Scheduler};
+use tikv_util::{error, memory::MemoryQuota, warn, worker::Scheduler};
 
 use crate::{
-    endpoint::{Deregister, Task},
+    endpoint::{Deregister, Task, TaskSize},
     old_value::{self, OldValueCache},
     Error as CdcError,
 };
@@ -28,6 +28,8 @@ pub struct CdcObserver {
     // A shared registry for managing observed regions.
     // TODO: it may become a bottleneck, find a better way to manage the registry.
     observe_regions: Arc<RwLock<HashMap<u64, ObserveId>>>,
+
+    memory_quota: Arc<MemoryQuota>,
 }
 
 impl CdcObserver {
@@ -35,10 +37,11 @@ impl CdcObserver {
     ///
     /// Events are strong ordered, so `sched` must be implemented as
     /// a FIFO queue.
-    pub fn new(sched: Scheduler<Task>) -> CdcObserver {
+    pub fn new(sched: Scheduler<Task>, memory_quota: Arc<MemoryQuota>) -> CdcObserver {
         CdcObserver {
             sched,
             observe_regions: Arc::default(),
+            memory_quota,
         }
     }
 
@@ -128,10 +131,22 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
                                   statistics: &mut Statistics| {
             old_value::get_old_value(&snapshot, key, query_ts, old_value_cache, statistics)
         };
-        if let Err(e) = self.sched.schedule(Task::MultiBatch {
+
+        let task = Task::MultiBatch {
             multi: cmd_batches,
             old_value_cb: Box::new(get_old_value),
-        }) {
+        };
+        if let Err(e) = self.memory_quota.alloc(task.approximate_size()) {
+            let deregister = Deregister::Delegate {
+                region_id,
+                observe_id,
+                err: CdcError::MemoryQuotaExceeded(e),
+            };
+            if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
+                error!("cdc schedule cdc task failed"; "error" => ?e)
+            }
+        }
+        if let Err(e) = self.sched.schedule(task) {
             warn!("cdc schedule task failed"; "error" => ?e);
         }
     }
@@ -216,7 +231,8 @@ mod tests {
     #[test]
     fn test_register_and_deregister() {
         let (scheduler, mut rx) = tikv_util::worker::dummy_scheduler();
-        let observer = CdcObserver::new(scheduler);
+        let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let observer = CdcObserver::new(scheduler, memory_quota);
         let observe_info = CmdObserveInfo::from_handle(
             ObserveHandle::new(),
             ObserveHandle::new(),

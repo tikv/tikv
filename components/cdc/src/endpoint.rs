@@ -295,6 +295,21 @@ impl fmt::Debug for Task {
     }
 }
 
+pub trait TaskSize {
+    fn approximate_size(&self) -> usize {
+        0
+    }
+}
+
+impl TaskSize for Task {
+    fn approximate_size(&self) -> usize {
+        match self {
+            Task::MultiBatch { multi, .. } => multi.iter().map(|b| b.size()).sum(),
+            _ => 0,
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct ResolvedRegion {
     region_id: u64,
@@ -1220,7 +1235,10 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
             Task::MultiBatch {
                 multi,
                 old_value_cb,
-            } => self.on_multi_batch(multi, old_value_cb),
+            } => {
+                self.on_multi_batch(multi, old_value_cb);
+                self.sink_memory_quota.free(task.approximate_size());
+            }
             Task::OpenConn { conn } => self.on_open_conn(conn),
             Task::SetConnVersion {
                 conn_id,
@@ -1477,6 +1495,8 @@ mod tests {
             region_read_progress,
             store_resolver_gc_interval,
         );
+
+        let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
         let ep = Endpoint::new(
             DEFAULT_CLUSTER_ID,
             cfg,
@@ -1493,12 +1513,12 @@ mod tests {
                     .kv_engine()
                     .unwrap()
             })),
-            CdcObserver::new(task_sched),
+            CdcObserver::new(task_sched, memory_quota.clone()),
             Arc::new(StdMutex::new(store_meta)),
             ConcurrencyManager::new(1.into()),
             env,
             security_mgr,
-            Arc::new(MemoryQuota::new(usize::MAX)),
+            memory_quota,
             causal_ts_provider,
         );
 
