@@ -119,7 +119,7 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
     fn tick_round(&mut self) {
         FSM_COUNT_PER_POLL
             .get(N::fsm_type())
-            .observe(self.normals.iter().filter(|n| n.is_some()).count() as f64);
+            .observe(self.normals.len() as f64);
         for f in self.normals.iter_mut().filter_map(Option::as_mut) {
             f.metrics.round += 1;
         }
