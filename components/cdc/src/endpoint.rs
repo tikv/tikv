@@ -1276,9 +1276,11 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
                 cb();
             }
             Task::TxnExtra(txn_extra) => {
+                let size = txn_extra.size();
                 for (k, v) in txn_extra.old_values {
                     self.old_value_cache.insert(k, v);
                 }
+                self.sink_memory_quota.free(size);
             }
             Task::Validate(validate) => match validate {
                 Validate::Region(region_id, validate) => {
@@ -1337,16 +1339,33 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
 
 pub struct CdcTxnExtraScheduler {
     scheduler: Scheduler<Task>,
+    memory_quota: Arc<MemoryQuota>,
 }
 
 impl CdcTxnExtraScheduler {
-    pub fn new(scheduler: Scheduler<Task>) -> CdcTxnExtraScheduler {
-        CdcTxnExtraScheduler { scheduler }
+    pub fn new(scheduler: Scheduler<Task>, memory_quota: Arc<MemoryQuota>) -> CdcTxnExtraScheduler {
+        CdcTxnExtraScheduler {
+            scheduler,
+            memory_quota
+        }
     }
 }
 
 impl TxnExtraScheduler for CdcTxnExtraScheduler {
     fn schedule(&self, txn_extra: TxnExtra) {
+        let size = txn_extra.size();
+        if let Err(e) = self.memory_quota.alloc(size) {
+            error!("cdc allocate memory for txn extra failed"; "error" => ?e)
+            // let deregister = Deregister::Delegate {
+            //     region_id,
+            //     observe_id,
+            //     err: Error::MemoryQuotaExceeded(e),
+            // };
+            // if let Err(e) = self.scheduler.schedule(Task::Deregister(deregister)) {
+            //     error!("cdc schedule cdc task failed"; "error" => ?e)
+            // }
+        }
+        // let err self.memory_quota.alloc(size)
         if let Err(e) = self.scheduler.schedule(Task::TxnExtra(txn_extra)) {
             error!("cdc schedule txn extra failed"; "err" => ?e);
         }
