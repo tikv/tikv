@@ -72,6 +72,11 @@ make_auto_flush_static_metric! {
 }
 
 lazy_static! {
+    pub static ref CDC_SCHEDULER_PENDING_TASKS: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_cdc_scheduler_pending_tasks",
+        "Total number of CDC pending tasks",
+        &["type"]
+    ).unwrap();
     pub static ref CDC_ENDPOINT_PENDING_TASKS: IntGauge = register_int_gauge!(
         "tikv_cdc_endpoint_pending_tasks",
         "CDC endpoint pending tasks"
