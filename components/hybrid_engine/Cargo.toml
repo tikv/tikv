@@ -6,7 +6,7 @@ publish = false
 license = "Apache-2.0"
 
 [features]
-testexport = ["raftstore/testexport"]
+testexport = []
 failpoints = ["fail/failpoints"]
 
 [[test]]
@@ -39,3 +39,4 @@ keys = { workspace = true }
 [dev-dependencies]
 tempfile = "3.0"
 test_util = { workspace = true }
+raftstore = { workspace = true, features = ["testexport"] }
