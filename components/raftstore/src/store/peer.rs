@@ -339,11 +339,11 @@ impl<S: Snapshot> ProposedAdminCmd<S> {
             && matches!(cmd_type, AdminCmdType::Split | AdminCmdType::BatchSplit)
     }
 
-    /// Returns true if the command can coexist with the given command.
+    /// Returns true if the command can tolerate the given command.
     ///
     /// As `raft-rs` defines, `TransferLeader` and `ChangePeer` commands are
-    /// safely mutual with each other.
-    fn can_coexist_with(&self, cmd_type: AdminCmdType) -> bool {
+    /// safely mutual tolerable with each other.
+    fn can_tolerate(&self, cmd_type: AdminCmdType) -> bool {
         (self.cmd_type == AdminCmdType::TransferLeader
             && matches!(
                 cmd_type,
@@ -460,7 +460,7 @@ impl<S: Snapshot> CmdEpochChecker<S> {
             .iter()
             .rev()
             .find(|cmd| {
-                if cmd.can_coexist_with(cmd_type) {
+                if cmd.can_tolerate(cmd_type) {
                     false
                 } else if cmd.is_mutually_exclusive_with(cmd_type) {
                     true
