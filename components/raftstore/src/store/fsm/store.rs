@@ -19,8 +19,8 @@ use std::{
 };
 
 use batch_system::{
-    BasicMailbox, BatchRouter, BatchSystem, Config as BatchSystemConfig, Fsm, HandleResult,
-    HandlerBuilder, PollHandler, Priority,
+    BasicMailbox, BatchRouter, BatchSystem, Config as BatchSystemConfig, Fsm, FsmType,
+    HandleResult, HandlerBuilder, PollHandler, Priority,
 };
 use causal_ts::CausalTsProviderImpl;
 use collections::{HashMap, HashMapEntry, HashSet};
@@ -792,6 +792,10 @@ where
     EK: KvEngine,
 {
     type Message = StoreMsg<EK>;
+
+    fn fsm_type() -> FsmType {
+        FsmType::store
+    }
 
     #[inline]
     fn is_stopped(&self) -> bool {

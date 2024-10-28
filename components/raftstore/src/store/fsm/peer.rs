@@ -16,7 +16,7 @@ use std::{
     u64,
 };
 
-use batch_system::{BasicMailbox, Fsm};
+use batch_system::{BasicMailbox, Fsm, FsmType};
 use collections::{HashMap, HashSet};
 use engine_traits::{
     Engines, KvEngine, RaftEngine, RaftLogBatch, SstMetaInfo, WriteBatchExt, CF_LOCK, CF_RAFT,
@@ -576,6 +576,10 @@ where
 {
     type Message = PeerMsg<EK>;
 
+    fn fsm_type() -> FsmType {
+        FsmType::store
+    }
+
     #[inline]
     fn is_stopped(&self) -> bool {
         self.stopped
@@ -777,6 +781,9 @@ where
                 }
             }
             self.fsm.batch_req_builder.request = Some(cmd);
+        }
+        if self.fsm.batch_req_builder.request.is_some() {
+            self.ctx.raft_metrics.ready.propose_delay.inc();
         }
     }
 
