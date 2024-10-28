@@ -912,6 +912,177 @@ impl BackgroundRunner {
             delete_range_scheduler,
         )
     }
+
+    // used for benchmark.
+    pub fn run_load_region(&self, region: CacheRegion, snapshot: Arc<RocksSnapshot>) {
+        Self::do_load_region(
+            region,
+            snapshot,
+            self.core.clone(),
+            self.delete_range_scheduler.clone(),
+            self.pd_client.clone(),
+            self.config.value().gc_run_interval.0,
+        )
+    }
+
+    fn do_load_region(
+        region: CacheRegion,
+        snapshot: Arc<RocksSnapshot>,
+        core: BackgroundRunnerCore,
+        delete_range_scheduler: Scheduler<BackgroundTask>,
+        pd_client: Arc<dyn PdClient>,
+        gc_run_interval: Duration,
+    ) {
+        fail::fail_point!("ime_before_start_loading_region");
+        fail::fail_point!("ime_on_start_loading_region");
+        let mut is_canceled = false;
+        {
+            let regions_map = core.engine.region_manager().regions_map.read();
+            let region_meta = regions_map.region_meta(region.id).unwrap();
+            // if loading is canceled, we skip the batch load.
+            // NOTE: here we don't check the region epoch version change,
+            // We will handle possible region split and partial cancelation
+            // in `on_snapshot_load_canceled` and `on_snapshot_load_finished`.
+            if region_meta.get_state() != RegionState::Loading {
+                assert_eq!(region_meta.get_state(), RegionState::LoadingCanceled);
+                is_canceled = true;
+            }
+        }
+        let skiplist_engine = core.engine.engine.clone();
+
+        if core.memory_controller.reached_stop_load_threshold() {
+            // We are running out of memory, so cancel the load.
+            is_canceled = true;
+        }
+
+        if is_canceled {
+            info!(
+                "ime snapshot load canceled";
+                "region" => ?region,
+            );
+            core.on_snapshot_load_failed(&region, &delete_range_scheduler, false);
+            return;
+        }
+
+        info!("ime loading region"; "region" => ?&region);
+        let start = Instant::now();
+        let iter_opt = IterOptions::new(
+            Some(KeyBuilder::from_slice(&region.start, 0, 0)),
+            Some(KeyBuilder::from_slice(&region.end, 0, 0)),
+            false,
+        );
+
+        let safe_point = 'load_snapshot: {
+            for &cf in DATA_CFS {
+                let handle = skiplist_engine.cf_handle(cf);
+                let seq = snapshot.sequence_number();
+                let guard = &epoch::pin();
+                match snapshot.iterator_opt(cf, iter_opt.clone()) {
+                    Ok(mut iter) => {
+                        iter.seek_to_first().unwrap();
+                        while iter.valid().unwrap() {
+                            // use the sequence number from RocksDB snapshot here as
+                            // the kv is clearly visible
+                            let mut encoded_key = encode_key(iter.key(), seq, ValueType::Value);
+                            let mut val = InternalBytes::from_vec(iter.value().to_vec());
+
+                            let mem_size = RegionCacheWriteBatchEntry::calc_put_entry_size(
+                                iter.key(),
+                                val.as_bytes(),
+                            );
+
+                            // todo(SpadeA): we can batch acquire the memory size
+                            // here.
+                            if let MemoryUsage::CapacityReached(n) =
+                                core.memory_controller.acquire(mem_size)
+                            {
+                                warn!(
+                                    "ime stop loading snapshot due to memory reaching capacity";
+                                    "region" => ?region,
+                                    "memory_usage(MB)" => ReadableSize(n as u64).as_mb_f64(),
+                                );
+                                break 'load_snapshot None;
+                            }
+
+                            encoded_key.set_memory_controller(core.memory_controller.clone());
+                            val.set_memory_controller(core.memory_controller.clone());
+
+                            if PRINTF_LOG.load(Ordering::Relaxed) {
+                                info!(
+                                    "write to memory in load";
+                                    "key" => log_wrappers::Value(encoded_key.as_slice()),
+                                    "cf" => ?cf,
+                                    "seq" => seq,
+                                );
+                            }
+
+                            handle.insert(encoded_key, val, guard);
+                            iter.next().unwrap();
+                        }
+                    }
+                    Err(e) => {
+                        error!("ime creating rocksdb iterator failed"; "cf" => cf, "err" => %e);
+                        break 'load_snapshot None;
+                    }
+                }
+            }
+            // gc the range
+            let tso_timeout = std::cmp::min(gc_run_interval, TIMTOUT_FOR_TSO);
+            let now = match block_on_timeout(pd_client.get_tso(), tso_timeout) {
+                Ok(Ok(ts)) => ts,
+                err => {
+                    error!(
+                        "ime get timestamp failed, skip gc loaded region";
+                        "timeout_duration" => ?tso_timeout,
+                        "error" => ?err,
+                    );
+                    // Get timestamp fail so don't do gc.
+                    break 'load_snapshot Some(0);
+                }
+            };
+
+            let safe_point = (|| {
+                fail::fail_point!("ime_safe_point_in_loading", |t| {
+                    t.unwrap().parse::<u64>().unwrap()
+                });
+
+                let safe_point = now
+                    .physical()
+                    .saturating_sub(gc_run_interval.as_millis() as u64);
+                TimeStamp::compose(safe_point, 0).into_inner()
+            })();
+
+            let mut filter = Filter::new(
+                safe_point,
+                u64::MAX,
+                skiplist_engine.cf_handle(CF_DEFAULT),
+                skiplist_engine.cf_handle(CF_WRITE),
+            );
+            filter.filter_keys_in_region(&region);
+
+            Some(safe_point)
+        };
+
+        if let Some(safe_point) = safe_point {
+            if core.on_snapshot_load_finished(&region, &delete_range_scheduler, safe_point) {
+                let duration = start.saturating_elapsed();
+                IN_MEMORY_ENGINE_LOAD_TIME_HISTOGRAM.observe(duration.as_secs_f64());
+                info!(
+                    "ime loading region finished";
+                    "region" => ?region,
+                    "duration(sec)" => ?duration,
+                );
+            } else {
+                info!("ime loading region canceled";"region" => ?region);
+            }
+        } else {
+            info!(
+                "ime snapshot load failed";
+                "region" => ?region,
+            );
+            core.on_snapshot_load_failed(&region, &delete_range_scheduler, true);
+        }
+    }
 }
 
 impl Runnable for BackgroundRunner {
@@ -973,163 +1144,14 @@ impl Runnable for BackgroundRunner {
                 let pd_client = self.pd_client.clone();
                 let gc_run_interval = self.config.value().gc_run_interval.0;
                 let f = async move {
-                    fail::fail_point!("ime_before_start_loading_region");
-                    fail::fail_point!("ime_on_start_loading_region");
-                    let mut is_canceled = false;
-                    {
-                        let regions_map = core.engine.region_manager().regions_map.read();
-                        let region_meta = regions_map.region_meta(region.id).unwrap();
-                        // if loading is canceled, we skip the batch load.
-                        // NOTE: here we don't check the region epoch version change,
-                        // We will handle possible region split and partial cancelation
-                        // in `on_snapshot_load_canceled` and `on_snapshot_load_finished`.
-                        if region_meta.get_state() != RegionState::Loading {
-                            assert_eq!(region_meta.get_state(), RegionState::LoadingCanceled);
-                            is_canceled = true;
-                        }
-                    }
-                    let skiplist_engine = core.engine.engine.clone();
-
-                    if core.memory_controller.reached_stop_load_threshold() {
-                        // We are running out of memory, so cancel the load.
-                        is_canceled = true;
-                    }
-
-                    if is_canceled {
-                        info!(
-                            "ime snapshot load canceled";
-                            "region" => ?region,
-                        );
-                        core.on_snapshot_load_failed(&region, &delete_range_scheduler, false);
-                        return;
-                    }
-
-                    info!("ime loading region"; "region" => ?&region);
-                    let start = Instant::now();
-                    let iter_opt = IterOptions::new(
-                        Some(KeyBuilder::from_slice(&region.start, 0, 0)),
-                        Some(KeyBuilder::from_slice(&region.end, 0, 0)),
-                        false,
+                    Self::do_load_region(
+                        region,
+                        snapshot,
+                        core,
+                        delete_range_scheduler,
+                        pd_client,
+                        gc_run_interval,
                     );
-
-                    let safe_point = 'load_snapshot: {
-                        for &cf in DATA_CFS {
-                            let handle = skiplist_engine.cf_handle(cf);
-                            let seq = snapshot.sequence_number();
-                            let guard = &epoch::pin();
-                            match snapshot.iterator_opt(cf, iter_opt.clone()) {
-                                Ok(mut iter) => {
-                                    iter.seek_to_first().unwrap();
-                                    while iter.valid().unwrap() {
-                                        // use the sequence number from RocksDB snapshot here as
-                                        // the kv is clearly visible
-                                        let mut encoded_key =
-                                            encode_key(iter.key(), seq, ValueType::Value);
-                                        let mut val =
-                                            InternalBytes::from_vec(iter.value().to_vec());
-
-                                        let mem_size =
-                                            RegionCacheWriteBatchEntry::calc_put_entry_size(
-                                                iter.key(),
-                                                val.as_bytes(),
-                                            );
-
-                                        // todo(SpadeA): we can batch acquire the memory size
-                                        // here.
-                                        if let MemoryUsage::CapacityReached(n) =
-                                            core.memory_controller.acquire(mem_size)
-                                        {
-                                            warn!(
-                                                "ime stop loading snapshot due to memory reaching capacity";
-                                                "region" => ?region,
-                                                "memory_usage(MB)" => ReadableSize(n as u64).as_mb_f64(),
-                                            );
-                                            break 'load_snapshot None;
-                                        }
-
-                                        encoded_key
-                                            .set_memory_controller(core.memory_controller.clone());
-                                        val.set_memory_controller(core.memory_controller.clone());
-
-                                        if PRINTF_LOG.load(Ordering::Relaxed) {
-                                            info!(
-                                                "write to memory in load";
-                                                "key" => log_wrappers::Value(encoded_key.as_slice()),
-                                                "cf" => ?cf,
-                                                "seq" => seq,
-                                            );
-                                        }
-
-                                        handle.insert(encoded_key, val, guard);
-                                        iter.next().unwrap();
-                                    }
-                                }
-                                Err(e) => {
-                                    error!("ime creating rocksdb iterator failed"; "cf" => cf, "err" => %e);
-                                    break 'load_snapshot None;
-                                }
-                            }
-                        }
-                        // gc the range
-                        let tso_timeout = std::cmp::min(gc_run_interval, TIMTOUT_FOR_TSO);
-                        let now = match block_on_timeout(pd_client.get_tso(), tso_timeout) {
-                            Ok(Ok(ts)) => ts,
-                            err => {
-                                error!(
-                                    "ime get timestamp failed, skip gc loaded region";
-                                    "timeout_duration" => ?tso_timeout,
-                                    "error" => ?err,
-                                );
-                                // Get timestamp fail so don't do gc.
-                                break 'load_snapshot Some(0);
-                            }
-                        };
-
-                        let safe_point = (|| {
-                            fail::fail_point!("ime_safe_point_in_loading", |t| {
-                                t.unwrap().parse::<u64>().unwrap()
-                            });
-
-                            let safe_point = now
-                                .physical()
-                                .saturating_sub(gc_run_interval.as_millis() as u64);
-                            TimeStamp::compose(safe_point, 0).into_inner()
-                        })();
-
-                        let mut filter = Filter::new(
-                            safe_point,
-                            u64::MAX,
-                            skiplist_engine.cf_handle(CF_DEFAULT),
-                            skiplist_engine.cf_handle(CF_WRITE),
-                        );
-                        filter.filter_keys_in_region(&region);
-
-                        Some(safe_point)
-                    };
-
-                    if let Some(safe_point) = safe_point {
-                        if core.on_snapshot_load_finished(
-                            &region,
-                            &delete_range_scheduler,
-                            safe_point,
-                        ) {
-                            let duration = start.saturating_elapsed();
-                            IN_MEMORY_ENGINE_LOAD_TIME_HISTOGRAM.observe(duration.as_secs_f64());
-                            info!(
-                                "ime loading region finished";
-                                "region" => ?region,
-                                "duration(sec)" => ?duration,
-                            );
-                        } else {
-                            info!("ime loading region canceled";"region" => ?region);
-                        }
-                    } else {
-                        info!(
-                            "ime snapshot load failed";
-                            "region" => ?region,
-                        );
-                        core.on_snapshot_load_failed(&region, &delete_range_scheduler, true);
-                    }
                 };
                 self.region_load_remote.spawn(f);
             }

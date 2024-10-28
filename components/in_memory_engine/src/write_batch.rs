@@ -23,7 +23,7 @@ use crate::{
     keys::{encode_key, InternalBytes, ValueType, ENC_KEY_SEQ_LENGTH},
     memory_controller::{MemoryController, MemoryUsage},
     metrics::{
-        IN_MEMORY_ENGINE_PREPARE_FOR_WRITE_DURATION_HISTOGRAM,
+        count_operations_for_cfs, IN_MEMORY_ENGINE_PREPARE_FOR_WRITE_DURATION_HISTOGRAM,
         IN_MEMORY_ENGINE_WRITE_DURATION_HISTOGRAM,
     },
     region_manager::RegionCacheStatus,
@@ -197,17 +197,28 @@ impl RegionCacheWriteBatch {
         let start = Instant::now();
         let mut lock_modification: u64 = 0;
         let engine = self.engine.core.engine();
+
+        // record the number of insertions and deletions for each cf
+        let mut put = [0, 0, 0];
+        let mut delete = [0, 0, 0];
         // Some entries whose ranges may be marked as evicted above, but it does not
         // matter, they will be deleted later.
         std::mem::take(&mut self.buffer).into_iter().for_each(|e| {
             if is_lock_cf(e.cf) {
                 lock_modification += e.data_size() as u64;
             }
+            if e.is_insertion() {
+                put[e.cf] += 1;
+            } else {
+                delete[e.cf] += 1;
+            }
+
             e.write_to_memory(seq, &engine, self.memory_controller.clone(), guard);
             seq += 1;
         });
         let duration = start.saturating_elapsed_secs();
         IN_MEMORY_ENGINE_WRITE_DURATION_HISTOGRAM.observe(duration);
+        count_operations_for_cfs(&put, &delete);
 
         fail::fail_point!("ime_on_region_cache_write_batch_write_consumed");
         fail::fail_point!("ime_before_clear_regions_in_being_written");
@@ -369,6 +380,10 @@ impl Debug for RegionCacheWriteBatchEntry {
 }
 
 impl RegionCacheWriteBatchEntry {
+    pub fn is_insertion(&self) -> bool {
+        matches!(self.inner, WriteBatchEntryInternal::PutValue(_))
+    }
+
     pub fn put_value(cf: &str, key: &[u8], value: &[u8]) -> Self {
         Self {
             cf: cf_to_id(cf),
@@ -477,6 +492,23 @@ impl WriteBatch for RegionCacheWriteBatch {
     }
 
     fn clear(&mut self) {
+        // `current_region` is some means `write_impl` is not called, so we need to
+        // clear the `in_written` flag.
+        // This can happen when apply fsm do `commit`(e.g. after handling Msg::Change),
+        // and then do not handle other kvs. Thus, the write batch is empty,
+        // and `write_impl` is not called.
+        if self.current_region.is_some() {
+            self.record_last_written_region();
+            // region's `in_written` is not cleaned as `write_impl` is not called,
+            // so we should do it here.
+            if !self.written_regions.is_empty() {
+                self.engine
+                    .core
+                    .region_manager()
+                    .clear_regions_in_being_written(&self.written_regions);
+            }
+        }
+
         self.region_cache_status = RegionCacheStatus::NotInCache;
         self.buffer.clear();
         self.save_points.clear();
