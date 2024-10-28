@@ -23,6 +23,7 @@ use crate::{
     delegate::{Downstream, DownstreamId, DownstreamState, ObservedRange},
     endpoint::{Deregister, Task},
 };
+use crate::metrics::CDC_SCHEDULER_PENDING_TASKS;
 
 static CONNECTION_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
@@ -301,6 +302,7 @@ impl Service {
             version,
             explicit_features,
         };
+        CDC_SCHEDULER_PENDING_TASKS.with_label_values(&["set_conn_version"]).inc();
         scheduler.schedule(task).map_err(|e| format!("{:?}", e))
     }
 
@@ -360,6 +362,7 @@ impl Service {
             request,
             downstream,
         };
+        CDC_SCHEDULER_PENDING_TASKS.with_label_values(&["register"]).inc();
         scheduler.schedule(task).map_err(|e| format!("{:?}", e))
     }
 
@@ -369,12 +372,14 @@ impl Service {
         conn_id: ConnId,
     ) -> Result<(), String> {
         let task = if request.region_id != 0 {
+            CDC_SCHEDULER_PENDING_TASKS.with_label_values(&["deregister::region"]).inc();
             Task::Deregister(Deregister::Region {
                 conn_id,
                 request_id: RequestId(request.request_id),
                 region_id: request.region_id,
             })
         } else {
+            CDC_SCHEDULER_PENDING_TASKS.with_label_values(&["deregister::request"]).inc();
             Task::Deregister(Deregister::Request {
                 conn_id,
                 request_id: RequestId(request.request_id),
@@ -430,6 +435,7 @@ impl Service {
         }
         info!("cdc connection created"; "downstream" => ctx.peer(), "features" => ?explicit_features);
 
+        CDC_SCHEDULER_PENDING_TASKS.with_label_values(&["open_conn"]).inc();
         if let Err(e) = self.scheduler.schedule(Task::OpenConn { conn }) {
             let peer = ctx.peer();
             error!("cdc connection initiate failed"; "downstream" => ?peer, "error" => ?e);
@@ -459,7 +465,9 @@ impl Service {
             if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
                 error!("cdc deregister failed"; "error" => ?e, "conn_id" => ?conn_id);
             }
+            CDC_SCHEDULER_PENDING_TASKS.with_label_values(&["deregister::conn"]).inc();
             Ok::<(), String>(())
+
         };
 
         let peer = ctx.peer();

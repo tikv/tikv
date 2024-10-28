@@ -716,6 +716,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 conn.iter_downstreams(|_, region_id, downstream_id, _| {
                     self.deregister_downstream(region_id, downstream_id, None);
                 });
+                CDC_SCHEDULER_PENDING_TASKS.with_label_values(&["deregister::conn"]).dec();
             }
             Deregister::Request {
                 conn_id,
@@ -726,6 +727,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                     let err = Some(Error::Other("region not found".into()));
                     self.deregister_downstream(region_id, downstream, err);
                 }
+                CDC_SCHEDULER_PENDING_TASKS.with_label_values(&["deregister::request"]).dec();
             }
             Deregister::Region {
                 conn_id,
@@ -737,6 +739,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                     let err = Some(Error::Other("region not found".into()));
                     self.deregister_downstream(region_id, downstream, err);
                 }
+                CDC_SCHEDULER_PENDING_TASKS.with_label_values(&["deregister::region"]).dec();
+
             }
             Deregister::Downstream {
                 conn_id,
@@ -756,6 +760,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                         self.deregister_downstream(region_id, downstream_id, err);
                     }
                 }
+                CDC_SCHEDULER_PENDING_TASKS.with_label_values(&["deregister::downstream"]).dec();
             }
             Deregister::Delegate {
                 region_id,
@@ -780,11 +785,13 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                     }
                 }
                 self.deregister_observe(region_id, delegate.handle.id);
+                CDC_SCHEDULER_PENDING_TASKS.with_label_values(&["deregister::delegate"]).dec();
             }
         }
     }
 
     pub fn on_register(&mut self, mut request: ChangeDataRequest, mut downstream: Downstream) {
+        CDC_SCHEDULER_PENDING_TASKS.with_label_values(&["register"]).dec();
         let kv_api = request.get_kv_api();
         let api_version = self.api_version;
         let filter_loop = downstream.filter_loop;
@@ -985,6 +992,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
 
     pub fn on_multi_batch(&mut self, multi: Vec<CmdBatch>, old_value_cb: OldValueCallback) {
         fail_point!("cdc_before_handle_multi_batch", |_| {});
+        CDC_SCHEDULER_PENDING_TASKS.with_label_values(&["multi_batch"]).dec();
         let mut statistics = Statistics::default();
         let size = multi.iter().map(|b| b.size()).sum();
         for batch in multi {
@@ -1008,6 +1016,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                         observe_id: delegate.handle.id,
                         err: e,
                     });
+                    CDC_SCHEDULER_PENDING_TASKS.with_label_values(&["deregister::delegate"]).inc();
                 }
             }
             if let Some(deregister) = deregister {
@@ -1025,6 +1034,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         region: Region,
         locks: BTreeMap<Key, MiniLock>,
     ) {
+        CDC_SCHEDULER_PENDING_TASKS.with_label_values(&["finish_scan_lock"]).dec();
         let region_id = region.get_id();
         match self.capture_regions.get_mut(&region_id) {
             None => {
@@ -1043,6 +1053,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                     Ok(fails) => {
                         let mut deregisters = Vec::new();
                         for (downstream, e) in fails {
+                            CDC_SCHEDULER_PENDING_TASKS.with_label_values(&["deregister::downstream"]).inc();
                             deregisters.push(Deregister::Downstream {
                                 conn_id: downstream.conn_id,
                                 request_id: downstream.req_id,
@@ -1056,17 +1067,21 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                             self.on_deregister(deregister);
                         }
                     }
-                    Err(e) => self.on_deregister(Deregister::Delegate {
-                        region_id,
-                        observe_id,
-                        err: e,
-                    }),
+                    Err(e) => {
+                        CDC_SCHEDULER_PENDING_TASKS.with_label_values(&["deregister::delegate"]).inc();
+                        self.on_deregister(Deregister::Delegate {
+                            region_id,
+                            observe_id,
+                            err: e,
+                        });
+                    }
                 }
             }
         }
     }
 
     fn on_min_ts(&mut self, regions: Vec<u64>, min_ts: TimeStamp, current_ts: TimeStamp) {
+        CDC_SCHEDULER_PENDING_TASKS.with_label_values(&["min_ts"]).dec();
         self.current_ts = current_ts;
         self.min_resolved_ts = current_ts;
 
@@ -1085,6 +1100,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
     }
 
     fn register_min_ts_event(&self, mut leader_resolver: LeadershipResolver, event_time: Instant) {
+        CDC_SCHEDULER_PENDING_TASKS.with_label_values(&["register_min_ts_event"]).dec();
         // Try to keep advance resolved ts every `min_ts_interval`, thus
         // the actual wait interval = `min_ts_interval` - the last register min_ts event
         // time.
@@ -1143,6 +1159,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                         // advance normally.
                         Err(err) => panic!("failed to register min ts event, error: {:?}", err),
                     }
+                    CDC_SCHEDULER_PENDING_TASKS.with_label_values(&["register_min_ts_event"]).inc();
                 } else {
                     // During shutdown, tso runtime drops future immediately,
                     // leader_resolver may be lost when this future drops before
@@ -1176,12 +1193,14 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                     // advance normally.
                     Err(err) => panic!("failed to schedule min ts event, error: {:?}", err),
                 }
+                CDC_SCHEDULER_PENDING_TASKS.with_label_values(&["min_ts"]).inc();
             }
         };
         self.tso_worker.spawn(fut);
     }
 
     fn on_open_conn(&mut self, conn: Conn) {
+        CDC_SCHEDULER_PENDING_TASKS.with_label_values(&["open_conn"]).dec();
         self.connections.insert(conn.get_id(), conn);
     }
 
@@ -1191,6 +1210,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         version: semver::Version,
         explicit_features: Vec<&'static str>,
     ) {
+        CDC_SCHEDULER_PENDING_TASKS.with_label_values(&["set_conn_version"]).dec();
         let conn = self.connections.get_mut(&conn_id).unwrap();
         conn.check_version_and_set_feature(version, explicit_features);
     }
@@ -1246,6 +1266,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
                 incremental_scan_barrier,
                 cb,
             } => {
+                CDC_SCHEDULER_PENDING_TASKS.with_label_values(&["init_downstream"]).dec();
                 match self.capture_regions.get_mut(&region_id) {
                     Some(delegate) if delegate.handle.id == observe_id => {
                         if delegate.init_lock_tracker() {
@@ -1276,6 +1297,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
                 cb();
             }
             Task::TxnExtra(txn_extra) => {
+                CDC_SCHEDULER_PENDING_TASKS.with_label_values(&["txn_extra"]).dec();
                 let size = txn_extra.size();
                 for (k, v) in txn_extra.old_values {
                     self.old_value_cache.insert(k, v);
@@ -1366,6 +1388,7 @@ impl TxnExtraScheduler for CdcTxnExtraScheduler {
             // }
         }
         // let err self.memory_quota.alloc(size)
+        CDC_SCHEDULER_PENDING_TASKS.with_label_values(&["txn_extra"]).inc();
         if let Err(e) = self.scheduler.schedule(Task::TxnExtra(txn_extra)) {
             error!("cdc schedule txn extra failed"; "err" => ?e);
         }
