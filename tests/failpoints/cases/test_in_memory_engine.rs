@@ -22,13 +22,20 @@ use kvproto::{
     raft_serverpb::RaftMessage,
 };
 use protobuf::Message;
+use raftstore::{
+    coprocessor::ObserveHandle,
+    store::{
+        fsm::{apply::ChangeObserver, ApplyTask},
+        msg::Callback,
+    },
+};
 use tempfile::tempdir;
 use test_coprocessor::{
     handle_request, init_data_with_details_pd_client, DagChunkSpliter, DagSelect, ProductTable,
 };
 use test_raftstore::{
-    get_tso, new_peer, new_server_cluster_with_hybrid_engine_with_no_region_cache, Cluster,
-    ServerCluster,
+    get_tso, new_peer, new_put_cf_cmd, new_server_cluster_with_hybrid_engine_with_no_region_cache,
+    Cluster, ServerCluster,
 };
 use test_util::eventually;
 use tidb_query_datatype::{
@@ -858,6 +865,103 @@ fn test_load_during_flashback() {
                 .contains_region(r.id)
         );
     }
+}
+
+// This case test that ApplyFsm handles `Msg::Change` at the end of one round.
+// This will let the `flush` call at the end flushes an empty WriteBatch, so so
+// internal state of IME's write-batch may not be cleared.
+#[test]
+fn test_apply_prepared_but_not_write() {
+    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
+    cluster.cfg.raft_store.apply_batch_system.pool_size = 1;
+    cluster.run();
+
+    let r = cluster.get_region(b"k");
+    cluster.must_split(&r, b"k10");
+
+    let r1 = cluster.get_region(b"k");
+    let r2 = cluster.get_region(b"k20");
+
+    // load both regions at store 1
+    let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
+    region_cache_engine
+        .core()
+        .region_manager()
+        .load_region(CacheRegion::from_region(&r1))
+        .unwrap();
+    region_cache_engine
+        .core()
+        .region_manager()
+        .load_region(CacheRegion::from_region(&r2))
+        .unwrap();
+
+    // first pause apply fsm.
+    fail::cfg("before_handle_normal", "pause").unwrap();
+
+    let (tx, rx) = unbounded();
+    fail::cfg_callback("after_write_to_db_skip_write_node_1", move || {
+        tx.send(()).unwrap();
+    })
+    .unwrap();
+
+    // propose a write to triggers sending a fake Msg::Change.
+    let req = test_raftstore::util::new_request(
+        r2.id,
+        r2.get_region_epoch().clone(),
+        vec![new_put_cf_cmd(CF_DEFAULT, b"k20", b"v1")],
+        false,
+    );
+    cluster
+        .call_command_on_leader(req, Duration::from_millis(20))
+        .unwrap_err();
+
+    // schedule a Msg::Change to trigger a explicit commit, it will lead to a empty
+    // flush at the end of this poll.
+    let apply_router = cluster.get_apply_router(1).unwrap();
+    apply_router.schedule_task(
+        r2.id,
+        ApplyTask::Change {
+            cmd: ChangeObserver::from_rts(r2.id, ObserveHandle::default()),
+            region_epoch: r2.get_region_epoch().clone(),
+            cb: Callback::Read {
+                cb: Box::new(|_| {}),
+                tracker: Default::default(),
+            },
+        },
+    );
+
+    // resume apply fsm to let it handle raft entries and the fake `Change` msg.
+    fail::remove("before_handle_normal");
+    rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+    // block apply again to batch the write of the 2 regions.
+    fail::cfg("before_handle_normal", "pause").unwrap();
+
+    // propose 2 write for 2 regions.
+    let req = test_raftstore::util::new_request(
+        r1.id,
+        r1.get_region_epoch().clone(),
+        vec![new_put_cf_cmd(CF_DEFAULT, b"k1", b"v2")],
+        false,
+    );
+    cluster
+        .call_command_on_leader(req, Duration::from_millis(10))
+        .unwrap_err();
+    let req = test_raftstore::util::new_request(
+        r2.id,
+        r2.get_region_epoch().clone(),
+        vec![new_put_cf_cmd(CF_DEFAULT, b"k20", b"v2")],
+        false,
+    );
+    cluster
+        .call_command_on_leader(req, Duration::from_millis(10))
+        .unwrap_err();
+
+    // resume apply fsm, should handle new writes successfully.
+    fail::remove("before_handle_normal");
+    fail::remove("after_write_to_db_skip_write_node_1");
+
+    assert_eq!(cluster.must_get(b"k1").unwrap(), b"v2");
 }
 
 #[test]
