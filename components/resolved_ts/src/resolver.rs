@@ -575,18 +575,12 @@ impl Resolver {
         let oldest_large_txn = self
             .large_txns
             .iter()
-            .filter_map(|(start_ts, _)| self.lookup_min_commit_ts(*start_ts))
-            .min()
-            .map(|ts| {
-                (
-                    ts,
-                    TxnLocks {
-                        lock_count: 1,
-                        // TODO: maybe fill this
-                        sample_lock: None,
-                    },
-                )
-            });
+            .filter_map(|(start_ts, txn_locks)| {
+                self.lookup_min_commit_ts(*start_ts)
+                    .map(|ts| (ts, txn_locks.clone()))
+            })
+            .min_by_key(|(ts, _)| *ts)
+            .map(|(ts, txn_locks)| (ts, txn_locks));
 
         match (oldest_normal_txn, oldest_large_txn) {
             (Some((&ts1, txn_locks1)), Some((ts2, txn_locks2))) => {
@@ -916,5 +910,8 @@ mod tests {
         );
 
         assert_eq!(resolver.resolve(20.into(), None, TsSource::PdTso), 5.into());
+        let oldest_txn = resolver.oldest_transaction().unwrap();
+        assert_eq!(oldest_txn.0, 5.into());
+        assert_eq!(oldest_txn.1.lock_count, 2);
     }
 }
