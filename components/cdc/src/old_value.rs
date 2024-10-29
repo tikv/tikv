@@ -1,9 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::ops::{Bound, Deref};
-use std::thread;
-use std::time::Duration;
-use rand::Rng;
 use engine_traits::{ReadOptions, CF_DEFAULT, CF_WRITE};
 use getset::CopyGetters;
 use tikv::storage::{
@@ -123,38 +120,34 @@ pub fn get_old_value<S: EngineSnapshot>(
     );
 
     old_value_cache.access_count += 1;
-    let prob: f32 = rand::thread_rng().gen_range(0.0..10.0);
-    if prob > 5.0 {
-        if let Some((old_value, mutation_type)) = old_value_cache.cache.remove(&key) {
-            return match mutation_type {
-                // Old value of an Insert is guaranteed to be None.
-                Some(MutationType::Insert) => {
-                    assert_eq!(old_value, OldValue::None);
-                    Ok(None)
-                }
-                // For Put, Delete or a mutation type we do not know,
-                // we read old value from the cache.
-                Some(MutationType::Put) | Some(MutationType::Delete) | None => {
-                    match old_value {
-                        OldValue::None => Ok(None),
-                        OldValue::Value { value } => Ok(Some(value)),
-                        OldValue::ValueTimeStamp { start_ts } => {
-                            let prev_key = key.truncate_ts().unwrap().append_ts(start_ts);
-                            let value = get_value_default(snapshot, &prev_key, statistics);
-                            Ok(value)
-                        }
-                        // Unspecified and SeekWrite should not be added into cache.
-                        OldValue::Unspecified | OldValue::SeekWrite(_) => unreachable!(),
+    if let Some((old_value, mutation_type)) = old_value_cache.cache.remove(&key) {
+        return match mutation_type {
+            // Old value of an Insert is guaranteed to be None.
+            Some(MutationType::Insert) => {
+                assert_eq!(old_value, OldValue::None);
+                Ok(None)
+            }
+            // For Put, Delete or a mutation type we do not know,
+            // we read old value from the cache.
+            Some(MutationType::Put) | Some(MutationType::Delete) | None => {
+                match old_value {
+                    OldValue::None => Ok(None),
+                    OldValue::Value { value } => Ok(Some(value)),
+                    OldValue::ValueTimeStamp { start_ts } => {
+                        let prev_key = key.truncate_ts().unwrap().append_ts(start_ts);
+                        let value = get_value_default(snapshot, &prev_key, statistics);
+                        Ok(value)
                     }
+                    // Unspecified and SeekWrite should not be added into cache.
+                    OldValue::Unspecified | OldValue::SeekWrite(_) => unreachable!(),
                 }
-                _ => unreachable!(),
-            };
-        }
+            }
+            _ => unreachable!(),
+        };
     }
 
     // Cannot get old value from cache, seek for it in engine.
     old_value_cache.miss_count += 1;
-    thread::sleep(Duration::from_millis(100));
     let key = key.truncate_ts().unwrap().append_ts(query_ts);
     let mut cursor = new_write_cursor_on_key(snapshot, &key);
     let value = near_seek_old_value(&key, &mut cursor, Either::Left(snapshot), statistics)?;
