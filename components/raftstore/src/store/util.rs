@@ -14,6 +14,7 @@ use std::{
     u64,
 };
 
+use bitflags::bitflags;
 use collections::HashSet;
 use engine_traits::KvEngine;
 use kvproto::{
@@ -191,12 +192,33 @@ pub fn is_epoch_stale(epoch: &metapb::RegionEpoch, check_epoch: &metapb::RegionE
         || epoch.get_conf_ver() < check_epoch.get_conf_ver()
 }
 
+bitflags! {
+    /// A bitmap contains some useful flags when dealing with checking epoch
+    /// on specific admin commands.
+    pub struct AdminCmdCheckBit: u8 {
+        const NONE               = 0b0000_0000;
+        const MUTUALLY_EXCLUSIVE = 0b0000_0001;
+        const TOLERABLE          = 0b0000_0010;
+        const SPECIAL_MARKER     = Self::MUTUALLY_EXCLUSIVE.bits | Self::TOLERABLE.bits;
+    }
+}
+
 #[derive(Debug, Copy, Clone)]
 pub struct AdminCmdEpochState {
     pub check_ver: bool,
     pub check_conf_ver: bool,
     pub change_ver: bool,
     pub change_conf_ver: bool,
+    /// Newly added `AdminCmdCheckBit` to indicate the special behavior of
+    /// specific admin commands.
+    /// Typically, although the `TransferLeader` command does not change the
+    /// `conf_ver`, it should be mutually exclusive with other commands which
+    /// change the `conf_ver`, such as `Split` and `BatchSplit`. If it's not
+    /// mutually exclusive, it may cause unexpected behaviors in rare scenarios
+    /// (e.g. #12410 and #17602.)
+    /// Meanwhile, as `raft-rs` defines, `TransferLeader` and `ChangePeer`
+    /// commands are safely mutual tolerable with each other.
+    pub check_bit: AdminCmdCheckBit,
 }
 
 impl AdminCmdEpochState {
@@ -205,12 +227,14 @@ impl AdminCmdEpochState {
         check_conf_ver: bool,
         change_ver: bool,
         change_conf_ver: bool,
+        check_bit: AdminCmdCheckBit,
     ) -> AdminCmdEpochState {
         AdminCmdEpochState {
             check_ver,
             check_conf_ver,
             change_ver,
             change_conf_ver,
+            check_bit,
         }
     }
 }
@@ -225,31 +249,67 @@ impl AdminCmdEpochState {
 /// cmd and **DO NOT** delete the old one.
 pub fn admin_cmd_epoch_lookup(admin_cmp_type: AdminCmdType) -> AdminCmdEpochState {
     match admin_cmp_type {
-        AdminCmdType::InvalidAdmin => AdminCmdEpochState::new(false, false, false, false),
-        AdminCmdType::CompactLog => AdminCmdEpochState::new(false, false, false, false),
-        AdminCmdType::ComputeHash => AdminCmdEpochState::new(false, false, false, false),
-        AdminCmdType::VerifyHash => AdminCmdEpochState::new(false, false, false, false),
+        AdminCmdType::InvalidAdmin => {
+            AdminCmdEpochState::new(false, false, false, false, AdminCmdCheckBit::NONE)
+        }
+        AdminCmdType::CompactLog => {
+            AdminCmdEpochState::new(false, false, false, false, AdminCmdCheckBit::NONE)
+        }
+        AdminCmdType::ComputeHash => {
+            AdminCmdEpochState::new(false, false, false, false, AdminCmdCheckBit::NONE)
+        }
+        AdminCmdType::VerifyHash => {
+            AdminCmdEpochState::new(false, false, false, false, AdminCmdCheckBit::NONE)
+        }
         // Change peer
-        AdminCmdType::ChangePeer => AdminCmdEpochState::new(false, true, false, true),
-        AdminCmdType::ChangePeerV2 => AdminCmdEpochState::new(false, true, false, true),
+        AdminCmdType::ChangePeer => {
+            AdminCmdEpochState::new(false, true, false, true, AdminCmdCheckBit::TOLERABLE)
+        }
+        AdminCmdType::ChangePeerV2 => {
+            AdminCmdEpochState::new(false, true, false, true, AdminCmdCheckBit::TOLERABLE)
+        }
         // Split
-        AdminCmdType::Split => AdminCmdEpochState::new(true, true, true, false),
-        AdminCmdType::BatchSplit => AdminCmdEpochState::new(true, true, true, false),
+        AdminCmdType::Split => AdminCmdEpochState::new(
+            true,
+            true,
+            true,
+            false,
+            AdminCmdCheckBit::MUTUALLY_EXCLUSIVE,
+        ),
+        AdminCmdType::BatchSplit => AdminCmdEpochState::new(
+            true,
+            true,
+            true,
+            false,
+            AdminCmdCheckBit::MUTUALLY_EXCLUSIVE,
+        ),
         // Merge
-        AdminCmdType::PrepareMerge => AdminCmdEpochState::new(true, true, true, true),
-        AdminCmdType::CommitMerge => AdminCmdEpochState::new(true, true, true, false),
-        AdminCmdType::RollbackMerge => AdminCmdEpochState::new(true, true, true, false),
+        AdminCmdType::PrepareMerge => {
+            AdminCmdEpochState::new(true, true, true, true, AdminCmdCheckBit::NONE)
+        }
+        AdminCmdType::CommitMerge => {
+            AdminCmdEpochState::new(true, true, true, false, AdminCmdCheckBit::NONE)
+        }
+        AdminCmdType::RollbackMerge => {
+            AdminCmdEpochState::new(true, true, true, false, AdminCmdCheckBit::NONE)
+        }
         // Transfer leader
-        AdminCmdType::TransferLeader => AdminCmdEpochState::new(true, true, false, false),
+        AdminCmdType::TransferLeader => {
+            AdminCmdEpochState::new(true, true, false, false, AdminCmdCheckBit::SPECIAL_MARKER)
+        }
         // PrepareFlashback could be committed successfully before a split being applied, so we need
         // to check the epoch to make sure it's sent to a correct key range.
         // NOTICE: FinishFlashback will never meet the epoch not match error since any scheduling
         // before it's forbidden.
         AdminCmdType::PrepareFlashback | AdminCmdType::FinishFlashback => {
-            AdminCmdEpochState::new(true, true, false, false)
+            AdminCmdEpochState::new(true, true, false, false, AdminCmdCheckBit::NONE)
         }
-        AdminCmdType::BatchSwitchWitness => AdminCmdEpochState::new(false, true, false, true),
-        AdminCmdType::UpdateGcPeer => AdminCmdEpochState::new(false, false, false, false),
+        AdminCmdType::BatchSwitchWitness => {
+            AdminCmdEpochState::new(false, true, false, true, AdminCmdCheckBit::NONE)
+        }
+        AdminCmdType::UpdateGcPeer => {
+            AdminCmdEpochState::new(false, false, false, false, AdminCmdCheckBit::NONE)
+        }
     }
 }
 

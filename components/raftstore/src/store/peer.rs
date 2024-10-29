@@ -78,8 +78,9 @@ use super::{
     read_queue::{ReadIndexQueue, ReadIndexRequest},
     transport::Transport,
     util::{
-        self, check_req_region_epoch, is_initial_msg, AdminCmdEpochState, ChangePeerI,
-        ConfChangeKind, Lease, LeaseState, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER,
+        self, check_req_region_epoch, is_initial_msg, AdminCmdCheckBit, AdminCmdEpochState,
+        ChangePeerI, ConfChangeKind, Lease, LeaseState, NORMAL_REQ_CHECK_CONF_VER,
+        NORMAL_REQ_CHECK_VER,
     },
     worker::BucketStatsInfo,
     DestroyPeerJob, LocalReadContext,
@@ -320,47 +321,6 @@ impl<S: Snapshot> ProposedAdminCmd<S> {
             cbs: Vec::new(),
         }
     }
-
-    /// Returns true if the command is a special command which should be
-    /// treated specially.
-    fn is_special_marker(&self) -> bool {
-        self.cmd_type == AdminCmdType::TransferLeader
-    }
-
-    /// Returns true if the command is mutually exclusive with the given
-    /// command.
-    /// Typically, although the `TransferLeader` command does not change the
-    /// `conf_ver`, it should be mutually exclusive with other commands which
-    /// change the `conf_ver`, such as `Split` and `BatchSplit`. If it's not
-    /// mutually exclusive, it may cause unexpected behaviors in rare scenarios
-    /// (e.g. #12410 and #17602.)
-    fn is_mutually_exclusive_with(&self, cmd_type: AdminCmdType) -> bool {
-        // Note: the incoming `TransferLeader` command will be denied only when the
-        // previous `TransferLeader` command is finished. Meanwhile, as
-        // `admin_cmd_epoch_lookup` defines, the later `TransferLeader` will be
-        // denied if the region has pending `Split` or `BatchSplit` commands.
-        self.is_special_marker()
-            && matches!(
-                cmd_type,
-                AdminCmdType::TransferLeader | AdminCmdType::Split | AdminCmdType::BatchSplit
-            )
-    }
-
-    /// Returns true if the command can tolerate the given command.
-    ///
-    /// As `raft-rs` defines, `TransferLeader` and `ChangePeer` commands are
-    /// safely mutual tolerable with each other.
-    fn can_tolerate(&self, cmd_type: AdminCmdType) -> bool {
-        (self.cmd_type == AdminCmdType::TransferLeader
-            && matches!(
-                cmd_type,
-                AdminCmdType::ChangePeer | AdminCmdType::ChangePeerV2
-            ))
-            || (matches!(
-                self.cmd_type,
-                AdminCmdType::ChangePeer | AdminCmdType::ChangePeerV2
-            ) && cmd_type == AdminCmdType::TransferLeader)
-    }
 }
 
 struct CmdEpochChecker<S: Snapshot> {
@@ -405,18 +365,24 @@ impl<S: Snapshot> CmdEpochChecker<S> {
             |_| None
         );
         self.maybe_update_term(term);
-        let (cmd_type, check_ver, check_conf_ver) = if !req.has_admin_request() {
+        let (check_ver, check_conf_ver, check_bit, cmd_type) = if !req.has_admin_request() {
             (
-                AdminCmdType::default(), // dummy value
                 NORMAL_REQ_CHECK_VER,
                 NORMAL_REQ_CHECK_CONF_VER,
+                AdminCmdCheckBit::NONE,
+                AdminCmdType::default(), // dummy value
             )
         } else {
             let cmd_type = req.get_admin_request().get_cmd_type();
             let epoch_state = admin_cmd_epoch_lookup(cmd_type);
-            (cmd_type, epoch_state.check_ver, epoch_state.check_conf_ver)
+            (
+                epoch_state.check_ver,
+                epoch_state.check_conf_ver,
+                epoch_state.check_bit,
+                cmd_type,
+            )
         };
-        self.last_conflict_index(cmd_type, check_ver, check_conf_ver)
+        self.last_conflict_index(check_ver, check_conf_ver, check_bit, cmd_type)
     }
 
     /// Check if the given admin cmd can be proposed on the basis of its epoch
@@ -448,8 +414,13 @@ impl<S: Snapshot> CmdEpochChecker<S> {
         self.maybe_update_term(term);
         let epoch_state = admin_cmd_epoch_lookup(cmd_type);
         assert!(
-            self.last_conflict_index(cmd_type, epoch_state.check_ver, epoch_state.check_conf_ver)
-                .is_none()
+            self.last_conflict_index(
+                epoch_state.check_ver,
+                epoch_state.check_conf_ver,
+                epoch_state.check_bit,
+                cmd_type
+            )
+            .is_none()
         );
 
         if epoch_state.change_conf_ver || epoch_state.change_ver {
@@ -459,19 +430,28 @@ impl<S: Snapshot> CmdEpochChecker<S> {
 
     fn last_conflict_index(
         &self,
-        cmd_type: AdminCmdType,
         check_ver: bool,
         check_conf_ver: bool,
+        check_bit: AdminCmdCheckBit,
+        cmd_type: AdminCmdType,
     ) -> Option<u64> {
         self.proposed_admin_cmd
             .iter()
             .rev()
             .find(|cmd| {
-                if cmd.can_tolerate(cmd_type) {
-                    false
-                } else if cmd.is_mutually_exclusive_with(cmd_type) {
+                let bit = cmd.epoch_state.check_bit & check_bit;
+                if bit & AdminCmdCheckBit::MUTUALLY_EXCLUSIVE
+                    == AdminCmdCheckBit::MUTUALLY_EXCLUSIVE
+                {
+                    // The cmd is mutually exclusive with the given cmd, return it
+                    // directly.
                     true
+                } else if bit == AdminCmdCheckBit::TOLERABLE && cmd_type != cmd.cmd_type {
+                    // The cmd is tolerable with the given cmd, and the cmd type is
+                    // different, so it's not conflicted.
+                    false
                 } else {
+                    // Otherwise, check the epoch state.
                     check_ver && cmd.epoch_state.change_ver
                         || check_conf_ver && cmd.epoch_state.change_conf_ver
                 }
@@ -493,16 +473,16 @@ impl<S: Snapshot> CmdEpochChecker<S> {
 
     /// Returns whether the last proposed admin cmd is a special marker.
     fn is_last_cmd_special_marker(&self) -> bool {
-        self.proposed_admin_cmd
-            .back()
-            .map_or(false, |cmd| cmd.is_special_marker())
+        self.proposed_admin_cmd.back().map_or(false, |cmd| {
+            cmd.epoch_state.check_bit == AdminCmdCheckBit::SPECIAL_MARKER
+        })
     }
 
     fn last_mutually_exclusive_cmd_details(&self) -> Option<(AdminCmdType, u64, u64, Instant)> {
         self.proposed_admin_cmd
             .iter()
             .rev()
-            .find(|cmd| cmd.is_special_marker())
+            .find(|cmd| cmd.epoch_state.check_bit == AdminCmdCheckBit::SPECIAL_MARKER)
             .map(|cmd| (cmd.cmd_type, cmd.index, self.term, cmd.timestamp))
     }
 
