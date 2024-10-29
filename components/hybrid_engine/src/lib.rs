@@ -1,6 +1,8 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
-#![allow(dead_code)]
-#![allow(unused_variables)]
+// TODO: HybridEngine has became a very thin shim, consider merging
+// `HybridEngineSnapshot` and `HybridEngineIterator` into in_memory_engine
+// crate.
+
 #![feature(let_chains)]
 
 mod db_vector;

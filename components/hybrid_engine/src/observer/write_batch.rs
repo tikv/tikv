@@ -69,16 +69,16 @@ impl WriteBatch for HybridObservableWriteBatch {
     fn write(&mut self) -> Result<u64> {
         unimplemented!("write")
     }
-    fn write_opt(&mut self, opts: &WriteOptions) -> Result<u64> {
+    fn write_opt(&mut self, _: &WriteOptions) -> Result<u64> {
         unimplemented!("write_opt")
     }
-    fn write_callback_opt(&mut self, opts: &WriteOptions, cb: impl FnMut(u64)) -> Result<u64>
+    fn write_callback_opt(&mut self, _: &WriteOptions, _: impl FnMut(u64)) -> Result<u64>
     where
         Self: Sized,
     {
         unimplemented!("write_callback_opt")
     }
-    fn merge(&mut self, other: Self) -> Result<()>
+    fn merge(&mut self, _: Self) -> Result<()>
     where
         Self: Sized,
     {

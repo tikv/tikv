@@ -1,6 +1,6 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{CacheRegion, KvEngine, RegionCacheEngine};
+use engine_traits::{KvEngine, RegionCacheEngine};
 
 /// This engine is structured with both a disk engine and an region cache
 /// engine. The disk engine houses the complete database data, whereas the
@@ -14,6 +14,7 @@ where
     EK: KvEngine,
     EC: RegionCacheEngine,
 {
+    #[allow(dead_code)]
     disk_engine: EK,
     region_cache_engine: EC,
 }
@@ -53,6 +54,7 @@ where
         crate::HybridEngineSnapshot::new(disk_snap, region_cache_snap)
     }
 
+    #[cfg(test)]
     pub(crate) fn disk_engine(&self) -> &EK {
         &self.disk_engine
     }
@@ -62,17 +64,11 @@ where
     }
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone)]
 pub struct SnapshotContext {
-    pub region: Option<CacheRegion>,
+    pub region: Option<engine_traits::CacheRegion>,
     pub read_ts: u64,
-}
-
-impl SnapshotContext {
-    pub fn set_region(&mut self, region: CacheRegion) {
-        assert!(self.region.is_none());
-        self.region = Some(region);
-    }
 }
 
 #[cfg(test)]
