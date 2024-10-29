@@ -134,15 +134,11 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
 
         let size = cmd_batches.iter().map(|b| b.size()).sum();
         self.memory_quota.alloc_force(size);
-        let in_use = self.memory_quota.in_use();
-        let capacity = self.memory_quota.capacity();
-        if in_use > capacity {
-            warn!("on multi batch alloc too much memory"; "in_use" => in_use, "capacity" => capacity);
-        }
         CDC_SCHEDULER_PENDING_TASKS.with_label_values(&["multi_batch"]).inc();
         if let Err(e) = self.sched.schedule(Task::MultiBatch {
             multi: cmd_batches,
-            old_value_cb: Box::new(get_old_value),        }) {
+            old_value_cb: Box::new(get_old_value),
+        }) {
             warn!("cdc schedule task failed"; "error" => ?e);
         }
     }
