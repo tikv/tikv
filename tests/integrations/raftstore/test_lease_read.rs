@@ -278,9 +278,6 @@ fn test_node_lease_unsafe_during_leader_transfers() {
 }
 
 #[test_case(test_raftstore::new_node_cluster)]
-// transfer leader means eviction, so hybrid_engine with range cache memory
-// engine does not fit in.
-// #[test_case(test_raftstore::new_node_cluster_with_hybrid_engine)]
 // #[test_case(test_raftstore_v2::new_node_cluster)]
 // TODO: batch get snapshot is not supported in raftstore v2 currently.
 //       https://github.com/tikv/tikv/issues/14876

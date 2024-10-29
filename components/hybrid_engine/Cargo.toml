@@ -5,15 +5,6 @@ edition = "2021"
 publish = false
 license = "Apache-2.0"
 
-[features]
-testexport = []
-failpoints = ["fail/failpoints"]
-
-[[test]]
-name = "failpoints"
-path = "tests/failpoints/mod.rs"
-required-features = ["failpoints"]
-
 [dependencies]
 engine_traits = { workspace = true }
 txn_types = { workspace = true }
@@ -30,7 +21,6 @@ prometheus = { version = "0.13", default-features = false, features = [
 prometheus-static-metric = "0.5"
 lazy_static = "1.4.0"
 crossbeam = { workspace = true }
-fail = "0.5"
 raftstore = { workspace = true }
 raft = { workspace = true }
 kvproto = { workspace = true }
@@ -39,4 +29,4 @@ keys = { workspace = true }
 [dev-dependencies]
 tempfile = "3.0"
 test_util = { workspace = true }
-raftstore = { workspace = true, features = ["testexport"] }
+fail = { version = "0.5", features = ["failpoints"] }

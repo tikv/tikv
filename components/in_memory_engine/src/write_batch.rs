@@ -125,6 +125,37 @@ impl RegionCacheWriteBatch {
         }
     }
 
+    pub fn prepare_for_region(&mut self, region: &metapb::Region) {
+        // If the region is already prepared for write, we do not need to prepare it
+        // again. See comments for the `prepared_regions` field for more details.
+        if let Some(current_region) = &self.current_region
+            && current_region.id == region.id
+        {
+            return;
+        }
+        let time = Instant::now();
+        // verify that the region is not prepared before
+        if self.prepared_regions.contains(&region.id) {
+            panic!(
+                "region {} is prepared for write before, but it is not the current region",
+                region.id
+            );
+        }
+        self.prepared_regions.push(region.id);
+        // record last region for clearing region in written flags.
+        self.record_last_written_region();
+
+        let cached_region = CacheRegion::from_region(region);
+        // TODO: remote range.
+        self.set_region_cache_status(
+            self.engine
+                .prepare_for_apply(&cached_region, region.is_in_flashback),
+        );
+        self.current_region = Some(cached_region);
+        self.current_region_evicted = false;
+        self.prepare_for_write_duration += time.saturating_elapsed();
+    }
+
     /// Trigger a CleanLockTombstone task if the accumulated lock cf
     /// modification exceeds the threshold (16MB).
     ///
@@ -514,37 +545,6 @@ impl WriteBatch for RegionCacheWriteBatch {
     fn merge(&mut self, mut other: Self) -> Result<()> {
         self.buffer.append(&mut other.buffer);
         Ok(())
-    }
-
-    fn prepare_for_region(&mut self, region: &metapb::Region) {
-        // If the region is already prepared for write, we do not need to prepare it
-        // again. See comments for the `prepared_regions` field for more details.
-        if let Some(current_region) = &self.current_region
-            && current_region.id == region.id
-        {
-            return;
-        }
-        let time = Instant::now();
-        // verify that the region is not prepared before
-        if self.prepared_regions.contains(&region.id) {
-            panic!(
-                "region {} is prepared for write before, but it is not the current region",
-                region.id
-            );
-        }
-        self.prepared_regions.push(region.id);
-        // record last region for clearing region in written flags.
-        self.record_last_written_region();
-
-        let cached_region = CacheRegion::from_region(region);
-        // TODO: remote range.
-        self.set_region_cache_status(
-            self.engine
-                .prepare_for_apply(&cached_region, region.is_in_flashback),
-        );
-        self.current_region = Some(cached_region);
-        self.current_region_evicted = false;
-        self.prepare_for_write_duration += time.saturating_elapsed();
     }
 }
 

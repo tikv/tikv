@@ -38,7 +38,7 @@ lazy_static! {
     pub static ref IN_MEMORY_ENGINE_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_VEC: IntCounterVec =
         register_int_counter_vec!(
             "tikv_in_memory_engine_snapshot_acquire_failed_reason_count",
-            "The reasons for why range cache snapshot is not acquired",
+            "The reasons for why region cache snapshot is not acquired",
             &["type"],
         )
         .unwrap();

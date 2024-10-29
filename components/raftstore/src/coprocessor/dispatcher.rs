@@ -1401,7 +1401,7 @@ mod tests {
         index += ObserverIndex::PostApplyQuery as usize;
         assert_all!([&ob.called], &[index]);
 
-        host.on_role_change(&region, RoleChange::new(StateRole::Leader));
+        host.on_role_change(&region, RoleChange::new_for_test(StateRole::Leader));
         index += ObserverIndex::OnRoleChange as usize;
         assert_all!([&ob.called], &[index]);
 
