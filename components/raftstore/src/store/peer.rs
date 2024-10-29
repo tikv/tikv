@@ -78,9 +78,8 @@ use super::{
     read_queue::{ReadIndexQueue, ReadIndexRequest},
     transport::Transport,
     util::{
-        self, check_req_region_epoch, is_initial_msg, AdminCmdCheckBit, AdminCmdEpochState,
-        ChangePeerI, ConfChangeKind, Lease, LeaseState, NORMAL_REQ_CHECK_CONF_VER,
-        NORMAL_REQ_CHECK_VER,
+        self, check_req_region_epoch, is_initial_msg, AdminCmdEpochState, ChangePeerI,
+        ConfChangeKind, Lease, LeaseState, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER,
     },
     worker::BucketStatsInfo,
     DestroyPeerJob, LocalReadContext,
@@ -303,7 +302,6 @@ pub struct ProposedAdminCmd<S: Snapshot> {
     cmd_type: AdminCmdType,
     epoch_state: AdminCmdEpochState,
     index: u64,
-    timestamp: Instant,
     cbs: Vec<Callback<S>>,
 }
 
@@ -317,7 +315,6 @@ impl<S: Snapshot> ProposedAdminCmd<S> {
             cmd_type,
             epoch_state,
             index,
-            timestamp: Instant::now(),
             cbs: Vec::new(),
         }
     }
@@ -359,102 +356,41 @@ impl<S: Snapshot> CmdEpochChecker<S> {
     /// Returns None if passing the epoch check, otherwise returns a index which
     /// is the last admin cmd index conflicted with this proposal.
     fn propose_check_epoch(&mut self, req: &RaftCmdRequest, term: u64) -> Option<u64> {
-        fail_point!(
-            "on_skip_propose_check_epoch",
-            req.get_admin_request().get_cmd_type() == AdminCmdType::TransferLeader,
-            |_| None
-        );
         self.maybe_update_term(term);
-        let (check_ver, check_conf_ver, check_bit, cmd_type) = if !req.has_admin_request() {
-            (
-                NORMAL_REQ_CHECK_VER,
-                NORMAL_REQ_CHECK_CONF_VER,
-                AdminCmdCheckBit::NORMAL,
-                AdminCmdType::default(), // dummy value
-            )
+        let (check_ver, check_conf_ver) = if !req.has_admin_request() {
+            (NORMAL_REQ_CHECK_VER, NORMAL_REQ_CHECK_CONF_VER)
         } else {
             let cmd_type = req.get_admin_request().get_cmd_type();
             let epoch_state = admin_cmd_epoch_lookup(cmd_type);
-            (
-                epoch_state.check_ver,
-                epoch_state.check_conf_ver,
-                epoch_state.check_bit,
-                cmd_type,
-            )
+            (epoch_state.check_ver, epoch_state.check_conf_ver)
         };
-        self.last_conflict_index(check_ver, check_conf_ver, check_bit, cmd_type)
-    }
-
-    /// Check if the given admin cmd can be proposed on the basis of its epoch
-    /// and previous proposed admin cmds.
-    fn propose_check_admin_cmd_epoch(&mut self, cmd_type: AdminCmdType, term: u64) -> Option<u64> {
-        let mock_admin_cmd = {
-            let mut req = RaftCmdRequest::default();
-            let mut admin_req = raft_cmdpb::AdminRequest::default();
-            admin_req.set_cmd_type(cmd_type);
-            req.set_admin_request(admin_req);
-            req
-        };
-        self.propose_check_epoch(&mock_admin_cmd, term)
-    }
-
-    fn forcely_post_propose(&mut self, cmd_type: AdminCmdType, index: u64, term: u64) {
-        self.maybe_update_term(term);
-        if let Some(cmd) = self.proposed_admin_cmd.back() {
-            assert!(cmd.index < index);
-        }
-        self.proposed_admin_cmd.push_back(ProposedAdminCmd::new(
-            cmd_type,
-            admin_cmd_epoch_lookup(cmd_type),
-            index,
-        ));
+        self.last_conflict_index(check_ver, check_conf_ver)
     }
 
     fn post_propose(&mut self, cmd_type: AdminCmdType, index: u64, term: u64) {
         self.maybe_update_term(term);
         let epoch_state = admin_cmd_epoch_lookup(cmd_type);
         assert!(
-            self.last_conflict_index(
-                epoch_state.check_ver,
-                epoch_state.check_conf_ver,
-                epoch_state.check_bit,
-                cmd_type
-            )
-            .is_none()
+            self.last_conflict_index(epoch_state.check_ver, epoch_state.check_conf_ver)
+                .is_none()
         );
 
         if epoch_state.change_conf_ver || epoch_state.change_ver {
-            self.forcely_post_propose(cmd_type, index, term);
+            if let Some(cmd) = self.proposed_admin_cmd.back() {
+                assert!(cmd.index < index);
+            }
+            self.proposed_admin_cmd
+                .push_back(ProposedAdminCmd::new(cmd_type, epoch_state, index));
         }
     }
 
-    fn last_conflict_index(
-        &self,
-        check_ver: bool,
-        check_conf_ver: bool,
-        check_bit: AdminCmdCheckBit,
-        cmd_type: AdminCmdType,
-    ) -> Option<u64> {
+    fn last_conflict_index(&self, check_ver: bool, check_conf_ver: bool) -> Option<u64> {
         self.proposed_admin_cmd
             .iter()
             .rev()
             .find(|cmd| {
-                let bit = cmd.epoch_state.check_bit & check_bit;
-                if bit & AdminCmdCheckBit::MUTUALLY_EXCLUSIVE
-                    == AdminCmdCheckBit::MUTUALLY_EXCLUSIVE
-                {
-                    // The cmd is mutually exclusive with the given cmd, return it
-                    // directly.
-                    true
-                } else if bit == AdminCmdCheckBit::TOLERABLE && cmd_type != cmd.cmd_type {
-                    // The cmd is tolerable with the given cmd, and the cmd type is
-                    // different, so it's not conflicted.
-                    false
-                } else {
-                    // Otherwise, check the epoch state.
-                    check_ver && cmd.epoch_state.change_ver
-                        || check_conf_ver && cmd.epoch_state.change_conf_ver
-                }
+                (check_ver && cmd.epoch_state.change_ver)
+                    || (check_conf_ver && cmd.epoch_state.change_conf_ver)
             })
             .map(|cmd| cmd.index)
     }
@@ -469,21 +405,6 @@ impl<S: Snapshot> CmdEpochChecker<S> {
             .rev()
             .find(|cmd| cmd.cmd_type == cmd_type)
             .map(|cmd| cmd.index)
-    }
-
-    /// Returns whether the last proposed admin cmd is a special marker.
-    fn is_last_cmd_special_marker(&self) -> bool {
-        self.proposed_admin_cmd.back().map_or(false, |cmd| {
-            cmd.epoch_state.check_bit == AdminCmdCheckBit::SPECIAL_MARKER
-        })
-    }
-
-    fn last_mutually_exclusive_cmd_details(&self) -> Option<(AdminCmdType, u64, u64, Instant)> {
-        self.proposed_admin_cmd
-            .iter()
-            .rev()
-            .find(|cmd| cmd.epoch_state.check_bit == AdminCmdCheckBit::SPECIAL_MARKER)
-            .map(|cmd| (cmd.cmd_type, cmd.index, self.term, cmd.timestamp))
     }
 
     fn advance_apply(&mut self, index: u64, term: u64, region: &metapb::Region) {
@@ -4040,7 +3961,7 @@ where
     }
 
     pub fn ready_to_transfer_leader<T>(
-        &mut self,
+        &self,
         ctx: &mut PollContext<EK, ER, T>,
         mut index: u64,
         peer: &metapb::Peer,
@@ -4076,26 +3997,6 @@ where
         if last_index >= index + ctx.cfg.leader_transfer_max_log_lag {
             return Some("log gap");
         }
-
-        // To prevent unexpected behaviors in rare scenarios (e.g. #12410 and #17602.),
-        // we should check if there is any pending conf change before
-        // transferring leader.
-        if self
-            .cmd_epoch_checker
-            .propose_check_admin_cmd_epoch(AdminCmdType::TransferLeader, self.term())
-            .is_some()
-        {
-            return Some("pending mutually exclusive cmd");
-        }
-        // Mock a transfer leader proposal to check epoch with the last index.
-        // Although the command does not change the epoch, it should be checked
-        // whether it is mutually exclusive with other commands which
-        // change the epoch.
-        self.cmd_epoch_checker.forcely_post_propose(
-            AdminCmdType::TransferLeader,
-            last_index,
-            self.term(),
-        );
 
         None
     }
@@ -4961,14 +4862,7 @@ where
             _ => peers.choose(&mut rand::thread_rng()).unwrap(),
         };
 
-        // Note that if there exists a pending mutually exclusive command, we should
-        // reject the transfer leader command.
-        let transferred = if peer.id == self.peer.id
-            || self
-                .cmd_epoch_checker
-                .propose_check_epoch(&req, self.term())
-                .is_some()
-        {
+        let transferred = if peer.id == self.peer.id {
             false
         } else {
             self.pre_transfer_leader(peer, extra_msgs, ctx)
@@ -5564,29 +5458,6 @@ where
 
     pub fn needs_update_last_leader_committed_idx(&self) -> bool {
         self.busy_on_apply.is_some() && self.last_leader_committed_idx.is_none()
-    }
-
-    /// Clear the pending admin cmds if the last cmd is a special marker cmd
-    /// and it's timeout.
-    ///
-    /// Note that the spefical marker cmd may block the subsequent cmds, so
-    /// we should clear it if it's timeout.
-    pub fn clear_pending_admin_cmds_if_needed(&mut self, timeout: Duration) {
-        if !self.cmd_epoch_checker.is_last_cmd_special_marker() {
-            return;
-        }
-        // If the last cmd is a special marker cmd, we should check whether it's
-        // timeout to avoid blocking the subsequent cmds. Typically, the special
-        // cmd is a mocked `TransferLeader` command, which may block the subsequent
-        // `Split` cmd if it's not committed for a long time.
-        let (_, index, term, start_ts) = self
-            .cmd_epoch_checker
-            .last_mutually_exclusive_cmd_details()
-            .unwrap();
-        if self.term() == term && start_ts.elapsed() >= timeout {
-            let region = self.region().clone();
-            self.cmd_epoch_checker.advance_apply(index, term, &region);
-        }
     }
 }
 
@@ -6635,150 +6506,97 @@ mod tests {
         let split_admin = new_admin_request(AdminCmdType::BatchSplit);
         let prepare_merge_admin = new_admin_request(AdminCmdType::PrepareMerge);
         let change_peer_admin = new_admin_request(AdminCmdType::ChangePeer);
-        let transfer_leader_admin = new_admin_request(AdminCmdType::TransferLeader);
 
-        // Check the conflicts on mutually exclusive commands.
-        {
-            let mut epoch_checker = CmdEpochChecker::<KvTestSnapshot>::default();
+        let mut epoch_checker = CmdEpochChecker::<KvTestSnapshot>::default();
 
-            assert_eq!(epoch_checker.propose_check_epoch(&split_admin, 10), None);
-            assert_eq!(epoch_checker.term, 10);
-            assert_eq!(
-                epoch_checker.propose_check_epoch(&transfer_leader_admin, 10),
-                None
-            );
-            // Transfer leader admin cmd should not be ignored to avoid the later propose
-            // on batch split before the transfer leader is applied.
-            epoch_checker.forcely_post_propose(AdminCmdType::TransferLeader, 5, 10);
-            assert_eq!(epoch_checker.proposed_admin_cmd.len(), 1);
-            // If there exists a transfer leader admin cmd, other admin cmds which needs to
-            // check epoch.check_conf_change should be ignored.
-            assert_eq!(epoch_checker.propose_check_epoch(&split_admin, 10), Some(5));
-            assert_eq!(epoch_checker.propose_check_epoch(&normal_cmd, 10), None);
-            assert_eq!(
-                epoch_checker.propose_check_epoch(&prepare_merge_admin, 10),
-                None,
-            );
-            // `ConfChange` should has no conflict with `TransferLeader`.
-            assert_eq!(
-                epoch_checker.propose_check_epoch(&change_peer_admin, 10),
-                None
-            );
-            // Change term to 11
-            assert_eq!(epoch_checker.propose_check_epoch(&split_admin, 11), None);
-            epoch_checker.post_propose(AdminCmdType::BatchSplit, 6, 11);
-            assert_eq!(epoch_checker.proposed_admin_cmd.len(), 1);
-            // Both conflict with the split admin cmd
-            assert_eq!(
-                epoch_checker.propose_check_epoch(&transfer_leader_admin, 11),
-                Some(6)
-            );
-            assert_eq!(
-                epoch_checker.propose_check_epoch(&change_peer_admin, 11),
-                None,
-            );
-            // New term should clear the proposed admin cmd.
-            epoch_checker.post_propose(AdminCmdType::ChangePeerV2, 7, 12);
-            assert_eq!(epoch_checker.proposed_admin_cmd.len(), 1);
-            // TransferLeader admin cmd should be ignored.
-            assert_eq!(
-                epoch_checker.propose_check_epoch(&transfer_leader_admin, 12),
-                None
-            );
+        assert_eq!(epoch_checker.propose_check_epoch(&split_admin, 10), None);
+        assert_eq!(epoch_checker.term, 10);
+        epoch_checker.post_propose(AdminCmdType::BatchSplit, 5, 10);
+        assert_eq!(epoch_checker.proposed_admin_cmd.len(), 1);
+
+        // Both conflict with the split admin cmd
+        assert_eq!(epoch_checker.propose_check_epoch(&normal_cmd, 10), Some(5));
+        assert_eq!(
+            epoch_checker.propose_check_epoch(&prepare_merge_admin, 10),
+            Some(5)
+        );
+
+        assert_eq!(
+            epoch_checker.propose_check_epoch(&change_peer_admin, 10),
+            None
+        );
+        epoch_checker.post_propose(AdminCmdType::ChangePeer, 6, 10);
+        assert_eq!(epoch_checker.proposed_admin_cmd.len(), 2);
+
+        assert_eq!(
+            epoch_checker.last_cmd_index(AdminCmdType::BatchSplit),
+            Some(5)
+        );
+        assert_eq!(
+            epoch_checker.last_cmd_index(AdminCmdType::ChangePeer),
+            Some(6)
+        );
+        assert_eq!(
+            epoch_checker.last_cmd_index(AdminCmdType::PrepareMerge),
+            None
+        );
+
+        // Conflict with the change peer admin cmd
+        assert_eq!(
+            epoch_checker.propose_check_epoch(&change_peer_admin, 10),
+            Some(6)
+        );
+        // Conflict with the split admin cmd
+        assert_eq!(epoch_checker.propose_check_epoch(&normal_cmd, 10), Some(5));
+        // Conflict with the change peer admin cmd
+        assert_eq!(
+            epoch_checker.propose_check_epoch(&prepare_merge_admin, 10),
+            Some(6)
+        );
+
+        epoch_checker.advance_apply(4, 10, &region);
+        // Have no effect on `proposed_admin_cmd`
+        assert_eq!(epoch_checker.proposed_admin_cmd.len(), 2);
+
+        epoch_checker.advance_apply(5, 10, &region);
+        // Left one change peer admin cmd
+        assert_eq!(epoch_checker.proposed_admin_cmd.len(), 1);
+
+        assert_eq!(epoch_checker.propose_check_epoch(&normal_cmd, 10), None);
+
+        assert_eq!(epoch_checker.propose_check_epoch(&split_admin, 10), Some(6));
+        // Change term to 11
+        assert_eq!(epoch_checker.propose_check_epoch(&split_admin, 11), None);
+        assert_eq!(epoch_checker.term, 11);
+        // Should be empty
+        assert_eq!(epoch_checker.proposed_admin_cmd.len(), 0);
+
+        // Test attaching multiple callbacks.
+        epoch_checker.post_propose(AdminCmdType::BatchSplit, 7, 12);
+        let mut rxs = vec![];
+        for _ in 0..3 {
+            let conflict_idx = epoch_checker.propose_check_epoch(&normal_cmd, 12).unwrap();
+            let (cb, rx) = new_cb();
+            epoch_checker.attach_to_conflict_cmd(conflict_idx, cb);
+            rxs.push(rx);
         }
-        // Test basic propose check
-        {
-            let mut epoch_checker = CmdEpochChecker::<KvTestSnapshot>::default();
-
-            assert_eq!(epoch_checker.propose_check_epoch(&split_admin, 10), None);
-            assert_eq!(epoch_checker.term, 10);
-            epoch_checker.post_propose(AdminCmdType::BatchSplit, 5, 10);
-            assert_eq!(epoch_checker.proposed_admin_cmd.len(), 1);
-
-            // Both conflict with the split admin cmd
-            assert_eq!(epoch_checker.propose_check_epoch(&normal_cmd, 10), Some(5));
-            assert_eq!(
-                epoch_checker.propose_check_epoch(&prepare_merge_admin, 10),
-                Some(5)
-            );
-
-            assert_eq!(
-                epoch_checker.propose_check_epoch(&change_peer_admin, 10),
-                None
-            );
-            epoch_checker.post_propose(AdminCmdType::ChangePeer, 6, 10);
-            assert_eq!(epoch_checker.proposed_admin_cmd.len(), 2);
-
-            assert_eq!(
-                epoch_checker.last_cmd_index(AdminCmdType::BatchSplit),
-                Some(5)
-            );
-            assert_eq!(
-                epoch_checker.last_cmd_index(AdminCmdType::ChangePeer),
-                Some(6)
-            );
-            assert_eq!(
-                epoch_checker.last_cmd_index(AdminCmdType::PrepareMerge),
-                None
-            );
-
-            // Conflict with the change peer admin cmd
-            assert_eq!(
-                epoch_checker.propose_check_epoch(&change_peer_admin, 10),
-                Some(6)
-            );
-            // Conflict with the split admin cmd
-            assert_eq!(epoch_checker.propose_check_epoch(&normal_cmd, 10), Some(5));
-            // Conflict with the change peer admin cmd
-            assert_eq!(
-                epoch_checker.propose_check_epoch(&prepare_merge_admin, 10),
-                Some(6)
-            );
-
-            epoch_checker.advance_apply(4, 10, &region);
-            // Have no effect on `proposed_admin_cmd`
-            assert_eq!(epoch_checker.proposed_admin_cmd.len(), 2);
-
-            epoch_checker.advance_apply(5, 10, &region);
-            // Left one change peer admin cmd
-            assert_eq!(epoch_checker.proposed_admin_cmd.len(), 1);
-
-            assert_eq!(epoch_checker.propose_check_epoch(&normal_cmd, 10), None);
-
-            assert_eq!(epoch_checker.propose_check_epoch(&split_admin, 10), Some(6));
-            // Change term to 11
-            assert_eq!(epoch_checker.propose_check_epoch(&split_admin, 11), None);
-            assert_eq!(epoch_checker.term, 11);
-            // Should be empty
-            assert_eq!(epoch_checker.proposed_admin_cmd.len(), 0);
-
-            // Test attaching multiple callbacks.
-            epoch_checker.post_propose(AdminCmdType::BatchSplit, 7, 12);
-            let mut rxs = vec![];
-            for _ in 0..3 {
-                let conflict_idx = epoch_checker.propose_check_epoch(&normal_cmd, 12).unwrap();
-                let (cb, rx) = new_cb();
-                epoch_checker.attach_to_conflict_cmd(conflict_idx, cb);
-                rxs.push(rx);
-            }
-            epoch_checker.advance_apply(7, 12, &region);
-            for rx in rxs {
-                rx.try_recv().unwrap();
-            }
-
-            // Should invoke callbacks when term is increased.
-            epoch_checker.post_propose(AdminCmdType::BatchSplit, 8, 12);
-            let (cb, rx) = new_cb();
-            epoch_checker.attach_to_conflict_cmd(8, cb);
-            assert_eq!(epoch_checker.propose_check_epoch(&normal_cmd, 13), None);
-            rx.try_recv().unwrap();
-
-            // Should invoke callbacks when it's dropped.
-            epoch_checker.post_propose(AdminCmdType::BatchSplit, 9, 13);
-            let (cb, rx) = new_cb();
-            epoch_checker.attach_to_conflict_cmd(9, cb);
-            drop(epoch_checker);
+        epoch_checker.advance_apply(7, 12, &region);
+        for rx in rxs {
             rx.try_recv().unwrap();
         }
+
+        // Should invoke callbacks when term is increased.
+        epoch_checker.post_propose(AdminCmdType::BatchSplit, 8, 12);
+        let (cb, rx) = new_cb();
+        epoch_checker.attach_to_conflict_cmd(8, cb);
+        assert_eq!(epoch_checker.propose_check_epoch(&normal_cmd, 13), None);
+        rx.try_recv().unwrap();
+
+        // Should invoke callbacks when it's dropped.
+        epoch_checker.post_propose(AdminCmdType::BatchSplit, 9, 13);
+        let (cb, rx) = new_cb();
+        epoch_checker.attach_to_conflict_cmd(9, cb);
+        drop(epoch_checker);
+        rx.try_recv().unwrap();
     }
 }

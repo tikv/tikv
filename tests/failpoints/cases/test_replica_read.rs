@@ -523,15 +523,6 @@ fn test_read_index_after_transfer_leader() {
     // Transfer leader to peer 1, peer 2 should not change role since we added a
     // recv filter.
     cluster.transfer_leader(region_id, new_peer(1, 1));
-    // Failed to transfer leadership as there exists a pending `BatchSplit` command
-    // which is not handled by peer 2, so `propose_check_epoch` on` peer 2 will
-    // fail and reject the leader transfer.
-    assert_eq!(cluster.leader_of_region(region_id).unwrap().get_id(), 2);
-    // Pause the `propose_check_epoch` to make the leader transfer pass through
-    // the epoch check.
-    let on_skip_propose_check_epoch = "on_skip_propose_check_epoch";
-    fail::cfg(on_skip_propose_check_epoch, "return").unwrap();
-    cluster.transfer_leader(region_id, new_peer(1, 1));
     // Pause before collecting peer messages to make sure all messages can be
     // handled in one batch.
     let on_peer_collect_message_2 = "on_peer_collect_message_2";
@@ -574,7 +565,6 @@ fn test_read_index_after_transfer_leader() {
 
     cluster.sim.wl().clear_recv_filters(2);
     fail::remove(on_handle_apply_2);
-    fail::remove(on_skip_propose_check_epoch);
 }
 
 /// Test if the read index request can get a correct response when the commit
