@@ -312,6 +312,7 @@ impl Sink {
         if bytes != 0 {
             self.memory_quota.alloc(bytes)?;
         }
+        info!("unbounded send event"; "in_use" => self.memory_quota.in_use());
         let ob_event = ObservedEvent::new(Instant::now_coarse(), observed_event, bytes);
         match self.unbounded_sender.unbounded_send(ob_event) {
             Ok(_) => Ok(()),
