@@ -196,9 +196,9 @@ bitflags! {
     /// A bitmap contains some useful flags when dealing with checking epoch
     /// on specific admin commands.
     pub struct AdminCmdCheckBit: u8 {
-        const NONE               = 0b0000_0000;
-        const MUTUALLY_EXCLUSIVE = 0b0000_0001;
-        const TOLERABLE          = 0b0000_0010;
+        const NORMAL             = 0b0000_0001;
+        const MUTUALLY_EXCLUSIVE = 0b0000_0010;
+        const TOLERABLE          = 0b0000_0100;
         const SPECIAL_MARKER     = Self::MUTUALLY_EXCLUSIVE.bits | Self::TOLERABLE.bits;
     }
 }
@@ -250,16 +250,16 @@ impl AdminCmdEpochState {
 pub fn admin_cmd_epoch_lookup(admin_cmp_type: AdminCmdType) -> AdminCmdEpochState {
     match admin_cmp_type {
         AdminCmdType::InvalidAdmin => {
-            AdminCmdEpochState::new(false, false, false, false, AdminCmdCheckBit::NONE)
+            AdminCmdEpochState::new(false, false, false, false, AdminCmdCheckBit::NORMAL)
         }
         AdminCmdType::CompactLog => {
-            AdminCmdEpochState::new(false, false, false, false, AdminCmdCheckBit::NONE)
+            AdminCmdEpochState::new(false, false, false, false, AdminCmdCheckBit::NORMAL)
         }
         AdminCmdType::ComputeHash => {
-            AdminCmdEpochState::new(false, false, false, false, AdminCmdCheckBit::NONE)
+            AdminCmdEpochState::new(false, false, false, false, AdminCmdCheckBit::NORMAL)
         }
         AdminCmdType::VerifyHash => {
-            AdminCmdEpochState::new(false, false, false, false, AdminCmdCheckBit::NONE)
+            AdminCmdEpochState::new(false, false, false, false, AdminCmdCheckBit::NORMAL)
         }
         // Change peer
         AdminCmdType::ChangePeer => {
@@ -285,13 +285,13 @@ pub fn admin_cmd_epoch_lookup(admin_cmp_type: AdminCmdType) -> AdminCmdEpochStat
         ),
         // Merge
         AdminCmdType::PrepareMerge => {
-            AdminCmdEpochState::new(true, true, true, true, AdminCmdCheckBit::NONE)
+            AdminCmdEpochState::new(true, true, true, true, AdminCmdCheckBit::NORMAL)
         }
         AdminCmdType::CommitMerge => {
-            AdminCmdEpochState::new(true, true, true, false, AdminCmdCheckBit::NONE)
+            AdminCmdEpochState::new(true, true, true, false, AdminCmdCheckBit::NORMAL)
         }
         AdminCmdType::RollbackMerge => {
-            AdminCmdEpochState::new(true, true, true, false, AdminCmdCheckBit::NONE)
+            AdminCmdEpochState::new(true, true, true, false, AdminCmdCheckBit::NORMAL)
         }
         // Transfer leader
         AdminCmdType::TransferLeader => {
@@ -302,13 +302,13 @@ pub fn admin_cmd_epoch_lookup(admin_cmp_type: AdminCmdType) -> AdminCmdEpochStat
         // NOTICE: FinishFlashback will never meet the epoch not match error since any scheduling
         // before it's forbidden.
         AdminCmdType::PrepareFlashback | AdminCmdType::FinishFlashback => {
-            AdminCmdEpochState::new(true, true, false, false, AdminCmdCheckBit::NONE)
+            AdminCmdEpochState::new(true, true, false, false, AdminCmdCheckBit::NORMAL)
         }
         AdminCmdType::BatchSwitchWitness => {
-            AdminCmdEpochState::new(false, true, false, true, AdminCmdCheckBit::NONE)
+            AdminCmdEpochState::new(false, true, false, true, AdminCmdCheckBit::NORMAL)
         }
         AdminCmdType::UpdateGcPeer => {
-            AdminCmdEpochState::new(false, false, false, false, AdminCmdCheckBit::NONE)
+            AdminCmdEpochState::new(false, false, false, false, AdminCmdCheckBit::NORMAL)
         }
     }
 }

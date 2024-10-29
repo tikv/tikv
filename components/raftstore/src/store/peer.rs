@@ -369,7 +369,7 @@ impl<S: Snapshot> CmdEpochChecker<S> {
             (
                 NORMAL_REQ_CHECK_VER,
                 NORMAL_REQ_CHECK_CONF_VER,
-                AdminCmdCheckBit::NONE,
+                AdminCmdCheckBit::NORMAL,
                 AdminCmdType::default(), // dummy value
             )
         } else {
