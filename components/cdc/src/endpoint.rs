@@ -176,7 +176,6 @@ pub enum Task {
     MultiBatch {
         multi: Vec<CmdBatch>,
         old_value_cb: OldValueCallback,
-        cancelled: Arc<AtomicBool>,
     },
     MinTs {
         regions: Vec<u64>,
@@ -991,15 +990,11 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         });
     }
 
-    pub fn on_multi_batch(&mut self, multi: Vec<CmdBatch>, old_value_cb: OldValueCallback, cancelled: Arc<AtomicBool>) {
+    pub fn on_multi_batch(&mut self, multi: Vec<CmdBatch>, old_value_cb: OldValueCallback) {
         fail_point!("cdc_before_handle_multi_batch", |_| {});
         CDC_SCHEDULER_PENDING_TASKS.with_label_values(&["multi_batch"]).dec();
         let size = multi.iter().map(|b| b.size()).sum();
         self.sink_memory_quota.free(size);
-        if cancelled.load(Ordering::Acquire) {
-            warn!("multi_batch task cancelled, just ignore");
-            return;
-        }
         let mut statistics = Statistics::default();
         for batch in multi {
             let region_id = batch.region_id;
@@ -1247,8 +1242,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
             Task::MultiBatch {
                 multi,
                 old_value_cb,
-                cancelled,
-            } => self.on_multi_batch(multi, old_value_cb, cancelled),
+            } => self.on_multi_batch(multi, old_value_cb),
             Task::OpenConn { conn } => self.on_open_conn(conn),
             Task::SetConnVersion {
                 conn_id,
@@ -1381,18 +1375,7 @@ impl CdcTxnExtraScheduler {
 impl TxnExtraScheduler for CdcTxnExtraScheduler {
     fn schedule(&self, txn_extra: TxnExtra) {
         let size = txn_extra.size();
-        if let Err(e) = self.memory_quota.alloc(size) {
-            error!("cdc allocate memory for txn extra failed"; "error" => ?e)
-            // let deregister = Deregister::Delegate {
-            //     region_id,
-            //     observe_id,
-            //     err: Error::MemoryQuotaExceeded(e),
-            // };
-            // if let Err(e) = self.scheduler.schedule(Task::Deregister(deregister)) {
-            //     error!("cdc schedule cdc task failed"; "error" => ?e)
-            // }
-        }
-        // let err self.memory_quota.alloc(size)
+        self.memory_quota.alloc_force(size);
         CDC_SCHEDULER_PENDING_TASKS.with_label_values(&["txn_extra"]).inc();
         if let Err(e) = self.scheduler.schedule(Task::TxnExtra(txn_extra)) {
             error!("cdc schedule txn extra failed"; "err" => ?e);
