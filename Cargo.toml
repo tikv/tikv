@@ -205,7 +205,7 @@ raft-proto = { git = "https://github.com/tikv/raft-rs", branch = "master" }
 protobuf = { git = "https://github.com/pingcap/rust-protobuf", branch = "v2.8" }
 protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", branch = "v2.8" }
 
-snappy-sys = { git = "https://github.com/busyjay/rust-snappy.git", branch = "static-link" }
+snappy-sys = { git = "https://github.com/tikv/rust-snappy.git", branch = "static-link" }
 # NOTICE: use openssl for signature to support fips 140
 tame-oauth = { git = "https://github.com/tikv/tame-oauth", branch = "fips-0.9" }
 
