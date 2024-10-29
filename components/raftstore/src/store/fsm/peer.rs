@@ -2688,6 +2688,14 @@ where
             return Ok(());
         }
 
+        // As this peer is already stable (initialized and has gotten HeartBeats from
+        // the leader), it's safe to clear the pending uncampaigned regions.
+        if MessageType::MsgHeartbeat == msg_type
+            && !self.fsm.peer.uncampaigned_new_regions.is_empty()
+        {
+            self.fsm.peer.uncampaigned_new_regions.clear();
+        }
+
         self.handle_reported_disk_usage(&msg);
 
         if matches!(self.ctx.self_disk_usage, DiskUsage::AlreadyFull)
@@ -4591,6 +4599,10 @@ where
                 .unwrap();
 
             if !campaigned {
+                // The new peer has not campaigned yet, record it for later campaign.
+                if !is_leader {
+                    self.fsm.peer.uncampaigned_new_regions.push(new_region_id);
+                }
                 if let Some(msg) = meta
                     .pending_msgs
                     .swap_remove_front(|m| m.get_to_peer() == &meta_peer)

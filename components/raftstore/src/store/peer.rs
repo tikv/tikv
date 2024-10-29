@@ -110,7 +110,7 @@ use crate::{
             CleanupTask, CompactTask, HeartbeatTask, RaftlogGcTask, ReadDelegate, ReadExecutor,
             ReadProgress, RegionTask, SplitCheckTask,
         },
-        Callback, Config, GlobalReplicationState, PdTask, ReadCallback, ReadIndexContext,
+        Callback, Config, GlobalReplicationState, PdTask, PeerMsg, ReadCallback, ReadIndexContext,
         ReadResponse, TxnExt, WriteCallback, RAFT_INIT_LOG_INDEX,
     },
     Error, Result,
@@ -925,6 +925,9 @@ where
     /// this peer has raft log gaps and whether should be marked busy on
     /// apply.
     pub last_leader_committed_idx: Option<u64>,
+
+    /// Used for recording the new created and uncampaigned regions by `Split`.
+    pub uncampaigned_new_regions: Vec<u64>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -1076,6 +1079,7 @@ where
             snapshot_recovery_state: None,
             busy_on_apply: Some(false),
             last_leader_committed_idx: None,
+            uncampaigned_new_regions: vec![],
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -2322,6 +2326,17 @@ where
                             "region_id" => self.region_id,
                         );
                     }
+                    // After the leadership changed, send `CasualMessage::Campaign` to the target
+                    // peer to campaign leader if there exists uncampaigned regions. It's used to
+                    // ensure there only one valid peer apply for campaign in the newly created raft
+                    // group to prevent unexpected behaviors in rare scenarios (e.g. #12410 and
+                    // #17602.),
+                    for new_region in self.uncampaigned_new_regions.drain(..) {
+                        let _ = ctx.router.send(
+                            new_region,
+                            PeerMsg::CasualMessage(Box::new(CasualMessage::Campaign)),
+                        );
+                    }
                 }
                 StateRole::Follower => {
                     self.leader_lease.expire();
@@ -2332,6 +2347,8 @@ where
                         let _ = self.get_store().clear_data();
                         self.delay_clean_data = false;
                     }
+                    // Clear the uncampaigned list.
+                    self.uncampaigned_new_regions.clear();
                 }
                 _ => {}
             }
