@@ -1,6 +1,7 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    fmt::Debug,
     sync::{atomic::Ordering, Arc},
     time::Duration,
 };
@@ -12,6 +13,7 @@ use engine_traits::{
     WriteBatchExt, WriteOptions, CF_DEFAULT,
 };
 use kvproto::metapb;
+use raftstore::store::fsm::apply::PRINTF_LOG;
 use smallvec::SmallVec;
 use tikv_util::{box_err, config::ReadableSize, error, info, time::Instant, warn};
 
@@ -183,6 +185,13 @@ impl RegionCacheWriteBatch {
         // record last region before flush.
         self.record_last_written_region();
 
+        if PRINTF_LOG.load(Ordering::Relaxed) {
+            info!(
+                "write impl";
+                "seq" => seq,
+            );
+        }
+
         fail::fail_point!("ime_on_region_cache_write_batch_write_impl");
         let guard = &epoch::pin();
         let start = Instant::now();
@@ -351,11 +360,23 @@ impl WriteBatchEntryInternal {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(crate) struct RegionCacheWriteBatchEntry {
     cf: usize,
     key: Bytes,
     inner: WriteBatchEntryInternal,
+}
+
+impl Debug for RegionCacheWriteBatchEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Region Cache Entry: Key {}, Value {:?}, CF {}",
+            log_wrappers::hex_encode_upper(&self.key),
+            self.inner,
+            self.cf,
+        )
+    }
 }
 
 impl RegionCacheWriteBatchEntry {
@@ -418,6 +439,14 @@ impl RegionCacheWriteBatchEntry {
         key.set_memory_controller(memory_controller.clone());
         value.set_memory_controller(memory_controller);
         handle.insert(key, value, guard);
+
+        if PRINTF_LOG.load(Ordering::Relaxed) {
+            info!(
+                "write to memory";
+                "entry" => ?self,
+                "seqno" => seq,
+            );
+        }
     }
 }
 

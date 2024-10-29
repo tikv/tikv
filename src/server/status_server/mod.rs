@@ -10,7 +10,7 @@ use std::{
     net::SocketAddr,
     pin::Pin,
     str::{self, FromStr},
-    sync::Arc,
+    sync::{atomic::Ordering, Arc},
     task::{Context, Poll},
     time::{Duration, Instant},
 };
@@ -45,6 +45,7 @@ use openssl::{
 use pin_project::pin_project;
 use profile::*;
 use prometheus::TEXT_FORMAT;
+use raftstore::store::fsm::apply::PRINTF_LOG;
 use regex::Regex;
 use resource_control::ResourceGroupManager;
 use security::{self, SecurityConfig};
@@ -739,6 +740,20 @@ where
                             }
                             (Method::PUT, "/resume_grpc") => {
                                 Self::handle_resume_grpc(grpc_service_mgr)
+                            }
+                            (Method::PUT, "/turn_on_print_log") => {
+                                PRINTF_LOG.store(true, Ordering::Relaxed);
+                                Ok(make_response(
+                                    StatusCode::OK,
+                                    "Successfully turn on printf log",
+                                ))
+                            }
+                            (Method::PUT, "/turn_off_print_log") => {
+                                PRINTF_LOG.store(false, Ordering::Relaxed);
+                                Ok(make_response(
+                                    StatusCode::OK,
+                                    "Successfully turn off printf log",
+                                ))
                             }
                             (Method::GET, "/async_tasks") => Self::dump_async_trace(),
                             (Method::GET, "debug/ime/cached_regions") => Self::handle_dumple_cached_regions(in_memory_engine.as_ref()),
