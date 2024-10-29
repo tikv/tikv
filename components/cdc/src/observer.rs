@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::{Arc, RwLock};
-
+use std::sync::atomic::{AtomicBool, Ordering};
 use collections::HashMap;
 use engine_traits::KvEngine;
 use fail::fail_point;
@@ -31,6 +31,8 @@ pub struct CdcObserver {
     observe_regions: Arc<RwLock<HashMap<u64, ObserveId>>>,
 
     memory_quota: Arc<MemoryQuota>,
+
+    cancelled: Arc<AtomicBool>,
 }
 
 impl CdcObserver {
@@ -43,6 +45,7 @@ impl CdcObserver {
             sched,
             observe_regions: Arc::default(),
             memory_quota,
+            cancelled: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -139,8 +142,10 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
         let task = Task::MultiBatch {
             multi: cmd_batches,
             old_value_cb: Box::new(get_old_value),
+            cancelled: self.cancelled.clone(),
         };
         if let Err(e) = self.memory_quota.alloc(size) {
+            self.cancelled.store(true, Ordering::Release);
             let deregister = Deregister::Delegate {
                 region_id,
                 observe_id,
