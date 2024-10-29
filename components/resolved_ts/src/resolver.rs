@@ -546,6 +546,8 @@ impl Resolver {
 
     // This may be inaccurate for large transactions. But it's just for monitoring
     // and diagnosis.
+    // The inaccuracy comes from untracking large txn locks, because we do not know
+    // the ts when untracking a lock.
     pub(crate) fn num_locks(&self) -> u64 {
         (self.locks_by_key.len()
             + self
