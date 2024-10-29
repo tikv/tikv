@@ -544,7 +544,8 @@ impl Resolver {
         }
     }
 
-    // This may be inaccurate for large transactions. But it's just for monitoring and diagnosis.
+    // This may be inaccurate for large transactions. But it's just for monitoring
+    // and diagnosis.
     pub(crate) fn num_locks(&self) -> u64 {
         (self.locks_by_key.len()
             + self
