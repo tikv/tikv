@@ -26,11 +26,10 @@ use crate::metrics::CDC_SCHEDULER_PENDING_TASKS;
 #[derive(Clone)]
 pub struct CdcObserver {
     sched: Scheduler<Task>,
+    memory_quota: Arc<MemoryQuota>,
     // A shared registry for managing observed regions.
     // TODO: it may become a bottleneck, find a better way to manage the registry.
     observe_regions: Arc<RwLock<HashMap<u64, ObserveId>>>,
-
-    memory_quota: Arc<MemoryQuota>,
 }
 
 impl CdcObserver {
@@ -41,8 +40,8 @@ impl CdcObserver {
     pub fn new(sched: Scheduler<Task>, memory_quota: Arc<MemoryQuota>) -> CdcObserver {
         CdcObserver {
             sched,
-            observe_regions: Arc::default(),
             memory_quota,
+            observe_regions: Arc::default(),
         }
     }
 
