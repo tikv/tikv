@@ -8,7 +8,6 @@ mod engine;
 mod engine_iterator;
 mod metrics;
 pub mod observer;
-mod region_cache_engine;
 mod snapshot;
 pub mod util;
 

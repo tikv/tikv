@@ -346,7 +346,8 @@ impl ServerCluster {
                 Box::new(router.clone()),
             );
             // Eviction observer
-            let observer = LoadEvictionObserver::new(Arc::new(in_memory_engine.clone()));
+            let observer =
+                LoadEvictionObserver::new(Arc::new(in_memory_engine.region_cache_engine().clone()));
             observer.register_to(&mut coprocessor_host);
             // Write batch observer
             let write_batch_observer =
