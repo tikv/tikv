@@ -31,8 +31,6 @@ pub struct CdcObserver {
     observe_regions: Arc<RwLock<HashMap<u64, ObserveId>>>,
 
     memory_quota: Arc<MemoryQuota>,
-
-    cancelled: Arc<AtomicBool>,
 }
 
 impl CdcObserver {
@@ -45,7 +43,6 @@ impl CdcObserver {
             sched,
             observe_regions: Arc::default(),
             memory_quota,
-            cancelled: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -136,30 +133,12 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
             old_value::get_old_value(&snapshot, key, query_ts, old_value_cache, statistics)
         };
 
-        let region_id = cmd_batches[0].region_id;
-        let observe_id = cmd_batches[0].cdc_id;
         let size = cmd_batches.iter().map(|b| b.size()).sum();
-        let task = Task::MultiBatch {
-            multi: cmd_batches,
-            old_value_cb: Box::new(get_old_value),
-            cancelled: self.cancelled.clone(),
-        };
-        if let Err(e) = self.memory_quota.alloc(size) {
-            self.cancelled.store(true, Ordering::Release);
-            let deregister = Deregister::Delegate {
-                region_id,
-                observe_id,
-                err: CdcError::MemoryQuotaExceeded(e),
-            };
-            CDC_SCHEDULER_PENDING_TASKS.with_label_values(&["deregister::delegate"]).inc();
-            if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
-                error!("cdc schedule cdc task failed"; "error" => ?e)
-            }
-            error!("cdc alloc memory for multi batch failed"; "in_use" => self.memory_quota.in_use())
-        }
-
+        self.memory_quota.alloc_force(size);
         CDC_SCHEDULER_PENDING_TASKS.with_label_values(&["multi_batch"]).inc();
-        if let Err(e) = self.sched.schedule(task) {
+        if let Err(e) = self.sched.schedule(Task::MultiBatch {
+            multi: cmd_batches,
+            old_value_cb: Box::new(get_old_value),        }) {
             warn!("cdc schedule task failed"; "error" => ?e);
         }
     }
