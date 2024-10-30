@@ -768,9 +768,9 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
         let pending_compaction_bytes = checker.long_term_pending_bytes.get_avg();
         let ignore = if let Some(before) = checker.pending_bytes_before_unsafe_destroy_range {
             // It assumes that the long term average will eventually come down below the
-                // soft limit. If the general traffic flow increases during destroy, the long
-                // term average may never come down and the flow control will be turned off for
-                // a long time, which would be a rather rare case, so just ignore it.
+            // soft limit. If the general traffic flow increases during destroy, the long
+            // term average may never come down and the flow control will be turned off for
+            // a long time, which would be a rather rare case, so just ignore it.
             if pending_compaction_bytes <= before && !self.wait_for_destroy_range_finish {
                 info!(
                     "pending compaction bytes is back to normal";
