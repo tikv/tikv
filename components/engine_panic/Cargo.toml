@@ -10,9 +10,9 @@ license = "Apache-2.0"
 testexport = []
 
 [dependencies]
-encryption = { workspace = true }
 engine_traits = { workspace = true }
 kvproto = { workspace = true }
+encryption = { workspace = true }
 raft = { workspace = true }
 tracker = { workspace = true }
 txn_types = { workspace = true }

@@ -12,6 +12,7 @@ use engine_traits::{
     WriteBatchExt, WriteOptions, CF_DEFAULT,
 };
 use kvproto::metapb;
+use smallvec::SmallVec;
 use tikv_util::{box_err, config::ReadableSize, error, info, time::Instant, warn};
 
 use crate::{
@@ -20,7 +21,7 @@ use crate::{
     keys::{encode_key, InternalBytes, ValueType, ENC_KEY_SEQ_LENGTH},
     memory_controller::{MemoryController, MemoryUsage},
     metrics::{
-        IN_MEMORY_ENGINE_PREPARE_FOR_WRITE_DURATION_HISTOGRAM,
+        count_operations_for_cfs, IN_MEMORY_ENGINE_PREPARE_FOR_WRITE_DURATION_HISTOGRAM,
         IN_MEMORY_ENGINE_WRITE_DURATION_HISTOGRAM,
     },
     region_manager::RegionCacheStatus,
@@ -67,6 +68,15 @@ pub struct RegionCacheWriteBatch {
 
     // record the total durations of the prepare work for write in the write batch
     prepare_for_write_duration: Duration,
+
+    // Now, we have an assumption that in one round of batch system process (PollHandler::begin ->
+    // ... -> PollHandler::end), although the same region can call `prepare_for_region`
+    // multiple times, it can only call sequentially. This is say, we will not have this:
+    // prepare_for_region(region1), prepare_for_region(region2), prepare_for_region(region1).
+    // In case to avoid this asssumption being broken, we record the regions that have called
+    // prepare_for_region and ensure that if the region is not the `currnet_region`, it is not
+    // recorded in this vec.
+    prepared_regions: SmallVec<[u64; 10]>,
 }
 
 impl std::fmt::Debug for RegionCacheWriteBatch {
@@ -92,6 +102,7 @@ impl From<&RegionCacheMemoryEngine> for RegionCacheWriteBatch {
             prepare_for_write_duration: Duration::default(),
             current_region: None,
             written_regions: vec![],
+            prepared_regions: SmallVec::new(),
         }
     }
 }
@@ -110,7 +121,39 @@ impl RegionCacheWriteBatch {
             prepare_for_write_duration: Duration::default(),
             current_region: None,
             written_regions: vec![],
+            prepared_regions: SmallVec::new(),
         }
+    }
+
+    pub fn prepare_for_region(&mut self, region: &metapb::Region) {
+        // If the region is already prepared for write, we do not need to prepare it
+        // again. See comments for the `prepared_regions` field for more details.
+        if let Some(current_region) = &self.current_region
+            && current_region.id == region.id
+        {
+            return;
+        }
+        let time = Instant::now();
+        // verify that the region is not prepared before
+        if self.prepared_regions.contains(&region.id) {
+            panic!(
+                "region {} is prepared for write before, but it is not the current region",
+                region.id
+            );
+        }
+        self.prepared_regions.push(region.id);
+        // record last region for clearing region in written flags.
+        self.record_last_written_region();
+
+        let cached_region = CacheRegion::from_region(region);
+        // TODO: remote range.
+        self.set_region_cache_status(
+            self.engine
+                .prepare_for_apply(&cached_region, region.is_in_flashback),
+        );
+        self.current_region = Some(cached_region);
+        self.current_region_evicted = false;
+        self.prepare_for_write_duration += time.saturating_elapsed();
     }
 
     /// Trigger a CleanLockTombstone task if the accumulated lock cf
@@ -171,25 +214,36 @@ impl RegionCacheWriteBatch {
         // record last region before flush.
         self.record_last_written_region();
 
-        fail::fail_point!("on_region_cache_write_batch_write_impl");
+        fail::fail_point!("ime_on_region_cache_write_batch_write_impl");
         let guard = &epoch::pin();
         let start = Instant::now();
         let mut lock_modification: u64 = 0;
         let engine = self.engine.core.engine();
+
+        // record the number of insertions and deletions for each cf
+        let mut put = [0, 0, 0];
+        let mut delete = [0, 0, 0];
         // Some entries whose ranges may be marked as evicted above, but it does not
         // matter, they will be deleted later.
         std::mem::take(&mut self.buffer).into_iter().for_each(|e| {
             if is_lock_cf(e.cf) {
                 lock_modification += e.data_size() as u64;
             }
+            if e.is_insertion() {
+                put[e.cf] += 1;
+            } else {
+                delete[e.cf] += 1;
+            }
+
             e.write_to_memory(seq, &engine, self.memory_controller.clone(), guard);
             seq += 1;
         });
         let duration = start.saturating_elapsed_secs();
         IN_MEMORY_ENGINE_WRITE_DURATION_HISTOGRAM.observe(duration);
+        count_operations_for_cfs(&put, &delete);
 
-        fail::fail_point!("in_memory_engine_write_batch_consumed");
-        fail::fail_point!("before_clear_ranges_in_being_written");
+        fail::fail_point!("ime_on_region_cache_write_batch_write_consumed");
+        fail::fail_point!("ime_before_clear_regions_in_being_written");
 
         if !self.written_regions.is_empty() {
             self.engine
@@ -234,14 +288,14 @@ impl RegionCacheWriteBatch {
 
         if !self.engine.enabled() {
             let region = self.current_region.as_ref().unwrap();
-            info!("ime range cache is disabled, evict the range"; "region" => ?region);
+            info!("ime is disabled, evict the range"; "region" => ?region);
             self.evict_current_region(EvictReason::Disabled);
             return;
         }
         let memory_expect = entry_size();
         if !self.memory_acquire(memory_expect) {
             let region = self.current_region.as_ref().unwrap();
-            info!("ime memory acquire failed due to reaching hard limit"; "region" => ?region);
+            info!("ime memory acquire failed due to reaches capacity"; "region" => ?region);
             self.evict_current_region(EvictReason::MemoryLimitReached);
             return;
         }
@@ -268,13 +322,13 @@ impl RegionCacheWriteBatch {
         }
     }
 
-    // return false means the memory usage reaches to hard limit and we have no
+    // return false means the memory usage reaches to capacity and we have no
     // quota to write to the engine
     fn memory_acquire(&mut self, mem_required: usize) -> bool {
         match self.memory_controller.acquire(mem_required) {
             MemoryUsage::CapacityReached(n) => {
                 warn!(
-                    "ime the memory usage of in-memory engine reaches to hard limit";
+                    "ime the memory usage reaches capacity";
                     "region" => ?self.current_region.as_ref().unwrap(),
                     "memory_usage(MB)" => ReadableSize(n as u64).as_mb_f64(),
                 );
@@ -336,6 +390,10 @@ pub(crate) struct RegionCacheWriteBatchEntry {
 }
 
 impl RegionCacheWriteBatchEntry {
+    pub fn is_insertion(&self) -> bool {
+        matches!(self.inner, WriteBatchEntryInternal::PutValue(_))
+    }
+
     pub fn put_value(cf: &str, key: &[u8], value: &[u8]) -> Self {
         Self {
             cf: cf_to_id(cf),
@@ -436,6 +494,23 @@ impl WriteBatch for RegionCacheWriteBatch {
     }
 
     fn clear(&mut self) {
+        // `current_region` is some means `write_impl` is not called, so we need to
+        // clear the `in_written` flag.
+        // This can happen when apply fsm do `commit`(e.g. after handling Msg::Change),
+        // and then do not handle other kvs. Thus, the write batch is empty,
+        // and `write_impl` is not called.
+        if self.current_region.is_some() {
+            self.record_last_written_region();
+            // region's `in_written` is not cleaned as `write_impl` is not called,
+            // so we should do it here.
+            if !self.written_regions.is_empty() {
+                self.engine
+                    .core
+                    .region_manager()
+                    .clear_regions_in_being_written(&self.written_regions);
+            }
+        }
+
         self.region_cache_status = RegionCacheStatus::NotInCache;
         self.buffer.clear();
         self.save_points.clear();
@@ -444,6 +519,7 @@ impl WriteBatch for RegionCacheWriteBatch {
         self.current_region = None;
         self.written_regions.clear();
         self.prepare_for_write_duration = Duration::ZERO;
+        self.prepared_regions.clear();
     }
 
     fn set_save_point(&mut self) {
@@ -469,22 +545,6 @@ impl WriteBatch for RegionCacheWriteBatch {
     fn merge(&mut self, mut other: Self) -> Result<()> {
         self.buffer.append(&mut other.buffer);
         Ok(())
-    }
-
-    fn prepare_for_region(&mut self, region: &metapb::Region) {
-        let time = Instant::now();
-        // record last region for clearing region in written flags.
-        self.record_last_written_region();
-
-        let cached_region = CacheRegion::from_region(region);
-        // TODO: remote range.
-        self.set_region_cache_status(
-            self.engine
-                .prepare_for_apply(&cached_region, region.is_in_flashback),
-        );
-        self.current_region = Some(cached_region);
-        self.current_region_evicted = false;
-        self.prepare_for_write_duration += time.saturating_elapsed();
     }
 }
 
@@ -908,20 +968,20 @@ mod tests {
             .snapshot(CacheRegion::from_region(&r1), 1000, 1000)
             .unwrap();
 
-        // disable the range cache
+        // disable the ime
         let mut config_manager = InMemoryEngineConfigManager(config.clone());
         let mut config_change = ConfigChange::new();
         config_change.insert(String::from("enable"), ConfigValue::Bool(false));
         config_manager.dispatch(config_change).unwrap();
 
         wb.write_impl(1000).unwrap();
-        // existing snapshot can still work after the range cache is disabled, but new
+        // existing snapshot can still work after the ime is disabled, but new
         // snapshot will fail to create
         assert!(snap1.get_value(b"zkk00").unwrap().is_none());
 
         let mut wb = RegionCacheWriteBatch::from(&engine);
+        // put should trigger the evict and it won't write into ime
         wb.prepare_for_region(&r1);
-        // put should trigger the evict and it won't write into range cache
         wb.put(b"zkk01", &val1).unwrap();
         wb.write_impl(1000).unwrap();
 
@@ -931,10 +991,10 @@ mod tests {
         let snap2 = engine
             .snapshot(CacheRegion::from_region(&r2), 1000, 1000)
             .unwrap();
-        // if no new write, the range cache can still be used.
+        // if no new write, the ime can still be used.
         assert_eq!(snap2.get_value(b"zkk11").unwrap().unwrap(), &val1);
 
-        // enable the range cache again
+        // enable the ime again
         let mut config_manager = InMemoryEngineConfigManager(config.clone());
         let mut config_change = ConfigChange::new();
         config_change.insert(String::from("enable"), ConfigValue::Bool(true));
@@ -986,5 +1046,30 @@ mod tests {
             let meta_by_range = regions_map.region_meta_by_end_key(&r_new.end).unwrap();
             assert_eq!(meta_by_range.get_region(), &r_new);
         }
+    }
+
+    #[test]
+    fn test_dirty_data_exist_when_prepare_for_region() {
+        let engine = RegionCacheMemoryEngine::new(InMemoryEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(InMemoryEngineConfig::config_for_test()),
+        )));
+        let r = new_region(1, b"", b"z");
+        let cache_region = CacheRegion::from_region(&r);
+        let mut wb = RegionCacheWriteBatch::from(&engine);
+        wb.prepare_for_region(&r);
+
+        engine
+            .core()
+            .region_manager()
+            .load_region(cache_region.clone())
+            .unwrap();
+        wb.prepare_for_region(&r);
+        wb.put(b"k1", b"val1").unwrap();
+        wb.put(b"k2", b"val2").unwrap();
+        wb.set_sequence_number(100).unwrap();
+
+        wb.write().unwrap();
+
+        assert!(engine.core().engine().data[0].is_empty());
     }
 }

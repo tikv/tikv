@@ -57,6 +57,7 @@ pub enum EvictReason {
     ApplySnapshot,
     Flashback,
     Manual,
+    PeerDestroy,
 }
 
 /// RegionCacheEngine works as a region cache caching some regions (in Memory or
@@ -92,13 +93,13 @@ pub trait RegionCacheEngine:
 }
 
 pub trait RegionCacheEngineExt {
-    // TODO(SpadeA): try to find a better way to reduce coupling degree of range
-    // cache engine and kv engine
+    // TODO(SpadeA): try to find a better way to reduce coupling degree of
+    // region cache engine and kv engine
     fn on_region_event(&self, event: RegionEvent);
 
-    fn region_cached(&self, range: &Region) -> bool;
+    fn region_cached(&self, region: &Region) -> bool;
 
-    fn load_region(&self, range: &Region);
+    fn load_region(&self, region: &Region);
 }
 
 /// A service that should run in the background to retrieve and apply cache

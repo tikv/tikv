@@ -227,10 +227,6 @@ impl ServerCluster {
         self.addrs.get(node_id).unwrap()
     }
 
-    pub fn get_apply_router(&self, node_id: u64) -> ApplyRouter<RocksEngine> {
-        self.metas.get(&node_id).unwrap().raw_apply_router.clone()
-    }
-
     pub fn get_server_router(&self, node_id: u64) -> SimulateStoreTransport {
         self.metas.get(&node_id).unwrap().sim_router.clone()
     }
@@ -350,7 +346,8 @@ impl ServerCluster {
                 Box::new(router.clone()),
             );
             // Eviction observer
-            let observer = LoadEvictionObserver::new(Arc::new(in_memory_engine.clone()));
+            let observer =
+                LoadEvictionObserver::new(Arc::new(in_memory_engine.region_cache_engine().clone()));
             observer.register_to(&mut coprocessor_host);
             // Write batch observer
             let write_batch_observer =
@@ -888,6 +885,10 @@ impl Simulator for ServerCluster {
     fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RaftTestEngine>> {
         self.metas.get(&node_id).map(|m| m.raw_router.clone())
     }
+
+    fn get_apply_router(&self, node_id: u64) -> Option<ApplyRouter<RocksEngine>> {
+        self.metas.get(&node_id).map(|m| m.raw_apply_router.clone())
+    }
 }
 
 impl Cluster<ServerCluster> {
@@ -953,10 +954,7 @@ pub fn new_server_cluster(id: u64, count: usize) -> Cluster<ServerCluster> {
     Cluster::new(id, count, sim, pd_client, ApiVersion::V1)
 }
 
-pub fn new_server_cluster_with_hybrid_engine_with_no_region_cache(
-    id: u64,
-    count: usize,
-) -> Cluster<ServerCluster> {
+pub fn new_server_cluster_with_hybrid_engine(id: u64, count: usize) -> Cluster<ServerCluster> {
     let pd_client = Arc::new(TestPdClient::new(id, false));
     let sim = Arc::new(RwLock::new(ServerCluster::new(Arc::clone(&pd_client))));
     let mut cluster = Cluster::new(id, count, sim, pd_client, ApiVersion::V1);

@@ -541,10 +541,9 @@ pub trait SnapshotExt {
         None
     }
 
-    /// Whether the snapshot acquired hit the cached range in the range cache
-    /// engine. It always returns false if the range cahce engine is not
-    /// enabled.
-    fn region_cache_engine_hit(&self) -> bool {
+    /// Whether the snapshot acquired hit the in memory engine. It always
+    /// returns false if the in memory engine is disabled.
+    fn in_memory_engine_hit(&self) -> bool {
         false
     }
 }

@@ -23,23 +23,30 @@ impl RegionCacheWriteBatchObserver {
             .registry
             .register_write_batch_observer(BoxWriteBatchObserver::new(self.clone()));
     }
+
+    pub(crate) fn new_observable_write_batch(&self) -> HybridObservableWriteBatch {
+        HybridObservableWriteBatch {
+            cache_write_batch: RegionCacheWriteBatch::from(&self.cache_engine),
+        }
+    }
 }
 
 impl Coprocessor for RegionCacheWriteBatchObserver {}
 
 impl WriteBatchObserver for RegionCacheWriteBatchObserver {
     fn create_observable_write_batch(&self) -> Box<dyn ObservableWriteBatch> {
-        Box::new(HybridObservableWriteBatch {
-            cache_write_batch: RegionCacheWriteBatch::from(&self.cache_engine),
-        })
+        Box::new(self.new_observable_write_batch())
     }
 }
 
-struct HybridObservableWriteBatch {
-    cache_write_batch: RegionCacheWriteBatch,
+pub(crate) struct HybridObservableWriteBatch {
+    pub(crate) cache_write_batch: RegionCacheWriteBatch,
 }
 
 impl ObservableWriteBatch for HybridObservableWriteBatch {
+    fn prepare_for_region(&mut self, region: &metapb::Region) {
+        self.cache_write_batch.prepare_for_region(region);
+    }
     fn write_opt_seq(&mut self, opts: &WriteOptions, seq_num: u64) {
         self.cache_write_batch.set_sequence_number(seq_num).unwrap();
         self.cache_write_batch.write_opt(opts).unwrap();
@@ -62,16 +69,16 @@ impl WriteBatch for HybridObservableWriteBatch {
     fn write(&mut self) -> Result<u64> {
         unimplemented!("write")
     }
-    fn write_opt(&mut self, opts: &WriteOptions) -> Result<u64> {
+    fn write_opt(&mut self, _: &WriteOptions) -> Result<u64> {
         unimplemented!("write_opt")
     }
-    fn write_callback_opt(&mut self, opts: &WriteOptions, cb: impl FnMut(u64)) -> Result<u64>
+    fn write_callback_opt(&mut self, _: &WriteOptions, _: impl FnMut(u64)) -> Result<u64>
     where
         Self: Sized,
     {
         unimplemented!("write_callback_opt")
     }
-    fn merge(&mut self, other: Self) -> Result<()>
+    fn merge(&mut self, _: Self) -> Result<()>
     where
         Self: Sized,
     {
@@ -102,9 +109,6 @@ impl WriteBatch for HybridObservableWriteBatch {
     fn rollback_to_save_point(&mut self) -> Result<()> {
         self.cache_write_batch.rollback_to_save_point()
     }
-    fn prepare_for_region(&mut self, region: &metapb::Region) {
-        self.cache_write_batch.prepare_for_region(region);
-    }
 }
 
 impl Mutable for HybridObservableWriteBatch {
@@ -124,12 +128,12 @@ impl Mutable for HybridObservableWriteBatch {
         self.cache_write_batch.delete_cf(cf, key)
     }
     fn delete_range(&mut self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
-        // delete_range in range cache engine means eviction -- all ranges overlapped
+        // delete_range in in memory engine means eviction -- all ranges overlapped
         // with [begin_key, end_key] will be evicted.
         self.cache_write_batch.delete_range(begin_key, end_key)
     }
     fn delete_range_cf(&mut self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
-        // delete_range in range cache engine means eviction -- all ranges overlapped
+        // delete_range in in memory engine means eviction -- all ranges overlapped
         // with [begin_key, end_key] will be evicted.
         self.cache_write_batch
             .delete_range_cf(cf, begin_key, end_key)

@@ -361,7 +361,6 @@ impl RegionCacheMemoryEngine {
         region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
         raft_casual_router: Option<Box<dyn CasualRouter<RocksEngine>>>,
     ) -> Self {
-        info!("ime init region cache memory engine");
         let core = Arc::new(RegionCacheMemoryEngineCore::new());
         let skiplist_engine = core.engine().clone();
 
@@ -402,6 +401,13 @@ impl RegionCacheMemoryEngine {
         self.core.region_manager().load_region(cache_region)
     }
 
+    // Used for benchmark.
+    pub fn must_set_region_state(&self, id: u64, state: RegionState) {
+        let mut regions_map = self.core.region_manager().regions_map().write();
+        let meta = regions_map.mut_region_meta(id).unwrap();
+        meta.set_state(state);
+    }
+
     /// Evict a region from the in-memory engine. After this call, the region
     /// will not be readable, but the data of the region may not be deleted
     /// immediately due to some ongoing snapshots.
@@ -411,15 +417,15 @@ impl RegionCacheMemoryEngine {
         evict_reason: EvictReason,
         cb: Option<Box<dyn AsyncFnOnce + Send + Sync>>,
     ) {
-        let deleteable_regions = self
+        let deletable_regions = self
             .core
             .region_manager
             .evict_region(region, evict_reason, cb);
-        if !deleteable_regions.is_empty() {
+        if !deletable_regions.is_empty() {
             // The region can be deleted directly.
             if let Err(e) = self
                 .bg_worker_manager()
-                .schedule_task(BackgroundTask::DeleteRegions(deleteable_regions))
+                .schedule_task(BackgroundTask::DeleteRegions(deletable_regions))
             {
                 error!(
                     "ime schedule delete region failed";
@@ -559,7 +565,7 @@ impl RegionCacheEngineExt for RegionCacheMemoryEngine {
                         .overlap_with_manual_load_range(&region)
                     {
                         info!(
-                            "try to load region in manual load range";
+                            "ime try to load region in manual load range";
                             "region" => ?region,
                         );
                         if let Err(e) = self.load_region(region.clone()) {

@@ -137,7 +137,7 @@ impl Iterable for RegionCacheSnapshot {
             || upper_bound > self.snapshot_meta.region.end
         {
             return Err(Error::Other(box_err!(
-                "the bounderies required [{}, {}] exceeds the range of the snapshot [{}, {}]",
+                "the boundaries required [{}, {}] exceeds the range of the snapshot [{}, {}]",
                 log_wrappers::Value(&lower_bound),
                 log_wrappers::Value(&upper_bound),
                 log_wrappers::Value(&self.snapshot_meta.region.start),
@@ -177,7 +177,6 @@ impl Peekable for RegionCacheSnapshot {
         cf: &str,
         key: &[u8],
     ) -> Result<Option<Self::DbVector>> {
-        fail::fail_point!("on_region_cache_get_value");
         if !self.snapshot_meta.region.contains_key(key) {
             return Err(Error::Other(box_err!(
                 "key {} not in range[{}, {}]",
@@ -532,7 +531,7 @@ impl Iterator for RegionCacheIterator {
     }
 
     fn seek(&mut self, key: &[u8]) -> Result<bool> {
-        fail::fail_point!("on_region_cache_iterator_seek");
+        fail::fail_point!("ime_on_iterator_seek");
         let begin = Instant::now();
         self.direction = Direction::Forward;
         if let Some(ref mut extractor) = self.prefix_extractor {
