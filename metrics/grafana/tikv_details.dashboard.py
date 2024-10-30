@@ -4503,6 +4503,10 @@ def InMemoryEngine() -> RowPanel:
                     ),
                 ],
             ),
+        ]
+    )
+    layout.row(
+        [
             graph_panel(
                 title="GC Filter",
                 description="Rang cache engine garbage collection information",
@@ -4746,6 +4750,10 @@ def InMemoryEngine() -> RowPanel:
                     ),
                 ],
             ),
+        ]
+    )
+    layout.row(
+        [
             graph_panel(
                 title="Auto GC SafePoint Gap",
                 description="The gap between newest auto gc safe point and oldest auto gc safe point of regions cached in the in-memroy engine",
