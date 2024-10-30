@@ -423,6 +423,18 @@ lazy_static! {
         exponential_buckets(5e-5, 2.0, 22).unwrap() // 50us ~ 104s
     )
     .unwrap();
+    pub static ref RAFT_MESSAGE_SEND_WAIT_DURATION: Histogram = register_histogram!(
+        "tikv_server_raft_message_send_wait_duration_seconds",
+        "Duration of wait for sending raft messages.",
+        exponential_buckets(0.00001, 2.0, 26).unwrap()
+    )
+    .unwrap();
+    pub static ref RAFT_MESSAGE_SEND_DURATION: Histogram = register_histogram!(
+        "tikv_server_raft_message_send_duration_seconds",
+        "Duration of sending raft messages.",
+        exponential_buckets(0.00001, 2.0, 26).unwrap()
+    )
+    .unwrap();
     pub static ref RAFT_MESSAGE_FLUSH_COUNTER: RaftMessageFlushCounterVec =
         register_static_int_counter_vec!(
             RaftMessageFlushCounterVec,

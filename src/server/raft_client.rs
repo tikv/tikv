@@ -11,7 +11,7 @@ use std::{
         atomic::{AtomicI32, AtomicU8, Ordering},
         Arc, Mutex,
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use collections::{HashMap, HashSet};
@@ -40,7 +40,7 @@ use tikv_kv::RaftExtension;
 use tikv_util::{
     config::{Tracker, VersionTrack},
     lru::LruCache,
-    time::duration_to_sec,
+    time::{duration_to_sec, nanos_to_secs},
     timer::GLOBAL_TIMER_HANDLE,
     worker::Scheduler,
 };
@@ -285,7 +285,19 @@ impl Buffer for BatchMessageBuffer {
 
     #[inline]
     fn flush(&mut self, sender: &mut ClientCStreamSender<BatchRaftMessage>) -> grpcio::Result<()> {
-        let batch = mem::take(&mut self.batch);
+        let mut batch = mem::take(&mut self.batch);
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64;
+        for msg in batch.msgs.iter_mut() {
+            assert!(now > msg.last_observed_time);
+            let elapsed = nanos_to_secs(now.saturating_sub(msg.last_observed_time));
+            RAFT_MESSAGE_SEND_WAIT_DURATION.observe(elapsed);
+        }
+        batch.last_observed_time = now;
+
         let res = Pin::new(sender).start_send((
             batch,
             WriteFlags::default().buffer_hint(self.overflowing.is_some()),
@@ -1054,7 +1066,11 @@ where
     /// If the message fails to be sent, false is returned. Returning true means
     /// the message is enqueued to buffer. Caller is expected to call `flush` to
     /// ensure all buffered messages are sent out.
-    pub fn send(&mut self, msg: RaftMessage) -> result::Result<(), DiscardReason> {
+    pub fn send(&mut self, mut msg: RaftMessage) -> result::Result<(), DiscardReason> {
+        msg.last_observed_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64;
         let store_id = msg.get_to_peer().store_id;
         let grpc_raft_conn_num = self.builder.cfg.value().grpc_raft_conn_num as u64;
         let conn_id = if grpc_raft_conn_num == 1 {

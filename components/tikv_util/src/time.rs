@@ -17,6 +17,11 @@ use std::{
 use async_speed_limit::clock::{BlockingClock, Clock, StandardClock};
 use time::{Duration as TimeDuration, Timespec};
 
+/// Returns the monotonic raw time since some unspecified starting point.
+pub use self::inner::monotonic_raw_now;
+pub use self::inner::{monotonic_coarse_now, monotonic_now};
+use crate::sys::thread::StdThreadBuildWrapper;
+
 /// Converts Duration to milliseconds.
 #[inline]
 pub fn duration_to_ms(d: Duration) -> u64 {
@@ -30,6 +35,10 @@ pub fn duration_to_ms(d: Duration) -> u64 {
 pub fn duration_to_sec(d: Duration) -> f64 {
     let nanos = f64::from(d.subsec_nanos());
     d.as_secs() as f64 + (nanos / 1_000_000_000.0)
+}
+
+pub fn nanos_to_secs(nanos: u64) -> f64 {
+    nanos as f64 / 1_000_000_000.0
 }
 
 /// Converts Duration to microseconds.
@@ -202,11 +211,6 @@ impl Drop for Monitor {
         }
     }
 }
-
-/// Returns the monotonic raw time since some unspecified starting point.
-pub use self::inner::monotonic_raw_now;
-pub use self::inner::{monotonic_coarse_now, monotonic_now};
-use crate::sys::thread::StdThreadBuildWrapper;
 
 const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
 const MILLISECOND_PER_SECOND: i64 = 1_000;
