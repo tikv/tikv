@@ -19,6 +19,8 @@ mod cross_check;
 mod engine;
 mod keys;
 mod memory_controller;
+#[cfg(test)]
+mod memory_usage_test;
 mod metrics;
 mod perf_context;
 #[cfg(test)]
