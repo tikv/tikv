@@ -6,6 +6,7 @@ use tikv_util::keybuilder::KeyBuilder;
 #[derive(Clone)]
 pub struct ReadOptions {
     fill_cache: bool,
+    ignore_range_deletions: bool,
 }
 
 impl ReadOptions {
@@ -22,11 +23,19 @@ impl ReadOptions {
     pub fn set_fill_cache(&mut self, v: bool) {
         self.fill_cache = v;
     }
+
+    #[inline]
+    pub fn ignore_range_deletions(&self) -> bool {
+        self.ignore_range_deletions
+    }
 }
 
 impl Default for ReadOptions {
     fn default() -> ReadOptions {
-        ReadOptions { fill_cache: true }
+        ReadOptions {
+            fill_cache: true,
+            ignore_range_deletions: true,
+        }
     }
 }
 
@@ -95,6 +104,7 @@ pub struct IterOptions {
     // never fail a request as incomplete, even on skipping too many keys.
     // It's used to avoid encountering too many tombstones when seeking.
     max_skippable_internal_keys: u64,
+    ignore_range_deletions: bool,
 }
 
 impl IterOptions {
@@ -113,6 +123,7 @@ impl IterOptions {
             key_only: false,
             seek_mode: SeekMode::TotalOrder,
             max_skippable_internal_keys: 0,
+            ignore_range_deletions: true,
         }
     }
 
@@ -247,6 +258,10 @@ impl IterOptions {
     pub fn set_max_skippable_internal_keys(&mut self, threshold: u64) {
         self.max_skippable_internal_keys = threshold;
     }
+
+    pub fn ignore_range_deletions(&self) -> bool {
+        self.ignore_range_deletions
+    }
 }
 
 impl Default for IterOptions {
@@ -261,6 +276,7 @@ impl Default for IterOptions {
             key_only: false,
             seek_mode: SeekMode::TotalOrder,
             max_skippable_internal_keys: 0,
+            ignore_range_deletions: true,
         }
     }
 }
