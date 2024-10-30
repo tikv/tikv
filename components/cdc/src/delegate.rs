@@ -578,7 +578,6 @@ impl Delegate {
         request_id: u64,
         entries: Vec<Option<KvEntry>>,
         filter_loop: bool,
-        observed_range: &ObservedRange,
     ) -> Result<Vec<CdcEvent>> {
         let entries_len = entries.len();
         let mut rows = vec![Vec::with_capacity(entries_len)];
@@ -596,9 +595,6 @@ impl Delegate {
                     lock,
                     old_value,
                 })) => {
-                    if !observed_range.contains_encoded_key(&lock.0) {
-                        continue;
-                    }
                     let l = Lock::parse(&lock.1).unwrap();
                     if decode_lock(lock.0, l, &mut row, &mut _has_value) {
                         continue;
@@ -612,9 +608,6 @@ impl Delegate {
                     write,
                     old_value,
                 })) => {
-                    if !observed_range.contains_encoded_key(&write.0) {
-                        continue;
-                    }
                     if decode_write(write.0, &write.1, &mut row, &mut _has_value, false) {
                         continue;
                     }
