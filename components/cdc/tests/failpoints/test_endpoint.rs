@@ -9,12 +9,16 @@ use std::{
 use api_version::{test_kv_format_impl, KvFormat};
 use causal_ts::CausalTsProvider;
 use cdc::{recv_timeout, Delegate, OldValueCache, Task, Validate};
+use engine_traits::{
+    IterOptions, Iterable, Iterator, MiscExt, Mutable, WriteBatch, WriteBatchExt, WriteOptions,
+    CF_DEFAULT, CF_WRITE,
+};
 use futures::{executor::block_on, sink::SinkExt};
 use grpcio::{ChannelBuilder, Environment, WriteFlags};
 use kvproto::{cdcpb::*, kvrpcpb::*, tikvpb_grpc::TikvClient};
 use pd_client::PdClient;
 use test_raftstore::*;
-use tikv_util::{debug, worker::Scheduler, HandyRwLock};
+use tikv_util::{debug, keybuilder::KeyBuilder, worker::Scheduler, HandyRwLock};
 use txn_types::{Key, TimeStamp};
 
 use crate::{new_event_feed, new_event_feed_v2, ClientReceiver, TestSuite, TestSuiteBuilder};
@@ -655,4 +659,93 @@ fn test_delegate_fail_during_incremental_scan() {
     let mut recver = recv.replace(None).unwrap();
     recv_timeout(&mut recver, Duration::from_secs(1)).unwrap_err();
     recv.replace(Some(recver));
+}
+
+#[test]
+fn test_cdc_load_unnecessary_old_value() {
+    let mut suite = TestSuite::new(1, ApiVersion::V1);
+    let region = suite.cluster.get_region(&[]);
+    let rid = region.id;
+    let engine = suite.cluster.get_engine(1);
+
+    let start_tso = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    let pk = format!("key_{:05}", 0).into_bytes();
+    let mut mutations = Vec::with_capacity(1000);
+    let mut keys = Vec::with_capacity(1000);
+    for i in 0..1000 {
+        let key = format!("key_{:05}", i).into_bytes();
+        keys.push(key.clone());
+
+        let mut mutation = Mutation::default();
+        mutation.set_op(Op::Put);
+        mutation.key = key;
+        mutation.value = vec![b'x'; 16];
+        mutations.push(mutation);
+    }
+    suite.must_kv_prewrite(rid, mutations, pk, start_tso);
+
+    let commit_tso = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    suite.must_kv_commit(rid, keys, start_tso, commit_tso);
+    engine.flush_cf(CF_WRITE, true).unwrap();
+
+    for cf in &[CF_WRITE, CF_DEFAULT] {
+        let mut wb = suite.cluster.get_engine(1).write_batch();
+        let mut count = 0;
+
+        let start = KeyBuilder::from_vec(vec![b'z'], 0, 0);
+        let end = KeyBuilder::from_vec(vec![b'z' + 1], 0, 0);
+        let iter_opts = IterOptions::new(Some(start), Some(end), false);
+        let mut iter = engine.iterator_opt(cf, iter_opts).unwrap();
+        let mut valid = iter.seek_to_first().unwrap();
+
+        // skip some keys.
+        while valid && count < 2 {
+            count += 1;
+            valid = iter.next().unwrap();
+        }
+        while valid {
+            count += 1;
+            let key = iter.key();
+            wb.delete_cf(cf, key).unwrap();
+            valid = iter.next().unwrap();
+        }
+        assert!(count == 0 || count == 1000);
+        wb.write_opt(&WriteOptions::default()).unwrap();
+        engine.flush_cf(cf, true).unwrap();
+    }
+
+    let scheduler = suite.endpoints.values().next().unwrap().scheduler();
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    scheduler
+        .schedule(Task::Validate(Validate::InitializeStats(Box::new(
+            move |stats| tx.send(stats).unwrap(),
+        ))))
+        .unwrap();
+
+    fail::cfg("ts_filter_is_helpful_always_true", "return(0)").unwrap();
+    let (mut req_tx, _, receive_event) = new_event_feed_v2(suite.get_region_cdc_client(rid));
+    let mut req = suite.new_changedata_request(rid);
+    req.request_id = 100;
+    req.checkpoint_ts = commit_tso.into_inner() - 1;
+    req.set_start_key(Key::from_raw(b"aa").into_encoded());
+    req.set_end_key(Key::from_raw(b"ab").into_encoded());
+    block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
+
+    let events = receive_event(false).events.to_vec();
+    assert_eq!(events.len(), 1, "{:?}", events);
+    match events[0].event.as_ref().unwrap() {
+        Event_oneof_event::Entries(es) => {
+            assert!(es.entries.len() == 1);
+            assert_eq!(es.entries[0].get_type(), EventLogType::Initialized);
+        }
+        _ => unreachable!(),
+    }
+
+    let stats = rx.recv().unwrap().old_value.write;
+    assert_eq!(stats.seek_tombstone, 0);
+    assert_eq!(stats.next_tombstone, 0);
+    assert_eq!(stats.prev_tombstone, 0);
+
+    fail::remove("ts_filter_is_helpful_always_true");
+    suite.stop();
 }
