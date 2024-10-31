@@ -260,17 +260,27 @@ pub fn get_tag_from_thread_name() -> Option<String> {
 /// Invokes the wrapped closure when dropped.
 pub struct DeferContext<T: FnOnce()> {
     t: Option<T>,
+    is_canceled: bool,
 }
 
 impl<T: FnOnce()> DeferContext<T> {
     pub fn new(t: T) -> DeferContext<T> {
-        DeferContext { t: Some(t) }
+        DeferContext {
+            t: Some(t),
+            is_canceled: false,
+        }
+    }
+
+    pub fn cancel(&mut self) {
+        self.is_canceled = true;
     }
 }
 
 impl<T: FnOnce()> Drop for DeferContext<T> {
     fn drop(&mut self) {
-        self.t.take().unwrap()()
+        if !self.is_canceled {
+            self.t.take().unwrap()()
+        }
     }
 }
 

@@ -70,10 +70,9 @@ pub use self::{
     region_snapshot::{RegionIterator, RegionSnapshot},
     replication_mode::{GlobalReplicationState, StoreGroup},
     snap::{
-        check_abort, copy_snapshot,
-        snap_io::{apply_sst_cf_file, build_sst_cf_file_list},
-        ApplyOptions, CfFile, Error as SnapError, SnapEntry, SnapKey, SnapManager,
-        SnapManagerBuilder, Snapshot, SnapshotStatistics, TabletSnapKey, TabletSnapManager,
+        check_abort, copy_snapshot, snap_io::apply_sst_cf_file, ApplyOptions, CfFile,
+        Error as SnapError, SnapKey, SnapManager, SnapManagerBuilder, Snapshot, TabletSnapKey,
+        TabletSnapManager,
     },
     snapshot_backup::SnapshotBrWaitApplySyncer,
     transport::{CasualRouter, ProposalRouter, SignificantRouter, StoreRouter, Transport},

@@ -34,7 +34,7 @@ use kvproto::{
     tikvpb::TikvClient,
 };
 use protobuf::Message;
-use raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
+use raftstore::store::{SnapKey, SnapManager, Snapshot};
 use security::SecurityManager;
 use tikv_kv::RaftExtension;
 use tikv_util::{
@@ -108,7 +108,7 @@ impl Display for Task {
 
 struct SnapChunk {
     first: Option<SnapshotChunk>,
-    snap: Box<Snapshot>,
+    snap: Arc<Snapshot>,
     remain_bytes: usize,
 }
 
@@ -128,7 +128,8 @@ impl Stream for SnapChunk {
             n if n > SNAP_CHUNK_LEN => vec![0; SNAP_CHUNK_LEN],
             n => vec![0; n],
         };
-        let result = self.snap.read_exact(buf.as_mut_slice());
+        let _with_io_type = WithIoType::new(IoType::Export);
+        let result = self.snap.as_ref().read_exact(buf.as_mut_slice());
         match result {
             Ok(_) => {
                 self.remain_bytes -= buf.len();
@@ -176,10 +177,9 @@ pub fn send_snap(
         (key, snap_start, generate_duration_sec)
     };
 
-    mgr.register(key.clone(), SnapEntry::Sending);
     let deregister = {
         let (mgr, key) = (mgr.clone(), key.clone());
-        DeferContext::new(move || mgr.deregister(&key, &SnapEntry::Sending))
+        DeferContext::new(move || mgr.deregister(&key))
     };
 
     let s = box_try!(mgr.get_snapshot_for_sending(&key));
@@ -252,7 +252,7 @@ pub fn send_snap(
         drop(client);
 
         fail_point!("snapshot_delete_after_send");
-        mgr.delete_snapshot(&key, &chunks.snap, true);
+        mgr.delete_snapshot(&key, &chunks.snap);
         match recv_result {
             Ok(_) => {
                 let cost = UnixSecs::now().into_inner().saturating_sub(snap_start);
@@ -285,7 +285,7 @@ pub fn send_snap(
 
 struct RecvSnapContext {
     key: SnapKey,
-    file: Option<Box<Snapshot>>,
+    snap: Option<Arc<Snapshot>>,
     raft_msg: RaftMessage,
     io_type: IoType,
     start: Instant,
@@ -332,7 +332,7 @@ impl RecvSnapContext {
 
         Ok(RecvSnapContext {
             key,
-            file: snap,
+            snap,
             raft_msg: meta,
             io_type,
             start: Instant::now(),
@@ -342,7 +342,7 @@ impl RecvSnapContext {
     fn finish<R: RaftExtension>(self, raft_router: R) -> Result<()> {
         let _with_io_type = WithIoType::new(self.io_type);
         let key = self.key;
-        if let Some(mut file) = self.file {
+        if let Some(mut file) = self.snap {
             info!("saving snapshot file"; "snap_key" => %key, "file" => file.path());
             if let Err(e) = file.save() {
                 let path = file.path();
@@ -365,32 +365,30 @@ fn recv_snap<R: RaftExtension + 'static>(
     let recv_task = async move {
         let mut stream = stream.map_err(Error::from);
         let head = stream.next().await.transpose()?;
-        let mut context = RecvSnapContext::new(head, &snap_mgr)?;
-        if context.file.is_none() {
-            return context.finish(raft_router);
-        }
+        let context = RecvSnapContext::new(head, &snap_mgr)?;
         let context_key = context.key.clone();
-        let total_size = context.file.as_ref().unwrap().total_size();
+        let Some(snap) = context.snap.as_ref() else {
+            return context.finish(raft_router);
+        };
+        let mut deregister = DeferContext::new(|| snap_mgr.deregister(&context_key));
+        let total_size = snap.total_size();
         SNAP_LIMIT_TRANSPORT_BYTES_COUNTER_STATIC
             .recv
             .inc_by(total_size);
-        snap_mgr.register(context.key.clone(), SnapEntry::Receiving);
-        defer!(snap_mgr.deregister(&context_key, &SnapEntry::Receiving));
         while let Some(item) = stream.next().await {
             fail_point!("receiving_snapshot_callback");
             fail_point!("receiving_snapshot_net_error", |_| {
-                Err(box_err!("{} failed to receive snapshot", context_key))
+                Err(box_err!("{} failed to receive snapshot", context.key))
             });
             let mut chunk = item?;
             let data = chunk.take_data();
             if data.is_empty() {
                 return Err(box_err!("{} receive chunk with empty data", context.key));
             }
-            let f = context.file.as_mut().unwrap();
-            let _with_io_type = WithIoType::new(context.io_type);
-            if let Err(e) = Write::write_all(&mut *f, &data) {
+            let _with_io_type = WithIoType::new(IoType::Import);
+            if let Err(e) = Write::write_all(&mut snap.as_ref(), &data) {
                 let key = &context.key;
-                let path = context.file.as_mut().unwrap().path();
+                let path = snap.path();
                 let e = box_err!("{} failed to write snapshot file {}: {}", key, path, e);
                 return Err(e);
             }
@@ -398,7 +396,9 @@ fn recv_snap<R: RaftExtension + 'static>(
         // Notify the snapshot manager that a snapshot has been received,
         // freeing up the associated resource in the concurrency limiter.
         snap_mgr.recv_snap_complete(context.raft_msg.region_id);
-        context.finish(raft_router)
+        context.finish(raft_router)?;
+        deregister.cancel();
+        Ok(())
     };
     async move {
         match recv_task.await {

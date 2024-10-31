@@ -2,7 +2,6 @@
 use std::{
     cell::RefCell,
     fs,
-    fs::{File, OpenOptions},
     io::{self, BufReader, Read, Write},
     sync::Arc,
     usize,
@@ -14,6 +13,7 @@ use engine_traits::{
     SstWriter, SstWriterBuilder, WriteBatch,
 };
 use fail::fail_point;
+use file_system::{File, OpenOptions};
 use kvproto::encryptionpb::EncryptionMethod;
 use tikv_util::{
     box_try,
@@ -27,213 +27,6 @@ use super::{CfFile, Error, IO_LIMITER_CHUNK_SIZE};
 /// Used to check a procedure is stale or not.
 pub trait StaleDetector {
     fn is_stale(&self) -> bool;
-}
-
-#[derive(Clone, Copy, Default)]
-pub struct BuildStatistics {
-    pub key_count: usize,
-    pub total_size: usize,
-}
-
-/// Build a snapshot file for the given column family in plain format.
-/// If there are no key-value pairs fetched, no files will be created at `path`,
-/// otherwise the file will be created and synchronized.
-pub fn build_plain_cf_file<E>(
-    cf_file: &mut CfFile,
-    key_mgr: Option<&Arc<DataKeyManager>>,
-    snap: &E::Snapshot,
-    start_key: &[u8],
-    end_key: &[u8],
-) -> Result<BuildStatistics, Error>
-where
-    E: KvEngine,
-{
-    let cf = cf_file.cf;
-    let path = cf_file.path.join(cf_file.gen_tmp_file_name(0));
-    let path = path.to_str().unwrap();
-    let mut file = Some(box_try!(
-        OpenOptions::new().write(true).create_new(true).open(path)
-    ));
-    let mut encrypted_file: Option<EncrypterWriter<File>> = None;
-    let mut should_encrypt = false;
-
-    if let Some(key_mgr) = key_mgr {
-        let enc_info = box_try!(key_mgr.new_file(path));
-        let mthd = enc_info.method;
-        if mthd != EncryptionMethod::Plaintext {
-            let writer = box_try!(EncrypterWriter::new(
-                file.take().unwrap(),
-                mthd,
-                &enc_info.key,
-                box_try!(Iv::from_slice(&enc_info.iv)),
-            ));
-            encrypted_file = Some(writer);
-            should_encrypt = true;
-        }
-    }
-
-    let mut writer = if !should_encrypt {
-        file.as_mut().unwrap() as &mut dyn Write
-    } else {
-        encrypted_file.as_mut().unwrap() as &mut dyn Write
-    };
-
-    let mut stats = BuildStatistics::default();
-    box_try!(snap.scan(cf, start_key, end_key, false, |key, value| {
-        stats.key_count += 1;
-        stats.total_size += key.len() + value.len();
-        box_try!(BytesEncoder::encode_compact_bytes(&mut writer, key));
-        box_try!(BytesEncoder::encode_compact_bytes(&mut writer, value));
-        Ok(true)
-    }));
-
-    if stats.key_count > 0 {
-        cf_file.add_file(0);
-        box_try!(BytesEncoder::encode_compact_bytes(&mut writer, b""));
-        let file = if !should_encrypt {
-            file.unwrap()
-        } else {
-            encrypted_file.unwrap().finalize().unwrap()
-        };
-        box_try!(file.sync_all());
-    } else {
-        drop(file);
-        box_try!(fs::remove_file(path));
-    }
-
-    Ok(stats)
-}
-
-/// Build a snapshot file for the given column family in sst format.
-/// If there are no key-value pairs fetched, no files will be created at `path`,
-/// otherwise the file will be created and synchronized.
-pub fn build_sst_cf_file_list<E>(
-    cf_file: &mut CfFile,
-    engine: &E,
-    snap: &E::Snapshot,
-    start_key: &[u8],
-    end_key: &[u8],
-    raw_size_per_file: u64,
-    io_limiter: &Limiter,
-    key_mgr: Option<Arc<DataKeyManager>>,
-) -> Result<BuildStatistics, Error>
-where
-    E: KvEngine,
-{
-    let cf = cf_file.cf;
-    let mut stats = BuildStatistics::default();
-    let mut remained_quota = 0;
-    let mut file_id: usize = 0;
-    let mut path = cf_file
-        .path
-        .join(cf_file.gen_tmp_file_name(file_id))
-        .to_str()
-        .unwrap()
-        .to_string();
-    let sst_writer = RefCell::new(create_sst_file_writer::<E>(engine, cf, &path)?);
-    let mut file_length: usize = 0;
-
-    let finish_sst_writer = |sst_writer: E::SstWriter,
-                             path: String,
-                             key_mgr: Option<Arc<DataKeyManager>>|
-     -> Result<(), Error> {
-        sst_writer.finish()?;
-        (|| {
-            fail_point!("inject_sst_file_corruption", |_| {
-                static CALLED: std::sync::atomic::AtomicBool =
-                    std::sync::atomic::AtomicBool::new(false);
-                if CALLED
-                    .compare_exchange(
-                        false,
-                        true,
-                        std::sync::atomic::Ordering::SeqCst,
-                        std::sync::atomic::Ordering::SeqCst,
-                    )
-                    .is_err()
-                {
-                    return;
-                }
-                // overwrite the file to break checksum
-                let mut f = OpenOptions::new().write(true).open(&path).unwrap();
-                f.write_all(b"x").unwrap();
-            });
-        })();
-
-        let sst_reader = E::SstReader::open(&path, key_mgr)?;
-        if let Err(e) = sst_reader.verify_checksum() {
-            // use sst reader to verify block checksum, it would detect corrupted SST due to
-            // memory bit-flip
-            fs::remove_file(&path)?;
-            error!(
-                "failed to pass block checksum verification";
-                "file" => path,
-                "err" => ?e,
-            );
-            return Err(io::Error::new(io::ErrorKind::InvalidData, e).into());
-        }
-        File::open(&path).and_then(|f| f.sync_all())?;
-        Ok(())
-    };
-
-    let instant = Instant::now();
-    box_try!(snap.scan(cf, start_key, end_key, false, |key, value| {
-        let entry_len = key.len() + value.len();
-        if file_length + entry_len > raw_size_per_file as usize {
-            cf_file.add_file(file_id); // add previous file
-            file_length = 0;
-            file_id += 1;
-            let prev_path = path.clone();
-            path = cf_file
-                .path
-                .join(cf_file.gen_tmp_file_name(file_id))
-                .to_str()
-                .unwrap()
-                .to_string();
-            let result = create_sst_file_writer::<E>(engine, cf, &path);
-            match result {
-                Ok(new_sst_writer) => {
-                    let old_writer = sst_writer.replace(new_sst_writer);
-                    box_try!(finish_sst_writer(old_writer, prev_path, key_mgr.clone()));
-                }
-                Err(e) => {
-                    let io_error = io::Error::new(io::ErrorKind::Other, e);
-                    return Err(io_error.into());
-                }
-            }
-        }
-
-        while entry_len > remained_quota {
-            // It's possible to acquire more than necessary, but let it be.
-            io_limiter.blocking_consume(IO_LIMITER_CHUNK_SIZE);
-            remained_quota += IO_LIMITER_CHUNK_SIZE;
-        }
-        remained_quota -= entry_len;
-
-        stats.key_count += 1;
-        stats.total_size += entry_len;
-        if let Err(e) = sst_writer.borrow_mut().put(key, value) {
-            let io_error = io::Error::new(io::ErrorKind::Other, e);
-            return Err(io_error.into());
-        }
-        file_length += entry_len;
-        Ok(true)
-    }));
-    if stats.key_count > 0 {
-        box_try!(finish_sst_writer(sst_writer.into_inner(), path, key_mgr));
-        cf_file.add_file(file_id);
-        info!(
-            "build_sst_cf_file_list builds {} files in cf {}. Total keys {}, total size {}. raw_size_per_file {}, total takes {:?}",
-            file_id + 1,
-            cf,
-            stats.key_count,
-            stats.total_size,
-            raw_size_per_file,
-            instant.saturating_elapsed(),
-        );
-    } else {
-        box_try!(fs::remove_file(path));
-    }
-    Ok(stats)
 }
 
 /// Apply the given snapshot file into a column family. `callback` will be
@@ -307,18 +100,6 @@ where
     }
     box_try!(db.ingest_external_file_cf(cf, files));
     Ok(())
-}
-
-fn create_sst_file_writer<E>(engine: &E, cf: CfName, path: &str) -> Result<E::SstWriter, Error>
-where
-    E: KvEngine,
-{
-    let builder = E::SstWriterBuilder::new()
-        .set_db(engine)
-        .set_cf(cf)
-        .set_compression_type(Some(SstCompressionType::Zstd));
-    let writer = box_try!(builder.build(path));
-    Ok(writer)
 }
 
 // TODO: Use DataKeyManager::open_file_for_read() instead.

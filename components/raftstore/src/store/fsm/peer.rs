@@ -1340,11 +1340,10 @@ where
     }
 
     fn on_gc_snap(&mut self, snaps: Vec<(SnapKey, bool)>) {
-        let schedule_delete_snapshot_files = |key: SnapKey, snap| {
+        let schedule_delete_snapshot_files = |key: SnapKey| {
             if let Err(e) = self.ctx.cleanup_scheduler.schedule(CleanupTask::GcSnapshot(
                 GcSnapshotTask::DeleteSnapshotFiles {
                     key: key.clone(),
-                    snapshot: snap,
                     check_entry: false,
                 },
             )) {
@@ -1362,18 +1361,6 @@ where
         let compacted_term = s.truncated_term();
         for (key, is_sending) in snaps {
             if is_sending {
-                let s = match self.ctx.snap_mgr.get_snapshot_for_gc(&key, is_sending) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        error!(%e;
-                            "failed to load snapshot";
-                            "region_id" => self.fsm.region_id(),
-                            "peer_id" => self.fsm.peer_id(),
-                            "snapshot" => ?key,
-                        );
-                        continue;
-                    }
-                };
                 if key.term < compacted_term || key.idx < compacted_idx {
                     info!(
                         "deleting compacted snap file";
@@ -1381,8 +1368,8 @@ where
                         "peer_id" => self.fsm.peer_id(),
                         "snap_file" => %key,
                     );
-                    schedule_delete_snapshot_files(key, s);
-                } else if let Ok(meta) = s.meta() {
+                    schedule_delete_snapshot_files(key);
+                } else if let Ok(meta) = self.ctx.snap_mgr.get_snapshot_meta(&key) {
                     let modified = match meta.modified() {
                         Ok(m) => m,
                         Err(e) => {
@@ -1404,7 +1391,7 @@ where
                                 "peer_id" => self.fsm.peer_id(),
                                 "snap_file" => %key,
                             );
-                            schedule_delete_snapshot_files(key, s);
+                            schedule_delete_snapshot_files(key);
                         }
                     }
                 }
@@ -1420,19 +1407,7 @@ where
                     "peer_id" => self.fsm.peer_id(),
                     "snap_file" => %key,
                 );
-                let a = match self.ctx.snap_mgr.get_snapshot_for_gc(&key, is_sending) {
-                    Ok(a) => a,
-                    Err(e) => {
-                        error!(%e;
-                            "failed to load snapshot";
-                            "region_id" => self.fsm.region_id(),
-                            "peer_id" => self.fsm.peer_id(),
-                            "snap_file" => %key,
-                        );
-                        continue;
-                    }
-                };
-                schedule_delete_snapshot_files(key, a);
+                schedule_delete_snapshot_files(key);
             }
         }
     }
@@ -2710,11 +2685,9 @@ where
                     // delete them here. If the snapshot file will be reused when
                     // receiving, then it will fail to pass the check again, so
                     // missing snapshot files should not be noticed.
-                    let snap = self.ctx.snap_mgr.get_snapshot_for_gc(&key, false)?;
                     if let Err(e) = self.ctx.cleanup_scheduler.schedule(CleanupTask::GcSnapshot(
                         GcSnapshotTask::DeleteSnapshotFiles {
                             key: key.clone(),
-                            snapshot: snap,
                             check_entry: false,
                         },
                     )) {
@@ -3342,7 +3315,7 @@ where
             // No need to get snapshot for witness, as witness's empty snapshot bypass
             // snapshot manager.
             let key = SnapKey::from_region_snap(region_id, snap);
-            self.ctx.snap_mgr.meta_file_exist(&key)?;
+            self.ctx.snap_mgr.has_registered(&key);
             Some(key)
         } else {
             None
