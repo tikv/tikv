@@ -4543,7 +4543,7 @@ def InMemoryEngine() -> RowPanel:
                 yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
                 targets=[
                     target(
-                        expr=expr_sum_rate(
+                        expr=expr_sum_delta(
                             "tikv_in_memory_engine_load_duration_secs_count",
                             by_labels=["instance"],
                         ),
@@ -4567,7 +4567,7 @@ def InMemoryEngine() -> RowPanel:
                 yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
                 targets=[
                     target(
-                        expr=expr_sum_rate(
+                        expr=expr_sum_delta(
                             "tikv_in_memory_engine_eviction_duration_secs_count",
                             by_labels=["type"],
                         ),

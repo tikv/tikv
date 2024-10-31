@@ -86,6 +86,11 @@ impl MemoryController {
     }
 
     #[inline]
+    pub(crate) fn stop_load_threshold(&self) -> usize {
+        self.config.value().stop_load_threshold()
+    }
+
+    #[inline]
     pub(crate) fn reached_stop_load_threshold(&self) -> bool {
         self.mem_usage() >= self.config.value().stop_load_threshold()
     }

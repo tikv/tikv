@@ -698,6 +698,9 @@ impl BackgroundRunnerCore {
             }
         };
         if !region_stats_manager.ready_for_auto_load_and_evict() {
+            info!(
+                "ime skip check load&evict because the duration from last load&evict check is too short."
+            );
             return;
         }
 
@@ -760,7 +763,7 @@ impl BackgroundRunnerCore {
         if !self.memory_controller.reached_stop_load_threshold() {
             let expected_new_count = self
                 .memory_controller
-                .evict_threshold()
+                .stop_load_threshold()
                 .saturating_sub(self.memory_controller.mem_usage())
                 / region_stats_manager.expected_region_size();
             let expected_new_count = usize::max(expected_new_count, 1);
