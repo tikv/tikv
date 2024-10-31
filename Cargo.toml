@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "8.4.0-alpha"
+version = "8.5.0-alpha"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -35,7 +35,6 @@ testexport = [
   "engine_traits/testexport",
   "engine_rocks/testexport",
   "engine_panic/testexport",
-  "hybrid_engine/testexport",
   "encryption/testexport",
 ]
 test-engine-kv-rocksdb = ["engine_test/test-engine-kv-rocksdb"]
@@ -189,6 +188,7 @@ yatp = { workspace = true }
 [dev-dependencies]
 api_version = { workspace = true, features = ["testexport"] }
 engine_test = { workspace = true }
+example_coprocessor_plugin = { workspace = true }                              # must, used for testing coprocessor plugin
 hyper-openssl = "0.9"
 panic_hook = { workspace = true }
 raftstore = { workspace = true, features = ["testexport"] }
@@ -317,9 +317,25 @@ members = [
 default-members = ["cmd/tikv-server", "cmd/tikv-ctl"]
 
 [workspace.metadata.cargo-machete]
-ignored = ["slog", "slog-global", "serde", "prometheus", "slog_derive", "strum", "error_code", "fuzz-targets", "libfuzzer-sys"]
+ignored = [
+  "slog",
+  "slog-global",
+  "serde",
+  "prometheus",
+  "slog_derive",
+  "strum",
+  "error_code",
+  "fuzz-targets",
+  "libfuzzer-sys",
+]
 [package.metadata.cargo-machete]
-ignored = ["encryption", "engine_panic", "hybrid_engine", "hyper-tls", "match-template"]
+ignored = [
+  "encryption",
+  "engine_panic",
+  "hybrid_engine",
+  "hyper-tls",
+  "match-template",
+]
 
 [workspace.dependencies]
 api_version = { path = "components/api_version" }

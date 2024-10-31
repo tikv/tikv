@@ -2663,21 +2663,25 @@ where
                 && !is_initialized_peer
                 && msg_type == target_msg_type
         };
+        #[cfg(feature = "failpoints")]
         fail_point!(
             "on_snap_msg_1000_2",
             fp_enable(MessageType::MsgSnapshot),
             |_| Ok(())
         );
+        #[cfg(feature = "failpoints")]
         fail_point!(
             "on_vote_msg_1000_2",
             fp_enable(MessageType::MsgRequestVote),
             |_| Ok(())
         );
+        #[cfg(feature = "failpoints")]
         fail_point!(
             "on_append_msg_1000_2",
             fp_enable(MessageType::MsgAppend),
             |_| Ok(())
         );
+        #[cfg(feature = "failpoints")]
         fail_point!(
             "on_heartbeat_msg_1000_2",
             fp_enable(MessageType::MsgHeartbeat),
@@ -3952,6 +3956,7 @@ where
 
     // [PerformanceCriticalPath] TODO: spin off the I/O code (self.fsm.peer.destroy)
     fn destroy_peer(&mut self, merged_by_target: bool) -> bool {
+        self.ctx.coprocessor_host.on_destroy_peer(self.region());
         fail_point!("destroy_peer");
         // Mark itself as pending_remove
         self.fsm.peer.pending_remove = true;

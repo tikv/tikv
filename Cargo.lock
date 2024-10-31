@@ -1234,6 +1234,7 @@ name = "crossbeam-skiplist"
 version = "0.1.3"
 dependencies = [
  "crossbeam-epoch",
+ "crossbeam-skiplist 0.1.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "crossbeam-utils",
 ]
 
@@ -2462,6 +2463,7 @@ dependencies = [
  "engine_traits",
  "fail",
  "in_memory_engine",
+ "keys",
  "kvproto",
  "lazy_static",
  "online_config",
@@ -2561,6 +2563,7 @@ version = "0.0.1"
 dependencies = [
  "bytes",
  "collections",
+ "criterion",
  "crossbeam",
  "crossbeam-skiplist 0.1.3",
  "dashmap",
@@ -2587,6 +2590,7 @@ dependencies = [
  "serde_json",
  "slog",
  "slog-global",
+ "smallvec",
  "strum 0.20.0",
  "tempfile",
  "test_pd",
@@ -2879,7 +2883,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#78b26b39bc179a0358ad0e5611b9d9934edabefd"
+source = "git+https://github.com/tikv/rust-rocksdb.git#2bb1e4e32b9e45cf3fd8210766a9db38eacd5e4d"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -2898,7 +2902,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#78b26b39bc179a0358ad0e5611b9d9934edabefd"
+source = "git+https://github.com/tikv/rust-rocksdb.git#2bb1e4e32b9e45cf3fd8210766a9db38eacd5e4d"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4700,7 +4704,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#78b26b39bc179a0358ad0e5611b9d9934edabefd"
+source = "git+https://github.com/tikv/rust-rocksdb.git#2bb1e4e32b9e45cf3fd8210766a9db38eacd5e4d"
 dependencies = [
  "libc 0.2.151",
  "librocksdb_sys",
@@ -6282,7 +6286,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "8.4.0-alpha"
+version = "8.5.0-alpha"
 dependencies = [
  "anyhow",
  "api_version",
@@ -6306,6 +6310,7 @@ dependencies = [
  "engine_test",
  "engine_traits",
  "error_code",
+ "example_coprocessor_plugin",
  "fail",
  "file_system",
  "flate2",

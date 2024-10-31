@@ -39,7 +39,9 @@ use raftstore::{coprocessor::RegionInfoProvider, store::CasualRouter};
 use security::SecurityManager;
 use tikv::{
     config::{ConfigController, DbConfigManger, DbType, TikvConfig},
-    server::{status_server::StatusServer, DEFAULT_CLUSTER_ID},
+    server::{
+        gc_worker::compaction_filter::GC_CONTEXT, status_server::StatusServer, DEFAULT_CLUSTER_ID,
+    },
 };
 use tikv_util::{
     config::{ensure_dir_exist, RaftDataStateMachine},
@@ -565,19 +567,19 @@ impl EnginesResourceInfo {
         }
 
         let mut normalized_pending_bytes = 0;
-        for (i, (pending, limit)) in compaction_pending_bytes
+        for (i, (pending, evict_threshold)) in compaction_pending_bytes
             .iter()
             .zip(soft_pending_compaction_bytes_limit)
             .enumerate()
         {
-            if limit > 0 {
+            if evict_threshold > 0 {
                 normalized_pending_bytes = cmp::max(
                     normalized_pending_bytes,
-                    (*pending * EnginesResourceInfo::SCALE_FACTOR / limit) as u32,
+                    (*pending * EnginesResourceInfo::SCALE_FACTOR / evict_threshold) as u32,
                 );
                 let base = self.base_max_compactions[i];
                 if base > 0 {
-                    let level = *pending as f32 / limit as f32;
+                    let level = *pending as f32 / evict_threshold as f32;
                     // 50% -> 1, 70% -> 2, 85% -> 3, 95% -> 6, 98% -> 1024.
                     let delta1 = if level > 0.98 {
                         1024
@@ -611,7 +613,7 @@ impl EnginesResourceInfo {
                             "cf" => cf,
                             "n" => base + delta,
                             "pending_bytes" => *pending,
-                            "soft_limit" => limit,
+                            "evict_threshold" => evict_threshold,
                             "level0_ratio" => level0_ratio[i],
                         );
                     }
@@ -717,7 +719,14 @@ pub fn build_hybrid_engine(
         )
     }
 
-    memory_engine.start_cross_check(disk_engine.clone(), region_cache_engine_context.pd_client());
+    memory_engine.start_cross_check(
+        disk_engine.clone(),
+        region_cache_engine_context.pd_client(),
+        Box::new(|| {
+            let ctx = GC_CONTEXT.lock().unwrap();
+            ctx.as_ref().map(|ctx| ctx.safe_point())
+        }),
+    );
 
     HybridEngine::new(disk_engine, memory_engine)
 }

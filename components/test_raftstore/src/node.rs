@@ -26,7 +26,7 @@ use raftstore::{
     router::{LocalReadRouter, RaftStoreRouter, ReadContext, ServerRaftStoreRouter},
     store::{
         config::RaftstoreConfigManager,
-        fsm::{store::StoreMeta, RaftBatchSystem, RaftRouter},
+        fsm::{store::StoreMeta, ApplyRouter, RaftBatchSystem, RaftRouter},
         SnapManagerBuilder, *,
     },
     Result,
@@ -515,6 +515,10 @@ impl Simulator for NodeCluster {
 
     fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RaftTestEngine>> {
         self.nodes.get(&node_id).map(|node| node.get_router())
+    }
+
+    fn get_apply_router(&self, node_id: u64) -> Option<ApplyRouter<RocksEngine>> {
+        self.nodes.get(&node_id).map(|node| node.get_apply_router())
     }
 }
 

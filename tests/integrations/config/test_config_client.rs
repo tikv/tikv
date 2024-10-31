@@ -11,7 +11,7 @@ use std::{
 use online_config::{ConfigChange, OnlineConfig};
 use raftstore::store::Config as RaftstoreConfig;
 use tikv::config::*;
-use tikv_util::config::{ReadableOffsetTime, ReadableSchedule, ReadableSize};
+use tikv_util::config::{ReadableOffsetTime, ReadableSchedule};
 
 fn change(name: &str, value: &str) -> HashMap<String, String> {
     let mut m = HashMap::new();
@@ -54,35 +54,6 @@ fn test_update_config() {
         .update(change("raftstore.raft-log-gc-threshold", "2000"))
         .unwrap();
     cfg.raft_store.raft_log_gc_threshold = 2000;
-    assert_eq!(cfg_controller.get_current(), cfg);
-
-    let mut in_memory_engine_config_change = HashMap::new();
-    in_memory_engine_config_change.insert("in_memory_engine.enabled".to_owned(), "true".to_owned());
-    in_memory_engine_config_change.insert(
-        "in_memory_engine.stop-load-limit-threshold".to_owned(),
-        "8GB".to_owned(),
-    );
-    in_memory_engine_config_change.insert(
-        "in_memory_engine.soft-limit-threshold".to_owned(),
-        "10GB".to_owned(),
-    );
-    in_memory_engine_config_change.insert(
-        "in_memory_engine.hard-limit-threshold".to_owned(),
-        "15GB".to_owned(),
-    );
-    cfg_controller
-        .update(in_memory_engine_config_change)
-        .unwrap();
-    cfg.in_memory_engine.enabled = true;
-    cfg.in_memory_engine.stop_load_limit_threshold = Some(ReadableSize::gb(8));
-    cfg.in_memory_engine.soft_limit_threshold = Some(ReadableSize::gb(10));
-    cfg.in_memory_engine.hard_limit_threshold = Some(ReadableSize::gb(15));
-    assert_eq!(cfg_controller.get_current(), cfg);
-
-    cfg_controller
-        .update(change("in_memory_engine.soft-limit-threshold", "11GB"))
-        .unwrap();
-    cfg.in_memory_engine.soft_limit_threshold = Some(ReadableSize::gb(11));
     assert_eq!(cfg_controller.get_current(), cfg);
 
     // update not support config
@@ -159,12 +130,12 @@ fn test_write_update_to_file() {
 block-cache-size = "10GB"
 
 [rocksdb.lockcf]
-## this config will not update even it has the same last 
+## this config will not update even it has the same last
 ## name as `rocksdb.defaultcf.block-cache-size`
 block-cache-size = "512MB"
 
 [coprocessor]
-## the update to `coprocessor.region-split-keys`, which do not show up 
+## the update to `coprocessor.region-split-keys`, which do not show up
 ## as key-value pair after [coprocessor], will be written at the end of [coprocessor]
 
 [gc]
@@ -221,12 +192,12 @@ pd-heartbeat-tick-interval = "1h"
 block-cache-size = "1GB"
 
 [rocksdb.lockcf]
-## this config will not update even it has the same last 
+## this config will not update even it has the same last
 ## name as `rocksdb.defaultcf.block-cache-size`
 block-cache-size = "512MB"
 
 [coprocessor]
-## the update to `coprocessor.region-split-keys`, which do not show up 
+## the update to `coprocessor.region-split-keys`, which do not show up
 ## as key-value pair after [coprocessor], will be written at the end of [coprocessor]
 
 region-split-keys = 10000

@@ -1,16 +1,6 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{
-    CacheRegion, FailedReason, KvEngine, Mutable, Peekable, ReadOptions, RegionCacheEngine, Result,
-    SnapshotContext, SnapshotMiscExt, SyncMutable, WriteBatch, WriteBatchExt,
-};
-
-use crate::{
-    metrics::{
-        IN_MEMORY_ENGINE_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC, SNAPSHOT_TYPE_COUNT_STATIC,
-    },
-    snapshot::HybridEngineSnapshot,
-};
+use engine_traits::{KvEngine, RegionCacheEngine};
 
 /// This engine is structured with both a disk engine and an region cache
 /// engine. The disk engine houses the complete database data, whereas the
@@ -24,65 +14,9 @@ where
     EK: KvEngine,
     EC: RegionCacheEngine,
 {
+    #[allow(dead_code)]
     disk_engine: EK,
     region_cache_engine: EC,
-}
-
-impl<EK, EC> HybridEngine<EK, EC>
-where
-    EK: KvEngine,
-    EC: RegionCacheEngine,
-{
-    pub fn disk_engine(&self) -> &EK {
-        &self.disk_engine
-    }
-
-    pub fn mut_disk_engine(&mut self) -> &mut EK {
-        &mut self.disk_engine
-    }
-
-    pub fn region_cache_engine(&self) -> &EC {
-        &self.region_cache_engine
-    }
-
-    pub fn mut_region_cache_engine(&mut self) -> &mut EC {
-        &mut self.region_cache_engine
-    }
-}
-
-pub fn new_in_memory_snapshot<EC: RegionCacheEngine>(
-    region_cache_engine: &EC,
-    region: CacheRegion,
-    read_ts: u64,
-    sequence_number: u64,
-) -> Option<EC::Snapshot> {
-    match region_cache_engine.snapshot(region, read_ts, sequence_number) {
-        Ok(snap) => {
-            SNAPSHOT_TYPE_COUNT_STATIC.region_cache_engine.inc();
-            Some(snap)
-        }
-        Err(FailedReason::TooOldRead) => {
-            IN_MEMORY_ENGINE_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
-                .too_old_read
-                .inc();
-            SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
-            None
-        }
-        Err(FailedReason::NotCached) => {
-            IN_MEMORY_ENGINE_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
-                .not_cached
-                .inc();
-            SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
-            None
-        }
-        Err(FailedReason::EpochNotMatch) => {
-            IN_MEMORY_ENGINE_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
-                .epoch_not_match
-                .inc();
-            SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
-            None
-        }
-    }
 }
 
 impl<EK, EC> HybridEngine<EK, EC>
@@ -97,140 +31,61 @@ where
         }
     }
 
-    pub fn new_snapshot(&self, ctx: Option<SnapshotContext>) -> HybridEngineSnapshot<EK, EC> {
+    #[cfg(test)]
+    pub(crate) fn new_snapshot(
+        &self,
+        ctx: Option<SnapshotContext>,
+    ) -> crate::HybridEngineSnapshot<EK, EC> {
+        use engine_traits::SnapshotMiscExt;
         let disk_snap = self.disk_engine.snapshot();
         let region_cache_snap = if !self.region_cache_engine.enabled() {
             None
         } else if let Some(ctx) = ctx {
-            new_in_memory_snapshot(
-                &self.region_cache_engine,
-                ctx.region.unwrap(),
-                ctx.read_ts,
-                disk_snap.sequence_number(),
-            )
+            self.region_cache_engine
+                .snapshot(
+                    ctx.region.unwrap(),
+                    ctx.read_ts,
+                    disk_snap.sequence_number(),
+                )
+                .ok()
         } else {
             None
         };
-        HybridEngineSnapshot::new(disk_snap, region_cache_snap)
-    }
-}
-
-impl<EK, EC> HybridEngine<EK, EC>
-where
-    EK: KvEngine,
-    EC: RegionCacheEngine,
-    HybridEngine<EK, EC>: WriteBatchExt,
-{
-    fn sync_write<F>(&self, key: &[u8], f: F) -> Result<()>
-    where
-        F: FnOnce(&mut <Self as WriteBatchExt>::WriteBatch) -> Result<()>,
-    {
-        let mut batch = self.write_batch();
-        if let Some(region) = self.region_cache_engine.get_region_for_key(key) {
-            batch.prepare_for_region(region);
-        }
-        f(&mut batch)?;
-        let _ = batch.write()?;
-        Ok(())
-    }
-}
-
-// todo: implement KvEngine methods as well as it's super traits.
-impl<EK, EC> KvEngine for HybridEngine<EK, EC>
-where
-    EK: KvEngine,
-    EC: RegionCacheEngine,
-    HybridEngine<EK, EC>: WriteBatchExt,
-{
-    type Snapshot = HybridEngineSnapshot<EK, EC>;
-
-    fn snapshot(&self) -> Self::Snapshot {
-        unreachable!()
+        crate::HybridEngineSnapshot::new(disk_snap, region_cache_snap)
     }
 
-    fn sync(&self) -> engine_traits::Result<()> {
-        self.disk_engine.sync()
+    #[cfg(test)]
+    pub(crate) fn disk_engine(&self) -> &EK {
+        &self.disk_engine
     }
 
-    fn bad_downcast<T: 'static>(&self) -> &T {
-        self.disk_engine.bad_downcast()
-    }
-
-    #[cfg(feature = "testexport")]
-    fn inner_refcount(&self) -> usize {
-        self.disk_engine.inner_refcount()
-    }
-}
-
-impl<EK, EC> Peekable for HybridEngine<EK, EC>
-where
-    EK: KvEngine,
-    EC: RegionCacheEngine,
-{
-    type DbVector = EK::DbVector;
-
-    // region cache engine only supports peekable trait in the snapshot of it
-    fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<Self::DbVector>> {
-        self.disk_engine.get_value_opt(opts, key)
-    }
-
-    // region cache engine only supports peekable trait in the snapshot of it
-    fn get_value_cf_opt(
-        &self,
-        opts: &ReadOptions,
-        cf: &str,
-        key: &[u8],
-    ) -> Result<Option<Self::DbVector>> {
-        self.disk_engine.get_value_cf_opt(opts, cf, key)
-    }
-}
-
-impl<EK, EC> SyncMutable for HybridEngine<EK, EC>
-where
-    EK: KvEngine,
-    EC: RegionCacheEngine,
-    HybridEngine<EK, EC>: WriteBatchExt,
-{
-    fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
-        self.sync_write(key, |b| b.put(key, value))
-    }
-
-    fn put_cf(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
-        self.sync_write(key, |b| b.put_cf(cf, key, value))
-    }
-
-    fn delete(&self, key: &[u8]) -> Result<()> {
-        self.sync_write(key, |b| b.delete(key))
-    }
-
-    fn delete_cf(&self, cf: &str, key: &[u8]) -> Result<()> {
-        self.sync_write(key, |b| b.delete_cf(cf, key))
-    }
-
-    fn delete_range(&self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
-        self.sync_write(begin_key, |b| b.delete_range(begin_key, end_key))
-    }
-
-    fn delete_range_cf(&self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
-        self.sync_write(begin_key, |b| b.delete_range_cf(cf, begin_key, end_key))
+    pub fn region_cache_engine(&self) -> &EC {
+        &self.region_cache_engine
     }
 }
 
 #[cfg(test)]
-mod tests {
+#[derive(Debug, Clone)]
+pub struct SnapshotContext {
+    pub region: Option<engine_traits::CacheRegion>,
+    pub read_ts: u64,
+}
 
+#[cfg(test)]
+mod tests {
     use std::sync::Arc;
 
     use engine_rocks::util::new_engine;
-    use engine_traits::{CacheRegion, SnapshotContext, CF_DEFAULT, CF_LOCK, CF_WRITE};
+    use engine_traits::{CacheRegion, CF_DEFAULT, CF_LOCK, CF_WRITE};
     use in_memory_engine::{
-        config::RegionCacheConfigManager, test_util::new_region, InMemoryEngineConfig,
+        config::InMemoryEngineConfigManager, test_util::new_region, InMemoryEngineConfig,
         InMemoryEngineContext, RegionCacheMemoryEngine,
     };
     use online_config::{ConfigChange, ConfigManager, ConfigValue};
     use tempfile::Builder;
     use tikv_util::config::VersionTrack;
 
+    use super::*;
     use crate::HybridEngine;
 
     #[test]
@@ -268,11 +123,11 @@ mod tests {
         let s = hybrid_engine.new_snapshot(Some(snap_ctx.clone()));
         assert!(!s.region_cache_snapshot_available());
 
-        let mut config_manager = RegionCacheConfigManager(config.clone());
+        let mut config_manager = InMemoryEngineConfigManager(config.clone());
         let mut config_change = ConfigChange::new();
-        config_change.insert(String::from("enabled"), ConfigValue::Bool(false));
+        config_change.insert(String::from("enable"), ConfigValue::Bool(false));
         config_manager.dispatch(config_change).unwrap();
-        assert!(!config.value().enabled);
+        assert!(!config.value().enable);
         snap_ctx.read_ts = 15;
         let s = hybrid_engine.new_snapshot(Some(snap_ctx));
         assert!(!s.region_cache_snapshot_available());

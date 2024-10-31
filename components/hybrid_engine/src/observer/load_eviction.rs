@@ -10,10 +10,10 @@ use kvproto::{
 };
 use raft::StateRole;
 use raftstore::coprocessor::{
-    dispatcher::BoxExtraMessageObserver, AdminObserver, ApplyCtxInfo, ApplySnapshotObserver,
-    BoxAdminObserver, BoxApplySnapshotObserver, BoxQueryObserver, BoxRoleObserver, Cmd,
-    Coprocessor, CoprocessorHost, ExtraMessageObserver, ObserverContext, QueryObserver,
-    RegionState, RoleObserver,
+    dispatcher::{BoxDestroyPeerObserver, BoxExtraMessageObserver},
+    AdminObserver, ApplyCtxInfo, ApplySnapshotObserver, BoxAdminObserver, BoxApplySnapshotObserver,
+    BoxQueryObserver, BoxRoleObserver, Cmd, Coprocessor, CoprocessorHost, DestroyPeerObserver,
+    ExtraMessageObserver, ObserverContext, QueryObserver, RegionState, RoleObserver,
 };
 use tikv_util::info;
 
@@ -53,6 +53,10 @@ impl LoadEvictionObserver {
         coprocessor_host
             .registry
             .register_extra_message_observer(priority, BoxExtraMessageObserver::new(self.clone()));
+        // Eviction the cached region when the peer is destroyed.
+        coprocessor_host
+            .registry
+            .register_destroy_peer_observer(priority, BoxDestroyPeerObserver::new(self.clone()));
     }
 
     fn post_exec_cmd(
@@ -133,6 +137,31 @@ impl LoadEvictionObserver {
 impl Coprocessor for LoadEvictionObserver {}
 
 impl QueryObserver for LoadEvictionObserver {
+    fn pre_exec_query(
+        &self,
+        _: &mut ObserverContext<'_>,
+        reqs: &[kvproto::raft_cmdpb::Request],
+        _: u64,
+        _: u64,
+    ) -> bool {
+        reqs.iter().for_each(|r| {
+            if r.has_delete_range() {
+                self.cache_engine
+                    .on_region_event(RegionEvent::EvictByRange {
+                        range: CacheRegion::new(
+                            0,
+                            0,
+                            keys::data_key(r.get_delete_range().get_start_key()),
+                            keys::data_key(r.get_delete_range().get_end_key()),
+                        ),
+                        reason: EvictReason::DeleteRange,
+                    })
+            }
+        });
+
+        false
+    }
+
     fn post_exec_query(
         &self,
         ctx: &mut ObserverContext<'_>,
@@ -149,6 +178,21 @@ impl QueryObserver for LoadEvictionObserver {
 }
 
 impl AdminObserver for LoadEvictionObserver {
+    fn pre_exec_admin(
+        &self,
+        ctx: &mut ObserverContext<'_>,
+        req: &kvproto::raft_cmdpb::AdminRequest,
+        _: u64,
+        _: u64,
+    ) -> bool {
+        if req.cmd_type == AdminCmdType::PrepareFlashback {
+            let cache_region = CacheRegion::from_region(ctx.region());
+            self.evict_region(cache_region, EvictReason::Flashback);
+        }
+
+        false
+    }
+
     fn post_exec_admin(
         &self,
         ctx: &mut ObserverContext<'_>,
@@ -228,6 +272,15 @@ impl ExtraMessageObserver for LoadEvictionObserver {
     }
 }
 
+impl DestroyPeerObserver for LoadEvictionObserver {
+    fn on_destroy_peer(&self, r: &Region) {
+        self.cache_engine.on_region_event(RegionEvent::Eviction {
+            region: CacheRegion::from_region(r),
+            reason: EvictReason::PeerDestroy,
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
@@ -251,11 +304,11 @@ mod tests {
             self.region_events.lock().unwrap().push(event);
         }
 
-        fn region_cached(&self, range: &Region) -> bool {
+        fn region_cached(&self, _: &Region) -> bool {
             unreachable!()
         }
 
-        fn load_region(&self, range: &Region) {
+        fn load_region(&self, _: &Region) {
             unreachable!()
         }
     }
@@ -344,7 +397,7 @@ mod tests {
         region.set_id(1);
         region.mut_peers().push(Peer::default());
         let mut ctx = ObserverContext::new(&region);
-        let role_change = RoleChange::new(StateRole::Leader);
+        let role_change = RoleChange::new_for_test(StateRole::Leader);
         observer.on_role_change(&mut ctx, &role_change);
         let cached_region = CacheRegion::from_region(&region);
         let expected = RegionEvent::TryLoad {

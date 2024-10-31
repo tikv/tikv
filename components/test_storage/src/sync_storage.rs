@@ -13,7 +13,9 @@ use kvproto::{
     kvrpcpb::{ChecksumAlgorithm, Context, GetRequest, KeyRange, LockInfo, RawGetRequest},
     metapb,
 };
-use raftstore::coprocessor::{region_info_accessor::MockRegionInfoProvider, RegionInfoProvider};
+use raftstore::coprocessor::{
+    region_info_accessor::MockRegionInfoProvider, CoprocessorHost, RegionInfoProvider,
+};
 use tikv::{
     server::gc_worker::{AutoGcConfig, GcConfig, GcSafePointProvider, GcWorker},
     storage::{
@@ -126,7 +128,8 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
             Default::default(),
             Arc::new(MockRegionInfoProvider::new(Vec::new())),
         );
-        gc_worker.start(store_id)?;
+        let coprocessor = CoprocessorHost::default();
+        gc_worker.start(store_id, coprocessor)?;
         Ok(Self {
             gc_worker,
             store: storage,
