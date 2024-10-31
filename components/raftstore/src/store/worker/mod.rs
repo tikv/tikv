@@ -43,7 +43,7 @@ pub use self::{
         BatchComponent as RaftStoreBatchComponent, BatchComponent, Runner as RefreshConfigRunner,
         Task as RefreshConfigTask, WriterContoller,
     },
-    region::{ApplySnapTask, Runner as RegionRunner, Task as RegionTask},
+    region::{Runner as RegionRunner, Task as RegionTask},
     split_check::{
         Bucket, BucketRange, BucketStatsInfo, KeyEntry, Runner as SplitCheckRunner,
         Task as SplitCheckTask,

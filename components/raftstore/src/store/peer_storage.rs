@@ -45,7 +45,6 @@ use crate::{
         fsm::GenSnapTask,
         peer::PersistSnapshotResult,
         util,
-        worker::ApplySnapTask,
     },
     Error, Result,
 };
@@ -893,12 +892,12 @@ where
     pub fn schedule_applying_snapshot(&mut self) {
         let status = Arc::new(AtomicUsize::new(JOB_STATUS_PENDING));
         self.set_snap_state(SnapState::Applying(Arc::clone(&status)));
-        let task = RegionTask::Apply(ApplySnapTask {
+        let task = RegionTask::Apply {
             region_id: self.get_region_id(),
             status,
             peer_id: self.peer_id,
             create_time: Instant::now_coarse(),
-        });
+        };
 
         // Don't schedule the snapshot to region worker.
         fail_point!("skip_schedule_applying_snapshot", |_| {});
