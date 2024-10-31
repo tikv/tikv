@@ -432,12 +432,7 @@ impl Resolver {
         // Find the min start ts.
         let min_lock = self.oldest_transaction();
         let has_lock = min_lock.is_some();
-        // min_txn_ts is min_lock.ts - 1, because we need to guarantee
-        // resolved_ts <= min_txn_ts < min_commit_ts <= commit_ts
-        let min_txn_ts = min_lock
-            .as_ref()
-            .map(|(ts, _)| (*ts).prev())
-            .unwrap_or(min_ts);
+        let min_txn_ts = min_lock.as_ref().map(|(ts, _)| *ts).unwrap_or(min_ts);
 
         // No more commit happens before the ts.
         let new_resolved_ts = cmp::min(min_txn_ts, min_ts);
@@ -561,18 +556,17 @@ impl Resolver {
         self.read_progress.as_ref()
     }
 
-    // Return the transaction with the smallest min_commit_ts. When min_commit_ts
-    // is unknown, use start_ts instead.
+    // Returns the minimum possible (commit_ts - 1), based on the knowledge we have,
+    // i.e. from all locks currently being tracked.
+    // The function is to provide an upper bound of resolved-ts. By definition
+    // resolved-ts must be strictly larger than a future commit_ts.
     //
     // "Oldest" doesn't mean it started first, but means it may have the smallest
-    // commit_ts.
+    // commit_ts, which is the returned ts + 1.
     //
-    // **IMPORTANT NOTE**: This cannot be directly used as a resolved_ts.
-    // Consider a lock that commits after the resolved-ts is calculated, it
-    // satisfies that commit_ts >= min_commit_ts. To ensure its commit_ts >
-    // resolved_ts, we must ensure that min_commit_ts > resolved_ts.
-    // So, min_commit_ts returned by this function should be used as an
-    // **exclusively** upper bound of resolved-ts.
+    // **NOTE**:
+    // For normal txns, we return start_ts.
+    // For large txns, we return its min_commit_ts-1.
     pub(crate) fn oldest_transaction(&self) -> Option<(TimeStamp, TxnLocks)> {
         let oldest_normal_txn = self
             .lock_ts_heap
@@ -587,7 +581,7 @@ impl Resolver {
             .min()
             .map(|ts| {
                 (
-                    ts,
+                    ts.prev(),
                     TxnLocks {
                         lock_count: 1,
                         // TODO: maybe fill this
@@ -894,7 +888,7 @@ mod tests {
         assert_eq!(resolver.large_txn_key_representative.len(), 2);
         assert_eq!(resolver.resolved_ts(), TimeStamp::zero());
 
-        assert_eq!(resolver.resolve(20.into(), None, TsSource::PdTso), 1.into());
+        assert_eq!(resolver.resolve(20.into(), None, TsSource::PdTso), 0.into());
 
         txn_status_cache.upsert(
             1.into(),
