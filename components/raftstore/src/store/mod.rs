@@ -82,7 +82,15 @@ pub use self::{
         CachedReadDelegate, CheckLeaderRunner, CheckLeaderTask, FlowStatistics, FlowStatsReporter,
         KeyEntry, LocalReadContext, LocalReader, LocalReaderCore, PdTask, ReadDelegate,
         ReadExecutor, ReadExecutorProvider, ReadProgress, ReadStats, RefreshConfigTask, RegionTask,
+<<<<<<< HEAD
         SplitCheckRunner, SplitCheckTask, SplitConfig, SplitConfigManager, StoreMetaDelegate,
         TrackVer, WriteStats,
+=======
+        SnapGenTask, SplitCheckRunner, SplitCheckTask, SplitConfig, SplitConfigManager, SplitInfo,
+        StoreMetaDelegate, StoreStatsReporter, TrackVer, WriteStats, WriterContoller,
+        BIG_REGION_CPU_OVERLOAD_THRESHOLD_RATIO, DEFAULT_BIG_REGION_BYTE_THRESHOLD,
+        DEFAULT_BIG_REGION_QPS_THRESHOLD, DEFAULT_BYTE_THRESHOLD, DEFAULT_QPS_THRESHOLD,
+        NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT, REGION_CPU_OVERLOAD_THRESHOLD_RATIO,
+>>>>>>> b01e4adf3c (raftstore: move snapshot generation out of the region worker (#17438))
     },
 };

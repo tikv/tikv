@@ -8,23 +8,26 @@ use std::{
     },
     fmt::{self, Display, Formatter},
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
-        mpsc::SyncSender,
+        atomic::{AtomicUsize, Ordering},
         Arc,
     },
     time::Duration,
     u64,
 };
 
+<<<<<<< HEAD
 use engine_traits::{DeleteStrategy, KvEngine, Mutable, Range, WriteBatch, CF_LOCK, CF_RAFT};
+=======
+use engine_traits::{
+    DeleteStrategy, KvEngine, Mutable, Range, WriteBatch, WriteOptions, CF_LOCK, CF_RAFT,
+};
+>>>>>>> b01e4adf3c (raftstore: move snapshot generation out of the region worker (#17438))
 use fail::fail_point;
-use file_system::{IoType, WithIoType};
 use kvproto::raft_serverpb::{PeerState, RaftApplyState, RegionLocalState};
-use pd_client::PdClient;
-use raft::eraftpb::Snapshot as RaftSnapshot;
 use tikv_util::{
     box_err, box_try,
     config::VersionTrack,
+<<<<<<< HEAD
     defer, error, info, thd_name,
     time::Instant,
     warn,
@@ -33,13 +36,19 @@ use tikv_util::{
 use yatp::{
     pool::{Builder, ThreadPool},
     task::future::TaskCell,
+=======
+    defer, error, info,
+    time::Instant,
+    warn,
+    worker::{Runnable, RunnableWithTimer},
+>>>>>>> b01e4adf3c (raftstore: move snapshot generation out of the region worker (#17438))
 };
 
 use super::metrics::*;
 use crate::{
     coprocessor::CoprocessorHost,
     store::{
-        self, check_abort,
+        check_abort,
         peer_storage::{
             JOB_STATUS_CANCELLED, JOB_STATUS_CANCELLING, JOB_STATUS_FAILED, JOB_STATUS_FINISHED,
             JOB_STATUS_PENDING, JOB_STATUS_RUNNING,
@@ -51,23 +60,16 @@ use crate::{
 };
 
 const CLEANUP_MAX_REGION_COUNT: usize = 64;
+<<<<<<< HEAD
 
 const TIFLASH: &str = "tiflash";
 const ENGINE: &str = "engine";
+=======
+>>>>>>> b01e4adf3c (raftstore: move snapshot generation out of the region worker (#17438))
 
 /// Region related task
 #[derive(Debug)]
-pub enum Task<S> {
-    Gen {
-        region_id: u64,
-        last_applied_term: u64,
-        last_applied_state: RaftApplyState,
-        kv_snap: S,
-        canceled: Arc<AtomicBool>,
-        notifier: SyncSender<RaftSnapshot>,
-        for_balance: bool,
-        to_store_id: u64,
-    },
+pub enum Task {
     Apply {
         region_id: u64,
         status: Arc<AtomicUsize>,
@@ -84,8 +86,8 @@ pub enum Task<S> {
     },
 }
 
-impl<S> Task<S> {
-    pub fn destroy(region_id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Task<S> {
+impl Task {
+    pub fn destroy(region_id: u64, start_key: Vec<u8>, end_key: Vec<u8>) -> Task {
         Task::Destroy {
             region_id,
             start_key,
@@ -94,10 +96,9 @@ impl<S> Task<S> {
     }
 }
 
-impl<S> Display for Task<S> {
+impl Display for Task {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
-            Task::Gen { region_id, .. } => write!(f, "Snap gen for {}", region_id),
             Task::Apply { region_id, .. } => write!(f, "Snap apply for {}", region_id),
             Task::Destroy {
                 region_id,
@@ -237,6 +238,7 @@ impl PendingDeleteRanges {
     }
 }
 
+<<<<<<< HEAD
 struct SnapGenContext<EK, R> {
     engine: EK,
     mgr: SnapManager,
@@ -341,6 +343,11 @@ pub struct Runner<EK, R, T>
 where
     EK: KvEngine,
     T: PdClient + 'static,
+=======
+pub struct Runner<EK, R>
+where
+    EK: KvEngine,
+>>>>>>> b01e4adf3c (raftstore: move snapshot generation out of the region worker (#17438))
 {
     batch_size: usize,
     use_delete_range: bool,
@@ -349,10 +356,9 @@ where
     clean_stale_check_interval: Duration,
     clean_stale_ranges_tick: usize,
 
-    tiflash_stores: HashMap<u64, bool>,
     // we may delay some apply tasks if level 0 files to write stall threshold,
     // pending_applies records all delayed apply task, and will check again later
-    pending_applies: VecDeque<Task<EK::Snapshot>>,
+    pending_applies: VecDeque<Task>,
     // Ranges that have been logically destroyed at a specific sequence number. We can
     // assume there will be no reader (engine snapshot) newer than that sequence number. Therefore,
     // they can be physically deleted with `DeleteFiles` when we're sure there is no older
@@ -367,15 +373,17 @@ where
     mgr: SnapManager,
     coprocessor_host: CoprocessorHost<EK>,
     router: R,
+<<<<<<< HEAD
     pd_client: Option<Arc<T>>,
     pool: ThreadPool<TaskCell>,
+=======
+>>>>>>> b01e4adf3c (raftstore: move snapshot generation out of the region worker (#17438))
 }
 
-impl<EK, R, T> Runner<EK, R, T>
+impl<EK, R> Runner<EK, R>
 where
     EK: KvEngine,
     R: CasualRouter<EK>,
-    T: PdClient + 'static,
 {
     pub fn new(
         engine: EK,
@@ -383,8 +391,7 @@ where
         cfg: Arc<VersionTrack<Config>>,
         coprocessor_host: CoprocessorHost<EK>,
         router: R,
-        pd_client: Option<Arc<T>>,
-    ) -> Runner<EK, R, T> {
+    ) -> Runner<EK, R> {
         Runner {
             batch_size: cfg.value().snap_apply_batch_size.0 as usize,
             use_delete_range: cfg.value().use_delete_range,
@@ -394,17 +401,19 @@ where
                 cfg.value().region_worker_tick_interval.as_millis(),
             ),
             clean_stale_ranges_tick: cfg.value().clean_stale_ranges_tick,
-            tiflash_stores: HashMap::default(),
             pending_applies: VecDeque::new(),
             pending_delete_ranges: PendingDeleteRanges::default(),
             engine,
             mgr,
             coprocessor_host,
             router,
+<<<<<<< HEAD
             pd_client,
             pool: Builder::new(thd_name!("snap-generator"))
                 .max_thread_count(cfg.value().snap_generator_pool_size)
                 .build_future_pool(),
+=======
+>>>>>>> b01e4adf3c (raftstore: move snapshot generation out of the region worker (#17438))
         }
     }
 
@@ -715,7 +724,7 @@ where
 
     /// Calls observer `pre_apply_snapshot` for every task.
     /// Multiple task can be `pre_apply_snapshot` at the same time.
-    fn pre_apply_snapshot(&self, task: &Task<EK::Snapshot>) -> Result<()> {
+    fn pre_apply_snapshot(&self, task: &Task) -> Result<()> {
         let (region_id, abort, peer_id) = match task {
             Task::Apply {
                 region_id,
@@ -787,16 +796,16 @@ where
     }
 }
 
-impl<EK, R, T> Runnable for Runner<EK, R, T>
+impl<EK, R> Runnable for Runner<EK, R>
 where
     EK: KvEngine,
     R: CasualRouter<EK> + Send + Clone + 'static,
-    T: PdClient,
 {
-    type Task = Task<EK::Snapshot>;
+    type Task = Task;
 
-    fn run(&mut self, task: Task<EK::Snapshot>) {
+    fn run(&mut self, task: Task) {
         match task {
+<<<<<<< HEAD
             Task::Gen {
                 region_id,
                 last_applied_term,
@@ -853,6 +862,8 @@ where
                     tikv_alloc::remove_thread_memory_accessor();
                 });
             }
+=======
+>>>>>>> b01e4adf3c (raftstore: move snapshot generation out of the region worker (#17438))
             task @ Task::Apply { .. } => {
                 fail_point!("on_region_worker_apply", true, |_| {});
                 if self.coprocessor_host.should_pre_apply_snapshot() {
@@ -886,11 +897,10 @@ where
     }
 }
 
-impl<EK, R, T> RunnableWithTimer for Runner<EK, R, T>
+impl<EK, R> RunnableWithTimer for Runner<EK, R>
 where
     EK: KvEngine,
     R: CasualRouter<EK> + Send + Clone + 'static,
-    T: PdClient + 'static,
 {
     fn on_timeout(&mut self) {
         self.handle_pending_applies(true);
@@ -910,15 +920,15 @@ where
 pub(crate) mod tests {
     use std::{
         io,
-        sync::{atomic::AtomicUsize, mpsc, Arc},
+        sync::{
+            atomic::{AtomicBool, AtomicUsize},
+            mpsc, Arc,
+        },
         thread,
         time::Duration,
     };
 
-    use engine_test::{
-        ctor::CfOptions,
-        kv::{KvTestEngine, KvTestSnapshot},
-    };
+    use engine_test::{ctor::CfOptions, kv::KvTestEngine};
     use engine_traits::{
         CompactExt, FlowControlFactorsExt, KvEngine, MiscExt, Mutable, Peekable,
         RaftEngineReadOnly, SyncMutable, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_WRITE,
@@ -940,8 +950,10 @@ pub(crate) mod tests {
             ObserverContext,
         },
         store::{
-            peer_storage::JOB_STATUS_PENDING, snap::tests::get_test_db_for_regions,
-            worker::RegionRunner, CasualMessage, SnapKey, SnapManager,
+            peer_storage::JOB_STATUS_PENDING,
+            snap::tests::get_test_db_for_regions,
+            worker::{RegionRunner, SnapGenRunner, SnapGenTask},
+            CasualMessage, SnapKey, SnapManager,
         },
     };
 
@@ -1051,7 +1063,7 @@ pub(crate) mod tests {
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
         let bg_worker = Worker::new("region-worker");
-        let mut worker: LazyWorker<Task<KvTestSnapshot>> = bg_worker.lazy_build("region-worker");
+        let mut worker: LazyWorker<Task> = bg_worker.lazy_build("region-worker");
         let sched = worker.scheduler();
         let (router, _) = mpsc::sync_channel(11);
         let cfg = make_raftstore_cfg(false);
@@ -1061,7 +1073,6 @@ pub(crate) mod tests {
             cfg,
             CoprocessorHost::<KvTestEngine>::default(),
             router,
-            Option::<Arc<RpcClient>>::None,
         );
         runner.clean_stale_check_interval = Duration::from_millis(100);
 
@@ -1164,13 +1175,23 @@ pub(crate) mod tests {
         let cfg = make_raftstore_cfg(true);
         let runner = RegionRunner::new(
             engine.kv.clone(),
-            mgr,
-            cfg,
+            mgr.clone(),
+            cfg.clone(),
             host,
-            router,
-            Option::<Arc<RpcClient>>::None,
+            router.clone(),
         );
         worker.start_with_timer(runner);
+
+        let mut snap_gen_worker = LazyWorker::new("snap-generator");
+        let snap_gen_sched = snap_gen_worker.scheduler();
+        let snap_gen_runner = SnapGenRunner::new(
+            engine.kv.clone(),
+            mgr,
+            router,
+            Option::<Arc<RpcClient>>::None,
+            snap_gen_worker.pool(),
+        );
+        snap_gen_worker.start(snap_gen_runner);
 
         let gen_and_apply_snap = |id: u64| {
             // construct snapshot
@@ -1182,8 +1203,8 @@ pub(crate) mod tests {
                 .unwrap();
             let idx = apply_state.get_applied_index();
             let entry = engine.raft.get_entry(id, idx).unwrap().unwrap();
-            sched
-                .schedule(Task::Gen {
+            snap_gen_sched
+                .schedule(SnapGenTask::Gen {
                     region_id: id,
                     kv_snap: engine.kv.snapshot(),
                     last_applied_term: entry.get_term(),
