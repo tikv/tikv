@@ -173,7 +173,7 @@ impl CacheRegionMeta {
         self.region.contains_range(region)
     }
 
-    pub(crate) fn safe_point(&self) -> u64 {
+    pub fn safe_point(&self) -> u64 {
         self.safe_point
     }
 
@@ -233,7 +233,7 @@ impl CacheRegionMeta {
         self.in_gc.store(in_gc, Ordering::Release);
     }
 
-    pub(crate) fn is_in_gc(&self) -> bool {
+    pub fn is_in_gc(&self) -> bool {
         self.in_gc.load(Ordering::Acquire)
     }
 
@@ -244,7 +244,7 @@ impl CacheRegionMeta {
     }
 
     #[inline]
-    pub(crate) fn is_written(&self) -> bool {
+    pub fn is_written(&self) -> bool {
         self.is_written.load(Ordering::Relaxed)
     }
 
@@ -473,7 +473,7 @@ impl RegionMetaMap {
         self.regions.get_mut(&id)
     }
 
-    pub(crate) fn regions(&self) -> &HashMap<u64, CacheRegionMeta> {
+    pub fn regions(&self) -> &HashMap<u64, CacheRegionMeta> {
         &self.regions
     }
 
@@ -1045,7 +1045,7 @@ pub enum LoadFailedReason {
     Evicting,
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone, Copy)]
 pub enum RegionCacheStatus {
     NotInCache,
     Cached,

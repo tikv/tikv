@@ -43,6 +43,18 @@ make_auto_flush_static_metric! {
         apply_snapshot,
         flashback,
         manual,
+        destroy_peer,
+    }
+
+    pub label_enum OperationType {
+        put,
+        delete,
+    }
+
+    pub label_enum CF {
+        default,
+        lock,
+        write,
     }
 
     pub struct GcFilteredCountVec: LocalIntCounter {
@@ -55,6 +67,11 @@ make_auto_flush_static_metric! {
 
     pub struct EvictionDurationVec: LocalHistogram {
         "type" => EvictReasonType,
+    }
+
+    pub struct OperationTypeForCF: LocalIntCounter {
+        "type" => OperationType,
+        "cf" => CF,
     }
 }
 
@@ -127,6 +144,26 @@ lazy_static! {
         exponential_buckets(0.00001, 2.0, 26).unwrap()
     )
     .unwrap();
+    pub static ref IN_MEMORY_ENGINE_KV_OPERATIONS: IntCounterVec = register_int_counter_vec!(
+        "tikv_in_memory_engine_kv_operations",
+        "Number of kv operations",
+        &["type", "cf"]
+    ).unwrap();
+    pub static ref IN_MEMORY_ENGINE_OLDEST_SAFE_POINT: IntGauge = register_int_gauge!(
+        "tikv_in_memory_engine_oldest_safe_point",
+        "The oldest safe point in the in-memory engine",
+    )
+    .unwrap();
+    pub static ref IN_MEMORY_ENGINE_NEWEST_SAFE_POINT: IntGauge = register_int_gauge!(
+        "tikv_in_memory_engine_newest_safe_point",
+        "The newest safe point in the in-memory engine",
+    )
+    .unwrap();
+    pub static ref SAFE_POINT_GAP: IntGauge = register_int_gauge!(
+        "tikv_safe_point_gap_with_in_memory_engine",
+        "The gap between tikv auto gc safe point and the oldest auto gc safe point in the in-memory engine",
+    )
+    .unwrap();
 }
 
 lazy_static! {
@@ -140,6 +177,8 @@ lazy_static! {
         IN_MEMORY_ENGINE_EVICTION_DURATION_HISTOGRAM,
         EvictionDurationVec
     );
+    pub static ref IN_MEMORY_ENGINE_OPERATION_STATIC: OperationTypeForCF =
+        auto_flush_from!(IN_MEMORY_ENGINE_KV_OPERATIONS, OperationTypeForCF);
 }
 
 pub fn flush_in_memory_engine_statistics(statistics: &Arc<InMemoryEngineStatistics>) {
@@ -222,5 +261,40 @@ pub(crate) fn observe_eviction_duration(secs: f64, evict_reason: EvictReason) {
         EvictReason::Manual => IN_MEMORY_ENGINE_EVICTION_DURATION_HISTOGRAM_STATIC
             .manual
             .observe(secs),
+        EvictReason::PeerDestroy => IN_MEMORY_ENGINE_EVICTION_DURATION_HISTOGRAM_STATIC
+            .destroy_peer
+            .observe(secs),
     }
+}
+
+pub(crate) fn count_operations_for_cfs(put_operations: &[u64], delete_operations: &[u64]) {
+    // according to `cf_to_id`, we have 0 for CF_DEFAULT, 1 for CF_LOCK, and 2 for
+    // CF_WRITE
+    assert_eq!(put_operations.len(), 3);
+    assert_eq!(delete_operations.len(), 3);
+    IN_MEMORY_ENGINE_OPERATION_STATIC
+        .put
+        .default
+        .inc_by(put_operations[0]);
+    IN_MEMORY_ENGINE_OPERATION_STATIC
+        .put
+        .lock
+        .inc_by(put_operations[1]);
+    IN_MEMORY_ENGINE_OPERATION_STATIC
+        .put
+        .write
+        .inc_by(put_operations[2]);
+
+    IN_MEMORY_ENGINE_OPERATION_STATIC
+        .delete
+        .default
+        .inc_by(delete_operations[0]);
+    IN_MEMORY_ENGINE_OPERATION_STATIC
+        .delete
+        .lock
+        .inc_by(delete_operations[1]);
+    IN_MEMORY_ENGINE_OPERATION_STATIC
+        .delete
+        .write
+        .inc_by(delete_operations[2]);
 }
