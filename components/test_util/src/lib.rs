@@ -154,3 +154,21 @@ pub fn assert_eq_debug<C: PartialEq + Debug>(lhs: &C, rhs: &C) {
         lhs_diff, rhs_diff
     );
 }
+
+#[track_caller]
+pub fn eventually(tick: Duration, total: Duration, mut check: impl FnMut() -> bool) {
+    let start = std::time::Instant::now();
+    loop {
+        if check() {
+            return;
+        }
+        if start.elapsed() < total {
+            std::thread::sleep(tick);
+            continue;
+        }
+        panic!(
+            "failed to pass the check after {:?} elapsed",
+            start.elapsed()
+        );
+    }
+}
