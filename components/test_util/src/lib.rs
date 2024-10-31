@@ -18,6 +18,7 @@ use std::{
     fmt::Debug,
     sync::atomic::{AtomicU16, Ordering},
     thread,
+    time::Duration,
 };
 
 use rand::Rng;
