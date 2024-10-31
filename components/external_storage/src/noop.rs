@@ -1,6 +1,11 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use async_trait::async_trait;
+use cloud::blob::BlobObject;
+use futures_util::{
+    future::{self, LocalBoxFuture},
+    stream::{self, LocalBoxStream},
+};
 use tokio::io;
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 
@@ -33,7 +38,7 @@ impl ExternalStorage for NoopStorage {
     async fn write(
         &self,
         _name: &str,
-        reader: UnpinReader,
+        reader: UnpinReader<'_>,
         _content_length: u64,
     ) -> io::Result<()> {
         // we must still process the entire reader to run the SHA-256 hasher.
@@ -47,6 +52,14 @@ impl ExternalStorage for NoopStorage {
 
     fn read_part(&self, _name: &str, _off: u64, _len: u64) -> ExternalData<'_> {
         Box::new(io::empty().compat())
+    }
+
+    fn iter_prefix(&self, _prefix: &str) -> LocalBoxStream<'_, io::Result<BlobObject>> {
+        Box::pin(stream::empty())
+    }
+
+    fn delete(&self, _name: &str) -> LocalBoxFuture<'_, io::Result<()>> {
+        Box::pin(future::ok(()))
     }
 }
 

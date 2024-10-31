@@ -367,6 +367,14 @@ pub trait Engine: Send + Clone + 'static {
     /// future is polled or not.
     fn async_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::SnapshotRes;
 
+    type IMSnap: Snapshot;
+    type IMSnapshotRes: Future<Output = Result<Self::IMSnap>> + Send + 'static;
+    /// Get a snapshot asynchronously.
+    ///
+    /// Note the snapshot is queried immediately no matter whether the returned
+    /// future is polled or not.
+    fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes;
+
     /// Precheck request which has write with it's context.
     fn precheck_write_with_ctx(&self, _ctx: &Context) -> Result<()> {
         Ok(())
@@ -533,10 +541,9 @@ pub trait SnapshotExt {
         None
     }
 
-    /// Whether the snapshot acquired hit the cached range in the range cache
-    /// engine. It always returns false if the range cahce engine is not
-    /// enabled.
-    fn range_cache_engine_hit(&self) -> bool {
+    /// Whether the snapshot acquired hit the in memory engine. It always
+    /// returns false if the in memory engine is disabled.
+    fn in_memory_engine_hit(&self) -> bool {
         false
     }
 }
@@ -712,6 +719,24 @@ pub fn snapshot<E: Engine>(
 ) -> impl std::future::Future<Output = Result<E::Snap>> {
     let begin = Instant::now();
     let val = engine.async_snapshot(ctx);
+    // make engine not cross yield point
+    async move {
+        let result = val.await;
+        with_tls_tracker(|tracker| {
+            tracker.metrics.get_snapshot_nanos += begin.elapsed().as_nanos() as u64;
+        });
+        fail_point!("after-snapshot");
+        result
+    }
+}
+
+/// Get an in memory snapshot of `engine`.
+pub fn in_memory_snapshot<E: Engine>(
+    engine: &mut E,
+    ctx: SnapContext<'_>,
+) -> impl std::future::Future<Output = Result<E::IMSnap>> {
+    let begin = Instant::now();
+    let val = engine.async_in_memory_snapshot(ctx);
     // make engine not cross yield point
     async move {
         let result = val.await;

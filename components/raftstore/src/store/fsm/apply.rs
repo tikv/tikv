@@ -79,7 +79,7 @@ use crate::{
     bytes_capacity,
     coprocessor::{
         ApplyCtxInfo, Cmd, CmdBatch, CmdObserveInfo, CoprocessorHost, ObserveHandle, ObserveLevel,
-        RegionState,
+        RegionState, WriteBatchWrapper,
     },
     store::{
         cmd_resp,
@@ -406,7 +406,7 @@ where
     exec_log_index: u64,
     exec_log_term: u64,
 
-    kv_wb: EK::WriteBatch,
+    kv_wb: WriteBatchWrapper<EK::WriteBatch>,
     kv_wb_last_bytes: u64,
     kv_wb_last_keys: u64,
 
@@ -492,6 +492,7 @@ where
         priority: Priority,
     ) -> ApplyContext<EK> {
         let kv_wb = engine.write_batch_with_cap(DEFAULT_APPLY_WB_SIZE);
+        let kv_wb = host.on_create_apply_write_batch(kv_wb);
 
         ApplyContext {
             tag,
@@ -618,7 +619,9 @@ where
             let data_size = self.kv_wb().data_size();
             if data_size > APPLY_WB_SHRINK_SIZE {
                 // Control the memory usage for the WriteBatch.
-                self.kv_wb = self.engine.write_batch_with_cap(DEFAULT_APPLY_WB_SIZE);
+                let kv_wb = self.engine.write_batch_with_cap(DEFAULT_APPLY_WB_SIZE);
+                let kv_wb = self.host.on_create_apply_write_batch(kv_wb);
+                self.kv_wb = kv_wb;
             } else {
                 // Clear data, reuse the WriteBatch, this can reduce memory allocations and
                 // deallocations.
@@ -626,6 +629,16 @@ where
             }
             self.kv_wb_last_bytes = 0;
             self.kv_wb_last_keys = 0;
+        } else {
+            fail_point!(
+                "after_write_to_db_skip_write_node_1",
+                self.store_id == 1,
+                |_| { unreachable!() }
+            );
+            // We call `clear` here because some WriteBatch impl may have some internal
+            // state that need to be reset even if the write batch is empty.
+            // Please refer to `RegionCacheWriteBatch::clear` for more details.
+            self.kv_wb_mut().clear();
         }
         if !self.delete_ssts.is_empty() {
             let tag = self.tag.clone();
@@ -720,12 +733,12 @@ where
     }
 
     #[inline]
-    pub fn kv_wb(&self) -> &EK::WriteBatch {
+    pub fn kv_wb(&self) -> &WriteBatchWrapper<EK::WriteBatch> {
         &self.kv_wb
     }
 
     #[inline]
-    pub fn kv_wb_mut(&mut self) -> &mut EK::WriteBatch {
+    pub fn kv_wb_mut(&mut self) -> &mut WriteBatchWrapper<EK::WriteBatch> {
         &mut self.kv_wb
     }
 
@@ -1203,7 +1216,7 @@ where
         self.metrics.written_keys += apply_ctx.delta_keys();
     }
 
-    fn write_apply_state(&self, wb: &mut EK::WriteBatch) {
+    fn write_apply_state(&self, wb: &mut WriteBatchWrapper<EK::WriteBatch>) {
         wb.put_msg_cf(
             CF_RAFT,
             &keys::apply_state_key(self.region.get_id()),
@@ -3283,7 +3296,7 @@ where
                     // open files in rocksdb.
                     // TODO: figure out another way to do consistency check without snapshot
                     // or short life snapshot.
-                    snap: ctx.engine.snapshot(None),
+                    snap: ctx.engine.snapshot(),
                 })
             },
         ))
@@ -3806,6 +3819,11 @@ where
         term: u64,
         compact_index: u64,
     },
+    // Trigger loading pending region for in_memory_engine,
+    InMemoryEngineLoadRegion {
+        region_id: u64,
+        trigger_load_cb: Box<dyn FnOnce(&Region) + Send + 'static>,
+    },
 }
 
 impl<EK: KvEngine> ResourceMetered for Box<Msg<EK>> {
@@ -3906,6 +3924,9 @@ where
                     "[region {}] force compact, term: {} compact_index: {}",
                     region_id, term, compact_index
                 )
+            }
+            Msg::InMemoryEngineLoadRegion { region_id, .. } => {
+                write!(f, "[region {}] try load in memory cache", region_id)
             }
         }
     }
@@ -4259,7 +4280,7 @@ where
         }
 
         if let Err(e) = snap_task.generate_and_schedule_snapshot::<EK>(
-            apply_ctx.engine.snapshot(None),
+            apply_ctx.engine.snapshot(),
             self.delegate.applied_term,
             self.delegate.apply_state.clone(),
             &apply_ctx.snap_gen_scheduler,
@@ -4331,7 +4352,7 @@ where
                 ReadResponse {
                     response: Default::default(),
                     snapshot: Some(RegionSnapshot::from_snapshot(
-                        Arc::new(apply_ctx.engine.snapshot(None)),
+                        Arc::new(apply_ctx.engine.snapshot()),
                         Arc::new(self.delegate.region.clone()),
                     )),
                     txn_extra_op: TxnExtraOp::Noop,
@@ -4521,6 +4542,12 @@ where
                 } => {
                     self.unsafe_force_compact(apply_ctx, term, compact_index);
                 }
+                Msg::InMemoryEngineLoadRegion {
+                    trigger_load_cb, ..
+                } => {
+                    trigger_load_cb(&self.delegate.region);
+                    fail_point!("on_apply_in_memory_engine_load_region");
+                }
             }
         }
     }
@@ -4703,6 +4730,7 @@ where
             }
             handle_result = HandleResult::KeepProcessing;
         }
+        fail_point!("before_handle_normal");
         fail_point!("before_handle_normal_3", normal.delegate.id() == 3, |_| {
             HandleResult::KeepProcessing
         });
@@ -4952,6 +4980,11 @@ where
                             "region_id" => region_id);
                     return;
                 }
+                Msg::InMemoryEngineLoadRegion { region_id, .. } => {
+                    info!("skip check load in memory region cache because target region is not found";
+                        "region_id" => region_id);
+                    return;
+                }
             },
             Either::Left(Err(TrySendError::Full(_))) => unreachable!(),
         };
@@ -5092,6 +5125,7 @@ mod memtrace {
                 Msg::Recover(..) => 0,
                 Msg::CheckCompact { .. } => 0,
                 Msg::UnsafeForceCompact { .. } => 0,
+                Msg::InMemoryEngineLoadRegion { .. } => 0,
             }
         }
     }

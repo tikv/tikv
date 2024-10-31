@@ -3,15 +3,16 @@
 // #[PerformanceCriticalPath] called by Fsm on_ready_compute_hash
 use std::{borrow::Cow, marker::PhantomData, mem, ops::Deref};
 
-use engine_traits::{CfName, KvEngine};
+use engine_traits::{CfName, KvEngine, WriteBatch};
 use kvproto::{
     metapb::{Region, RegionEpoch},
     pdpb::CheckPolicy,
-    raft_cmdpb::{ComputeHashRequest, RaftCmdRequest},
+    raft_cmdpb::{CmdType, ComputeHashRequest, RaftCmdRequest},
     raft_serverpb::RaftMessage,
 };
 use protobuf::Message;
 use raft::eraftpb;
+use read_write::WriteBatchObserver;
 use tikv_util::box_try;
 
 use super::{split_observer::SplitObserver, *};
@@ -289,12 +290,37 @@ impl_box_observer_g!(
     ConsistencyCheckObserver,
     WrappedConsistencyCheckObserver
 );
-impl_box_observer!(BoxMessageObserver, MessageObserver, WrappedMessageObserver);
+impl_box_observer!(
+    BoxRaftMessageObserver,
+    RaftMessageObserver,
+    WrappedRaftMessageObserver
+);
+impl_box_observer!(
+    BoxExtraMessageObserver,
+    ExtraMessageObserver,
+    WrappedExtraMessageObserver
+);
 impl_box_observer!(
     BoxRegionHeartbeatObserver,
     RegionHeartbeatObserver,
     WrappedRegionHeartbeatObserver
 );
+impl_box_observer!(
+    BoxWriteBatchObserver,
+    WriteBatchObserver,
+    WrappedBoxWriteBatchObserver
+);
+impl_box_observer!(
+    BoxSnapshotObserver,
+    SnapshotObserver,
+    WrappedBoxSnapshotObserver
+);
+impl_box_observer!(
+    BoxDestroyPeerObserver,
+    DestroyPeerObserver,
+    WrappedBoxDestroyPeerObserver
+);
+
 /// Registry contains all registered coprocessors.
 #[derive(Clone)]
 pub struct Registry<E>
@@ -312,8 +338,15 @@ where
     read_index_observers: Vec<Entry<BoxReadIndexObserver>>,
     pd_task_observers: Vec<Entry<BoxPdTaskObserver>>,
     update_safe_ts_observers: Vec<Entry<BoxUpdateSafeTsObserver>>,
-    message_observers: Vec<Entry<BoxMessageObserver>>,
+    raft_message_observers: Vec<Entry<BoxRaftMessageObserver>>,
+    extra_message_observers: Vec<Entry<BoxExtraMessageObserver>>,
     region_heartbeat_observers: Vec<Entry<BoxRegionHeartbeatObserver>>,
+    destroy_peer_observers: Vec<Entry<BoxDestroyPeerObserver>>,
+    // For now, `write_batch_observer` and `snapshot_observer` can only have one
+    // observer solely because of simplicity. However, it is possible to have
+    // multiple observers in the future if needed.
+    write_batch_observer: Option<BoxWriteBatchObserver>,
+    snapshot_observer: Option<BoxSnapshotObserver>,
     // TODO: add endpoint
 }
 
@@ -331,8 +364,12 @@ impl<E: KvEngine> Default for Registry<E> {
             read_index_observers: Default::default(),
             pd_task_observers: Default::default(),
             update_safe_ts_observers: Default::default(),
-            message_observers: Default::default(),
+            raft_message_observers: Default::default(),
+            extra_message_observers: Default::default(),
             region_heartbeat_observers: Default::default(),
+            destroy_peer_observers: Default::default(),
+            write_batch_observer: None,
+            snapshot_observer: None,
         }
     }
 }
@@ -402,8 +439,12 @@ impl<E: KvEngine> Registry<E> {
         push!(priority, qo, self.update_safe_ts_observers);
     }
 
-    pub fn register_message_observer(&mut self, priority: u32, qo: BoxMessageObserver) {
-        push!(priority, qo, self.message_observers);
+    pub fn register_raft_message_observer(&mut self, priority: u32, qo: BoxRaftMessageObserver) {
+        push!(priority, qo, self.raft_message_observers);
+    }
+
+    pub fn register_extra_message_observer(&mut self, priority: u32, qo: BoxExtraMessageObserver) {
+        push!(priority, qo, self.extra_message_observers);
     }
 
     pub fn register_region_heartbeat_observer(
@@ -412,6 +453,22 @@ impl<E: KvEngine> Registry<E> {
         qo: BoxRegionHeartbeatObserver,
     ) {
         push!(priority, qo, self.region_heartbeat_observers);
+    }
+
+    pub fn register_destroy_peer_observer(
+        &mut self,
+        priority: u32,
+        destroy_peer_observer: BoxDestroyPeerObserver,
+    ) {
+        push!(priority, destroy_peer_observer, self.destroy_peer_observers);
+    }
+
+    pub fn register_write_batch_observer(&mut self, write_batch_observer: BoxWriteBatchObserver) {
+        self.write_batch_observer = Some(write_batch_observer);
+    }
+
+    pub fn register_snapshot_observer(&mut self, snapshot_observer: BoxSnapshotObserver) {
+        self.snapshot_observer = Some(snapshot_observer);
     }
 }
 
@@ -574,6 +631,21 @@ impl<E: KvEngine> CoprocessorHost<E> {
         }
     }
 
+    pub fn pre_delete_range(&self, start_key: &[u8], end_key: &[u8]) {
+        let region = Region::default();
+        let mut ctx = ObserverContext::new(&region);
+        for observer in &self.registry.query_observers {
+            let observer = observer.observer.inner();
+            let mut request = Request::new();
+            request.set_cmd_type(CmdType::DeleteRange);
+            request.mut_delete_range().set_start_key(start_key.to_vec());
+            request.mut_delete_range().set_end_key(end_key.to_vec());
+            if observer.pre_exec_query(&mut ctx, &[request], 0, 0) {
+                return;
+            }
+        }
+    }
+
     // (index, term) is for the applying entry.
     pub fn pre_exec(&self, region: &Region, cmd: &RaftCmdRequest, index: u64, term: u64) -> bool {
         let mut ctx = ObserverContext::new(region);
@@ -683,8 +755,22 @@ impl<E: KvEngine> CoprocessorHost<E> {
         );
     }
 
-    pub fn pre_transfer_leader(&self, r: &Region, tr: &TransferLeaderRequest) -> Result<()> {
-        try_loop_ob!(r, &self.registry.admin_observers, pre_transfer_leader, tr)
+    pub fn pre_transfer_leader(
+        &self,
+        r: &Region,
+        tr: &TransferLeaderRequest,
+    ) -> Result<Vec<ExtraMessage>> {
+        let mut ctx = ObserverContext::new(r);
+        let mut msgs = vec![];
+        for o in &self.registry.admin_observers {
+            if let Some(msg) = (o.observer).inner().pre_transfer_leader(&mut ctx, tr)? {
+                msgs.push(msg);
+            }
+            if ctx.bypass {
+                break;
+            }
+        }
+        Ok(msgs)
     }
 
     pub fn post_apply_snapshot(
@@ -828,9 +914,16 @@ impl<E: KvEngine> CoprocessorHost<E> {
         true
     }
 
+    pub fn on_extra_message(&self, r: &Region, msg: &ExtraMessage) {
+        for observer in &self.registry.extra_message_observers {
+            let observer = observer.observer.inner();
+            observer.on_extra_message(r, msg);
+        }
+    }
+
     /// Returns false if the message should not be stepped later.
     pub fn on_raft_message(&self, msg: &RaftMessage) -> bool {
-        for observer in &self.registry.message_observers {
+        for observer in &self.registry.raft_message_observers {
             let observer = observer.observer.inner();
             if !observer.on_raft_message(msg) {
                 return false;
@@ -884,6 +977,38 @@ impl<E: KvEngine> CoprocessorHost<E> {
             let observer = observer.observer.inner();
             observer.on_update_safe_ts(region_id, self_safe_ts, leader_safe_ts)
         }
+    }
+
+    pub fn on_create_apply_write_batch<WB: WriteBatch>(&self, wb: WB) -> WriteBatchWrapper<WB> {
+        let observable_wb = self
+            .registry
+            .write_batch_observer
+            .as_ref()
+            .map(|observer| observer.inner().create_observable_write_batch());
+        WriteBatchWrapper::new(wb, observable_wb)
+    }
+
+    pub fn on_destroy_peer(&self, region: &Region) {
+        if self.registry.destroy_peer_observers.is_empty() {
+            return;
+        }
+
+        for observer in &self.registry.destroy_peer_observers {
+            let observer = observer.observer.inner();
+            observer.on_destroy_peer(region);
+        }
+    }
+
+    pub fn on_snapshot(
+        &self,
+        region: &Region,
+        read_ts: u64,
+        seqno: u64,
+    ) -> Option<Box<dyn ObservedSnapshot>> {
+        self.registry
+            .snapshot_observer
+            .as_ref()
+            .map(move |observer| observer.inner().on_snapshot(region, read_ts, seqno))
     }
 
     pub fn shutdown(&self) {
@@ -1200,7 +1325,7 @@ mod tests {
         }
     }
 
-    impl MessageObserver for TestCoprocessor {
+    impl RaftMessageObserver for TestCoprocessor {
         fn on_raft_message(&self, _: &RaftMessage) -> bool {
             self.called
                 .fetch_add(ObserverIndex::OnRaftMessage as usize, Ordering::SeqCst);
@@ -1245,7 +1370,7 @@ mod tests {
         host.registry
             .register_update_safe_ts_observer(1, BoxUpdateSafeTsObserver::new(ob.clone()));
         host.registry
-            .register_message_observer(1, BoxMessageObserver::new(ob.clone()));
+            .register_raft_message_observer(1, BoxRaftMessageObserver::new(ob.clone()));
 
         let mut index: usize = 0;
         let region = Region::default();
@@ -1276,7 +1401,7 @@ mod tests {
         index += ObserverIndex::PostApplyQuery as usize;
         assert_all!([&ob.called], &[index]);
 
-        host.on_role_change(&region, RoleChange::new(StateRole::Leader));
+        host.on_role_change(&region, RoleChange::new_for_test(StateRole::Leader));
         index += ObserverIndex::OnRoleChange as usize;
         assert_all!([&ob.called], &[index]);
 

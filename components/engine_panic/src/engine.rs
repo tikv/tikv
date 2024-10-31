@@ -2,7 +2,7 @@
 
 use engine_traits::{
     IterMetricsCollector, IterOptions, Iterable, Iterator, KvEngine, MetricsExt, Peekable,
-    ReadOptions, Result, SnapshotContext, SyncMutable, WriteOptions,
+    ReadOptions, Result, SyncMutable, WriteOptions,
 };
 
 use crate::{db_vector::PanicDbVector, snapshot::PanicSnapshot, write_batch::PanicWriteBatch};
@@ -13,7 +13,7 @@ pub struct PanicEngine;
 impl KvEngine for PanicEngine {
     type Snapshot = PanicSnapshot;
 
-    fn snapshot(&self, _: Option<SnapshotContext>) -> Self::Snapshot {
+    fn snapshot(&self) -> Self::Snapshot {
         panic!()
     }
     fn sync(&self) -> Result<()> {

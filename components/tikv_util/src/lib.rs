@@ -55,6 +55,7 @@ pub mod metrics;
 pub mod mpsc;
 pub mod quota_limiter;
 pub mod resource_control;
+pub mod smoother;
 pub mod store;
 pub mod stream;
 pub mod sys;

@@ -51,26 +51,20 @@ kvproto = { workspace = true }
 lazy_static = "1.3"
 log_wrappers = { workspace = true }
 online_config = { workspace = true }
-pd_client = { workspace = true }
 prometheus = { version = "0.13", default-features = false, features = ["nightly"] }
 raft = { workspace = true }
 raftstore = { workspace = true }
 resource_control = { workspace = true }
-security = { workspace = true }
-serde = "1.0"
-serde_derive = "1.0"
 slog = { workspace = true }
 # better to not use slog-global, but pass in the logger
 slog-global = { workspace = true }
 thiserror = "1.0"
-tidb_query_common = { workspace = true }
 tikv = { workspace = true }
 tikv_alloc = { workspace = true }
 tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["rt-multi-thread"] }
 tokio-stream = "0.1"
 txn_types = { workspace = true }
-yatp = { workspace = true }
 
 [dev-dependencies]
 rand = "0.8"

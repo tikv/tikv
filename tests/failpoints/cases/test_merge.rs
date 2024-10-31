@@ -10,7 +10,6 @@ use std::{
     time::Duration,
 };
 
-use engine_rocks::RocksEngine;
 use engine_traits::{Peekable, CF_RAFT};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
@@ -1307,7 +1306,7 @@ fn test_prewrite_before_max_ts_is_synced() {
     let channel = ChannelBuilder::new(env).connect(&addr);
     let client = TikvClient::new(channel);
 
-    let do_prewrite = |cluster: &mut Cluster<RocksEngine, ServerCluster<RocksEngine>>| {
+    let do_prewrite = |cluster: &mut Cluster<ServerCluster>| {
         let region_id = right.get_id();
         let leader = cluster.leader_of_region(region_id).unwrap();
         let epoch = cluster.get_region_epoch(region_id);
@@ -1393,6 +1392,8 @@ fn test_source_peer_read_delegate_after_apply() {
 
 #[test]
 fn test_merge_with_concurrent_pessimistic_locking() {
+    let peer_size_limit = 512 << 10;
+    let instance_size_limit = 100 << 20;
     let mut cluster = new_server_cluster(0, 2);
     configure_for_merge(&mut cluster.cfg);
     cluster.cfg.pessimistic_txn.pipelined = true;
@@ -1418,18 +1419,22 @@ fn test_merge_with_concurrent_pessimistic_locking() {
     txn_ext
         .pessimistic_locks
         .write()
-        .insert(vec![(
-            Key::from_raw(b"k0"),
-            PessimisticLock {
-                primary: b"k0".to_vec().into_boxed_slice(),
-                start_ts: 10.into(),
-                ttl: 3000,
-                for_update_ts: 20.into(),
-                min_commit_ts: 30.into(),
-                last_change: LastChange::make_exist(15.into(), 3),
-                is_locked_with_conflict: false,
-            },
-        )])
+        .insert(
+            vec![(
+                Key::from_raw(b"k0"),
+                PessimisticLock {
+                    primary: b"k0".to_vec().into_boxed_slice(),
+                    start_ts: 10.into(),
+                    ttl: 3000,
+                    for_update_ts: 20.into(),
+                    min_commit_ts: 30.into(),
+                    last_change: LastChange::make_exist(15.into(), 3),
+                    is_locked_with_conflict: false,
+                },
+            )],
+            peer_size_limit,
+            instance_size_limit,
+        )
         .unwrap();
 
     let addr = cluster.sim.rl().get_addr(1);
@@ -1481,6 +1486,8 @@ fn test_merge_with_concurrent_pessimistic_locking() {
 
 #[test]
 fn test_merge_pessimistic_locks_with_concurrent_prewrite() {
+    let peer_size_limit = 512 << 10;
+    let instance_size_limit = 100 << 20;
     let mut cluster = new_server_cluster(0, 2);
     configure_for_merge(&mut cluster.cfg);
     cluster.cfg.pessimistic_txn.pipelined = true;
@@ -1521,10 +1528,14 @@ fn test_merge_pessimistic_locks_with_concurrent_prewrite() {
     txn_ext
         .pessimistic_locks
         .write()
-        .insert(vec![
-            (Key::from_raw(b"k0"), lock.clone()),
-            (Key::from_raw(b"k1"), lock),
-        ])
+        .insert(
+            vec![
+                (Key::from_raw(b"k0"), lock.clone()),
+                (Key::from_raw(b"k1"), lock),
+            ],
+            peer_size_limit,
+            instance_size_limit,
+        )
         .unwrap();
 
     let mut mutation = Mutation::default();
@@ -1566,6 +1577,8 @@ fn test_merge_pessimistic_locks_with_concurrent_prewrite() {
 
 #[test]
 fn test_retry_pending_prepare_merge_fail() {
+    let peer_size_limit = 512 << 10;
+    let instance_size_limit = 100 << 20;
     let mut cluster = new_server_cluster(0, 2);
     configure_for_merge(&mut cluster.cfg);
     cluster.cfg.pessimistic_txn.pipelined = true;
@@ -1602,7 +1615,11 @@ fn test_retry_pending_prepare_merge_fail() {
     txn_ext
         .pessimistic_locks
         .write()
-        .insert(vec![(Key::from_raw(b"k1"), l1)])
+        .insert(
+            vec![(Key::from_raw(b"k1"), l1)],
+            peer_size_limit,
+            instance_size_limit,
+        )
         .unwrap();
 
     // Pause apply and write some data to the left region
@@ -1643,6 +1660,8 @@ fn test_retry_pending_prepare_merge_fail() {
 
 #[test]
 fn test_merge_pessimistic_locks_propose_fail() {
+    let peer_size_limit = 512 << 10;
+    let instance_size_limit = 100 << 20;
     let mut cluster = new_server_cluster(0, 2);
     configure_for_merge(&mut cluster.cfg);
     cluster.cfg.pessimistic_txn.pipelined = true;
@@ -1678,7 +1697,11 @@ fn test_merge_pessimistic_locks_propose_fail() {
     txn_ext
         .pessimistic_locks
         .write()
-        .insert(vec![(Key::from_raw(b"k1"), lock)])
+        .insert(
+            vec![(Key::from_raw(b"k1"), lock)],
+            peer_size_limit,
+            instance_size_limit,
+        )
         .unwrap();
 
     fail::cfg("raft_propose", "pause").unwrap();
@@ -2179,7 +2202,6 @@ fn test_destroy_race_during_atomic_snapshot_after_merge() {
         .when(left_filter_block.clone())
         .reserve_dropped(left_blocked_messages.clone())
         .set_msg_callback(Arc::new(move |msg: &RaftMessage| {
-            debug!("dbg left msg_callback"; "msg" => ?msg);
             if left_filter_block.load(atomic::Ordering::SeqCst) {
                 return;
             }
@@ -2203,7 +2225,6 @@ fn test_destroy_race_during_atomic_snapshot_after_merge() {
         .direction(Direction::Recv)
         .when(right_filter_block.clone())
         .set_msg_callback(Arc::new(move |msg: &RaftMessage| {
-            debug!("dbg right msg_callback"; "msg" => ?msg);
             if msg.get_to_peer().get_id() == new_peer_id {
                 let _ = new_peer_id_tx.lock().unwrap().take().map(|tx| tx.send(()));
                 if msg.get_message().get_msg_type() == MessageType::MsgSnapshot {

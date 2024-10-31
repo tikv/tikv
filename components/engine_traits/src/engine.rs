@@ -33,17 +33,13 @@ pub trait KvEngine:
     + Debug
     + Unpin
     + Checkpointable
-    + RangeCacheEngineExt
     + 'static
 {
     /// A consistent read-only snapshot of the database
     type Snapshot: Snapshot;
 
     /// Create a snapshot
-    ///
-    /// SnapCtx will only be used by some type of trait implementors (ex:
-    /// HybridEngine)
-    fn snapshot(&self, snap_ctx: Option<SnapshotContext>) -> Self::Snapshot;
+    fn snapshot(&self) -> Self::Snapshot;
 
     /// Syncs any writes to disk
     fn sync(&self) -> Result<()>;
@@ -81,21 +77,4 @@ pub trait KvEngine:
     /// full release of engine.
     #[cfg(feature = "testexport")]
     fn inner_refcount(&self) -> usize;
-}
-
-#[derive(Debug, Clone)]
-pub struct SnapshotContext {
-    pub range: Option<CacheRange>,
-    pub region_id: u64,
-    // the version of region epoch.
-    pub epoch_version: u64,
-
-    pub read_ts: u64,
-}
-
-impl SnapshotContext {
-    pub fn set_range(&mut self, range: CacheRange) {
-        assert!(self.range.is_none());
-        self.range = Some(range);
-    }
 }

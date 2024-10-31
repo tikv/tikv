@@ -6,20 +6,23 @@ use tidb_query_datatype::{
     codec::{
         data_type::*,
         mysql::{
+            check_fsp,
             duration::{
                 MAX_HOUR_PART, MAX_MINUTE_PART, MAX_NANOS, MAX_NANOS_PART, MAX_SECOND_PART,
                 NANOS_PER_SEC,
             },
             time::{
-                extension::DateTimeExtension, weekmode::WeekMode, WeekdayExtension, MONTH_NAMES,
+                extension::DateTimeExtension, interval::*, weekmode::WeekMode, WeekdayExtension,
+                MONTH_NAMES,
             },
-            Duration, TimeType, MAX_FSP,
+            Duration, Time, TimeType, MAX_FSP,
         },
-        Error,
+        Error, Result as CodecResult,
     },
     expr::{EvalContext, SqlMode},
-    FieldTypeAccessor,
+    FieldTypeAccessor, FieldTypeFlag,
 };
+use tipb::{Expr, ExprType};
 
 use crate::RpnFnCallExtra;
 
@@ -911,20 +914,630 @@ fn datetime_to_string(mut datetime: DateTime) -> String {
     datetime.to_string()
 }
 
+pub struct AddSubDateMeta {
+    unit: IntervalUnit,
+    is_clock_unit: bool,
+    interval_unsigned: bool,
+    interval_decimal: isize,
+}
+
+fn build_add_sub_date_meta(expr: &mut Expr) -> Result<AddSubDateMeta> {
+    let children = expr.mut_children();
+    if children.len() != 3 {
+        return Err(box_err!("wrong add/sub_date expr size {}", children.len()));
+    }
+    let unit_str = match children[2].get_tp() {
+        ExprType::Bytes | ExprType::String => {
+            std::str::from_utf8(children[2].get_val()).map_err(Error::Encoding)?
+        }
+        _ => return Err(box_err!("unknown unit type {:?}", children[2].get_tp())),
+    };
+    let unit = IntervalUnit::from_str(unit_str)?;
+    let is_clock_unit = unit.is_clock_unit();
+    let interval_unsigned = children[1]
+        .get_field_type()
+        .as_accessor()
+        .flag()
+        .contains(FieldTypeFlag::UNSIGNED);
+    let interval_decimal = children[1].get_field_type().decimal();
+
+    Ok(AddSubDateMeta {
+        unit,
+        is_clock_unit,
+        interval_unsigned,
+        interval_decimal,
+    })
+}
+
+pub trait AddSubDateConvertToTime {
+    fn to_time(&self, ctx: &mut EvalContext, metadata: &AddSubDateMeta) -> CodecResult<Time>;
+}
+
+impl<'a> AddSubDateConvertToTime for BytesRef<'a> {
+    #[inline]
+    fn to_time(&self, ctx: &mut EvalContext, metadata: &AddSubDateMeta) -> CodecResult<Time> {
+        let input = std::str::from_utf8(self).map_err(Error::Encoding)?;
+        let mut t = Time::parse_without_type(ctx, input, MAX_FSP, true)?;
+        if metadata.is_clock_unit {
+            t.set_time_type(TimeType::DateTime)?;
+        }
+        Ok(t)
+    }
+}
+
+impl AddSubDateConvertToTime for i64 {
+    #[inline]
+    fn to_time(&self, ctx: &mut EvalContext, metadata: &AddSubDateMeta) -> CodecResult<Time> {
+        let mut t = Time::parse_from_i64_default(ctx, *self)?;
+        if metadata.is_clock_unit {
+            t.set_time_type(TimeType::DateTime)?;
+        }
+        Ok(t)
+    }
+}
+
+impl AddSubDateConvertToTime for Real {
+    #[inline]
+    fn to_time(&self, ctx: &mut EvalContext, metadata: &AddSubDateMeta) -> CodecResult<Time> {
+        let mut t = Time::parse_from_real_default(ctx, self)?;
+        if metadata.is_clock_unit {
+            t.set_time_type(TimeType::DateTime)?;
+        }
+        Ok(t)
+    }
+}
+
+impl AddSubDateConvertToTime for Decimal {
+    #[inline]
+    fn to_time(&self, ctx: &mut EvalContext, metadata: &AddSubDateMeta) -> CodecResult<Time> {
+        let mut t = Time::parse_from_decimal_default(ctx, self)?;
+        if metadata.is_clock_unit {
+            t.set_time_type(TimeType::DateTime)?;
+        }
+        Ok(t)
+    }
+}
+
+impl AddSubDateConvertToTime for DateTime {
+    #[inline]
+    fn to_time(&self, _ctx: &mut EvalContext, metadata: &AddSubDateMeta) -> CodecResult<Time> {
+        let mut t = *self;
+        if metadata.is_clock_unit || self.get_time_type() == TimeType::Timestamp {
+            t.set_time_type(TimeType::DateTime)?;
+        }
+        Ok(t)
+    }
+}
+
+fn add_date(
+    ctx: &mut EvalContext,
+    mut datetime: DateTime,
+    interval: &Interval,
+    result_fsp: i8,
+) -> CodecResult<DateTime> {
+    let month = interval.month();
+    let sec = interval.sec();
+    let nano = interval.nano();
+
+    datetime = datetime.add_sec_nanos(ctx, sec, nano)?;
+    if month != 0 {
+        datetime.add_months(month)?;
+    }
+
+    if let Ok(fsp) = check_fsp(result_fsp) {
+        datetime.set_fsp(fsp);
+    }
+
+    Ok(datetime)
+}
+
+fn sub_date(
+    ctx: &mut EvalContext,
+    datetime: DateTime,
+    interval: &Interval,
+    result_fsp: i8,
+) -> CodecResult<DateTime> {
+    add_date(ctx, datetime, &interval.negate(), result_fsp)
+}
+
+#[inline]
+fn add_sub_date_time_any_interval_any_as_string<
+    T: AddSubDateConvertToTime,
+    I: ConvertToIntervalStr,
+    F: Fn(&mut EvalContext, DateTime, &Interval, i8) -> CodecResult<DateTime>,
+>(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    metadata: &AddSubDateMeta,
+    time: &T,
+    interval: &I,
+    op: F,
+) -> Result<Option<Bytes>> {
+    let datetime = match time.to_time(ctx, metadata) {
+        Ok(d) => d,
+        Err(e) => return ctx.handle_invalid_time_error(e).map(|_| Ok(None))?,
+    };
+    let interval_str = interval.to_interval_string(
+        ctx,
+        metadata.unit,
+        metadata.interval_unsigned,
+        metadata.interval_decimal,
+    )?;
+    let interval = match Interval::parse_from_str(ctx, &metadata.unit, &interval_str)? {
+        Some(i) => i,
+        None => return Ok(None),
+    };
+    let mut date_res = match op(
+        ctx,
+        datetime,
+        &interval,
+        extra.ret_field_type.get_decimal() as i8,
+    ) {
+        Ok(d) => d,
+        Err(e) => return ctx.handle_invalid_time_error(e).map(|_| Ok(None))?,
+    };
+    if date_res.micro() == 0 {
+        date_res.minimize_fsp();
+    } else {
+        date_res.maximize_fsp();
+    }
+
+    Ok(Some(date_res.to_string().into_bytes()))
+}
+
+#[inline]
+fn add_sub_date_time_datetime_interval_any_as_datetime<
+    I: ConvertToIntervalStr,
+    F: Fn(&mut EvalContext, DateTime, &Interval, i8) -> CodecResult<DateTime>,
+>(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    metadata: &AddSubDateMeta,
+    time: &DateTime,
+    interval: &I,
+    op: F,
+) -> Result<Option<DateTime>> {
+    let datetime = match time.to_time(ctx, metadata) {
+        Ok(d) => d,
+        Err(e) => return ctx.handle_invalid_time_error(e).map(|_| Ok(None))?,
+    };
+    let interval_str = interval.to_interval_string(
+        ctx,
+        metadata.unit,
+        metadata.interval_unsigned,
+        metadata.interval_decimal,
+    )?;
+    let interval = match Interval::parse_from_str(ctx, &metadata.unit, &interval_str)? {
+        Some(i) => i,
+        None => return Ok(None),
+    };
+    let date_res = match op(
+        ctx,
+        datetime,
+        &interval,
+        extra.ret_field_type.get_decimal() as i8,
+    ) {
+        Ok(d) => d,
+        Err(e) => return ctx.handle_invalid_time_error(e).map(|_| Ok(None))?,
+    };
+
+    Ok(Some(date_res))
+}
+
+#[inline]
+fn add_sub_date_time_duration_interval_any_as_datetime<
+    I: ConvertToIntervalStr,
+    F: Fn(&mut EvalContext, DateTime, &Interval, i8) -> CodecResult<DateTime>,
+>(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    metadata: &AddSubDateMeta,
+    dur: &Duration,
+    interval: &I,
+    op: F,
+) -> Result<Option<DateTime>> {
+    let datetime = DateTime::from_duration(ctx, *dur, TimeType::DateTime)?;
+    let interval_str = interval.to_interval_string(
+        ctx,
+        metadata.unit,
+        metadata.interval_unsigned,
+        metadata.interval_decimal,
+    )?;
+    let interval = match Interval::parse_from_str(ctx, &metadata.unit, &interval_str)? {
+        Some(i) => i,
+        None => return Ok(None),
+    };
+    let date_res = match op(
+        ctx,
+        datetime,
+        &interval,
+        extra.ret_field_type.get_decimal() as i8,
+    ) {
+        Ok(d) => d,
+        Err(e) => return ctx.handle_invalid_time_error(e).map(|_| Ok(None))?,
+    };
+
+    Ok(Some(date_res))
+}
+
+#[inline]
+fn add_sub_date_time_duration_interval_any_as_duration<
+    I: ConvertToIntervalStr,
+    F: Fn(Duration, Duration) -> Option<Duration>,
+>(
+    ctx: &mut EvalContext,
+    metadata: &AddSubDateMeta,
+    dur: &Duration,
+    interval: &I,
+    op: F,
+) -> Result<Option<Duration>> {
+    let interval_str = interval.to_interval_string(
+        ctx,
+        metadata.unit,
+        metadata.interval_unsigned,
+        metadata.interval_decimal,
+    )?;
+    let interval = match Interval::extract_duration(ctx, &metadata.unit, &interval_str) {
+        Ok(d) => d,
+        Err(e) => return ctx.handle_invalid_time_error(e).map(|_| Ok(None))?,
+    };
+    let dur_res = match op(*dur, interval) {
+        Some(d) => d,
+        None => {
+            return ctx
+                .handle_invalid_time_error(Error::overflow(
+                    "Duration",
+                    format!("({} - {})", dur, interval),
+                ))
+                .map(|_| Ok(None))?;
+        }
+    };
+
+    Ok(Some(dur_res))
+}
+
+#[rpn_fn(capture = [ctx, extra, metadata], metadata_mapper = build_add_sub_date_meta)]
+#[inline]
+pub fn add_date_time_any_interval_any_as_string<
+    T: AddSubDateConvertToTime + Evaluable + EvaluableRet,
+    I: ConvertToIntervalStr + Evaluable + EvaluableRet,
+>(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    metadata: &AddSubDateMeta,
+    time: &T,
+    interval: &I,
+    _unit: BytesRef,
+) -> Result<Option<Bytes>> {
+    add_sub_date_time_any_interval_any_as_string(ctx, extra, metadata, time, interval, add_date)
+}
+
+#[rpn_fn(capture = [ctx, extra, metadata], metadata_mapper = build_add_sub_date_meta)]
+#[inline]
+pub fn sub_date_time_any_interval_any_as_string<
+    T: AddSubDateConvertToTime + Evaluable + EvaluableRet,
+    I: ConvertToIntervalStr + Evaluable + EvaluableRet,
+>(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    metadata: &AddSubDateMeta,
+    time: &T,
+    interval: &I,
+    _unit: BytesRef,
+) -> Result<Option<Bytes>> {
+    add_sub_date_time_any_interval_any_as_string(ctx, extra, metadata, time, interval, sub_date)
+}
+
+#[rpn_fn(capture = [ctx, extra, metadata], metadata_mapper = build_add_sub_date_meta)]
+#[inline]
+pub fn add_date_time_string_interval_string_as_string(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    metadata: &AddSubDateMeta,
+    time: BytesRef,
+    interval: BytesRef,
+    _unit: BytesRef,
+) -> Result<Option<Bytes>> {
+    add_sub_date_time_any_interval_any_as_string(ctx, extra, metadata, &time, &interval, add_date)
+}
+
+#[rpn_fn(capture = [ctx, extra, metadata], metadata_mapper = build_add_sub_date_meta)]
+#[inline]
+pub fn sub_date_time_string_interval_string_as_string(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    metadata: &AddSubDateMeta,
+    time: BytesRef,
+    interval: BytesRef,
+    _unit: BytesRef,
+) -> Result<Option<Bytes>> {
+    add_sub_date_time_any_interval_any_as_string(ctx, extra, metadata, &time, &interval, sub_date)
+}
+
+#[rpn_fn(capture = [ctx, extra, metadata], metadata_mapper = build_add_sub_date_meta)]
+#[inline]
+pub fn add_date_time_string_interval_any_as_string<
+    I: ConvertToIntervalStr + Evaluable + EvaluableRet,
+>(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    metadata: &AddSubDateMeta,
+    time: BytesRef,
+    interval: &I,
+    _unit: BytesRef,
+) -> Result<Option<Bytes>> {
+    add_sub_date_time_any_interval_any_as_string(ctx, extra, metadata, &time, interval, add_date)
+}
+
+#[rpn_fn(capture = [ctx, extra, metadata], metadata_mapper = build_add_sub_date_meta)]
+#[inline]
+pub fn sub_date_time_string_interval_any_as_string<
+    I: ConvertToIntervalStr + Evaluable + EvaluableRet,
+>(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    metadata: &AddSubDateMeta,
+    time: BytesRef,
+    interval: &I,
+    _unit: BytesRef,
+) -> Result<Option<Bytes>> {
+    add_sub_date_time_any_interval_any_as_string(ctx, extra, metadata, &time, interval, sub_date)
+}
+
+#[rpn_fn(capture = [ctx, extra, metadata], metadata_mapper = build_add_sub_date_meta)]
+#[inline]
+pub fn add_date_time_any_interval_string_as_string<
+    T: AddSubDateConvertToTime + Evaluable + EvaluableRet,
+>(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    metadata: &AddSubDateMeta,
+    time: &T,
+    interval: BytesRef,
+    _unit: BytesRef,
+) -> Result<Option<Bytes>> {
+    add_sub_date_time_any_interval_any_as_string(ctx, extra, metadata, time, &interval, add_date)
+}
+
+#[rpn_fn(capture = [ctx, extra, metadata], metadata_mapper = build_add_sub_date_meta)]
+#[inline]
+pub fn sub_date_time_any_interval_string_as_string<
+    T: AddSubDateConvertToTime + Evaluable + EvaluableRet,
+>(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    metadata: &AddSubDateMeta,
+    time: &T,
+    interval: BytesRef,
+    _unit: BytesRef,
+) -> Result<Option<Bytes>> {
+    add_sub_date_time_any_interval_any_as_string(ctx, extra, metadata, time, &interval, sub_date)
+}
+
+#[rpn_fn(capture = [ctx, extra, metadata], metadata_mapper = build_add_sub_date_meta)]
+#[inline]
+pub fn add_date_time_datetime_interval_string_as_datetime(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    metadata: &AddSubDateMeta,
+    time: &DateTime,
+    interval: BytesRef,
+    _unit: BytesRef,
+) -> Result<Option<DateTime>> {
+    add_sub_date_time_datetime_interval_any_as_datetime(
+        ctx, extra, metadata, time, &interval, add_date,
+    )
+}
+
+#[rpn_fn(capture = [ctx, extra, metadata], metadata_mapper = build_add_sub_date_meta)]
+#[inline]
+pub fn sub_date_time_datetime_interval_string_as_datetime(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    metadata: &AddSubDateMeta,
+    time: &DateTime,
+    interval: BytesRef,
+    _unit: BytesRef,
+) -> Result<Option<DateTime>> {
+    add_sub_date_time_datetime_interval_any_as_datetime(
+        ctx, extra, metadata, time, &interval, sub_date,
+    )
+}
+
+#[rpn_fn(capture = [ctx, extra, metadata], metadata_mapper = build_add_sub_date_meta)]
+#[inline]
+pub fn add_date_time_datetime_interval_any_as_datetime<
+    I: ConvertToIntervalStr + Evaluable + EvaluableRet,
+>(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    metadata: &AddSubDateMeta,
+    time: &DateTime,
+    interval: &I,
+    _unit: BytesRef,
+) -> Result<Option<DateTime>> {
+    add_sub_date_time_datetime_interval_any_as_datetime(
+        ctx, extra, metadata, time, interval, add_date,
+    )
+}
+
+#[rpn_fn(capture = [ctx, extra, metadata], metadata_mapper = build_add_sub_date_meta)]
+#[inline]
+pub fn sub_date_time_datetime_interval_any_as_datetime<
+    I: ConvertToIntervalStr + Evaluable + EvaluableRet,
+>(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    metadata: &AddSubDateMeta,
+    time: &DateTime,
+    interval: &I,
+    _unit: BytesRef,
+) -> Result<Option<DateTime>> {
+    add_sub_date_time_datetime_interval_any_as_datetime(
+        ctx, extra, metadata, time, interval, sub_date,
+    )
+}
+
+#[rpn_fn(capture = [ctx, extra, metadata], metadata_mapper = build_add_sub_date_meta)]
+#[inline]
+pub fn add_date_time_duration_interval_string_as_datetime(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    metadata: &AddSubDateMeta,
+    dur: &Duration,
+    interval: BytesRef,
+    _unit: BytesRef,
+) -> Result<Option<DateTime>> {
+    add_sub_date_time_duration_interval_any_as_datetime(
+        ctx, extra, metadata, dur, &interval, add_date,
+    )
+}
+
+#[rpn_fn(capture = [ctx, extra, metadata], metadata_mapper = build_add_sub_date_meta)]
+#[inline]
+pub fn sub_date_time_duration_interval_string_as_datetime(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    metadata: &AddSubDateMeta,
+    dur: &Duration,
+    interval: BytesRef,
+    _unit: BytesRef,
+) -> Result<Option<DateTime>> {
+    add_sub_date_time_duration_interval_any_as_datetime(
+        ctx, extra, metadata, dur, &interval, sub_date,
+    )
+}
+
+#[rpn_fn(capture = [ctx, extra, metadata], metadata_mapper = build_add_sub_date_meta)]
+#[inline]
+pub fn add_date_time_duration_interval_any_as_datetime<
+    I: ConvertToIntervalStr + Evaluable + EvaluableRet,
+>(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    metadata: &AddSubDateMeta,
+    dur: &Duration,
+    interval: &I,
+    _unit: BytesRef,
+) -> Result<Option<DateTime>> {
+    add_sub_date_time_duration_interval_any_as_datetime(
+        ctx, extra, metadata, dur, interval, add_date,
+    )
+}
+
+#[rpn_fn(capture = [ctx, extra, metadata], metadata_mapper = build_add_sub_date_meta)]
+#[inline]
+pub fn sub_date_time_duration_interval_any_as_datetime<
+    I: ConvertToIntervalStr + Evaluable + EvaluableRet,
+>(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    metadata: &AddSubDateMeta,
+    dur: &Duration,
+    interval: &I,
+    _unit: BytesRef,
+) -> Result<Option<DateTime>> {
+    add_sub_date_time_duration_interval_any_as_datetime(
+        ctx, extra, metadata, dur, interval, sub_date,
+    )
+}
+
+#[rpn_fn(capture = [ctx, metadata], metadata_mapper = build_add_sub_date_meta)]
+#[inline]
+pub fn add_date_time_duration_interval_string_as_duration(
+    ctx: &mut EvalContext,
+    metadata: &AddSubDateMeta,
+    dur: &Duration,
+    interval: BytesRef,
+    _unit: BytesRef,
+) -> Result<Option<Duration>> {
+    add_sub_date_time_duration_interval_any_as_duration(
+        ctx,
+        metadata,
+        dur,
+        &interval,
+        Duration::checked_add,
+    )
+}
+
+#[rpn_fn(capture = [ctx, metadata], metadata_mapper = build_add_sub_date_meta)]
+#[inline]
+pub fn sub_date_time_duration_interval_string_as_duration(
+    ctx: &mut EvalContext,
+    metadata: &AddSubDateMeta,
+    dur: &Duration,
+    interval: BytesRef,
+    _unit: BytesRef,
+) -> Result<Option<Duration>> {
+    add_sub_date_time_duration_interval_any_as_duration(
+        ctx,
+        metadata,
+        dur,
+        &interval,
+        Duration::checked_sub,
+    )
+}
+
+#[rpn_fn(capture = [ctx, metadata], metadata_mapper = build_add_sub_date_meta)]
+#[inline]
+pub fn add_date_time_duration_interval_any_as_duration<
+    I: ConvertToIntervalStr + Evaluable + EvaluableRet,
+>(
+    ctx: &mut EvalContext,
+    metadata: &AddSubDateMeta,
+    dur: &Duration,
+    interval: &I,
+    _unit: BytesRef,
+) -> Result<Option<Duration>> {
+    add_sub_date_time_duration_interval_any_as_duration(
+        ctx,
+        metadata,
+        dur,
+        interval,
+        Duration::checked_add,
+    )
+}
+
+#[rpn_fn(capture = [ctx, metadata], metadata_mapper = build_add_sub_date_meta)]
+#[inline]
+pub fn sub_date_time_duration_interval_any_as_duration<
+    I: ConvertToIntervalStr + Evaluable + EvaluableRet,
+>(
+    ctx: &mut EvalContext,
+    metadata: &AddSubDateMeta,
+    dur: &Duration,
+    interval: &I,
+    _unit: BytesRef,
+) -> Result<Option<Duration>> {
+    add_sub_date_time_duration_interval_any_as_duration(
+        ctx,
+        metadata,
+        dur,
+        interval,
+        Duration::checked_sub,
+    )
+}
+
 #[cfg(test)]
 mod tests {
+    use std::{str::FromStr, sync::Arc};
+
     use tidb_query_datatype::{
         builder::FieldTypeBuilder,
         codec::{
+            batch::LazyBatchColumnVec,
+            data_type::*,
             error::ERR_TRUNCATE_WRONG_VALUE,
             mysql::{Time, MAX_FSP},
         },
+        expr::EvalConfig,
         FieldTypeTp,
     };
-    use tipb::ScalarFuncSig;
+    use tipb::{FieldType, ScalarFuncSig};
+    use tipb_helper::ExprDefBuilder;
 
     use super::*;
-    use crate::types::test_util::RpnFnScalarEvaluator;
+    use crate::{types::test_util::RpnFnScalarEvaluator, RpnExpressionBuilder};
 
     #[test]
     fn test_add_duration_and_duration() {
@@ -2662,6 +3275,572 @@ mod tests {
                 .evaluate::<Int>(ScalarFuncSig::Quarter)
                 .unwrap();
             assert_eq!(output, expected, "got {}", output.unwrap());
+        }
+    }
+
+    fn get_add_sub_date_expr_types(sig: ScalarFuncSig) -> (FieldTypeTp, FieldTypeTp, FieldTypeTp) {
+        use FieldTypeTp::*;
+        use ScalarFuncSig::*;
+        match sig {
+            AddDateStringString | SubDateStringString => (String, String, String),
+            AddDateStringInt | SubDateStringInt => (String, Long, String),
+            AddDateStringReal | SubDateStringReal => (String, Float, String),
+            AddDateStringDecimal | SubDateStringDecimal => (String, NewDecimal, String),
+            AddDateIntString | SubDateIntString => (Long, String, String),
+            AddDateRealString | SubDateRealString => (Float, String, String),
+            AddDateDecimalString | SubDateDecimalString => (NewDecimal, String, String),
+            AddDateIntInt | SubDateIntInt => (Long, Long, String),
+            AddDateIntReal | SubDateIntReal => (Long, Float, String),
+            AddDateIntDecimal | SubDateIntDecimal => (Long, NewDecimal, String),
+            AddDateRealInt | SubDateRealInt => (Float, Long, String),
+            AddDateRealReal | SubDateRealReal => (Float, Float, String),
+            AddDateRealDecimal | SubDateRealDecimal => (Float, NewDecimal, String),
+            AddDateDecimalInt | SubDateDecimalInt => (NewDecimal, Long, String),
+            AddDateDecimalReal | SubDateDecimalReal => (NewDecimal, Float, String),
+            AddDateDecimalDecimal | SubDateDecimalDecimal => (NewDecimal, NewDecimal, String),
+            AddDateDatetimeString | SubDateDatetimeString => (DateTime, String, DateTime),
+            AddDateDatetimeInt | SubDateDatetimeInt => (DateTime, Long, DateTime),
+            AddDateDatetimeReal | SubDateDatetimeReal => (DateTime, Float, DateTime),
+            AddDateDatetimeDecimal | SubDateDatetimeDecimal => (DateTime, NewDecimal, DateTime),
+            AddDateDurationString | SubDateDurationString => (Duration, String, Duration),
+            AddDateDurationInt | SubDateDurationInt => (Duration, Long, Duration),
+            AddDateDurationReal | SubDateDurationReal => (Duration, Float, Duration),
+            AddDateDurationDecimal | SubDateDurationDecimal => (Duration, NewDecimal, Duration),
+            AddDateDurationStringDatetime | SubDateDurationStringDatetime => {
+                (Duration, String, DateTime)
+            }
+            AddDateDurationIntDatetime | SubDateDurationIntDatetime => (Duration, Long, DateTime),
+            AddDateDurationRealDatetime | SubDateDurationRealDatetime => {
+                (Duration, Float, DateTime)
+            }
+            AddDateDurationDecimalDatetime | SubDateDurationDecimalDatetime => {
+                (Duration, NewDecimal, DateTime)
+            }
+            _ => panic!("unknown sig {:?}", sig),
+        }
+    }
+
+    #[test]
+    fn test_add_sub_date() {
+        let cases = {
+            use ScalarFuncSig::*;
+            vec![
+                (
+                    AddDateStringString,
+                    Some("2008-04-01"),
+                    Some("5"),
+                    "day",
+                    Some("2008-04-06"),
+                ),
+                (
+                    SubDateStringString,
+                    Some("2008-04-01"),
+                    Some("5"),
+                    "day",
+                    Some("2008-03-27"),
+                ),
+                (
+                    AddDateStringInt,
+                    Some("2024-09-01 12:10:01"),
+                    Some("21"),
+                    "Minute",
+                    Some("2024-09-01 12:31:01"),
+                ),
+                (
+                    SubDateStringInt,
+                    Some("2024-09-01 12:10:01"),
+                    Some("21"),
+                    "Minute",
+                    Some("2024-09-01 11:49:01"),
+                ),
+                (
+                    AddDateStringReal,
+                    Some("2024-09-01 12:10:01"),
+                    Some("21.1239"),
+                    "Minute_microsecond",
+                    Some("2024-09-01 12:10:22.123900"),
+                ),
+                (
+                    SubDateStringReal,
+                    Some("2024-09-01 12:10:01"),
+                    Some("10.22"),
+                    "minute_microsecond",
+                    Some("2024-09-01 12:09:50.780000"),
+                ),
+                (
+                    AddDateStringDecimal,
+                    Some("2024-09-01 12:10:01"),
+                    Some("10.200"),
+                    "Day_Minute",
+                    Some("2024-09-02 01:30:01"),
+                ),
+                (
+                    SubDateStringDecimal,
+                    Some("2024-09-01 12:10:01"),
+                    Some("-10.22"),
+                    "Day_Minute",
+                    Some("2024-09-01 22:32:01"),
+                ),
+                (
+                    AddDateIntString,
+                    Some("20240901"),
+                    Some("2e3"),
+                    "second",
+                    Some("2024-09-01 00:33:20"),
+                ),
+                (
+                    SubDateIntString,
+                    Some("20240901"),
+                    Some("2e3"),
+                    "second",
+                    Some("2024-08-31 23:26:40"),
+                ),
+                (
+                    AddDateRealString,
+                    Some("070118"),
+                    Some("-1e4"),
+                    "SECOND",
+                    Some("2007-01-17 21:13:20"),
+                ),
+                (
+                    SubDateRealString,
+                    Some("121231113045.123"),
+                    Some("2-20"),
+                    "year_month",
+                    Some("2009-04-30 11:30:45.123001"),
+                ),
+                (
+                    AddDateDecimalString,
+                    Some("1203"),
+                    Some("-22"),
+                    "quarter",
+                    Some("1995-06-03"),
+                ),
+                (
+                    SubDateDecimalString,
+                    Some("170105084059.575601"),
+                    Some("123.221456"),
+                    "second_microsecond",
+                    Some("2017-01-05 08:38:56.354145"),
+                ),
+                (
+                    AddDateIntInt,
+                    Some("691231235959"),
+                    Some("123"),
+                    "Minute_Second",
+                    Some("2070-01-01 00:02:02"),
+                ),
+                (
+                    SubDateIntInt,
+                    Some("691231235959"),
+                    Some("321"),
+                    "Hour_Second",
+                    Some("2069-12-31 23:54:38"),
+                ),
+                (
+                    AddDateIntReal,
+                    Some("591231"),
+                    Some("-1.678"),
+                    "Week",
+                    Some("2059-12-17"),
+                ),
+                (
+                    SubDateIntReal,
+                    Some("591231"),
+                    Some("6.678"),
+                    "MONTH",
+                    Some("2059-05-31"),
+                ),
+                (
+                    AddDateIntDecimal,
+                    Some("19990101000000"),
+                    Some("238.12390"),
+                    "Day_Microsecond",
+                    Some("1999-01-01 00:03:58.123900"),
+                ),
+                (
+                    SubDateIntDecimal,
+                    Some("991231235959"),
+                    Some("238.12390"),
+                    "Day_Microsecond",
+                    Some("1999-12-31 23:56:00.876100"),
+                ),
+                (
+                    AddDateRealInt,
+                    Some("121231113045.9999999"),
+                    Some("1234"),
+                    "MICROSECOND",
+                    Some("2012-12-31 11:30:46.001234"),
+                ),
+                (
+                    SubDateRealInt,
+                    Some("121231113045.9999999"),
+                    Some("8912"),
+                    "day",
+                    Some("1988-08-07 11:30:46"),
+                ),
+                (
+                    AddDateRealReal,
+                    Some("170105084059.575601"),
+                    Some("-98.123"),
+                    "second",
+                    Some("2017-01-05 08:39:21.452592"),
+                ),
+                (
+                    SubDateRealReal,
+                    Some("170105084059.575601"),
+                    Some("-98.123"),
+                    "HOUR",
+                    Some("2017-01-09 10:40:59.575592"),
+                ),
+                (
+                    AddDateRealDecimal,
+                    Some("1210"),
+                    Some("9876.1234"),
+                    "Minute_Microsecond",
+                    Some("2000-12-10 02:44:36.123400"),
+                ),
+                (
+                    SubDateRealDecimal,
+                    Some("1210"),
+                    Some("9876.1234"),
+                    "Minute_Microsecond",
+                    Some("2000-12-09 21:15:23.876600"),
+                ),
+                (
+                    AddDateDecimalInt,
+                    Some("121231113045.999999"),
+                    Some("1234"),
+                    "MICROSECOND",
+                    Some("2012-12-31 11:30:46.001233"),
+                ),
+                (
+                    SubDateDecimalInt,
+                    Some("240924"),
+                    Some("1234"),
+                    "WEEK",
+                    Some("2001-01-30"),
+                ),
+                (
+                    AddDateDecimalReal,
+                    Some("121231113045.999999"),
+                    Some("1234.892"),
+                    "MICROSECOND",
+                    Some("2012-12-31 11:30:46.001234"),
+                ),
+                (
+                    SubDateDecimalReal,
+                    Some("240924"),
+                    Some("1234.99"),
+                    "Hour_Microsecond",
+                    Some("2024-09-23 23:39:25.010000"),
+                ),
+                (
+                    AddDateDecimalDecimal,
+                    Some("121231113045.999999"),
+                    Some("1234.892"),
+                    "MICROSECOND",
+                    Some("2012-12-31 11:30:46.001234"),
+                ),
+                (
+                    SubDateDecimalDecimal,
+                    Some("240924"),
+                    Some("1234.99"),
+                    "minute_microsecond",
+                    Some("2024-09-23 23:39:25.010000"),
+                ),
+                (
+                    AddDateDatetimeString,
+                    Some("2024-01-01"),
+                    Some("8"),
+                    "DaY",
+                    Some("2024-01-09"),
+                ),
+                (
+                    SubDateDatetimeString,
+                    Some("2024-01-01"),
+                    Some("8 12:60:128.9123"),
+                    "day_mIcroseconD",
+                    Some("2023-12-23 10:57:51.087700"),
+                ),
+                (
+                    SubDateDatetimeString,
+                    Some("2024-01-01 12:22:12.321"),
+                    Some("-7 55:03:09.629"),
+                    "day_mIcroseconD",
+                    Some("2024-01-10 19:25:21.950000"),
+                ),
+                (
+                    AddDateDatetimeInt,
+                    Some("2001-02-03"),
+                    Some("782"),
+                    "minUte",
+                    Some("2001-02-03 13:02:00.000000"),
+                ),
+                (
+                    SubDateDatetimeInt,
+                    Some("2001-02-03"),
+                    Some("782"),
+                    "minUte",
+                    Some("2001-02-02 10:58:00.000000"),
+                ),
+                (
+                    AddDateDatetimeReal,
+                    Some("2002-02-28 23:59:22.222"),
+                    Some("1.678"),
+                    "Minute_Second",
+                    Some("2002-03-01 00:11:40.222000"),
+                ),
+                (
+                    SubDateDatetimeReal,
+                    Some("2002-02-28 23:59:22.222"),
+                    Some("1238123.123489"),
+                    "Minute_Second",
+                    Some("1999-10-21 18:18:13.222000"),
+                ),
+                (
+                    AddDateDatetimeDecimal,
+                    Some("2024-12-30"),
+                    Some("-98264.678"),
+                    "Second",
+                    Some("2024-12-28 20:42:15.322000"),
+                ),
+                (
+                    SubDateDatetimeDecimal,
+                    Some("2024-12-31"),
+                    Some("778.12348"),
+                    "Day_Hour",
+                    Some("2021-06-17 12:00:00.000000"),
+                ),
+                (
+                    AddDateDurationString,
+                    Some("12:26:12.212"),
+                    Some("29 12:23:36.1234"),
+                    "day_microsecond",
+                    Some("720:49:48.335400"),
+                ),
+                (
+                    SubDateDurationString,
+                    Some("12:26:12.212"),
+                    Some("29 12:23:36.1234"),
+                    "day_microsecond",
+                    Some("-695:57:23.911400"),
+                ),
+                (
+                    AddDateDurationInt,
+                    Some("1 10:11:12.1234565"),
+                    Some("123"),
+                    "minute",
+                    Some("36:14:12.123457"),
+                ),
+                (
+                    SubDateDurationInt,
+                    Some("1 10:11:12.1234565"),
+                    Some("123"),
+                    "minute",
+                    Some("32:08:12.123457"),
+                ),
+                (
+                    AddDateDurationReal,
+                    Some("1112"),
+                    Some("-234.889"),
+                    "MINUTE_SECOND",
+                    Some("-03:57:37.000000"),
+                ),
+                (
+                    SubDateDurationReal,
+                    Some("1112"),
+                    Some("-234.889"),
+                    "MINUTE_SECOND",
+                    Some("04:20:01.000000"),
+                ),
+                (
+                    AddDateDurationDecimal,
+                    Some("1 12"),
+                    Some("1.2345"),
+                    "MINUTE_MICROSECOND",
+                    Some("36:00:01.234500"),
+                ),
+                (
+                    SubDateDurationDecimal,
+                    Some("-1 12"),
+                    Some("1.2345"),
+                    "second_MICROSECOND",
+                    Some("-36:00:01.234500"),
+                ),
+                (
+                    AddDateDurationStringDatetime,
+                    Some("12:26:12.212"),
+                    Some("29 12:23:36"),
+                    "DAY_SECOND",
+                    Some("2020-03-03 00:49:48.212000"),
+                ),
+                (
+                    SubDateDurationStringDatetime,
+                    Some("12:26:12.212"),
+                    Some("29 12:23:36"),
+                    "DAY_SECOND",
+                    Some("2020-01-04 00:02:36.212000"),
+                ),
+                (
+                    AddDateDurationIntDatetime,
+                    Some("1 10:11:12.1234565"),
+                    Some("123"),
+                    "QUARTER",
+                    Some("2050-11-03 10:11:12.123457"),
+                ),
+                (
+                    SubDateDurationIntDatetime,
+                    Some("1 10:11:12.1234565"),
+                    Some("123"),
+                    "QUARTER",
+                    Some("1989-05-03 10:11:12.123457"),
+                ),
+                (
+                    AddDateDurationRealDatetime,
+                    Some("1112"),
+                    Some("-41.12"),
+                    "DAY_HOUR",
+                    Some("2019-12-22 12:11:12.000000"),
+                ),
+                (
+                    SubDateDurationRealDatetime,
+                    Some("1112"),
+                    Some("-41.12"),
+                    "DAY_HOUR",
+                    Some("2020-03-14 12:11:12.000000"),
+                ),
+                (
+                    AddDateDurationDecimalDatetime,
+                    Some("-35:30:46"),
+                    Some("12.99"),
+                    "Year",
+                    Some("2033-01-31 12:29:14.000000"),
+                ),
+                (
+                    SubDateDurationDecimalDatetime,
+                    Some("-35:30:46"),
+                    Some("12.99"),
+                    "year_month",
+                    Some("1999-10-31 12:29:14.000000"),
+                ),
+                (
+                    SubDateDurationDecimalDatetime,
+                    Some("-35:30:46"),
+                    Some("12.99000"),
+                    "year_month",
+                    None,
+                ),
+                (AddDateDecimalInt, None, Some("1234"), "MICROSECOND", None),
+                (SubDateIntString, Some("20240901"), None, "second", None),
+                (AddDateIntInt, Some("0"), Some("0"), "day_hour", None),
+                (SubDateIntDecimal, Some("0"), Some("0.0"), "minute", None),
+            ]
+        };
+        let builder_push_param = |ctx: &mut EvalContext,
+                                  mut builder: ExprDefBuilder,
+                                  param: Option<&str>,
+                                  field_type: FieldTypeTp|
+         -> ExprDefBuilder {
+            if param.is_none() {
+                builder = builder.push_child(ExprDefBuilder::constant_null(field_type));
+                return builder;
+            }
+            let param = param.unwrap();
+            match field_type {
+                FieldTypeTp::String => {
+                    builder = builder
+                        .push_child(ExprDefBuilder::constant_bytes(param.as_bytes().to_vec()))
+                }
+                FieldTypeTp::Long => {
+                    let p = i64::from_str(param).unwrap();
+                    builder = builder.push_child(ExprDefBuilder::constant_int(p));
+                }
+                FieldTypeTp::Float => {
+                    let p = f64::from_str(param).unwrap();
+                    builder = builder.push_child(ExprDefBuilder::constant_real(p));
+                }
+                FieldTypeTp::NewDecimal => {
+                    let p = Decimal::from_str(param).unwrap();
+                    builder = builder.push_child(ExprDefBuilder::constant_decimal(p));
+                }
+                FieldTypeTp::DateTime => {
+                    let p = Time::parse_without_type(ctx, param, MAX_FSP, true).unwrap();
+                    builder = builder.push_child(ExprDefBuilder::constant_time(
+                        p.to_packed_u64(ctx).unwrap(),
+                        p.get_time_type(),
+                    ));
+                }
+                FieldTypeTp::Duration => {
+                    let p = Duration::parse(ctx, param, MAX_FSP).unwrap();
+                    builder = builder.push_child(ExprDefBuilder::constant_duration(p));
+                }
+                _ => panic!("unknown field type {:?}", field_type),
+            }
+            builder
+        };
+
+        for (func_sig, time, interval, unit, expected) in cases {
+            let mut cfg = EvalConfig::default();
+            cfg.is_test = true;
+            let mut ctx = EvalContext::new(Arc::new(cfg));
+            let (time_type, interval_type, result_type) = get_add_sub_date_expr_types(func_sig);
+            let mut result_field_type: FieldType = result_type.into();
+            result_field_type.set_decimal(MAX_FSP as i32);
+            let mut builder = ExprDefBuilder::scalar_func(func_sig, result_field_type);
+
+            builder = builder_push_param(&mut ctx, builder, time, time_type);
+            builder = builder_push_param(&mut ctx, builder, interval, interval_type);
+            builder = builder.push_child(ExprDefBuilder::constant_bytes(unit.as_bytes().to_vec()));
+            let node = builder.build();
+            let exp = RpnExpressionBuilder::build_from_expr_tree(node, &mut ctx, 1).unwrap();
+
+            let schema = &[];
+            let mut columns = LazyBatchColumnVec::empty();
+            let val = exp.eval(&mut ctx, schema, &mut columns, &[0], 1).unwrap();
+
+            assert!(val.is_vector());
+            let value = val.vector_value().unwrap().as_ref();
+            assert_eq!(value.len(), 1);
+            match result_type {
+                FieldTypeTp::String => {
+                    let v = value.to_bytes_vec();
+                    assert_eq!(
+                        v[0].as_deref().and_then(|s| std::str::from_utf8(s).ok()),
+                        expected,
+                        "{:?} {:?} {:?} {:?}",
+                        func_sig,
+                        time,
+                        interval,
+                        unit
+                    );
+                }
+                FieldTypeTp::DateTime => {
+                    let v = value.to_date_time_vec();
+                    assert_eq!(
+                        v[0].map(|s| s.to_string()).as_deref(),
+                        expected,
+                        "{:?} {:?} {:?} {:?}",
+                        func_sig,
+                        time,
+                        interval,
+                        unit
+                    );
+                }
+                FieldTypeTp::Duration => {
+                    let v = value.to_duration_vec();
+                    assert_eq!(
+                        v[0].map(|s| s.to_string()).as_deref(),
+                        expected,
+                        "{:?} {:?} {:?} {:?}",
+                        func_sig,
+                        time,
+                        interval,
+                        unit
+                    );
+                }
+                _ => panic!("unknown field type {:?}", result_type),
+            }
         }
     }
 }
