@@ -3982,12 +3982,12 @@ where
         // https://github.com/tikv/tikv/issues/17363#issuecomment-2404227253.
         if self.raft_group.raft.pending_conf_index > index {
             info!(
-                "not ready to transfer leader, target peer has an unapplied conf change";
+                "not ready to transfer leader, transferee has an unapplied conf change";
                 "region_id" => self.region_id,
-                "target_peer_id" => peer_id,
+                "transferee_peer_id" => peer_id,
                 "pending_conf_index" => self.raft_group.raft.pending_conf_index,
-                "leader_applied_index" => self.raft_group.raft.raft_log.applied,
-                "target_applied_index" => index
+                "applied_index" => self.raft_group.raft.raft_log.applied,
+                "transferee_applied_index" => index
             );
             return Some("pending conf change");
         }
@@ -3996,8 +3996,8 @@ where
             info!(
                 "transfer leader with pending conf on current leader";
                 "region_id" => self.region_id,
-                "target_peer_id" => peer_id,
-                "target_applied_index" => index,
+                "transferee_peer_id" => peer_id,
+                "transferee_applied_index" => index,
                 "pending_conf_index" => self.raft_group.raft.pending_conf_index,
                 "last_index" => self.get_store().last_index(),
                 "persist_index" => self.raft_group.raft.raft_log.persisted,
