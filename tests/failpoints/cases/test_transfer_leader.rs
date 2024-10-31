@@ -741,7 +741,8 @@ fn test_when_applied_conf_change_on_transferee() {
     must_get_equal(&cluster.get_engine(4), b"k2", b"v2");
 }
 
-// Similar to the above test, but with some pessimistic locks on the leader.
+// This test verifies that a leader transfer is allowed when the transferee
+// has been applied a conf change but the leader has not yet applied.
 #[test]
 fn test_when_applied_conf_change_on_transferee_pessimistic_lock() {
     let mut cluster = new_server_cluster(0, 4);
@@ -763,6 +764,78 @@ fn test_when_applied_conf_change_on_transferee_pessimistic_lock() {
 
     pd_client.transfer_leader(region_id, new_peer(3, 3), vec![]);
     pd_client.region_leader_must_be(region_id, new_peer(3, 3));
+}
+
+// This test verifies that a leader transfer is allowed when the transferee
+// has been applied a region split but the leader has not yet applied.
+#[test]
+fn test_when_applied_region_split_on_transferee_pessimistic_lock() {
+    let mut cluster = new_server_cluster(0, 3);
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+    let region_id = cluster.run_conf_change();
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+    // Use peer_id 4 as the leader since we want to reuse the failpoint
+    // apply_before_split_1_3.
+    pd_client.transfer_leader(region_id, new_peer(3, 3), vec![]);
+    pd_client.region_leader_must_be(region_id, new_peer(3, 3));
+
+    fail::cfg("apply_before_split_1_1", "pause").unwrap();
+    fail::cfg("apply_before_split_1_3", "pause").unwrap();
+    fail::cfg("propose_locks_before_transfer_leader", "return").unwrap();
+
+    let region = pd_client.get_region(b"x").unwrap();
+    pd_client.split_region(region, pdpb::CheckPolicy::Usekey, vec![b"x1".to_vec()]);
+    sleep_ms(300);
+
+    pd_client.transfer_leader(region_id, new_peer(2, 2), vec![]);
+    sleep_ms(300);
+    pd_client.region_leader_must_be(region_id, new_peer(2, 2));
+}
+
+// This test verifies that a leader transfer is:
+// - Not allowed when the transferee has been applied a region commit-merge but
+//   the leader has not yet applied.
+// - Allowed when the transferee has been applied a region prepare-merge but the
+//   leader has not yet applied.
+#[test]
+fn test_when_applied_region_merge_on_transferee_pessimistic_lock() {
+    let mut cluster = new_server_cluster(0, 3);
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+    let region_id = cluster.run_conf_change();
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    // Use peer_id 4 since we want to reuse the failpoint
+    // apply_before_commit_merge_except_1_4.
+    pd_client.must_add_peer(region_id, new_peer(4, 4));
+    pd_client.region_leader_must_be(region_id, new_peer(1, 1));
+
+    let region = cluster.get_region(b"x");
+    let region_id = region.id;
+    pd_client.split_region(region, pdpb::CheckPolicy::Usekey, vec![b"x1".to_vec()]);
+    sleep_ms(300);
+    let left = cluster.get_region(b"x");
+    let right = cluster.get_region(b"y");
+    assert_eq!(region_id, right.get_id());
+
+    fail::cfg("apply_before_commit_merge_except_1_4", "pause").unwrap();
+    fail::cfg("propose_locks_before_transfer_leader", "return").unwrap();
+
+    // Merge right to left.
+    pd_client.merge_region(right.get_id(), left.get_id());
+    sleep_ms(300);
+
+    pd_client.transfer_leader(right.get_id(), new_peer(4, 4), vec![]);
+    sleep_ms(300);
+    assert_eq!(
+        pd_client.check_region_leader(right.get_id(), new_peer(4, 4)),
+        false
+    );
+
+    pd_client.transfer_leader(right.get_id(), new_peer(2, 2), vec![]);
+    sleep_ms(300);
+    pd_client.region_leader_must_be(right.get_id(), new_peer(2, 2));
 }
 
 // This test verifies that a leader transfer is rejected when the transferee
@@ -796,74 +869,4 @@ fn test_when_applied_conf_change_on_learner_transferee() {
 
     pd_client.transfer_leader(region_id, new_peer(3, 3), vec![]);
     pd_client.region_leader_must_be(region_id, new_peer(3, 3));
-}
-
-// This test verifies that a leader transfer is allowed when the transferee
-// has been applied a region split but the leader has not yet applied.
-#[test]
-fn test_when_applied_region_split_on_transferee() {
-    let mut cluster = new_server_cluster(0, 3);
-    let pd_client = cluster.pd_client.clone();
-    pd_client.disable_default_operator();
-    let region_id = cluster.run_conf_change();
-    pd_client.must_add_peer(region_id, new_peer(2, 2));
-    pd_client.must_add_peer(region_id, new_peer(3, 3));
-    // Use peer_id 4 as the leader since we want to reuse the failpoint
-    // apply_before_split_1_3.
-    pd_client.transfer_leader(region_id, new_peer(3, 3), vec![]);
-    pd_client.region_leader_must_be(region_id, new_peer(3, 3));
-
-    fail::cfg("apply_before_split_1_1", "pause").unwrap();
-    fail::cfg("apply_before_split_1_3", "pause").unwrap();
-
-    let region = pd_client.get_region(b"x").unwrap();
-    pd_client.split_region(region, pdpb::CheckPolicy::Usekey, vec![b"x1".to_vec()]);
-    sleep_ms(300);
-
-    pd_client.transfer_leader(region_id, new_peer(2, 2), vec![]);
-    sleep_ms(300);
-    pd_client.region_leader_must_be(region_id, new_peer(2, 2));
-}
-
-// This test verifies that a leader transfer is:
-// - Not allowed when the transferee has been applied a region commit-merge but
-//   the leader has not yet applied.
-// - Allowed when the transferee has been applied a region prepare-merge but the
-//   leader has not yet applied.
-#[test]
-fn test_when_applied_region_merge_on_transferee() {
-    let mut cluster = new_server_cluster(0, 3);
-    let pd_client = cluster.pd_client.clone();
-    pd_client.disable_default_operator();
-    let region_id = cluster.run_conf_change();
-    pd_client.must_add_peer(region_id, new_peer(2, 2));
-    // Use peer_id 4 since we want to reuse the failpoint
-    // apply_before_commit_merge_except_1_4.
-    pd_client.must_add_peer(region_id, new_peer(4, 4));
-    pd_client.region_leader_must_be(region_id, new_peer(1, 1));
-
-    let region = cluster.get_region(b"x");
-    let region_id = region.id;
-    pd_client.split_region(region, pdpb::CheckPolicy::Usekey, vec![b"x1".to_vec()]);
-    sleep_ms(300);
-    let left = cluster.get_region(b"x");
-    let right = cluster.get_region(b"y");
-    assert_eq!(region_id, right.get_id());
-
-    fail::cfg("apply_before_commit_merge_except_1_4", "pause").unwrap();
-
-    // Merge right to left.
-    pd_client.merge_region(right.get_id(), left.get_id());
-    sleep_ms(300);
-
-    pd_client.transfer_leader(right.get_id(), new_peer(4, 4), vec![]);
-    sleep_ms(300);
-    assert_eq!(
-        pd_client.check_region_leader(right.get_id(), new_peer(4, 4)),
-        false
-    );
-
-    pd_client.transfer_leader(right.get_id(), new_peer(2, 2), vec![]);
-    sleep_ms(300);
-    pd_client.region_leader_must_be(right.get_id(), new_peer(2, 2));
 }
