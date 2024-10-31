@@ -9,7 +9,7 @@ use std::time::Instant;
 use kvproto::kvrpcpb as pb;
 
 pub use self::{
-    slab::{TrackerToken, TrackerTokenArray, GLOBAL_TRACKERS, INVALID_TRACKER_TOKEN},
+    slab::{TrackerToken, GLOBAL_TRACKERS, INVALID_TRACKER_TOKEN},
     tls::*,
 };
 

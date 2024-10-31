@@ -43,7 +43,6 @@ use tikv_util::{
     time::{duration_to_sec, setup_for_spin_interval, spin_at_least, Duration, Instant},
     warn,
 };
-use tracker::TrackerTokenArray;
 
 use super::write_router::{SharedSenders, WriteSenders};
 use crate::{
@@ -926,8 +925,6 @@ where
             self.perf_context.report_metrics(&trackers);
             write_raft_time = duration_to_sec(now.saturating_elapsed());
             STORE_WRITE_RAFTDB_DURATION_HISTOGRAM.observe(write_raft_time);
-            debug!("raft log is persisted";
-                "req_info" => TrackerTokenArray::new(trackers.as_slice()));
         }
 
         fail_point!("raft_after_save");

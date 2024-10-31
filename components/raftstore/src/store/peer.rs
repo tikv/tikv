@@ -66,7 +66,7 @@ use tikv_util::{
     Either,
 };
 use time::{Duration as TimeDuration, Timespec};
-use tracker::{TrackerTokenArray, GLOBAL_TRACKERS};
+use tracker::GLOBAL_TRACKERS;
 use txn_types::{TimeStamp, WriteBatchFlags};
 use uuid::Uuid;
 
@@ -3105,13 +3105,6 @@ where
                             // In this case the apply can be guaranteed to be successful. Invoke the
                             // on_committed callback if necessary.
                             p.cb.invoke_committed();
-
-                            debug!("raft log is committed";
-                                "req_info" => TrackerTokenArray::new(p.cb.write_trackers()
-                                    .into_iter()
-                                    .filter_map(|time_tracker| time_tracker.as_tracker_token())
-                                    .collect::<Vec<_>>().as_slice())
-                            );
                         }
                         p
                     })

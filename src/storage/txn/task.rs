@@ -17,7 +17,6 @@ use crate::storage::{
     },
 };
 
-#[derive(Debug)]
 pub(super) struct Task {
     cid: u64,
     tracker_token: TrackerToken,
