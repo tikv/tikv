@@ -319,6 +319,7 @@ where
             messenger: self.messenger.clone(),
             scan_pool_handle: self.scan_pool_handle.clone(),
             scans: FutureWaitGroup::new(),
+            advance_ts_interval: self.advance_ts_interval,
         }
     }
 }
