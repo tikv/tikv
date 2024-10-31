@@ -2586,6 +2586,11 @@ where
     ) -> Result<(AdminResponse, ApplyResult<EK::Snapshot>)> {
         fail_point!("apply_before_split");
         fail_point!(
+            "apply_before_split_1_1",
+            self.id() == 1 && self.region_id() == 1,
+            |_| { unreachable!() }
+        );
+        fail_point!(
             "apply_before_split_1_3",
             self.id() == 3 && self.region_id() == 1,
             |_| { unreachable!() }
