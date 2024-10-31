@@ -16,11 +16,7 @@ use crate::{
 
 pub enum Task {
     GcSnapshot,
-    DeleteSnapshotFiles {
-        key: SnapKey,
-        snapshot: Box<Snapshot>,
-        check_entry: bool,
-    },
+    DeleteSnapshotFiles { key: SnapKey, check_entry: bool },
 }
 
 impl fmt::Display for Task {
@@ -86,7 +82,7 @@ where
                         "snaps" => ?snaps,
                     );
                     for (key, is_sending) in snaps {
-                        let snap = match self.snap_mgr.get_snapshot_for_gc(&key, is_sending) {
+                        let snap = match self.snap_mgr.get_snapshot_for_applying(&key) {
                             Ok(snap) => snap,
                             Err(e) => {
                                 error!(%e;
@@ -96,7 +92,7 @@ where
                                 continue;
                             }
                         };
-                        self.snap_mgr.delete_snapshot(&key, snap.as_ref(), false);
+                        self.snap_mgr.delete_snapshot(&key, snap.as_ref());
                     }
                     Ok(())
                 }
@@ -124,8 +120,8 @@ where
         Ok(())
     }
 
-    fn delete_snapshot(&self, key: &SnapKey, snap: &Snapshot, check_entry: bool) -> bool {
-        self.snap_mgr.delete_snapshot(key, snap, check_entry)
+    fn delete_snapshot(&self, key: &SnapKey, snap: &Snapshot) -> bool {
+        self.snap_mgr.delete_snapshot(key, snap)
     }
 }
 
@@ -151,22 +147,12 @@ where
                     error!(%e; "send StoreMsg::GcSnapshotFinish failed");
                 }
             }
-            Task::DeleteSnapshotFiles {
-                key,
-                mut snapshot,
-                check_entry,
-            } => {
-                let snapshot = snapshot.as_mut();
-                if let Err(e) = snapshot.load_snapshot_meta_if_necessary() {
-                    warn!(
-                        "failed to load existent snapshot meta when try to build snapshot";
-                        "snapshot" => %snapshot.path(),
-                        "err" => ?e,
-                    );
-                }
-                let ok = self.delete_snapshot(&key, snapshot, check_entry);
-                if !ok {
-                    error!("failed to delete snapshot for key {}", key);
+            Task::DeleteSnapshotFiles { key, check_entry } => {
+                if let Ok(snapshot) = self.snap_mgr.get_snapshot_for_gc(&key) {
+                    let ok = self.delete_snapshot(&key, &snapshot);
+                    if !ok {
+                        error!("failed to delete snapshot for key {}", key);
+                    }
                 }
             }
         }

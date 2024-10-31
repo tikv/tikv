@@ -35,9 +35,10 @@ use tikv_util::{
     time::{Instant, UnixSecs},
     warn,
     worker::Scheduler,
+    DeferContext,
 };
 
-use super::{metrics::*, worker::RegionTask, SnapEntry, SnapKey, SnapManager};
+use super::{metrics::*, worker::RegionTask, SnapKey, SnapManager};
 use crate::{
     store::{
         async_io::{read::ReadTask, write::WriteTask},
@@ -1101,8 +1102,6 @@ where
         last_applied_term,
         apply_state.get_applied_index(),
     );
-    mgr.register(key.clone(), SnapEntry::Generating);
-    defer!(mgr.deregister(&key, &SnapEntry::Generating));
 
     let region_state: RegionLocalState = kv_snap
         .get_msg_cf(CF_RAFT, &keys::region_state_key(key.region_id))
@@ -1119,16 +1118,24 @@ where
         )));
     }
 
+    let mut s = mgr.get_snapshot_for_building(&key)?;
+    let mut deregister = {
+        let (mgr, key) = (mgr.clone(), key.clone());
+        DeferContext::new(move || mgr.deregister(&key))
+    };
+
     let mut snapshot = Snapshot::default();
-    // Set snapshot metadata.
+    // Set raft snapshot metadata.
     snapshot.mut_metadata().set_index(key.idx);
     snapshot.mut_metadata().set_term(key.term);
     snapshot
         .mut_metadata()
         .set_conf_state(util::conf_state_from_region(region_state.get_region()));
-    // Set snapshot data.
-    let mut s = mgr.get_snapshot_for_building(&key)?;
-    let snap_data = s.build(
+    // Set raft snapshot payload. Note that the payload doesn't carry kv data.
+    // It actually is the necessary metadata of sending kv data. Kv data will be
+    // sent separately by a dedicated socket connection.
+    // Check `send_snapshot_sock`in `raft_client.rs` to see how socket connect.
+    let snap_payload = s.build(
         engine,
         &kv_snap,
         region_state.get_region(),
@@ -1136,8 +1143,9 @@ where
         for_balance,
         start,
     )?;
-    snapshot.set_data(snap_data.write_to_bytes()?.into());
+    snapshot.set_data(snap_payload.write_to_bytes()?.into());
 
+    deregister.cancel();
     Ok(snapshot)
 }
 

@@ -47,7 +47,7 @@ use crate::{
         },
         snap::{plain_file_used, Error, Result, SNAPSHOT_CFS},
         transport::CasualRouter,
-        ApplyOptions, CasualMessage, Config, SnapEntry, SnapError, SnapKey, SnapManager,
+        ApplyOptions, CasualMessage, Config, SnapError, SnapKey, SnapManager,
     },
 };
 
@@ -707,14 +707,13 @@ where
         let term = apply_state.get_truncated_state().get_term();
         let idx = apply_state.get_truncated_state().get_index();
         let snap_key = SnapKey::new(region_id, term, idx);
-        self.mgr.register(snap_key.clone(), SnapEntry::Applying);
-        defer!({
-            self.mgr.deregister(&snap_key, &SnapEntry::Applying);
-        });
         let mut s = box_try!(self.mgr.get_snapshot_for_applying(&snap_key));
         if !s.exists() {
-            return Err(box_err!("missing snapshot file {}", s.path()));
+            return Err(box_err!("missing snapshot file {}", s));
         }
+        defer!({
+            self.mgr.deregister(&snap_key);
+        });
         check_abort(&abort)?;
         let timer = Instant::now();
         let options = ApplyOptions {
@@ -842,7 +841,7 @@ where
                 &snap_key,
                 None,
             );
-            return Err(box_err!("missing snapshot file {}", s.path()));
+            return Err(box_err!("missing snapshot file {}", s));
         }
         check_abort(&abort)?;
         self.coprocessor_host.pre_apply_snapshot(

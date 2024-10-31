@@ -90,15 +90,11 @@ impl<EK: KvEngine> Transport for ChannelTransport<EK> {
             let snap = msg.get_message().get_snapshot();
             let key = SnapKey::from_snap(snap).unwrap();
             let from = match self.core.lock().unwrap().snap_paths.get(&from_store) {
-                Some(p) => {
-                    p.0.register(key.clone(), SnapEntry::Sending);
-                    p.0.get_snapshot_for_sending(&key).unwrap()
-                }
+                Some(p) => p.0.get_snapshot_for_sending(&key).unwrap(),
                 None => return Err(box_err!("missing temp dir for store {}", from_store)),
             };
             let to = match self.core.lock().unwrap().snap_paths.get(&to_store) {
                 Some(p) => {
-                    p.0.register(key.clone(), SnapEntry::Receiving);
                     let data = msg.get_message().get_snapshot().get_data();
                     let mut snapshot_data = raft_serverpb::RaftSnapshotData::default();
                     snapshot_data.merge_from_bytes(data).unwrap();
@@ -110,12 +106,7 @@ impl<EK: KvEngine> Transport for ChannelTransport<EK> {
 
             defer!({
                 let core = self.core.lock().unwrap();
-                core.snap_paths[&from_store]
-                    .0
-                    .deregister(&key, &SnapEntry::Sending);
-                core.snap_paths[&to_store]
-                    .0
-                    .deregister(&key, &SnapEntry::Receiving);
+                core.snap_paths[&from_store].0.deregister(&key);
             });
 
             copy_snapshot(from, to)?;
