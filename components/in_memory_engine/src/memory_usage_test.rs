@@ -195,7 +195,6 @@ fn evaluate_memory_usage(case: Case) {
     )
     .unwrap();
     for (i, (k, v)) in end.into_iter().enumerate() {
-        if k == "resident" {}
         writeln!(log_buf, "    {}: {}", k, v.saturating_sub(start[i].1)).unwrap();
     }
     println!("{}", log_buf);
