@@ -18,7 +18,7 @@ const MAX_GC_RUN_INTERVAL: Duration = Duration::from_secs(600);
 // the maximum write kv throughput(20MiB), this is an empirical value.
 const MAX_WRITE_KV_SPEED: u64 = 20 * 1024 * 1024;
 // The maximum duration in seconds we expect IME to release enough memory after
-// memory usage reaches `evict_threshold`. This is an empiracal value.
+// memory usage reaches `evict_threshold`. This is an empirical value.
 // We use this value to determine the default value of `evict_threshold` based
 // on `capacity`.
 const MAX_RESERVED_DURATION_FOR_WRITE: u64 = 10;
