@@ -62,7 +62,7 @@ lazy_static! {
     pub static ref FSM_POLL_DURATION_VEC: HistogramVec =
     register_histogram_vec!(
         "tikv_batch_system_fsm_poll_seconds",
-        "Duration of one fsm being polled.",
+        "Total time for an FSM to finish processing all messages, potentially over multiple polling rounds.",
         &["type"],
         exponential_buckets(0.001, 1.59, 20).unwrap(), // max 10s
     ).unwrap();
