@@ -2343,7 +2343,7 @@ def RaftProcess() -> RowPanel:
         [
             heatmap_panel(
                 title="Store fsm poll duration",
-                description="The time of store fsm poll",
+                description="Total time for an FSM to finish processing all messages, potentially over multiple polling rounds.",
                 yaxis=yaxis(format=UNITS.SECONDS),
                 metric="tikv_batch_system_fsm_poll_seconds_bucket",
                 label_selectors=['type="store"'],
