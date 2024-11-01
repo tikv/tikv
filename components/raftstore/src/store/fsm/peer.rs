@@ -255,7 +255,7 @@ where
     pub fn create(
         store_id: u64,
         cfg: &Config,
-        region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+        region_scheduler: Scheduler<RegionTask>,
         raftlog_fetch_scheduler: Scheduler<ReadTask<EK>>,
         engines: Engines<EK, ER>,
         region: &metapb::Region,
@@ -317,7 +317,7 @@ where
     pub fn replicate(
         store_id: u64,
         cfg: &Config,
-        region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+        region_scheduler: Scheduler<RegionTask>,
         raftlog_fetch_scheduler: Scheduler<ReadTask<EK>>,
         engines: Engines<EK, ER>,
         region_id: u64,
@@ -2670,21 +2670,25 @@ where
                 && !is_initialized_peer
                 && msg_type == target_msg_type
         };
+        #[cfg(feature = "failpoints")]
         fail_point!(
             "on_snap_msg_1000_2",
             fp_enable(MessageType::MsgSnapshot),
             |_| Ok(())
         );
+        #[cfg(feature = "failpoints")]
         fail_point!(
             "on_vote_msg_1000_2",
             fp_enable(MessageType::MsgRequestVote),
             |_| Ok(())
         );
+        #[cfg(feature = "failpoints")]
         fail_point!(
             "on_append_msg_1000_2",
             fp_enable(MessageType::MsgAppend),
             |_| Ok(())
         );
+        #[cfg(feature = "failpoints")]
         fail_point!(
             "on_heartbeat_msg_1000_2",
             fp_enable(MessageType::MsgHeartbeat),

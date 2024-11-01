@@ -28,7 +28,7 @@ where
     EK: KvEngine,
     EC: RegionCacheEngine,
 {
-    pub fn try_from_disk_snap(
+    pub(crate) fn try_from_disk_snap(
         snap: &EK::Snapshot,
         opts: &ReadOptions,
         cf: &str,
@@ -41,7 +41,7 @@ where
             }))
     }
 
-    pub fn try_from_cache_snap(
+    pub(crate) fn try_from_cache_snap(
         snap: &EC::Snapshot,
         opts: &ReadOptions,
         cf: &str,

@@ -34,8 +34,8 @@ use test_coprocessor::{
     handle_request, init_data_with_details_pd_client, DagChunkSpliter, DagSelect, ProductTable,
 };
 use test_raftstore::{
-    get_tso, new_peer, new_put_cf_cmd, new_server_cluster_with_hybrid_engine_with_no_region_cache,
-    Cluster, ServerCluster,
+    get_tso, new_peer, new_put_cf_cmd, new_server_cluster_with_hybrid_engine, Cluster,
+    ServerCluster,
 };
 use test_util::eventually;
 use tidb_query_datatype::{
@@ -144,7 +144,7 @@ fn async_put(
 
 #[test]
 fn test_put_copr_get() {
-    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
+    let mut cluster = new_server_cluster_with_hybrid_engine(0, 1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 1;
     cluster.run();
 
@@ -174,13 +174,13 @@ fn test_put_copr_get() {
 
     must_copr_point_get(&mut cluster, &product, 1);
 
-    // verify it's read from range cache engine
+    // verify it's read from in memory engine
     rx.try_recv().unwrap();
 }
 
 #[test]
 fn test_load() {
-    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
+    let mut cluster = new_server_cluster_with_hybrid_engine(0, 1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
     cluster.run();
 
@@ -248,7 +248,7 @@ fn test_load() {
     for table in &tables {
         must_copr_point_get(&mut cluster, table, 1);
 
-        // verify it's read from range cache engine
+        // verify it's read from in memory engine
         assert!(rx.try_recv().unwrap());
     }
 }
@@ -257,7 +257,7 @@ fn test_load() {
 // splits.
 #[test]
 fn test_load_with_split() {
-    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
+    let mut cluster = new_server_cluster_with_hybrid_engine(0, 1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
     cluster.run();
 
@@ -319,7 +319,7 @@ fn test_load_with_split() {
     for table in &tables {
         must_copr_point_get(&mut cluster, table, 1);
 
-        // verify it's read from range cache engine
+        // verify it's read from in memory engine
         assert!(rx.try_recv().unwrap());
     }
 }
@@ -335,7 +335,7 @@ fn test_load_with_split() {
 // table1-table2 is scheduled.
 #[test]
 fn test_load_with_split2() {
-    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
+    let mut cluster = new_server_cluster_with_hybrid_engine(0, 1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 4;
     cluster.run();
     let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
@@ -426,7 +426,7 @@ fn test_load_with_split2() {
 // range, and even been evicted.
 #[test]
 fn test_load_with_eviction() {
-    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
+    let mut cluster = new_server_cluster_with_hybrid_engine(0, 1);
     cluster.run();
     // load range
     let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
@@ -496,7 +496,7 @@ fn test_load_with_eviction() {
 
 #[test]
 fn test_evictions_after_transfer_leader() {
-    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 2);
+    let mut cluster = new_server_cluster_with_hybrid_engine(0, 2);
     cluster.run();
 
     let r = cluster.get_region(b"");
@@ -521,7 +521,7 @@ fn test_evictions_after_transfer_leader() {
 
 #[test]
 fn test_eviction_after_merge() {
-    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
+    let mut cluster = new_server_cluster_with_hybrid_engine(0, 1);
     cluster.run();
     let r = cluster.get_region(b"");
     cluster.must_split(&r, b"key1");
@@ -557,7 +557,7 @@ fn test_eviction_after_merge() {
 
 #[test]
 fn test_manual_load_range_after_transfer_leader() {
-    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 2);
+    let mut cluster = new_server_cluster_with_hybrid_engine(0, 2);
     cluster.run();
 
     let r = cluster.get_region(b"");
@@ -598,7 +598,7 @@ fn test_manual_load_range_after_transfer_leader() {
 
 #[test]
 fn test_eviction_after_ingest_sst() {
-    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
+    let mut cluster = new_server_cluster_with_hybrid_engine(0, 1);
     cluster.run();
 
     // Generate a sst file.
@@ -667,7 +667,7 @@ fn test_eviction_after_ingest_sst() {
 
 #[test]
 fn test_pre_load_when_transfer_ledaer() {
-    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 3);
+    let mut cluster = new_server_cluster_with_hybrid_engine(0, 3);
     cluster.run();
 
     let (tx, rx) = unbounded();
@@ -699,7 +699,7 @@ fn test_pre_load_when_transfer_ledaer() {
 fn test_background_loading_pending_region() {
     fail::cfg("ime_background_check_load_pending_interval", "return(1000)").unwrap();
 
-    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
+    let mut cluster = new_server_cluster_with_hybrid_engine(0, 1);
     cluster.run();
 
     let r = cluster.get_region(b"");
@@ -722,7 +722,7 @@ fn test_background_loading_pending_region() {
 #[test]
 fn test_delete_range() {
     let delete_range = |unsafe_destroy_range| {
-        let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
+        let mut cluster = new_server_cluster_with_hybrid_engine(0, 1);
         cluster.run();
 
         let (tx, rx) = sync_channel(0);
@@ -753,7 +753,7 @@ fn test_delete_range() {
         })
         .unwrap();
         must_copr_point_get(&mut cluster, &product, 1);
-        // verify it's read from range cache engine
+        // verify it's read from in memory engine
         rx.try_recv().unwrap();
 
         if unsafe_destroy_range {
@@ -791,7 +791,7 @@ fn test_delete_range() {
 
 #[test]
 fn test_evict_on_flashback() {
-    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
+    let mut cluster = new_server_cluster_with_hybrid_engine(0, 1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 1;
     cluster.run();
 
@@ -833,7 +833,7 @@ fn test_evict_on_flashback() {
 #[test]
 fn test_load_during_flashback() {
     fail::cfg("ime_background_check_load_pending_interval", "return(1000)").unwrap();
-    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
+    let mut cluster = new_server_cluster_with_hybrid_engine(0, 1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 1;
     cluster.run();
 
@@ -872,7 +872,7 @@ fn test_load_during_flashback() {
 // internal state of IME's write-batch may not be cleared.
 #[test]
 fn test_apply_prepared_but_not_write() {
-    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
+    let mut cluster = new_server_cluster_with_hybrid_engine(0, 1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 1;
     cluster.run();
 
@@ -966,7 +966,7 @@ fn test_apply_prepared_but_not_write() {
 
 #[test]
 fn test_eviction_when_destroy_peer() {
-    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
+    let mut cluster = new_server_cluster_with_hybrid_engine(0, 1);
     cluster.run();
 
     let t1 = ProductTable::new();

@@ -58,7 +58,6 @@ use tikv_util::{
 };
 use txn_types::WriteBatchFlags;
 
-use self::region_cache_engine::RangCacheEngineExt;
 use super::*;
 use crate::Config;
 // We simulate 3 or 5 nodes, each has a store.
@@ -178,11 +177,6 @@ pub struct Cluster<T: Simulator> {
     pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,
     resource_manager: Option<Arc<ResourceGroupManager>>,
-
-    // When this is set, the `HybridEngineImpl` will be used as the underlying KvEngine. In
-    // addition, it atomaticaly load the whole range when start. When we want to do something
-    // specific, for example, only load ranges of some regions, we may not set this.
-    region_cache_engine_enabled_with_whole_range: bool,
 }
 
 impl<T: Simulator> Cluster<T> {
@@ -216,7 +210,6 @@ impl<T: Simulator> Cluster<T> {
             resource_manager: Some(Arc::new(ResourceGroupManager::default())),
             kv_statistics: vec![],
             raft_statistics: vec![],
-            region_cache_engine_enabled_with_whole_range: false,
         }
     }
 
@@ -346,17 +339,6 @@ impl<T: Simulator> Cluster<T> {
         self.create_engines();
         self.bootstrap_region().unwrap();
         self.start().unwrap();
-        if self.region_cache_engine_enabled_with_whole_range {
-            let pd_regions = self.pd_client.scan_regions(&[], &[], i32::MAX).unwrap();
-            let regions: Vec<_> = pd_regions
-                .into_iter()
-                .map(|mut r| r.take_region())
-                .collect();
-
-            self.engines
-                .iter()
-                .for_each(|(_, engines)| engines.kv.cache_regions(&regions));
-        }
     }
 
     // Bootstrap the store with fixed ID (like 1, 2, .. 5) and
@@ -2020,10 +2002,6 @@ impl<T: Simulator> Cluster<T> {
 
         Ok(())
     }
-
-    pub fn region_cache_engine_enabled_with_whole_range(&mut self, v: bool) {
-        self.region_cache_engine_enabled_with_whole_range = v;
-    }
 }
 
 impl<T: Simulator> Drop for Cluster<T> {
@@ -2062,29 +2040,5 @@ impl RawEngine<RocksEngine> for RocksEngine {
 
     fn raft_local_state(&self, region_id: u64) -> engine_traits::Result<Option<RaftLocalState>> {
         self.get_msg_cf(CF_RAFT, &keys::raft_state_key(region_id))
-    }
-}
-
-impl RawEngine<RocksEngine> for HybridEngineImpl {
-    fn region_cache_engine(&self) -> bool {
-        true
-    }
-
-    fn region_local_state(
-        &self,
-        region_id: u64,
-    ) -> engine_traits::Result<Option<RegionLocalState>> {
-        self.disk_engine()
-            .get_msg_cf(CF_RAFT, &keys::region_state_key(region_id))
-    }
-
-    fn raft_apply_state(&self, region_id: u64) -> engine_traits::Result<Option<RaftApplyState>> {
-        self.disk_engine()
-            .get_msg_cf(CF_RAFT, &keys::apply_state_key(region_id))
-    }
-
-    fn raft_local_state(&self, region_id: u64) -> engine_traits::Result<Option<RaftLocalState>> {
-        self.disk_engine()
-            .get_msg_cf(CF_RAFT, &keys::raft_state_key(region_id))
     }
 }

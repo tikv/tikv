@@ -181,11 +181,13 @@ pub fn fetch_stats() -> Result<Option<AllocStats>, Error> {
         ("retained", stats::retained::read()?),
         (
             "dirty",
-            stats::resident::read()? - stats::active::read()? - stats::metadata::read()?,
+            stats::resident::read()?
+                .saturating_sub(stats::active::read()?)
+                .saturating_sub(stats::metadata::read()?),
         ),
         (
             "fragmentation",
-            stats::active::read()? - stats::allocated::read()?,
+            stats::active::read()?.saturating_sub(stats::allocated::read()?),
         ),
     ]))
 }

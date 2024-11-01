@@ -21610,7 +21610,7 @@
           },
           "dataFormat": "tsbuckets",
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The wait time of store fsm schedule",
+          "description": "Duration of store fsm waiting to be polled",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -21715,7 +21715,7 @@
           },
           "dataFormat": "tsbuckets",
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The wait time of apply fsm schedule",
+          "description": "Duration of apply fsm waiting to be polled.e",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -21820,7 +21820,7 @@
           },
           "dataFormat": "tsbuckets",
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The time of store fsm poll",
+          "description": "Total time for an store FSM to finish processing all messages, potentially over multiple polling rounds.",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -21925,7 +21925,7 @@
           },
           "dataFormat": "tsbuckets",
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The time of apply fsm poll",
+          "description": "Total time for an apply FSM to finish processing all messages, potentially over multiple polling rounds",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -22030,7 +22030,7 @@
           },
           "dataFormat": "tsbuckets",
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Round of one store fsm being continuously polled",
+          "description": "Number of polling rounds for an store FSM to finish processing all messages",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -22135,7 +22135,7 @@
           },
           "dataFormat": "tsbuckets",
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Round of one apply fsm being continuously polled",
+          "description": "Number of polling rounds for an apply FSM to finish processing all messages",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -39304,7 +39304,7 @@
           },
           "gridPos": {
             "h": 7,
-            "w": 6,
+            "w": 12,
             "x": 0,
             "y": 14
           },
@@ -39437,8 +39437,8 @@
           },
           "gridPos": {
             "h": 7,
-            "w": 6,
-            "x": 6,
+            "w": 12,
+            "x": 12,
             "y": 14
           },
           "height": null,
@@ -39570,9 +39570,9 @@
           },
           "gridPos": {
             "h": 7,
-            "w": 6,
-            "x": 12,
-            "y": 14
+            "w": 12,
+            "x": 0,
+            "y": 21
           },
           "height": null,
           "hideTimeOverride": false,
@@ -39707,9 +39707,9 @@
           },
           "gridPos": {
             "h": 7,
-            "w": 6,
-            "x": 18,
-            "y": 14
+            "w": 12,
+            "x": 12,
+            "y": 21
           },
           "heatmap": {},
           "height": null,
@@ -39814,7 +39814,7 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 21
+            "y": 28
           },
           "heatmap": {},
           "height": null,
@@ -39915,7 +39915,7 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 21
+            "y": 28
           },
           "height": null,
           "hideTimeOverride": false,
@@ -40052,7 +40052,7 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 28
+            "y": 35
           },
           "heatmap": {},
           "height": null,
@@ -40153,7 +40153,7 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 28
+            "y": 35
           },
           "height": null,
           "hideTimeOverride": false,
@@ -40290,7 +40290,7 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 35
+            "y": 42
           },
           "heatmap": {},
           "height": null,
@@ -40391,7 +40391,7 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 35
+            "y": 42
           },
           "height": null,
           "hideTimeOverride": false,
@@ -40596,7 +40596,7 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 42
+            "y": 49
           },
           "heatmap": {},
           "height": null,
@@ -40697,7 +40697,7 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 42
+            "y": 49
           },
           "height": null,
           "hideTimeOverride": false,
@@ -40898,7 +40898,7 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 49
+            "y": 56
           },
           "height": null,
           "hideTimeOverride": false,
@@ -41106,7 +41106,7 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 49
+            "y": 56
           },
           "height": null,
           "hideTimeOverride": false,
@@ -41282,9 +41282,9 @@
           },
           "gridPos": {
             "h": 7,
-            "w": 6,
+            "w": 12,
             "x": 0,
-            "y": 56
+            "y": 63
           },
           "height": null,
           "hideTimeOverride": false,
@@ -41415,9 +41415,9 @@
           },
           "gridPos": {
             "h": 7,
-            "w": 6,
-            "x": 6,
-            "y": 56
+            "w": 12,
+            "x": 12,
+            "y": 63
           },
           "height": null,
           "hideTimeOverride": false,
@@ -41548,9 +41548,9 @@
           },
           "gridPos": {
             "h": 7,
-            "w": 6,
-            "x": 12,
-            "y": 56
+            "w": 12,
+            "x": 0,
+            "y": 70
           },
           "height": null,
           "hideTimeOverride": false,
@@ -41681,9 +41681,9 @@
           },
           "gridPos": {
             "h": 7,
-            "w": 6,
-            "x": 18,
-            "y": 56
+            "w": 12,
+            "x": 12,
+            "y": 70
           },
           "height": null,
           "hideTimeOverride": false,
@@ -49860,7 +49860,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_coprocessor_scan_details\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",req=~\"index|index_by_region_cache\"}\n    [$__rate_interval]\n)) by (tag, $additional_groupby) ",
+              "expr": "sum(rate(\n    tikv_coprocessor_scan_details\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",req=~\"index|index_by_in_memory_engine\"}\n    [$__rate_interval]\n)) by (tag, $additional_groupby) ",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -49868,7 +49868,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{tag}} {{$additional_groupby}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_coprocessor_scan_details\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",req=~\"index|index_by_region_cache\"}\n    [$__rate_interval]\n)) by (tag, $additional_groupby) ",
+              "query": "sum(rate(\n    tikv_coprocessor_scan_details\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",req=~\"index|index_by_in_memory_engine\"}\n    [$__rate_interval]\n)) by (tag, $additional_groupby) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -50126,7 +50126,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_coprocessor_scan_details\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",req=~\"index|index_by_region_cache\"}\n    [$__rate_interval]\n)) by (cf, tag, $additional_groupby) ",
+              "expr": "sum(rate(\n    tikv_coprocessor_scan_details\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",req=~\"index|index_by_in_memory_engine\"}\n    [$__rate_interval]\n)) by (cf, tag, $additional_groupby) ",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -50134,7 +50134,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{cf}}-{{tag}} {{$additional_groupby}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_coprocessor_scan_details\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",req=~\"index|index_by_region_cache\"}\n    [$__rate_interval]\n)) by (cf, tag, $additional_groupby) ",
+              "query": "sum(rate(\n    tikv_coprocessor_scan_details\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",req=~\"index|index_by_in_memory_engine\"}\n    [$__rate_interval]\n)) by (cf, tag, $additional_groupby) ",
               "refId": "",
               "step": 10,
               "target": ""

@@ -19,7 +19,7 @@ use crate::HybridEngine;
 /// use hybrid_engine::util::hybrid_engine_for_tests;
 /// use in_memory_engine::{test_util::new_region, InMemoryEngineConfig};
 /// let mut config = InMemoryEngineConfig::default();
-/// config.enabled = true;
+/// config.enable = true;
 /// let (_path, _hybrid_engine) = hybrid_engine_for_tests("temp", config, |memory_engine| {
 ///     let region = new_region(1, b"", b"z");
 ///     memory_engine.new_region(region);
