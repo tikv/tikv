@@ -233,6 +233,8 @@ impl StoreFsm {
 impl Fsm for StoreFsm {
     type Message = StoreMsg;
 
+    const FSM_TYPE: batch_system::FsmType = batch_system::FsmType::store;
+
     #[inline]
     fn is_stopped(&self) -> bool {
         false

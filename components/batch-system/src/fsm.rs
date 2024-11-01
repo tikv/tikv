@@ -12,7 +12,7 @@ use std::{
 
 use resource_control::ResourceMetered;
 
-use crate::mailbox::BasicMailbox;
+use crate::{mailbox::BasicMailbox, metrics::FsmType};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Priority {
@@ -40,6 +40,8 @@ pub trait FsmScheduler {
 /// updating internal state according to incoming messages.
 pub trait Fsm: Send + 'static {
     type Message: Send + ResourceMetered;
+
+    const FSM_TYPE: FsmType;
 
     fn is_stopped(&self) -> bool;
 
