@@ -545,6 +545,7 @@ dependencies = [
  "lazy_static",
  "online_config",
  "prometheus",
+ "prometheus-static-metric",
  "resource_control",
  "serde",
  "slog",

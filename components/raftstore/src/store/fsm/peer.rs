@@ -16,7 +16,7 @@ use std::{
     u64,
 };
 
-use batch_system::{BasicMailbox, Fsm};
+use batch_system::{BasicMailbox, Fsm, FsmType};
 use collections::{HashMap, HashSet};
 use engine_traits::{
     Engines, KvEngine, RaftEngine, RaftLogBatch, SstMetaInfo, WriteBatchExt, CF_LOCK, CF_RAFT,
@@ -576,6 +576,8 @@ where
 {
     type Message = PeerMsg<EK>;
 
+    const FSM_TYPE: FsmType = FsmType::store;
+
     #[inline]
     fn is_stopped(&self) -> bool {
         self.stopped
@@ -761,22 +763,27 @@ where
         // Propose batch request which may be still waiting for more raft-command
         if should_propose && !force_delay_fp() {
             self.propose_pending_batch_raft_command();
-        } else if self.fsm.batch_req_builder.has_proposed_cb
-            && self.fsm.batch_req_builder.propose_checked.is_none()
-            && let Some(cmd) = self.fsm.batch_req_builder.request.take()
-        {
-            // We are delaying these requests to next loop. Try to fulfill their
-            // proposed callback early.
-            self.fsm.batch_req_builder.propose_checked = Some(false);
-            if let Ok(None) = self.pre_propose_raft_command(&cmd) {
-                if self.fsm.peer.will_likely_propose(&cmd) {
-                    self.fsm.batch_req_builder.propose_checked = Some(true);
-                    for cb in &mut self.fsm.batch_req_builder.callbacks {
-                        cb.invoke_proposed();
+        } else {
+            if self.fsm.batch_req_builder.has_proposed_cb
+                && self.fsm.batch_req_builder.propose_checked.is_none()
+                && let Some(cmd) = self.fsm.batch_req_builder.request.take()
+            {
+                // We are delaying these requests to next loop. Try to fulfill their
+                // proposed callback early.
+                self.fsm.batch_req_builder.propose_checked = Some(false);
+                if let Ok(None) = self.pre_propose_raft_command(&cmd) {
+                    if self.fsm.peer.will_likely_propose(&cmd) {
+                        self.fsm.batch_req_builder.propose_checked = Some(true);
+                        for cb in &mut self.fsm.batch_req_builder.callbacks {
+                            cb.invoke_proposed();
+                        }
                     }
                 }
+                self.fsm.batch_req_builder.request = Some(cmd);
             }
-            self.fsm.batch_req_builder.request = Some(cmd);
+            if self.fsm.batch_req_builder.request.is_some() {
+                self.ctx.raft_metrics.ready.propose_delay.inc();
+            }
         }
     }
 
