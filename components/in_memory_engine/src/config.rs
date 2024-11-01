@@ -15,14 +15,14 @@ const MIN_GC_RUN_INTERVAL: Duration = Duration::from_secs(10);
 // The maximum interval for GC run is 10 minutes which equals to the minimum
 // value of TiDB GC lifetime.
 const MAX_GC_RUN_INTERVAL: Duration = Duration::from_secs(600);
-// the maximum write kv throughput(20MiB), this is an empiracal value.
+// the maximum write kv throughput(20MiB), this is an empirical value.
 const MAX_WRITE_KV_SPEED: u64 = 20 * 1024 * 1024;
-// The maximun duration in seconds we expect IME to release enough memory after
+// The maximum duration in seconds we expect IME to release enough memory after
 // memory usage reaches `evict_threshold`. This is an empiracal value.
 // We use this value to determine the default value of `evict_threshold` based
 // on `capacity`.
 const MAX_RESERVED_DURATION_FOR_WRITE: u64 = 10;
-// Regions' mvcc read amplificatoin statistics is updated every 1min, so we set
+// Regions' mvcc read amplification statistics is updated every 1min, so we set
 // the minimal load&evcit check duration to 2min.
 const MIN_LOAD_EVICT_INTERVAL: Duration = Duration::from_secs(120);
 
