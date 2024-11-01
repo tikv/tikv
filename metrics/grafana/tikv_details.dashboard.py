@@ -2361,7 +2361,7 @@ def RaftProcess() -> RowPanel:
         [
             heatmap_panel(
                 title="Store fsm poll round",
-                description="Round of one store fsm being continuously polled",
+                description="Number of polling rounds for an FSM to finish processing all messages",
                 metric="tikv_batch_system_fsm_poll_rounds_bucket",
                 label_selectors=['type="store"'],
             ),
