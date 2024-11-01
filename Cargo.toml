@@ -161,7 +161,7 @@ smallvec = "1.4"
 sst_importer = { workspace = true }
 strum = { version = "0.20", features = ["derive"] }
 sync_wrapper = "0.1.1"
-sysinfo = "0.26"
+sysinfo = "0.32"
 tempfile = "3.0"
 thiserror = "1.0"
 tidb_query_common = { workspace = true }
@@ -222,8 +222,6 @@ fs2 = { git = "https://github.com/tikv/fs2-rs", branch = "tikv" }
 
 # Remove this when a new version is release. We need to solve rust-lang/cmake-rs#143.
 cmake = { git = "https://github.com/rust-lang/cmake-rs" }
-
-sysinfo = { git = "https://github.com/tikv/sysinfo", branch = "0.26-fix-cpu" }
 # When you modify TiKV cooperatively with kvproto, this will be useful to submit the PR to TiKV and the PR to
 # kvproto at the same time.
 # After the PR to kvproto is merged, remember to comment this out and run `cargo update -p kvproto`.

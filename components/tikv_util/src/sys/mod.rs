@@ -2,6 +2,7 @@
 
 // re-export some traits for ease of use
 use std::{
+    collections::HashMap,
     path::Path,
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -9,8 +10,8 @@ use std::{
 use fail::fail_point;
 #[cfg(target_os = "linux")]
 use lazy_static::lazy_static;
-use sysinfo::RefreshKind;
-pub use sysinfo::{CpuExt, DiskExt, NetworkExt, ProcessExt, SystemExt};
+pub use sysinfo::{Cpu, Disks, NetworkData, Process, System};
+use sysinfo::{LoadAvg, MemoryRefreshKind, Networks, Pid, ProcessesToUpdate, RefreshKind};
 
 use crate::config::ReadableSize;
 
@@ -137,8 +138,104 @@ impl SysQuota {
     }
 
     fn sysinfo_memory_limit_in_bytes() -> u64 {
-        let system = sysinfo::System::new_with_specifics(RefreshKind::new().with_memory());
-        system.total_memory()
+        let system = sysinfo::System::new_with_specifics(
+            RefreshKind::new().with_memory(MemoryRefreshKind::everything()),
+        );
+        // If cgroup limits are available, use the minimum of cgroup and system limits.
+        // TODO: replace self-defined `CgroupSys` with sysinfo::CgroupLimits later.
+        std::cmp::min(
+            system.total_memory(),
+            system
+                .cgroup_limits()
+                .map_or(u64::MAX, |cgroups| cgroups.total_memory),
+        )
+    }
+}
+
+/// A wrapper of `sysinfo::System`, `sysinfo::Disks` and `sysinfo::Networks` to
+/// provide more functionalities. It's used to get system information and
+/// refresh them periodically.
+///
+/// Typically, it's used in `DiagnosticsService` to provide system information.
+pub struct SystemInfo {
+    system: System,
+    disks: Disks,
+    networks: Networks,
+}
+
+impl Default for SystemInfo {
+    fn default() -> Self {
+        SystemInfo::new()
+    }
+}
+
+impl SystemInfo {
+    #[inline]
+    fn new() -> Self {
+        SystemInfo {
+            system: System::new_all(),
+            disks: Disks::new_with_refreshed_list(),
+            networks: Networks::new_with_refreshed_list(),
+        }
+    }
+
+    #[inline]
+    pub fn system(&self) -> &System {
+        &self.system
+    }
+
+    #[inline]
+    pub fn disks(&self) -> &Disks {
+        &self.disks
+    }
+
+    #[inline]
+    pub fn networks(&self) -> &Networks {
+        &self.networks
+    }
+
+    #[inline]
+    pub fn processes(&self) -> &HashMap<Pid, Process> {
+        self.system.processes()
+    }
+
+    #[inline]
+    pub fn system_load_average(&self) -> LoadAvg {
+        sysinfo::System::load_average()
+    }
+
+    #[inline]
+    pub fn refresh_all(&mut self) {
+        self.system.refresh_all();
+        self.refresh_networks();
+        self.refresh_disks();
+    }
+
+    #[inline]
+    pub fn refresh_cpu(&mut self) {
+        self.system.refresh_cpu_all();
+    }
+
+    #[inline]
+    pub fn refresh_memory(&mut self) {
+        self.system.refresh_memory();
+    }
+
+    #[inline]
+    pub fn refresh_processes(&mut self) {
+        self.system.refresh_processes(ProcessesToUpdate::All, true);
+    }
+
+    #[inline]
+    pub fn refresh_networks(&mut self) {
+        self.networks.refresh_list();
+        self.networks.refresh();
+    }
+
+    #[inline]
+    pub fn refresh_disks(&mut self) {
+        self.disks.refresh_list();
+        self.disks.refresh();
     }
 }
 
