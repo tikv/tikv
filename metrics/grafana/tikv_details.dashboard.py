@@ -2306,10 +2306,100 @@ def RaftProcess() -> RowPanel:
                 yaxis=yaxis(format=UNITS.SECONDS),
                 metric="tikv_replica_read_lock_check_duration_seconds_bucket",
             ),
+            graph_panel(
+                title="Fsm reschedule ops",
+                description="The number of fsm reschedule ops",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_batch_system_fsm_reschedule_total",
+                            by_labels=["type"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            heatmap_panel(
+                title="Store fsm schedule wait duration",
+                description="Duration of store fsm waiting to be polled",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_batch_system_fsm_schedule_wait_seconds_bucket",
+                label_selectors=['type="store"'],
+            ),
+            heatmap_panel(
+                title="Apply fsm schedule wait duration",
+                description="Duration of apply fsm waiting to be polled.e",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_batch_system_fsm_schedule_wait_seconds_bucket",
+                label_selectors=['type="apply"'],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            heatmap_panel(
+                title="Store fsm poll duration",
+                description="Total time for an store FSM to finish processing all messages, potentially over multiple polling rounds.",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_batch_system_fsm_poll_seconds_bucket",
+                label_selectors=['type="store"'],
+            ),
+            heatmap_panel(
+                title="Apply fsm poll duration",
+                description="Total time for an apply FSM to finish processing all messages, potentially over multiple polling rounds",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_batch_system_fsm_poll_seconds_bucket",
+                label_selectors=['type="apply"'],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            heatmap_panel(
+                title="Store fsm poll round",
+                description="Number of polling rounds for an store FSM to finish processing all messages",
+                metric="tikv_batch_system_fsm_poll_rounds_bucket",
+                label_selectors=['type="store"'],
+            ),
+            heatmap_panel(
+                title="Apply fsm poll round",
+                description="Number of polling rounds for an apply FSM to finish processing all messages",
+                metric="tikv_batch_system_fsm_poll_rounds_bucket",
+                label_selectors=['type="apply"'],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            heatmap_panel(
+                title="Store fsm count per poll",
+                description="Number of store fsm polled in one poll",
+                metric="tikv_batch_system_fsm_count_per_poll_bucket",
+                label_selectors=['type="store"'],
+            ),
+            heatmap_panel(
+                title="Apply fsm count per poll",
+                description="Number of apply fsm polled in one poll",
+                metric="tikv_batch_system_fsm_count_per_poll_bucket",
+                label_selectors=['type="apply"'],
+            ),
+        ]
+    )
+    layout.row(
+        [
             heatmap_panel(
                 title="Peer msg length distribution",
                 description="The length of peer msgs for each round handling",
                 metric="tikv_raftstore_peer_msg_len_bucket",
+            ),
+            heatmap_panel(
+                title="Apply msg length distribution",
+                description="The length of apply msgs for each round handling",
+                metric="tikv_raftstore_apply_msg_len_bucket",
             ),
         ]
     )
@@ -4314,7 +4404,7 @@ def CoprocessorDetail() -> RowPanel:
                     target(
                         expr=expr_sum_rate(
                             "tikv_coprocessor_scan_details",
-                            label_selectors=['req=~"index|index_by_region_cache"'],
+                            label_selectors=['req=~"index|index_by_in_memory_engine"'],
                             by_labels=["tag"],
                         ),
                         additional_groupby=True,
@@ -4348,7 +4438,7 @@ def CoprocessorDetail() -> RowPanel:
                     target(
                         expr=expr_sum_rate(
                             "tikv_coprocessor_scan_details",
-                            label_selectors=['req=~"index|index_by_region_cache"'],
+                            label_selectors=['req=~"index|index_by_in_memory_engine"'],
                             by_labels=["cf", "tag"],
                         ),
                         additional_groupby=True,
@@ -4503,6 +4593,10 @@ def InMemoryEngine() -> RowPanel:
                     ),
                 ],
             ),
+        ]
+    )
+    layout.row(
+        [
             graph_panel(
                 title="GC Filter",
                 description="Rang cache engine garbage collection information",
@@ -4746,6 +4840,10 @@ def InMemoryEngine() -> RowPanel:
                     ),
                 ],
             ),
+        ]
+    )
+    layout.row(
+        [
             graph_panel(
                 title="Auto GC SafePoint Gap",
                 description="The gap between newest auto gc safe point and oldest auto gc safe point of regions cached in the in-memroy engine",

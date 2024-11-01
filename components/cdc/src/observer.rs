@@ -263,7 +263,7 @@ mod tests {
         region.mut_peers().push(new_peer(3, 3));
 
         let mut ctx = ObserverContext::new(&region);
-        observer.on_role_change(&mut ctx, &RoleChange::new(StateRole::Follower));
+        observer.on_role_change(&mut ctx, &RoleChange::new_for_test(StateRole::Follower));
         rx.recv_timeout(Duration::from_millis(10)).unwrap_err();
 
         let oid = ObserveId::new();
@@ -329,7 +329,7 @@ mod tests {
         };
 
         // No event if it changes to leader.
-        observer.on_role_change(&mut ctx, &RoleChange::new(StateRole::Leader));
+        observer.on_role_change(&mut ctx, &RoleChange::new_for_test(StateRole::Leader));
         rx.recv_timeout(Duration::from_millis(10)).unwrap_err();
 
         // unsubscribed fail if observer id is different.
@@ -338,13 +338,13 @@ mod tests {
         // No event if it is unsubscribed.
         let oid_ = observer.unsubscribe_region(1, oid).unwrap();
         assert_eq!(oid_, oid);
-        observer.on_role_change(&mut ctx, &RoleChange::new(StateRole::Follower));
+        observer.on_role_change(&mut ctx, &RoleChange::new_for_test(StateRole::Follower));
         rx.recv_timeout(Duration::from_millis(10)).unwrap_err();
 
         // No event if it is unsubscribed.
         region.set_id(999);
         let mut ctx = ObserverContext::new(&region);
-        observer.on_role_change(&mut ctx, &RoleChange::new(StateRole::Follower));
+        observer.on_role_change(&mut ctx, &RoleChange::new_for_test(StateRole::Follower));
         rx.recv_timeout(Duration::from_millis(10)).unwrap_err();
     }
 }

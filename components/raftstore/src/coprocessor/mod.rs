@@ -295,8 +295,7 @@ pub struct RoleChange {
 }
 
 impl RoleChange {
-    #[cfg(any(test, feature = "testexport"))]
-    pub fn new(state: StateRole) -> Self {
+    pub fn new_for_test(state: StateRole) -> Self {
         RoleChange {
             state,
             leader_id: raft::INVALID_ID,

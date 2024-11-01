@@ -139,7 +139,7 @@ impl Coprocessor for LoadEvictionObserver {}
 impl QueryObserver for LoadEvictionObserver {
     fn pre_exec_query(
         &self,
-        ctx: &mut ObserverContext<'_>,
+        _: &mut ObserverContext<'_>,
         reqs: &[kvproto::raft_cmdpb::Request],
         _: u64,
         _: u64,
@@ -304,11 +304,11 @@ mod tests {
             self.region_events.lock().unwrap().push(event);
         }
 
-        fn region_cached(&self, range: &Region) -> bool {
+        fn region_cached(&self, _: &Region) -> bool {
             unreachable!()
         }
 
-        fn load_region(&self, range: &Region) {
+        fn load_region(&self, _: &Region) {
             unreachable!()
         }
     }
@@ -397,7 +397,7 @@ mod tests {
         region.set_id(1);
         region.mut_peers().push(Peer::default());
         let mut ctx = ObserverContext::new(&region);
-        let role_change = RoleChange::new(StateRole::Leader);
+        let role_change = RoleChange::new_for_test(StateRole::Leader);
         observer.on_role_change(&mut ctx, &role_change);
         let cached_region = CacheRegion::from_region(&region);
         let expected = RegionEvent::TryLoad {
