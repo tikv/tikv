@@ -72,7 +72,7 @@ lazy_static! {
     pub static ref FSM_POLL_ROUND_VEC: HistogramVec =
     register_histogram_vec!(
         "tikv_batch_system_fsm_poll_rounds",
-        "Round of one fsm being continuously polled.",
+        "Number of polling rounds for an FSM to finish processing all messages.",
         &["type"],
         exponential_buckets(1.0, 2.0, 20).unwrap(),
     ).unwrap();
