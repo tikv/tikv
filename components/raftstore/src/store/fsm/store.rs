@@ -793,9 +793,7 @@ where
 {
     type Message = StoreMsg<EK>;
 
-    fn fsm_type() -> FsmType {
-        FsmType::store
-    }
+    const FSM_TYPE: FsmType = FsmType::store;
 
     #[inline]
     fn is_stopped(&self) -> bool {

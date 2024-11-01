@@ -576,9 +576,7 @@ where
 {
     type Message = PeerMsg<EK>;
 
-    fn fsm_type() -> FsmType {
-        FsmType::store
-    }
+    const FSM_TYPE: FsmType = FsmType::store;
 
     #[inline]
     fn is_stopped(&self) -> bool {

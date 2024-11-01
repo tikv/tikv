@@ -4562,9 +4562,7 @@ where
 {
     type Message = Box<Msg<EK>>;
 
-    fn fsm_type() -> FsmType {
-        FsmType::apply
-    }
+    const FSM_TYPE: FsmType = FsmType::apply;
 
     #[inline]
     fn is_stopped(&self) -> bool {
@@ -4661,9 +4659,7 @@ impl ControlFsm {
 impl Fsm for ControlFsm {
     type Message = ControlMsg;
 
-    fn fsm_type() -> FsmType {
-        FsmType::apply
-    }
+    const FSM_TYPE: FsmType = FsmType::apply;
 
     #[inline]
     fn is_stopped(&self) -> bool {

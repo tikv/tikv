@@ -103,9 +103,7 @@ impl<EK: KvEngine, ER: RaftEngine> PeerFsm<EK, ER> {
 impl<EK: KvEngine, ER: RaftEngine> Fsm for PeerFsm<EK, ER> {
     type Message = PeerMsg;
 
-    fn fsm_type() -> batch_system::FsmType {
-        batch_system::FsmType::store
-    }
+    const FSM_TYPE: batch_system::FsmType = batch_system::FsmType::store;
 
     #[inline]
     fn is_stopped(&self) -> bool {

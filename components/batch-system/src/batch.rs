@@ -61,9 +61,9 @@ impl<N: Fsm> MetricsCollector<N> {
 
 impl<N: Fsm> Drop for MetricsCollector<N> {
     fn drop(&mut self) {
-        FSM_POLL_ROUND.get(N::fsm_type()).observe(self.round as f64);
+        FSM_POLL_ROUND.get(N::FSM_TYPE).observe(self.round as f64);
         FSM_POLL_DURATION
-            .get(N::fsm_type())
+            .get(N::FSM_TYPE)
             .observe(self.timer.saturating_elapsed_secs());
     }
 }
@@ -118,7 +118,7 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
 
     fn tick_round(&mut self) {
         FSM_COUNT_PER_POLL
-            .get(N::fsm_type())
+            .get(N::FSM_TYPE)
             .observe(self.normals.len() as f64);
         for f in self.normals.iter_mut().filter_map(Option::as_mut) {
             f.metrics.round += 1;
@@ -129,13 +129,13 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
         match fsm {
             FsmTypes::Normal((n, schedule_time)) => {
                 FSM_SCHEDULE_WAIT_DURATION
-                    .get(N::fsm_type())
+                    .get(N::FSM_TYPE)
                     .observe(schedule_time.saturating_elapsed_secs());
                 self.normals.push(Some(NormalFsm::new(n)));
             }
             FsmTypes::Control((c, schedule_time)) => {
                 FSM_SCHEDULE_WAIT_DURATION
-                    .get(C::fsm_type())
+                    .get(C::FSM_TYPE)
                     .observe(schedule_time.saturating_elapsed_secs());
                 assert!(self.control.is_none());
                 self.control = Some(c);
@@ -208,7 +208,7 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
             Some(ReschedulePolicy::Release(l)) => self.release(to_schedule, l),
             Some(ReschedulePolicy::Remove) => self.remove(to_schedule),
             Some(ReschedulePolicy::Schedule) => {
-                FSM_RESCHEDULE_COUNTER.get(N::fsm_type()).inc();
+                FSM_RESCHEDULE_COUNTER.get(N::FSM_TYPE).inc();
                 router.normal_scheduler.schedule(to_schedule.fsm);
                 None
             }

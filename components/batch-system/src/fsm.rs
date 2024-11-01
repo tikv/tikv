@@ -41,7 +41,7 @@ pub trait FsmScheduler {
 pub trait Fsm: Send + 'static {
     type Message: Send + ResourceMetered;
 
-    fn fsm_type() -> FsmType;
+    const FSM_TYPE: FsmType;
 
     fn is_stopped(&self) -> bool;
 

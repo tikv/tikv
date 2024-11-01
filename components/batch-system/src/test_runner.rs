@@ -54,9 +54,7 @@ pub struct Runner {
 impl Fsm for Runner {
     type Message = Message;
 
-    fn fsm_type() -> FsmType {
-        FsmType::store
-    }
+    const FSM_TYPE: FsmType = FsmType::store;
 
     fn is_stopped(&self) -> bool {
         self.is_stopped
