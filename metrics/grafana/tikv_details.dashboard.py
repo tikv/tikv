@@ -2325,14 +2325,14 @@ def RaftProcess() -> RowPanel:
         [
             heatmap_panel(
                 title="Store fsm schedule wait duration",
-                description="The wait time of store fsm schedule",
+                description="Duration of store fsm waiting to be polled",
                 yaxis=yaxis(format=UNITS.SECONDS),
                 metric="tikv_batch_system_fsm_schedule_wait_seconds_bucket",
                 label_selectors=['type="store"'],
             ),
             heatmap_panel(
                 title="Apply fsm schedule wait duration",
-                description="The wait time of apply fsm schedule",
+                description="Duration of apply fsm waiting to be polled.e",
                 yaxis=yaxis(format=UNITS.SECONDS),
                 metric="tikv_batch_system_fsm_schedule_wait_seconds_bucket",
                 label_selectors=['type="apply"'],
@@ -2343,14 +2343,14 @@ def RaftProcess() -> RowPanel:
         [
             heatmap_panel(
                 title="Store fsm poll duration",
-                description="Total time for an FSM to finish processing all messages, potentially over multiple polling rounds.",
+                description="Total time for an store FSM to finish processing all messages, potentially over multiple polling rounds.",
                 yaxis=yaxis(format=UNITS.SECONDS),
                 metric="tikv_batch_system_fsm_poll_seconds_bucket",
                 label_selectors=['type="store"'],
             ),
             heatmap_panel(
                 title="Apply fsm poll duration",
-                description="The time of apply fsm poll",
+                description="Total time for an apply FSM to finish processing all messages, potentially over multiple polling rounds",
                 yaxis=yaxis(format=UNITS.SECONDS),
                 metric="tikv_batch_system_fsm_poll_seconds_bucket",
                 label_selectors=['type="apply"'],
@@ -2361,13 +2361,13 @@ def RaftProcess() -> RowPanel:
         [
             heatmap_panel(
                 title="Store fsm poll round",
-                description="Number of polling rounds for an FSM to finish processing all messages",
+                description="Number of polling rounds for an store FSM to finish processing all messages",
                 metric="tikv_batch_system_fsm_poll_rounds_bucket",
                 label_selectors=['type="store"'],
             ),
             heatmap_panel(
                 title="Apply fsm poll round",
-                description="Round of one apply fsm being continuously polled",
+                description="Number of polling rounds for an apply FSM to finish processing all messages",
                 metric="tikv_batch_system_fsm_poll_rounds_bucket",
                 label_selectors=['type="apply"'],
             ),
