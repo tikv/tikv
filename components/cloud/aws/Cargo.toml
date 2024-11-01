@@ -11,7 +11,7 @@ failpoints = ["fail/failpoints"]
 [dependencies]
 async-trait = "0.1"
 
-aws-config = { version = "1", features = [], default-features = false}
+aws-config = { version = "1", features = [], default-features = false }
 aws-credential-types = { version = "1", features = ["hardcoded-credentials"] }
 # Note: sts@1.40.0, s3@1.47.0 and kms@1.41.0 is the latest version that supports rustc 1.77...
 # We may update this after we update our rustc.
@@ -48,9 +48,8 @@ tokio-util = { version = "0.7" }
 url = "2.0"
 uuid = { version = "0.8", features = ["v4"] }
 
-
 [dev-dependencies]
 aws-smithy-runtime = { version = "1.4.0", features = ["test-util", "client"] }
 base64 = "0.13"
 futures = "0.3"
-tokio = {version = "1.5", features = ["macros"]}
+tokio = { version = "1.5", features = ["macros"] }
