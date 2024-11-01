@@ -117,7 +117,7 @@ impl<E: KvEngine> Initializer<E> {
 
         let region_id = self.region_id;
         let downstream_id = self.downstream_id;
-        let observe_id = self.observe_handle.id;
+        let observe_id = self.observe_id;
         // when there are a lot of pending incremental scan tasks, they may be stopped,
         // check the state here to accelerate tasks cancel process.
         if self.downstream_state.load() == DownstreamState::Stopped {
@@ -133,10 +133,6 @@ impl<E: KvEngine> Initializer<E> {
         // we need to acquire scan concurrency permit before taking snapshot.
         let sched = self.sched.clone();
         let region_epoch = self.region_epoch.clone();
-<<<<<<< HEAD
-        let downstream_id = self.downstream_id;
-=======
->>>>>>> c40977bb27 (cdc: cancel incremental scan tasks in time (#17670))
         let downstream_state = self.downstream_state.clone();
         let (cb, fut) = tikv_util::future::paired_future_callback();
         let sink = self.sink.clone();
