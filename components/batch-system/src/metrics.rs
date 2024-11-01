@@ -52,7 +52,7 @@ lazy_static! {
     pub static ref FSM_SCHEDULE_WAIT_DURATION_VEC: HistogramVec =
     register_histogram_vec!(
         "tikv_batch_system_fsm_schedule_wait_seconds",
-        "Duration of fsm waiting to schedule.",
+        "Duration of fsm waiting to be polled.",
         &["type"],
         exponential_buckets(0.001, 1.59, 20).unwrap(), // max 10s
     ).unwrap();
