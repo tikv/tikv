@@ -854,10 +854,40 @@ fn test_when_applied_conf_change_on_learner_transferee() {
     fail::cfg("apply_on_conf_change_1_1", "pause").unwrap();
 
     // Demote peer-2 to be a learner.
-    cluster.pd_client.joint_confchange(
+    pd_client.joint_confchange(
         region_id,
         vec![(ConfChangeType::AddLearnerNode, new_learner_peer(2, 2))],
     );
+    sleep_ms(300);
+
+    pd_client.transfer_leader(region_id, new_peer(2, 2), vec![]);
+    sleep_ms(300);
+    assert_eq!(
+        pd_client.check_region_leader(region_id, new_peer(2, 2)),
+        false
+    );
+
+    pd_client.transfer_leader(region_id, new_peer(3, 3), vec![]);
+    pd_client.region_leader_must_be(region_id, new_peer(3, 3));
+}
+
+// This test verifies that a leader transfer is rejected when the transferee
+// has been demoted to a witness but the leader has not yet applied this
+// configuration change.
+#[test]
+fn test_when_applied_conf_change_on_witness_transferee() {
+    let mut cluster = new_server_cluster(0, 3);
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+    let region_id = cluster.run_conf_change();
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+    pd_client.region_leader_must_be(region_id, new_peer(1, 1));
+
+    fail::cfg("apply_on_conf_change_1_1", "pause").unwrap();
+
+    // Demote peer-2 to be a witness.
+    pd_client.must_switch_witnesses(region_id, vec![2], vec![true]);
     sleep_ms(300);
 
     pd_client.transfer_leader(region_id, new_peer(2, 2), vec![]);
