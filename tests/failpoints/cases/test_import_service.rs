@@ -106,7 +106,7 @@ fn test_download_to_full_disk() {
 
 #[test]
 fn test_ingest_reentrant() {
-    let (cluster, ctx, _tikv, import) = new_cluster_and_tikv_import_client();
+    let (_cluster, ctx, _tikv, import) = new_cluster_and_tikv_import_client();
 
     let temp_dir = Builder::new()
         .prefix("test_ingest_reentrant")
