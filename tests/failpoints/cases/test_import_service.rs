@@ -5,7 +5,6 @@ use std::{
     time::Duration,
 };
 
-use file_system::calc_crc32;
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{disk_usage::DiskUsage, import_sstpb::*, tikvpb_grpc::TikvClient};
@@ -134,15 +133,9 @@ fn test_ingest_reentrant() {
         .unwrap()
         .get_path(&meta);
 
-    let checksum1 = calc_crc32(save_path.clone()).unwrap();
     // Do ingest and it will ingest success.
     must_ingest_sst(&import, ctx.clone(), meta.clone());
 
-    let checksum2 = calc_crc32(save_path).unwrap();
-    // TODO: Remove this once write_global_seqno is deprecated.
-    // Checksums are the same since the global seqno in the SST file no longer gets
-    // updated with the default setting, which is write_global_seqno=false.
-    assert_eq!(checksum1, checksum2);
     // Do ingest again and it can be reentrant
     must_ingest_sst(&import, ctx.clone(), meta);
 }

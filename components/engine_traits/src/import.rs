@@ -12,8 +12,4 @@ pub trait IngestExternalFileOptions {
     fn new() -> Self;
 
     fn move_files(&mut self, f: bool);
-
-    fn get_write_global_seqno(&self) -> bool;
-
-    fn set_write_global_seqno(&mut self, f: bool);
 }
