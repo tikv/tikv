@@ -123,16 +123,6 @@ fn test_ingest_reentrant() {
     // Don't delete ingested sst file or we cannot find sst file in next ingest.
     fail::cfg("dont_delete_ingested_sst", "1*return").unwrap();
 
-    let node_id = *cluster.sim.rl().get_node_ids().iter().next().unwrap();
-    // Use sst save path to track the sst file checksum.
-    let save_path = cluster
-        .sim
-        .rl()
-        .importers
-        .get(&node_id)
-        .unwrap()
-        .get_path(&meta);
-
     // Do ingest and it will ingest success.
     must_ingest_sst(&import, ctx.clone(), meta.clone());
 
