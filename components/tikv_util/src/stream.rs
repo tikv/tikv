@@ -13,8 +13,15 @@ use std::{
 use bytes::Bytes;
 use futures::stream::{self, Stream};
 use futures_util::io::AsyncRead;
+<<<<<<< HEAD
 use rand::{thread_rng, Rng};
 use tokio::{runtime::Builder, time::sleep};
+=======
+use tokio::runtime::Builder;
+
+const MAX_RETRY_DELAY: Duration = Duration::from_secs(32);
+const MAX_RETRY_TIMES: usize = 14;
+>>>>>>> d434617430 (aws: switch to aws-sdk (#13814))
 
 /// Wrapper of an `AsyncRead` instance, exposed as a `Sync` `Stream` of `Bytes`.
 pub struct AsyncReadAsSyncStreamOfBytes<R> {

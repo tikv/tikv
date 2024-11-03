@@ -25,6 +25,7 @@ use futures_util::{
     future::FutureExt,
     io::{AsyncRead, AsyncReadExt},
     stream::TryStreamExt,
+    StreamExt,
 };
 pub use kvproto::brpb::S3 as InputConfig;
 use thiserror::Error;
@@ -252,7 +253,11 @@ impl S3Storage {
         let mut loader =
             aws_config::defaults(BehaviorVersion::latest()).credentials_provider(creds);
 
+<<<<<<< HEAD
         loader = util::configure_region(loader, &bucket_region)?;
+=======
+        loader = util::configure_region(loader, &bucket_region, !bucket_endpoint.is_empty())?;
+>>>>>>> d434617430 (aws: switch to aws-sdk (#13814))
         loader = util::configure_endpoint(loader, &bucket_endpoint);
         loader = loader.http_client(client);
         Ok(loader.load().await)
@@ -741,6 +746,80 @@ impl BlobStorage for S3Storage {
     }
 }
 
+<<<<<<< HEAD
+=======
+impl DeletableStorage for S3Storage {
+    fn delete(&self, name: &str) -> LocalBoxFuture<'_, io::Result<()>> {
+        let key = self.maybe_prefix_key(name);
+        async move {
+            let now = Instant::now();
+            let res = self
+                .client
+                .delete_object()
+                .bucket(self.config.bucket.bucket.to_string())
+                .key(key.clone())
+                .send()
+                .await;
+            CLOUD_REQUEST_HISTOGRAM_VEC
+                .with_label_values(&["s3", "delete_object"])
+                .observe(now.saturating_elapsed().as_secs_f64());
+            match res {
+                Ok(_) => Ok(()),
+                Err(e) => Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("failed to delete object {}", e),
+                )),
+            }
+        }
+        .boxed_local()
+    }
+}
+
+impl IterableStorage for S3Storage {
+    fn iter_prefix(
+        &self,
+        prefix: &str,
+    ) -> Pin<Box<dyn Stream<Item = std::result::Result<BlobObject, io::Error>> + '_>> {
+        let builder = self
+            .client
+            .list_objects_v2()
+            .bucket(self.config.bucket.bucket.to_string())
+            .prefix(self.maybe_prefix_key(prefix));
+        let mut page_stream = builder.into_paginator().send();
+        let stream = futures::stream::poll_fn(move |cx| page_stream.poll_next(cx));
+
+        stream
+            .map_ok(|page| {
+                page.contents
+                    .map(|cs| {
+                        futures::stream::iter(cs.into_iter().map(|v| {
+                            Ok(BlobObject {
+                                key: v.key.map(|k| self.strip_prefix_if_needed(k)).ok_or_else(
+                                    || {
+                                        io::Error::new(
+                                            io::ErrorKind::InvalidData,
+                                            "object key is empty",
+                                        )
+                                    },
+                                )?,
+                            })
+                        }))
+                        .left_stream()
+                    })
+                    .unwrap_or_else(|| futures::stream::empty().right_stream())
+            })
+            .map_err(|err| {
+                io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("sdk encounters an unexpected error: {:?}", err),
+                )
+            })
+            .try_flatten()
+            .boxed_local()
+    }
+}
+
+>>>>>>> d434617430 (aws: switch to aws-sdk (#13814))
 #[cfg(test)]
 mod tests {
     use std::assert_matches::assert_matches;
