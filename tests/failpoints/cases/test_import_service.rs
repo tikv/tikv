@@ -469,6 +469,7 @@ fn test_flushed_applied_index_after_ingset() {
 
     // file a write to trigger ready flush, even if the write is not flushed.
     must_raw_put(&client, ctx, b"key1".to_vec(), b"value1".to_vec());
+    std::thread::sleep(std::time::Duration::from_millis(50));
     let count = sst_file_count(&cluster.paths);
     assert_eq!(0, count);
 
