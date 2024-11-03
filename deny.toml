@@ -8,11 +8,11 @@ deny = [
     # We allow md5 for AWS S3 object lock feature which requires
     # computting object's md5.
     { name = "md5", wrappers = ["aws"] },
-    { name = "md-5" },
-    { name = "sha1" },
+    { name = "md-5", wrappers = ["aws-smithy-checksums"]},
+    { name = "sha1", wrappers = ["aws-smithy-checksums"]},
     { name = "sha-1" },
-    # We allow sha2 for oauth2 crate, because it does use sha2 in TiKV use case.
-    { name = "sha2", wrappers = ["oauth2"] },
+    # We allow sha2 for oauth2 and aws rust sdk crate, because it does use sha2 in TiKV use case.
+    { name = "sha2", wrappers = ["oauth2", "aws-sigv4", "aws-smithy-checksums", "aws-sdk-s3"] },
     { name = "sha3" },
     # Symmetric encryption
     { name = "aes" },
@@ -27,14 +27,18 @@ deny = [
     { name = "ecdsa" },
     { name = "ed25519" },
     # Message authentication codes
+<<<<<<< HEAD
     { name = "hamc" },
+=======
+    { name = "hmac", wrappers = ["aws-sigv4", "aws-sdk-s3"]},
+>>>>>>> d434617430 (aws: switch to aws-sdk (#13814))
     # We prefer the system native TLS or OpenSSL.
     { name = "rustls" },
     { name = "ring" },
     # Ban trait crates from RustCrypto.
     { name = "aead" },
     { name = "cipher" },
-    { name = "digest", wrappers = ["sha2"] },
+    { name = "digest", wrappers = ["sha2", "md-5", "sha1", "hmac"] },
     { name = "password-hash" },
     { name = "signature" },
 ]
