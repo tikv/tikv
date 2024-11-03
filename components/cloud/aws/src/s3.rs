@@ -901,7 +901,7 @@ mod tests {
             ReplayEvent::new(
                 http::Request::builder()
                     .uri(Uri::from_static(
-                        "https://s3.cn-north-1.amazonaws.com.cn/mybucket/mykey?uploads&x-id=CreateMultipartUpload"
+                        "https://s3.cn-north-1.amazonaws.com.cn/mybucket/mykey?uploads"
                     ))
                     .body(SdkBody::from(""))
                     .unwrap(),
@@ -946,7 +946,7 @@ mod tests {
             ReplayEvent::new(
                 http::Request::builder()
                     .uri(Uri::from_static(
-                        "https://s3.cn-north-1.amazonaws.com.cn/mybucket/mykey?x-id=CompleteMultipartUpload&uploadId=1"
+                        "https://s3.cn-north-1.amazonaws.com.cn/mybucket/mykey?uploadId=1"
                     ))
                     .body(SdkBody::from(
                         r#"<CompleteMultipartUpload xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Part><PartNumber>1</PartNumber></Part><Part><PartNumber>2</PartNumber></Part><Part><PartNumber>3</PartNumber></Part></CompleteMultipartUpload>"#
