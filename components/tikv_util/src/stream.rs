@@ -13,10 +13,10 @@ use std::{
 use bytes::Bytes;
 use futures::stream::{self, Stream};
 use futures_util::io::AsyncRead;
-use http::status::StatusCode;
-use rand::{thread_rng, Rng};
-use rusoto_core::{request::HttpDispatchError, RusotoError};
-use tokio::{runtime::Builder, time::sleep};
+use tokio::runtime::Builder;
+
+const MAX_RETRY_DELAY: Duration = Duration::from_secs(32);
+const MAX_RETRY_TIMES: usize = 14;
 
 /// Wrapper of an `AsyncRead` instance, exposed as a `Sync` `Stream` of `Bytes`.
 pub struct AsyncReadAsSyncStreamOfBytes<R> {
@@ -191,32 +191,11 @@ where
     }
 }
 
-pub fn http_retriable(status: StatusCode) -> bool {
-    status.is_server_error() || status == StatusCode::REQUEST_TIMEOUT
-}
-
-impl<E> RetryError for RusotoError<E> {
-    fn is_retryable(&self) -> bool {
-        match self {
-            Self::HttpDispatch(e) => e.is_retryable(),
-            Self::Unknown(resp) if http_retriable(resp.status) => true,
-            _ => false,
-        }
-    }
-}
-
-impl RetryError for HttpDispatchError {
-    fn is_retryable(&self) -> bool {
-        true
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::{cell::RefCell, pin::Pin};
 
     use futures::{Future, FutureExt};
-    use rusoto_core::HttpDispatchError;
 
     use super::RetryError;
     use crate::stream::retry;
@@ -235,7 +214,7 @@ mod tests {
     #[test]
     fn test_retry_is_send_even_return_type_not_sync() {
         struct BangSync(Option<RefCell<()>>);
-        let fut = retry(|| futures::future::ok::<_, HttpDispatchError>(BangSync(None)));
+        let fut = retry(|| futures::future::ok::<_, TriviallyRetry>(BangSync(None)));
         assert_send(fut)
     }
 
