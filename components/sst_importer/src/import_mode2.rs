@@ -9,7 +9,6 @@ use collections::{HashMap, HashSet};
 use futures_util::compat::Future01CompatExt;
 use kvproto::{import_sstpb::Range, metapb::Region};
 use tikv_util::{resizable_threadpool::ResizableRuntimeHandle, timer::GLOBAL_TIMER_HANDLE};
-use tokio::runtime::Handle;
 
 use super::Config;
 
@@ -54,49 +53,6 @@ impl ImportModeSwitcherV2 {
             import_mode_ranges: HashMap::default(),
         }));
         ImportModeSwitcherV2 { inner }
-    }
-
-    // Periodically perform timeout check to change import mode of some regions back
-    // to normal mode.
-    pub fn start(&self, executor: &Handle) {
-        // spawn a background future to put regions back into normal mode after timeout
-        let inner = self.inner.clone();
-        let switcher = Arc::downgrade(&inner);
-        let timer_loop = async move {
-            let mut prev_ranges = vec![];
-            // loop until the switcher has been dropped
-            while let Some(switcher) = switcher.upgrade() {
-                let next_check = {
-                    let now = Instant::now();
-                    let mut switcher = switcher.lock().unwrap();
-                    for range in prev_ranges.drain(..) {
-                        if let Some(next_check) = switcher.import_mode_ranges.get(&range) {
-                            if now >= *next_check {
-                                switcher.clear_import_mode_range(range);
-                            }
-                        }
-                    }
-
-                    let mut min_next_check = now + switcher.timeout;
-                    for (range, next_check) in &switcher.import_mode_ranges {
-                        if *next_check <= min_next_check {
-                            if *next_check < min_next_check {
-                                min_next_check = *next_check;
-                                prev_ranges.clear();
-                            }
-                            prev_ranges.push(range.clone());
-                        }
-                    }
-                    min_next_check
-                };
-
-                let ok = GLOBAL_TIMER_HANDLE.delay(next_check).compat().await.is_ok();
-                if !ok {
-                    warn!("failed to delay with global timer");
-                }
-            }
-        };
-        executor.spawn(timer_loop);
     }
 
     pub fn start_resizable_threads(&self, executor: &ResizableRuntimeHandle) {
@@ -198,9 +154,18 @@ pub fn range_overlaps(range1: &HashRange, range2: &Range) -> bool {
 mod test {
     use std::thread;
 
-    use tikv_util::config::ReadableDuration;
+    use tikv_util::{config::ReadableDuration, resizable_threadpool::ResizableRuntime};
+    use tokio::runtime::Runtime;
 
     use super::*;
+
+    type TokioResult<T> = std::io::Result<T>;
+
+    fn create_tokio_runtime(_: usize, _: &str) -> TokioResult<Runtime> {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+    }
 
     #[test]
     fn test_region_range_overlaps() {
@@ -311,10 +276,10 @@ mod test {
             ..Config::default()
         };
 
-        let threads = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
+        let mut threads =
+            ResizableRuntime::new("test", Box::new(create_tokio_runtime), Box::new(|_| {}));
+        threads.adjust_with(4);
+        let handle = ResizableRuntimeHandle::new(threads);
 
         let switcher = ImportModeSwitcherV2::new(&cfg);
         let mut region = Region::default();
@@ -341,14 +306,14 @@ mod test {
         assert!(switcher.region_in_import_mode(&region2));
         assert!(switcher.region_in_import_mode(&region3));
 
-        switcher.start(threads.handle());
+        switcher.start_resizable_threads(&handle);
 
         thread::sleep(Duration::from_millis(400));
         // renew the timeout of key_range2
         switcher.ranges_enter_import_mode(vec![key_range2]);
         thread::sleep(Duration::from_millis(400));
 
-        threads.block_on(tokio::task::yield_now());
+        handle.block_on(tokio::task::yield_now());
 
         // the range covering region and region2 should be cleared due to timeout.
         assert!(!switcher.region_in_import_mode(&region));
@@ -356,7 +321,7 @@ mod test {
         assert!(switcher.region_in_import_mode(&region3));
 
         thread::sleep(Duration::from_millis(400));
-        threads.block_on(tokio::task::yield_now());
+        handle.block_on(tokio::task::yield_now());
         assert!(!switcher.region_in_import_mode(&region3));
     }
 }
