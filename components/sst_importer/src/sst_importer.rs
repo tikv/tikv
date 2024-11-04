@@ -2339,13 +2339,14 @@ mod tests {
 
     #[test]
     fn test_update_import_num_threads() {
-        let threads = ResizableRuntime::new(
+        let mut threads = ResizableRuntime::new(
             "test",
             Box::new(create_tokio_runtime),
             Box::new(|new_size: usize| {
                 COUNTER.store(new_size, Ordering::SeqCst);
             }),
         );
+        threads.adjust_with(Config::default().num_threads);
         let handle = ResizableRuntimeHandle::new(threads);
         let mut cfg_mgr = ImportConfigManager::new(Config::default(), handle);
 
