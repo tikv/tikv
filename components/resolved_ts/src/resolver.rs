@@ -571,7 +571,7 @@ impl Resolver {
     // Returns the minimum possible (commit_ts - 1), based on the knowledge we have,
     // i.e. from all locks currently being tracked.
     // The function is to provide an upper bound of resolved-ts. By definition
-    // resolved-ts must be strictly larger than a future commit_ts.
+    // resolved-ts must be strictly smaller than a future commit_ts.
     //
     // "Oldest" doesn't mean it started first, but means it may have the smallest
     // commit_ts, which is the returned ts + 1.
