@@ -12,7 +12,6 @@ use engine_traits::{CfOptions, DbOptions, KvEngine};
 use futures_util::compat::Future01CompatExt;
 use kvproto::import_sstpb::*;
 use tikv_util::{resizable_threadpool::ResizableRuntimeHandle, timer::GLOBAL_TIMER_HANDLE};
-use tokio::{io::Result as TokioResult, runtime::Handle};
 
 use super::{Config, Result};
 
@@ -248,6 +247,7 @@ mod tests {
     use test_sst_importer::{new_test_engine, new_test_engine_with_options};
     use tikv_util::{config::ReadableDuration, resizable_threadpool::ResizableRuntime};
     use tokio::runtime::Runtime;
+    type TokioResult<T> = std::io::Result<T>;
 
     use super::*;
 

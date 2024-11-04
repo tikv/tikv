@@ -44,7 +44,7 @@ use tikv_util::{
     time::{Instant, Limiter},
     Either, HandyRwLock,
 };
-use tokio::{io::Result as TokioResult, runtime::Runtime, sync::OnceCell};
+use tokio::{runtime::Runtime, sync::OnceCell};
 use txn_types::{Key, TimeStamp, WriteRef};
 
 use crate::{
@@ -1653,6 +1653,7 @@ mod tests {
     use crate::{import_file::ImportPath, *};
 
     static COUNTER: AtomicUsize = AtomicUsize::new(0);
+    type TokioResult<T> = std::io::Result<T>;
 
     fn create_tokio_runtime(_: usize, _: &str) -> TokioResult<Runtime> {
         tokio::runtime::Builder::new_current_thread()
@@ -2298,7 +2299,7 @@ mod tests {
         };
         let change = cfg.diff(&cfg_new);
 
-        let mut threads =
+        let threads =
             ResizableRuntime::new("test", Box::new(create_tokio_runtime), Box::new(|_| {}));
         let handle = ResizableRuntimeHandle::new(threads);
 
