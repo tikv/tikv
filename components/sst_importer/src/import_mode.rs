@@ -87,7 +87,7 @@ impl ImportModeSwitcher {
         }));
         ImportModeSwitcher { inner, is_import }
     }
-
+    
     // start_resizable_threads only serves for resizable runtime
     pub fn start_resizable_threads<E: KvEngine>(&self, executor: &ResizableRuntimeHandle, db: E) {
         // spawn a background future to put TiKV back into normal mode after timeout
