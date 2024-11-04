@@ -59,7 +59,7 @@ use txn_types::{TimeStamp, TxnExtra, TxnExtraScheduler};
 use crate::{
     channel::{CdcEvent, SendError},
     delegate::{on_init_downstream, Delegate, Downstream, DownstreamId, DownstreamState},
-    initializer::Initializer,
+    initializer::{InitializeStats, Initializer},
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
     service::{Conn, ConnId, FeatureGate},
@@ -130,6 +130,7 @@ type InitCallback = Box<dyn FnOnce() + Send>;
 pub enum Validate {
     Region(u64, Box<dyn FnOnce(Option<&Delegate>) + Send>),
     OldValueCache(Box<dyn FnOnce(&OldValueCache) + Send>),
+    InitializeStats(Box<dyn FnOnce(InitializeStats) + Send>),
 }
 
 pub enum Task {
@@ -245,6 +246,7 @@ impl fmt::Debug for Task {
             Task::Validate(validate) => match validate {
                 Validate::Region(region_id, _) => de.field("region_id", &region_id).finish(),
                 Validate::OldValueCache(_) => de.finish(),
+                Validate::InitializeStats(_) => de.finish(),
             },
             Task::ChangeConfig(change) => de
                 .field("type", &"change_config")
@@ -360,6 +362,9 @@ pub struct Endpoint<T, E, S> {
     resolved_region_count: usize,
     unresolved_region_count: usize,
     warn_resolved_ts_repeat_count: usize,
+
+    // Validate statistics of the next incremental scan. Only for tests.
+    validate_next_initialize_stats: Option<Box<dyn FnOnce(InitializeStats) + Send>>,
 }
 
 impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, S> {
@@ -465,6 +470,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             warn_resolved_ts_repeat_count: WARN_RESOLVED_TS_COUNT_THRESHOLD,
             current_ts: TimeStamp::zero(),
             causal_ts_provider,
+
+            validate_next_initialize_stats: None,
         };
         ep.register_min_ts_event(leader_resolver, Instant::now());
         ep
@@ -790,14 +797,18 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         let cdc_handle = self.cdc_handle.clone();
         let concurrency_semaphore = self.scan_concurrency_semaphore.clone();
         let memory_quota = self.sink_memory_quota.clone();
+        let validate_initialize_stats = self.validate_next_initialize_stats.take();
         self.workers.spawn(async move {
             CDC_SCAN_TASKS.with_label_values(&["total"]).inc();
             match init
                 .initialize(change_cmd, cdc_handle, concurrency_semaphore, memory_quota)
                 .await
             {
-                Ok(()) => {
+                Ok(stats) => {
                     CDC_SCAN_TASKS.with_label_values(&["finish"]).inc();
+                    if let Some(validate) = validate_initialize_stats {
+                        validate(stats);
+                    }
                 }
                 Err(e) => {
                     CDC_SCAN_TASKS.with_label_values(&["abort"]).inc();
@@ -1231,6 +1242,9 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
                 }
                 Validate::OldValueCache(validate) => {
                     validate(&self.old_value_cache);
+                }
+                Validate::InitializeStats(validate) => {
+                    self.validate_next_initialize_stats = Some(validate);
                 }
             },
             Task::ChangeConfig(change) => self.on_change_cfg(change),
