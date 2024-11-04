@@ -648,8 +648,20 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         let downstream_state = downstream.get_state();
         let filter_loop = downstream.get_filter_loop();
 
-        // Register must follow OpenConn, so the connection must be available.
-        let conn = self.connections.get_mut(&conn_id).unwrap();
+        // The connection can be deregistered by some internal errors. Clients will
+        // be always notified by closing the GRPC server stream, so it's OK to drop
+        // the task directly.
+        let conn = match self.connections.get_mut(&conn_id) {
+            Some(conn) => conn,
+            None => {
+                info!("cdc register region on an deregistered connection, ignore";
+                    "region_id" => region_id,
+                    "conn_id" => ?conn_id,
+                    "req_id" => request.get_request_id(),
+                    "downstream_id" => ?downstream_id);
+                return;
+            }
+        };
         downstream.set_sink(conn.get_sink().clone());
 
         // Check if the cluster id matches.
