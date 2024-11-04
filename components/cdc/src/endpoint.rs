@@ -650,7 +650,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 info!("cdc register region on an deregistered connection, ignore";
                     "region_id" => region_id,
                     "conn_id" => ?conn_id,
-                    "req_id" => request_id,
+                    "req_id" => request.get_request_id(),
                     "downstream_id" => ?downstream_id);
                 return;
             }
