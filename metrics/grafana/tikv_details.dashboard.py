@@ -1892,13 +1892,13 @@ def RaftWaterfall() -> RowPanel:
         [
             graph_panel_histogram_quantiles(
                 title="Store propose wait duration",
-                description="The propose wait time duration of each request",
+                description="Time from request scheduling to when it is handled by Raftstore",
                 yaxes=yaxes(left_format=UNITS.SECONDS),
                 metric="tikv_raftstore_request_wait_time_duration_secs",
             ),
             graph_panel_histogram_quantiles(
                 title="Store batch wait duration",
-                description="The batch wait time duration of each request",
+                description="Time from request scheduling to when a batch of requests is formed and prepared to be proposed to Raft",
                 yaxes=yaxes(left_format=UNITS.SECONDS),
                 metric="tikv_raftstore_store_wf_batch_wait_duration_seconds",
             ),
@@ -1908,13 +1908,13 @@ def RaftWaterfall() -> RowPanel:
         [
             graph_panel_histogram_quantiles(
                 title="Store send to write queue duration",
-                description="The send-to-write-queue time duration of each request",
+                description="Time from request scheduling to just before it is sent to the store writer thread",
                 yaxes=yaxes(left_format=UNITS.SECONDS),
                 metric="tikv_raftstore_store_wf_send_to_queue_duration_seconds",
             ),
             graph_panel_histogram_quantiles(
                 title="Store send proposal duration",
-                description="The send raft message of the proposal duration of each request",
+                description="Time from request scheduling to just before it is sent to followers",
                 yaxes=yaxes(left_format=UNITS.SECONDS),
                 metric="tikv_raftstore_store_wf_send_proposal_duration_seconds",
             ),
@@ -1924,13 +1924,13 @@ def RaftWaterfall() -> RowPanel:
         [
             graph_panel_histogram_quantiles(
                 title="Store write kv db end duration",
-                description="The write kv db end duration of each request",
+                description="Time from request scheduling to when the batch's snapshot state is written to KV DB",
                 yaxes=yaxes(left_format=UNITS.SECONDS),
                 metric="tikv_raftstore_store_wf_write_kvdb_end_duration_seconds",
             ),
             graph_panel_histogram_quantiles(
                 title="Store before write duration",
-                description="The before write time duration of each request",
+                description="Time from request scheduling to just before it is written to Raft Engine",
                 yaxes=yaxes(left_format=UNITS.SECONDS),
                 metric="tikv_raftstore_store_wf_before_write_duration_seconds",
             ),
@@ -1939,16 +1939,16 @@ def RaftWaterfall() -> RowPanel:
     layout.row(
         [
             graph_panel_histogram_quantiles(
-                title="Store persist duration",
-                description="The persist duration of each request",
-                yaxes=yaxes(left_format=UNITS.SECONDS),
-                metric="tikv_raftstore_store_wf_persist_duration_seconds",
-            ),
-            graph_panel_histogram_quantiles(
                 title="Store write end duration",
-                description="The write end duration of each request",
+                description="Time from request scheduling to when it is written to Raft Engine",
                 yaxes=yaxes(left_format=UNITS.SECONDS),
                 metric="tikv_raftstore_store_wf_write_end_duration_seconds",
+            ),
+            graph_panel_histogram_quantiles(
+                title="Store persist duration",
+                description="Time from request scheduling to when its associated ready is persisted on the leader",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_raftstore_store_wf_persist_duration_seconds",
             ),
         ]
     )
@@ -1956,13 +1956,13 @@ def RaftWaterfall() -> RowPanel:
         [
             graph_panel_histogram_quantiles(
                 title="Store commit but not persist duration",
-                description="The commit but not persist duration of each request",
+                description="Time from request scheduling to when it is committed; at the time of commit, it has not been persisted on the leader",
                 yaxes=yaxes(left_format=UNITS.SECONDS),
                 metric="tikv_raftstore_store_wf_commit_not_persist_log_duration_seconds",
             ),
             graph_panel_histogram_quantiles(
                 title="Store commit and persist duration",
-                description="The commit and persist duration of each request",
+                description="Time from request scheduling to when it is committed; at the time of commit, it has been persisted on the leader",
                 yaxes=yaxes(left_format=UNITS.SECONDS),
                 metric="tikv_raftstore_store_wf_commit_log_duration_seconds",
             ),
@@ -1976,9 +1976,9 @@ def RaftIO() -> RowPanel:
     layout.row(
         heatmap_panel_graph_panel_histogram_quantile_pairs(
             heatmap_title="Process ready duration",
-            heatmap_description="The time consumed for peer processes to be ready in Raft",
+            heatmap_description="The time taken by Raftstore to complete processing a poll round, which includes a batch of region peers",
             graph_title="99% Process ready duration per server",
-            graph_description="The time consumed for peer processes to be ready in Raft",
+            graph_description="The time taken by Raftstore to complete processing a poll round, which includes a batch of region peers",
             graph_by_labels=["instance"],
             graph_hides=["count", "avg"],
             yaxis_format=UNITS.SECONDS,
