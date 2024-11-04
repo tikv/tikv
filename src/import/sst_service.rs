@@ -43,16 +43,19 @@ use tikv_util::{
 };
 use tokio::time::sleep;
 use txn_types::{Key, WriteRef, WriteType};
+use file_system::IoType;
 
 use super::{
     ingest::{async_snapshot, ingest, IngestLatch, SuspendDeadline},
     make_rpc_error, pb_error_inc, raft_writer,
 };
+use file_system::set_io_type;
 use crate::{
-    import::{duplicate_detect::DuplicateDetector, utils as ImportUtils},
+    import::duplicate_detect::DuplicateDetector,
     send_rpc_response,
     server::CONFIG_ROCKSDB_GAUGE,
     storage::{self, errors::extract_region_error_from_error},
+    tikv_util::sys::thread::ThreadBuildWrapper,
 };
 
 /// The concurrency of sending raft request for every `apply` requests.
@@ -319,9 +322,31 @@ impl<E: Engine> ImportSstService<E> {
         resource_manager: Option<Arc<ResourceGroupManager>>,
         region_info_accessor: Arc<RegionInfoAccessor>,
     ) -> Self {
+        let eng = Arc::new(Mutex::new(engine.clone()));
+        let create_tokio_runtime = move |thread_count: usize, thread_name: &str| {
+            let props = tikv_util::thread_group::current_properties();
+            let eng = eng.clone();
+            tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(thread_count)
+            .enable_all()
+            .thread_name(thread_name)
+            .with_sys_and_custom_hooks(
+                move|| {
+                    tikv_util::thread_group::set_properties(props.clone());
+                    set_io_type(IoType::Import);
+                    tikv_kv::set_tls_engine(eng.lock().unwrap().clone());
+                },
+                move || {
+                    // SAFETY: we have set the engine at some lines above with type `E`.
+                    unsafe { tikv_kv::destroy_tls_engine::<E>() };
+                },
+            )
+            .build()
+        };
+
         let mut threads = ResizableRuntime::new(
             "import",
-            Box::new(ImportUtils::create_tokio_runtime),
+            Box::new(create_tokio_runtime),
             Box::new(|_| ()),
         );
         // There would be 4 initial threads running forever.

@@ -16,7 +16,6 @@ mod duplicate_detect;
 mod ingest;
 mod raft_writer;
 mod sst_service;
-mod utils;
 
 use std::fmt::Debug;
 
