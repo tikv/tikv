@@ -14,8 +14,8 @@ use crossbeam_skiplist::{
 };
 use engine_rocks::RocksEngine;
 use engine_traits::{
-    CacheRegion, EvictReason, FailedReason, IterOptions, Iterable, KvEngine, RegionCacheEngine,
-    RegionCacheEngineExt, RegionEvent, Result, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
+    CacheRegion, EvictReason, FailedReason, KvEngine, RegionCacheEngine, RegionCacheEngineExt,
+    RegionEvent, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
 use fail::fail_point;
 use kvproto::metapb::Region;
@@ -30,7 +30,7 @@ use crate::{
         encode_key_for_boundary_with_mvcc, encode_key_for_boundary_without_mvcc, InternalBytes,
     },
     memory_controller::MemoryController,
-    read::{RegionCacheIterator, RegionCacheSnapshot},
+    read::RegionCacheSnapshot,
     region_manager::{
         AsyncFnOnce, LoadFailedReason, RegionCacheStatus, RegionManager, RegionState,
     },
@@ -537,10 +537,6 @@ impl RegionCacheEngine for RegionCacheMemoryEngine {
             .start_bg_hint_service(range_hint_service)
     }
 
-    fn get_region_for_key(&self, key: &[u8]) -> Option<CacheRegion> {
-        self.core.region_manager().get_region_for_key(key)
-    }
-
     fn enabled(&self) -> bool {
         self.config.value().enable
     }
@@ -622,15 +618,6 @@ impl RegionCacheEngineExt for RegionCacheMemoryEngine {
             region: CacheRegion::from_region(region),
             for_manual_range: false,
         });
-    }
-}
-
-impl Iterable for RegionCacheMemoryEngine {
-    type Iterator = RegionCacheIterator;
-
-    fn iterator_opt(&self, _: &str, _: IterOptions) -> Result<Self::Iterator> {
-        // This engine does not support creating iterators directly by the engine.
-        panic!("iterator_opt is not supported on creating by RegionCacheMemoryEngine directly")
     }
 }
 
