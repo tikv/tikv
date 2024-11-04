@@ -960,6 +960,6 @@ mod tests {
         use super::*;
 
         // make sure the msg is small enough
-        assert_eq!(mem::size_of::<PeerMsg<RocksEngine>>(), 32);
+        assert_eq!(mem::size_of::<PeerMsg<RocksEngine>>(), 24);
     }
 }
