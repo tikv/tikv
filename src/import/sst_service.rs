@@ -8,6 +8,7 @@ use std::{
 };
 
 use engine_traits::{CompactExt, CF_DEFAULT, CF_WRITE};
+use file_system::{set_io_type, IoType};
 use futures::{sink::SinkExt, stream::TryStreamExt, FutureExt, TryFutureExt};
 use grpcio::{
     ClientStreamingSink, RequestStream, RpcContext, ServerStreamingSink, UnarySink, WriteFlags,
@@ -43,13 +44,11 @@ use tikv_util::{
 };
 use tokio::time::sleep;
 use txn_types::{Key, WriteRef, WriteType};
-use file_system::IoType;
 
 use super::{
     ingest::{async_snapshot, ingest, IngestLatch, SuspendDeadline},
     make_rpc_error, pb_error_inc, raft_writer,
 };
-use file_system::set_io_type;
 use crate::{
     import::duplicate_detect::DuplicateDetector,
     send_rpc_response,
@@ -327,28 +326,25 @@ impl<E: Engine> ImportSstService<E> {
             let props = tikv_util::thread_group::current_properties();
             let eng = eng.clone();
             tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(thread_count)
-            .enable_all()
-            .thread_name(thread_name)
-            .with_sys_and_custom_hooks(
-                move|| {
-                    tikv_util::thread_group::set_properties(props.clone());
-                    set_io_type(IoType::Import);
-                    tikv_kv::set_tls_engine(eng.lock().unwrap().clone());
-                },
-                move || {
-                    // SAFETY: we have set the engine at some lines above with type `E`.
-                    unsafe { tikv_kv::destroy_tls_engine::<E>() };
-                },
-            )
-            .build()
+                .worker_threads(thread_count)
+                .enable_all()
+                .thread_name(thread_name)
+                .with_sys_and_custom_hooks(
+                    move || {
+                        tikv_util::thread_group::set_properties(props.clone());
+                        set_io_type(IoType::Import);
+                        tikv_kv::set_tls_engine(eng.lock().unwrap().clone());
+                    },
+                    move || {
+                        // SAFETY: we have set the engine at some lines above with type `E`.
+                        unsafe { tikv_kv::destroy_tls_engine::<E>() };
+                    },
+                )
+                .build()
         };
 
-        let mut threads = ResizableRuntime::new(
-            "import",
-            Box::new(create_tokio_runtime),
-            Box::new(|_| ()),
-        );
+        let mut threads =
+            ResizableRuntime::new("import", Box::new(create_tokio_runtime), Box::new(|_| ()));
         // There would be 4 initial threads running forever.
         threads.adjust_with(4);
         let handle = ResizableRuntimeHandle::new(threads);
