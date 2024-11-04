@@ -56,15 +56,6 @@ use crate::{
     Error, Result, Task,
 };
 
-struct ScanStat {
-    // Fetched bytes to the scanner.
-    emit: usize,
-    // Bytes from the device, `None` if not possible to get it.
-    disk_read: Option<usize>,
-    // Perf delta for RocksDB.
-    perf_delta: ReadPerfContext,
-}
-
 pub(crate) enum KvEntry {
     TxnEntry(TxnEntry),
     RawKvEntry(KvPair),
@@ -111,7 +102,7 @@ impl<E: KvEngine> Initializer<E> {
         cdc_handle: T,
         concurrency_semaphore: Arc<Semaphore>,
         memory_quota: Arc<MemoryQuota>,
-    ) -> Result<()> {
+    ) -> Result<InitializeStats> {
         fail_point!("cdc_before_initialize");
         let _permit = concurrency_semaphore.acquire().await;
 
@@ -178,7 +169,7 @@ impl<E: KvEngine> Initializer<E> {
         &mut self,
         mut resp: ReadResponse<impl EngineSnapshot>,
         memory_quota: Arc<MemoryQuota>,
-    ) -> Result<()> {
+    ) -> Result<InitializeStats> {
         if let Some(region_snapshot) = resp.snapshot {
             let region = region_snapshot.get_region().clone();
             assert_eq!(self.region_id, region.get_id());
@@ -200,7 +191,7 @@ impl<E: KvEngine> Initializer<E> {
         snap: S,
         region: Region,
         memory_quota: Arc<MemoryQuota>,
-    ) -> Result<()> {
+    ) -> Result<InitializeStats> {
         CDC_SCAN_TASKS.with_label_values(&["ongoing"]).inc();
         defer!(CDC_SCAN_TASKS.with_label_values(&["ongoing"]).dec());
 
@@ -209,7 +200,7 @@ impl<E: KvEngine> Initializer<E> {
         let observe_id = self.observe_id;
         let conn_id = self.conn_id;
         let kv_api = self.kv_api;
-        let on_cancel = || -> Result<()> {
+        let on_cancel = || -> Result<InitializeStats> {
             info!("cdc async incremental scan canceled";
                 "region_id" => region_id,
                 "downstream_id" => ?downstream_id,
@@ -280,6 +271,7 @@ impl<E: KvEngine> Initializer<E> {
             DownstreamState::Initializing | DownstreamState::Stopped
         ));
 
+        let mut stats = InitializeStats::default();
         while !done {
             // When downstream_state is Stopped, it means the corresponding
             // delegate is stopped. The initialization can be safely canceled.
@@ -288,7 +280,9 @@ impl<E: KvEngine> Initializer<E> {
             }
             let cursors = old_value_cursors.as_mut();
             let resolver = resolver.as_mut();
-            let entries = self.scan_batch(&mut scanner, cursors, resolver).await?;
+            let entries = self
+                .scan_batch(&mut scanner, cursors, resolver, &mut stats)
+                .await?;
             if let Some(None) = entries.last() {
                 // If the last element is None, it means scanning is finished.
                 done = true;
@@ -317,7 +311,7 @@ impl<E: KvEngine> Initializer<E> {
 
         CDC_SCAN_DURATION_HISTOGRAM.observe(takes.as_secs_f64());
         CDC_SCAN_SINK_DURATION_HISTOGRAM.observe(duration_to_sec(sink_time));
-        Ok(())
+        Ok(stats)
     }
 
     // It's extracted from `Initializer::scan_batch` to avoid becoming an
@@ -328,7 +322,7 @@ impl<E: KvEngine> Initializer<E> {
         scanner: &mut Scanner<S>,
         mut old_value_cursors: Option<&mut OldValueCursors<S::Iter>>,
         entries: &mut Vec<Option<KvEntry>>,
-    ) -> Result<ScanStat> {
+    ) -> Result<InitializeStats> {
         let mut read_old_value = |v: &mut OldValue, stats: &mut Statistics| -> Result<()> {
             let (wc, dc) = match old_value_cursors {
                 Some(ref mut x) => (&mut x.write, &mut x.default),
@@ -343,21 +337,28 @@ impl<E: KvEngine> Initializer<E> {
             Ok(())
         };
 
+        let mut stats = InitializeStats::default();
+
         // This code block shouldn't be switched to other threads.
         let mut total_bytes = 0;
         let mut total_size = 0;
         let perf_instant = ReadPerfInstant::new();
         let inspector = self_thread_inspector().ok();
         let old_io_stat = inspector.as_ref().and_then(|x| x.io_stat().unwrap_or(None));
-        let mut stats = Statistics::default();
         while total_bytes <= self.max_scan_batch_bytes && total_size < self.max_scan_batch_size {
             total_size += 1;
             match scanner {
                 Scanner::TxnKvScanner(scanner) => match scanner.next_entry()? {
                     Some(mut entry) => {
-                        read_old_value(entry.old_value(), &mut stats)?;
-                        total_bytes += entry.size();
-                        entries.push(Some(KvEntry::TxnEntry(entry)));
+                        let key = match entry {
+                            TxnEntry::Prewrite { ref lock, .. } => &lock.0,
+                            TxnEntry::Commit { ref write, .. } => &write.0,
+                        };
+                        if self.observed_range.contains_encoded_key(key) {
+                            read_old_value(entry.old_value(), &mut stats.old_value)?;
+                            total_bytes += entry.size();
+                            entries.push(Some(KvEntry::TxnEntry(entry)));
+                        }
                     }
                     None => {
                         entries.push(None);
@@ -381,19 +382,17 @@ impl<E: KvEngine> Initializer<E> {
                 }
             }
         }
-        flush_oldvalue_stats(&stats, TAG_INCREMENTAL_SCAN);
+        flush_oldvalue_stats(&stats.old_value, TAG_INCREMENTAL_SCAN);
         let new_io_stat = inspector.as_ref().and_then(|x| x.io_stat().unwrap_or(None));
-        let disk_read = match (old_io_stat, new_io_stat) {
+
+        stats.scan.emit = total_bytes;
+        stats.scan.disk_read = match (old_io_stat, new_io_stat) {
             (Some(s1), Some(s2)) => Some((s2.read - s1.read) as usize),
             _ => None,
         };
-        let perf_delta = perf_instant.delta();
-        let emit = total_bytes;
-        Ok(ScanStat {
-            emit,
-            disk_read,
-            perf_delta,
-        })
+        stats.scan.perf_delta = perf_instant.delta();
+
+        Ok(stats)
     }
 
     async fn scan_batch<S: Snapshot>(
@@ -401,22 +400,22 @@ impl<E: KvEngine> Initializer<E> {
         scanner: &mut Scanner<S>,
         old_value_cursors: Option<&mut OldValueCursors<S::Iter>>,
         resolver: Option<&mut Resolver>,
+        stats: &mut InitializeStats,
     ) -> Result<Vec<Option<KvEntry>>> {
         let mut entries = Vec::with_capacity(self.max_scan_batch_size);
-        let ScanStat {
-            emit,
-            disk_read,
-            perf_delta,
-        } = self.do_scan(scanner, old_value_cursors, &mut entries)?;
+        let delta_stats = self.do_scan(scanner, old_value_cursors, &mut entries)?;
+        stats.add(&delta_stats);
 
-        TLS_CDC_PERF_STATS.with(|x| *x.borrow_mut() += perf_delta);
+        TLS_CDC_PERF_STATS.with(|x| *x.borrow_mut() += delta_stats.scan.perf_delta);
         tls_flush_perf_stats();
-        if let Some(bytes) = disk_read {
+        if let Some(bytes) = delta_stats.scan.disk_read {
             CDC_SCAN_DISK_READ_BYTES.inc_by(bytes as _);
             self.scan_speed_limiter.consume(bytes).await;
         }
-        CDC_SCAN_BYTES.inc_by(emit as _);
-        self.fetch_speed_limiter.consume(emit as _).await;
+        CDC_SCAN_BYTES.inc_by(delta_stats.scan.emit as _);
+        self.fetch_speed_limiter
+            .consume(delta_stats.scan.emit as _)
+            .await;
 
         if let Some(resolver) = resolver {
             // Track the locks.
@@ -444,7 +443,6 @@ impl<E: KvEngine> Initializer<E> {
             self.request_id,
             entries,
             self.filter_loop,
-            &self.observed_range,
         )?;
         if done {
             let (cb, fut) = tikv_util::future::paired_future_callback();
@@ -517,6 +515,8 @@ impl<E: KvEngine> Initializer<E> {
     }
 
     fn ts_filter_is_helpful<S: Snapshot>(&self, snap: &S) -> bool {
+        fail_point!("ts_filter_is_helpful_always_true", |_| true);
+
         if self.ts_filter_ratio < f64::EPSILON {
             return false;
         }
@@ -565,6 +565,33 @@ impl<E: KvEngine> Initializer<E> {
     ) -> Option<u64> {
         prop.get(field.as_bytes())
             .and_then(|mut x| number::decode_u64(&mut x).ok())
+    }
+}
+
+#[derive(Default, Debug)]
+pub struct InitializeStats {
+    pub old_value: Statistics,
+    pub scan: ScanStats,
+}
+
+#[derive(Default, Debug)]
+pub struct ScanStats {
+    // Fetched bytes to the scanner.
+    emit: usize,
+    // Bytes from the device, `None` if not possible to get it.
+    disk_read: Option<usize>,
+    // Perf delta for RocksDB.
+    perf_delta: ReadPerfContext,
+}
+
+impl InitializeStats {
+    fn add(&mut self, other: &InitializeStats) {
+        self.old_value.add(&other.old_value);
+        self.scan.emit += other.scan.emit;
+        if let Some(x) = self.scan.disk_read.as_mut() {
+            *x += other.scan.disk_read.unwrap_or_default();
+        }
+        self.scan.perf_delta += other.scan.perf_delta;
     }
 }
 
@@ -716,12 +743,14 @@ mod tests {
             total_bytes += v.len();
             let ts = TimeStamp::new(i as _);
             must_prewrite_put(&mut engine, k, v, k, ts);
-            let txn_locks = expected_locks.entry(ts).or_insert_with(|| {
-                let mut txn_locks = TxnLocks::default();
-                txn_locks.sample_lock = Some(k.to_vec().into());
-                txn_locks
-            });
-            txn_locks.lock_count += 1;
+            if i < 90 {
+                let txn_locks = expected_locks.entry(ts).or_insert_with(|| {
+                    let mut txn_locks = TxnLocks::default();
+                    txn_locks.sample_lock = Some(k.to_vec().into());
+                    txn_locks
+                });
+                txn_locks.lock_count += 1;
+            }
         }
 
         let region = Region::default();
