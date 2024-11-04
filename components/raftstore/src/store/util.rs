@@ -2325,6 +2325,7 @@ mod tests {
             AdminCmdType::InvalidAdmin,
             AdminCmdType::ComputeHash,
             AdminCmdType::VerifyHash,
+            AdminCmdType::TransferLeader,
         ] {
             let mut admin = AdminRequest::default();
             admin.set_cmd_type(*ty);
@@ -2346,7 +2347,6 @@ mod tests {
             AdminCmdType::PrepareMerge,
             AdminCmdType::CommitMerge,
             AdminCmdType::RollbackMerge,
-            AdminCmdType::TransferLeader,
         ] {
             let mut admin = AdminRequest::default();
             admin.set_cmd_type(*ty);
@@ -2382,7 +2382,6 @@ mod tests {
             AdminCmdType::PrepareMerge,
             AdminCmdType::CommitMerge,
             AdminCmdType::RollbackMerge,
-            AdminCmdType::TransferLeader,
         ] {
             let mut admin = AdminRequest::default();
             admin.set_cmd_type(*ty);
