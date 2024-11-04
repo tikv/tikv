@@ -42,7 +42,7 @@ pub(crate) const MEM_CONTROLLER_OVERHEAD: usize = 8;
 // default, the memtable size for lock cf is 32MB. As not all ranges will be
 // cached in the memory, just use half of it here.
 const AMOUNT_TO_CLEAN_TOMBSTONE: u64 = ReadableSize::mb(16).0;
-// The value of the delete entry in the in-memory engine. It's just a emptry
+// The value of the delete entry in the in-memory engine. It's just a empty
 // slice.
 const DELETE_ENTRY_VAL: &[u8] = b"";
 
@@ -73,8 +73,8 @@ pub struct RegionCacheWriteBatch {
     // ... -> PollHandler::end), although the same region can call `prepare_for_region`
     // multiple times, it can only call sequentially. This is say, we will not have this:
     // prepare_for_region(region1), prepare_for_region(region2), prepare_for_region(region1).
-    // In case to avoid this asssumption being broken, we record the regions that have called
-    // prepare_for_region and ensure that if the region is not the `currnet_region`, it is not
+    // In case to avoid this assumption being broken, we record the regions that have called
+    // prepare_for_region and ensure that if the region is not the `current_region`, it is not
     // recorded in this vec.
     prepared_regions: SmallVec<[u64; 10]>,
 }

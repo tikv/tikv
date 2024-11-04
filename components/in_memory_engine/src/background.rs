@@ -783,16 +783,8 @@ impl BackgroundRunnerCore {
 // Flush epoch and pin enough times to make the delayed operations be executed
 #[cfg(test)]
 pub(crate) fn flush_epoch() {
-    {
-        let guard = &epoch::pin();
-        guard.flush();
-    }
-    // Local epoch tries to advance the global epoch every 128 pins. When global
-    // epoch advances, the operations(here, means delete) in the older epoch can be
-    // executed.
-    for _ in 0..128 {
-        let _ = &epoch::pin();
-    }
+    let guard = &epoch::pin();
+    guard.flush();
 }
 
 pub struct BackgroundRunner {
