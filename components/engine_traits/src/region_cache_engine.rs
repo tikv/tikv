@@ -8,7 +8,7 @@ use std::{
 use keys::{enc_end_key, enc_start_key};
 use kvproto::metapb::Region;
 
-use crate::{Iterable, KvEngine, Snapshot, WriteBatchExt};
+use crate::{KvEngine, Snapshot, WriteBatchExt};
 
 #[derive(Debug, PartialEq)]
 pub enum FailedReason {
@@ -63,7 +63,7 @@ pub enum EvictReason {
 /// RegionCacheEngine works as a region cache caching some regions (in Memory or
 /// NVME for instance) to improve the read performance.
 pub trait RegionCacheEngine:
-    RegionCacheEngineExt + WriteBatchExt + Iterable + Debug + Clone + Unpin + Send + Sync + 'static
+    RegionCacheEngineExt + WriteBatchExt + Debug + Clone + Unpin + Send + Sync + 'static
 {
     type Snapshot: Snapshot;
 
@@ -80,9 +80,6 @@ pub trait RegionCacheEngine:
 
     type DiskEngine: KvEngine;
     fn set_disk_engine(&mut self, disk_engine: Self::DiskEngine);
-
-    // return the region containing the key
-    fn get_region_for_key(&self, key: &[u8]) -> Option<CacheRegion>;
 
     type RangeHintService: RangeHintService;
     fn start_hint_service(&self, range_hint_service: Self::RangeHintService);
