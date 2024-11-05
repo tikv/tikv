@@ -214,6 +214,7 @@ mod tests {
     use tikv::storage::kv::TestEngineBuilder;
     use tikv_util::{store::new_peer, worker::dummy_scheduler};
     use txn_types::{TxnExtra, TxnExtraScheduler};
+
     use super::*;
     use crate::CdcTxnExtraScheduler;
 
@@ -379,7 +380,7 @@ mod tests {
             &engine,
         );
 
-        txn_extra_scheduler.schedule(TxnExtra{
+        txn_extra_scheduler.schedule(TxnExtra {
             old_values: Default::default(),
             one_pc: false,
             allowed_in_flashback: false,
