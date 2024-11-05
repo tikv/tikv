@@ -161,7 +161,6 @@ impl<E: KvEngine> Initializer<E> {
             // That's why we can determine whether to build a lock resolver or not
             // without check and compare snapshot sequence number.
             Callback::read(Box::new(move |resp| {
-                CDC_SCHEDULER_PENDING_TASKS.with_label_values(&["init_downstream"]).inc();
                 if let Err(e) = sched.schedule(Task::InitDownstream {
                     region_id,
                     observe_id,
@@ -550,7 +549,6 @@ impl<E: KvEngine> Initializer<E> {
         );
 
         fail_point!("before_schedule_resolver_ready");
-        CDC_SCHEDULER_PENDING_TASKS.with_label_values(&["finish_scan_lock"]).inc();
         if let Err(e) = self.sched.schedule(Task::FinishScanLocks {
             observe_id,
             region,
@@ -569,14 +567,12 @@ impl<E: KvEngine> Initializer<E> {
             //   resolved ts.
             // * A region error. It usually mean a peer is not leader or a leader meets an
             //   error and can not serve.
-            CDC_SCHEDULER_PENDING_TASKS.with_label_values(&["deregister::delegate"]).inc();
             Deregister::Delegate {
                 region_id: self.region_id,
                 observe_id: self.observe_handle.id,
                 err,
             }
         } else {
-            CDC_SCHEDULER_PENDING_TASKS.with_label_values(&["deregister::downstream"]).inc();
             Deregister::Downstream {
                 conn_id: self.conn_id,
                 request_id: self.request_id,
