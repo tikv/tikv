@@ -1354,7 +1354,8 @@ impl TxnExtraScheduler for CdcTxnExtraScheduler {
     fn schedule(&self, txn_extra: TxnExtra) {
         let size = txn_extra.size();
         if let Err(e) = self.memory_quota.alloc(size) {
-            warn!("cdc schedule txn extra failed on alloc memory quota";
+            CDC_DROP_TXN_EXTRA_TASKS_COUNT.inc();
+            debug!("cdc schedule txn extra failed on alloc memory quota";
                 "in_use" => self.memory_quota.in_use(), "err" => ?e);
             return;
         }
