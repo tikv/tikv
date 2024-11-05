@@ -2688,14 +2688,6 @@ where
             return Ok(());
         }
 
-        // As this peer is already stable (initialized and has gotten HeartBeats from
-        // the leader), it's safe to clear the pending uncampaigned regions.
-        if MessageType::MsgHeartbeat == msg_type
-            && !self.fsm.peer.uncampaigned_new_regions.is_empty()
-        {
-            self.fsm.peer.uncampaigned_new_regions.clear();
-        }
-
         self.handle_reported_disk_usage(&msg);
 
         if matches!(self.ctx.self_disk_usage, DiskUsage::AlreadyFull)
@@ -4372,6 +4364,11 @@ where
         self.fsm.peer.raft_log_size_hint =
             self.fsm.peer.raft_log_size_hint * remain_cnt / total_cnt;
         let compact_to = state.get_index() + 1;
+        // As this peer is already stable (initialized and has gotten CompactLog from
+        // the leader), it's safe to clear the pending uncampaigned regions.
+        if !self.fsm.peer.uncampaigned_new_regions.is_empty() {
+            self.fsm.peer.uncampaigned_new_regions.clear();
+        }
         self.fsm.peer.schedule_raftlog_gc(self.ctx, compact_to);
         self.fsm.peer.last_compacted_idx = compact_to;
         self.fsm.peer.mut_store().on_compact_raftlog(compact_to);
