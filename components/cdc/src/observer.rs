@@ -1,9 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, RwLock,
-};
+use std::sync::{Arc, RwLock};
 
 use collections::HashMap;
 use engine_traits::KvEngine;
@@ -223,7 +220,7 @@ mod tests {
     fn test_register_and_deregister() {
         let (scheduler, mut rx) = tikv_util::worker::dummy_scheduler();
         let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
-        let observer = CdcObserver::new(scheduler, memory_quota);
+        let observer = CdcObserver::new(scheduler, memory_quota.clone());
         let observe_info = CmdObserveInfo::from_handle(
             ObserveHandle::new(),
             ObserveHandle::new(),
@@ -232,6 +229,7 @@ mod tests {
         let engine = TestEngineBuilder::new().build().unwrap().get_rocksdb();
 
         let mut cb = CmdBatch::new(&observe_info, 0);
+        let size = cb.size();
         cb.push(&observe_info, 0, Cmd::default());
         <CdcObserver as CmdObserver<RocksEngine>>::on_flush_applied_cmd_batch(
             &observer,
@@ -239,6 +237,7 @@ mod tests {
             &mut vec![cb],
             &engine,
         );
+        assert_eq!(memory_quota.in_use(), size);
         match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
             Task::MultiBatch { multi, .. } => {
                 assert_eq!(multi.len(), 1);
