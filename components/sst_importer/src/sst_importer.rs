@@ -2690,7 +2690,7 @@ mod tests {
             db,
         );
 
-        let path = importer.dir.join_for_write(&meta).unwrap();
+        let path = importer.dir.join(&meta).unwrap();
         assert!(!file_system::file_exists(path.save));
 
         match result {
