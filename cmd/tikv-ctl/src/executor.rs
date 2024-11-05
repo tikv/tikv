@@ -211,6 +211,7 @@ pub trait DebugExecutor {
                     json!({
                         "region": json!({
                             "id": r.get_id(),
+                            "state": format!("{:?}", s.get_state()),
                             "start_key": hex::encode_upper(r.get_start_key()),
                             "end_key": hex::encode_upper(r.get_end_key()),
                             "region_epoch": json!({
