@@ -193,10 +193,13 @@ impl TestSuiteBuilder {
                 }));
             sim.txn_extra_schedulers.insert(
                 id,
-                Arc::new(cdc::CdcTxnExtraScheduler::new(worker.scheduler().clone())),
+                Arc::new(cdc::CdcTxnExtraScheduler::new(
+                    worker.scheduler().clone(),
+                    memory_quota.clone(),
+                )),
             );
             let scheduler = worker.scheduler();
-            let cdc_ob = cdc::CdcObserver::new(scheduler.clone());
+            let cdc_ob = cdc::CdcObserver::new(scheduler.clone(), memory_quota.clone());
             obs.insert(id, cdc_ob.clone());
             sim.coprocessor_hosts.entry(id).or_default().push(Box::new(
                 move |host: &mut CoprocessorHost<RocksEngine>| {
