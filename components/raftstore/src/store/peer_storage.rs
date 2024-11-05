@@ -1219,10 +1219,7 @@ pub mod tests {
         time::Duration,
     };
 
-    use engine_test::{
-        kv::{KvTestEngine, KvTestSnapshot},
-        raft::RaftTestEngine,
-    };
+    use engine_test::{kv::KvTestEngine, raft::RaftTestEngine};
     use engine_traits::{
         Engines, Iterable, RaftEngineDebug, RaftEngineReadOnly, SyncMutable, WriteBatch,
         WriteBatchExt, ALL_CFS, CF_DEFAULT,
@@ -1255,7 +1252,7 @@ pub mod tests {
     };
 
     fn new_storage(
-        region_scheduler: Scheduler<RegionTask<KvTestSnapshot>>,
+        region_scheduler: Scheduler<RegionTask<KvTestEngine>>,
         raftlog_fetch_scheduler: Scheduler<ReadTask<KvTestEngine>>,
         path: &TempDir,
     ) -> PeerStorage<KvTestEngine, RaftTestEngine> {
@@ -1288,7 +1285,7 @@ pub mod tests {
     }
 
     pub fn new_storage_from_ents(
-        region_scheduler: Scheduler<RegionTask<KvTestSnapshot>>,
+        region_scheduler: Scheduler<RegionTask<KvTestEngine>>,
         raftlog_fetch_scheduler: Scheduler<ReadTask<KvTestEngine>>,
         path: &TempDir,
         ents: &[Entry],
@@ -1620,7 +1617,7 @@ pub mod tests {
     fn generate_and_schedule_snapshot(
         gen_task: GenSnapTask,
         engines: &Engines<KvTestEngine, RaftTestEngine>,
-        sched: &Scheduler<RegionTask<KvTestSnapshot>>,
+        sched: &Scheduler<RegionTask<KvTestEngine>>,
     ) -> Result<()> {
         let apply_state: RaftApplyState = engines
             .kv
@@ -1668,6 +1665,7 @@ pub mod tests {
         let cfg = make_region_worker_raftstore_cfg(true);
         let runner = RegionRunner::new(
             s.engines.kv.clone(),
+            s.engines.raft.clone(),
             mgr,
             cfg,
             CoprocessorHost::<KvTestEngine>::default(),
@@ -1817,6 +1815,7 @@ pub mod tests {
         let cfg = make_region_worker_raftstore_cfg(true);
         let runner = RegionRunner::new(
             s.engines.kv.clone(),
+            s.engines.raft.clone(),
             mgr,
             cfg,
             CoprocessorHost::<KvTestEngine>::default(),
@@ -1878,6 +1877,7 @@ pub mod tests {
         let (router, _) = mpsc::sync_channel(100);
         let runner = RegionRunner::new(
             s.engines.kv.clone(),
+            s.engines.raft.clone(),
             mgr,
             cfg,
             CoprocessorHost::<KvTestEngine>::default(),
@@ -1958,6 +1958,7 @@ pub mod tests {
         let cfg = make_region_worker_raftstore_cfg(true);
         let runner = RegionRunner::new(
             s1.engines.kv.clone(),
+            s1.engines.raft.clone(),
             mgr,
             cfg,
             CoprocessorHost::<KvTestEngine>::default(),

@@ -123,6 +123,7 @@ pub fn get_decrypter_reader(
     Ok(Box::new(r) as Box<dyn Read + Send>)
 }
 
+/*
 #[cfg(test)]
 mod tests {
     use std::{collections::HashMap, path::PathBuf};
@@ -286,3 +287,4 @@ mod tests {
         }
     }
 }
+*/

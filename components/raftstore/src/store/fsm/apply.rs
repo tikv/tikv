@@ -5578,7 +5578,7 @@ mod tests {
                 .get_msg_cf(CF_RAFT, &apply_state_key)
                 .unwrap()
                 .unwrap(),
-            e => panic!("unexpected apply result: {:?}", e),
+            e => panic!("unexpected apply result"),
         };
         assert_eq!(apply_res.region_id, 2);
         assert_eq!(apply_res.apply_state, apply_state);
