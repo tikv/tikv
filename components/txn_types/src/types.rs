@@ -574,8 +574,8 @@ impl TxnExtra {
             result += key.len();
             result += value.0.size();
         }
-        // add 8 for 2 boolean fields
-        result + 8
+        // add 2 for 2 boolean fields
+        result + 2
     }
 }
 
