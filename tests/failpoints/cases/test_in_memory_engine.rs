@@ -21,7 +21,9 @@ use kvproto::{
     raft_cmdpb::{AdminCmdType, CmdType, RaftCmdRequest, RaftRequestHeader, Request},
     raft_serverpb::RaftMessage,
 };
+use pd_client::PdClient;
 use protobuf::Message;
+use raft::eraftpb::MessageType;
 use raftstore::{
     coprocessor::ObserveHandle,
     store::{
@@ -34,8 +36,8 @@ use test_coprocessor::{
     handle_request, init_data_with_details_pd_client, DagChunkSpliter, DagSelect, ProductTable,
 };
 use test_raftstore::{
-    get_tso, new_peer, new_put_cf_cmd, new_server_cluster_with_hybrid_engine, Cluster,
-    ServerCluster,
+    get_tso, new_learner_peer, new_peer, new_put_cf_cmd, new_server_cluster_with_hybrid_engine,
+    CloneFilterFactory, Cluster, Direction, RegionPacketFilter, ServerCluster,
 };
 use test_util::eventually;
 use tidb_query_datatype::{
@@ -1021,4 +1023,39 @@ fn test_eviction_when_destroy_peer() {
         let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
         assert!(!region_cache_engine.region_cached(&r));
     }
+}
+
+// IME must not panic when destroy an uninitialized region.
+#[test]
+fn test_eviction_when_destroy_uninitialized_peer() {
+    let mut cluster = new_server_cluster_with_hybrid_engine(0, 2);
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+    cluster.run_conf_change();
+
+    let region = pd_client.get_region(b"").unwrap();
+    assert!(
+        !region.get_peers().iter().any(|p| p.get_store_id() == 2),
+        "{:?}",
+        region
+    );
+
+    // Block snapshot messages, so that new peers will never be initialized.
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(region.get_id(), 2)
+            .msg_type(MessageType::MsgSnapshot)
+            .direction(Direction::Recv),
+    ));
+
+    let learner1 = new_learner_peer(2, 2);
+    pd_client.must_add_peer(region.get_id(), learner1.clone());
+    cluster.must_region_exist(region.get_id(), 2);
+    pd_client.must_remove_peer(region.get_id(), learner1);
+
+    // IME observes all peer destroy events to timely evict regions. By adding a
+    // new peer, the old and uninitialized peer will be destroyed and IME must
+    // not panic in this case.
+    let learner2 = new_learner_peer(2, 3);
+    pd_client.must_add_peer(region.get_id(), learner2.clone());
+    cluster.must_region_exist(region.get_id(), 2);
 }
