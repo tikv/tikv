@@ -748,9 +748,12 @@ macro_rules! impl_write {
                     let tablet = match tablets.get(region_id) {
                         Some(t) => t,
                         None => {
-                            return (Err(Error::Engine(
-                                format!("region {} not found", region_id).into(),
-                            )), Some(rx));
+                            return (
+                                Err(Error::Engine(
+                                    format!("region {} not found", region_id).into(),
+                                )),
+                                Some(rx),
+                            );
                         }
                     };
 
@@ -1380,12 +1383,15 @@ mod test {
         raft_cmdpb::{RaftCmdRequest, Request},
     };
     use protobuf::{Message, SingularPtrField};
+    use raft::StateRole::Follower;
+    use raftstore::RegionInfo;
     use tikv_kv::{Modify, WriteData};
     use txn_types::{Key, TimeStamp, Write, WriteBatchFlags, WriteType};
-    use raftstore::RegionInfo;
-    use raft::StateRole::Follower;
 
-    use crate::{import::sst_service::{RequestCollector, check_local_region_stale}, server::raftkv};
+    use crate::{
+        import::sst_service::{check_local_region_stale, RequestCollector},
+        server::raftkv,
+    };
 
     fn write(key: &[u8], ty: WriteType, commit_ts: u64, start_ts: u64) -> (Vec<u8>, Vec<u8>) {
         let k = Key::from_raw(key).append_ts(TimeStamp::new(commit_ts));
