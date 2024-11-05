@@ -213,7 +213,7 @@ mod tests {
     use raftstore::coprocessor::RoleChange;
     use tikv::storage::kv::TestEngineBuilder;
     use tikv_util::{store::new_peer, worker::dummy_scheduler};
-
+    use txn_types::{TxnExtra, TxnExtraScheduler};
     use super::*;
     use crate::CdcTxnExtraScheduler;
 
@@ -370,7 +370,6 @@ mod tests {
         );
         let mut cb = CmdBatch::new(&observe_info, 0);
         cb.push(&observe_info, 0, Cmd::default());
-        let cmd_batches = vec![cb];
 
         let engine = TestEngineBuilder::new().build().unwrap().get_rocksdb();
         <CdcObserver as CmdObserver<RocksEngine>>::on_flush_applied_cmd_batch(
@@ -379,6 +378,12 @@ mod tests {
             &mut vec![cb],
             &engine,
         );
+
+        txn_extra_scheduler.schedule(TxnExtra{
+            old_values: Default::default(),
+            one_pc: false,
+            allowed_in_flashback: false,
+        });
 
         match task_rx
             .recv_timeout(Duration::from_millis(10))
