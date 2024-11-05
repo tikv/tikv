@@ -3000,6 +3000,8 @@ impl Default for BackupStreamConfig {
 pub struct CdcConfig {
     pub min_ts_interval: ReadableDuration,
     pub hibernate_regions_compatible: bool,
+    #[online_config(skip)]
+    pub responser_threads: usize,
     // TODO(hi-rustin): Consider resizing the thread pool based on `incremental_scan_threads`.
     #[online_config(skip)]
     pub incremental_scan_threads: usize,
@@ -3047,6 +3049,8 @@ impl Default for CdcConfig {
         Self {
             min_ts_interval: ReadableDuration::secs(1),
             hibernate_regions_compatible: true,
+            // 3 threads for outputing events to CDC clients.
+            responser_threads: 3,
             // 4 threads for incremental scan.
             incremental_scan_threads: 4,
             // At most 6 concurrent running tasks.
@@ -3078,6 +3082,13 @@ impl CdcConfig {
                 default_cfg.min_ts_interval
             );
             self.min_ts_interval = default_cfg.min_ts_interval;
+        }
+        if self.responser_threads == 0 {
+            warn!(
+                "cdc.responser-threads can't be 0, change it to {}",
+                default_cfg.responser_threads
+            );
+            self.responser_threads = default_cfg.responser_threads;
         }
         if self.incremental_scan_threads == 0 {
             warn!(

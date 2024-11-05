@@ -1275,6 +1275,7 @@ where
         let cdc_service = cdc::Service::new(
             servers.cdc_scheduler.clone(),
             servers.cdc_memory_quota.clone(),
+            self.core.config.cdc.responser_threads,
         );
         if servers
             .server
