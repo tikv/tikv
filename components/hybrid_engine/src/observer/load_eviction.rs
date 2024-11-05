@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use engine_traits::{CacheRegion, EvictReason, KvEngine, RegionCacheEngineExt, RegionEvent};
 use kvproto::{
-    metapb::Region,
+    metapb::{Peer, Region},
     raft_cmdpb::AdminCmdType,
     raft_serverpb::{ExtraMessage, ExtraMessageType, RaftApplyState},
 };
@@ -15,7 +15,7 @@ use raftstore::coprocessor::{
     BoxQueryObserver, BoxRoleObserver, Cmd, Coprocessor, CoprocessorHost, DestroyPeerObserver,
     ExtraMessageObserver, ObserverContext, QueryObserver, RegionState, RoleObserver,
 };
-use tikv_util::debug;
+use tikv_util::{debug, warn};
 
 #[derive(Clone)]
 pub struct LoadEvictionObserver {
@@ -274,8 +274,16 @@ impl ExtraMessageObserver for LoadEvictionObserver {
 
 impl DestroyPeerObserver for LoadEvictionObserver {
     fn on_destroy_peer(&self, r: &Region) {
+        let mut region = r.clone();
+        if region.get_peers().is_empty() {
+            warn!("ime evict an uninitialized region"; "region" => ?region);
+            // In some cases, the region may have no peer, such as an
+            // uninitialized peer being destroyed. We need to push an empty peer
+            // to prevent panic in `CacheRegion::from_region`.
+            region.mut_peers().push(Peer::default());
+        }
         self.cache_engine.on_region_event(RegionEvent::Eviction {
-            region: CacheRegion::from_region(r),
+            region: CacheRegion::from_region(&region),
             reason: EvictReason::PeerDestroy,
         });
     }

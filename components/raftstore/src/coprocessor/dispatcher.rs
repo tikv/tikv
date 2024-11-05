@@ -954,9 +954,6 @@ impl<E: KvEngine> CoprocessorHost<E> {
     }
 
     pub fn on_applied_current_term(&self, role: StateRole, region: &Region) {
-        if self.registry.cmd_observers.is_empty() {
-            return;
-        }
         for observer in &self.registry.cmd_observers {
             let observer = observer.observer.inner();
             observer.on_applied_current_term(role, region);
@@ -989,10 +986,6 @@ impl<E: KvEngine> CoprocessorHost<E> {
     }
 
     pub fn on_destroy_peer(&self, region: &Region) {
-        if self.registry.destroy_peer_observers.is_empty() {
-            return;
-        }
-
         for observer in &self.registry.destroy_peer_observers {
             let observer = observer.observer.inner();
             observer.on_destroy_peer(region);
