@@ -460,7 +460,6 @@ impl Service {
                 error!("cdc deregister failed"; "error" => ?e, "conn_id" => ?conn_id);
             }
             Ok::<(), String>(())
-
         };
 
         let peer = ctx.peer();
