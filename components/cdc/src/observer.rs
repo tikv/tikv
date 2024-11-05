@@ -358,7 +358,7 @@ mod tests {
     #[test]
     fn test_txn_extra_dropped_since_exceed_memory_quota() {
         let memory_quota = Arc::new(MemoryQuota::new(10));
-        let (task_sched, task_rx) = dummy_scheduler();
+        let (task_sched, mut task_rx) = dummy_scheduler();
         let observer = CdcObserver::new(task_sched.clone(), memory_quota.clone());
         let txn_extra_scheduler =
             CdcTxnExtraScheduler::new(task_sched.clone(), memory_quota.clone());
@@ -380,12 +380,13 @@ mod tests {
             &engine,
         );
 
-        match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
+        match task_rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
             Task::MultiBatch { multi, .. } => {
                 assert_eq!(multi.len(), 1);
                 assert_eq!(multi[0].len(), 1);
             }
             _ => panic!("unexpected task"),
         };
+        assert!(task_rx.recv_timeout(Duration::from_millis(10)).unwrap().is_none());
     }
 }
