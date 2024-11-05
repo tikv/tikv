@@ -212,9 +212,10 @@ mod tests {
     use kvproto::metapb::Region;
     use raftstore::coprocessor::RoleChange;
     use tikv::storage::kv::TestEngineBuilder;
-    use tikv_util::store::new_peer;
+    use tikv_util::{store::new_peer, worker::dummy_scheduler};
 
     use super::*;
+    use crate::CdcTxnExtraScheduler;
 
     #[test]
     fn test_register_and_deregister() {
@@ -229,8 +230,8 @@ mod tests {
         let engine = TestEngineBuilder::new().build().unwrap().get_rocksdb();
 
         let mut cb = CmdBatch::new(&observe_info, 0);
-        let size = cb.size();
         cb.push(&observe_info, 0, Cmd::default());
+        let size = cb.size();
         <CdcObserver as CmdObserver<RocksEngine>>::on_flush_applied_cmd_batch(
             &observer,
             cb.level,
@@ -352,5 +353,39 @@ mod tests {
         let mut ctx = ObserverContext::new(&region);
         observer.on_role_change(&mut ctx, &RoleChange::new(StateRole::Follower));
         rx.recv_timeout(Duration::from_millis(10)).unwrap_err();
+    }
+
+    #[test]
+    fn test_txn_extra_dropped_since_exceed_memory_quota() {
+        let memory_quota = Arc::new(MemoryQuota::new(10));
+        let (task_sched, task_rx) = dummy_scheduler();
+        let observer = CdcObserver::new(task_sched.clone(), memory_quota.clone());
+        let txn_extra_scheduler =
+            CdcTxnExtraScheduler::new(task_sched.clone(), memory_quota.clone());
+
+        let observe_info = CmdObserveInfo::from_handle(
+            ObserveHandle::new(),
+            ObserveHandle::new(),
+            ObserveHandle::new(),
+        );
+        let mut cb = CmdBatch::new(&observe_info, 0);
+        cb.push(&observe_info, 0, Cmd::default());
+        let cmd_batches = vec![cb];
+
+        let engine = TestEngineBuilder::new().build().unwrap().get_rocksdb();
+        <CdcObserver as CmdObserver<RocksEngine>>::on_flush_applied_cmd_batch(
+            &observer,
+            cb.level,
+            &mut vec![cb],
+            &engine,
+        );
+
+        match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
+            Task::MultiBatch { multi, .. } => {
+                assert_eq!(multi.len(), 1);
+                assert_eq!(multi[0].len(), 1);
+            }
+            _ => panic!("unexpected task"),
+        };
     }
 }
