@@ -568,8 +568,17 @@ impl Resolver {
         self.read_progress.as_ref()
     }
 
-    // Return the transaction with the smallest min_commit_ts. When min_commit_ts
-    // is unknown, use start_ts instead.
+    // Returns the minimum possible (commit_ts - 1), based on the knowledge we have,
+    // i.e. from all locks currently being tracked.
+    // The function is to provide an upper bound of resolved-ts. By definition
+    // resolved-ts must be strictly smaller than a future commit_ts.
+    //
+    // "Oldest" doesn't mean it started first, but means it may have the smallest
+    // commit_ts, which is the returned ts + 1.
+    //
+    // **NOTE**:
+    // For normal txns, we return start_ts.
+    // For large txns, we return its min_commit_ts-1.
     pub(crate) fn oldest_transaction(&self) -> Option<(TimeStamp, TxnLocks)> {
         let oldest_normal_txn = self
             .lock_ts_heap
@@ -582,7 +591,7 @@ impl Resolver {
             .iter()
             .filter_map(|(start_ts, txn_locks)| {
                 self.lookup_min_commit_ts(*start_ts)
-                    .map(|ts| (ts, txn_locks.clone()))
+                    .map(|ts| (ts.prev(), txn_locks.clone()))
             })
             .min_by_key(|(ts, _)| *ts);
 
@@ -896,7 +905,7 @@ mod tests {
         assert_eq!(resolver.large_txn_key_representative.len(), 2);
         assert_eq!(resolver.resolved_ts(), TimeStamp::zero());
 
-        assert_eq!(resolver.resolve(20.into(), None, TsSource::PdTso), 1.into());
+        assert_eq!(resolver.resolve(20.into(), None, TsSource::PdTso), 0.into());
 
         txn_status_cache.upsert(
             1.into(),
@@ -913,9 +922,35 @@ mod tests {
             SystemTime::now(),
         );
 
-        assert_eq!(resolver.resolve(20.into(), None, TsSource::PdTso), 5.into());
+        assert_eq!(resolver.resolve(20.into(), None, TsSource::PdTso), 4.into());
         let oldest_txn = resolver.oldest_transaction().unwrap();
-        assert_eq!(oldest_txn.0, 5.into());
+        assert_eq!(oldest_txn.0, 4.into());
         assert_eq!(oldest_txn.1.lock_count, 2);
+    }
+
+    #[test]
+    fn test_resolved_ts_always_greater_than_following_commit_ts() {
+        // A later commit_ts must be strictly larger than resolved-ts. Equality is not
+        // allowed. The case may not happen in real implementation, but we want
+        // to ensure the correctness and robustness of every submodule.
+        let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
+        let txn_status_cache = Arc::new(TxnStatusCache::new(100));
+        let mut resolver = Resolver::new(1, memory_quota, txn_status_cache.clone());
+        let key: Vec<u8> = vec![1, 2, 3, 4];
+
+        resolver.track_lock(1.into(), key.clone(), None, 1).unwrap();
+        // PD TSO = 9. A read request with ts 9 reads, and pushes the min_commit_ts to
+        // 10, which is greater than current PD TS.
+        txn_status_cache.upsert(
+            1.into(),
+            TxnState::Ongoing {
+                min_commit_ts: 10.into(),
+            },
+            SystemTime::now(),
+        );
+        // We assert the resolved-ts cannot be 10. Because a later commit ts could be
+        // 10.
+        assert_eq!(resolver.resolve(10.into(), None, TsSource::PdTso), 9.into());
+        // Now the txn can commit, with the smallest possible commit_ts = 10.
     }
 }
