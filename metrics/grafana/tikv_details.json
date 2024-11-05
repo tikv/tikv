@@ -39962,7 +39962,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_in_memory_engine_load_duration_secs_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance) ",
+              "expr": "sum(delta(\n    tikv_in_memory_engine_load_duration_secs_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance) ",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -39970,7 +39970,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{instance}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_in_memory_engine_load_duration_secs_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance) ",
+              "query": "sum(delta(\n    tikv_in_memory_engine_load_duration_secs_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -40200,7 +40200,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_in_memory_engine_eviction_duration_secs_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, $additional_groupby) ",
+              "expr": "sum(delta(\n    tikv_in_memory_engine_eviction_duration_secs_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, $additional_groupby) ",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -40208,7 +40208,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{type}} {{$additional_groupby}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_in_memory_engine_eviction_duration_secs_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, $additional_groupby) ",
+              "query": "sum(delta(\n    tikv_in_memory_engine_eviction_duration_secs_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, $additional_groupby) ",
               "refId": "",
               "step": 10,
               "target": ""

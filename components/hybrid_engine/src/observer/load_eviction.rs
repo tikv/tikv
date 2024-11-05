@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use engine_traits::{CacheRegion, EvictReason, KvEngine, RegionCacheEngineExt, RegionEvent};
 use kvproto::{
-    metapb::Region,
+    metapb::{Peer, Region},
     raft_cmdpb::AdminCmdType,
     raft_serverpb::{ExtraMessage, ExtraMessageType, RaftApplyState},
 };
@@ -15,7 +15,7 @@ use raftstore::coprocessor::{
     BoxQueryObserver, BoxRoleObserver, Cmd, Coprocessor, CoprocessorHost, DestroyPeerObserver,
     ExtraMessageObserver, ObserverContext, QueryObserver, RegionState, RoleObserver,
 };
-use tikv_util::info;
+use tikv_util::{debug, warn};
 
 #[derive(Clone)]
 pub struct LoadEvictionObserver {
@@ -82,7 +82,7 @@ impl LoadEvictionObserver {
                 ))
         {
             let cache_region = CacheRegion::from_region(ctx.region());
-            info!(
+            debug!(
                 "ime evict range due to apply commands";
                 "region" => ?cache_region,
                 "is_ingest_sst" => apply.pending_handle_ssts.is_some(),
@@ -94,7 +94,7 @@ impl LoadEvictionObserver {
         if !state.new_regions.is_empty() {
             let cmd_type = cmd.request.get_admin_request().get_cmd_type();
             assert!(cmd_type == AdminCmdType::BatchSplit || cmd_type == AdminCmdType::Split);
-            info!(
+            debug!(
                 "ime handle region split";
                 "region_id" => ctx.region().get_id(),
                 "admin_command" => ?cmd.request.get_admin_request().get_cmd_type(),
@@ -246,7 +246,7 @@ impl RoleObserver for LoadEvictionObserver {
         if let StateRole::Leader = change.state {
             // Currently, it is only used by the manual load.
             let cache_region = CacheRegion::from_region(ctx.region());
-            info!(
+            debug!(
                 "ime try to load region due to became leader";
                 "region" => ?cache_region,
             );
@@ -255,7 +255,7 @@ impl RoleObserver for LoadEvictionObserver {
             && change.initialized
         {
             let cache_region = CacheRegion::from_region(ctx.region());
-            info!(
+            debug!(
                 "ime try to evict region due to became follower";
                 "region" => ?cache_region,
             );
@@ -274,8 +274,16 @@ impl ExtraMessageObserver for LoadEvictionObserver {
 
 impl DestroyPeerObserver for LoadEvictionObserver {
     fn on_destroy_peer(&self, r: &Region) {
+        let mut region = r.clone();
+        if region.get_peers().is_empty() {
+            warn!("ime evict an uninitialized region"; "region" => ?region);
+            // In some cases, the region may have no peer, such as an
+            // uninitialized peer being destroyed. We need to push an empty peer
+            // to prevent panic in `CacheRegion::from_region`.
+            region.mut_peers().push(Peer::default());
+        }
         self.cache_engine.on_region_event(RegionEvent::Eviction {
-            region: CacheRegion::from_region(r),
+            region: CacheRegion::from_region(&region),
             reason: EvictReason::PeerDestroy,
         });
     }

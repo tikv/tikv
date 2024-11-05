@@ -698,6 +698,9 @@ impl BackgroundRunnerCore {
             }
         };
         if !region_stats_manager.ready_for_auto_load_and_evict() {
+            info!(
+                "ime skip check load&evict because the duration from last load&evict check is too short."
+            );
             return;
         }
 
