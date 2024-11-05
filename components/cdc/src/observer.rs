@@ -380,13 +380,22 @@ mod tests {
             &engine,
         );
 
-        match task_rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
+        match task_rx
+            .recv_timeout(Duration::from_millis(10))
+            .unwrap()
+            .unwrap()
+        {
             Task::MultiBatch { multi, .. } => {
                 assert_eq!(multi.len(), 1);
                 assert_eq!(multi[0].len(), 1);
             }
             _ => panic!("unexpected task"),
         };
-        assert!(task_rx.recv_timeout(Duration::from_millis(10)).unwrap().is_none());
+        assert!(
+            task_rx
+                .recv_timeout(Duration::from_millis(10))
+                .unwrap()
+                .is_none()
+        );
     }
 }
