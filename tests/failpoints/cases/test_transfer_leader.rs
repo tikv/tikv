@@ -846,8 +846,8 @@ fn test_when_applied_region_split_on_transferee_pessimistic_lock() {
 }
 
 // This test verifies that a leader transfer is:
-// - Not allowed for the source region when the transferee has applied a
-//   region commit-merge but the leader has not yet applied.
+// - Not allowed for the source region when the transferee has applied a region
+//   commit-merge but the leader has not yet applied.
 // - Allowed for the source region when the transferee has applied a region
 //   prepare-merge but the leader has not yet applied.
 // - Allowed for the target region in both scenarios above.
