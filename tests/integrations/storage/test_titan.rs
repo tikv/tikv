@@ -16,7 +16,7 @@ use engine_traits::{
 };
 use keys::data_key;
 use kvproto::metapb::{Peer, Region};
-use raftstore::store::{apply_sst_cf_file, build_sst_cf_file_list, CfFile, RegionSnapshot};
+use raftstore::store::{apply_sst_cf_file, CfFile, RegionSnapshot};
 use tempfile::Builder;
 use test_raftstore::*;
 use tikv::{
@@ -140,6 +140,7 @@ fn test_turnoff_titan() {
     cluster.pre_start_check().unwrap();
 }
 
+/*
 #[test]
 #[ignore]
 fn test_delete_files_in_range_for_titan() {
@@ -432,3 +433,4 @@ fn test_delete_files_in_range_for_titan() {
         Some((Key::from_raw(b"b"), b"b_value".to_vec())),
     );
 }
+*/

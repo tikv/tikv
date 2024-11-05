@@ -42,7 +42,7 @@ use tikv_util::{
     config::{Tracker, VersionTrack, MIB},
     time::{Instant, UnixSecs},
     timer::GLOBAL_TIMER_HANDLE,
-    worker::Runnable,
+    worker::{Runnable, RunnableWithTimer},
     DeferContext,
 };
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
@@ -421,6 +421,7 @@ pub struct Runner<R: RaftExtension> {
     cfg: Config,
     sending_count: Arc<AtomicUsize>,
     recving_count: Arc<AtomicUsize>,
+    pending_send: Vec<Task>,
 }
 
 impl<R: RaftExtension + 'static> Runner<R> {
@@ -451,6 +452,7 @@ impl<R: RaftExtension + 'static> Runner<R> {
             cfg: config,
             sending_count: Arc::new(AtomicUsize::new(0)),
             recving_count: Arc::new(AtomicUsize::new(0)),
+            pending_send: Vec::new(),
         };
         snap_worker
     }
@@ -494,6 +496,55 @@ impl<R: RaftExtension + 'static> Runner<R> {
         }
 
         None
+    }
+
+    fn handle_pending_send(&mut self) {
+        while self.sending_count.load(Ordering::SeqCst) < self.cfg.concurrent_send_snap_limit {
+            let task = match self.pending_send.pop() {
+                Some(t) => t,
+                None => return,
+            };
+
+            let (addr, msg, cb) = match task {
+                Task::Send { addr, msg, cb } => (addr, msg, cb),
+                _ => unreachable!(),
+            };
+            SNAP_TASK_COUNTER_STATIC.send.inc();
+
+            let region_id = msg.get_region_id();
+
+            let env = Arc::clone(&self.env);
+            let mgr = self.snap_mgr.clone();
+            let security_mgr = Arc::clone(&self.security_mgr);
+            let sending_count = Arc::clone(&self.sending_count);
+            sending_count.fetch_add(1, Ordering::SeqCst);
+            let send_task = send_snap(env, mgr, security_mgr, &self.cfg.clone(), &addr, msg);
+            let task = async move {
+                let res = match send_task {
+                    Err(e) => Err(e),
+                    Ok(f) => f.await,
+                };
+                match res {
+                    Ok(stat) => {
+                        info!(
+                            "sent snapshot";
+                            "region_id" => stat.key.region_id,
+                            "snap_key" => %stat.key,
+                            "size" => stat.total_size,
+                            "duration" => ?stat.elapsed
+                        );
+                        cb(Ok(()));
+                    }
+                    Err(e) => {
+                        error!("failed to send snap"; "to_addr" => addr, "region_id" => region_id, "err" => ?e);
+                        cb(Err(e));
+                    }
+                };
+                sending_count.fetch_sub(1, Ordering::SeqCst);
+            };
+
+            self.pool.spawn(task);
+        }
     }
 }
 
@@ -566,51 +617,10 @@ impl<R: RaftExtension + 'static> Runnable for Runner<R> {
                 };
                 self.pool.spawn(task);
             }
-            Task::Send { addr, msg, cb } => {
+            t @ Task::Send { .. } => {
                 fail_point!("send_snapshot");
-                let region_id = msg.get_region_id();
-                if self.sending_count.load(Ordering::SeqCst) >= self.cfg.concurrent_send_snap_limit
-                {
-                    warn!(
-                        "too many sending snapshot tasks, drop Send Snap[to: {}, snap: {:?}]",
-                        addr, msg
-                    );
-                    cb(Err(Error::Other("Too many sending snapshot tasks".into())));
-                    return;
-                }
-                SNAP_TASK_COUNTER_STATIC.send.inc();
-
-                let env = Arc::clone(&self.env);
-                let mgr = self.snap_mgr.clone();
-                let security_mgr = Arc::clone(&self.security_mgr);
-                let sending_count = Arc::clone(&self.sending_count);
-                sending_count.fetch_add(1, Ordering::SeqCst);
-                let send_task = send_snap(env, mgr, security_mgr, &self.cfg.clone(), &addr, msg);
-                let task = async move {
-                    let res = match send_task {
-                        Err(e) => Err(e),
-                        Ok(f) => f.await,
-                    };
-                    match res {
-                        Ok(stat) => {
-                            info!(
-                                "sent snapshot";
-                                "region_id" => stat.key.region_id,
-                                "snap_key" => %stat.key,
-                                "size" => stat.total_size,
-                                "duration" => ?stat.elapsed
-                            );
-                            cb(Ok(()));
-                        }
-                        Err(e) => {
-                            error!("failed to send snap"; "to_addr" => addr, "region_id" => region_id, "err" => ?e);
-                            cb(Err(e));
-                        }
-                    };
-                    sending_count.fetch_sub(1, Ordering::SeqCst);
-                };
-
-                self.pool.spawn(task);
+                self.pending_send.push(t);
+                self.handle_pending_send();
             }
             Task::RefreshConfigEvent => {
                 self.refresh_cfg();
@@ -619,5 +629,15 @@ impl<R: RaftExtension + 'static> Runnable for Runner<R> {
                 f(&self.cfg);
             }
         }
+    }
+}
+
+impl<R: RaftExtension + 'static> RunnableWithTimer for Runner<R> {
+    fn on_timeout(&mut self) {
+        self.handle_pending_send();
+    }
+
+    fn get_interval(&self) -> Duration {
+        Duration::from_millis(500)
     }
 }

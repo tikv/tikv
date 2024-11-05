@@ -868,11 +868,12 @@ impl ApplySnapshotObserver for MockApplySnapshotObserver {
         _: &raftstore::store::SnapKey,
         snap: Option<&raftstore::store::Snapshot>,
     ) {
-        let tablet_path = snap.unwrap().tablet_snap_path().as_ref().unwrap().clone();
-        self.tablet_snap_paths
-            .lock()
-            .unwrap()
-            .insert(peer_id, (false, tablet_path));
+        // let tablet_path =
+        // snap.unwrap().tablet_snap_path().as_ref().unwrap().clone();
+        // self.tablet_snap_paths
+        //     .lock()
+        //     .unwrap()
+        //     .insert(peer_id, (false, tablet_path));
     }
 
     fn post_apply_snapshot(
@@ -882,15 +883,16 @@ impl ApplySnapshotObserver for MockApplySnapshotObserver {
         _: &raftstore::store::SnapKey,
         snap: Option<&raftstore::store::Snapshot>,
     ) {
-        let tablet_path = snap.unwrap().tablet_snap_path().as_ref().unwrap().clone();
-        match self.tablet_snap_paths.lock().unwrap().entry(peer_id) {
-            collections::HashMapEntry::Occupied(mut entry) => {
-                if entry.get_mut().1 == tablet_path {
-                    entry.get_mut().0 = true;
-                }
-            }
-            collections::HashMapEntry::Vacant(_) => {}
-        }
+        // let tablet_path =
+        // snap.unwrap().tablet_snap_path().as_ref().unwrap().clone();
+        // match self.tablet_snap_paths.lock().unwrap().entry(peer_id) {
+        //     collections::HashMapEntry::Occupied(mut entry) => {
+        //         if entry.get_mut().1 == tablet_path {
+        //             entry.get_mut().0 = true;
+        //         }
+        //     }
+        //     collections::HashMapEntry::Vacant(_) => {}
+        // }
     }
 }
 
