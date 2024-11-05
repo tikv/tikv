@@ -146,7 +146,6 @@ impl RegionCacheWriteBatch {
         self.record_last_written_region();
 
         let cached_region = CacheRegion::from_region(region);
-        // TODO: remote range.
         self.set_region_cache_status(
             self.engine
                 .prepare_for_apply(&cached_region, region.is_in_flashback),
