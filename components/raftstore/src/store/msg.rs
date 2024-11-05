@@ -924,17 +924,10 @@ where
 impl<EK: KvEngine> StoreMsg<EK> {
     pub fn discriminant(&self) -> usize {
         match self {
-<<<<<<< HEAD
             StoreMsg::RaftMessage(_) => 0,
             StoreMsg::StoreUnreachable { .. } => 1,
             StoreMsg::CompactedEvent(_) => 2,
             StoreMsg::ClearRegionSizeInRange { .. } => 3,
-=======
-            StoreMsg::RaftMessage(..) => 0,
-            StoreMsg::ClearRegionSizeInRange { .. } => 1,
-            StoreMsg::StoreUnreachable { .. } => 2,
-            StoreMsg::CompactedEvent(_) => 3,
->>>>>>> f6e0ed928d (import: write RPC will check region epoch before continue (#15795) (#17352))
             StoreMsg::Tick(_) => 4,
             StoreMsg::Start { .. } => 5,
             StoreMsg::UpdateReplicationMode(_) => 6,
@@ -943,10 +936,6 @@ impl<EK: KvEngine> StoreMsg<EK> {
             StoreMsg::UnsafeRecoveryCreatePeer { .. } => 9,
             StoreMsg::GcSnapshotFinish => 10,
             StoreMsg::AwakenRegions { .. } => 11,
-<<<<<<< HEAD
-            StoreMsg::ValidateSstResult { .. } => 12,
-=======
->>>>>>> f6e0ed928d (import: write RPC will check region epoch before continue (#15795) (#17352))
             #[cfg(any(test, feature = "testexport"))]
             StoreMsg::Validate(_) => 12,
         }
