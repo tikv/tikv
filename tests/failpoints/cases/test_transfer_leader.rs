@@ -713,7 +713,7 @@ fn test_when_applied_conf_change_on_transferee() {
 
     pd_client.remove_peer(region_id, new_peer(2, 2));
     sleep_ms(300);
-    // Peer 2 is still exists since the leader hasn't applied the ConfChange
+    // Peer 2 still exists since the leader hasn't applied the ConfChange
     // yet.
     pd_client.must_have_peer(region_id, new_peer(2, 2));
 
@@ -783,7 +783,7 @@ fn test_when_applied_conf_change_on_learner_transferee() {
 }
 
 // This test verifies that a leader transfer is allowed when the transferee
-// has been applied a conf change but the leader has not yet applied.
+// has applied a conf change but the leader has not yet applied.
 #[test]
 fn test_when_applied_conf_change_on_transferee_pessimistic_lock() {
     let mut cluster = new_server_cluster(0, 4);
@@ -799,7 +799,7 @@ fn test_when_applied_conf_change_on_transferee_pessimistic_lock() {
 
     pd_client.remove_peer(region_id, new_peer(2, 2));
     sleep_ms(300);
-    // Peer 2 is still exists since the leader hasn't applied the ConfChange
+    // Peer 2 still exists since the leader hasn't applied the ConfChange
     // yet.
     pd_client.must_have_peer(region_id, new_peer(2, 2));
 
@@ -810,7 +810,7 @@ fn test_when_applied_conf_change_on_transferee_pessimistic_lock() {
 }
 
 // This test verifies that a leader transfer is allowed when the transferee
-// has been applied a region split but the leader has not yet applied.
+// has applied a region split but the leader has not yet applied.
 #[test]
 fn test_when_applied_region_split_on_transferee_pessimistic_lock() {
     let mut cluster = new_server_cluster(0, 3);
@@ -846,9 +846,9 @@ fn test_when_applied_region_split_on_transferee_pessimistic_lock() {
 }
 
 // This test verifies that a leader transfer is:
-// - Not allowed for the source region when the transferee has been applied a
+// - Not allowed for the source region when the transferee has applied a
 //   region commit-merge but the leader has not yet applied.
-// - Allowed for the source region when the transferee has been applied a region
+// - Allowed for the source region when the transferee has applied a region
 //   prepare-merge but the leader has not yet applied.
 // - Allowed for the target region in both scenarios above.
 #[test]
@@ -930,7 +930,7 @@ fn test_when_applied_region_merge_on_transferee_pessimistic_lock() {
 }
 
 // This test verifies that a leader transfer is allowed when the transferee
-// has been applied a witness switch but the leader has not yet applied.
+// has applied a witness switch but the leader has not yet applied.
 #[test]
 fn test_when_applied_witness_switch_on_transferee_pessimistic_lock() {
     init_log_for_test();
