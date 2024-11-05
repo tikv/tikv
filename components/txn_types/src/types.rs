@@ -575,7 +575,7 @@ impl TxnExtra {
             result += value.0.size();
         }
         // add 2 for 2 boolean fields
-        result + 2
+        result + std::mem::size_of::<Self>()
     }
 }
 
