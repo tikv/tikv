@@ -1075,7 +1075,7 @@ pub(crate) mod tests {
             ObserverContext,
         },
         store::{
-            peer_storage::JOB_STATUS_PENDING, snap::tests::get_test_db_for_regions,
+            copy_snapshot, peer_storage::JOB_STATUS_PENDING, snap::tests::get_test_db_for_regions,
             worker::RegionRunner, CasualMessage, SnapKey, SnapManager,
         },
     };
@@ -1185,12 +1185,13 @@ pub(crate) mod tests {
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
         let bg_worker = Worker::new("region-worker");
-        let mut worker: LazyWorker<Task<KvTestSnapshot>> = bg_worker.lazy_build("region-worker");
+        let mut worker: LazyWorker<Task<KvTestEngine>> = bg_worker.lazy_build("region-worker");
         let sched = worker.scheduler();
         let (router, _) = mpsc::sync_channel(11);
         let cfg = make_raftstore_cfg(false);
         let mut runner = RegionRunner::new(
             engine.kv.clone(),
+            engine.raft.clone(),
             mgr,
             cfg,
             CoprocessorHost::<KvTestEngine>::default(),
@@ -1215,6 +1216,7 @@ pub(crate) mod tests {
                 region_id: 1,
                 start_key: b"k1".to_vec(),
                 end_key: b"k2".to_vec(),
+                kv_wb: engine.kv.write_batch(),
             })
             .unwrap();
         for i in 0..9 {
@@ -1223,6 +1225,7 @@ pub(crate) mod tests {
                     region_id: i as u64 + 2,
                     start_key: ranges[i].clone(),
                     end_key: ranges[i + 1].clone(),
+                    kv_wb: engine.kv.write_batch(),
                 })
                 .unwrap();
         }
@@ -1244,7 +1247,7 @@ pub(crate) mod tests {
             .tempdir()
             .unwrap();
         let obs = MockApplySnapshotObserver::default();
-        let mut host = CoprocessorHost::<KvTestEngine>::default();
+        let mut host = CoprocessorHost::default();
         host.registry
             .register_apply_snapshot_observer(1, BoxApplySnapshotObserver::new(obs.clone()));
 
@@ -1299,6 +1302,7 @@ pub(crate) mod tests {
         let cfg = make_raftstore_cfg(true);
         let runner = RegionRunner::new(
             engine.kv.clone(),
+            engine.raft.clone(),
             mgr,
             cfg,
             host,
@@ -1344,8 +1348,7 @@ pub(crate) mod tests {
             let mut s3 = mgr
                 .get_snapshot_for_receiving(&key, data.take_meta())
                 .unwrap();
-            io::copy(&mut s2, &mut s3).unwrap();
-            s3.save().unwrap();
+            copy_snapshot(&s2, &s3).unwrap();
 
             // set applying state
             let mut wb = engine.kv.write_batch();
@@ -1379,6 +1382,7 @@ pub(crate) mod tests {
                     region_id: id,
                     start_key,
                     end_key,
+                    kv_wb: engine.kv.write_batch(),
                 })
                 .unwrap();
         };
