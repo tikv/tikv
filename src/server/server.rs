@@ -331,7 +331,7 @@ where
                     security_mgr,
                     cfg,
                 );
-                self.snap_worker.start(snap_runner);
+                self.snap_worker.start_with_timer(snap_runner);
             }
             Either::Right(mgr) => {
                 let snap_runner = TabletRunner::new(

@@ -109,7 +109,7 @@ impl<EK: KvEngine> Transport for ChannelTransport<EK> {
                 core.snap_paths[&from_store].0.deregister(&key);
             });
 
-            copy_snapshot(from, to)?;
+            copy_snapshot(&from, &to)?;
         }
 
         let core = self.core.lock().unwrap();
