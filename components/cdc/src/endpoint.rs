@@ -246,7 +246,7 @@ impl fmt::Debug for Task {
                 .field("version", version)
                 .field("explicit_features", explicit_features)
                 .finish(),
-            Task::MultiBatch { multi, ..} => de
+            Task::MultiBatch { multi, .. } => de
                 .field("type", &"multi_batch")
                 .field("multi_batch", &multi.len())
                 .finish(),
@@ -1056,10 +1056,10 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                         }
                     }
                     Err(e) => self.on_deregister(Deregister::Delegate {
-                            region_id,
-                            observe_id,
-                            err: e,
-                        }),
+                        region_id,
+                        observe_id,
+                        err: e,
+                    }),
                 }
             }
         }
@@ -1345,7 +1345,7 @@ impl CdcTxnExtraScheduler {
     pub fn new(scheduler: Scheduler<Task>, memory_quota: Arc<MemoryQuota>) -> CdcTxnExtraScheduler {
         CdcTxnExtraScheduler {
             scheduler,
-            memory_quota
+            memory_quota,
         }
     }
 }
