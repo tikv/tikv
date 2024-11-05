@@ -29,13 +29,10 @@ use kvproto::{
     },
     kvrpcpb::Context,
     metapb::RegionEpoch,
-    raft_cmdpb::{CmdType, DeleteRequest, PutRequest, RaftCmdRequest, RaftRequestHeader, Request},
 };
-use protobuf::Message;
 use raftstore::{
     coprocessor::{RegionInfo, RegionInfoProvider},
-    router::RaftStoreRouter,
-    store::{util::is_epoch_stale, Callback, RaftCmdExtraOpts, RegionSnapshot},
+    store::util::is_epoch_stale,
     RegionInfoAccessor,
 };
 use sst_importer::{
@@ -47,7 +44,7 @@ use tikv_kv::{
 };
 use tikv_util::{
     config::ReadableSize,
-    future::create_stream_with_buffer,
+    future::{create_stream_with_buffer, paired_future_callback},
     sys::thread::ThreadBuildWrapper,
     time::{Instant, Limiter},
     HandyRwLock,
@@ -751,9 +748,9 @@ macro_rules! impl_write {
                     let tablet = match tablets.get(region_id) {
                         Some(t) => t,
                         None => {
-                            return Err(Error::Engine(
+                            return (Err(Error::Engine(
                                 format!("region {} not found", region_id).into(),
-                            ));
+                            )), Some(rx));
                         }
                     };
 
@@ -1379,14 +1376,16 @@ mod test {
     use engine_traits::{CF_DEFAULT, CF_WRITE};
     use kvproto::{
         kvrpcpb::Context,
-        metapb::RegionEpoch,
+        metapb::{Region, RegionEpoch},
         raft_cmdpb::{RaftCmdRequest, Request},
     };
-    use protobuf::Message;
+    use protobuf::{Message, SingularPtrField};
     use tikv_kv::{Modify, WriteData};
     use txn_types::{Key, TimeStamp, Write, WriteBatchFlags, WriteType};
+    use raftstore::RegionInfo;
+    use raft::StateRole::Follower;
 
-    use crate::{import::sst_service::RequestCollector, server::raftkv};
+    use crate::{import::sst_service::{RequestCollector, check_local_region_stale}, server::raftkv};
 
     fn write(key: &[u8], ty: WriteType, commit_ts: u64, start_ts: u64) -> (Vec<u8>, Vec<u8>) {
         let k = Key::from_raw(key).append_ts(TimeStamp::new(commit_ts));
