@@ -19,7 +19,6 @@ use raft::eraftpb::{ConfChangeType, MessageType};
 use raftstore::store::Callback;
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
-use test_util::init_log_for_test;
 use tikv::storage::Snapshot;
 use tikv_util::{
     config::{ReadableDuration, ReadableSize},
@@ -933,7 +932,6 @@ fn test_when_applied_region_merge_on_transferee_pessimistic_lock() {
 // has applied a witness switch but the leader has not yet applied.
 #[test]
 fn test_when_applied_witness_switch_on_transferee_pessimistic_lock() {
-    init_log_for_test();
     let mut cluster = new_server_cluster(0, 3);
     let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
