@@ -1892,13 +1892,13 @@ def RaftWaterfall() -> RowPanel:
         [
             graph_panel_histogram_quantiles(
                 title="Store propose wait duration",
-                description="The propose wait time duration of each request",
+                description="Time from request scheduling to when it is handled by Raftstore",
                 yaxes=yaxes(left_format=UNITS.SECONDS),
                 metric="tikv_raftstore_request_wait_time_duration_secs",
             ),
             graph_panel_histogram_quantiles(
                 title="Store batch wait duration",
-                description="The batch wait time duration of each request",
+                description="Time from request scheduling to when a batch of requests is formed and prepared to be proposed to Raft",
                 yaxes=yaxes(left_format=UNITS.SECONDS),
                 metric="tikv_raftstore_store_wf_batch_wait_duration_seconds",
             ),
@@ -1908,13 +1908,13 @@ def RaftWaterfall() -> RowPanel:
         [
             graph_panel_histogram_quantiles(
                 title="Store send to write queue duration",
-                description="The send-to-write-queue time duration of each request",
+                description="Time from request scheduling to just before it is sent to the store writer thread",
                 yaxes=yaxes(left_format=UNITS.SECONDS),
                 metric="tikv_raftstore_store_wf_send_to_queue_duration_seconds",
             ),
             graph_panel_histogram_quantiles(
                 title="Store send proposal duration",
-                description="The send raft message of the proposal duration of each request",
+                description="Time from request scheduling to just before it is sent to followers",
                 yaxes=yaxes(left_format=UNITS.SECONDS),
                 metric="tikv_raftstore_store_wf_send_proposal_duration_seconds",
             ),
@@ -1924,13 +1924,13 @@ def RaftWaterfall() -> RowPanel:
         [
             graph_panel_histogram_quantiles(
                 title="Store write kv db end duration",
-                description="The write kv db end duration of each request",
+                description="Time from request scheduling to when the batch's snapshot state is written to KV DB",
                 yaxes=yaxes(left_format=UNITS.SECONDS),
                 metric="tikv_raftstore_store_wf_write_kvdb_end_duration_seconds",
             ),
             graph_panel_histogram_quantiles(
                 title="Store before write duration",
-                description="The before write time duration of each request",
+                description="Time from request scheduling to just before it is written to Raft Engine",
                 yaxes=yaxes(left_format=UNITS.SECONDS),
                 metric="tikv_raftstore_store_wf_before_write_duration_seconds",
             ),
@@ -1939,16 +1939,16 @@ def RaftWaterfall() -> RowPanel:
     layout.row(
         [
             graph_panel_histogram_quantiles(
-                title="Store persist duration",
-                description="The persist duration of each request",
-                yaxes=yaxes(left_format=UNITS.SECONDS),
-                metric="tikv_raftstore_store_wf_persist_duration_seconds",
-            ),
-            graph_panel_histogram_quantiles(
                 title="Store write end duration",
-                description="The write end duration of each request",
+                description="Time from request scheduling to when it is written to Raft Engine",
                 yaxes=yaxes(left_format=UNITS.SECONDS),
                 metric="tikv_raftstore_store_wf_write_end_duration_seconds",
+            ),
+            graph_panel_histogram_quantiles(
+                title="Store persist duration",
+                description="Time from request scheduling to when its associated ready is persisted on the leader",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_raftstore_store_wf_persist_duration_seconds",
             ),
         ]
     )
@@ -1956,13 +1956,13 @@ def RaftWaterfall() -> RowPanel:
         [
             graph_panel_histogram_quantiles(
                 title="Store commit but not persist duration",
-                description="The commit but not persist duration of each request",
+                description="Time from request scheduling to when it is committed; at the time of commit, it has not been persisted on the leader",
                 yaxes=yaxes(left_format=UNITS.SECONDS),
                 metric="tikv_raftstore_store_wf_commit_not_persist_log_duration_seconds",
             ),
             graph_panel_histogram_quantiles(
                 title="Store commit and persist duration",
-                description="The commit and persist duration of each request",
+                description="Time from request scheduling to when it is committed; at the time of commit, it has been persisted on the leader",
                 yaxes=yaxes(left_format=UNITS.SECONDS),
                 metric="tikv_raftstore_store_wf_commit_log_duration_seconds",
             ),
@@ -1976,9 +1976,9 @@ def RaftIO() -> RowPanel:
     layout.row(
         heatmap_panel_graph_panel_histogram_quantile_pairs(
             heatmap_title="Process ready duration",
-            heatmap_description="The time consumed for peer processes to be ready in Raft",
+            heatmap_description="The time taken by Raftstore to complete processing a poll round, which includes a batch of region peers",
             graph_title="99% Process ready duration per server",
-            graph_description="The time consumed for peer processes to be ready in Raft",
+            graph_description="The time taken by Raftstore to complete processing a poll round, which includes a batch of region peers",
             graph_by_labels=["instance"],
             graph_hides=["count", "avg"],
             yaxis_format=UNITS.SECONDS,
@@ -2306,10 +2306,100 @@ def RaftProcess() -> RowPanel:
                 yaxis=yaxis(format=UNITS.SECONDS),
                 metric="tikv_replica_read_lock_check_duration_seconds_bucket",
             ),
+            graph_panel(
+                title="Fsm reschedule ops",
+                description="The number of fsm reschedule ops",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_batch_system_fsm_reschedule_total",
+                            by_labels=["type"],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            heatmap_panel(
+                title="Store fsm schedule wait duration",
+                description="Duration of store fsm waiting to be polled",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_batch_system_fsm_schedule_wait_seconds_bucket",
+                label_selectors=['type="store"'],
+            ),
+            heatmap_panel(
+                title="Apply fsm schedule wait duration",
+                description="Duration of apply fsm waiting to be polled.e",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_batch_system_fsm_schedule_wait_seconds_bucket",
+                label_selectors=['type="apply"'],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            heatmap_panel(
+                title="Store fsm poll duration",
+                description="Total time for an store FSM to finish processing all messages, potentially over multiple polling rounds.",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_batch_system_fsm_poll_seconds_bucket",
+                label_selectors=['type="store"'],
+            ),
+            heatmap_panel(
+                title="Apply fsm poll duration",
+                description="Total time for an apply FSM to finish processing all messages, potentially over multiple polling rounds",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_batch_system_fsm_poll_seconds_bucket",
+                label_selectors=['type="apply"'],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            heatmap_panel(
+                title="Store fsm poll round",
+                description="Number of polling rounds for an store FSM to finish processing all messages",
+                metric="tikv_batch_system_fsm_poll_rounds_bucket",
+                label_selectors=['type="store"'],
+            ),
+            heatmap_panel(
+                title="Apply fsm poll round",
+                description="Number of polling rounds for an apply FSM to finish processing all messages",
+                metric="tikv_batch_system_fsm_poll_rounds_bucket",
+                label_selectors=['type="apply"'],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            heatmap_panel(
+                title="Store fsm count per poll",
+                description="Number of store fsm polled in one poll",
+                metric="tikv_batch_system_fsm_count_per_poll_bucket",
+                label_selectors=['type="store"'],
+            ),
+            heatmap_panel(
+                title="Apply fsm count per poll",
+                description="Number of apply fsm polled in one poll",
+                metric="tikv_batch_system_fsm_count_per_poll_bucket",
+                label_selectors=['type="apply"'],
+            ),
+        ]
+    )
+    layout.row(
+        [
             heatmap_panel(
                 title="Peer msg length distribution",
                 description="The length of peer msgs for each round handling",
                 metric="tikv_raftstore_peer_msg_len_bucket",
+            ),
+            heatmap_panel(
+                title="Apply msg length distribution",
+                description="The length of apply msgs for each round handling",
+                metric="tikv_raftstore_apply_msg_len_bucket",
             ),
         ]
     )
@@ -4314,7 +4404,7 @@ def CoprocessorDetail() -> RowPanel:
                     target(
                         expr=expr_sum_rate(
                             "tikv_coprocessor_scan_details",
-                            label_selectors=['req=~"index|index_by_region_cache"'],
+                            label_selectors=['req=~"index|index_by_in_memory_engine"'],
                             by_labels=["tag"],
                         ),
                         additional_groupby=True,
@@ -4348,7 +4438,7 @@ def CoprocessorDetail() -> RowPanel:
                     target(
                         expr=expr_sum_rate(
                             "tikv_coprocessor_scan_details",
-                            label_selectors=['req=~"index|index_by_region_cache"'],
+                            label_selectors=['req=~"index|index_by_in_memory_engine"'],
                             by_labels=["cf", "tag"],
                         ),
                         additional_groupby=True,
@@ -4503,6 +4593,10 @@ def InMemoryEngine() -> RowPanel:
                     ),
                 ],
             ),
+        ]
+    )
+    layout.row(
+        [
             graph_panel(
                 title="GC Filter",
                 description="Rang cache engine garbage collection information",
@@ -4539,7 +4633,7 @@ def InMemoryEngine() -> RowPanel:
                 yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
                 targets=[
                     target(
-                        expr=expr_sum_rate(
+                        expr=expr_sum_delta(
                             "tikv_in_memory_engine_load_duration_secs_count",
                             by_labels=["instance"],
                         ),
@@ -4563,7 +4657,7 @@ def InMemoryEngine() -> RowPanel:
                 yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
                 targets=[
                     target(
-                        expr=expr_sum_rate(
+                        expr=expr_sum_delta(
                             "tikv_in_memory_engine_eviction_duration_secs_count",
                             by_labels=["type"],
                         ),
@@ -4746,6 +4840,10 @@ def InMemoryEngine() -> RowPanel:
                     ),
                 ],
             ),
+        ]
+    )
+    layout.row(
+        [
             graph_panel(
                 title="Auto GC SafePoint Gap",
                 description="The gap between newest auto gc safe point and oldest auto gc safe point of regions cached in the in-memroy engine",

@@ -1674,8 +1674,9 @@ where
             );
 
             // Hybrid engine observer.
-            let eviction_observer =
-                HybridEngineLoadEvictionObserver::new(Arc::new(in_memory_engine.clone()));
+            let eviction_observer = HybridEngineLoadEvictionObserver::new(Arc::new(
+                in_memory_engine.region_cache_engine().clone(),
+            ));
             eviction_observer.register_to(self.coprocessor_host.as_mut().unwrap());
             let write_batch_observer =
                 RegionCacheWriteBatchObserver::new(in_memory_engine.region_cache_engine().clone());
