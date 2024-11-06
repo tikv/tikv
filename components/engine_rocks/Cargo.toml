@@ -61,6 +61,7 @@ txn_types = { workspace = true }
 git = "https://github.com/tikv/rust-rocksdb.git"
 package = "rocksdb"
 features = ["encryption"]
+branch = "tikv-7.5"
 
 [dev-dependencies]
 rand = "0.8"
