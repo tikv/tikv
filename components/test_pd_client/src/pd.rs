@@ -1355,13 +1355,19 @@ impl TestPdClient {
     pub fn region_leader_must_be(&self, region_id: u64, peer: metapb::Peer) {
         for _ in 0..500 {
             sleep_ms(10);
-            if let Some(p) = self.cluster.rl().leaders.get(&region_id) {
-                if *p == peer {
-                    return;
-                }
+            if self.check_region_leader(region_id, peer.clone()) {
+                return;
             }
         }
         panic!("region {} must have leader: {:?}", region_id, peer);
+    }
+
+    pub fn check_region_leader(&self, region_id: u64, peer: metapb::Peer) -> bool {
+        self.cluster
+            .rl()
+            .leaders
+            .get(&region_id)
+            .map_or(false, |p| *p == peer)
     }
 
     // check whether region is split by split_key or not.
