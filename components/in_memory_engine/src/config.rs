@@ -23,8 +23,12 @@ const MAX_WRITE_KV_SPEED: u64 = 20 * 1024 * 1024;
 // on `capacity`.
 const MAX_RESERVED_DURATION_FOR_WRITE: u64 = 10;
 // Regions' mvcc read amplification statistics is updated every 1min, so we set
-// the minimal load&evcit check duration to 2min.
+// the minimal load&evict check duration to 2min.
 const MIN_LOAD_EVICT_INTERVAL: Duration = Duration::from_secs(120);
+// The default threshold for mvcc amplification. Test shows setting it to 10
+// can benefit common workloads, eg, TPCc (50 warehouse), saving about 20% of
+// unified read pool CPU usage.
+const DEFAULT_MVCC_AMPLIFICATION_THRESHOLD: usize = 10;
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, OnlineConfig)]
 #[serde(default, rename_all = "kebab-case")]
@@ -76,7 +80,7 @@ impl Default for InMemoryEngineConfig {
             load_evict_interval: ReadableDuration(Duration::from_secs(300)),
             evict_threshold: None,
             capacity: None,
-            mvcc_amplification_threshold: 100,
+            mvcc_amplification_threshold: DEFAULT_MVCC_AMPLIFICATION_THRESHOLD,
             cross_check_interval: ReadableDuration(Duration::from_secs(0)),
             expected_region_size: raftstore::coprocessor::config::SPLIT_SIZE,
         }
@@ -168,7 +172,7 @@ impl InMemoryEngineConfig {
             evict_threshold: Some(ReadableSize::gb(1)),
             capacity: Some(ReadableSize::gb(2)),
             expected_region_size: ReadableSize::mb(20),
-            mvcc_amplification_threshold: 10,
+            mvcc_amplification_threshold: DEFAULT_MVCC_AMPLIFICATION_THRESHOLD,
             cross_check_interval: ReadableDuration(Duration::from_secs(0)),
         }
     }
