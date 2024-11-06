@@ -397,11 +397,10 @@ mod tests {
             }
             _ => panic!("unexpected task"),
         };
-        assert!(
-            task_rx
-                .recv_timeout(Duration::from_millis(10))
-                .unwrap()
-                .is_none()
-        );
+        
+        let err = task_rx
+            .recv_timeout(Duration::from_millis(10))
+            .unwrap_err();
+        assert_eq!(err, std::sync::mpsc::RecvTimeoutError::Timeout);
     }
 }
