@@ -567,6 +567,15 @@ impl TxnExtra {
     pub fn is_empty(&self) -> bool {
         self.old_values.is_empty()
     }
+
+    pub fn size(&self) -> usize {
+        let mut result = 0;
+        for (key, value) in &self.old_values {
+            result += key.len();
+            result += value.0.size();
+        }
+        result + std::mem::size_of::<Self>()
+    }
 }
 
 pub trait TxnExtraScheduler: Send + Sync {
