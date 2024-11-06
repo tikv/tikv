@@ -219,7 +219,7 @@ pub fn admin_cmd_epoch_lookup(admin_cmp_type: AdminCmdType) -> AdminCmdEpochStat
         AdminCmdType::CommitMerge => AdminCmdEpochState::new(true, true, true, false),
         AdminCmdType::RollbackMerge => AdminCmdEpochState::new(true, true, true, false),
         // Transfer leader
-        AdminCmdType::TransferLeader => AdminCmdEpochState::new(true, true, false, false),
+        AdminCmdType::TransferLeader => AdminCmdEpochState::new(false, false, false, false),
         // PrepareFlashback could be committed successfully before a split being applied, so we need
         // to check the epoch to make sure it's sent to a correct key range.
         // NOTICE: FinishFlashback will never meet the epoch not match error since any scheduling
@@ -2124,6 +2124,7 @@ mod tests {
             AdminCmdType::InvalidAdmin,
             AdminCmdType::ComputeHash,
             AdminCmdType::VerifyHash,
+            AdminCmdType::TransferLeader,
         ] {
             let mut admin = AdminRequest::default();
             admin.set_cmd_type(*ty);
@@ -2145,7 +2146,6 @@ mod tests {
             AdminCmdType::PrepareMerge,
             AdminCmdType::CommitMerge,
             AdminCmdType::RollbackMerge,
-            AdminCmdType::TransferLeader,
         ] {
             let mut admin = AdminRequest::default();
             admin.set_cmd_type(*ty);
@@ -2181,7 +2181,6 @@ mod tests {
             AdminCmdType::PrepareMerge,
             AdminCmdType::CommitMerge,
             AdminCmdType::RollbackMerge,
-            AdminCmdType::TransferLeader,
         ] {
             let mut admin = AdminRequest::default();
             admin.set_cmd_type(*ty);
