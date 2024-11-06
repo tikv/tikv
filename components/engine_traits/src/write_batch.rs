@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use crate::{errors::Result, options::WriteOptions, CacheRegion};
+use crate::{errors::Result, options::WriteOptions};
 
 /// Engines that can create write batches
 pub trait WriteBatchExt: Sized {
@@ -136,8 +136,4 @@ pub trait WriteBatch: Mutable {
     fn merge(&mut self, src: Self) -> Result<()>
     where
         Self: Sized;
-
-    /// It declares that the following consecutive write will be within this
-    /// region.
-    fn prepare_for_region(&mut self, _: CacheRegion) {}
 }

@@ -78,16 +78,3 @@ pub trait KvEngine:
     #[cfg(feature = "testexport")]
     fn inner_refcount(&self) -> usize;
 }
-
-#[derive(Debug, Clone)]
-pub struct SnapshotContext {
-    pub region: Option<CacheRegion>,
-    pub read_ts: u64,
-}
-
-impl SnapshotContext {
-    pub fn set_region(&mut self, region: CacheRegion) {
-        assert!(self.region.is_none());
-        self.region = Some(region);
-    }
-}

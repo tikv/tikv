@@ -1,3 +1,5 @@
+// Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
+
 use std::{
     fs::File,
     io::Read,
@@ -16,16 +18,26 @@ use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};
 use kvproto::{
     import_sstpb::SstMeta,
     kvrpcpb::Context,
-    raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request},
+    raft_cmdpb::{AdminCmdType, CmdType, RaftCmdRequest, RaftRequestHeader, Request},
+    raft_serverpb::RaftMessage,
 };
+use pd_client::PdClient;
 use protobuf::Message;
+use raft::eraftpb::MessageType;
+use raftstore::{
+    coprocessor::ObserveHandle,
+    store::{
+        fsm::{apply::ChangeObserver, ApplyTask},
+        msg::Callback,
+    },
+};
 use tempfile::tempdir;
 use test_coprocessor::{
     handle_request, init_data_with_details_pd_client, DagChunkSpliter, DagSelect, ProductTable,
 };
 use test_raftstore::{
-    get_tso, new_peer, new_server_cluster_with_hybrid_engine_with_no_region_cache, Cluster,
-    ServerCluster,
+    get_tso, new_learner_peer, new_peer, new_put_cf_cmd, new_server_cluster_with_hybrid_engine,
+    CloneFilterFactory, Cluster, Direction, RegionPacketFilter, ServerCluster,
 };
 use test_util::eventually;
 use tidb_query_datatype::{
@@ -48,6 +60,7 @@ fn copr_point_get(
     let key_range = table.get_record_range_one(row_id);
     let req = DagSelect::from(table)
         .key_ranges(vec![key_range])
+        .start_ts(get_tso(&cluster.pd_client).into())
         .build_with(ctx, &[0]);
     let cop_resp = handle_request(&endpoint, req);
     assert!(!cop_resp.has_region_error(), "{:?}", cop_resp);
@@ -98,13 +111,42 @@ fn must_copr_load_data(cluster: &mut Cluster<ServerCluster>, table: &ProductTabl
         &[(row_id, Some(&format!("name:{}", row_id)), row_id)],
         true,
         &cluster.cfg.tikv.server,
-        None,
+        Some(cluster.pd_client.clone()),
     );
+}
+
+fn async_put(
+    cluster: &mut Cluster<ServerCluster>,
+    table: &ProductTable,
+    row_id: i64,
+) -> std::thread::JoinHandle<()> {
+    let cfg = cluster.cfg.tikv.server.clone();
+    let pd_client = cluster.pd_client.clone();
+    let key = table.get_table_prefix();
+    let split_key = Key::from_raw(&key).into_encoded();
+    let ctx = cluster.get_ctx(&split_key);
+    let engine = cluster.sim.rl().storages[&ctx.get_peer().get_store_id()].clone();
+    let table_ = table.clone();
+    let (tx, rx) = unbounded();
+    let handle = std::thread::spawn(move || {
+        tx.send(()).unwrap();
+        let _ = init_data_with_details_pd_client(
+            ctx,
+            engine,
+            &table_,
+            &[(row_id, Some(&format!("name:{}", row_id)), row_id)],
+            true,
+            &cfg,
+            Some(pd_client),
+        );
+    });
+    rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    handle
 }
 
 #[test]
 fn test_put_copr_get() {
-    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
+    let mut cluster = new_server_cluster_with_hybrid_engine(0, 1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 1;
     cluster.run();
 
@@ -127,20 +169,20 @@ fn test_put_copr_get() {
     let product = ProductTable::new();
     must_copr_load_data(&mut cluster, &product, 1);
     let (tx, rx) = unbounded();
-    fail::cfg_callback("on_region_cache_iterator_seek", move || {
+    fail::cfg_callback("ime_on_iterator_seek", move || {
         tx.send(true).unwrap();
     })
     .unwrap();
 
     must_copr_point_get(&mut cluster, &product, 1);
 
-    // verify it's read from range cache engine
+    // verify it's read from in memory engine
     rx.try_recv().unwrap();
 }
 
 #[test]
 fn test_load() {
-    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
+    let mut cluster = new_server_cluster_with_hybrid_engine(0, 1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
     cluster.run();
 
@@ -161,7 +203,7 @@ fn test_load() {
     }
 
     let (tx, rx) = unbounded();
-    fail::cfg_callback("on_snapshot_load_finished", move || {
+    fail::cfg_callback("ime_on_snapshot_load_finished", move || {
         tx.send(true).unwrap();
     })
     .unwrap();
@@ -200,7 +242,7 @@ fn test_load() {
     rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
     let (tx, rx) = unbounded();
-    fail::cfg_callback("on_region_cache_iterator_seek", move || {
+    fail::cfg_callback("ime_on_iterator_seek", move || {
         tx.send(true).unwrap();
     })
     .unwrap();
@@ -208,7 +250,7 @@ fn test_load() {
     for table in &tables {
         must_copr_point_get(&mut cluster, table, 1);
 
-        // verify it's read from range cache engine
+        // verify it's read from in memory engine
         assert!(rx.try_recv().unwrap());
     }
 }
@@ -217,7 +259,7 @@ fn test_load() {
 // splits.
 #[test]
 fn test_load_with_split() {
-    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
+    let mut cluster = new_server_cluster_with_hybrid_engine(0, 1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
     cluster.run();
 
@@ -225,7 +267,7 @@ fn test_load_with_split() {
     // let channel to make load process block at finishing loading snapshot
     let (tx2, rx2) = sync_channel(0);
     let rx2 = Arc::new(Mutex::new(rx2));
-    fail::cfg_callback("on_snapshot_load_finished", move || {
+    fail::cfg_callback("ime_on_snapshot_load_finished", move || {
         tx.send(true).unwrap();
         let _ = rx2.lock().unwrap().recv().unwrap();
     })
@@ -271,7 +313,7 @@ fn test_load_with_split() {
     tx2.send(true).unwrap();
 
     let (tx, rx) = unbounded();
-    fail::cfg_callback("on_region_cache_iterator_seek", move || {
+    fail::cfg_callback("ime_on_iterator_seek", move || {
         tx.send(true).unwrap();
     })
     .unwrap();
@@ -279,7 +321,7 @@ fn test_load_with_split() {
     for table in &tables {
         must_copr_point_get(&mut cluster, table, 1);
 
-        // verify it's read from range cache engine
+        // verify it's read from in memory engine
         assert!(rx.try_recv().unwrap());
     }
 }
@@ -295,7 +337,7 @@ fn test_load_with_split() {
 // table1-table2 is scheduled.
 #[test]
 fn test_load_with_split2() {
-    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
+    let mut cluster = new_server_cluster_with_hybrid_engine(0, 1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 4;
     cluster.run();
     let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
@@ -320,30 +362,7 @@ fn test_load_with_split2() {
         let _ = handle_put_pause_rx.recv();
     })
     .unwrap();
-    let mut async_put = |table: &ProductTable, row_id| {
-        let engine = cluster.sim.rl().storages[&1].clone();
-        let cfg = cluster.cfg.tikv.server.clone();
-        let key = table.get_table_prefix();
-        let split_key = Key::from_raw(&key).into_encoded();
-        let ctx = cluster.get_ctx(&split_key);
-        let table_ = table.clone();
-        let (tx, rx) = unbounded();
-        let handle = std::thread::spawn(move || {
-            tx.send(()).unwrap();
-            let _ = init_data_with_details_pd_client(
-                ctx,
-                engine,
-                &table_,
-                &[(row_id, Some(&format!("name:{}", row_id)), row_id)],
-                true,
-                &cfg,
-                None,
-            );
-        });
-        rx.recv_timeout(Duration::from_secs(5)).unwrap();
-        handle
-    };
-    let handle1 = async_put(&product1, 2);
+    let handle1 = async_put(&mut cluster, &product1, 2);
     handle_put_rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
     std::thread::sleep(Duration::from_secs(1));
@@ -356,12 +375,12 @@ fn test_load_with_split2() {
         .unwrap();
 
     let (tx, rx) = sync_channel(1);
-    fail::cfg_callback("on_snapshot_load_finished", move || {
+    fail::cfg_callback("ime_on_snapshot_load_finished", move || {
         tx.send(true).unwrap();
     })
     .unwrap();
 
-    let handle2 = async_put(&product2, 9);
+    let handle2 = async_put(&mut cluster, &product2, 9);
     let _ = rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
     drop(handle_put_pause_tx);
@@ -384,7 +403,7 @@ fn test_load_with_split2() {
     handle2.join().unwrap();
 
     let (tx, rx) = unbounded();
-    fail::cfg_callback("on_region_cache_iterator_seek", move || {
+    fail::cfg_callback("ime_on_iterator_seek", move || {
         tx.send(true).unwrap();
     })
     .unwrap();
@@ -394,8 +413,8 @@ fn test_load_with_split2() {
     // ["", table2) should not cached.
     must_copr_load_data(&mut cluster, &product1, 3);
     let (tx, rx) = unbounded();
-    fail::remove("on_region_cache_iterator_seek");
-    fail::cfg_callback("on_region_cache_iterator_seek", move || {
+    fail::remove("ime_on_iterator_seek");
+    fail::cfg_callback("ime_on_iterator_seek", move || {
         tx.send(true).unwrap();
     })
     .unwrap();
@@ -409,13 +428,14 @@ fn test_load_with_split2() {
 // range, and even been evicted.
 #[test]
 fn test_load_with_eviction() {
-    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
+    let mut cluster = new_server_cluster_with_hybrid_engine(0, 1);
     cluster.run();
     // load range
     let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
     // Load the whole range as if it is not splitted. Loading process should handle
     // it correctly.
-    let cache_range = CacheRegion::new(1, 0, DATA_MIN_KEY, DATA_MAX_KEY);
+    let r = cluster.get_region(b"");
+    let cache_range = CacheRegion::from_region(&r);
     region_cache_engine
         .core()
         .region_manager()
@@ -430,29 +450,9 @@ fn test_load_with_eviction() {
     let r = cluster.get_region(&split_key);
     cluster.must_split(&r, &split_key);
 
-    fail::cfg("on_region_cache_write_batch_write_impl", "pause").unwrap();
-    let mut async_put = |table: &ProductTable, row_id| {
-        let engine = cluster.sim.rl().storages[&1].clone();
-        let cfg = cluster.cfg.tikv.server.clone();
-        let pd_client = cluster.pd_client.clone();
-        let key = table.get_table_prefix();
-        let split_key = Key::from_raw(&key).into_encoded();
-        let ctx = cluster.get_ctx(&split_key);
-        let table_ = table.clone();
-        std::thread::spawn(move || {
-            let _ = init_data_with_details_pd_client(
-                ctx,
-                engine,
-                &table_,
-                &[(row_id, Some(&format!("name:{}", row_id)), row_id)],
-                true,
-                &cfg,
-                Some(pd_client),
-            );
-        })
-    };
-    let handle1 = async_put(&product1, 1);
-    let handle2 = async_put(&product2, 15);
+    fail::cfg("ime_on_region_cache_write_batch_write_impl", "pause").unwrap();
+    let handle1 = async_put(&mut cluster, &product1, 1);
+    let handle2 = async_put(&mut cluster, &product2, 1);
 
     {
         let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
@@ -474,28 +474,19 @@ fn test_load_with_eviction() {
         );
     }
 
-    fail::remove("on_region_cache_write_batch_write_impl");
+    fail::remove("ime_on_region_cache_write_batch_write_impl");
     handle1.join().unwrap();
     handle2.join().unwrap();
 
     for (table, is_cached) in &[(product1, true), (product2, false)] {
-        fail::remove("on_region_cache_iterator_seek");
+        fail::remove("ime_on_iterator_seek");
         let (tx, rx) = unbounded();
-        fail::cfg_callback("on_region_cache_iterator_seek", move || {
+        fail::cfg_callback("ime_on_iterator_seek", move || {
             tx.send(true).unwrap();
         })
         .unwrap();
 
-        let key = table.get_table_prefix();
-        let table_key = Key::from_raw(&key).into_encoded();
-        let ctx = cluster.get_ctx(&table_key);
-        let endpoint = cluster.sim.rl().copr_endpoints[&1].clone();
-        let req = DagSelect::from(table).build_with(ctx, &[0]);
-        let cop_resp = handle_request(&endpoint, req);
-        let mut resp = SelectResponse::default();
-        resp.merge_from_bytes(cop_resp.get_data()).unwrap();
-        assert!(!cop_resp.has_region_error(), "{:?}", cop_resp);
-        assert!(cop_resp.get_other_error().is_empty(), "{:?}", cop_resp);
+        must_copr_point_get(&mut cluster, table, 1);
 
         if *is_cached {
             rx.try_recv().unwrap();
@@ -507,7 +498,7 @@ fn test_load_with_eviction() {
 
 #[test]
 fn test_evictions_after_transfer_leader() {
-    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 2);
+    let mut cluster = new_server_cluster_with_hybrid_engine(0, 2);
     cluster.run();
 
     let r = cluster.get_region(b"");
@@ -532,7 +523,7 @@ fn test_evictions_after_transfer_leader() {
 
 #[test]
 fn test_eviction_after_merge() {
-    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
+    let mut cluster = new_server_cluster_with_hybrid_engine(0, 1);
     cluster.run();
     let r = cluster.get_region(b"");
     cluster.must_split(&r, b"key1");
@@ -568,7 +559,7 @@ fn test_eviction_after_merge() {
 
 #[test]
 fn test_manual_load_range_after_transfer_leader() {
-    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 2);
+    let mut cluster = new_server_cluster_with_hybrid_engine(0, 2);
     cluster.run();
 
     let r = cluster.get_region(b"");
@@ -609,7 +600,7 @@ fn test_manual_load_range_after_transfer_leader() {
 
 #[test]
 fn test_eviction_after_ingest_sst() {
-    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
+    let mut cluster = new_server_cluster_with_hybrid_engine(0, 1);
     cluster.run();
 
     // Generate a sst file.
@@ -678,11 +669,11 @@ fn test_eviction_after_ingest_sst() {
 
 #[test]
 fn test_pre_load_when_transfer_ledaer() {
-    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 3);
+    let mut cluster = new_server_cluster_with_hybrid_engine(0, 3);
     cluster.run();
 
     let (tx, rx) = unbounded();
-    fail::cfg_callback("on_completes_batch_loading", move || {
+    fail::cfg_callback("ime_on_completes_batch_loading", move || {
         tx.send(true).unwrap();
     })
     .unwrap();
@@ -708,9 +699,9 @@ fn test_pre_load_when_transfer_ledaer() {
 
 #[test]
 fn test_background_loading_pending_region() {
-    fail::cfg("background_check_load_pending_interval", "return(1000)").unwrap();
+    fail::cfg("ime_background_check_load_pending_interval", "return(1000)").unwrap();
 
-    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
+    let mut cluster = new_server_cluster_with_hybrid_engine(0, 1);
     cluster.run();
 
     let r = cluster.get_region(b"");
@@ -733,11 +724,11 @@ fn test_background_loading_pending_region() {
 #[test]
 fn test_delete_range() {
     let delete_range = |unsafe_destroy_range| {
-        let mut cluster = new_server_cluster_with_hybrid_engine_with_no_region_cache(0, 1);
+        let mut cluster = new_server_cluster_with_hybrid_engine(0, 1);
         cluster.run();
 
         let (tx, rx) = sync_channel(0);
-        fail::cfg_callback("on_snapshot_load_finished", move || {
+        fail::cfg_callback("ime_on_snapshot_load_finished", move || {
             tx.send(true).unwrap();
         })
         .unwrap();
@@ -759,12 +750,12 @@ fn test_delete_range() {
         rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
         let (tx, rx) = unbounded();
-        fail::cfg_callback("on_region_cache_iterator_seek", move || {
+        fail::cfg_callback("ime_on_iterator_seek", move || {
             tx.send(true).unwrap();
         })
         .unwrap();
         must_copr_point_get(&mut cluster, &product, 1);
-        // verify it's read from range cache engine
+        // verify it's read from in memory engine
         rx.try_recv().unwrap();
 
         if unsafe_destroy_range {
@@ -798,4 +789,273 @@ fn test_delete_range() {
 
     delete_range(false);
     delete_range(true);
+}
+
+#[test]
+fn test_evict_on_flashback() {
+    let mut cluster = new_server_cluster_with_hybrid_engine(0, 1);
+    cluster.cfg.raft_store.apply_batch_system.pool_size = 1;
+    cluster.run();
+
+    let table = ProductTable::new();
+
+    must_copr_load_data(&mut cluster, &table, 1);
+    must_copr_load_data(&mut cluster, &table, 2);
+    must_copr_load_data(&mut cluster, &table, 3);
+
+    let r = cluster.get_region(b"");
+    {
+        let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
+        region_cache_engine
+            .core()
+            .region_manager()
+            .load_region(CacheRegion::from_region(&r))
+            .unwrap();
+    }
+
+    cluster.must_send_wait_flashback_msg(r.id, AdminCmdType::PrepareFlashback);
+    cluster.must_send_wait_flashback_msg(r.id, AdminCmdType::FinishFlashback);
+
+    let (tx, rx) = unbounded();
+    fail::cfg_callback("ime_on_iterator_seek", move || {
+        tx.send(true).unwrap();
+    })
+    .unwrap();
+
+    must_copr_point_get(&mut cluster, &table, 1);
+    rx.try_recv().unwrap_err();
+
+    must_copr_point_get(&mut cluster, &table, 2);
+    rx.try_recv().unwrap_err();
+
+    must_copr_point_get(&mut cluster, &table, 3);
+    rx.try_recv().unwrap_err();
+}
+
+#[test]
+fn test_load_during_flashback() {
+    fail::cfg("ime_background_check_load_pending_interval", "return(1000)").unwrap();
+    let mut cluster = new_server_cluster_with_hybrid_engine(0, 1);
+    cluster.cfg.raft_store.apply_batch_system.pool_size = 1;
+    cluster.run();
+
+    let table = ProductTable::new();
+
+    must_copr_load_data(&mut cluster, &table, 1);
+    let r = cluster.get_region(b"");
+    cluster.must_send_wait_flashback_msg(r.id, AdminCmdType::PrepareFlashback);
+    let (tx, rx) = unbounded();
+    fail::cfg_callback("ime_fail_to_schedule_load", move || {
+        tx.send(true).unwrap();
+    })
+    .unwrap();
+    {
+        let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
+        region_cache_engine
+            .core()
+            .region_manager()
+            .load_region(CacheRegion::from_region(&r))
+            .unwrap();
+    }
+    rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    {
+        let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
+        assert!(
+            !region_cache_engine
+                .core()
+                .region_manager()
+                .contains_region(r.id)
+        );
+    }
+}
+
+// This case test that ApplyFsm handles `Msg::Change` at the end of one round.
+// This will let the `flush` call at the end flushes an empty WriteBatch, so so
+// internal state of IME's write-batch may not be cleared.
+#[test]
+fn test_apply_prepared_but_not_write() {
+    let mut cluster = new_server_cluster_with_hybrid_engine(0, 1);
+    cluster.cfg.raft_store.apply_batch_system.pool_size = 1;
+    cluster.run();
+
+    let r = cluster.get_region(b"k");
+    cluster.must_split(&r, b"k10");
+
+    let r1 = cluster.get_region(b"k");
+    let r2 = cluster.get_region(b"k20");
+
+    // load both regions at store 1
+    let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
+    region_cache_engine
+        .core()
+        .region_manager()
+        .load_region(CacheRegion::from_region(&r1))
+        .unwrap();
+    region_cache_engine
+        .core()
+        .region_manager()
+        .load_region(CacheRegion::from_region(&r2))
+        .unwrap();
+
+    // first pause apply fsm.
+    fail::cfg("before_handle_normal", "pause").unwrap();
+
+    let (tx, rx) = unbounded();
+    fail::cfg_callback("after_write_to_db_skip_write_node_1", move || {
+        tx.send(()).unwrap();
+    })
+    .unwrap();
+
+    // propose a write to triggers sending a fake Msg::Change.
+    let req = test_raftstore::util::new_request(
+        r2.id,
+        r2.get_region_epoch().clone(),
+        vec![new_put_cf_cmd(CF_DEFAULT, b"k20", b"v1")],
+        false,
+    );
+    cluster
+        .call_command_on_leader(req, Duration::from_millis(20))
+        .unwrap_err();
+
+    // schedule a Msg::Change to trigger a explicit commit, it will lead to a empty
+    // flush at the end of this poll.
+    let apply_router = cluster.get_apply_router(1).unwrap();
+    apply_router.schedule_task(
+        r2.id,
+        ApplyTask::Change {
+            cmd: ChangeObserver::from_rts(r2.id, ObserveHandle::default()),
+            region_epoch: r2.get_region_epoch().clone(),
+            cb: Callback::Read {
+                cb: Box::new(|_| {}),
+                tracker: Default::default(),
+            },
+        },
+    );
+
+    // resume apply fsm to let it handle raft entries and the fake `Change` msg.
+    fail::remove("before_handle_normal");
+    rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+    // block apply again to batch the write of the 2 regions.
+    fail::cfg("before_handle_normal", "pause").unwrap();
+
+    // propose 2 write for 2 regions.
+    let req = test_raftstore::util::new_request(
+        r1.id,
+        r1.get_region_epoch().clone(),
+        vec![new_put_cf_cmd(CF_DEFAULT, b"k1", b"v2")],
+        false,
+    );
+    cluster
+        .call_command_on_leader(req, Duration::from_millis(10))
+        .unwrap_err();
+    let req = test_raftstore::util::new_request(
+        r2.id,
+        r2.get_region_epoch().clone(),
+        vec![new_put_cf_cmd(CF_DEFAULT, b"k20", b"v2")],
+        false,
+    );
+    cluster
+        .call_command_on_leader(req, Duration::from_millis(10))
+        .unwrap_err();
+
+    // resume apply fsm, should handle new writes successfully.
+    fail::remove("before_handle_normal");
+    fail::remove("after_write_to_db_skip_write_node_1");
+
+    assert_eq!(cluster.must_get(b"k1").unwrap(), b"v2");
+}
+
+#[test]
+fn test_eviction_when_destroy_peer() {
+    let mut cluster = new_server_cluster_with_hybrid_engine(0, 1);
+    cluster.run();
+
+    let t1 = ProductTable::new();
+    let t2 = ProductTable::new();
+
+    let key = t2.get_table_prefix();
+    let split_key = Key::from_raw(&key).into_encoded();
+    let r = cluster.get_region(&split_key);
+    cluster.must_split(&r, &split_key);
+    let r = cluster.get_region(&split_key);
+
+    let (tx, rx) = sync_channel(0);
+    fail::cfg_callback("ime_on_snapshot_load_finished", move || {
+        tx.send(true).unwrap();
+    })
+    .unwrap();
+    {
+        let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
+        let cache_region = CacheRegion::from_region(&r);
+        region_cache_engine
+            .core()
+            .region_manager()
+            .load_region(cache_region)
+            .unwrap();
+    }
+
+    must_copr_load_data(&mut cluster, &t1, 1);
+    must_copr_load_data(&mut cluster, &t2, 1);
+
+    rx.recv_timeout(Duration::from_secs(2)).unwrap();
+
+    let (tx, rx) = sync_channel(0);
+    fail::cfg_callback("destroy_peer", move || {
+        tx.send(true).unwrap();
+    })
+    .unwrap();
+
+    let router = cluster.get_router(1).unwrap();
+    let mut raft_msg = RaftMessage::default();
+    raft_msg.set_region_id(r.get_id());
+    raft_msg.set_is_tombstone(true);
+    raft_msg.set_from_peer(new_peer(0, 0));
+    raft_msg.set_to_peer(r.get_peers()[0].clone());
+    let mut epoch = r.get_region_epoch().clone();
+    epoch.set_version(epoch.get_version() + 1);
+    raft_msg.set_region_epoch(epoch);
+    router.send_raft_message(raft_msg).unwrap();
+
+    rx.recv_timeout(Duration::from_secs(2)).unwrap();
+
+    {
+        let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
+        assert!(!region_cache_engine.region_cached(&r));
+    }
+}
+
+// IME must not panic when destroy an uninitialized region.
+#[test]
+fn test_eviction_when_destroy_uninitialized_peer() {
+    let mut cluster = new_server_cluster_with_hybrid_engine(0, 2);
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+    cluster.run_conf_change();
+
+    let region = pd_client.get_region(b"").unwrap();
+    assert!(
+        !region.get_peers().iter().any(|p| p.get_store_id() == 2),
+        "{:?}",
+        region
+    );
+
+    // Block snapshot messages, so that new peers will never be initialized.
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(region.get_id(), 2)
+            .msg_type(MessageType::MsgSnapshot)
+            .direction(Direction::Recv),
+    ));
+
+    let learner1 = new_learner_peer(2, 2);
+    pd_client.must_add_peer(region.get_id(), learner1.clone());
+    cluster.must_region_exist(region.get_id(), 2);
+    pd_client.must_remove_peer(region.get_id(), learner1);
+
+    // IME observes all peer destroy events to timely evict regions. By adding a
+    // new peer, the old and uninitialized peer will be destroyed and IME must
+    // not panic in this case.
+    let learner2 = new_learner_peer(2, 3);
+    pd_client.must_add_peer(region.get_id(), learner2.clone());
+    cluster.must_region_exist(region.get_id(), 2);
 }
