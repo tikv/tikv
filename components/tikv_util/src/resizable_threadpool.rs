@@ -1,16 +1,18 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use futures::Future;
-use std::sync::Mutex;
-use tokio::{io::Result as TokioResult, runtime::{Runtime, Handle}};
+use tokio::{
+    io::Result as TokioResult,
+    runtime::{Handle, Runtime},
+};
 
 pub struct ResizableRuntime {
     pub size: usize,
     thread_name: String,
     pool: Arc<Mutex<Option<Handle>>>, // Use Arc<Mutex> for thread-safe updates
-    all_pools: Vec<Runtime>, // Keep track of all pools
+    all_pools: Vec<Runtime>,          // Keep track of all pools
     replace_pool_rule: Box<dyn Fn(usize, &str) -> TokioResult<Runtime> + Send + Sync>,
     after_adjust: Box<dyn Fn(usize) + Send + Sync>,
 }
@@ -141,8 +143,12 @@ mod test {
         let after_adjust = |new_size: usize| {
             COUNTER.store(new_size, Ordering::SeqCst);
         };
-        let mut threads =
-            ResizableRuntime::new(4,"test", Box::new(replace_pool_rule), Box::new(after_adjust));
+        let mut threads = ResizableRuntime::new(
+            4,
+            "test",
+            Box::new(replace_pool_rule),
+            Box::new(after_adjust),
+        );
         assert_eq!(COUNTER.load(Ordering::SeqCst), 4);
         threads.adjust_with(8);
         assert_eq!(COUNTER.load(Ordering::SeqCst), 8);
