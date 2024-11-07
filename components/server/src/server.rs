@@ -23,8 +23,8 @@ use std::{
 
 use api_version::{dispatch_api_version, KvFormat};
 use backup_stream::{
-    config::BackupStreamConfigManager, metadata::store::PdStore, observer::BackupStreamObserver,
-    BackupStreamResolver,
+    config::BackupStreamConfigManager, ingest_listener::UploadSst, metadata::store::PdStore,
+    observer::BackupStreamObserver, BackupStreamResolver,
 };
 use causal_ts::CausalTsProviderImpl;
 use cdc::CdcConfigManager;
@@ -957,6 +957,10 @@ where
             false,
         )
         .unwrap();
+        if let Some(sched) = backup_stream_scheduler.as_ref() {
+            let upload_sst_for_log_backup = UploadSst::new(sched.clone());
+            importer.replace_hooks(Arc::new(upload_sst_for_log_backup));
+        }
         for (cf_name, compression_type) in &[
             (
                 CF_DEFAULT,

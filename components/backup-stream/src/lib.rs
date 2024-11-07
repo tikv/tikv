@@ -10,6 +10,7 @@ pub mod config;
 mod endpoint;
 pub mod errors;
 mod event_loader;
+pub mod ingest_listener;
 pub mod metadata;
 pub mod metrics;
 pub mod observer;

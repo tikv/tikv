@@ -1,16 +1,25 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::time::Duration;
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
-use futures::{executor::block_on, stream::StreamExt};
+use futures::{
+    executor::block_on,
+    future::{BoxFuture, FutureExt},
+    stream::StreamExt,
+};
 use kvproto::{import_sstpb::*, kvrpcpb::Context, tikvpb::*};
 use pd_client::PdClient;
+use sst_importer::hooking::{AfterIngestedCtx, BeforeProposeIngestCtx, SharedImportHook};
 use tempfile::Builder;
 use test_sst_importer::*;
 use tikv::config::TikvConfig;
 use tikv_util::{
     config::ReadableSize,
     sys::disk::{set_disk_status, DiskUsage},
+    HandyRwLock,
 };
 
 use super::util::*;
@@ -662,4 +671,116 @@ fn test_suspend_import() {
     let sst_range = (20, 30);
     let ssts = write(sst_range).unwrap();
     multi_ingest(ssts.get_metas()).unwrap();
+}
+
+#[test]
+fn test_ingest_hooks() {
+    let temp_dir = Builder::new()
+        .prefix("test_ingest_hooks")
+        .tempdir()
+        .unwrap();
+
+    struct TestHook {
+        wants: Mutex<SstMeta>,
+    }
+
+    impl sst_importer::hooking::ImportHook for TestHook {
+        fn before_propose_ingest(
+            &self,
+            cx: BeforeProposeIngestCtx<'_>,
+        ) -> BoxFuture<'_, sst_importer::Result<()>> {
+            assert_eq!(cx.sst_meta.len(), 1);
+            assert_eq!(cx.sst_meta.first().unwrap(), &*self.wants.lock().unwrap());
+            let path = (cx.sst_to_path)(&cx.sst_meta[0]).unwrap();
+            assert!(path.exists(), "sst_path = {} but not exist", path.display());
+
+            futures::future::ok(()).boxed()
+        }
+
+        fn after_ingested(&self, cx: AfterIngestedCtx<'_>) -> BoxFuture<'_, ()> {
+            assert_eq!(cx.sst_meta.len(), 1);
+            assert_eq!(cx.sst_meta.first().unwrap(), &*self.wants.lock().unwrap());
+            futures::future::ready(()).boxed()
+        }
+    }
+
+    let (cluster, ctx, _tikv, import) = new_cluster_and_tikv_import_client();
+    let hook = Arc::new(TestHook {
+        wants: Mutex::default(),
+    }) as SharedImportHook;
+    for importer in cluster.sim.wl().importers.values_mut() {
+        // SAFETY: there should be no other one access the `hooks` field as no `ingest`
+        // RPC call happens.
+        unsafe {
+            let importer = Arc::get_mut_unchecked(importer);
+            importer.replace_hooks(Arc::clone(&hook));
+        }
+    }
+    let sst_path = temp_dir.path().join("test.sst");
+    let sst_range = (0, 100);
+    let (mut meta, data) = gen_sst_file(sst_path, sst_range);
+    meta.set_region_id(ctx.get_region_id());
+    meta.set_region_epoch(ctx.get_region_epoch().clone());
+    send_upload_sst(&import, &meta, &data).unwrap();
+    *Arc::downcast::<TestHook>(hook)
+        .unwrap()
+        .wants
+        .lock()
+        .unwrap() = meta.clone();
+
+    must_ingest_sst(&import, ctx.clone(), meta.clone());
+}
+
+#[test]
+fn test_ingest_hook_abort() {
+    let temp_dir = Builder::new()
+        .prefix("test_ingest_hooks")
+        .tempdir()
+        .unwrap();
+
+    struct TestHook;
+
+    const MAGIC_STRING: &str =
+        "5aSp5Zyw546E6buDIOWuh+Wumea0quiNkiDml6XmnIjnm4jmmIMg6L6w5a6/5YiX5by1Cg==";
+
+    impl sst_importer::hooking::ImportHook for TestHook {
+        fn before_propose_ingest(
+            &self,
+            _cx: BeforeProposeIngestCtx<'_>,
+        ) -> BoxFuture<'_, sst_importer::Result<()>> {
+            futures::future::err(sst_importer::Error::Hooking(box_err!(
+                "you will receive this, our tiny little secret: {}",
+                MAGIC_STRING
+            )))
+            .boxed()
+        }
+
+        fn after_ingested(&self, _cx: AfterIngestedCtx<'_>) -> BoxFuture<'_, ()> {
+            futures::future::ready(()).boxed()
+        }
+    }
+
+    let (cluster, ctx, _tikv, import) = new_cluster_and_tikv_import_client();
+    let hook = Arc::new(TestHook) as SharedImportHook;
+    for importer in cluster.sim.wl().importers.values_mut() {
+        // SAFETY: there should be no other one access the `hooks` field as no `ingest`
+        // RPC call happens.
+        unsafe {
+            let importer = Arc::get_mut_unchecked(importer);
+            importer.replace_hooks(Arc::clone(&hook));
+        }
+    }
+    let sst_path = temp_dir.path().join("test.sst");
+    let sst_range = (0, 100);
+    let (mut meta, data) = gen_sst_file(sst_path, sst_range);
+    meta.set_region_id(ctx.get_region_id());
+    meta.set_region_epoch(ctx.get_region_epoch().clone());
+    send_upload_sst(&import, &meta, &data).unwrap();
+
+    let mut ingest_request = IngestRequest::default();
+    ingest_request.set_context(ctx);
+    ingest_request.set_sst(meta);
+
+    let err = import.ingest(&ingest_request).unwrap_err();
+    assert!(err.to_string().contains(MAGIC_STRING), "{}", err);
 }

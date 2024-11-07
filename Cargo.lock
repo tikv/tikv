@@ -888,6 +888,7 @@ dependencies = [
  "resolved_ts",
  "slog",
  "slog-global",
+ "sst_importer",
  "tempdir",
  "tempfile",
  "test_pd",
@@ -3510,7 +3511,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#2bb1e4e32b9e45cf3fd8210766a9db38eacd5e4d"
+source = "git+https://github.com/tikv/rust-rocksdb.git#78b26b39bc179a0358ad0e5611b9d9934edabefd"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -3529,7 +3530,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#2bb1e4e32b9e45cf3fd8210766a9db38eacd5e4d"
+source = "git+https://github.com/tikv/rust-rocksdb.git#78b26b39bc179a0358ad0e5611b9d9934edabefd"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -5427,7 +5428,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#2bb1e4e32b9e45cf3fd8210766a9db38eacd5e4d"
+source = "git+https://github.com/tikv/rust-rocksdb.git#78b26b39bc179a0358ad0e5611b9d9934edabefd"
 dependencies = [
  "libc 0.2.151",
  "librocksdb_sys",
@@ -6698,6 +6699,7 @@ dependencies = [
  "service",
  "slog",
  "slog-global",
+ "sst_importer",
  "tempfile",
  "test_backup",
  "test_coprocessor",

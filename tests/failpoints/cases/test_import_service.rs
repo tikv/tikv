@@ -1,18 +1,24 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    path::PathBuf,
     sync::{mpsc::channel, Arc, Mutex},
     time::Duration,
 };
 
-use futures::executor::block_on;
+use file_system::calc_crc32;
+use futures::{
+    executor::block_on,
+    future::{BoxFuture, FutureExt, TryFutureExt},
+};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{disk_usage::DiskUsage, import_sstpb::*, tikvpb_grpc::TikvClient};
+use sst_importer::hooking::{AfterIngestedCtx, BeforeProposeIngestCtx, SharedImportHook};
 use tempfile::{Builder, TempDir};
 use test_raftstore::{must_raw_put, Simulator};
 use test_sst_importer::*;
 use tikv::config::TikvConfig;
-use tikv_util::{config::ReadableSize, sys::disk, HandyRwLock};
+use tikv_util::{box_err, config::ReadableSize, sys::disk, HandyRwLock};
 
 #[allow(dead_code)]
 #[path = "../../integrations/import/util.rs"]

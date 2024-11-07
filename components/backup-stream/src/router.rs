@@ -57,7 +57,7 @@ use txn_types::{Key, Lock, TimeStamp, WriteRef};
 use super::errors::Result;
 use crate::{
     annotate,
-    endpoint::Task,
+    endpoint::{FetchedTask, Task},
     errors::{ContextualResultExt, Error},
     metadata::StreamTask,
     metrics::{HANDLE_KV_HISTOGRAM, SKIP_KV_COUNTER},
@@ -619,10 +619,19 @@ impl RouterInner {
         r.get_value_by_point(key).cloned()
     }
 
-    pub fn select_task(&self, selector: TaskSelectorRef<'_>) -> Vec<String> {
+    pub fn select_task_name(&self, selector: TaskSelectorRef<'_>) -> Vec<String> {
+        self.select_task(selector)
+            .map(|mut ft| ft.task.info.take_name())
+            .collect()
+    }
+
+    pub fn select_task<'a, 'b: 'a>(
+        &'a self,
+        selector: TaskSelectorRef<'b>,
+    ) -> impl Iterator<Item = FetchedTask> + '_ {
         self.tasks
             .iter()
-            .filter(|entry| {
+            .filter(move |entry| {
                 let (name, info) = entry.pair();
                 selector.matches(
                     name.as_str(),
@@ -631,8 +640,11 @@ impl RouterInner {
                         .map(|(s, e)| (s.as_slice(), e.as_slice())),
                 )
             })
-            .map(|entry| entry.key().to_owned())
-            .collect()
+            .map(|entry| FetchedTask {
+                task: entry.task.clone(),
+                storage: Arc::clone(&entry.storage),
+                ranges: entry.ranges.clone(),
+            })
     }
 
     #[cfg(test)]

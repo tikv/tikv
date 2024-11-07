@@ -14,6 +14,7 @@ use dashmap::DashMap;
 use encryption::BackupEncryptionManager;
 use engine_traits::KvEngine;
 use error_code::ErrorCodeExt;
+use external_storage::ExternalStorage;
 use futures::{stream::AbortHandle, FutureExt, TryFutureExt};
 use kvproto::{
     brpb::{StreamBackupError, StreamBackupTaskInfo},
@@ -44,7 +45,7 @@ use tikv_util::{
 use tokio::{
     io::Result as TokioResult,
     runtime::{Handle, Runtime},
-    sync::{mpsc::Sender, Semaphore},
+    sync::{mpsc::Sender, oneshot::Sender as OneshotSender, Semaphore},
 };
 use tokio_stream::StreamExt;
 use tracing::instrument;
@@ -276,7 +277,7 @@ where
 
     fn on_fatal_error(&self, select: TaskSelector, err: Box<Error>) {
         err.report_fatal();
-        let tasks = self.range_router.select_task(select.reference());
+        let tasks = self.range_router.select_task_name(select.reference());
         warn!("fatal error reporting"; "selector" => ?select, "selected" => ?tasks, "err" => %err);
         for task in tasks {
             // Let's pause the task first.
@@ -324,7 +325,7 @@ where
                 continue;
             }
             // move task to schedule
-            scheduler.schedule(Task::WatchTask(TaskOp::AddTask(task)))?;
+            scheduler.schedule(Task::LogBackupTask(TaskOp::Add(task)))?;
         }
 
         let revision = tasks.revision;
@@ -378,10 +379,10 @@ where
 
                     match event {
                         MetadataEvent::AddTask { task } => {
-                            scheduler.schedule(Task::WatchTask(TaskOp::AddTask(task)))?;
+                            scheduler.schedule(Task::LogBackupTask(TaskOp::Add(task)))?;
                         }
                         MetadataEvent::RemoveTask { task } => {
-                            scheduler.schedule(Task::WatchTask(TaskOp::RemoveTask(task)))?;
+                            scheduler.schedule(Task::LogBackupTask(TaskOp::Remove(task)))?;
                         }
                         MetadataEvent::Error { err } => {
                             err.report("metadata client watch meet error");
@@ -428,10 +429,10 @@ where
 
                     match event {
                         MetadataEvent::PauseTask { task } => {
-                            scheduler.schedule(Task::WatchTask(TaskOp::PauseTask(task)))?;
+                            scheduler.schedule(Task::LogBackupTask(TaskOp::Pause(task)))?;
                         }
                         MetadataEvent::ResumeTask { task } => {
-                            scheduler.schedule(Task::WatchTask(TaskOp::ResumeTask(task)))?;
+                            scheduler.schedule(Task::LogBackupTask(TaskOp::Resume(task)))?;
                         }
                         MetadataEvent::Error { err } => {
                             err.report("metadata client watch meet error");
@@ -554,17 +555,21 @@ where
 
     pub fn handle_watch_task(&self, op: TaskOp) {
         match op {
-            TaskOp::AddTask(task) => {
+            TaskOp::Add(task) => {
                 self.on_register(task);
             }
-            TaskOp::RemoveTask(task_name) => {
+            TaskOp::Remove(task_name) => {
                 self.on_unregister(&task_name);
             }
-            TaskOp::PauseTask(task_name) => {
+            TaskOp::Pause(task_name) => {
                 self.on_pause(&task_name);
             }
-            TaskOp::ResumeTask(task) => {
+            TaskOp::Resume(task) => {
                 self.on_resume(task);
+            }
+            TaskOp::Query(sel, ret) => {
+                // We don't mind whether the receiver still alive.
+                let _ = ret.send(self.range_router.select_task(sel.reference()).collect());
             }
         }
     }
@@ -771,7 +776,7 @@ where
                 self.pool.spawn(root!("retry_resume"; async move {
                     tokio::time::sleep(Duration::from_secs(5)).await;
                     sched
-                        .schedule(Task::WatchTask(TaskOp::ResumeTask(task_name)))
+                        .schedule(Task::LogBackupTask(TaskOp::Resume(task_name)))
                         .unwrap();
                 }));
             }
@@ -1020,7 +1025,7 @@ where
                 .observe(now.saturating_elapsed_secs())
         }
         match task {
-            Task::WatchTask(op) => self.handle_watch_task(op),
+            Task::LogBackupTask(op) => self.handle_watch_task(op),
             Task::BatchEvent(events) => self.do_backup(events),
             Task::Flush(task) => self.on_flush(task),
             Task::ModifyObserve(op) => self.on_modify_observe(op),
@@ -1240,7 +1245,7 @@ impl fmt::Debug for RegionCheckpointOperation {
 }
 
 pub enum Task {
-    WatchTask(TaskOp),
+    LogBackupTask(TaskOp),
     BatchEvent(Vec<CmdBatch>),
     ChangeConfig(BackupStreamConfig),
     /// Change the observe status of some region.
@@ -1280,10 +1285,35 @@ pub enum Task {
 
 #[derive(Debug)]
 pub enum TaskOp {
-    AddTask(StreamTask),
-    RemoveTask(String),
-    PauseTask(String),
-    ResumeTask(String),
+    Add(StreamTask),
+    Remove(String),
+    Pause(String),
+    Resume(String),
+    Query(TaskSelector, OneshotSender<Vec<FetchedTask>>),
+}
+
+#[derive(Clone)]
+pub struct FetchedTask {
+    pub task: StreamTask,
+    pub storage: Arc<dyn ExternalStorage>,
+    pub ranges: Vec<(Vec<u8>, Vec<u8>)>,
+}
+
+impl fmt::Debug for FetchedTask {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FetchedTask")
+            .field("task", &self.task)
+            .field(
+                "storage",
+                &self
+                    .storage
+                    .url()
+                    .map(|u| u.to_string())
+                    .unwrap_or_else(|_| String::from("<fmt-err>")),
+            )
+            .field("ranges", &self.ranges)
+            .finish()
+    }
 }
 
 /// The callback for resolving region.
@@ -1369,7 +1399,7 @@ impl std::fmt::Debug for ObserveOp {
 impl fmt::Debug for Task {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::WatchTask(arg0) => f.debug_tuple("WatchTask").field(arg0).finish(),
+            Self::LogBackupTask(arg0) => f.debug_tuple("WatchTask").field(arg0).finish(),
             Self::BatchEvent(arg0) => f
                 .debug_tuple("BatchEvent")
                 .field(&format!("[{} events...]", arg0.len()))
@@ -1408,11 +1438,12 @@ impl fmt::Display for Task {
 impl Task {
     fn label(&self) -> &'static str {
         match self {
-            Task::WatchTask(w) => match w {
-                TaskOp::AddTask(_) => "watch_task.add",
-                TaskOp::RemoveTask(_) => "watch_task.remove",
-                TaskOp::PauseTask(_) => "watch_task.pause",
-                TaskOp::ResumeTask(_) => "watch_task.resume",
+            Task::LogBackupTask(w) => match w {
+                TaskOp::Add(_) => "logtask.add",
+                TaskOp::Remove(_) => "logtask.remove",
+                TaskOp::Pause(_) => "logtask.pause",
+                TaskOp::Resume(_) => "logtask.resume",
+                TaskOp::Query(..) => "logtask.query",
             },
             Task::BatchEvent(_) => "batch_event",
             Task::ChangeConfig(_) => "change_config",

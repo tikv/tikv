@@ -49,6 +49,7 @@ use txn_types::{Key, TimeStamp, WriteRef};
 
 use crate::{
     caching::cache_map::{CacheMap, ShareOwned},
+    hooking::{AfterIngestedCtx, BeforeProposeIngestCtx, NopHooks, SharedImportHook},
     import_file::{ImportDir, ImportFile},
     import_mode::{ImportModeSwitcher, RocksDbMetricsFn},
     import_mode2::{HashRange, ImportModeSwitcherV2},
@@ -151,6 +152,8 @@ pub struct SstImporter<E: KvEngine> {
     file_locks: Arc<DashMap<String, (CacheKvFile, Instant)>>,
     memory_quota: Arc<MemoryQuota>,
     multi_master_keys_backend: MultiMasterKeyBackend,
+
+    hooks: SharedImportHook,
 }
 
 impl<E: KvEngine> SstImporter<E> {
@@ -204,7 +207,25 @@ impl<E: KvEngine> SstImporter<E> {
             _download_rt: download_rt,
             memory_quota: Arc::new(MemoryQuota::new(memory_limit as _)),
             multi_master_keys_backend: MultiMasterKeyBackend::new(),
+            hooks: Arc::new(NopHooks::default()),
         })
+    }
+
+    pub async fn before_propose_ingest(&self, metas: &[SstMeta]) -> Result<()> {
+        let cx = BeforeProposeIngestCtx {
+            sst_meta: metas,
+            sst_to_path: &|path| self.sst_to_path(path),
+        };
+        self.hooks.before_propose_ingest(cx).await
+    }
+
+    pub async fn after_ingested(&self, meta: &[SstMeta]) {
+        let cx = AfterIngestedCtx { sst_meta: meta };
+        self.hooks.after_ingested(cx).await;
+    }
+
+    pub fn replace_hooks(&mut self, hook: SharedImportHook) {
+        self.hooks = hook
     }
 
     pub fn ranges_enter_import_mode(&self, ranges: Vec<Range>) {
@@ -357,6 +378,10 @@ impl<E: KvEngine> SstImporter<E> {
 
     pub fn verify_checksum(&self, metas: &[SstMeta]) -> Result<()> {
         self.dir.verify_checksum(metas, self.key_manager.clone())
+    }
+
+    pub fn sst_to_path(&self, meta: &SstMeta) -> Result<PathBuf> {
+        Ok(self.dir.join_for_read(meta)?.save.clone())
     }
 
     pub fn exist(&self, meta: &SstMeta) -> bool {

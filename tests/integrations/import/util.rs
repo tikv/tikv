@@ -8,7 +8,7 @@ use kvproto::{import_sstpb::*, kvrpcpb::*, tikvpb::*};
 use security::SecurityConfig;
 use test_raftstore::*;
 use test_raftstore_v2::{Cluster as ClusterV2, ServerCluster as ServerClusterV2};
-use tikv::config::TikvConfig;
+use tikv::{config::TikvConfig, import::SstImporter};
 use tikv_util::HandyRwLock;
 
 const CLEANUP_SST_MILLIS: u64 = 10;

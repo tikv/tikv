@@ -20,6 +20,7 @@ mod util;
 #[macro_use]
 pub mod import_mode;
 mod caching;
+pub mod hooking;
 pub mod import_mode2;
 pub mod metrics;
 pub mod sst_importer;
