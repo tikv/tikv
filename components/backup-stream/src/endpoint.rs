@@ -638,22 +638,7 @@ where
         );
 
         let task_name = task.info.get_name().to_owned();
-<<<<<<< HEAD
-        // clean the safepoint created at pause(if there is)
-        self.pool.spawn(
-            self.pd_client
-                .update_service_safe_point(
-                    self.pause_guard_id_for_task(task.info.get_name()),
-                    TimeStamp::zero(),
-                    Duration::new(0, 0),
-                )
-                .map(|r| {
-                    r.map_err(|err| Error::from(err).report("removing safe point for pausing"))
-                }),
-        );
-=======
         self.clean_pause_guard_id_for_task(&task_name);
->>>>>>> a2a81a9af7 (backup-stream: clean the `pause-guard-gc-safepoint` when unregister the log task (#17317))
         self.pool.block_on(async move {
             let task_clone = task.clone();
             let run = async move {
@@ -698,17 +683,17 @@ where
 
     // clean the safepoint created at pause(if there is)
     fn clean_pause_guard_id_for_task(&self, task_name: &str) {
-        self.pool.spawn(root!("unregister_task";
-        self.pd_client
-            .update_service_safe_point(
-                self.pause_guard_id_for_task(task_name),
-                TimeStamp::zero(),
-                Duration::new(0, 0),
-            )
-            .map(|r| {
-                r.map_err(|err| Error::from(err).report("removing safe point for pausing"))
-            })
-        ));
+        self.pool.spawn(
+            self.pd_client
+                .update_service_safe_point(
+                    self.pause_guard_id_for_task(task_name),
+                    TimeStamp::zero(),
+                    Duration::new(0, 0),
+                )
+                .map(|r| {
+                    r.map_err(|err| Error::from(err).report("removing safe point for pausing"))
+                }),
+        );
     }
 
     fn pause_guard_id_for_task(&self, task: &str) -> String {
