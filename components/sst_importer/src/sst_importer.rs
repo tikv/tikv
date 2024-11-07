@@ -2300,7 +2300,7 @@ mod tests {
         let change = cfg.diff(&cfg_new);
 
         let threads = ResizableRuntime::new(
-            cfg.thread_nums,
+            cfg.num_threads,
             "test",
             Box::new(create_tokio_runtime),
             Box::new(|_| {}),
@@ -2333,7 +2333,7 @@ mod tests {
         let change = cfg.diff(&cfg_new);
 
         let threads = ResizableRuntime::new(
-            cfg.thread_nums,
+            cfg.num_threads,
             "test",
             Box::new(create_tokio_runtime),
             Box::new(|_| {}),
@@ -2347,7 +2347,7 @@ mod tests {
 
     #[test]
     fn test_update_import_num_threads() {
-        let mut threads = ResizableRuntime::new(
+        let threads = ResizableRuntime::new(
             Config::default().num_threads,
             "test",
             Box::new(create_tokio_runtime),

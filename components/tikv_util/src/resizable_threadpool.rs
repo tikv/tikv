@@ -11,8 +11,8 @@ use tokio::{
 pub struct ResizableRuntime {
     pub size: usize,
     thread_name: String,
-    pool: Arc<Mutex<Option<Handle>>>, // Use Arc<Mutex> for thread-safe updates
-    all_pools: Vec<Runtime>,          // Keep track of all pools
+    pool: Arc<Mutex<Option<Handle>>>,
+    all_pools: Vec<Runtime>,
     replace_pool_rule: Box<dyn Fn(usize, &str) -> TokioResult<Runtime> + Send + Sync>,
     after_adjust: Box<dyn Fn(usize) + Send + Sync>,
 }
@@ -83,7 +83,10 @@ impl ResizableRuntime {
 
 impl Drop for ResizableRuntime {
     fn drop(&mut self) {
-        self.all_pools.clear(); // Drop all previously used pools
+        println!("drop ResizableRuntime!");
+        for runtime in self.all_pools.drain(..) {
+            runtime.shutdown_background();
+        }
     }
 }
 
