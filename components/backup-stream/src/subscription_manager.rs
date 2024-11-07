@@ -296,6 +296,8 @@ pub struct RegionSubscriptionManager<S, R, PDC> {
     messenger: Sender<ObserveOp>,
     scan_pool_handle: Arc<ScanPoolHandle>,
     scans: Arc<FutureWaitGroup>,
+
+    advance_ts_interval: Duration,
 }
 
 impl<S, R, PDC> Clone for RegionSubscriptionManager<S, R, PDC>
@@ -317,6 +319,7 @@ where
             messenger: self.messenger.clone(),
             scan_pool_handle: self.scan_pool_handle.clone(),
             scans: FutureWaitGroup::new(),
+            advance_ts_interval: self.advance_ts_interval,
         }
     }
 }
@@ -355,6 +358,7 @@ where
         pd_client: Arc<PDC>,
         scan_pool_size: usize,
         resolver: BackupStreamResolver<HChkLd, E>,
+        advance_ts_interval: Duration,
     ) -> (Self, future![()])
     where
         E: KvEngine,
@@ -374,6 +378,7 @@ where
             messenger: tx,
             scan_pool_handle: Arc::new(scan_pool_handle),
             scans: FutureWaitGroup::new(),
+            advance_ts_interval,
         };
         let fut = op.clone().region_operator_loop(rx, resolver);
         (op, fut)
@@ -472,7 +477,13 @@ where
                         warn!("waiting for initial scanning done timed out, forcing progress!"; 
                             "take" => ?now.saturating_elapsed(), "timedout" => %timedout);
                     }
-                    let regions = resolver.resolve(self.subs.current_regions(), min_ts).await;
+                    let regions = resolver
+                        .resolve(
+                            self.subs.current_regions(),
+                            min_ts,
+                            Some(self.advance_ts_interval),
+                        )
+                        .await;
                     let cps = self.subs.resolve_with(min_ts, regions);
                     let min_region = cps.iter().min_by_key(|rs| rs.checkpoint);
                     // If there isn't any region observed, the `min_ts` can be used as resolved ts

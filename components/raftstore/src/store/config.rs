@@ -366,6 +366,13 @@ pub struct Config {
     #[online_config(hidden)]
     #[serde(alias = "enable-partitioned-raft-kv-compatible-learner")]
     pub enable_v2_compatible_learner: bool,
+
+    /// The minimal count of region pending on applying raft logs.
+    /// Only when the count of regions which not pending on applying logs is
+    /// less than the threshold, can the raftstore supply service.
+    #[doc(hidden)]
+    #[online_config(hidden)]
+    pub min_pending_apply_region_count: u64,
 }
 
 impl Default for Config {
@@ -486,6 +493,7 @@ impl Default for Config {
             check_request_snapshot_interval: ReadableDuration::minutes(1),
             enable_v2_compatible_learner: false,
             unsafe_disable_check_quorum: false,
+            min_pending_apply_region_count: 10,
         }
     }
 }
@@ -848,6 +856,12 @@ impl Config {
             }
         }
         assert!(self.region_compact_check_step.is_some());
+
+        if self.min_pending_apply_region_count == 0 {
+            return Err(box_err!(
+                "min_pending_apply_region_count must be greater than 0"
+            ));
+        }
 
         Ok(())
     }

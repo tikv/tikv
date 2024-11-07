@@ -59,7 +59,7 @@ where
         match &self.router {
             Some(router) => {
                 router.broadcast_normal(|| {
-                    PeerMsg::SignificantMsg(SignificantMsg::CheckPendingAdmin(tx.clone()))
+                    PeerMsg::SignificantMsg(Box::new(SignificantMsg::CheckPendingAdmin(tx.clone())))
                 });
                 let send_task = async move {
                     let mut s = rx.map(|resp| Ok((resp, WriteFlags::default())));

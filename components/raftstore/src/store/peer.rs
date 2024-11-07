@@ -573,7 +573,9 @@ pub fn start_unsafe_recovery_report<EK: KvEngine, ER: RaftEngine>(
     let wait_apply =
         UnsafeRecoveryWaitApplySyncer::new(report_id, router.clone(), exit_force_leader);
     router.broadcast_normal(|| {
-        PeerMsg::SignificantMsg(SignificantMsg::UnsafeRecoveryWaitApply(wait_apply.clone()))
+        PeerMsg::SignificantMsg(Box::new(SignificantMsg::UnsafeRecoveryWaitApply(
+            wait_apply.clone(),
+        )))
     });
 }
 
@@ -762,15 +764,15 @@ impl UnsafeRecoveryWaitApplySyncer {
             let router_ptr = thread_safe_router.lock().unwrap();
             if exit_force_leader {
                 (*router_ptr).broadcast_normal(|| {
-                    PeerMsg::SignificantMsg(SignificantMsg::ExitForceLeaderState)
+                    PeerMsg::SignificantMsg(Box::new(SignificantMsg::ExitForceLeaderState))
                 });
             }
             let fill_out_report =
                 UnsafeRecoveryFillOutReportSyncer::new(report_id, (*router_ptr).clone());
             (*router_ptr).broadcast_normal(|| {
-                PeerMsg::SignificantMsg(SignificantMsg::UnsafeRecoveryFillOutReport(
+                PeerMsg::SignificantMsg(Box::new(SignificantMsg::UnsafeRecoveryFillOutReport(
                     fill_out_report.clone(),
-                ))
+                )))
             });
         }));
         UnsafeRecoveryWaitApplySyncer {
@@ -1113,6 +1115,16 @@ where
     pub snapshot_recovery_state: Option<SnapshotRecoveryState>,
 
     last_record_safe_point: u64,
+    /// Used for checking whether the peer is busy on apply.
+    /// * `None` => the peer has no pending logs for apply or already finishes
+    ///   applying.
+    /// * `Some(false)` => initial state, not be recorded.
+    /// * `Some(true)` => busy on apply, and already recorded.
+    pub busy_on_apply: Option<bool>,
+    /// The index of last commited idx in the leader. It's used to check whether
+    /// this peer has raft log gaps and whether should be marked busy on
+    /// apply.
+    pub last_leader_committed_idx: Option<u64>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -1262,6 +1274,8 @@ where
             lead_transferee: raft::INVALID_ID,
             unsafe_recovery_state: None,
             snapshot_recovery_state: None,
+            busy_on_apply: Some(false),
+            last_leader_committed_idx: None,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -2891,9 +2905,10 @@ where
 
         if let Some(hs) = ready.hs() {
             let pre_commit_index = self.get_store().commit_index();
-            assert!(hs.get_commit() >= pre_commit_index);
+            let cur_commit_index = hs.get_commit();
+            assert!(cur_commit_index >= pre_commit_index);
             if self.is_leader() {
-                self.on_leader_commit_idx_changed(pre_commit_index, hs.get_commit());
+                self.on_leader_commit_idx_changed(pre_commit_index, cur_commit_index);
             }
         }
 
@@ -5344,6 +5359,37 @@ where
                 self.snapshot_recovery_state = None;
             }
         }
+    }
+
+    pub fn update_last_leader_committed_idx(&mut self, committed_index: u64) {
+        if self.is_leader() {
+            // Ignore.
+            return;
+        }
+
+        let local_committed_index = self.get_store().commit_index();
+        if committed_index < local_committed_index {
+            warn!(
+                "stale committed index";
+                "region_id" => self.region().get_id(),
+                "peer_id" => self.peer_id(),
+                "last_committed_index" => committed_index,
+                "local_index" => local_committed_index,
+            );
+        } else {
+            self.last_leader_committed_idx = Some(committed_index);
+            debug!(
+                "update last committed index from leader";
+                "region_id" => self.region().get_id(),
+                "peer_id" => self.peer_id(),
+                "last_committed_index" => committed_index,
+                "local_index" => local_committed_index,
+            );
+        }
+    }
+
+    pub fn needs_update_last_leader_committed_idx(&self) -> bool {
+        self.busy_on_apply.is_some() && self.last_leader_committed_idx.is_none()
     }
 }
 
