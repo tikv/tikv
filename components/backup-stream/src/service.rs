@@ -13,11 +13,11 @@ use crate::{
 };
 
 #[derive(Clone)]
-pub struct Service {
+pub struct BackupStreamGrpcService {
     endpoint: Scheduler<Task>,
 }
 
-impl Service {
+impl BackupStreamGrpcService {
     pub fn new(endpoint: Scheduler<Task>) -> Self {
         Self { endpoint }
     }
@@ -39,7 +39,7 @@ impl From<RegionIdWithVersion> for RegionIdentity {
     }
 }
 
-impl LogBackup for Service {
+impl LogBackup for BackupStreamGrpcService {
     fn get_last_flush_ts_of_region(
         &mut self,
         _ctx: RpcContext<'_>,
@@ -92,11 +92,9 @@ impl LogBackup for Service {
 
     fn subscribe_flush_event(
         &mut self,
-        _ctx: grpcio::RpcContext<'_>,
-        _req: kvproto::logbackuppb::SubscribeFlushEventRequest,
-        #[allow(unused_variables)] sink: grpcio::ServerStreamingSink<
-            kvproto::logbackuppb::SubscribeFlushEventResponse,
-        >,
+        _ctx: RpcContext<'_>,
+        _req: SubscribeFlushEventRequest,
+        #[allow(unused_variables)] sink: grpcio::ServerStreamingSink<SubscribeFlushEventResponse>,
     ) {
         #[cfg(test)]
         panic!("Service should not be used in an unit test");

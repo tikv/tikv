@@ -11,9 +11,9 @@ use raft::StateRole;
 use raftstore::{
     coprocessor::{
         AdminObserver, ApplyCtxInfo, ApplySnapshotObserver, BoxAdminObserver,
-        BoxApplySnapshotObserver, BoxMessageObserver, BoxPdTaskObserver, BoxQueryObserver,
+        BoxApplySnapshotObserver, BoxPdTaskObserver, BoxQueryObserver, BoxRaftMessageObserver,
         BoxRegionChangeObserver, BoxRoleObserver, BoxUpdateSafeTsObserver, Cmd, Coprocessor,
-        CoprocessorHost, MessageObserver, ObserverContext, PdTaskObserver, QueryObserver,
+        CoprocessorHost, ObserverContext, PdTaskObserver, QueryObserver, RaftMessageObserver,
         RegionChangeEvent, RegionChangeObserver, RegionState, RoleChange, RoleObserver,
         StoreSizeInfo, UpdateSafeTsObserver,
     },
@@ -96,9 +96,9 @@ impl<T: Transport + 'static, ER: RaftEngine> TiFlashObserver<T, ER> {
             TIFLASH_OBSERVER_PRIORITY,
             BoxRoleObserver::new(self.clone()),
         );
-        coprocessor_host.registry.register_message_observer(
+        coprocessor_host.registry.register_raft_message_observer(
             TIFLASH_OBSERVER_PRIORITY,
-            BoxMessageObserver::new(self.clone()),
+            BoxRaftMessageObserver::new(self.clone()),
         );
     }
 }
@@ -195,7 +195,7 @@ impl<T: Transport + 'static, ER: RaftEngine> RegionChangeObserver for TiFlashObs
     }
 }
 
-impl<T: Transport + 'static, ER: RaftEngine> MessageObserver for TiFlashObserver<T, ER> {
+impl<T: Transport + 'static, ER: RaftEngine> RaftMessageObserver for TiFlashObserver<T, ER> {
     fn on_raft_message(&self, msg: &RaftMessage) -> bool {
         self.forwarder.on_raft_message(msg)
     }

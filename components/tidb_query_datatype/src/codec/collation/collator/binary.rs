@@ -24,7 +24,7 @@ impl Collator for CollatorBinary {
     }
 
     #[inline]
-    fn sort_compare(a: &[u8], b: &[u8]) -> Result<Ordering> {
+    fn sort_compare(a: &[u8], b: &[u8], _force_no_pad: bool) -> Result<Ordering> {
         Ok(a.cmp(b))
     }
 

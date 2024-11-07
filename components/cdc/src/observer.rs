@@ -56,7 +56,7 @@ impl CdcObserver {
             .register_region_change_observer(100, BoxRegionChangeObserver::new(self.clone()));
     }
 
-    /// Subscribe an region, the observer will sink events of the region into
+    /// Subscribe a region, the observer will sink events of the region into
     /// its scheduler.
     ///
     /// Return previous ObserveId if there is one.
@@ -121,8 +121,7 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
         // Create a snapshot here for preventing the old value was GC-ed.
         // TODO: only need it after enabling old value, may add a flag to indicate
         // whether to get it.
-        let snapshot =
-            RegionSnapshot::from_snapshot(Arc::new(engine.snapshot(None)), Arc::new(region));
+        let snapshot = RegionSnapshot::from_snapshot(Arc::new(engine.snapshot()), Arc::new(region));
         let get_old_value = move |key,
                                   query_ts,
                                   old_value_cache: &mut OldValueCache,
@@ -264,7 +263,7 @@ mod tests {
         region.mut_peers().push(new_peer(3, 3));
 
         let mut ctx = ObserverContext::new(&region);
-        observer.on_role_change(&mut ctx, &RoleChange::new(StateRole::Follower));
+        observer.on_role_change(&mut ctx, &RoleChange::new_for_test(StateRole::Follower));
         rx.recv_timeout(Duration::from_millis(10)).unwrap_err();
 
         let oid = ObserveId::new();
@@ -330,7 +329,7 @@ mod tests {
         };
 
         // No event if it changes to leader.
-        observer.on_role_change(&mut ctx, &RoleChange::new(StateRole::Leader));
+        observer.on_role_change(&mut ctx, &RoleChange::new_for_test(StateRole::Leader));
         rx.recv_timeout(Duration::from_millis(10)).unwrap_err();
 
         // unsubscribed fail if observer id is different.
@@ -339,13 +338,13 @@ mod tests {
         // No event if it is unsubscribed.
         let oid_ = observer.unsubscribe_region(1, oid).unwrap();
         assert_eq!(oid_, oid);
-        observer.on_role_change(&mut ctx, &RoleChange::new(StateRole::Follower));
+        observer.on_role_change(&mut ctx, &RoleChange::new_for_test(StateRole::Follower));
         rx.recv_timeout(Duration::from_millis(10)).unwrap_err();
 
         // No event if it is unsubscribed.
         region.set_id(999);
         let mut ctx = ObserverContext::new(&region);
-        observer.on_role_change(&mut ctx, &RoleChange::new(StateRole::Follower));
+        observer.on_role_change(&mut ctx, &RoleChange::new_for_test(StateRole::Follower));
         rx.recv_timeout(Duration::from_millis(10)).unwrap_err();
     }
 }

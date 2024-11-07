@@ -13,4 +13,9 @@ where
     Self:
         'static + Peekable + Iterable + CfNamesExt + SnapshotMiscExt + Send + Sync + Sized + Debug,
 {
+    /// Whether the snapshot acquired hit the in memory engine. It always
+    /// returns false if the in memory engine is disabled.
+    fn in_memory_engine_hit(&self) -> bool {
+        false
+    }
 }

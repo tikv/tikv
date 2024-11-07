@@ -12,9 +12,7 @@ use std::{
 };
 
 use collections::HashMap;
-#[cfg(test)]
-use dashmap::mapref::one::Ref;
-use dashmap::DashMap;
+use dashmap::{mapref::one::Ref, DashMap};
 use fail::fail_point;
 use kvproto::{
     kvrpcpb::{CommandPri, ResourceControlContext},
@@ -22,13 +20,14 @@ use kvproto::{
 };
 use parking_lot::{MappedRwLockReadGuard, RwLock, RwLockReadGuard};
 use tikv_util::{
+    config::VersionTrack,
     info,
     resource_control::{TaskMetadata, TaskPriority, DEFAULT_RESOURCE_GROUP_NAME},
     time::Instant,
 };
 use yatp::queue::priority::TaskPriorityProvider;
 
-use crate::{metrics::deregister_metrics, resource_limiter::ResourceLimiter};
+use crate::{config::Config, metrics::deregister_metrics, resource_limiter::ResourceLimiter};
 
 // a read task cost at least 50us.
 const DEFAULT_PRIORITY_PER_READ_TASK: u64 = 50;
@@ -68,10 +67,18 @@ pub struct ResourceGroupManager {
     version_generator: AtomicU64,
     // the shared resource limiter of each priority
     priority_limiters: [Arc<ResourceLimiter>; TaskPriority::PRIORITY_COUNT],
+    // lastest config.
+    config: Arc<VersionTrack<Config>>,
 }
 
 impl Default for ResourceGroupManager {
     fn default() -> Self {
+        Self::new(Config::default())
+    }
+}
+
+impl ResourceGroupManager {
+    pub fn new(config: Config) -> Self {
         let priority_limiters = TaskPriority::priorities().map(|p| {
             Arc::new(ResourceLimiter::new(
                 p.as_str().to_owned(),
@@ -87,6 +94,7 @@ impl Default for ResourceGroupManager {
             registry: Default::default(),
             version_generator: AtomicU64::new(0),
             priority_limiters,
+            config: Arc::new(VersionTrack::new(config)),
         };
 
         // init the default resource group by default.
@@ -103,9 +111,7 @@ impl Default for ResourceGroupManager {
 
         manager
     }
-}
 
-impl ResourceGroupManager {
     #[inline]
     pub fn get_group_count(&self) -> u64 {
         self.group_count.load(Ordering::Relaxed)
@@ -217,9 +223,12 @@ impl ResourceGroupManager {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn get_resource_group(&self, name: &str) -> Option<Ref<'_, String, ResourceGroup>> {
         self.resource_groups.get(&name.to_ascii_lowercase())
+    }
+
+    pub fn get_config(&self) -> &Arc<VersionTrack<Config>> {
+        &self.config
     }
 
     pub fn get_all_resource_groups(&self) -> Vec<PbResourceGroup> {

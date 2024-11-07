@@ -1,7 +1,6 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::BTreeSet,
     num::NonZeroUsize,
     sync::{mpsc::channel, Arc},
     thread,
@@ -9,16 +8,17 @@ use std::{
 };
 
 use collections::HashMap;
-use engine_rocks::RocksEngine;
 use kvproto::metapb::Region;
 use more_asserts::{assert_gt, assert_le};
-use raftstore::coprocessor::{RegionInfoAccessor, RegionInfoProvider};
+use pd_client::{RegionStat, RegionWriteCfCopDetail};
+use raftstore::coprocessor::{
+    region_info_accessor::{RaftStoreEvent, RegionActivity, RegionInfoQuery},
+    RegionInfoAccessor, RegionInfoProvider,
+};
 use test_raftstore::*;
 use tikv_util::HandyRwLock;
 
-fn prepare_cluster<T: Simulator<RocksEngine>>(
-    cluster: &mut Cluster<RocksEngine, T>,
-) -> Vec<Region> {
+fn prepare_cluster<T: Simulator>(cluster: &mut Cluster<T>) -> Vec<Region> {
     for i in 0..15 {
         let i = i + b'0';
         let key = vec![b'k', i];
@@ -77,7 +77,7 @@ fn test_region_collection_seek_region() {
         .sim
         .wl()
         .post_create_coprocessor_host(Box::new(move |id, host| {
-            let p = RegionInfoAccessor::new(host, Arc::new(|| false));
+            let p = RegionInfoAccessor::new(host, Arc::new(|| false), Box::new(|| 0));
             tx.send((id, p)).unwrap()
         }));
 
@@ -151,7 +151,7 @@ fn test_region_collection_get_regions_in_range() {
         .sim
         .wl()
         .post_create_coprocessor_host(Box::new(move |id, host| {
-            let p = RegionInfoAccessor::new(host, Arc::new(|| false));
+            let p = RegionInfoAccessor::new(host, Arc::new(|| false), Box::new(|| 0));
             tx.send((id, p)).unwrap()
         }));
 
@@ -196,28 +196,37 @@ fn test_region_collection_get_top_regions() {
         .sim
         .wl()
         .post_create_coprocessor_host(Box::new(move |id, host| {
-            let p = RegionInfoAccessor::new(host, Arc::new(|| true));
+            let p = RegionInfoAccessor::new(host, Arc::new(|| true), Box::new(|| 0));
             tx.send((id, p)).unwrap()
         }));
     cluster.run();
     let region_info_providers: HashMap<_, _> = rx.try_iter().collect();
     assert_eq!(region_info_providers.len(), 3);
     let regions = prepare_cluster(&mut cluster);
-    let mut regions = regions.into_iter().map(|r| r.get_id()).collect::<Vec<_>>();
-    regions.sort();
-    let mut all_results = BTreeSet::<u64>::new();
+    let mut region_ids = regions.iter().map(|r| r.get_id()).collect::<Vec<_>>();
+    region_ids.sort();
     for node_id in cluster.get_node_ids() {
         let engine = &region_info_providers[&node_id];
+        for r in &regions {
+            let mut region_stat = RegionStat::default();
+            region_stat.cop_detail = RegionWriteCfCopDetail::new(10, 10, 10);
+            let _ = engine.scheduler().schedule(RegionInfoQuery::RaftStoreEvent(
+                RaftStoreEvent::UpdateRegionActivity {
+                    region: r.clone(),
+                    activity: RegionActivity { region_stat },
+                },
+            ));
+        }
 
         let result = engine
-            .get_top_regions(NonZeroUsize::new(10))
+            .get_top_regions(NonZeroUsize::new(10).unwrap())
             .unwrap()
             .into_iter()
             .map(|(r, _)| r.get_id())
             .collect::<Vec<_>>();
 
         for region_id in &result {
-            assert!(regions.contains(region_id));
+            assert!(region_ids.contains(region_id));
         }
         let len = result.len();
         if engine.region_leaders().read().unwrap().contains(&node_id) {
@@ -225,16 +234,7 @@ fn test_region_collection_get_top_regions() {
             assert_gt!(len, 0);
             assert_le!(len, 10);
         }
-        // All the regions for which this node is the leader.
-        let result = engine
-            .get_top_regions(None)
-            .unwrap()
-            .into_iter()
-            .map(|(r, _)| r.get_id())
-            .collect::<Vec<_>>();
-        all_results.extend(result.iter());
     }
-    assert_eq!(all_results.into_iter().collect::<Vec<_>>(), regions);
 
     for (_, p) in region_info_providers {
         p.stop();
@@ -250,7 +250,7 @@ fn test_region_collection_find_region_by_key() {
         .sim
         .wl()
         .post_create_coprocessor_host(Box::new(move |id, host| {
-            let p = RegionInfoAccessor::new(host, Arc::new(|| false));
+            let p = RegionInfoAccessor::new(host, Arc::new(|| false), Box::new(|| 0));
             tx.send((id, p)).unwrap()
         }));
 

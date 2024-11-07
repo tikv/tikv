@@ -10,7 +10,6 @@ use std::{
     time::Duration,
 };
 
-use engine_rocks::RocksEngine;
 use engine_traits::{Peekable, CF_RAFT};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
@@ -1307,7 +1306,7 @@ fn test_prewrite_before_max_ts_is_synced() {
     let channel = ChannelBuilder::new(env).connect(&addr);
     let client = TikvClient::new(channel);
 
-    let do_prewrite = |cluster: &mut Cluster<RocksEngine, ServerCluster<RocksEngine>>| {
+    let do_prewrite = |cluster: &mut Cluster<ServerCluster>| {
         let region_id = right.get_id();
         let leader = cluster.leader_of_region(region_id).unwrap();
         let epoch = cluster.get_region_epoch(region_id);
@@ -1393,6 +1392,8 @@ fn test_source_peer_read_delegate_after_apply() {
 
 #[test]
 fn test_merge_with_concurrent_pessimistic_locking() {
+    let peer_size_limit = 512 << 10;
+    let instance_size_limit = 100 << 20;
     let mut cluster = new_server_cluster(0, 2);
     configure_for_merge(&mut cluster.cfg);
     cluster.cfg.pessimistic_txn.pipelined = true;
@@ -1418,18 +1419,22 @@ fn test_merge_with_concurrent_pessimistic_locking() {
     txn_ext
         .pessimistic_locks
         .write()
-        .insert(vec![(
-            Key::from_raw(b"k0"),
-            PessimisticLock {
-                primary: b"k0".to_vec().into_boxed_slice(),
-                start_ts: 10.into(),
-                ttl: 3000,
-                for_update_ts: 20.into(),
-                min_commit_ts: 30.into(),
-                last_change: LastChange::make_exist(15.into(), 3),
-                is_locked_with_conflict: false,
-            },
-        )])
+        .insert(
+            vec![(
+                Key::from_raw(b"k0"),
+                PessimisticLock {
+                    primary: b"k0".to_vec().into_boxed_slice(),
+                    start_ts: 10.into(),
+                    ttl: 3000,
+                    for_update_ts: 20.into(),
+                    min_commit_ts: 30.into(),
+                    last_change: LastChange::make_exist(15.into(), 3),
+                    is_locked_with_conflict: false,
+                },
+            )],
+            peer_size_limit,
+            instance_size_limit,
+        )
         .unwrap();
 
     let addr = cluster.sim.rl().get_addr(1);
@@ -1481,6 +1486,8 @@ fn test_merge_with_concurrent_pessimistic_locking() {
 
 #[test]
 fn test_merge_pessimistic_locks_with_concurrent_prewrite() {
+    let peer_size_limit = 512 << 10;
+    let instance_size_limit = 100 << 20;
     let mut cluster = new_server_cluster(0, 2);
     configure_for_merge(&mut cluster.cfg);
     cluster.cfg.pessimistic_txn.pipelined = true;
@@ -1521,10 +1528,14 @@ fn test_merge_pessimistic_locks_with_concurrent_prewrite() {
     txn_ext
         .pessimistic_locks
         .write()
-        .insert(vec![
-            (Key::from_raw(b"k0"), lock.clone()),
-            (Key::from_raw(b"k1"), lock),
-        ])
+        .insert(
+            vec![
+                (Key::from_raw(b"k0"), lock.clone()),
+                (Key::from_raw(b"k1"), lock),
+            ],
+            peer_size_limit,
+            instance_size_limit,
+        )
         .unwrap();
 
     let mut mutation = Mutation::default();
@@ -1566,6 +1577,8 @@ fn test_merge_pessimistic_locks_with_concurrent_prewrite() {
 
 #[test]
 fn test_retry_pending_prepare_merge_fail() {
+    let peer_size_limit = 512 << 10;
+    let instance_size_limit = 100 << 20;
     let mut cluster = new_server_cluster(0, 2);
     configure_for_merge(&mut cluster.cfg);
     cluster.cfg.pessimistic_txn.pipelined = true;
@@ -1602,7 +1615,11 @@ fn test_retry_pending_prepare_merge_fail() {
     txn_ext
         .pessimistic_locks
         .write()
-        .insert(vec![(Key::from_raw(b"k1"), l1)])
+        .insert(
+            vec![(Key::from_raw(b"k1"), l1)],
+            peer_size_limit,
+            instance_size_limit,
+        )
         .unwrap();
 
     // Pause apply and write some data to the left region
@@ -1643,6 +1660,8 @@ fn test_retry_pending_prepare_merge_fail() {
 
 #[test]
 fn test_merge_pessimistic_locks_propose_fail() {
+    let peer_size_limit = 512 << 10;
+    let instance_size_limit = 100 << 20;
     let mut cluster = new_server_cluster(0, 2);
     configure_for_merge(&mut cluster.cfg);
     cluster.cfg.pessimistic_txn.pipelined = true;
@@ -1678,7 +1697,11 @@ fn test_merge_pessimistic_locks_propose_fail() {
     txn_ext
         .pessimistic_locks
         .write()
-        .insert(vec![(Key::from_raw(b"k1"), lock)])
+        .insert(
+            vec![(Key::from_raw(b"k1"), lock)],
+            peer_size_limit,
+            instance_size_limit,
+        )
         .unwrap();
 
     fail::cfg("raft_propose", "pause").unwrap();
@@ -1785,50 +1808,6 @@ fn test_destroy_source_peer_while_merging() {
     for i in 2..=5 {
         must_get_equal(&cluster.get_engine(i), b"k5", b"v5");
     }
-}
-
-// Test that a store is able to generate snapshots while destroying a region. It
-// confirms the resolution of issue #12587.
-#[test]
-fn test_snap_gen_while_destroy_is_stuck() {
-    let mut cluster = new_node_cluster(0, 5);
-    configure_for_merge(&mut cluster.cfg);
-    let pd_client = Arc::clone(&cluster.pd_client);
-    pd_client.disable_default_operator();
-
-    cluster.run();
-
-    cluster.must_put(b"k1", b"v1");
-    cluster.must_put(b"k3", b"v3");
-    for i in 1..=5 {
-        must_get_equal(&cluster.get_engine(i), b"k1", b"v1");
-        must_get_equal(&cluster.get_engine(i), b"k3", b"v3");
-    }
-    cluster.must_split(&pd_client.get_region(b"k1").unwrap(), b"k2");
-
-    let region_1 = pd_client.get_region(b"k1").unwrap();
-    let region_2 = pd_client.get_region(b"k3").unwrap();
-    // Ensure that store 5 is the leader of region_1 and store 1 is the leader of
-    // region_2.
-    cluster.must_transfer_leader(region_1.get_id(), new_peer(5, 1001));
-    cluster.must_transfer_leader(region_2.get_id(), new_peer(1, 1));
-
-    let on_region_worker_destroy_fp = "on_region_worker_destroy";
-    fail::cfg(on_region_worker_destroy_fp, "pause").unwrap();
-
-    // Remove region_1 from from store 1 so that a destory task is scheduled.
-    // The destory task will be stuck due to the fail point above to simulate a
-    // slow destory scenario.
-    pd_client.must_remove_peer(region_1.get_id(), find_peer(&region_1, 1).unwrap().clone());
-    must_get_equal(&cluster.get_engine(1), b"k1", b"v1");
-
-    // Trigger a snapshot gen task on store 1 by removing and adding region_2 on
-    // store 5. The snapshot generation should go through without issues.
-    pd_client.must_remove_peer(region_2.get_id(), new_peer(5, 5));
-    must_get_none(&cluster.get_engine(5), b"k3");
-
-    pd_client.must_add_peer(region_2.get_id(), new_peer(5, 6));
-    must_get_equal(&cluster.get_engine(5), b"k3", b"v3");
 }
 
 struct MsgTimeoutFilter {
@@ -2223,7 +2202,6 @@ fn test_destroy_race_during_atomic_snapshot_after_merge() {
         .when(left_filter_block.clone())
         .reserve_dropped(left_blocked_messages.clone())
         .set_msg_callback(Arc::new(move |msg: &RaftMessage| {
-            debug!("dbg left msg_callback"; "msg" => ?msg);
             if left_filter_block.load(atomic::Ordering::SeqCst) {
                 return;
             }
@@ -2247,7 +2225,6 @@ fn test_destroy_race_during_atomic_snapshot_after_merge() {
         .direction(Direction::Recv)
         .when(right_filter_block.clone())
         .set_msg_callback(Arc::new(move |msg: &RaftMessage| {
-            debug!("dbg right msg_callback"; "msg" => ?msg);
             if msg.get_to_peer().get_id() == new_peer_id {
                 let _ = new_peer_id_tx.lock().unwrap().take().map(|tx| tx.send(()));
                 if msg.get_message().get_msg_type() == MessageType::MsgSnapshot {

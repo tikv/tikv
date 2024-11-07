@@ -38,7 +38,6 @@ openssl-vendored = ["tikv/openssl-vendored", "openssl/vendored"]
 external-jemalloc = ["engine_store_ffi/external-jemalloc"]
 
 [dependencies]
-range_cache_memory_engine = { workspace = true }
 health_controller = { workspace = true }
 api_version = { workspace = true }
 async-stream = "0.2"
@@ -62,6 +61,7 @@ engine_tiflash = { workspace = true, default-features = false }
 engine_traits = { workspace = true }
 error_code = { workspace = true }
 fail = "0.5"
+in_memory_engine = { workspace = true }
 file_system = { workspace = true }
 fs2 = "0.4"
 futures = "0.3"
@@ -79,7 +79,6 @@ log_wrappers = { workspace = true }
 mime = "0.3.13"
 nix = "0.23"
 online_config = { workspace = true }
-
 openssl = { workspace = true }
 pd_client = { workspace = true }
 pin-project = "1.0"

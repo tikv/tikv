@@ -16,7 +16,7 @@ use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
 use engine_rocks::RocksSnapshot;
 use engine_store_ffi::core::DebugStruct;
-use engine_traits::{Engines, MiscExt, SnapshotContext};
+use engine_traits::{Engines, MiscExt};
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
 use health_controller::HealthController;
@@ -34,7 +34,7 @@ use pd_client::PdClient;
 use raftstore::{
     coprocessor::{CoprocessorHost, RegionInfoAccessor},
     errors::Error as RaftError,
-    router::{CdcRaftRouter, LocalReadRouter, RaftStoreRouter, ServerRaftStoreRouter},
+    router::{CdcRaftRouter, LocalReadRouter, RaftStoreRouter, ReadContext, ServerRaftStoreRouter},
     store::{
         fsm::{store::StoreMeta, ApplyRouter, RaftBatchSystem, RaftRouter},
         msg::RaftCmdExtraOpts,
@@ -65,7 +65,10 @@ use tikv::{
     storage::{
         self,
         kv::{FakeExtension, LocalTablets, SnapContext},
-        txn::flow_controller::{EngineFlowController, FlowController},
+        txn::{
+            flow_controller::{EngineFlowController, FlowController},
+            txn_status_cache::TxnStatusCache,
+        },
         Engine, Storage,
     },
 };
@@ -292,28 +295,43 @@ impl ServerCluster {
         }
 
         let key_mgr_cloned = key_manager.clone();
-        let local_reader = LocalReader::new(
-            engines.kv.clone(),
-            StoreMetaDelegate::new(store_meta.clone(), engines.kv.clone()),
-            router.clone(),
-        );
 
         // Create coprocessor.
         let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
 
-        // Region stats manager collects region heartbeat for use by in-memory engine.
+        let local_reader = LocalReader::new(
+            engines.kv.clone(),
+            StoreMetaDelegate::new(store_meta.clone(), engines.kv.clone()),
+            router.clone(),
+            coprocessor_host.clone(),
+        );
+
+        // In-memory engine
         let enable_region_stats_mgr_cb: Arc<dyn Fn() -> bool + Send + Sync> =
-            if cfg.range_cache_engine.enabled {
+            if cfg.in_memory_engine.enable {
                 Arc::new(|| true)
             } else {
                 Arc::new(|| false)
             };
-        let region_info_accessor =
-            RegionInfoAccessor::new(&mut coprocessor_host, enable_region_stats_mgr_cb);
+
+        let mut in_memory_engine_config = cfg.in_memory_engine.clone();
+        in_memory_engine_config.expected_region_size = cfg.coprocessor.region_split_size();
+        let in_memory_engine_config = Arc::new(VersionTrack::new(in_memory_engine_config));
+        let in_memory_engine_config_clone = in_memory_engine_config.clone();
+
+        let region_info_accessor = RegionInfoAccessor::new(
+            &mut coprocessor_host,
+            enable_region_stats_mgr_cb,
+            Box::new(move || {
+                in_memory_engine_config_clone
+                    .value()
+                    .mvcc_amplification_threshold
+            }),
+        );
 
         let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
         let sim_router = SimulateTransport::new(raft_router.clone());
-        let raft_engine = RaftKv::new(
+        let mut engine = RaftKv::new(
             sim_router.clone(),
             engines.kv.clone(),
             region_info_accessor.region_leaders(),
@@ -331,14 +349,9 @@ impl ServerCluster {
         let storage_read_pool = ReadPool::from(storage::build_read_pool(
             &tikv::config::StorageReadPoolConfig::default_for_test(),
             pd_sender.clone(),
-            raft_engine.clone(),
+            engine.clone(),
         ));
 
-        let mut engine = RaftKv::new(
-            sim_router.clone(),
-            engines.kv.clone(),
-            region_info_accessor.region_leaders(),
-        );
         let extension = engine.raft_extension().clone();
         if let Some(scheduler) = self.txn_extra_schedulers.remove(&node_id) {
             engine.set_txn_extra_scheduler(scheduler);
@@ -356,8 +369,9 @@ impl ServerCluster {
             Default::default(),
             Arc::new(region_info_accessor.clone()),
         );
-        gc_worker.start(node_id).unwrap();
+        gc_worker.start(node_id, coprocessor_host.clone()).unwrap();
 
+        let txn_status_cache = Arc::new(TxnStatusCache::new_for_test());
         let rts_worker = if cfg.resolved_ts.enable {
             // Resolved ts worker
             let mut rts_worker = LazyWorker::new("resolved-ts");
@@ -373,6 +387,7 @@ impl ServerCluster {
                 concurrency_manager.clone(),
                 self.env.clone(),
                 self.security_mgr.clone(),
+                txn_status_cache.clone(),
             );
             // Start the worker
             rts_worker.start(rts_endpoint);
@@ -426,7 +441,7 @@ impl ServerCluster {
             cfg.quota.enable_auto_tune,
         ));
         let store = Storage::<_, _, F>::from_engine(
-            engine,
+            engine.clone(),
             &cfg.storage,
             storage_read_pool.handle(),
             lock_mgr.clone(),
@@ -440,8 +455,9 @@ impl ServerCluster {
             None,
             None, // TODO resource_ctl
             None, // TODO resource manager
+            txn_status_cache,
         )?;
-        self.storages.insert(node_id, raft_engine);
+        self.storages.insert(node_id, engine.clone());
 
         ReplicaReadLockChecker::new(concurrency_manager.clone()).register(&mut coprocessor_host);
 
@@ -736,7 +752,6 @@ impl Simulator<TiFlashEngine> for ServerCluster {
 
     fn async_read(
         &mut self,
-        snap_ctx: Option<SnapshotContext>,
         node_id: u64,
         batch_id: Option<ThreadReadId>,
         request: RaftCmdRequest,
@@ -750,9 +765,8 @@ impl Simulator<TiFlashEngine> for ServerCluster {
                 cb.invoke_with_response(resp);
             }
             Some(meta) => {
-                meta.sim_router
-                    .read(snap_ctx, batch_id, request, cb)
-                    .unwrap();
+                let read_ctx = ReadContext::new(batch_id, None);
+                meta.sim_router.read(read_ctx, request, cb).unwrap();
             }
         };
     }
@@ -803,7 +817,7 @@ impl Simulator<TiFlashEngine> for ServerCluster {
         request: RaftCmdRequest,
         timeout: Duration,
     ) -> Result<RaftCmdResponse> {
-        let (cb, mut rx) = test_raftstore::make_cb::<TiFlashEngine>(&request);
+        let (cb, mut rx) = super::cluster::make_cb::<TiFlashEngine>(&request);
 
         match self.async_command_on_node(node_id, request, cb) {
             Ok(()) => {}

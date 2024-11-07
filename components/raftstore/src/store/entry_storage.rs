@@ -335,26 +335,8 @@ impl EntryCache {
     fn trace_cached_entries(&mut self, entries: CachedEntries) {
         let dangle_size = {
             let mut guard = entries.entries.lock().unwrap();
-
-            let last_idx = guard.0.last().map(|e| e.index).unwrap();
-            let cache_front = match self.cache.front().map(|e| e.index) {
-                Some(i) => i,
-                None => u64::MAX,
-            };
-
-            let dangle_range = if last_idx < cache_front {
-                // All entries are not in entry cache.
-                0..guard.0.len()
-            } else if let Ok(i) = guard.0.binary_search_by(|e| e.index.cmp(&cache_front)) {
-                // Some entries are in entry cache.
-                0..i
-            } else {
-                // All entries are in entry cache.
-                0..0
-            };
-
             let mut size = 0;
-            for e in &guard.0[dangle_range] {
+            for e in &guard.0 {
                 size += bytes_capacity(&e.data) + bytes_capacity(&e.context);
             }
             guard.1 = size;
@@ -416,7 +398,7 @@ pub enum RaftlogFetchState {
     Fetched(Box<RaftlogFetchResult>),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(PartialEq)]
 pub struct RaftlogFetchResult {
     pub ents: raft::Result<Vec<Entry>>,
     // because entries may be empty, so store the original low index that the task issued
@@ -429,6 +411,19 @@ pub struct RaftlogFetchResult {
     pub tried_cnt: usize,
     // the term when the task issued
     pub term: u64,
+}
+
+impl std::fmt::Debug for RaftlogFetchResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // avoid dumping entries content
+        f.debug_struct("RaftlogFetchResult")
+            .field("low", &self.low)
+            .field("max_size", &self.max_size)
+            .field("hit_size_limit", &self.hit_size_limit)
+            .field("tried_cnt", &self.tried_cnt)
+            .field("term", &self.term)
+            .finish()
+    }
 }
 
 #[derive(Default)]
@@ -1259,6 +1254,8 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
 
     /// Evict entries from the cache.
     pub fn evict_entry_cache(&mut self, half: bool) {
+        fail_point!("mock_evict_entry_cache", |_| {});
+
         if !self.is_entry_cache_empty() {
             let cache = &mut self.cache;
             let cache_len = cache.cache.len();
@@ -1395,7 +1392,7 @@ pub mod tests {
         // Test trace an entry which is still in cache.
         let cached_entries = CachedEntries::new(vec![new_padded_entry(102, 3, 5)]);
         cache.trace_cached_entries(cached_entries);
-        check_mem_size_change(0);
+        check_mem_size_change(5);
 
         // Test compare `cached_last` with `trunc_to_idx` in `EntryCache::append_impl`.
         cache.append(0, 0, &[new_padded_entry(103, 4, 7)]);
@@ -1409,7 +1406,7 @@ pub mod tests {
         // Test compact the last traced dangle entry.
         cache.persisted = 102;
         cache.compact_to(103);
-        check_mem_size_change(-5);
+        check_mem_size_change(-10);
 
         // Test compact all entries.
         cache.persisted = 103;

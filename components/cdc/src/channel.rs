@@ -22,13 +22,13 @@ use kvproto::cdcpb::{ChangeDataEvent, Event, ResolvedTs};
 use protobuf::Message;
 use tikv_util::{
     future::block_on_timeout,
-    impl_display_as_debug,
+    impl_display_as_debug, info,
     memory::{MemoryQuota, MemoryQuotaExceeded},
     time::Instant,
     warn,
 };
 
-use crate::metrics::*;
+use crate::{metrics::*, service::ConnId};
 
 /// The maximum bytes of events can be batched into one `CdcEvent::Event`, 32KB.
 pub const CDC_EVENT_MAX_BYTES: usize = 32 * 1024;
@@ -194,7 +194,7 @@ impl EventBatcher {
     }
 }
 
-pub fn channel(buffer: usize, memory_quota: Arc<MemoryQuota>) -> (Sink, Drain) {
+pub fn channel(conn_id: ConnId, buffer: usize, memory_quota: Arc<MemoryQuota>) -> (Sink, Drain) {
     let (unbounded_sender, unbounded_receiver) = unbounded();
     let (bounded_sender, bounded_receiver) = bounded(buffer);
     (
@@ -207,14 +207,19 @@ pub fn channel(buffer: usize, memory_quota: Arc<MemoryQuota>) -> (Sink, Drain) {
             unbounded_receiver,
             bounded_receiver,
             memory_quota,
+            conn_id,
         },
     )
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum SendError {
+    // Full is returned by the sender if the channel is full, this should only happen to the
+    // bounded sender.
     Full,
+    // Disconnected is returned by the sender if the channel is disconnected.
     Disconnected,
+    // Congested is returned if memory quota exceeded.
     Congested,
 }
 
@@ -355,6 +360,7 @@ pub struct Drain {
     unbounded_receiver: UnboundedReceiver<ObservedEvent>,
     bounded_receiver: Receiver<ScanedEvent>,
     memory_quota: Arc<MemoryQuota>,
+    conn_id: ConnId,
 }
 
 impl<'a> Drain {
@@ -362,6 +368,7 @@ impl<'a> Drain {
         let observed = (&mut self.unbounded_receiver).map(|x| (x.created, x.event, x.size));
         let scaned = (&mut self.bounded_receiver).filter_map(|x| {
             if x.truncated.load(Ordering::Acquire) {
+                self.memory_quota.free(x.size as _);
                 return futures::future::ready(None);
             }
             futures::future::ready(Some((x.created, x.event, x.size)))
@@ -420,14 +427,17 @@ impl Drop for Drain {
         self.bounded_receiver.close();
         self.unbounded_receiver.close();
         let start = Instant::now();
-        let mut drain = Box::pin(async {
+        let mut total_bytes = 0;
+        let mut drain = Box::pin(async move {
+            let conn_id = self.conn_id;
             let memory_quota = self.memory_quota.clone();
-            let mut total_bytes = 0;
             let mut drain = self.drain();
             while let Some((_, bytes)) = drain.next().await {
                 total_bytes += bytes;
             }
             memory_quota.free(total_bytes);
+            info!("drop Drain finished, free memory"; "conn_id" => ?conn_id,
+                "freed_bytes" => total_bytes, "inuse_bytes" => memory_quota.in_use());
         });
         block_on(&mut drain);
         let takes = start.saturating_elapsed();
@@ -463,7 +473,7 @@ mod tests {
     type Send = Box<dyn FnMut(CdcEvent) -> Result<(), SendError>>;
     fn new_test_channel(buffer: usize, capacity: usize, force_send: bool) -> (Send, Drain) {
         let memory_quota = Arc::new(MemoryQuota::new(capacity));
-        let (mut tx, rx) = channel(buffer, memory_quota);
+        let (mut tx, rx) = channel(ConnId::default(), buffer, memory_quota);
         let mut flag = true;
         let send = move |event| {
             flag = !flag;
@@ -474,6 +484,38 @@ mod tests {
             }
         };
         (Box::new(send), rx)
+    }
+
+    #[test]
+    fn test_scanned_event() {
+        let mut e = Event::default();
+        e.region_id = 233;
+        {
+            let memory_quota = Arc::new(MemoryQuota::new(1024));
+            let (mut tx, mut rx) = channel(ConnId::default(), 10, memory_quota);
+
+            let truncated = Arc::new(AtomicBool::new(false));
+            let event = CdcEvent::Event(e.clone());
+            let size = event.size() as usize;
+            let _ = block_on(tx.send_all(vec![event], truncated));
+
+            let memory_quota = rx.memory_quota.clone();
+            let mut drain = rx.drain();
+            assert_matches!(block_on(drain.next()), Some((CdcEvent::Event(_), _)));
+            assert_eq!(memory_quota.in_use(), size);
+        }
+        {
+            let memory_quota = Arc::new(MemoryQuota::new(1024));
+            let (mut tx, mut rx) = channel(ConnId::default(), 10, memory_quota);
+
+            let truncated = Arc::new(AtomicBool::new(true));
+            let _ = block_on(tx.send_all(vec![CdcEvent::Event(e)], truncated));
+
+            let memory_quota = rx.memory_quota.clone();
+            let mut drain = rx.drain();
+            recv_timeout(&mut drain, Duration::from_millis(100)).unwrap_err();
+            assert_eq!(memory_quota.in_use(), 0);
+        }
     }
 
     #[test]
@@ -535,10 +577,10 @@ mod tests {
 
     #[test]
     fn test_congest() {
-        let mut e = kvproto::cdcpb::Event::default();
+        let mut e = Event::default();
         e.region_id = 1;
         let event = CdcEvent::Event(e.clone());
-        assert!(event.size() != 0);
+        assert_ne!(event.size(), 0);
         // 1KB
         let max_pending_bytes = 1024;
         let buffer = max_pending_bytes / event.size();
@@ -552,10 +594,10 @@ mod tests {
 
     #[test]
     fn test_set_capacity() {
-        let mut e = kvproto::cdcpb::Event::default();
+        let mut e = Event::default();
         e.region_id = 1;
         let event = CdcEvent::Event(e.clone());
-        assert!(event.size() != 0);
+        assert_ne!(event.size(), 0);
         // 1KB
         let max_pending_bytes = 1024;
         let buffer = max_pending_bytes / event.size();
@@ -603,15 +645,15 @@ mod tests {
 
     #[test]
     fn test_force_send() {
-        let mut e = kvproto::cdcpb::Event::default();
+        let mut e = Event::default();
         e.region_id = 1;
         let event = CdcEvent::Event(e.clone());
-        assert!(event.size() != 0);
+        assert_ne!(event.size(), 0);
         // 1KB
         let max_pending_bytes = 1024;
         let buffer = max_pending_bytes / event.size();
         let memory_quota = Arc::new(MemoryQuota::new(max_pending_bytes as _));
-        let (tx, _rx) = channel(buffer as _, memory_quota);
+        let (tx, _rx) = channel(ConnId::default(), buffer as _, memory_quota);
         for _ in 0..buffer {
             tx.unbounded_send(CdcEvent::Event(e.clone()), false)
                 .unwrap();
@@ -626,10 +668,10 @@ mod tests {
 
     #[test]
     fn test_channel_memory_leak() {
-        let mut e = kvproto::cdcpb::Event::default();
+        let mut e = Event::default();
         e.region_id = 1;
         let event = CdcEvent::Event(e.clone());
-        assert!(event.size() != 0);
+        assert_ne!(event.size(), 0);
         // 1KB
         let max_pending_bytes = 1024;
         let buffer = max_pending_bytes / event.size() + 1;

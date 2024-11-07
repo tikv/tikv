@@ -424,7 +424,7 @@ pub fn check_term(header: &RaftRequestHeader, term: u64) -> Result<()> {
     if header.get_term() == 0 || term <= header.get_term() + 1 {
         Ok(())
     } else {
-        // If header's term is 2 verions behind current term,
+        // If header's term is 2 versions behind current term,
         // leadership may have been changed away.
         Err(Error::StaleCommand)
     }
@@ -765,10 +765,9 @@ pub fn get_entry_header(entry: &Entry) -> RaftRequestHeader {
     if entry.get_entry_type() != EntryType::EntryNormal {
         return RaftRequestHeader::default();
     }
-    let logger = slog_global::get_global().new(slog::o!());
     match SimpleWriteReqDecoder::new(
         |_, _, _| RaftCmdRequest::default(),
-        &logger,
+        None,
         entry.get_data(),
         entry.get_index(),
         entry.get_term(),
@@ -818,10 +817,9 @@ pub enum RaftCmd<'a> {
 }
 
 pub fn parse_raft_cmd_request<'a>(data: &'a [u8], index: u64, term: u64, tag: &str) -> RaftCmd<'a> {
-    let logger = slog_global::get_global().new(slog::o!());
     match SimpleWriteReqDecoder::new(
         |_, _, _| parse_data_at(data, index, tag),
-        &logger,
+        None,
         data,
         index,
         term,
@@ -2304,7 +2302,7 @@ mod tests {
         header.set_term(7);
         check_term(&header, 7).unwrap();
         check_term(&header, 8).unwrap();
-        // If header's term is 2 verions behind current term,
+        // If header's term is 2 versions behind current term,
         // leadership may have been changed away.
         check_term(&header, 9).unwrap_err();
         check_term(&header, 10).unwrap_err();

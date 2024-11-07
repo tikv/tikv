@@ -445,7 +445,7 @@ pub fn need_compact(range_stats: &RangeStats, compact_threshold: &CompactThresho
     // We trigger region compaction when their are to many tombstones as well as
     // redundant keys, both of which can severly impact scan operation:
     let estimate_num_del = range_stats.num_entries - range_stats.num_versions;
-    let redundant_keys = range_stats.num_entries - range_stats.num_rows;
+    let redundant_keys = range_stats.redundant_keys();
     (redundant_keys >= compact_threshold.redundant_rows_threshold
         && redundant_keys * 100
             >= compact_threshold.redundant_rows_percent_threshold * range_stats.num_entries)
@@ -869,5 +869,44 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(stats.num_entries - stats.num_versions, 0);
+    }
+
+    #[test]
+    fn test_need_compact() {
+        // many tombstone case
+        let range_stats = RangeStats {
+            num_entries: 1000,
+            num_versions: 200,
+            num_deletes: 0,
+            num_rows: 200,
+        };
+        assert!(need_compact(
+            &range_stats,
+            &CompactThreshold::new(10, 30, 100, 100)
+        ));
+
+        // many mvcc put case
+        let range_stats = RangeStats {
+            num_entries: 1000,
+            num_versions: 1000,
+            num_deletes: 0,
+            num_rows: 200,
+        };
+        assert!(need_compact(
+            &range_stats,
+            &CompactThreshold::new(100, 100, 100, 30)
+        ));
+
+        // many mvcc delete case
+        let range_stats = RangeStats {
+            num_entries: 1000,
+            num_versions: 1000,
+            num_deletes: 800,
+            num_rows: 1000,
+        };
+        assert!(need_compact(
+            &range_stats,
+            &CompactThreshold::new(100, 100, 100, 30)
+        ));
     }
 }

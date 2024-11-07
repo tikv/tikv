@@ -1348,9 +1348,10 @@ pub mod tests {
     impl MockRegionInfoProvider {
         pub fn new(encode_key: bool) -> Self {
             MockRegionInfoProvider {
-                regions: Arc::new(Mutex::new(RegionCollector::new(Arc::new(RwLock::new(
-                    HashSet::default(),
-                ))))),
+                regions: Arc::new(Mutex::new(RegionCollector::new(
+                    Arc::new(RwLock::new(HashSet::default())),
+                    Box::new(|| 0),
+                ))),
                 cancel: None,
                 need_encode_key: encode_key,
             }

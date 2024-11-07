@@ -17,7 +17,7 @@ use kvproto::{
         AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request,
         TransferLeaderRequest,
     },
-    raft_serverpb::RaftApplyState,
+    raft_serverpb::{ExtraMessage, RaftApplyState},
 };
 use pd_client::RegionStat;
 use raft::{eraftpb, StateRole};
@@ -31,17 +31,22 @@ pub mod region_info_accessor;
 mod split_check;
 pub mod split_observer;
 use kvproto::raft_serverpb::RaftMessage;
+mod read_write;
 
 pub use self::{
     config::{Config, ConsistencyCheckMethod},
     consistency_check::{ConsistencyCheckObserver, Raw as RawConsistencyCheckObserver},
     dispatcher::{
         BoxAdminObserver, BoxApplySnapshotObserver, BoxCmdObserver, BoxConsistencyCheckObserver,
-        BoxMessageObserver, BoxPdTaskObserver, BoxQueryObserver, BoxRegionChangeObserver,
+        BoxPdTaskObserver, BoxQueryObserver, BoxRaftMessageObserver, BoxRegionChangeObserver,
         BoxRoleObserver, BoxSplitCheckObserver, BoxUpdateSafeTsObserver, CoprocessorHost, Registry,
         StoreHandle,
     },
     error::{Error, Result},
+    read_write::{
+        ObservableWriteBatch, ObservedSnapshot, SnapshotObserver, WriteBatchObserver,
+        WriteBatchWrapper,
+    },
     region_info_accessor::{
         Callback as RegionInfoCallback, RangeKey, RegionCollector, RegionInfo, RegionInfoAccessor,
         RegionInfoProvider, SeekRegionCallback,
@@ -87,6 +92,7 @@ pub struct RegionState {
     pub peer_id: u64,
     pub pending_remove: bool,
     pub modified_region: Option<Region>,
+    pub new_regions: Vec<Region>,
 }
 
 /// Context for exec observers of mutation to be applied to ApplyContext.
@@ -139,8 +145,8 @@ pub trait AdminObserver: Coprocessor {
         &self,
         _ctx: &mut ObserverContext<'_>,
         _tr: &TransferLeaderRequest,
-    ) -> Result<()> {
-        Ok(())
+    ) -> Result<Option<ExtraMessage>> {
+        Ok(None)
     }
 }
 
@@ -289,8 +295,7 @@ pub struct RoleChange {
 }
 
 impl RoleChange {
-    #[cfg(any(test, feature = "testexport"))]
-    pub fn new(state: StateRole) -> Self {
+    pub fn new_for_test(state: StateRole) -> Self {
         RoleChange {
             state,
             leader_id: raft::INVALID_ID,
@@ -356,11 +361,16 @@ pub trait RegionHeartbeatObserver: Coprocessor {
     fn on_region_heartbeat(&self, _: &mut ObserverContext<'_>, _: &RegionStat) {}
 }
 
-pub trait MessageObserver: Coprocessor {
+pub trait RaftMessageObserver: Coprocessor {
     /// Returns false if the message should not be stepped later.
     fn on_raft_message(&self, _: &RaftMessage) -> bool {
         true
     }
+}
+
+//
+pub trait ExtraMessageObserver: Coprocessor {
+    fn on_extra_message(&self, _: &Region, _: &ExtraMessage) {}
 }
 
 #[derive(Clone, Debug, Default)]
@@ -598,6 +608,11 @@ pub trait ReadIndexObserver: Coprocessor {
 pub trait UpdateSafeTsObserver: Coprocessor {
     /// Hook after update self safe_ts and received leader safe_ts.
     fn on_update_safe_ts(&self, _: u64, _: u64, _: u64) {}
+}
+
+pub trait DestroyPeerObserver: Coprocessor {
+    /// Hook to call when destroying a peer.
+    fn on_destroy_peer(&self, _: &Region) {}
 }
 
 #[cfg(test)]
