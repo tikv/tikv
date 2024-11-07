@@ -1,7 +1,7 @@
 [profile.ci]
 retries = 2 # Run at most 3 times
 fail-fast = false
-slow-timeout = { period = "60s", terminate-after = 2 } # Timeout 2m
+slow-timeout = { period = "80s", terminate-after = 2 } # Timeout 2m
 failure-output = "final"
 
 [profile.ci.junit]

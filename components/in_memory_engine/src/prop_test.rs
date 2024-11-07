@@ -20,6 +20,33 @@ use crate::{
 // This fixed mvcc suffix is used for CF_WRITE and CF_DEFAULT in prop test.
 const MVCC_SUFFIX: u64 = 10;
 
+pub fn new_skiplist_engine_for_test() -> (
+    SkiplistEngine,
+    Box<dyn Fn(Vec<u8>, Option<Vec<u8>>) -> (InternalBytes, Option<InternalBytes>, epoch::Guard)>,
+) {
+    let skiplist = SkiplistEngine::default();
+    let mut cfg = InMemoryEngineConfig::default();
+    cfg.evict_threshold = Some(ReadableSize::gb(1));
+    cfg.capacity = Some(ReadableSize::gb(2));
+    let controller = Arc::new(MemoryController::new(
+        Arc::new(VersionTrack::new(cfg)),
+        skiplist.clone(),
+    ));
+
+    let skiplist_args = Box::new(move |k: Vec<u8>, v: Option<Vec<u8>>| {
+        let mut key = encode_key(&k, 0, crate::ValueType::Value);
+        key.set_memory_controller(controller.clone());
+        let value = v.map(|v| {
+            let mut value = InternalBytes::from_vec(v);
+            value.set_memory_controller(controller.clone());
+            value
+        });
+        let guard = epoch::pin();
+        (key, value, guard)
+    });
+    (skiplist, skiplist_args)
+}
+
 #[derive(Clone)]
 enum Operation {
     Put(Vec<u8>, Vec<u8>),
@@ -132,8 +159,6 @@ fn scan_skiplist(
 }
 
 fn test_rocksdb_skiplist_basic_operations(cf: CfName, operations: Vec<Operation>) {
-    let skiplist = SkiplistEngine::default();
-
     let path_rocks = tempfile::tempdir().unwrap();
     let db_rocks = new_engine(
         path_rocks.path().to_str().unwrap(),
@@ -141,26 +166,7 @@ fn test_rocksdb_skiplist_basic_operations(cf: CfName, operations: Vec<Operation>
     )
     .unwrap();
 
-    let mut cfg = InMemoryEngineConfig::default();
-    cfg.soft_limit_threshold = Some(ReadableSize::gb(1));
-    cfg.hard_limit_threshold = Some(ReadableSize::gb(2));
-    let controller = Arc::new(MemoryController::new(
-        Arc::new(VersionTrack::new(cfg)),
-        skiplist.clone(),
-    ));
-
-    let skiplist_args = |k: Vec<u8>, v: Option<Vec<u8>>| {
-        let mut key = encode_key(&k, 0, crate::ValueType::Value);
-        key.set_memory_controller(controller.clone());
-        let value = v.map(|v| {
-            let mut value = InternalBytes::from_vec(v);
-            value.set_memory_controller(controller.clone());
-            value
-        });
-        let guard = epoch::pin();
-        let handle = skiplist.cf_handle(cf);
-        (handle, key, value, guard)
-    };
+    let (skiplist, skiplist_args) = new_skiplist_engine_for_test();
 
     // Delete range in SkiplistEngine considers MVCC suffix for CF_DEFAULT and
     // CF_WRITE, so we append the suffix for them.
@@ -174,7 +180,8 @@ fn test_rocksdb_skiplist_basic_operations(cf: CfName, operations: Vec<Operation>
                 }
                 db_rocks.put_cf(cf, &k, &v).unwrap();
 
-                let (handle, key, value, guard) = skiplist_args(k, Some(v));
+                let handle = skiplist.cf_handle(cf);
+                let (key, value, guard) = skiplist_args(k, Some(v));
                 handle.insert(key, value.unwrap(), &guard)
             }
             Operation::Get(mut k) => {
@@ -184,7 +191,8 @@ fn test_rocksdb_skiplist_basic_operations(cf: CfName, operations: Vec<Operation>
                         .into_encoded();
                 }
                 let res_rocks = db_rocks.get_value_cf(cf, &k).unwrap();
-                let (handle, key, _value, guard) = skiplist_args(k, None);
+                let handle = skiplist.cf_handle(cf);
+                let (key, _value, guard) = skiplist_args(k, None);
                 let res_skiplist = handle.get(&key, &guard);
                 assert_eq!(
                     res_rocks.as_deref(),
@@ -199,7 +207,8 @@ fn test_rocksdb_skiplist_basic_operations(cf: CfName, operations: Vec<Operation>
                 }
                 db_rocks.delete_cf(cf, &k).unwrap();
 
-                let (handle, key, _value, guard) = skiplist_args(k, None);
+                let handle = skiplist.cf_handle(cf);
+                let (key, _value, guard) = skiplist_args(k, None);
                 handle.remove(&key, &guard)
             }
             Operation::Scan(mut k, limit) => {
@@ -209,7 +218,8 @@ fn test_rocksdb_skiplist_basic_operations(cf: CfName, operations: Vec<Operation>
                         .into_encoded();
                 }
                 let res_rocks = scan_rocksdb(&db_rocks, cf, &k, limit);
-                let (handle, key, _value, _guard) = skiplist_args(k, None);
+                let handle = skiplist.cf_handle(cf);
+                let (key, _value, _guard) = skiplist_args(k, None);
                 let res_titan = scan_skiplist(handle, &key, limit);
                 assert_eq!(res_rocks, res_titan);
             }

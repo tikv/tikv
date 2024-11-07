@@ -38,6 +38,7 @@ use tikv_util::{
     box_err, debug, error, error_unknown,
     future::RescheduleChecker,
     impl_display_as_debug, info,
+    resizable_threadpool::ResizableRuntime,
     store::find_peer,
     time::{Instant, Limiter},
     warn,
@@ -49,7 +50,7 @@ use txn_types::{Key, Lock, TimeStamp};
 use crate::{
     metrics::*,
     softlimit::{CpuStatistics, SoftLimit, SoftLimitByCpu},
-    utils::{ControlThreadPool, KeyValueCodec},
+    utils::KeyValueCodec,
     writer::{BackupWriterBuilder, CfNameWrap},
     Error, *,
 };
@@ -702,7 +703,7 @@ impl SoftLimitKeeper {
 /// It coordinates backup tasks and dispatches them to different workers.
 pub struct Endpoint<E: Engine, R: RegionInfoProvider + Clone + 'static> {
     store_id: u64,
-    pool: RefCell<ControlThreadPool>,
+    pool: RefCell<ResizableRuntime>,
     io_pool: Runtime,
     tablets: LocalTablets<E::Local>,
     config_manager: ConfigManager,
@@ -877,7 +878,11 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
         resource_ctl: Option<Arc<ResourceGroupManager>>,
     ) -> Endpoint<E, R> {
-        let pool = ControlThreadPool::new();
+        let pool = ResizableRuntime::new(
+            "backup-worker",
+            Box::new(utils::create_tokio_runtime),
+            Box::new(|new_size| BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64)),
+        );
         let rt = utils::create_tokio_runtime(config.io_thread_size, "backup-io").unwrap();
         let config_manager = ConfigManager(Arc::new(RwLock::new(config)));
         let softlimit = SoftLimitKeeper::new(config_manager.clone());
@@ -1500,7 +1505,11 @@ pub mod tests {
         use std::thread::sleep;
 
         let counter = Arc::new(AtomicU32::new(0));
-        let mut pool = ControlThreadPool::new();
+        let mut pool = ResizableRuntime::new(
+            "bkwkr",
+            Box::new(utils::create_tokio_runtime),
+            Box::new(|new_size: usize| BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64)),
+        );
         pool.adjust_with(3);
 
         for i in 0..8 {
@@ -2540,12 +2549,12 @@ pub mod tests {
         endpoint.handle_backup_task(task);
         assert!(endpoint.pool.borrow().size == 15);
 
-        // shrink thread pool only if there are too many idle threads
+        // shrink thread pool
         endpoint.get_config_manager().set_num_threads(10);
         req.set_start_key(vec![b'2']);
         let (task, _) = Task::new(req.clone(), tx.clone()).unwrap();
         endpoint.handle_backup_task(task);
-        assert!(endpoint.pool.borrow().size == 15);
+        assert!(endpoint.pool.borrow().size == 10);
 
         endpoint.get_config_manager().set_num_threads(3);
         req.set_start_key(vec![b'3']);
@@ -2560,7 +2569,11 @@ pub mod tests {
         // for testing whether dropping the pool before all tasks finished causes panic.
         // but the panic must be checked manually. (It may panic at tokio runtime
         // threads)
-        let mut pool = ControlThreadPool::new();
+        let mut pool = ResizableRuntime::new(
+            "bkwkr",
+            Box::new(utils::create_tokio_runtime),
+            Box::new(|new_size: usize| BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64)),
+        );
         pool.adjust_with(1);
         pool.spawn(async { tokio::time::sleep(Duration::from_millis(100)).await });
         pool.adjust_with(2);

@@ -173,7 +173,7 @@ impl CacheRegionMeta {
         self.region.contains_range(region)
     }
 
-    pub(crate) fn safe_point(&self) -> u64 {
+    pub fn safe_point(&self) -> u64 {
         self.safe_point
     }
 
@@ -206,7 +206,7 @@ impl CacheRegionMeta {
             "ime update region meta state";
             "region_id" => self.region.id,
             "epoch" => self.region.epoch_version,
-            "curr_state" => ?self.state,
+            "current_state" => ?self.state,
             "new_state" => ?new_state);
         self.state = new_state;
     }
@@ -233,7 +233,7 @@ impl CacheRegionMeta {
         self.in_gc.store(in_gc, Ordering::Release);
     }
 
-    pub(crate) fn is_in_gc(&self) -> bool {
+    pub fn is_in_gc(&self) -> bool {
         self.in_gc.load(Ordering::Acquire)
     }
 
@@ -244,7 +244,7 @@ impl CacheRegionMeta {
     }
 
     #[inline]
-    pub(crate) fn is_written(&self) -> bool {
+    pub fn is_written(&self) -> bool {
         self.is_written.load(Ordering::Relaxed)
     }
 
@@ -473,7 +473,7 @@ impl RegionMetaMap {
         self.regions.get_mut(&id)
     }
 
-    pub(crate) fn regions(&self) -> &HashMap<u64, CacheRegionMeta> {
+    pub fn regions(&self) -> &HashMap<u64, CacheRegionMeta> {
         &self.regions
     }
 
@@ -683,11 +683,11 @@ impl RegionManager {
         Ok(())
     }
 
-    // If the snapshot is the last one in the snapshot list of one cache range in
-    // historical_regions, it means one or some evicted_ranges may be ready to be
-    // removed physically.
-    // So, we return a vector of ranges to denote the ranges that are ready to be
-    // removed.
+    // If the snapshot is the last one in the snapshot list of one cache region
+    // in historical_regions, it means one or some evicted_regions may be ready
+    // to be removed physically.
+    // So, we return a vector of ranges to denote the ranges that are ready to
+    // be removed.
     pub(crate) fn remove_region_snapshot(
         &self,
         snapshot_meta: &RegionCacheSnapshotMeta,
@@ -846,7 +846,7 @@ impl RegionManager {
             return vec![];
         }
 
-        let mut deleteable_regions = vec![];
+        let mut deletable_regions = vec![];
         for rid in evict_ids {
             if let Some(region) = self.do_evict_region(
                 rid,
@@ -859,10 +859,10 @@ impl RegionManager {
                     None
                 },
             ) {
-                deleteable_regions.push(region);
+                deletable_regions.push(region);
             }
         }
-        deleteable_regions
+        deletable_regions
     }
 
     // return the region if it can be directly deleted.
@@ -885,7 +885,7 @@ impl RegionManager {
         if prev_state == RegionState::Pending {
             let meta = regions_map.remove_region(id);
             info!(
-                "ime evict overlap pending region in cache range engine";
+                "ime evict overlap pending region";
                 "reason" => ?evict_reason,
                 "target_region" => ?evict_region,
                 "overlap_region" => ?meta.region,
@@ -905,7 +905,7 @@ impl RegionManager {
         };
 
         info!(
-            "ime evict overlap region in cache range engine";
+            "ime evict overlap region";
             "reason" => ?evict_reason,
             "target_region" => ?evict_region,
             "overlap_region" => ?meta.region,
@@ -926,7 +926,7 @@ impl RegionManager {
     }
 
     pub fn on_delete_regions(&self, regions: &[CacheRegion]) {
-        fail::fail_point!("in_memory_engine_on_delete_regions");
+        fail::fail_point!("ime_on_delete_regions");
         let mut cbs = vec![];
         {
             let mut regions_map = self.regions_map.write();
@@ -1045,7 +1045,7 @@ pub enum LoadFailedReason {
     Evicting,
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone, Copy)]
 pub enum RegionCacheStatus {
     NotInCache,
     Cached,
