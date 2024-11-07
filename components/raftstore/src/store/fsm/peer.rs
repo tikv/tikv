@@ -4443,7 +4443,7 @@ where
         );
         self.fsm.peer.post_split();
 
-        let is_leader = self.fsm.peer.is_leader();
+        let (is_leader, is_follower) = (self.fsm.peer.is_leader(), self.fsm.peer.is_follower());
         if is_leader {
             if share_source_region_size {
                 self.fsm.peer.set_approximate_size(share_size);
@@ -4615,7 +4615,7 @@ where
 
             if !campaigned {
                 // The new peer has not campaigned yet, record it for later campaign.
-                if !is_leader {
+                if !is_follower {
                     self.fsm.peer.uncampaigned_new_regions.0.push(new_region_id);
                 }
                 if let Some(msg) = meta
