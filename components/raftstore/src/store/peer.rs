@@ -927,7 +927,10 @@ where
     pub last_leader_committed_idx: Option<u64>,
 
     /// Used for recording the new created and uncampaigned regions by `Split`.
-    pub uncampaigned_new_regions: Vec<u64>,
+    /// The first element is the region id, the second element is the time when
+    /// pending regions are added, used to clear the pending regions after a
+    /// election timeout.
+    pub uncampaigned_new_regions: (Vec<u64>, Instant),
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -1079,7 +1082,7 @@ where
             snapshot_recovery_state: None,
             busy_on_apply: Some(false),
             last_leader_committed_idx: None,
-            uncampaigned_new_regions: vec![],
+            uncampaigned_new_regions: (vec![], Instant::now()),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -2331,7 +2334,7 @@ where
                     // ensure there only one valid peer apply for campaign in the newly created raft
                     // group to prevent unexpected behaviors in rare scenarios (e.g. #12410 and
                     // #17602.),
-                    for new_region in self.uncampaigned_new_regions.drain(..) {
+                    for new_region in self.uncampaigned_new_regions.0.drain(..) {
                         let _ = ctx.router.send(
                             new_region,
                             PeerMsg::CasualMessage(Box::new(CasualMessage::Campaign)),
@@ -2348,7 +2351,7 @@ where
                         self.delay_clean_data = false;
                     }
                     // Clear the uncampaigned list.
-                    self.uncampaigned_new_regions.clear();
+                    self.uncampaigned_new_regions.0.clear();
                 }
                 _ => {}
             }

@@ -2302,6 +2302,24 @@ where
 
         self.check_force_leader();
 
+        // If there has any uncleared records in the uncampaigned_new_regions list,
+        // clear them if the timestamp exceeds the election timeout.
+        {
+            let (has_uncompaigned_regions, ts) = (
+                !self.fsm.peer.uncampaigned_new_regions.0.is_empty(),
+                self.fsm.peer.uncampaigned_new_regions.1,
+            );
+            if has_uncompaigned_regions {
+                let max_election_timeout = Duration::from_millis(
+                    self.ctx.cfg.raft_base_tick_interval.as_millis()
+                        * (self.ctx.cfg.raft_election_timeout_ticks * 2 + 1) as u64,
+                );
+                if ts.elapsed() >= max_election_timeout {
+                    self.fsm.peer.uncampaigned_new_regions.0.clear();
+                }
+            }
+        }
+
         let mut res = None;
         if self.ctx.cfg.hibernate_regions {
             if self.fsm.hibernate_state.group_state() == GroupState::Idle {
@@ -4364,11 +4382,6 @@ where
         self.fsm.peer.raft_log_size_hint =
             self.fsm.peer.raft_log_size_hint * remain_cnt / total_cnt;
         let compact_to = state.get_index() + 1;
-        // As this peer is already stable (initialized and has gotten CompactLog from
-        // the leader), it's safe to clear the pending uncampaigned regions.
-        if !self.fsm.peer.uncampaigned_new_regions.is_empty() {
-            self.fsm.peer.uncampaigned_new_regions.clear();
-        }
         self.fsm.peer.schedule_raftlog_gc(self.ctx, compact_to);
         self.fsm.peer.last_compacted_idx = compact_to;
         self.fsm.peer.mut_store().on_compact_raftlog(compact_to);
@@ -4457,6 +4470,11 @@ where
                     "err" => %e,
                 );
             }
+        } else {
+            // It means that there does not exist pending uncompleted split (previous splits
+            // are already finished), so we can clear the previous uncompaigned
+            // list.
+            self.fsm.peer.uncampaigned_new_regions.0.clear();
         }
 
         let last_key = enc_end_key(regions.last().unwrap());
@@ -4598,7 +4616,7 @@ where
             if !campaigned {
                 // The new peer has not campaigned yet, record it for later campaign.
                 if !is_leader {
-                    self.fsm.peer.uncampaigned_new_regions.push(new_region_id);
+                    self.fsm.peer.uncampaigned_new_regions.0.push(new_region_id);
                 }
                 if let Some(msg) = meta
                     .pending_msgs
@@ -4617,6 +4635,11 @@ where
         drop(meta);
         if is_leader {
             self.on_split_region_check_tick();
+        } else {
+            // Update the timestamp if there exists uncampaigned regions.
+            if !self.fsm.peer.uncampaigned_new_regions.0.is_empty() {
+                self.fsm.peer.uncampaigned_new_regions.1 = Instant::now();
+            }
         }
         fail_point!("after_split", self.ctx.store_id() == 3, |_| {});
     }
