@@ -368,19 +368,16 @@ mod tests {
         // Capacity has a maximum limit.
         let mut cfg = InMemoryEngineConfig::default();
         cfg.enable = true;
-        let mut block_cache_capacity = ReadableSize::gb(100).0 as u64;
+        let mut block_cache_capacity = ReadableSize::gb(100).0;
         cfg.validate(&mut block_cache_capacity, DEFAULT_REGION_SPLIT_SIZE)
             .unwrap();
         assert_eq!(cfg.capacity.unwrap().0, MAX_CAPACITY);
-        assert_eq!(
-            block_cache_capacity,
-            ReadableSize::gb(100).0 as u64 - MAX_CAPACITY
-        );
+        assert_eq!(block_cache_capacity, ReadableSize::gb(100).0 - MAX_CAPACITY);
         // ... unless capacity is set manually.
         let mut cfg = InMemoryEngineConfig::default();
         cfg.enable = true;
         cfg.capacity = Some(ReadableSize(2 * MAX_CAPACITY));
-        let mut block_cache_capacity = ReadableSize::gb(100).0 as u64;
+        let mut block_cache_capacity = ReadableSize::gb(100).0;
         cfg.validate(&mut block_cache_capacity, DEFAULT_REGION_SPLIT_SIZE)
             .unwrap();
         assert_eq!(cfg.capacity.unwrap().0, 2 * MAX_CAPACITY);
