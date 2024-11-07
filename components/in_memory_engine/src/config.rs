@@ -34,8 +34,10 @@ const DEFAULT_MVCC_AMPLIFICATION_THRESHOLD: usize = 10;
 const MIN_CAPACITY: u64 = 2 * SPLIT_SIZE.0;
 // The maximum capacity, 5GB should be large enough.
 const MAX_CAPACITY: u64 = ReadableSize::gb(5).0;
-// The default capacity ratio that IME takes from block cache.
-const DEFAULT_CAPACITY_RATIO: f64 = 0.1;
+// By default, the IME uses 10% of the block cache and takes an equal amount of
+// memory from the system. This is based on tests showing that the IME rarely
+// fills its full capacity.
+const DEFAULT_CAPACITY_FROM_BLOCK_CACHE_RATIO: f64 = 0.1;
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq, OnlineConfig)]
 #[serde(default, rename_all = "kebab-case")]
@@ -104,7 +106,8 @@ impl InMemoryEngineConfig {
             return Ok(());
         }
 
-        let capacity = (*block_cache_capacity as f64 * DEFAULT_CAPACITY_RATIO) as u64;
+        let capacity =
+            (*block_cache_capacity as f64 * DEFAULT_CAPACITY_FROM_BLOCK_CACHE_RATIO * 2.0) as u64;
         if (capacity < MIN_CAPACITY || capacity <= region_split_size.0) && self.capacity.is_none() {
             self.enable = false;
             warn!(
@@ -119,7 +122,7 @@ impl InMemoryEngineConfig {
         if self.capacity.is_none() {
             let capacity = std::cmp::min(MAX_CAPACITY, capacity);
             self.capacity = Some(ReadableSize(capacity));
-            *block_cache_capacity -= capacity;
+            *block_cache_capacity -= capacity / 2;
             info!(
                 "in-memory engine capacity is set to {}, block cache capacity is set to {}",
                 self.capacity.as_ref().unwrap(),
@@ -245,8 +248,9 @@ mod tests {
     use super::*;
 
     const DEFAULT_REGION_SPLIT_SIZE: ReadableSize = ReadableSize::mb(256);
+    const SMALL_ENOUGH_BLOCK_CACHE_CAPACITY: u64 = (MIN_CAPACITY + 1) / 2;
     const LARGE_ENOUGH_BLOCK_CACHE_CAPACITY: u64 =
-        (MIN_CAPACITY + 1) * (1.0 / DEFAULT_CAPACITY_RATIO) as u64;
+        (MIN_CAPACITY + 1) * (1.0 / DEFAULT_CAPACITY_FROM_BLOCK_CACHE_RATIO) as u64;
 
     #[test]
     fn test_validate() {
@@ -332,23 +336,23 @@ mod tests {
         check_delta(&cfg, ReadableSize::mb(200), ReadableSize::mb(392));
 
         // Small capacity disables IME.
-        let mut block_cache_capacity = MIN_CAPACITY - 1;
+        let mut block_cache_capacity = SMALL_ENOUGH_BLOCK_CACHE_CAPACITY;
         let mut cfg = InMemoryEngineConfig::default();
         cfg.enable = true;
         cfg.validate(&mut block_cache_capacity, ReadableSize::mb(96))
             .unwrap();
         assert!(!cfg.enable);
-        assert_eq!(block_cache_capacity, MIN_CAPACITY - 1);
+        assert_eq!(block_cache_capacity, SMALL_ENOUGH_BLOCK_CACHE_CAPACITY);
         // ... unless capacity is set manually.
         let mut cfg = InMemoryEngineConfig::default();
         cfg.enable = true;
-        cfg.capacity = Some(ReadableSize(MIN_CAPACITY - 2));
+        cfg.capacity = Some(ReadableSize(MIN_CAPACITY / 2 - 2));
         cfg.validate(&mut block_cache_capacity, ReadableSize::mb(96))
             .unwrap();
         assert!(cfg.enable);
-        assert_eq!(cfg.capacity.unwrap().0, MIN_CAPACITY - 2);
+        assert_eq!(cfg.capacity.unwrap().0, MIN_CAPACITY / 2 - 2);
         // block_cache_capacity should not be reduced by a manual set capacity.
-        assert_eq!(block_cache_capacity, MIN_CAPACITY - 1);
+        assert_eq!(block_cache_capacity, SMALL_ENOUGH_BLOCK_CACHE_CAPACITY);
 
         // Validate will automatically set capacity if not set.
         let mut cfg = InMemoryEngineConfig::default();
@@ -360,9 +364,14 @@ mod tests {
         assert!(cfg.evict_threshold.is_some(), "{:?}", cfg);
         assert!(cfg.stop_load_threshold.is_some(), "{:?}", cfg);
         // block_cache_capacity should be reduced by capacity.
-        assert_eq!(
+        assert!(
+            LARGE_ENOUGH_BLOCK_CACHE_CAPACITY - cfg.capacity.unwrap().0 / 2 - 1
+                < block_cache_capacity
+                && block_cache_capacity
+                    < LARGE_ENOUGH_BLOCK_CACHE_CAPACITY - cfg.capacity.unwrap().0 / 2 + 1,
+            "block_cache_capacity: {}, capacity: {}",
             block_cache_capacity,
-            LARGE_ENOUGH_BLOCK_CACHE_CAPACITY - cfg.capacity.unwrap().0
+            cfg.capacity.unwrap().0,
         );
 
         // Capacity has a maximum limit.
@@ -372,7 +381,14 @@ mod tests {
         cfg.validate(&mut block_cache_capacity, DEFAULT_REGION_SPLIT_SIZE)
             .unwrap();
         assert_eq!(cfg.capacity.unwrap().0, MAX_CAPACITY);
-        assert_eq!(block_cache_capacity, ReadableSize::gb(100).0 - MAX_CAPACITY);
+        assert!(
+            ReadableSize::gb(100).0 - cfg.capacity.unwrap().0 / 2 - 1 < block_cache_capacity
+                && block_cache_capacity < ReadableSize::gb(100).0 - cfg.capacity.unwrap().0 / 2 + 1,
+            "block_cache_capacity: {}, capacity: {}",
+            block_cache_capacity,
+            cfg.capacity.unwrap().0
+        );
+
         // ... unless capacity is set manually.
         let mut cfg = InMemoryEngineConfig::default();
         cfg.enable = true;
