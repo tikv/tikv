@@ -10,7 +10,6 @@ use engine_traits::{CompactedEvent, KvEngine, Snapshot};
 use futures::channel::mpsc::UnboundedSender;
 use kvproto::{
     brpb::CheckAdminResponse,
-    import_sstpb::SstMeta,
     kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp},
     metapb,
     metapb::RegionEpoch,
@@ -842,10 +841,6 @@ where
 {
     RaftMessage(Box<InspectedRaftMessage>),
 
-    ValidateSstResult {
-        invalid_ssts: Vec<SstMeta>,
-    },
-
     // Clear region size and keys for all regions in the range, so we can force them to
     // re-calculate their size later.
     ClearRegionSizeInRange {
@@ -902,7 +897,6 @@ where
                 write!(fmt, "Store {}  is unreachable", store_id)
             }
             StoreMsg::CompactedEvent(ref event) => write!(fmt, "CompactedEvent cf {}", event.cf()),
-            StoreMsg::ValidateSstResult { .. } => write!(fmt, "Validate SST Result"),
             StoreMsg::ClearRegionSizeInRange {
                 ref start_key,
                 ref end_key,
@@ -942,9 +936,8 @@ impl<EK: KvEngine> StoreMsg<EK> {
             StoreMsg::UnsafeRecoveryCreatePeer { .. } => 9,
             StoreMsg::GcSnapshotFinish => 10,
             StoreMsg::AwakenRegions { .. } => 11,
-            StoreMsg::ValidateSstResult { .. } => 12,
             #[cfg(any(test, feature = "testexport"))]
-            StoreMsg::Validate(_) => 13,
+            StoreMsg::Validate(_) => 12,
         }
     }
 }
