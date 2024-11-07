@@ -2299,8 +2299,12 @@ mod tests {
         };
         let change = cfg.diff(&cfg_new);
 
-        let threads =
-            ResizableRuntime::new("test", Box::new(create_tokio_runtime), Box::new(|_| {}));
+        let threads = ResizableRuntime::new(
+            cfg.thread_nums,
+            "test",
+            Box::new(create_tokio_runtime),
+            Box::new(|_| {}),
+        );
         let handle = ResizableRuntimeHandle::new(threads);
 
         // create config manager and update config.
@@ -2328,8 +2332,12 @@ mod tests {
         };
         let change = cfg.diff(&cfg_new);
 
-        let threads =
-            ResizableRuntime::new("test", Box::new(create_tokio_runtime), Box::new(|_| {}));
+        let threads = ResizableRuntime::new(
+            cfg.thread_nums,
+            "test",
+            Box::new(create_tokio_runtime),
+            Box::new(|_| {}),
+        );
         let handle = ResizableRuntimeHandle::new(threads);
 
         let mut cfg_mgr = ImportConfigManager::new(cfg, handle);
@@ -2340,13 +2348,13 @@ mod tests {
     #[test]
     fn test_update_import_num_threads() {
         let mut threads = ResizableRuntime::new(
+            Config::default().num_threads,
             "test",
             Box::new(create_tokio_runtime),
             Box::new(|new_size: usize| {
                 COUNTER.store(new_size, Ordering::SeqCst);
             }),
         );
-        threads.adjust_with(Config::default().num_threads);
         let handle = ResizableRuntimeHandle::new(threads);
         let mut cfg_mgr = ImportConfigManager::new(Config::default(), handle);
 

@@ -343,10 +343,13 @@ impl<E: Engine> ImportSstService<E> {
                 .build()
         };
 
-        let mut threads =
-            ResizableRuntime::new("import", Box::new(create_tokio_runtime), Box::new(|_| ()));
+        let threads = ResizableRuntime::new(
+            4,
+            "import",
+            Box::new(create_tokio_runtime),
+            Box::new(|_| ()),
+        );
         // There would be 4 initial threads running forever.
-        threads.adjust_with(4);
         let handle = ResizableRuntimeHandle::new(threads);
         if let LocalTablets::Singleton(tablet) = &tablets {
             importer.start_switch_mode_check(&handle.clone(), Some(tablet.clone()));

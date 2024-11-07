@@ -314,9 +314,12 @@ mod tests {
 
         let cfg = Config::default();
 
-        let mut threads =
-            ResizableRuntime::new("test", Box::new(create_tokio_runtime), Box::new(|_| {}));
-        threads.adjust_with(cfg.num_threads);
+        let mut threads = ResizableRuntime::new(
+            cfg.num_threads,
+            "test",
+            Box::new(create_tokio_runtime),
+            Box::new(|_| {}),
+        );
         let switcher = ImportModeSwitcher::new(&cfg);
         switcher.start_resizable_threads(&ResizableRuntimeHandle::new(threads), db.clone());
         check_import_options(&db, &normal_db_options, &normal_cf_options);
@@ -351,8 +354,7 @@ mod tests {
         };
 
         let mut threads =
-            ResizableRuntime::new("test", Box::new(create_tokio_runtime), Box::new(|_| {}));
-        threads.adjust_with(4);
+            ResizableRuntime::new(4, "test", Box::new(create_tokio_runtime), Box::new(|_| {}));
         let switcher = ImportModeSwitcher::new(&cfg);
         let handle = ResizableRuntimeHandle::new(threads);
 

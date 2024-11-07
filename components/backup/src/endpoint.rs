@@ -879,6 +879,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         resource_ctl: Option<Arc<ResourceGroupManager>>,
     ) -> Endpoint<E, R> {
         let pool = ResizableRuntime::new(
+            0,
             "backup-worker",
             Box::new(utils::create_tokio_runtime),
             Box::new(|new_size| BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64)),
@@ -1506,11 +1507,11 @@ pub mod tests {
 
         let counter = Arc::new(AtomicU32::new(0));
         let mut pool = ResizableRuntime::new(
+            3,
             "bkwkr",
             Box::new(utils::create_tokio_runtime),
             Box::new(|new_size: usize| BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64)),
         );
-        pool.adjust_with(3);
 
         for i in 0..8 {
             let ctr = counter.clone();
@@ -2570,11 +2571,11 @@ pub mod tests {
         // but the panic must be checked manually. (It may panic at tokio runtime
         // threads)
         let mut pool = ResizableRuntime::new(
+            1,
             "bkwkr",
             Box::new(utils::create_tokio_runtime),
             Box::new(|new_size: usize| BACKUP_THREAD_POOL_SIZE_GAUGE.set(new_size as i64)),
         );
-        pool.adjust_with(1);
         pool.spawn(async { tokio::time::sleep(Duration::from_millis(100)).await });
         pool.adjust_with(2);
         drop(pool);

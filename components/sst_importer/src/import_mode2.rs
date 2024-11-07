@@ -277,8 +277,7 @@ mod test {
         };
 
         let mut threads =
-            ResizableRuntime::new("test", Box::new(create_tokio_runtime), Box::new(|_| {}));
-        threads.adjust_with(4);
+            ResizableRuntime::new(4, "test", Box::new(create_tokio_runtime), Box::new(|_| {}));
         let handle = ResizableRuntimeHandle::new(threads);
 
         let switcher = ImportModeSwitcherV2::new(&cfg);
