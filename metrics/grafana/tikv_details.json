@@ -23796,7 +23796,7 @@
           },
           "dataFormat": "tsbuckets",
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The time consumed waiting to send Raft Message",
+          "description": "The time consumed waiting to send Raft Messages",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -23889,7 +23889,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The time consumed waiting to send Raft Message per TiKV instance",
+          "description": "The time consumed waiting to send Raft Messages per TiKV instance",
           "editable": true,
           "error": false,
           "fieldConfig": {
