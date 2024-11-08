@@ -2870,6 +2870,13 @@ pub mod tests {
             Arc::new(MockPdClient {}),
             None,
         );
+        assert!(
+            runner
+                .core
+                .engine
+                .region_manager()
+                .try_set_regions_in_gc(true)
+        );
         let regions = runner.core.regions_for_gc();
         assert_eq!(2, regions.len());
 
@@ -2881,7 +2888,8 @@ pub mod tests {
                 .region_manager()
                 .try_set_regions_in_gc(true)
         );
-        assert!(runner.core.regions_for_gc().is_empty());
+        // finished the current gc task.
+        runner.core.on_gc_finished();
 
         assert!(
             runner
