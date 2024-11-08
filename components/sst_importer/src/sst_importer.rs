@@ -39,7 +39,7 @@ use tikv_util::{
     },
     future::RescheduleChecker,
     memory::{MemoryQuota, OwnedAllocated},
-    resizable_threadpool::ResizableRuntimeHandle,
+    resizable_threadpool::RuntimeHandle,
     sys::{thread::ThreadBuildWrapper, SysQuota},
     time::{Instant, Limiter},
     Either, HandyRwLock,
@@ -265,7 +265,7 @@ impl<E: KvEngine> SstImporter<E> {
         }
     }
 
-    pub fn start_switch_mode_check(&self, executor: &ResizableRuntimeHandle, db: Option<E>) {
+    pub fn start_switch_mode_check(&self, executor: &RuntimeHandle, db: Option<E>) {
         match &self.switcher {
             Either::Left(switcher) => switcher.start_resizable_threads(executor, db.unwrap()),
             Either::Right(switcher) => switcher.start_resizable_threads(executor),
@@ -2305,7 +2305,7 @@ mod tests {
             Box::new(create_tokio_runtime),
             Box::new(|_| {}),
         );
-        let handle = ResizableRuntimeHandle::new(threads);
+        let handle = RuntimeHandle::new(threads);
 
         // create config manager and update config.
         let mut cfg_mgr = ImportConfigManager::new(cfg, handle);
@@ -2338,7 +2338,7 @@ mod tests {
             Box::new(create_tokio_runtime),
             Box::new(|_| {}),
         );
-        let handle = ResizableRuntimeHandle::new(threads);
+        let handle = RuntimeHandle::new(threads);
 
         let mut cfg_mgr = ImportConfigManager::new(cfg, handle);
         let r = cfg_mgr.dispatch(change);
@@ -2355,7 +2355,7 @@ mod tests {
                 COUNTER.store(new_size, Ordering::SeqCst);
             }),
         );
-        let handle = ResizableRuntimeHandle::new(threads);
+        let handle = RuntimeHandle::new(threads);
         let mut cfg_mgr = ImportConfigManager::new(Config::default(), handle);
 
         assert_eq!(COUNTER.load(Ordering::SeqCst), cfg_mgr.rl().num_threads);

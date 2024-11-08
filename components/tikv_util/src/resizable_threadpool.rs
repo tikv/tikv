@@ -1,17 +1,28 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 
 use futures::Future;
 use tokio::{
     io::Result as TokioResult,
     runtime::{Handle, Runtime},
+    sync::mpsc,
 };
+
+#[derive(Clone)]
+pub struct RuntimeHandle {
+    inner: Arc<RwLock<Option<Handle>>>,
+}
+
+struct AdjustHandle {
+    size: usize,
+    tx: mpsc::Sender<usize>,
+}
 
 pub struct ResizableRuntime {
     pub size: usize,
     thread_name: String,
-    pool: Arc<Mutex<Option<Handle>>>,
+    pool: RuntimeHandle,
     all_pools: Vec<Runtime>,
     replace_pool_rule: Box<dyn Fn(usize, &str) -> TokioResult<Runtime> + Send + Sync>,
     after_adjust: Box<dyn Fn(usize) + Send + Sync>,
@@ -27,7 +38,9 @@ impl ResizableRuntime {
         let mut ret = ResizableRuntime {
             size: 0,
             thread_name: thread_name.to_owned(),
-            pool: Arc::new(Mutex::new(None)),
+            pool: RuntimeHandle {
+                inner: Arc::new(RwLock::new(None)),
+            },
             all_pools: Vec::new(),
             replace_pool_rule,
             after_adjust,
@@ -41,12 +54,18 @@ impl ResizableRuntime {
     where
         Fut: Future<Output = ()> + Send + 'static,
     {
-        let pool_guard = self.pool.lock().unwrap();
-        if let Some(pool) = pool_guard.as_ref() {
-            pool.spawn(fut);
-        } else {
-            panic!("ResizableRuntime: please call adjust_with() before spawn()");
-        }
+        self.pool.spawn(fut);
+    }
+
+    pub fn block_on<F>(&self, f: F) -> F::Output
+    where
+        F: Future,
+    {
+        self.pool.block_on(f)
+    }
+
+    pub fn handle(&self) -> RuntimeHandle {
+        self.pool.clone()
     }
 
     pub fn adjust_with(&mut self, new_size: usize) {
@@ -60,24 +79,12 @@ impl ResizableRuntime {
         self.all_pools.push(new_pool);
 
         {
-            let mut pool_guard = self.pool.lock().unwrap();
+            let mut pool_guard = self.pool.inner.write().unwrap();
             *pool_guard = Some(handle);
         }
 
         self.size = new_size;
         (self.after_adjust)(new_size);
-    }
-
-    pub fn block_on<F>(&self, f: F) -> F::Output
-    where
-        F: Future,
-    {
-        let pool_guard = self.pool.lock().unwrap();
-        if let Some(pool) = pool_guard.as_ref() {
-            pool.block_on(f)
-        } else {
-            panic!("ResizableRuntime: please call adjust_with() before block_on()");
-        }
     }
 }
 
@@ -90,43 +97,36 @@ impl Drop for ResizableRuntime {
     }
 }
 
-#[derive(Clone)]
-pub struct ResizableRuntimeHandle {
-    inner: Arc<RwLock<ResizableRuntime>>,
-}
-
-impl ResizableRuntimeHandle {
-    pub fn new(runtime: ResizableRuntime) -> Self {
-        ResizableRuntimeHandle {
-            inner: Arc::new(RwLock::new(runtime)),
-        }
-    }
-
+impl RuntimeHandle {
     pub fn spawn<Fut>(&self, fut: Fut)
     where
         Fut: Future<Output = ()> + Send + 'static,
     {
         let inner = self.inner.read().unwrap();
-        inner.spawn(fut);
+        if let Some(handle) = inner.as_ref() {
+            handle.spawn(fut);
+        }
+
     }
 
-    pub fn adjust_with(&self, new_size: usize) {
-        let mut inner = self.inner.write().unwrap();
-        inner.adjust_with(new_size);
-    }
-
-    pub fn block_on<F>(&self, f: F) -> F::Output
+    pub fn block_on<Fut>(&self, fut: Fut) -> Fut::Output
     where
-        F: Future,
+        Fut: Future,
     {
         let inner = self.inner.read().unwrap();
-        inner.block_on(f)
+        if let Some(handle) = inner.as_ref() {
+            handle.block_on(fut)
+        } else {
+            panic!("runtime is not running");
+        }
     }
 }
 
 #[cfg(test)]
 mod test {
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::thread::sleep;
+    use std::time::Duration;
 
     use super::*;
 
@@ -152,8 +152,12 @@ mod test {
             Box::new(replace_pool_rule),
             Box::new(after_adjust),
         );
+        let handle = threads.handle();
         assert_eq!(COUNTER.load(Ordering::SeqCst), 4);
         threads.adjust_with(8);
-        assert_eq!(COUNTER.load(Ordering::SeqCst), 8);
+        handle.block_on(async {
+            sleep(Duration::from_millis(100));
+            assert_eq!(COUNTER.load(Ordering::SeqCst), 8);
+        });
     }
 }

@@ -37,7 +37,7 @@ use tikv_kv::{Engine, LocalTablets, Modify, WriteData};
 use tikv_util::{
     config::ReadableSize,
     future::{create_stream_with_buffer, paired_future_callback},
-    resizable_threadpool::{ResizableRuntime, ResizableRuntimeHandle},
+    resizable_threadpool::{ResizableRuntime, RuntimeHandle},
     sys::disk::{get_disk_status, DiskUsage},
     time::{Instant, Limiter},
     HandyRwLock,
@@ -119,7 +119,7 @@ pub struct ImportSstService<E: Engine> {
     tablets: LocalTablets<E::Local>,
     engine: E,
     // TODO: (Ris) change to ResizableRuntime
-    threads: ResizableRuntimeHandle,
+    threads: RuntimeHandle,
     importer: Arc<SstImporter<E::Local>>,
     limiter: Limiter,
     ingest_latch: Arc<IngestLatch>,
@@ -350,7 +350,7 @@ impl<E: Engine> ImportSstService<E> {
             Box::new(|_| ()),
         );
         // There would be 4 initial threads running forever.
-        let handle = ResizableRuntimeHandle::new(threads);
+        let handle = RuntimeHandle::new(threads);
         if let LocalTablets::Singleton(tablet) = &tablets {
             importer.start_switch_mode_check(&handle.clone(), Some(tablet.clone()));
         } else {
