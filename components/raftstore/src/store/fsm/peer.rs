@@ -3700,6 +3700,9 @@ where
         }
     }
 
+    // NOTE: This method is used by both the leader and the follower.
+    // Both the request and response for transfer-leader share the MessageType
+    // `MsgTransferLeader`.
     fn on_transfer_leader_msg(&mut self, msg: &eraftpb::Message, peer_disk_usage: DiskUsage) {
         // log_term is set by original leader, represents the term last log is written
         // in, which should be equal to the original leader's term.
@@ -3736,6 +3739,7 @@ where
                             "region_id" => self.fsm.region_id(),
                             "peer_id" => self.fsm.peer_id(),
                             "to" => ?from,
+                            "last_index" => self.fsm.peer.get_store().last_index(),
                         );
                         let mut cmd = new_admin_request(
                             self.fsm.peer.region().get_id(),
@@ -3794,6 +3798,11 @@ where
         {
             return false;
         }
+
+        fail_point!("propose_locks_before_transfer_leader", |_| {
+            pessimistic_locks.status = LocksStatus::TransferringLeader;
+            true
+        });
 
         // If it is not writable, it's probably because it's a retried TransferLeader
         // and the locks have been proposed. But we still need to return true to
@@ -5835,7 +5844,7 @@ where
                 let is_admin_request = msg.has_admin_request();
                 info_or_debug!(
                     is_admin_request;
-                    "failed to propose";
+                    "failed to pre propose";
                     "region_id" => self.region_id(),
                     "peer_id" => self.fsm.peer_id(),
                     "message" => ?msg,
@@ -5868,8 +5877,20 @@ where
         let mut resp = RaftCmdResponse::default();
         let term = self.fsm.peer.term();
         bind_term(&mut resp, term);
+        // Save important details from `msg` so we can log them later if the proposal
+        // fails. This is a workaround because `msg` gets moved when proposed.
+        let is_admin_request = msg.has_admin_request();
+        let admin_cmd_type = is_admin_request.then(|| msg.get_admin_request().get_cmd_type());
         if self.fsm.peer.propose(self.ctx, cb, msg, resp, diskfullopt) {
             self.fsm.has_ready = true;
+        } else {
+            info_or_debug!(
+                is_admin_request;
+                "failed to propose";
+                "region_id" => self.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "admin_cmd_type" => ?admin_cmd_type,
+            );
         }
 
         if self.fsm.peer.should_wake_up {
