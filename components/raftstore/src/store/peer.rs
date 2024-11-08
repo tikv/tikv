@@ -926,9 +926,11 @@ where
     /// apply.
     pub last_leader_committed_idx: Option<u64>,
 
-    /// Used for recording the new created and uncampaigned regions by `Split`.
+    /// Used to record uncampaigned regions, which are the new regions 
+    /// created when a follower applies a split. If the follower becomes a 
+    /// leader, a campaign is triggered for those regions.
     /// The first element is the region id, the second element is the time when
-    /// pending regions are added, used to clear the pending regions after a
+    /// pending regions are added, used to clear the pending regions after an
     /// election timeout.
     pub uncampaigned_new_regions: (Vec<u64>, Instant),
 }
@@ -2336,9 +2338,8 @@ where
                     }
                     // After the leadership changed, send `CasualMessage::Campaign` to the target
                     // peer to campaign leader if there exists uncampaigned regions. It's used to
-                    // ensure there only one valid peer apply for campaign in the newly created raft
-                    // group to prevent unexpected behaviors in rare scenarios (e.g. #12410 and
-                    // #17602.),
+                    // ensure that a leader is elected promptly for the newly created Raft 
+                    // group, minimizing availability impact (e.g. #12410 and #17602.).
                     for new_region in self.uncampaigned_new_regions.0.drain(..) {
                         let _ = ctx.router.send(
                             new_region,

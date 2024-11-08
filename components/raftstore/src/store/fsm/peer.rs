@@ -2302,7 +2302,7 @@ where
 
         self.check_force_leader();
 
-        // If there has any uncleared records in the uncampaigned_new_regions list,
+        // If there are any uncleared records in the uncampaigned_new_regions list,
         // clear them if the timestamp exceeds the election timeout.
         {
             let (has_uncompaigned_regions, ts) = (
