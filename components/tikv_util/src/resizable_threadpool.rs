@@ -6,17 +6,11 @@ use futures::Future;
 use tokio::{
     io::Result as TokioResult,
     runtime::{Handle, Runtime},
-    sync::mpsc,
 };
 
 #[derive(Clone)]
 pub struct RuntimeHandle {
     inner: Arc<RwLock<Option<Handle>>>,
-}
-
-struct AdjustHandle {
-    size: usize,
-    tx: mpsc::Sender<usize>,
 }
 
 pub struct ResizableRuntime {
@@ -26,6 +20,31 @@ pub struct ResizableRuntime {
     all_pools: Vec<Runtime>,
     replace_pool_rule: Box<dyn Fn(usize, &str) -> TokioResult<Runtime> + Send + Sync>,
     after_adjust: Box<dyn Fn(usize) + Send + Sync>,
+}
+
+impl RuntimeHandle {
+    pub fn spawn<Fut>(&self, fut: Fut)
+    where
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        let inner = self.inner.read().unwrap();
+        if let Some(handle) = inner.as_ref() {
+            handle.spawn(fut);
+        }
+
+    }
+
+    pub fn block_on<Fut>(&self, fut: Fut) -> Fut::Output
+    where
+        Fut: Future,
+    {
+        let inner = self.inner.read().unwrap();
+        if let Some(handle) = inner.as_ref() {
+            handle.block_on(fut)
+        } else {
+            panic!("runtime is not running");
+        }
+    }
 }
 
 impl ResizableRuntime {
@@ -93,31 +112,6 @@ impl Drop for ResizableRuntime {
         println!("drop ResizableRuntime!");
         for runtime in self.all_pools.drain(..) {
             runtime.shutdown_background();
-        }
-    }
-}
-
-impl RuntimeHandle {
-    pub fn spawn<Fut>(&self, fut: Fut)
-    where
-        Fut: Future<Output = ()> + Send + 'static,
-    {
-        let inner = self.inner.read().unwrap();
-        if let Some(handle) = inner.as_ref() {
-            handle.spawn(fut);
-        }
-
-    }
-
-    pub fn block_on<Fut>(&self, fut: Fut) -> Fut::Output
-    where
-        Fut: Future,
-    {
-        let inner = self.inner.read().unwrap();
-        if let Some(handle) = inner.as_ref() {
-            handle.block_on(fut)
-        } else {
-            panic!("runtime is not running");
         }
     }
 }

@@ -2305,7 +2305,7 @@ mod tests {
             Box::new(create_tokio_runtime),
             Box::new(|_| {}),
         );
-        let handle = RuntimeHandle::new(threads);
+        let handle = threads.handle();
 
         // create config manager and update config.
         let mut cfg_mgr = ImportConfigManager::new(cfg, handle);
@@ -2338,7 +2338,7 @@ mod tests {
             Box::new(create_tokio_runtime),
             Box::new(|_| {}),
         );
-        let handle = RuntimeHandle::new(threads);
+        let handle = threads.handle();
 
         let mut cfg_mgr = ImportConfigManager::new(cfg, handle);
         let r = cfg_mgr.dispatch(change);
@@ -2355,7 +2355,7 @@ mod tests {
                 COUNTER.store(new_size, Ordering::SeqCst);
             }),
         );
-        let handle = RuntimeHandle::new(threads);
+        let handle = threads.handle();
         let mut cfg_mgr = ImportConfigManager::new(Config::default(), handle);
 
         assert_eq!(COUNTER.load(Ordering::SeqCst), cfg_mgr.rl().num_threads);

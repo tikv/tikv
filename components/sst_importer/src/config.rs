@@ -8,8 +8,9 @@ use std::{
 
 use online_config::{self, OnlineConfig};
 use tikv_util::{
-    config::ReadableDuration, resizable_threadpool::RuntimeHandle, HandyRwLock,
+    config::ReadableDuration, HandyRwLock,
 };
+use tokio::sync::mpsc::Sender;
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
@@ -65,14 +66,14 @@ impl Config {
 #[derive(Clone)]
 pub struct ConfigManager {
     pub config: Arc<RwLock<Config>>,
-    threads: RuntimeHandle,
+    tx: Sender<(usize, Sender<()>)>
 }
 
 impl ConfigManager {
-    pub fn new(cfg: Config, threads: RuntimeHandle) -> Self {
+    pub fn new(cfg: Config, tx: Sender<(usize, Sender<()>)>) -> Self {
         ConfigManager {
             config: Arc::new(RwLock::new(cfg)),
-            threads,
+            tx,
         }
     }
 }
@@ -95,7 +96,11 @@ impl online_config::ConfigManager for ConfigManager {
             return Err(e);
         }
 
-        self.threads.adjust_with(cfg.num_threads);
+        tokio::spawn(async {
+            //send the new config
+            self.tx.send(cfg.num_threads, self).await.unwrap();
+        })
+        
         *self.wl() = cfg;
         Ok(())
     }

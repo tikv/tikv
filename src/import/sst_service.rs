@@ -43,6 +43,10 @@ use tikv_util::{
     HandyRwLock,
 };
 use tokio::time::sleep;
+use tokio::{
+    runtime::{Handle, Runtime},
+    sync::mpsc as mpsc,
+};
 use txn_types::{Key, WriteRef, WriteType};
 
 use super::{
@@ -349,6 +353,7 @@ impl<E: Engine> ImportSstService<E> {
             Box::new(create_tokio_runtime),
             Box::new(|_| ()),
         );
+        let threads_clone = Arc::new(threads);
         // There would be 4 initial threads running forever.
         let handle = RuntimeHandle::new(threads);
         if let LocalTablets::Singleton(tablet) = &tablets {
@@ -364,8 +369,14 @@ impl<E: Engine> ImportSstService<E> {
                 tokio::time::sleep(WRITER_GC_INTERVAL).await;
             }
         });
-
-        let cfg_mgr = ConfigManager::new(cfg, handle.clone());
+        let (tx, mut rx) = mpsc::channel::<(usize, mpsc::Sender<()>)>(1);
+        tokio::spawn(async move {
+            while let Some((new_size, ack_tx)) = rx.recv().await {
+                threads_clone.adjust_with(new_size);
+                let _ = ack_tx.send(()).await;
+            }
+        });
+        let cfg_mgr = ConfigManager::new(cfg, tx.clone());
         handle.spawn(Self::tick(importer.clone(), cfg_mgr.clone()));
         // Drop the initial pool to accept new tasks
         handle.adjust_with(cfg_mgr.rl().num_threads);

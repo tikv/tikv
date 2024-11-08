@@ -321,7 +321,7 @@ mod tests {
             Box::new(|_| {}),
         );
         let switcher = ImportModeSwitcher::new(&cfg);
-        switcher.start_resizable_threads(&RuntimeHandle::new(threads), db.clone());
+        switcher.start_resizable_threads(&threads.handle(), db.clone());
         check_import_options(&db, &normal_db_options, &normal_cf_options);
         assert!(switcher.enter_import_mode(&db, mf).unwrap());
         check_import_options(&db, &import_db_options, &import_cf_options);
