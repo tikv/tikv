@@ -2866,10 +2866,22 @@ pub mod tests {
         assert_eq!(2, regions.len());
 
         // try run another gc task will return false.
-        assert!(!runner.core.engine.region_manager().try_set_regions_in_gc(true));
+        assert!(
+            !runner
+                .core
+                .engine
+                .region_manager()
+                .try_set_regions_in_gc(true)
+        );
         assert!(runner.core.regions_for_gc().is_empty());
 
-        assert!(runner.core.engine.region_manager().try_set_regions_in_gc(true));
+        assert!(
+            runner
+                .core
+                .engine
+                .region_manager()
+                .try_set_regions_in_gc(true)
+        );
         let regions = runner.core.regions_for_gc();
         assert_eq!(2, regions.len());
         runner.core.on_gc_finished();
