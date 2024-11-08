@@ -176,6 +176,13 @@ pub enum ErrorHeaderKind {
     StaleCommand,
     StoreNotMatch,
     RaftEntryTooLarge,
+    ReadIndexNotReady,
+    ProposalInMergeMode,
+    DataNotReady,
+    RegionNotInitialized,
+    DiskFull,
+    RecoveryInProgress,
+    FlashbackInProgress,
     Other,
 }
 
@@ -193,6 +200,13 @@ impl ErrorHeaderKind {
             ErrorHeaderKind::StaleCommand => "stale_command",
             ErrorHeaderKind::StoreNotMatch => "store_not_match",
             ErrorHeaderKind::RaftEntryTooLarge => "raft_entry_too_large",
+            ErrorHeaderKind::ReadIndexNotReady => "read_index_not_ready",
+            ErrorHeaderKind::ProposalInMergeMode => "proposal_in_merge_mode",
+            ErrorHeaderKind::DataNotReady => "data_not_ready",
+            ErrorHeaderKind::RegionNotInitialized => "region_not_initialized",
+            ErrorHeaderKind::DiskFull => "disk_full",
+            ErrorHeaderKind::RecoveryInProgress => "recovery_in_progress",
+            ErrorHeaderKind::FlashbackInProgress => "flashback_in_progress",
             ErrorHeaderKind::Other => "other",
         }
     }
@@ -227,6 +241,20 @@ pub fn get_error_kind_from_header(header: &errorpb::Error) -> ErrorHeaderKind {
         ErrorHeaderKind::StoreNotMatch
     } else if header.has_raft_entry_too_large() {
         ErrorHeaderKind::RaftEntryTooLarge
+    } else if header.has_read_index_not_ready() {
+        ErrorHeaderKind::ReadIndexNotReady
+    } else if header.has_proposal_in_merging_mode() {
+        ErrorHeaderKind::ProposalInMergeMode
+    } else if header.has_data_is_not_ready() {
+        ErrorHeaderKind::DataNotReady
+    } else if header.has_region_not_initialized() {
+        ErrorHeaderKind::RegionNotInitialized
+    } else if header.has_disk_full() {
+        ErrorHeaderKind::DiskFull
+    } else if header.has_recovery_in_progress() {
+        ErrorHeaderKind::RecoveryInProgress
+    } else if header.has_flashback_in_progress() {
+        ErrorHeaderKind::FlashbackInProgress
     } else {
         ErrorHeaderKind::Other
     }
@@ -253,6 +281,14 @@ pub fn extract_region_error_from_error(e: &Error) -> Option<errorpb::Error> {
         }))) => {
             let mut err = errorpb::Error::default();
             err.set_max_timestamp_not_synced(Default::default());
+            Some(err)
+        }
+        Error(box ErrorInner::Txn(
+            e @ TxnError(box TxnErrorInner::RawKvMaxTimestampNotSynced { .. }),
+        )) => {
+            let mut err = errorpb::Error::default();
+            err.set_max_timestamp_not_synced(Default::default());
+            err.set_message(format!("{}", e));
             Some(err)
         }
         Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::FlashbackNotPrepared(

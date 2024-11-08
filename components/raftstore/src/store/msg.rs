@@ -10,7 +10,6 @@ use engine_traits::{CompactedEvent, KvEngine, Snapshot};
 use futures::channel::mpsc::UnboundedSender;
 use kvproto::{
     brpb::CheckAdminResponse,
-    import_sstpb::SstMeta,
     kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp},
     metapb,
     metapb::RegionEpoch,
@@ -737,29 +736,26 @@ pub struct InspectedRaftMessage {
 }
 
 /// Message that can be sent to a peer.
-#[allow(clippy::large_enum_variant)]
 #[derive(EnumCount, EnumVariantNames)]
 #[repr(u8)]
 pub enum PeerMsg<EK: KvEngine> {
     /// Raft message is the message sent between raft nodes in the same
     /// raft group. Messages need to be redirected to raftstore if target
     /// peer doesn't exist.
-    RaftMessage(InspectedRaftMessage),
+    RaftMessage(Box<InspectedRaftMessage>),
     /// Raft command is the command that is expected to be proposed by the
     /// leader of the target raft group. If it's failed to be sent, callback
     /// usually needs to be called before dropping in case of resource leak.
-    RaftCommand(RaftCommand<EK::Snapshot>),
+    RaftCommand(Box<RaftCommand<EK::Snapshot>>),
     /// Tick is periodical task. If target peer doesn't exist there is a
     /// potential that the raft node will not work anymore.
     Tick(PeerTick),
     /// Result of applying committed entries. The message can't be lost.
-    ApplyRes {
-        res: ApplyTaskRes<EK::Snapshot>,
-    },
+    ApplyRes(Box<ApplyTaskRes<EK::Snapshot>>),
     /// Message that can't be lost but rarely created. If they are lost, real
     /// bad things happen like some peers will be considered dead in the
     /// group.
-    SignificantMsg(SignificantMsg<EK::Snapshot>),
+    SignificantMsg(Box<SignificantMsg<EK::Snapshot>>),
     /// Start the FSM.
     Start,
     /// A message only used to notify a peer.
@@ -769,7 +765,7 @@ pub enum PeerMsg<EK: KvEngine> {
         ready_number: u64,
     },
     /// Message that is not important and can be dropped occasionally.
-    CasualMessage(CasualMessage<EK>),
+    CasualMessage(Box<CasualMessage<EK>>),
     /// Ask region to report a heartbeat to PD.
     HeartbeatPd,
     /// Asks region to change replication mode.
@@ -790,7 +786,7 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
                 tick
             },
             PeerMsg::SignificantMsg(msg) => write!(fmt, "{:?}", msg),
-            PeerMsg::ApplyRes { res } => write!(fmt, "ApplyRes {:?}", res),
+            PeerMsg::ApplyRes(res) => write!(fmt, "ApplyRes {:?}", res),
             PeerMsg::Start => write!(fmt, "Startup"),
             PeerMsg::Noop => write!(fmt, "Noop"),
             PeerMsg::Persisted {
@@ -833,7 +829,7 @@ impl<EK: KvEngine> PeerMsg<EK> {
     pub fn is_send_failure_ignorable(&self) -> bool {
         matches!(
             self,
-            PeerMsg::SignificantMsg(SignificantMsg::CaptureChange { .. })
+            PeerMsg::SignificantMsg(box SignificantMsg::CaptureChange { .. })
         )
     }
 }
@@ -843,11 +839,7 @@ pub enum StoreMsg<EK>
 where
     EK: KvEngine,
 {
-    RaftMessage(InspectedRaftMessage),
-
-    ValidateSstResult {
-        invalid_ssts: Vec<SstMeta>,
-    },
+    RaftMessage(Box<InspectedRaftMessage>),
 
     // Clear region size and keys for all regions in the range, so we can force them to
     // re-calculate their size later.
@@ -905,7 +897,6 @@ where
                 write!(fmt, "Store {}  is unreachable", store_id)
             }
             StoreMsg::CompactedEvent(ref event) => write!(fmt, "CompactedEvent cf {}", event.cf()),
-            StoreMsg::ValidateSstResult { .. } => write!(fmt, "Validate SST Result"),
             StoreMsg::ClearRegionSizeInRange {
                 ref start_key,
                 ref end_key,
@@ -945,9 +936,23 @@ impl<EK: KvEngine> StoreMsg<EK> {
             StoreMsg::UnsafeRecoveryCreatePeer { .. } => 9,
             StoreMsg::GcSnapshotFinish => 10,
             StoreMsg::AwakenRegions { .. } => 11,
-            StoreMsg::ValidateSstResult { .. } => 12,
             #[cfg(any(test, feature = "testexport"))]
-            StoreMsg::Validate(_) => 13,
+            StoreMsg::Validate(_) => 12,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_msg_size() {
+        use std::mem;
+
+        use engine_rocks::RocksEngine;
+
+        use super::*;
+
+        // make sure the msg is small enough
+        assert_eq!(mem::size_of::<PeerMsg<RocksEngine>>(), 24);
     }
 }
