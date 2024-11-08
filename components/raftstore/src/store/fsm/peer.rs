@@ -2312,9 +2312,9 @@ where
             if has_uncompaigned_regions {
                 let max_election_timeout = Duration::from_millis(
                     self.ctx.cfg.raft_base_tick_interval.as_millis()
-                        * (self.ctx.cfg.raft_election_timeout_ticks * 2 + 1) as u64,
+                        * self.ctx.cfg.raft_max_election_timeout_ticks as u64,
                 );
-                if ts.elapsed() >= max_election_timeout {
+                if ts.elapsed() > max_election_timeout {
                     self.fsm.peer.uncampaigned_new_regions.0.clear();
                 }
             }
