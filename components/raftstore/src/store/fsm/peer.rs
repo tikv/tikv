@@ -4615,7 +4615,7 @@ where
 
             if !campaigned {
                 // The new peer has not campaigned yet, record it for later campaign.
-                if !is_follower {
+                if is_follower {
                     self.fsm.peer.uncampaigned_new_regions.0.push(new_region_id);
                 }
                 if let Some(msg) = meta
