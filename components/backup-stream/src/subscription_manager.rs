@@ -38,8 +38,6 @@ use crate::{
 
 type ScanPool = tokio::runtime::Runtime;
 
-const INITIAL_SCAN_FAILURE_MAX_RETRY_TIME: usize = 10;
-
 // The retry parameters for failed to get last checkpoint ts.
 // When PD is temporarily disconnected, we may need this retry.
 // The total duration of retrying is about 345s ( 20 * 16 + 15 ),
@@ -196,11 +194,14 @@ impl ScanCmd {
 
     /// execute the command, when meeting error, retrying.
     async fn exec_by_with_retry(self, init: impl InitialScan) {
-        let mut retry_time = INITIAL_SCAN_FAILURE_MAX_RETRY_TIME;
+        let mut retry_time = TRY_START_OBSERVE_MAX_RETRY_TIME;
         loop {
             match self.exec_by(init.clone()).await {
                 Err(err) if should_retry(&err) && retry_time > 0 => {
-                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    tokio::time::sleep(backoff_for_start_observe(
+                        TRY_START_OBSERVE_MAX_RETRY_TIME - retry_time,
+                    ))
+                    .await;
                     warn!("meet retryable error"; "err" => %err, "retry_time" => retry_time);
                     retry_time -= 1;
                     continue;
@@ -296,6 +297,8 @@ pub struct RegionSubscriptionManager<S, R, PDC> {
     messenger: Sender<ObserveOp>,
     scan_pool_handle: Arc<ScanPoolHandle>,
     scans: Arc<FutureWaitGroup>,
+
+    advance_ts_interval: Duration,
 }
 
 impl<S, R, PDC> Clone for RegionSubscriptionManager<S, R, PDC>
@@ -317,6 +320,7 @@ where
             messenger: self.messenger.clone(),
             scan_pool_handle: self.scan_pool_handle.clone(),
             scans: FutureWaitGroup::new(),
+            advance_ts_interval: self.advance_ts_interval,
         }
     }
 }
@@ -355,6 +359,7 @@ where
         pd_client: Arc<PDC>,
         scan_pool_size: usize,
         resolver: BackupStreamResolver<HChkLd, E>,
+        advance_ts_interval: Duration,
     ) -> (Self, future![()])
     where
         E: KvEngine,
@@ -374,6 +379,7 @@ where
             messenger: tx,
             scan_pool_handle: Arc::new(scan_pool_handle),
             scans: FutureWaitGroup::new(),
+            advance_ts_interval,
         };
         let fut = op.clone().region_operator_loop(rx, resolver);
         (op, fut)
@@ -472,7 +478,13 @@ where
                         warn!("waiting for initial scanning done timed out, forcing progress!"; 
                             "take" => ?now.saturating_elapsed(), "timedout" => %timedout);
                     }
-                    let regions = resolver.resolve(self.subs.current_regions(), min_ts).await;
+                    let regions = resolver
+                        .resolve(
+                            self.subs.current_regions(),
+                            min_ts,
+                            Some(self.advance_ts_interval),
+                        )
+                        .await;
                     let cps = self.subs.resolve_with(min_ts, regions);
                     let min_region = cps.iter().min_by_key(|rs| rs.checkpoint);
                     // If there isn't any region observed, the `min_ts` can be used as resolved ts
