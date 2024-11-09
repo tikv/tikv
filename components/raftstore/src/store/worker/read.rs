@@ -29,6 +29,7 @@ use tikv_util::{
     time::{monotonic_raw_now, ThreadReadId},
 };
 use time::Timespec;
+use tracker::GLOBAL_TRACKERS;
 use txn_types::TimeStamp;
 
 use super::metrics::*;
@@ -1043,6 +1044,12 @@ where
                     }
                     _ => unreachable!(),
                 };
+
+                cb.read_tracker().map(|tracker| {
+                    GLOBAL_TRACKERS.with_tracker(tracker, |t| {
+                        t.metrics.local_read = true;
+                    })
+                });
 
                 TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_executed_requests.inc());
                 if !snap_updated {
