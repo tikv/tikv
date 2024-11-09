@@ -265,7 +265,7 @@ impl RegionStatsManager {
                             r.cop_detail.mvcc_amplification()
                                 < mvcc_amplification_to_filter
                         } else {
-                            // In this case, memory usage is relarively low, we only evict those that should not be cached apparently.
+                            // In this case, memory usage is relatively low, we only evict those that should not be cached apparently.
                             r.cop_detail.mvcc_amplification()
                                 <= self.config.value().mvcc_amplification_threshold as f64 / MVCC_AMPLIFICATION_FILTER_FACTOR
                                 || r.cop_detail.iterated_count()  < avg_top_next_prev / ITERATED_COUNT_FILTER_FACTOR

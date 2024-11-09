@@ -3961,8 +3961,10 @@ impl TikvConfig {
             return Err("in-memory-engine is unavailable for feature TTL or API v2".into());
         }
         self.in_memory_engine.expected_region_size = self.coprocessor.region_split_size();
-        self.in_memory_engine
-            .validate(self.coprocessor.region_split_size())?;
+        self.in_memory_engine.validate(
+            &mut self.storage.block_cache.capacity.as_mut().unwrap().0,
+            self.coprocessor.region_split_size(),
+        )?;
 
         // Now, only support cross check in in-memory engine when compaction filter is
         // enabled.
