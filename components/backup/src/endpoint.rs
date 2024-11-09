@@ -66,7 +66,9 @@ struct Request {
     sub_ranges: Vec<KeyRange>,
     start_ts: TimeStamp,
     end_ts: TimeStamp,
-    limiter: Limiter,
+    // cloning on Limiter will share the same underlying token bucket thus can be used as
+    // a global rate limiter
+    rate_limiter: Limiter,
     backend: StorageBackend,
     cancel: Arc<AtomicBool>,
     is_raw_kv: bool,
@@ -113,9 +115,9 @@ impl Task {
     ) -> Result<(Task, Arc<AtomicBool>)> {
         let cancel = Arc::new(AtomicBool::new(false));
 
-        let speed_limit = req.get_rate_limit();
-        let limiter = Limiter::new(if speed_limit > 0 {
-            speed_limit as f64
+        let rate_limit = req.get_rate_limit();
+        let rate_limiter = Limiter::new(if rate_limit > 0 {
+            rate_limit as f64
         } else {
             f64::INFINITY
         });
@@ -135,7 +137,7 @@ impl Task {
                 start_ts: req.get_start_version().into(),
                 end_ts: req.get_end_version().into(),
                 backend: req.get_storage_backend().clone(),
-                limiter,
+                rate_limiter,
                 cancel: cancel.clone(),
                 is_raw_kv: req.get_is_raw_kv(),
                 dst_api_ver: req.get_dst_api_version(),
@@ -217,7 +219,7 @@ struct InMemBackupFiles<EK: KvEngine> {
     start_version: TimeStamp,
     end_version: TimeStamp,
     region: Region,
-    limiter: Option<Arc<ResourceLimiter>>,
+    resource_limiter: Option<Arc<ResourceLimiter>>,
 }
 
 async fn save_backup_file_worker<EK: KvEngine>(
@@ -228,7 +230,7 @@ async fn save_backup_file_worker<EK: KvEngine>(
 ) {
     while let Ok(msg) = rx.recv().await {
         let files = if msg.files.need_flush_keys() {
-            match with_resource_limiter(msg.files.save(&storage), msg.limiter.clone()).await {
+            match with_resource_limiter(msg.files.save(&storage), msg.resource_limiter.clone()).await {
                 Ok(mut split_files) => {
                     let mut has_err = false;
                     for file in split_files.iter_mut() {
@@ -431,7 +433,7 @@ impl BackupRange {
                     start_version: begin_ts,
                     end_version: backup_ts,
                     region: self.region.clone(),
-                    limiter: resource_limiter.clone(),
+                    resource_limiter: resource_limiter.clone(),
                 };
                 send_to_worker_with_metrics(&saver, msg).await?;
                 next_file_start_key = this_end_key;
@@ -478,7 +480,7 @@ impl BackupRange {
             start_version: begin_ts,
             end_version: backup_ts,
             region: self.region.clone(),
-            limiter: resource_limiter.clone(),
+            resource_limiter: resource_limiter.clone(),
         };
         send_to_worker_with_metrics(&saver, msg).await?;
 
@@ -550,7 +552,7 @@ impl BackupRange {
         &self,
         mut engine: E,
         db: E::Local,
-        limiter: &Limiter,
+        rate_limiter: &Limiter,
         file_name: String,
         cf: CfNameWrap,
         compression_type: Option<SstCompressionType>,
@@ -562,7 +564,7 @@ impl BackupRange {
             db,
             &file_name,
             cf,
-            limiter.clone(),
+            rate_limiter.clone(),
             compression_type,
             compression_level,
             cipher,
@@ -612,7 +614,7 @@ impl BackupRange {
             start_version: TimeStamp::zero(),
             end_version: TimeStamp::zero(),
             region: self.region.clone(),
-            limiter: None,
+            resource_limiter: None,
         };
         send_to_worker_with_metrics(&saver_tx, msg).await?;
         Ok(stat)
@@ -635,6 +637,10 @@ impl ConfigManager {
     }
 }
 
+/// SoftLimitKeeper can run in the background and adjust the number of threads running based on
+/// CPU stats.
+/// It only starts to work when enable_auto_tune is turned on in BackupConfig.
+/// The initial number of threads is controlled by num_threads in BackupConfig.
 #[derive(Clone)]
 struct SoftLimitKeeper {
     limit: SoftLimit,
@@ -681,7 +687,7 @@ impl SoftLimitKeeper {
 
         self.limit.resize(quota_val).await.map_err(|err| {
             warn!(
-                "error during appling the soft limit for backup.";
+                "error during applying the soft limit for backup.";
                 "current_limit" => %self.limit.current_cap(),
                 "to_set_value" => %quota_val,
                 "err" => %err,
@@ -708,7 +714,7 @@ pub struct Endpoint<E: Engine, R: RegionInfoProvider + Clone + 'static> {
     tablets: LocalTablets<E::Local>,
     config_manager: ConfigManager,
     concurrency_manager: ConcurrencyManager,
-    softlimit: SoftLimitKeeper,
+    soft_limit_keeper: SoftLimitKeeper,
     api_version: ApiVersion,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used in rawkv apiv2 only
     resource_ctl: Option<Arc<ResourceGroupManager>>,
@@ -885,8 +891,8 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         );
         let rt = utils::create_tokio_runtime(config.io_thread_size, "backup-io").unwrap();
         let config_manager = ConfigManager(Arc::new(RwLock::new(config)));
-        let softlimit = SoftLimitKeeper::new(config_manager.clone());
-        rt.spawn(softlimit.clone().run());
+        let soft_limit_keeper = SoftLimitKeeper::new(config_manager.clone());
+        rt.spawn(soft_limit_keeper.clone().run());
         Endpoint {
             store_id,
             engine,
@@ -894,7 +900,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
             pool: RefCell::new(pool),
             tablets,
             io_pool: rt,
-            softlimit,
+            soft_limit_keeper,
             config_manager,
             concurrency_manager,
             api_version,
@@ -940,7 +946,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         let concurrency_manager = self.concurrency_manager.clone();
         let batch_size = self.config_manager.0.read().unwrap().batch_size;
         let sst_max_size = self.config_manager.0.read().unwrap().sst_max_size.0;
-        let limit = self.softlimit.limit();
+        let soft_limit_keeper = self.soft_limit_keeper.limit();
         let resource_limiter = self.resource_ctl.as_ref().and_then(|r| {
             r.get_background_resource_limiter(&request.resource_group_name, &request.source_tag)
         });
@@ -953,7 +959,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                 // when get the guard, release it until we finish scanning a batch,
                 // because if we were suspended during scanning,
                 // the region info have higher possibility to change (then we must compensate that by the fine-grained backup).
-                let guard = limit.guard().await;
+                let guard = soft_limit_keeper.guard().await;
                 if let Err(e) = guard {
                     warn!("failed to retrieve limit guard, omitting."; "err" => %e);
                 };
@@ -1008,7 +1014,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                             .backup_raw_kv_to_file(
                                 engine,
                                 db.into_owned(),
-                                &request.limiter,
+                                &request.rate_limiter,
                                 name,
                                 cf.into(),
                                 ct,
@@ -1020,7 +1026,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                     } else {
                         let writer_builder = BackupWriterBuilder::new(
                             store_id,
-                            request.limiter.clone(),
+                            request.rate_limiter.clone(),
                             brange.region.clone(),
                             db.into_owned(),
                             ct,
@@ -1149,10 +1155,10 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
             }
         };
         let backend = Arc::<dyn ExternalStorage>::from(backend);
-        let concurrency = self.config_manager.0.read().unwrap().num_threads;
-        self.pool.borrow_mut().adjust_with(concurrency);
+        let num_threads = self.config_manager.0.read().unwrap().num_threads;
+        self.pool.borrow_mut().adjust_with(num_threads);
         let (tx, rx) = async_channel::bounded(1);
-        for _ in 0..concurrency {
+        for _ in 0..num_threads {
             self.spawn_backup_worker(
                 prs.clone(),
                 request.clone(),
@@ -1616,7 +1622,7 @@ pub mod tests {
                         start_ts: 1.into(),
                         end_ts: 1.into(),
                         backend,
-                        limiter: Limiter::new(f64::INFINITY),
+                        rate_limiter: Limiter::new(f64::INFINITY),
                         cancel: Arc::default(),
                         is_raw_kv: false,
                         dst_api_ver: ApiVersion::V1,
@@ -1727,7 +1733,7 @@ pub mod tests {
                 start_ts: 1.into(),
                 end_ts: 1.into(),
                 backend: backend.clone(),
-                limiter: Limiter::new(f64::INFINITY),
+                rate_limiter: Limiter::new(f64::INFINITY),
                 cancel: Arc::default(),
                 is_raw_kv: false,
                 dst_api_ver: ApiVersion::V1,
@@ -1758,7 +1764,7 @@ pub mod tests {
                 start_ts: 1.into(),
                 end_ts: 1.into(),
                 backend,
-                limiter: Limiter::new(f64::INFINITY),
+                rate_limiter: Limiter::new(f64::INFINITY),
                 cancel: Arc::default(),
                 is_raw_kv: false,
                 dst_api_ver: ApiVersion::V1,
@@ -1868,7 +1874,7 @@ pub mod tests {
                         start_ts: 1.into(),
                         end_ts: 1.into(),
                         backend,
-                        limiter: Limiter::new(f64::INFINITY),
+                        rate_limiter: Limiter::new(f64::INFINITY),
                         cancel: Arc::default(),
                         is_raw_kv: false,
                         dst_api_ver: ApiVersion::V1,
@@ -2097,9 +2103,9 @@ pub mod tests {
             let (mut task, _) = Task::new(req, tx).unwrap();
             if len % 2 == 0 {
                 // Make sure the rate limiter is set.
-                assert!(task.request.limiter.speed_limit().is_finite());
+                assert!(task.request.rate_limiter.speed_limit().is_finite());
                 // Share the same rate limiter.
-                task.request.limiter = limiter.clone();
+                task.request.rate_limiter = limiter.clone();
             }
             endpoint.handle_backup_task(task);
             let (resp, rx) = block_on(rx.into_future());
@@ -2267,7 +2273,7 @@ pub mod tests {
         req.set_storage_backend(make_local_backend(&tmp1));
         req.set_rate_limit(10 * 1024 * 1024);
         let (mut task, _) = Task::new(req, tx).unwrap();
-        task.request.limiter = limiter;
+        task.request.rate_limiter = limiter;
         endpoint.handle_backup_task(task);
         let (resp, rx) = block_on(rx.into_future());
         let resp = resp.unwrap();
