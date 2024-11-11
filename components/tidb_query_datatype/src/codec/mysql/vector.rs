@@ -142,7 +142,7 @@ impl ToString for VectorFloat32Ref<'_> {
 impl<'a> VectorFloat32Ref<'a> {
     #[inline]
     pub fn l2_squared_distance(&self, b: VectorFloat32Ref<'a>) -> Result<f64> {
-        match f32::sqeuclidean(self.data(), b.data()) {
+        match SpatialSimilarity::sqeuclidean(self.data(), b.data()) {
             Some(l2_distance) => Ok(l2_distance),
             None => Err(box_err!("Vectors must be of the same length")),
         }
@@ -155,7 +155,7 @@ impl<'a> VectorFloat32Ref<'a> {
 
     #[inline]
     pub fn inner_product(&self, b: VectorFloat32Ref<'a>) -> Result<f64> {
-        match f32::dot(self.data(), b.data()) {
+        match SpatialSimilarity::dot(self.data(), b.data()) {
             Some(inner_product) => Ok(inner_product),
             None => Err(box_err!("Vectors must be of the same length")),
         }
@@ -163,7 +163,7 @@ impl<'a> VectorFloat32Ref<'a> {
 
     #[inline]
     pub fn cosine_distance(&self, b: VectorFloat32Ref<'a>) -> Result<f64> {
-        match f32::cosine(self.data(), b.data()) {
+        match SpatialSimilarity::cosine(self.data(), b.data()) {
             Some(cosine_similarity) => Ok(cosine_similarity),
             None => Err(box_err!("Vectors must be of the same length")),
         }
@@ -184,7 +184,7 @@ impl<'a> VectorFloat32Ref<'a> {
     pub fn l2_norm(&self) -> Result<f64> {
         // Note: We align the impl with pgvector: Only l2_norm use double
         // precision during calculation.
-        match f32::dot(self.data(), self.data()) {
+        match SpatialSimilarity::dot(self.data(), self.data()) {
             Some(norm) => Ok(norm.sqrt()),
             None => Err(box_err!("Vectors must be of the same length")),
         }

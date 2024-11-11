@@ -35,7 +35,7 @@ protobuf = "2"
 regex = "1.1"
 serde = "1.0"
 serde_json = "1.0"
-simsimd = "5.1.1"
+simsimd = "=4.4.0"
 slog = { workspace = true }
 slog-global = { workspace = true }
 static_assertions = { version = "1.0", features = ["nightly"] }
