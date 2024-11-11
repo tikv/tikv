@@ -573,7 +573,9 @@ pub fn start_unsafe_recovery_report<EK: KvEngine, ER: RaftEngine>(
     let wait_apply =
         UnsafeRecoveryWaitApplySyncer::new(report_id, router.clone(), exit_force_leader);
     router.broadcast_normal(|| {
-        PeerMsg::SignificantMsg(SignificantMsg::UnsafeRecoveryWaitApply(wait_apply.clone()))
+        PeerMsg::SignificantMsg(Box::new(SignificantMsg::UnsafeRecoveryWaitApply(
+            wait_apply.clone(),
+        )))
     });
 }
 
@@ -762,15 +764,15 @@ impl UnsafeRecoveryWaitApplySyncer {
             let router_ptr = thread_safe_router.lock().unwrap();
             if exit_force_leader {
                 (*router_ptr).broadcast_normal(|| {
-                    PeerMsg::SignificantMsg(SignificantMsg::ExitForceLeaderState)
+                    PeerMsg::SignificantMsg(Box::new(SignificantMsg::ExitForceLeaderState))
                 });
             }
             let fill_out_report =
                 UnsafeRecoveryFillOutReportSyncer::new(report_id, (*router_ptr).clone());
             (*router_ptr).broadcast_normal(|| {
-                PeerMsg::SignificantMsg(SignificantMsg::UnsafeRecoveryFillOutReport(
+                PeerMsg::SignificantMsg(Box::new(SignificantMsg::UnsafeRecoveryFillOutReport(
                     fill_out_report.clone(),
-                ))
+                )))
             });
         }));
         UnsafeRecoveryWaitApplySyncer {

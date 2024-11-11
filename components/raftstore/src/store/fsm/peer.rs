@@ -204,7 +204,7 @@ where
         while let Ok(msg) = self.receiver.try_recv() {
             let callback = match msg {
                 PeerMsg::RaftCommand(cmd) => cmd.callback,
-                PeerMsg::CasualMessage(CasualMessage::SplitRegion { callback, .. }) => callback,
+                PeerMsg::CasualMessage(box CasualMessage::SplitRegion { callback, .. }) => callback,
                 PeerMsg::RaftMessage(im) => {
                     raft_messages_size += im.heap_size;
                     continue;
@@ -664,7 +664,7 @@ where
                         && !self.fsm.peer.disk_full_peers.majority())
                         || cmd.extra_opts.disk_full_opt == DiskFullOpt::NotAllowedOnFull)
                     {
-                        self.fsm.batch_req_builder.add(cmd, req_size);
+                        self.fsm.batch_req_builder.add(*cmd, req_size);
                         if self.fsm.batch_req_builder.should_finish(&self.ctx.cfg) {
                             self.propose_pending_batch_raft_command();
                         }
@@ -677,7 +677,7 @@ where
                     }
                 }
                 PeerMsg::Tick(tick) => self.on_tick(tick),
-                PeerMsg::ApplyRes { res } => {
+                PeerMsg::ApplyRes(res) => {
                     self.on_apply_res(res);
                 }
                 PeerMsg::SignificantMsg(msg) => self.on_significant_msg(msg),
@@ -1064,8 +1064,8 @@ where
         }
     }
 
-    fn on_casual_msg(&mut self, msg: CasualMessage<EK>) {
-        match msg {
+    fn on_casual_msg(&mut self, msg: Box<CasualMessage<EK>>) {
+        match *msg {
             CasualMessage::SplitRegion {
                 region_epoch,
                 split_keys,
@@ -1418,8 +1418,8 @@ where
         );
     }
 
-    fn on_significant_msg(&mut self, msg: SignificantMsg<EK::Snapshot>) {
-        match msg {
+    fn on_significant_msg(&mut self, msg: Box<SignificantMsg<EK::Snapshot>>) {
+        match *msg {
             SignificantMsg::SnapshotStatus {
                 to_peer_id, status, ..
             } => {
@@ -1765,7 +1765,7 @@ where
             // follower state
             let _ = self.ctx.router.send(
                 self.region_id(),
-                PeerMsg::CasualMessage(CasualMessage::Campaign),
+                PeerMsg::CasualMessage(Box::new(CasualMessage::Campaign)),
             );
         }
         self.fsm.has_ready = true;
@@ -2325,9 +2325,10 @@ where
         }
     }
 
-    fn on_apply_res(&mut self, res: ApplyTaskRes<EK::Snapshot>) {
+    #[allow(clippy::boxed_local)]
+    fn on_apply_res(&mut self, res: Box<ApplyTaskRes<EK::Snapshot>>) {
         fail_point!("on_apply_res", |_| {});
-        match res {
+        match *res {
             ApplyTaskRes::Apply(mut res) => {
                 debug!(
                     "async apply finish";
@@ -2494,8 +2495,8 @@ where
         }
     }
 
-    fn on_raft_message(&mut self, msg: InspectedRaftMessage) -> Result<()> {
-        let InspectedRaftMessage { heap_size, mut msg } = msg;
+    fn on_raft_message(&mut self, m: Box<InspectedRaftMessage>) -> Result<()> {
+        let InspectedRaftMessage { heap_size, mut msg } = *m;
         let peer_disk_usage = msg.disk_usage;
         let stepped = Cell::new(false);
         let memtrace_raft_entries = &mut self.fsm.peer.memtrace_raft_entries as *mut usize;
@@ -2526,13 +2527,40 @@ where
             "is_initialized_peer" => is_initialized_peer,
         );
 
+        let msg_type = msg.get_message().get_msg_type();
+        let fp_enable = |target_msg_type: MessageType| -> bool {
+            self.fsm.region_id() == 1000
+                && self.store_id() == 2
+                && !is_initialized_peer
+                && msg_type == target_msg_type
+        };
+        fail_point!(
+            "on_snap_msg_1000_2",
+            fp_enable(MessageType::MsgSnapshot),
+            |_| Ok(())
+        );
+        fail_point!(
+            "on_vote_msg_1000_2",
+            fp_enable(MessageType::MsgRequestVote),
+            |_| Ok(())
+        );
+        fail_point!(
+            "on_append_msg_1000_2",
+            fp_enable(MessageType::MsgAppend),
+            |_| Ok(())
+        );
+        fail_point!(
+            "on_heartbeat_msg_1000_2",
+            fp_enable(MessageType::MsgHeartbeat),
+            |_| Ok(())
+        );
+
         if self.fsm.peer.pending_remove || self.fsm.stopped {
             return Ok(());
         }
 
         self.handle_reported_disk_usage(&msg);
 
-        let msg_type = msg.get_message().get_msg_type();
         if matches!(self.ctx.self_disk_usage, DiskUsage::AlreadyFull)
             && MessageType::MsgTimeoutNow == msg_type
         {
@@ -3024,10 +3052,10 @@ where
                         );
                         if self.handle_destroy_peer(job) {
                             // It's not frequent, so use 0 as `heap_size` is ok.
-                            let store_msg = StoreMsg::RaftMessage(InspectedRaftMessage {
+                            let store_msg = StoreMsg::RaftMessage(Box::new(InspectedRaftMessage {
                                 heap_size: 0,
                                 msg: msg.clone(),
-                            });
+                            }));
                             if let Err(e) = self.ctx.router.send_control(store_msg) {
                                 info!(
                                     "failed to send back store message, are we shutting down?";
@@ -3258,7 +3286,24 @@ where
         }
 
         let mut meta = self.ctx.store_meta.lock().unwrap();
-        if meta.regions[&self.region_id()] != *self.region() {
+        // Check if the region matches the metadata. A mismatch means another
+        // peer has replaced the current peer, which can happen during a split: a
+        // peer is first created via raft message, then replaced by another peer
+        // (of the same region) when the split is applied.
+        let region_mismatch = match meta.regions.get(&self.region_id()) {
+            Some(region) => *region != *self.region(),
+            None => {
+                // If the region doesn't exist, treat it as a mismatch. This can
+                // happen in rare situations (e.g. #17469).
+                warn!(
+                    "region not found in meta";
+                    "region_id" => self.fsm.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                );
+                true
+            }
+        };
+        if region_mismatch {
             if !self.fsm.peer.is_initialized() {
                 info!(
                     "stale delegate detected, skip";
@@ -3271,7 +3316,7 @@ where
                 panic!(
                     "{} meta corrupted: {:?} != {:?}",
                     self.fsm.peer.tag,
-                    meta.regions[&self.region_id()],
+                    meta.regions.get(&self.region_id()),
                     self.region()
                 );
             }
@@ -3357,7 +3402,7 @@ where
                 // may has been merged/splitted already.
                 let _ = self.ctx.router.force_send(
                     exist_region.get_id(),
-                    PeerMsg::CasualMessage(CasualMessage::RegionOverlapped),
+                    PeerMsg::CasualMessage(Box::new(CasualMessage::RegionOverlapped)),
                 );
             }
         }
@@ -3435,11 +3480,11 @@ where
                 .router
                 .force_send(
                     source_region_id,
-                    PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
+                    PeerMsg::SignificantMsg(Box::new(SignificantMsg::MergeResult {
                         target_region_id: self.fsm.region_id(),
                         target: self.fsm.peer.peer.clone(),
                         result,
-                    }),
+                    })),
                 )
                 .unwrap();
         }
@@ -3667,9 +3712,9 @@ where
             )
             .flush()
             .when_done(move || {
-                if let Err(e) =
-                    mb.force_send(PeerMsg::SignificantMsg(SignificantMsg::RaftLogGcFlushed))
-                {
+                if let Err(e) = mb.force_send(PeerMsg::SignificantMsg(Box::new(
+                    SignificantMsg::RaftLogGcFlushed,
+                ))) {
                     if tikv_util::thread_group::is_shutdown(!cfg!(test)) {
                         return;
                     }
@@ -4346,7 +4391,8 @@ where
                     .pending_msgs
                     .swap_remove_front(|m| m.get_to_peer() == &meta_peer)
                 {
-                    let peer_msg = PeerMsg::RaftMessage(InspectedRaftMessage { heap_size: 0, msg });
+                    let peer_msg =
+                        PeerMsg::RaftMessage(Box::new(InspectedRaftMessage { heap_size: 0, msg }));
                     if let Err(e) = self.ctx.router.force_send(new_region_id, peer_msg) {
                         warn!("handle first requset failed"; "region_id" => region_id, "error" => ?e);
                     }
@@ -4575,14 +4621,14 @@ where
             .router
             .force_send(
                 target_id,
-                PeerMsg::RaftCommand(RaftCommand::new_ext(
+                PeerMsg::RaftCommand(Box::new(RaftCommand::new_ext(
                     request,
                     Callback::None,
                     RaftCmdExtraOpts {
                         deadline: None,
                         disk_full_opt: DiskFullOpt::AllowedOnAlmostFull,
                     },
-                )),
+                ))),
             )
             .map_err(|_| Error::RegionNotFound(target_id))
     }
@@ -4838,11 +4884,11 @@ where
         }
         if let Err(e) = self.ctx.router.force_send(
             source.get_id(),
-            PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
+            PeerMsg::SignificantMsg(Box::new(SignificantMsg::MergeResult {
                 target_region_id: self.fsm.region_id(),
                 target: self.fsm.peer.peer.clone(),
                 result: MergeResultKind::FromTargetLog,
-            }),
+            })),
         ) {
             panic!(
                 "{} failed to send merge result(FromTargetLog) to source region {}, err {}",
@@ -5116,11 +5162,11 @@ where
         for r in &persist_res.destroy_regions {
             if let Err(e) = self.ctx.router.force_send(
                 r.get_id(),
-                PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
+                PeerMsg::SignificantMsg(Box::new(SignificantMsg::MergeResult {
                     target_region_id: self.fsm.region_id(),
                     target: self.fsm.peer.peer.clone(),
                     result: MergeResultKind::FromTargetSnapshotStep2,
-                }),
+                })),
             ) {
                 panic!(
                     "{} failed to send merge result(FromTargetSnapshotStep2) to source region {}, err {}",
