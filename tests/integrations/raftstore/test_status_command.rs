@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use health_controller::types::LatencyInspector;
+use health_controller::types::{InspectFactor, LatencyInspector};
 use raftstore::store::msg::StoreMsg as StoreMsgV1;
 use raftstore_v2::router::StoreMsg as StoreMsgV2;
 use test_raftstore::Simulator as S1;
@@ -51,6 +51,7 @@ fn test_latency_inspect() {
             }),
         );
         let msg = StoreMsgV1::LatencyInspect {
+            factor: InspectFactor::RaftDisk,
             send_time: Instant::now(),
             inspector,
         };
@@ -91,6 +92,7 @@ fn test_sync_latency_inspect() {
         }),
     );
     let msg = StoreMsgV1::LatencyInspect {
+        factor: InspectFactor::RaftDisk,
         send_time: Instant::now(),
         inspector,
     };

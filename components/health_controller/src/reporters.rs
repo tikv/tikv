@@ -12,6 +12,7 @@ use prometheus::IntGauge;
 use crate::{
     slow_score::{SlowScore, SlowScoreTickResult},
     trend::{RequestPerSecRecorder, Trend},
+    types::InspectFactor,
     HealthController, HealthControllerInner, RaftstoreDuration,
 };
 
@@ -43,9 +44,82 @@ pub struct RaftstoreReporterConfig {
     pub result_l2_gap_gauges: IntGauge,
 }
 
+/// A unified slow score that combines multiple slow scores.
+///
+/// It's used to calculate the final slow score of a store.
+/// It contains multiple factors, each factor represents a different aspect of
+/// the store's performance. Typically, we have two factors: Raft Disk I/O and
+/// Apply Disk I/O. If there are more factors in the future, we can add them
+/// here.
+pub struct UnifiedSlowScore {
+    factors: Vec<SlowScore>,
+}
+
+impl Default for UnifiedSlowScore {
+    fn default() -> Self {
+        Self { factors: vec![] }
+    }
+}
+
+impl UnifiedSlowScore {
+    pub fn new(cfg: &RaftstoreReporterConfig) -> Self {
+        let mut unified_slow_score = UnifiedSlowScore::default();
+        // The first factor is for Raft Disk I/O.
+        unified_slow_score
+            .factors
+            .push(SlowScore::new(cfg.inspect_interval));
+        // The second factor is for Apply Disk I/O.
+        unified_slow_score
+            .factors
+            .push(SlowScore::new_with_extra_config(
+                cfg.inspect_interval.mul_f64(5.0),
+                10,
+            ));
+        unified_slow_score
+    }
+
+    pub fn record(&mut self, id: u64, duration: &RaftstoreDuration, not_busy: bool) {
+        let factor = if duration.apply_process_duration.is_none() {
+            InspectFactor::RaftDisk
+        } else {
+            InspectFactor::ApplyDisk
+        };
+        self.factors[factor as usize].record(id, duration.delays_on_disk_io(false), not_busy);
+    }
+
+    pub fn get(&self, factor: InspectFactor) -> &SlowScore {
+        &self.factors[factor as usize]
+    }
+
+    pub fn get_mut(&mut self, factor: InspectFactor) -> &mut SlowScore {
+        &mut self.factors[factor as usize]
+    }
+
+    // Returns the maximum score of all factors.
+    pub fn get_score(&self) -> f64 {
+        let mut max = 0.0;
+        for factor in &self.factors {
+            let score = factor.get();
+            if score > max {
+                max = score;
+            }
+        }
+        max
+    }
+
+    pub fn last_tick_finished(&self) -> bool {
+        self.factors.iter().all(SlowScore::last_tick_finished)
+    }
+
+    pub fn get_inspect_interval(&self) -> Duration {
+        // Assume that Raft Disk I/O and Apply Disk I/O have the same inspect interval.
+        self.factors[InspectFactor::RaftDisk as usize].get_inspect_interval()
+    }
+}
+
 pub struct RaftstoreReporter {
     health_controller_inner: Arc<HealthControllerInner>,
-    slow_score: SlowScore,
+    slow_score: UnifiedSlowScore,
     slow_trend: SlowTrendStatistics,
     is_healthy: bool,
 }
@@ -56,7 +130,7 @@ impl RaftstoreReporter {
     pub fn new(health_controller: &HealthController, cfg: RaftstoreReporterConfig) -> Self {
         Self {
             health_controller_inner: health_controller.inner.clone(),
-            slow_score: SlowScore::new(cfg.inspect_interval),
+            slow_score: UnifiedSlowScore::new(&cfg),
             slow_trend: SlowTrendStatistics::new(cfg),
             is_healthy: true,
         }
@@ -67,7 +141,7 @@ impl RaftstoreReporter {
     }
 
     pub fn get_slow_score(&self) -> f64 {
-        self.slow_score.get()
+        self.slow_score.get_score()
     }
 
     pub fn get_slow_trend(&self) -> &SlowTrendStatistics {
@@ -81,13 +155,12 @@ impl RaftstoreReporter {
         store_not_busy: bool,
     ) {
         // Fine-tuned, `SlowScore` only takes the I/O jitters on the disk into account.
-        self.slow_score
-            .record(id, duration.delays_on_disk_io(false), store_not_busy);
+        self.slow_score.record(id, &duration, store_not_busy);
         self.slow_trend.record(duration);
 
         // Publish slow score to health controller
         self.health_controller_inner
-            .update_raftstore_slow_score(self.slow_score.get());
+            .update_raftstore_slow_score(self.slow_score.get_score());
     }
 
     fn is_healthy(&self) -> bool {
@@ -109,34 +182,42 @@ impl RaftstoreReporter {
         }
     }
 
-    pub fn tick(&mut self, store_maybe_busy: bool) -> SlowScoreTickResult {
+    pub fn tick(&mut self, store_maybe_busy: bool, factor: InspectFactor) -> SlowScoreTickResult {
         // Record a fairly great value when timeout
         self.slow_trend.slow_cause.record(500_000, Instant::now());
 
+        // healthy: The health status of the current store.
+        // last_tick_finished: The last tick of all factors is finished.
+        // factor_tick_finished: The last tick of the current factor is finished.
+        let (healthy, last_tick_finished, factor_tick_finished) = (
+            self.is_healthy(),
+            self.slow_score.last_tick_finished(),
+            self.slow_score.get(factor).last_tick_finished(),
+        );
         // The health status is recovered to serving as long as any tick
         // does not timeout.
-        if !self.is_healthy() && self.slow_score.last_tick_finished() {
+        if !healthy && last_tick_finished {
             self.set_is_healthy(true);
         }
-        if !self.slow_score.last_tick_finished() {
+        if !last_tick_finished {
             // If the last tick is not finished, it means that the current store might
             // be busy on handling requests or delayed on I/O operations. And only when
             // the current store is not busy, it should record the last_tick as a timeout.
-            if !store_maybe_busy {
-                self.slow_score.record_timeout();
+            if !store_maybe_busy && !factor_tick_finished {
+                self.slow_score.get_mut(factor).record_timeout();
             }
         }
 
-        let slow_score_tick_result = self.slow_score.tick();
+        let slow_score_tick_result = self.slow_score.get_mut(factor).tick();
         if slow_score_tick_result.updated_score.is_some() && !slow_score_tick_result.has_new_record
         {
             self.set_is_healthy(false);
         }
 
         // Publish the slow score to health controller
-        if let Some(slow_score_value) = slow_score_tick_result.updated_score {
+        if let Some(_) = slow_score_tick_result.updated_score {
             self.health_controller_inner
-                .update_raftstore_slow_score(slow_score_value);
+                .update_raftstore_slow_score(self.slow_score.get_score());
         }
 
         slow_score_tick_result

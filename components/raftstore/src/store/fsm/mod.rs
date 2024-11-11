@@ -14,8 +14,8 @@ pub use self::{
     apply::{
         check_sst_for_ingestion, create_apply_batch_system, Apply, ApplyBatchSystem, ApplyMetrics,
         ApplyRes, ApplyRouter, Builder as ApplyPollerBuilder, CatchUpLogs, ChangeObserver,
-        ChangePeer, ExecResult, GenSnapTask, Msg as ApplyTask, Notifier as ApplyNotifier, Proposal,
-        Registration, SwitchWitness, TaskRes as ApplyTaskRes,
+        ChangePeer, ControlMsg as ApplyControlMsg, ExecResult, GenSnapTask, Msg as ApplyTask,
+        Notifier as ApplyNotifier, Proposal, Registration, SwitchWitness, TaskRes as ApplyTaskRes,
     },
     metrics::{GlobalStoreStat, LocalStoreStat},
     peer::{

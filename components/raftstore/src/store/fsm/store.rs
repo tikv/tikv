@@ -33,7 +33,10 @@ use engine_traits::{
 use fail::fail_point;
 use file_system::{IoType, WithIoType};
 use futures::{compat::Future01CompatExt, FutureExt};
-use health_controller::{types::LatencyInspector, HealthController};
+use health_controller::{
+    types::{InspectFactor, LatencyInspector},
+    HealthController,
+};
 use itertools::Itertools;
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use kvproto::{
@@ -92,8 +95,8 @@ use crate::{
             peer::{
                 maybe_destroy_source, new_admin_request, PeerFsm, PeerFsmDelegate, SenderFsmPair,
             },
-            ApplyBatchSystem, ApplyNotifier, ApplyPollerBuilder, ApplyRes, ApplyRouter,
-            ApplyTaskRes,
+            ApplyBatchSystem, ApplyControlMsg, ApplyNotifier, ApplyPollerBuilder, ApplyRes,
+            ApplyRouter, ApplyTaskRes,
         },
         local_metrics::{IoType as InspectIoType, RaftMetrics},
         memory::*,
@@ -886,19 +889,35 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                 #[cfg(any(test, feature = "testexport"))]
                 StoreMsg::Validate(f) => f(&self.ctx.cfg),
                 StoreMsg::LatencyInspect {
+                    factor,
                     send_time,
                     mut inspector,
                 } => {
-                    inspector.record_store_wait(send_time.saturating_elapsed());
-                    inspector.record_store_commit(
-                        self.ctx
-                            .raft_metrics
-                            .health_stats
-                            .avg(InspectIoType::Network),
-                    );
-                    // Reset the health_stats and wait it to be refreshed in the next tick.
-                    self.ctx.raft_metrics.health_stats.reset();
-                    self.ctx.pending_latency_inspect.push(inspector);
+                    match factor {
+                        InspectFactor::RaftDisk => {
+                            inspector.record_store_wait(send_time.saturating_elapsed());
+                            inspector.record_store_commit(
+                                self.ctx
+                                    .raft_metrics
+                                    .health_stats
+                                    .avg(InspectIoType::Network),
+                            );
+                            // Reset the health_stats and wait it to be refreshed in the next tick.
+                            self.ctx.raft_metrics.health_stats.reset();
+                            self.ctx.pending_latency_inspect.push(inspector);
+                        }
+                        InspectFactor::ApplyDisk => {
+                            // Send LatencyInspector to ApplyContext
+                            if let Err(e) = self.ctx.apply_router.send_control(
+                                ApplyControlMsg::LatencyInspect {
+                                    send_time,
+                                    inspector,
+                                },
+                            ) {
+                                error!("send latency inspect to apply context failed"; "err" => ?e, "store_id" => self.fsm.store.id);
+                            }
+                        }
+                    }
                 }
                 StoreMsg::UnsafeRecoveryReport(report) => self.store_heartbeat_pd(Some(report)),
                 StoreMsg::UnsafeRecoveryCreatePeer { syncer, create } => {

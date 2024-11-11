@@ -54,6 +54,24 @@ impl SlowScore {
         }
     }
 
+    pub fn new_with_extra_config(inspect_interval: Duration, round_ticks: u64) -> SlowScore {
+        SlowScore {
+            value: OrderedFloat(1.0),
+
+            timeout_requests: 0,
+            total_requests: 0,
+
+            inspect_interval,
+            ratio_thresh: OrderedFloat(0.1),
+            min_ttr: Duration::from_secs(5 * 60),
+            last_record_time: Instant::now(),
+            last_update_time: Instant::now(),
+            round_ticks,
+            last_tick_id: 0,
+            last_tick_finished: true,
+        }
+    }
+
     pub fn record(&mut self, id: u64, duration: Duration, not_busy: bool) {
         self.last_record_time = Instant::now();
         if id != self.last_tick_id {

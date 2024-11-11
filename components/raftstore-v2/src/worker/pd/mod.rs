@@ -9,7 +9,7 @@ use causal_ts::CausalTsProviderImpl;
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
-use health_controller::types::{LatencyInspector, RaftstoreDuration};
+use health_controller::types::{InspectFactor, LatencyInspector, RaftstoreDuration};
 use kvproto::{metapb, pdpb};
 use pd_client::{BucketStat, PdClient};
 use raftstore::store::{
@@ -428,7 +428,7 @@ impl StoreStatsReporter for PdReporter {
         }
     }
 
-    fn update_latency_stats(&self, timer_tick: u64) {
+    fn update_latency_stats(&self, timer_tick: u64, _factor: InspectFactor) {
         // Tick slowness statistics.
         {
             if let Err(e) = self.scheduler.schedule(Task::TickSlownessStats) {

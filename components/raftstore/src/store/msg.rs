@@ -8,7 +8,7 @@ use std::{borrow::Cow, fmt};
 use collections::HashSet;
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
 use futures::channel::mpsc::UnboundedSender;
-use health_controller::types::LatencyInspector;
+use health_controller::types::{InspectFactor, LatencyInspector};
 use kvproto::{
     brpb::CheckAdminResponse,
     kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp},
@@ -947,6 +947,7 @@ where
 
     /// Inspect the latency of raftstore.
     LatencyInspect {
+        factor: InspectFactor,
         send_time: Instant,
         inspector: LatencyInspector,
     },
