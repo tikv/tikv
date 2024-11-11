@@ -50,6 +50,19 @@ CLIPPY_LINTS=(
     -D clippy::assertions_on_result_states \
 )
 
+# We should be pedantic about writing async code, as it's easy to write
+# suboptimal or even bloat code. See:
+# - https://github.com/rust-lang/rust/issues/69826
+# - https://github.com/rust-lang/rust/issues/69663
+# - https://github.com/rust-lang/rust/issues/71407
+CLIPPY_LINTS+=(
+    -D clippy::unused_async \
+    -D clippy::manual_async_fn \
+    # Available since v1.70.0.
+    # -D clippy::redundant_async_block \
+    # -D clippy::large_futures \
+)
+
 cargo clippy --workspace \
     --exclude fuzz-targets --exclude fuzzer-honggfuzz --exclude fuzzer-afl --exclude fuzzer-libfuzzer \
     --no-default-features --features "${TIKV_ENABLE_FEATURES}" "$@" -- "${CLIPPY_LINTS[@]}"

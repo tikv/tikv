@@ -121,9 +121,7 @@ impl PriorityQueue {
         extras.set_metadata(group_name.as_bytes().to_owned());
         self.worker_pool.spawn_with_extras(
             ControlledFuture::new(
-                async move {
-                    f.await;
-                },
+                f,
                 self.resource_ctl.clone(),
                 group_name.as_bytes().to_owned(),
             ),

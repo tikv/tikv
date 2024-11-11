@@ -12,7 +12,10 @@ use std::{
 };
 
 use fail::fail_point;
-use futures::channel::oneshot::{self, Canceled};
+use futures::{
+    channel::oneshot::{self, Canceled},
+    FutureExt,
+};
 use prometheus::{IntCounter, IntGauge};
 use tracker::TrackedFuture;
 use yatp::{queue::Extras, task::future};
@@ -163,11 +166,13 @@ impl PoolInner {
 
         metrics_running_task_count.inc();
 
-        let f = async move {
-            let _ = future.await;
+        // NB: Prefer FutureExt::map to async block, because an async block
+        // doubles memory usage.
+        // See https://github.com/rust-lang/rust/issues/59087
+        let f = future.map(move |_| {
             metrics_handled_task_count.inc();
             metrics_running_task_count.dec();
-        };
+        });
 
         if let Some(extras) = extras {
             self.pool.spawn(future::TaskCell::new(f, extras));
@@ -192,12 +197,14 @@ impl PoolInner {
 
         let (tx, rx) = oneshot::channel();
         metrics_running_task_count.inc();
-        self.pool.spawn(async move {
-            let res = future.await;
+        // NB: Prefer FutureExt::map to async block, because an async block
+        // doubles memory usage.
+        // See https://github.com/rust-lang/rust/issues/59087
+        self.pool.spawn(future.map(move |res| {
             metrics_handled_task_count.inc();
             metrics_running_task_count.dec();
             let _ = tx.send(res);
-        });
+        }));
         Ok(rx)
     }
 }
