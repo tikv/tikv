@@ -46,13 +46,13 @@ fn test_apply_full_disk() {
         (b"k3", b"v3", 3),
         (b"k4", b"v4", 4),
     ];
-    let mut sst_meta = make_plain_file(&storage, "file1.log", default.into_iter());
-    register_range_for(&mut sst_meta, b"k1", b"k3a");
+    let mut sst_meta = util::make_plain_file(&storage, "file1.log", default.into_iter());
+    util::register_range_for(&mut sst_meta, b"k1", b"k3a");
     let mut req = ApplyRequest::new();
     req.set_context(ctx.clone());
-    req.set_rewrite_rules(vec![rewrite_for(&mut sst_meta, b"k", b"r")].into());
+    req.set_rewrite_rules(vec![util::rewrite_for(&mut sst_meta, b"k", b"r")].into());
     req.set_metas(vec![sst_meta].into());
-    req.set_storage_backend(local_storage(&tmp));
+    req.set_storage_backend(util::local_storage(&tmp));
     disk::set_disk_status(DiskUsage::AlmostFull);
     let result = import.apply(&req).unwrap();
     assert!(result.has_error());
