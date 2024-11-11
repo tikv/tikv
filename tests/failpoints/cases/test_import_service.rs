@@ -6,24 +6,13 @@ use std::{
 };
 
 use file_system::calc_crc32;
-<<<<<<< HEAD
 use futures::{executor::block_on, stream, SinkExt};
 use grpcio::{Result, WriteFlags};
-use kvproto::import_sstpb::*;
+use kvproto::{disk_usage::DiskUsage, import_sstpb::*};
 use tempfile::Builder;
 use test_raftstore::Simulator;
 use test_sst_importer::*;
-use tikv_util::HandyRwLock;
-=======
-use futures::executor::block_on;
-use grpcio::{ChannelBuilder, Environment};
-use kvproto::{disk_usage::DiskUsage, import_sstpb::*, tikvpb_grpc::TikvClient};
-use tempfile::{Builder, TempDir};
-use test_raftstore::{must_raw_put, Simulator};
-use test_sst_importer::*;
-use tikv::config::TikvConfig;
-use tikv_util::{config::ReadableSize, sys::disk, HandyRwLock};
->>>>>>> 485c434512 (br: pre-check TiKV disk space before download (#17238))
+use tikv_util::{sys::disk, HandyRwLock};
 
 #[allow(dead_code)]
 #[path = "../../integrations/import/util.rs"]
