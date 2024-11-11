@@ -20,6 +20,7 @@ use grpcio::{
     ClientStreamingSink, RequestStream, RpcContext, ServerStreamingSink, UnarySink, WriteFlags,
 };
 use kvproto::{
+    disk_usage::DiskUsage,
     encryptionpb::EncryptionMethod,
     errorpb,
     import_sstpb::{
@@ -39,7 +40,7 @@ use tikv_kv::{
 use tikv_util::{
     config::ReadableSize,
     future::create_stream_with_buffer,
-    sys::thread::ThreadBuildWrapper,
+    sys::{disk::get_disk_status, thread::ThreadBuildWrapper},
     time::{Instant, Limiter},
     HandyRwLock,
 };
@@ -847,7 +848,13 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
 
             let mut resp = ApplyResponse::default();
             if get_disk_status(0) != DiskUsage::Normal {
-                resp.set_error(Error::DiskSpaceNotEnough.into());
+                resp.set_error(
+                    Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        "TiKV disk space is not enough.",
+                    ))
+                    .into(),
+                );
                 return crate::send_rpc_response!(Ok(resp), sink, label, start);
             }
 
@@ -885,7 +892,13 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 .observe(start.saturating_elapsed().as_secs_f64());
             if get_disk_status(0) != DiskUsage::Normal {
                 let mut resp = DownloadResponse::default();
-                resp.set_error(Error::DiskSpaceNotEnough.into());
+                resp.set_error(
+                    Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        "TiKV disk space is not enough.",
+                    ))
+                    .into(),
+                );
                 return crate::send_rpc_response!(Ok(resp), sink, label, timer);
             }
 
