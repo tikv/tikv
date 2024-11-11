@@ -3439,7 +3439,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#4a3e17f5e62dc3999e2c0f63293fdeffced80626"
+source = "git+https://github.com/3AceShowHand/kvproto?branch=lightning-physical-import-ignore-by-cdc#e7aa44ff5bf0c24047db1592259cfe5af000608e"
 dependencies = [
  "futures 0.3.15",
  "grpcio",

@@ -62,6 +62,10 @@ impl TxnSource {
     pub(crate) fn is_lossy_ddl_reorg_source_set(txn_source: u64) -> bool {
         (txn_source >> LOSSY_DDL_REORG_SOURCE_SHIFT) != 0
     }
+    
+    pub(crate) fn is_lightning_physical_import(txn_source: u64) -> bool {
+        (txn_source >> LIGHTNING_PHYSICAL_IMPORT_SHIFT) != 0
+    }
 }
 
 impl From<TxnSource> for u64 {

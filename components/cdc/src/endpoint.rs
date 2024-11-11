@@ -788,6 +788,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         let kv_api = request.get_kv_api();
         let api_version = self.api_version;
         let filter_loop = downstream.filter_loop;
+        let skip_lightning_physical_imported = downstream.skip_lightning_physical_imported;
 
         let region_id = request.region_id;
         let request_id = RequestId(request.request_id);
@@ -961,6 +962,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             ts_filter_ratio: self.config.incremental_scan_ts_filter_ratio,
             kv_api,
             filter_loop,
+            skip_lightning_physical_imported,
         };
 
         let cdc_handle = self.cdc_handle.clone();
@@ -1563,6 +1565,7 @@ mod tests {
             conn_id,
             ChangeDataRequestKvApi::RawKv,
             false,
+            false,
             ObservedRange::default(),
         );
         req.set_kv_api(ChangeDataRequestKvApi::RawKv);
@@ -1597,6 +1600,7 @@ mod tests {
             RequestId(2),
             conn_id,
             ChangeDataRequestKvApi::TxnKv,
+            false,
             false,
             ObservedRange::default(),
         );
@@ -1633,6 +1637,7 @@ mod tests {
             RequestId(3),
             conn_id,
             ChangeDataRequestKvApi::TxnKv,
+            false,
             false,
             ObservedRange::default(),
         );
@@ -1844,6 +1849,7 @@ mod tests {
             conn_id,
             ChangeDataRequestKvApi::TiDb,
             false,
+            false,
             ObservedRange::default(),
         );
         suite.run(Task::Register {
@@ -1896,6 +1902,7 @@ mod tests {
             conn_id,
             ChangeDataRequestKvApi::TiDb,
             false,
+            false,
             ObservedRange::default(),
         );
         suite.run(Task::Register {
@@ -1916,6 +1923,7 @@ mod tests {
             RequestId(1),
             conn_id,
             ChangeDataRequestKvApi::TiDb,
+            false,
             false,
             ObservedRange::default(),
         );
@@ -1961,6 +1969,7 @@ mod tests {
             conn_id,
             ChangeDataRequestKvApi::TiDb,
             false,
+            false,
             ObservedRange::default(),
         );
         suite.add_local_reader(100);
@@ -1992,6 +2001,7 @@ mod tests {
             RequestId(1),
             conn_id,
             ChangeDataRequestKvApi::TiDb,
+            false,
             false,
             ObservedRange::default(),
         );
@@ -2059,6 +2069,7 @@ mod tests {
             conn_id,
             ChangeDataRequestKvApi::TiDb,
             false,
+            false,
             ObservedRange::default(),
         );
         suite.run(Task::Register {
@@ -2075,6 +2086,7 @@ mod tests {
             RequestId(2),
             conn_id,
             ChangeDataRequestKvApi::TiDb,
+            false,
             false,
             ObservedRange::default(),
         );
@@ -2162,6 +2174,7 @@ mod tests {
             conn_id,
             ChangeDataRequestKvApi::TiDb,
             false,
+            false,
             ObservedRange::default(),
         );
         downstream.get_state().store(DownstreamState::Normal);
@@ -2199,6 +2212,7 @@ mod tests {
             RequestId(0),
             conn_id,
             ChangeDataRequestKvApi::TiDb,
+            false,
             false,
             ObservedRange::default(),
         );
@@ -2254,6 +2268,7 @@ mod tests {
             RequestId(3),
             conn_id,
             ChangeDataRequestKvApi::TiDb,
+            false,
             false,
             ObservedRange::default(),
         );
@@ -2334,6 +2349,7 @@ mod tests {
             conn_id,
             ChangeDataRequestKvApi::TiDb,
             false,
+            false,
             ObservedRange::default(),
         );
         let downstream_id = downstream.id;
@@ -2376,6 +2392,7 @@ mod tests {
             RequestId(0),
             conn_id,
             ChangeDataRequestKvApi::TiDb,
+            false,
             false,
             ObservedRange::default(),
         );
@@ -2429,6 +2446,7 @@ mod tests {
             RequestId(0),
             conn_id,
             ChangeDataRequestKvApi::TiDb,
+            false,
             false,
             ObservedRange::default(),
         );
@@ -2485,6 +2503,7 @@ mod tests {
                     RequestId(0),
                     conn_id,
                     ChangeDataRequestKvApi::TiDb,
+                    false,
                     false,
                     ObservedRange::default(),
                 );
@@ -2615,6 +2634,7 @@ mod tests {
             conn_id_a,
             ChangeDataRequestKvApi::TiDb,
             false,
+            false,
             ObservedRange::default(),
         );
         suite.run(Task::Register {
@@ -2637,6 +2657,7 @@ mod tests {
             RequestId(0),
             conn_id_b,
             ChangeDataRequestKvApi::TiDb,
+            false,
             false,
             ObservedRange::default(),
         );
@@ -2767,6 +2788,7 @@ mod tests {
                 conn_id,
                 ChangeDataRequestKvApi::TiDb,
                 false,
+                false,
                 ObservedRange::default(),
             );
             on_init_downstream(&downstream.get_state());
@@ -2860,6 +2882,7 @@ mod tests {
             conn_id,
             ChangeDataRequestKvApi::TiDb,
             false,
+            false,
             ObservedRange::default(),
         );
         suite.run(Task::Register {
@@ -2877,6 +2900,7 @@ mod tests {
             conn_id,
             ChangeDataRequestKvApi::TiDb,
             false,
+            false,
             ObservedRange::default(),
         );
         suite.run(Task::Register {
@@ -2893,6 +2917,7 @@ mod tests {
             RequestId(2),
             conn_id,
             ChangeDataRequestKvApi::TiDb,
+            false,
             false,
             ObservedRange::default(),
         );
@@ -2958,6 +2983,7 @@ mod tests {
             conn_id,
             ChangeDataRequestKvApi::TiDb,
             false,
+            false,
             ObservedRange::default(),
         );
         suite.run(Task::Register {
@@ -2996,6 +3022,7 @@ mod tests {
                 RequestId(i),
                 conn_id,
                 ChangeDataRequestKvApi::TiDb,
+                false,
                 false,
                 ObservedRange::default(),
             );
@@ -3041,6 +3068,7 @@ mod tests {
                 RequestId(1),
                 conn_id,
                 ChangeDataRequestKvApi::TiDb,
+                false,
                 false,
                 ObservedRange::default(),
             );
@@ -3109,6 +3137,7 @@ mod tests {
             RequestId(1),
             conn_id,
             ChangeDataRequestKvApi::TiDb,
+            false,
             false,
             ObservedRange::default(),
         );
