@@ -37,7 +37,7 @@ fn test_basic_apply() {
 
 #[test]
 fn test_apply_full_disk() {
-    let (_cluster, ctx, _tikv, import) = new_cluster_and_tikv_import_client();
+    let (_cluster, ctx, _tikv, import) = util::new_cluster_and_tikv_import_client();
     let tmp = TempDir::new().unwrap();
     let storage = LocalStorage::new(tmp.path()).unwrap();
     let default = [
@@ -46,10 +46,12 @@ fn test_apply_full_disk() {
         (b"k3", b"v3", 3),
         (b"k4", b"v4", 4),
     ];
-    let mut sst_meta = util::make_plain_file(&storage, "file1.log", default.into_iter());
+    let mut sst_meta =
+        util::make_plain_file(&storage, "file1.log", IntoIterator::into_iter(default));
+
     util::register_range_for(&mut sst_meta, b"k1", b"k3a");
     let mut req = ApplyRequest::new();
-    req.set_context(ctx.clone());
+    req.set_context(ctx);
     req.set_rewrite_rules(vec![util::rewrite_for(&mut sst_meta, b"k", b"r")].into());
     req.set_metas(vec![sst_meta].into());
     req.set_storage_backend(util::local_storage(&tmp));

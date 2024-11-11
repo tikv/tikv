@@ -14,8 +14,6 @@ use test_raftstore::Simulator;
 use test_sst_importer::*;
 use tikv_util::{sys::disk, HandyRwLock};
 
-use crate::import::util::new_cluster_and_tikv_import_client;
-
 #[allow(dead_code)]
 #[path = "../../integrations/import/util.rs"]
 mod util;
