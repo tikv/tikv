@@ -69,10 +69,11 @@ impl UnifiedSlowScore {
             .factors
             .push(SlowScore::new(cfg.inspect_interval));
         // The second factor is for Apply Disk I/O.
+        // TODO: add configurations for Apply Disk I/O.
         unified_slow_score
             .factors
             .push(SlowScore::new_with_extra_config(
-                cfg.inspect_interval.mul_f64(5.0),
+                cfg.inspect_interval.mul_f64(5.0), // 5x inspect interval, 5*100ms by default.
                 10,
             ));
         unified_slow_score
