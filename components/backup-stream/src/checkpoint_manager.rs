@@ -103,11 +103,11 @@ impl SubscriptionManager {
         }
 
         for c in canceled {
-            self.remove_subscription(&c).await;
+            self.remove_subscription(&c);
         }
     }
 
-    async fn remove_subscription(&mut self, id: &Uuid) {
+    fn remove_subscription(&mut self, id: &Uuid) {
         match self.subscribers.remove(id) {
             Some(sub) => {
                 info!("client is gone, removing subscription"; "id" => %id);
@@ -610,6 +610,7 @@ pub mod tests {
             Self(Arc::new(Mutex::new(inner)))
         }
 
+        #[allow(clippy::unused_async)]
         pub async fn fail(&self, status: RpcStatus) -> crate::errors::Result<()> {
             panic!("failed in a case should never fail: {}", status);
         }

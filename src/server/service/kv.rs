@@ -1534,6 +1534,7 @@ fn future_scan_lock<E: Engine, L: LockManager, F: KvFormat>(
     }
 }
 
+#[allow(clippy::unused_async)]
 async fn future_gc(_: GcRequest) -> ServerResult<GcResponse> {
     Err(Error::Grpc(GrpcError::RpcFailure(RpcStatus::new(
         RpcStatusCode::UNIMPLEMENTED,
