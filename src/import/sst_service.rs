@@ -20,6 +20,7 @@ use grpcio::{
     ClientStreamingSink, RequestStream, RpcContext, ServerStreamingSink, UnarySink, WriteFlags,
 };
 use kvproto::{
+    disk_usage::DiskUsage,
     encryptionpb::EncryptionMethod,
     errorpb,
     import_sstpb::{
@@ -45,7 +46,7 @@ use tikv_kv::{
 use tikv_util::{
     config::ReadableSize,
     future::{create_stream_with_buffer, paired_future_callback},
-    sys::thread::ThreadBuildWrapper,
+    sys::{disk::get_disk_status, thread::ThreadBuildWrapper},
     time::{Instant, Limiter},
     HandyRwLock,
 };
@@ -938,6 +939,16 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 .observe(start.saturating_elapsed().as_secs_f64());
 
             let mut resp = ApplyResponse::default();
+            if get_disk_status(0) != DiskUsage::Normal {
+                resp.set_error(
+                    Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        "TiKV disk space is not enough.",
+                    ))
+                    .into(),
+                );
+                return crate::send_rpc_response!(Ok(resp), sink, label, start);
+            }
 
             match Self::apply_imp(req, importer, applier, limiter, max_raft_size).await {
                 Ok(Some(r)) => resp.set_range(r),
@@ -971,6 +982,17 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             sst_importer::metrics::IMPORTER_DOWNLOAD_DURATION
                 .with_label_values(&["queue"])
                 .observe(start.saturating_elapsed().as_secs_f64());
+            if get_disk_status(0) != DiskUsage::Normal {
+                let mut resp = DownloadResponse::default();
+                resp.set_error(
+                    Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        "TiKV disk space is not enough.",
+                    ))
+                    .into(),
+                );
+                return crate::send_rpc_response!(Ok(resp), sink, label, timer);
+            }
 
             // FIXME: download() should be an async fn, to allow BR to cancel
             // a download task.
