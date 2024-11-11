@@ -57,6 +57,15 @@ pub enum InspectFactor {
     // TODO: Add more factors, like network io.
 }
 
+impl InspectFactor {
+    pub fn as_str(&self) -> &str {
+        match *self {
+            InspectFactor::RaftDisk => "raft",
+            InspectFactor::ApplyDisk => "apply",
+        }
+    }
+}
+
 /// Used to inspect the latency of all stages of raftstore.
 pub struct LatencyInspector {
     id: u64,

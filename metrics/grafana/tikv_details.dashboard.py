@@ -9797,6 +9797,7 @@ def SlowTrendStatistics() -> RowPanel:
                     target(
                         expr=expr_sum(
                             "tikv_raftstore_slow_score",
+                            by_labels=["instance", "type"],
                         ),
                     ),
                 ],

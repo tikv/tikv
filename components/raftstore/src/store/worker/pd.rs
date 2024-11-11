@@ -1913,8 +1913,10 @@ where
             .health_reporter
             .tick(self.store_stat.maybe_busy(), factor);
         if let Some(score) = slow_score_tick_result.updated_score {
-            // TODO
-            STORE_SLOW_SCORE_GAUGE.set(score);
+            // TODO: use sub metric to record different factor's slow score.
+            STORE_SLOW_SCORE_GAUGE
+                .with_label_values(&[factor.as_str()])
+                .set(score as i64);
         }
         let id = slow_score_tick_result.tick_id;
         let scheduler = self.scheduler.clone();
