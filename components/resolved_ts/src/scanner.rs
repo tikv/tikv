@@ -43,7 +43,7 @@ pub struct ScanTask {
 }
 
 impl ScanTask {
-    async fn send_entries(&self, entries: ScanEntries, apply_index: u64) {
+    fn send_entries(&self, entries: ScanEntries, apply_index: u64) {
         let task = Task::ScanLocks {
             region_id: self.region.get_id(),
             observe_id: self.handle.id,
@@ -160,11 +160,10 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> ScannerPool<T, E> {
                 if has_remaining {
                     start_key = Some(locks.last().unwrap().0.clone())
                 }
-                task.send_entries(ScanEntries::Lock(locks), apply_index)
-                    .await;
+                task.send_entries(ScanEntries::Lock(locks), apply_index);
             }
             RTS_SCAN_DURATION_HISTOGRAM.observe(start.saturating_elapsed().as_secs_f64());
-            task.send_entries(ScanEntries::None, apply_index).await;
+            task.send_entries(ScanEntries::None, apply_index);
         };
         self.workers.spawn(fut);
     }

@@ -41,7 +41,7 @@ fn test_check_pending_admin() {
 
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
     router.broadcast_normal(|| {
-        PeerMsg::SignificantMsg(SignificantMsg::CheckPendingAdmin(tx.clone()))
+        PeerMsg::SignificantMsg(Box::new(SignificantMsg::CheckPendingAdmin(tx.clone())))
     });
     futures::executor::block_on(async {
         let r = rx.next().await;
@@ -57,7 +57,7 @@ fn test_check_pending_admin() {
 
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
     router.broadcast_normal(|| {
-        PeerMsg::SignificantMsg(SignificantMsg::CheckPendingAdmin(tx.clone()))
+        PeerMsg::SignificantMsg(Box::new(SignificantMsg::CheckPendingAdmin(tx.clone())))
     });
     futures::executor::block_on(async {
         let r = rx.next().await;
@@ -97,9 +97,9 @@ fn test_snap_wait_apply() {
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
 
     router.broadcast_normal(|| {
-        PeerMsg::SignificantMsg(SignificantMsg::SnapshotRecoveryWaitApply(
+        PeerMsg::SignificantMsg(Box::new(SignificantMsg::SnapshotRecoveryWaitApply(
             SnapshotRecoveryWaitApplySyncer::new(1, tx.clone()),
-        ))
+        )))
     });
 
     // we expect recv timeout because the leader peer on store 1 cannot finished the
@@ -114,9 +114,9 @@ fn test_snap_wait_apply() {
     // apply.
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
     router.broadcast_normal(|| {
-        PeerMsg::SignificantMsg(SignificantMsg::SnapshotRecoveryWaitApply(
+        PeerMsg::SignificantMsg(Box::new(SignificantMsg::SnapshotRecoveryWaitApply(
             SnapshotRecoveryWaitApplySyncer::new(1, tx.clone()),
-        ))
+        )))
     });
 
     // we expect recv the region id from rx.

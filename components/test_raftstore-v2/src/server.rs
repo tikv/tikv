@@ -542,6 +542,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
             raft_kv_v2,
             LocalTablets::Registry(tablet_registry.clone()),
             Arc::clone(&importer),
+            Arc::new(region_info_accessor.clone()),
         );
 
         // Create deadlock service.

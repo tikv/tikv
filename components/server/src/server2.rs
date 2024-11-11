@@ -928,12 +928,14 @@ where
         backup_worker.start(backup_endpoint);
 
         // Import SST service.
+        let region_info_accessor = self.region_info_accessor.as_ref().unwrap().clone();
         let import_service = ImportSstService::new(
             self.core.config.import.clone(),
             self.core.config.raft_store.raft_entry_max_size,
             engines.engine.clone(),
             LocalTablets::Registry(self.tablet_registry.as_ref().unwrap().clone()),
             servers.importer.clone(),
+            Arc::new(region_info_accessor),
         );
         let import_cfg_mgr = import_service.get_config_manager();
 

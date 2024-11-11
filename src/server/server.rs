@@ -474,14 +474,18 @@ pub mod test_router {
             cmd: RaftCommand<RocksSnapshot>,
         ) -> std::result::Result<(), crossbeam::channel::TrySendError<RaftCommand<RocksSnapshot>>>
         {
-            let _ = self.tx.send(Either::Left(PeerMsg::RaftCommand(cmd)));
+            let _ = self
+                .tx
+                .send(Either::Left(PeerMsg::RaftCommand(Box::new(cmd))));
             Ok(())
         }
     }
 
     impl CasualRouter<RocksEngine> for TestRaftStoreRouter {
         fn send(&self, _: u64, msg: CasualMessage<RocksEngine>) -> RaftStoreResult<()> {
-            let _ = self.tx.send(Either::Left(PeerMsg::CasualMessage(msg)));
+            let _ = self
+                .tx
+                .send(Either::Left(PeerMsg::CasualMessage(Box::new(msg))));
             Ok(())
         }
     }
@@ -499,12 +503,9 @@ pub mod test_router {
 
     impl RaftStoreRouter<RocksEngine> for TestRaftStoreRouter {
         fn send_raft_msg(&self, msg: RaftMessage) -> RaftStoreResult<()> {
-            let _ = self
-                .tx
-                .send(Either::Left(PeerMsg::RaftMessage(InspectedRaftMessage {
-                    heap_size: 0,
-                    msg,
-                })));
+            let _ = self.tx.send(Either::Left(PeerMsg::RaftMessage(Box::new(
+                InspectedRaftMessage { heap_size: 0, msg },
+            ))));
             Ok(())
         }
 

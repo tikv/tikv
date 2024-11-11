@@ -45,9 +45,9 @@ impl Store {
         let mut region_ssts: HashMap<_, Vec<_>> = HashMap::default();
         for sst in ssts {
             region_ssts
-                .entry(sst.get_region_id())
+                .entry(sst.0.get_region_id())
                 .or_default()
-                .push(sst);
+                .push(sst.0);
         }
         for (region_id, ssts) in region_ssts {
             if let Err(TrySendError::Disconnected(msg)) = ctx.router.send(region_id, PeerMsg::CleanupImportSst(ssts.into()))
