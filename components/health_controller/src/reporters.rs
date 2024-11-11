@@ -79,19 +79,23 @@ impl UnifiedSlowScore {
         unified_slow_score
     }
 
-    pub fn record(&mut self, id: u64, duration: &RaftstoreDuration, not_busy: bool) {
-        let factor = if duration.apply_process_duration.is_none() {
-            InspectFactor::RaftDisk
-        } else {
-            InspectFactor::ApplyDisk
-        };
+    #[inline]
+    pub fn record(
+        &mut self,
+        id: u64,
+        factor: InspectFactor,
+        duration: &RaftstoreDuration,
+        not_busy: bool,
+    ) {
         self.factors[factor as usize].record(id, duration.delays_on_disk_io(false), not_busy);
     }
 
+    #[inline]
     pub fn get(&self, factor: InspectFactor) -> &SlowScore {
         &self.factors[factor as usize]
     }
 
+    #[inline]
     pub fn get_mut(&mut self, factor: InspectFactor) -> &mut SlowScore {
         &mut self.factors[factor as usize]
     }
@@ -112,6 +116,7 @@ impl UnifiedSlowScore {
         self.factors.iter().all(SlowScore::last_tick_finished)
     }
 
+    #[inline]
     pub fn get_inspect_interval(&self) -> Duration {
         // Assume that Raft Disk I/O and Apply Disk I/O have the same inspect interval.
         self.factors[InspectFactor::RaftDisk as usize].get_inspect_interval()
@@ -152,11 +157,13 @@ impl RaftstoreReporter {
     pub fn record_raftstore_duration(
         &mut self,
         id: u64,
+        factor: InspectFactor,
         duration: RaftstoreDuration,
         store_not_busy: bool,
     ) {
         // Fine-tuned, `SlowScore` only takes the I/O jitters on the disk into account.
-        self.slow_score.record(id, &duration, store_not_busy);
+        self.slow_score
+            .record(id, factor, &duration, store_not_busy);
         self.slow_trend.record(duration);
 
         // Publish slow score to health controller

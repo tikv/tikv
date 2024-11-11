@@ -201,6 +201,7 @@ where
     },
     UpdateSlowScore {
         id: u64,
+        factor: InspectFactor,
         duration: RaftstoreDuration,
     },
     RegionCpuRecords(Arc<RawRecords>),
@@ -452,8 +453,16 @@ where
             Task::QueryRegionLeader { region_id } => {
                 write!(f, "query the leader of region {}", region_id)
             }
-            Task::UpdateSlowScore { id, ref duration } => {
-                write!(f, "compute slow score: id {}, duration {:?}", id, duration)
+            Task::UpdateSlowScore {
+                id,
+                factor,
+                ref duration,
+            } => {
+                write!(
+                    f,
+                    "compute slow score: id {}, factor: {:?}, duration {:?}",
+                    id, factor, duration
+                )
             }
             Task::RegionCpuRecords(ref cpu_records) => {
                 write!(f, "get region cpu records: {:?}", cpu_records)
@@ -1931,7 +1940,6 @@ where
                     {
                         self.handle_fake_store_heartbeat();
                     }
-
                     LatencyInspector::new(
                         id,
                         Box::new(move |id, duration| {
@@ -1954,9 +1962,11 @@ where
                             STORE_INSPECT_DURATION_HISTOGRAM
                                 .with_label_values(&["all"])
                                 .observe(tikv_util::time::duration_to_sec(duration.sum()));
-                            if let Err(e) =
-                                scheduler.schedule(Task::UpdateSlowScore { id, duration })
-                            {
+                            if let Err(e) = scheduler.schedule(Task::UpdateSlowScore {
+                                id,
+                                factor,
+                                duration,
+                            }) {
                                 warn!("schedule pd task failed"; "err" => ?e);
                             }
                         }),
@@ -1970,7 +1980,11 @@ where
                             .observe(tikv_util::time::duration_to_sec(
                                 duration.apply_process_duration.unwrap_or_default(),
                             ));
-                        if let Err(e) = scheduler.schedule(Task::UpdateSlowScore { id, duration }) {
+                        if let Err(e) = scheduler.schedule(Task::UpdateSlowScore {
+                            id,
+                            factor,
+                            duration,
+                        }) {
                             warn!("schedule pd task failed"; "err" => ?e);
                         }
                     }),
@@ -2236,9 +2250,14 @@ where
                 txn_ext,
             } => self.handle_update_max_timestamp(region_id, initial_status, txn_ext),
             Task::QueryRegionLeader { region_id } => self.handle_query_region_leader(region_id),
-            Task::UpdateSlowScore { id, duration } => {
+            Task::UpdateSlowScore {
+                id,
+                factor,
+                duration,
+            } => {
                 self.health_reporter.record_raftstore_duration(
                     id,
+                    factor,
                     duration,
                     !self.store_stat.maybe_busy(),
                 );

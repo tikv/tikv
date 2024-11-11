@@ -914,7 +914,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                                     inspector,
                                 },
                             ) {
-                                error!("send latency inspect to apply context failed"; "err" => ?e, "store_id" => self.fsm.store.id);
+                                warn!("send latency inspect to apply context failed"; "err" => ?e, "store_id" => self.fsm.store.id);
                             }
                         }
                     }
