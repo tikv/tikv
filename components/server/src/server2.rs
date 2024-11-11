@@ -643,6 +643,7 @@ where
         let cdc_endpoint = cdc::Endpoint::new(
             self.core.config.server.cluster_id,
             &self.core.config.cdc,
+            &self.core.config.resolved_ts,
             self.core.config.storage.engine == EngineType::RaftKv2,
             self.core.config.storage.api_version(),
             self.pd_client.clone(),
@@ -714,6 +715,7 @@ where
                     pd_client::meta_storage::Source::LogBackup,
                 ))),
                 self.core.config.log_backup.clone(),
+                self.core.config.resolved_ts.clone(),
                 backup_stream_scheduler.clone(),
                 backup_stream_ob,
                 self.region_info_accessor.as_ref().unwrap().clone(),
@@ -926,12 +928,14 @@ where
         backup_worker.start(backup_endpoint);
 
         // Import SST service.
+        let region_info_accessor = self.region_info_accessor.as_ref().unwrap().clone();
         let import_service = ImportSstService::new(
             self.core.config.import.clone(),
             self.core.config.raft_store.raft_entry_max_size,
             engines.engine.clone(),
             LocalTablets::Registry(self.tablet_registry.as_ref().unwrap().clone()),
             servers.importer.clone(),
+            Arc::new(region_info_accessor),
         );
         let import_cfg_mgr = import_service.get_config_manager();
 

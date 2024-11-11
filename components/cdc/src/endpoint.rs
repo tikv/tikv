@@ -36,7 +36,7 @@ use raftstore::{
 use resolved_ts::{resolve_by_raft, LeadershipResolver, Resolver};
 use security::SecurityManager;
 use tikv::{
-    config::CdcConfig,
+    config::{CdcConfig, ResolvedTsConfig},
     storage::{kv::LocalTablets, Statistics},
 };
 use tikv_util::{
@@ -59,7 +59,7 @@ use txn_types::{TimeStamp, TxnExtra, TxnExtraScheduler};
 use crate::{
     channel::{CdcEvent, SendError},
     delegate::{on_init_downstream, Delegate, Downstream, DownstreamId, DownstreamState},
-    initializer::Initializer,
+    initializer::{InitializeStats, Initializer},
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
     service::{Conn, ConnId, FeatureGate},
@@ -130,6 +130,7 @@ type InitCallback = Box<dyn FnOnce() + Send>;
 pub enum Validate {
     Region(u64, Box<dyn FnOnce(Option<&Delegate>) + Send>),
     OldValueCache(Box<dyn FnOnce(&OldValueCache) + Send>),
+    InitializeStats(Box<dyn FnOnce(InitializeStats) + Send>),
 }
 
 pub enum Task {
@@ -245,6 +246,7 @@ impl fmt::Debug for Task {
             Task::Validate(validate) => match validate {
                 Validate::Region(region_id, _) => de.field("region_id", &region_id).finish(),
                 Validate::OldValueCache(_) => de.finish(),
+                Validate::InitializeStats(_) => de.finish(),
             },
             Task::ChangeConfig(change) => de
                 .field("type", &"change_config")
@@ -336,6 +338,7 @@ pub struct Endpoint<T, E, S> {
 
     raftstore_v2: bool,
     config: CdcConfig,
+    resolved_ts_config: ResolvedTsConfig,
     api_version: ApiVersion,
 
     // Incremental scan
@@ -359,12 +362,16 @@ pub struct Endpoint<T, E, S> {
     resolved_region_count: usize,
     unresolved_region_count: usize,
     warn_resolved_ts_repeat_count: usize,
+
+    // Validate statistics of the next incremental scan. Only for tests.
+    validate_next_initialize_stats: Option<Box<dyn FnOnce(InitializeStats) + Send>>,
 }
 
 impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, S> {
     pub fn new(
         cluster_id: u64,
         config: &CdcConfig,
+        resolved_ts_config: &ResolvedTsConfig,
         raftstore_v2: bool,
         api_version: ApiVersion,
         pd_client: Arc<dyn PdClient>,
@@ -440,6 +447,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             max_scan_batch_bytes,
             max_scan_batch_size,
             config: config.clone(),
+            resolved_ts_config: resolved_ts_config.clone(),
             raftstore_v2,
             api_version,
             workers,
@@ -462,6 +470,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             warn_resolved_ts_repeat_count: WARN_RESOLVED_TS_COUNT_THRESHOLD,
             current_ts: TimeStamp::zero(),
             causal_ts_provider,
+
+            validate_next_initialize_stats: None,
         };
         ep.register_min_ts_event(leader_resolver, Instant::now());
         ep
@@ -638,8 +648,20 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         let downstream_state = downstream.get_state();
         let filter_loop = downstream.get_filter_loop();
 
-        // Register must follow OpenConn, so the connection must be available.
-        let conn = self.connections.get_mut(&conn_id).unwrap();
+        // The connection can be deregistered by some internal errors. Clients will
+        // be always notified by closing the GRPC server stream, so it's OK to drop
+        // the task directly.
+        let conn = match self.connections.get_mut(&conn_id) {
+            Some(conn) => conn,
+            None => {
+                info!("cdc register region on an deregistered connection, ignore";
+                    "region_id" => region_id,
+                    "conn_id" => ?conn_id,
+                    "req_id" => request.get_request_id(),
+                    "downstream_id" => ?downstream_id);
+                return;
+            }
+        };
         downstream.set_sink(conn.get_sink().clone());
 
         // Check if the cluster id matches.
@@ -775,14 +797,18 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         let cdc_handle = self.cdc_handle.clone();
         let concurrency_semaphore = self.scan_concurrency_semaphore.clone();
         let memory_quota = self.sink_memory_quota.clone();
+        let validate_initialize_stats = self.validate_next_initialize_stats.take();
         self.workers.spawn(async move {
             CDC_SCAN_TASKS.with_label_values(&["total"]).inc();
             match init
                 .initialize(change_cmd, cdc_handle, concurrency_semaphore, memory_quota)
                 .await
             {
-                Ok(()) => {
+                Ok(stats) => {
                     CDC_SCAN_TASKS.with_label_values(&["finish"]).inc();
+                    if let Some(validate) = validate_initialize_stats {
+                        validate(stats);
+                    }
                 }
                 Err(e) => {
                     CDC_SCAN_TASKS.with_label_values(&["abort"]).inc();
@@ -1053,6 +1079,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         let causal_ts_provider = self.causal_ts_provider.clone();
         // We use channel to deliver leader_resolver in async block.
         let (leader_resolver_tx, leader_resolver_rx) = bounded(1);
+        let advance_ts_interval = self.resolved_ts_config.advance_ts_interval.0;
 
         let fut = async move {
             let _ = timeout.compat().await;
@@ -1107,7 +1134,9 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             let regions =
                 if hibernate_regions_compatible && gate.can_enable(FEATURE_RESOLVED_TS_STORE) {
                     CDC_RESOLVED_TS_ADVANCE_METHOD.set(1);
-                    leader_resolver.resolve(regions, min_ts).await
+                    leader_resolver
+                        .resolve(regions, min_ts, Some(advance_ts_interval))
+                        .await
                 } else {
                     CDC_RESOLVED_TS_ADVANCE_METHOD.set(0);
                     resolve_by_raft(regions, min_ts, cdc_handle).await
@@ -1213,6 +1242,9 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
                 }
                 Validate::OldValueCache(validate) => {
                     validate(&self.old_value_cache);
+                }
+                Validate::InitializeStats(validate) => {
+                    self.validate_next_initialize_stats = Some(validate);
                 }
             },
             Task::ChangeConfig(change) => self.on_change_cfg(change),
@@ -1407,6 +1439,7 @@ mod tests {
         let ep = Endpoint::new(
             DEFAULT_CLUSTER_ID,
             cfg,
+            &ResolvedTsConfig::default(),
             false,
             api_version,
             pd_client,

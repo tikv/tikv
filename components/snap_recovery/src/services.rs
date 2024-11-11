@@ -220,9 +220,9 @@ impl<ER: RaftEngine> RecoveryService<ER> {
     pub fn wait_apply_last(router: RaftRouter<RocksEngine, ER>, sender: SyncSender<u64>) {
         let wait_apply = SnapshotRecoveryWaitApplySyncer::new(0, sender);
         router.broadcast_normal(|| {
-            PeerMsg::SignificantMsg(SignificantMsg::SnapshotRecoveryWaitApply(
+            PeerMsg::SignificantMsg(Box::new(SignificantMsg::SnapshotRecoveryWaitApply(
                 wait_apply.clone(),
-            ))
+            )))
         });
     }
 }

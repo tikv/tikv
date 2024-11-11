@@ -2817,7 +2817,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-7.1#2a127d084abb239a6c53e1e82e695325cf66bbce"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-7.1#365cf8130bf301931cf7d3068d59797698f29d74"
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -2836,7 +2836,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-7.1#2a127d084abb239a6c53e1e82e695325cf66bbce"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-7.1#365cf8130bf301931cf7d3068d59797698f29d74"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -2912,9 +2912,9 @@ dependencies = [
 
 [[package]]
 name = "lz4-sys"
-version = "1.9.4"
+version = "1.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57d27b317e207b10f69f5e75494119e391a96f48861ae870d1da6edac98ca900"
+checksum = "e9764018d143cc854c9f17f0b907de70f14393b1f502da6375dce70f00514eb3"
 dependencies = [
  "cc",
  "libc 0.2.139",
@@ -4109,7 +4109,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.3.0"
-source = "git+https://github.com/tikv/raft-engine.git?branch=tikv-6.5#895ca932caee427a731ee02e898daf9f2a89d348"
+source = "git+https://github.com/tikv/raft-engine.git?branch=tikv-6.5#2a4faff8358245640eeb5585c945dffe7ede8776"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -4143,7 +4143,7 @@ dependencies = [
 [[package]]
 name = "raft-engine-ctl"
 version = "0.3.0"
-source = "git+https://github.com/tikv/raft-engine.git?branch=tikv-6.5#895ca932caee427a731ee02e898daf9f2a89d348"
+source = "git+https://github.com/tikv/raft-engine.git?branch=tikv-6.5#2a4faff8358245640eeb5585c945dffe7ede8776"
 dependencies = [
  "clap 3.1.6",
  "env_logger 0.10.0",
@@ -4710,7 +4710,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-7.1#2a127d084abb239a6c53e1e82e695325cf66bbce"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-7.1#365cf8130bf301931cf7d3068d59797698f29d74"
 dependencies = [
  "libc 0.2.139",
  "librocksdb_sys",
@@ -6280,7 +6280,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "7.1.5"
+version = "7.1.6"
 dependencies = [
  "anyhow",
  "api_version",

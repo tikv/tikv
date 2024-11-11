@@ -25,7 +25,7 @@ use raftstore::{
     router::CdcHandle,
 };
 use resolved_ts::{resolve_by_raft, LeadershipResolver};
-use tikv::config::BackupStreamConfig;
+use tikv::config::{BackupStreamConfig, ResolvedTsConfig};
 use tikv_util::{
     box_err,
     config::ReadableDuration,
@@ -113,6 +113,7 @@ where
         store_id: u64,
         store: S,
         config: BackupStreamConfig,
+        resolved_ts_config: ResolvedTsConfig,
         scheduler: Scheduler<Task>,
         observer: BackupStreamObserver,
         accessor: R,
@@ -178,6 +179,7 @@ where
             pd_client.clone(),
             ((config.num_threads + 1) / 2).max(1),
             resolver,
+            resolved_ts_config.advance_ts_interval.0,
         );
         pool.spawn(op_loop);
         let mut checkpoint_mgr = CheckpointManager::default();
@@ -636,18 +638,7 @@ where
         );
 
         let task_name = task.info.get_name().to_owned();
-        // clean the safepoint created at pause(if there is)
-        self.pool.spawn(
-            self.pd_client
-                .update_service_safe_point(
-                    self.pause_guard_id_for_task(task.info.get_name()),
-                    TimeStamp::zero(),
-                    Duration::new(0, 0),
-                )
-                .map(|r| {
-                    r.map_err(|err| Error::from(err).report("removing safe point for pausing"))
-                }),
-        );
+        self.clean_pause_guard_id_for_task(&task_name);
         self.pool.block_on(async move {
             let task_clone = task.clone();
             let run = async move {
@@ -690,6 +681,21 @@ where
         metrics::update_task_status(TaskStatus::Running, &task_name);
     }
 
+    // clean the safepoint created at pause(if there is)
+    fn clean_pause_guard_id_for_task(&self, task_name: &str) {
+        self.pool.spawn(
+            self.pd_client
+                .update_service_safe_point(
+                    self.pause_guard_id_for_task(task_name),
+                    TimeStamp::zero(),
+                    Duration::new(0, 0),
+                )
+                .map(|r| {
+                    r.map_err(|err| Error::from(err).report("removing safe point for pausing"))
+                }),
+        );
+    }
+
     fn pause_guard_id_for_task(&self, task: &str) -> String {
         format!("{}-{}-pause-guard", task, self.store_id)
     }
@@ -714,7 +720,7 @@ where
             Err(err) => {
                 err.report(format!("failed to resume backup stream task {}", task_name));
                 let sched = self.scheduler.clone();
-                tokio::task::spawn(async move {
+                self.pool.spawn(async move {
                     tokio::time::sleep(Duration::from_secs(5)).await;
                     sched
                         .schedule(Task::WatchTask(TaskOp::ResumeTask(task_name)))
@@ -724,9 +730,10 @@ where
         }
     }
 
-    pub fn on_unregister(&self, task: &str) -> Option<StreamBackupTaskInfo> {
-        let info = self.unload_task(task);
-        self.remove_metrics_after_unregister(task);
+    pub fn on_unregister(&self, task_name: &str) -> Option<StreamBackupTaskInfo> {
+        let info = self.unload_task(task_name);
+        self.clean_pause_guard_id_for_task(task_name);
+        self.remove_metrics_after_unregister(task_name);
         info
     }
 
@@ -1113,9 +1120,14 @@ where
     RT: CdcHandle<EK> + 'static,
     EK: KvEngine,
 {
-    pub async fn resolve(&mut self, regions: Vec<u64>, min_ts: TimeStamp) -> Vec<u64> {
+    pub async fn resolve(
+        &mut self,
+        regions: Vec<u64>,
+        min_ts: TimeStamp,
+        timeout: Option<Duration>,
+    ) -> Vec<u64> {
         match self {
-            BackupStreamResolver::V1(x) => x.resolve(regions, min_ts).await,
+            BackupStreamResolver::V1(x) => x.resolve(regions, min_ts, timeout).await,
             BackupStreamResolver::V2(x, _) => {
                 let x = x.clone();
                 resolve_by_raft(regions, min_ts, x).await
