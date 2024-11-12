@@ -82,7 +82,7 @@ pub struct InMemoryEngineConfig {
 impl Default for InMemoryEngineConfig {
     fn default() -> Self {
         Self {
-            enable: false,
+            enable: true,
             gc_run_interval: ReadableDuration(DEFAULT_GC_RUN_INTERVAL),
             stop_load_threshold: None,
             // Each load/evict operation should run within five minutes.
@@ -90,7 +90,7 @@ impl Default for InMemoryEngineConfig {
             evict_threshold: None,
             capacity: None,
             mvcc_amplification_threshold: DEFAULT_MVCC_AMPLIFICATION_THRESHOLD,
-            cross_check_interval: ReadableDuration(Duration::from_secs(0)),
+            cross_check_interval: ReadableDuration(Duration::from_secs(30)),
             expected_region_size: raftstore::coprocessor::config::SPLIT_SIZE,
         }
     }
