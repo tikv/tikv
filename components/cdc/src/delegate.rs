@@ -138,7 +138,6 @@ pub struct Downstream {
 
     pub kv_api: ChangeDataRequestKvApi,
     pub filter_loop: bool,
-    pub skip_lightning_physical_imported: bool,
     pub observed_range: ObservedRange,
 
     sink: Option<Sink>,
@@ -173,7 +172,6 @@ impl Downstream {
         conn_id: ConnId,
         kv_api: ChangeDataRequestKvApi,
         filter_loop: bool,
-        skip_lightning_physical_imported: bool,
         observed_range: ObservedRange,
     ) -> Downstream {
         Downstream {
@@ -184,7 +182,6 @@ impl Downstream {
             conn_id,
             kv_api,
             filter_loop,
-            skip_lightning_physical_imported,
 
             observed_range,
 
@@ -755,7 +752,6 @@ impl Delegate {
         request_id: RequestId,
         entries: Vec<Option<KvEntry>>,
         filter_loop: bool,
-        skip_lightning_physical_imported: bool,
         observed_range: &ObservedRange,
     ) -> Result<Vec<CdcEvent>> {
         let entries_len = entries.len();
@@ -822,9 +818,6 @@ impl Delegate {
             if TxnSource::is_lossy_ddl_reorg_source_set(row.txn_source)
                 || filter_loop && TxnSource::is_cdc_write_source_set(row.txn_source)
             {
-                continue;
-            }
-            if skip_lightning_physical_imported && TxnSource::is_lightning_physical_import(row.txn_source) {
                 continue;
             }
             if current_rows_size + row_size >= CDC_EVENT_MAX_BYTES {
@@ -971,9 +964,6 @@ impl Delegate {
                     || downstream.filter_loop
                         && TxnSource::is_cdc_write_source_set(entry.txn_source)
                 {
-                    continue;
-                }
-                if downstream.skip_lightning_physical_imported && TxnSource::is_lightning_physical_import(entry.txn_source) {
                     continue;
                 }
 
@@ -1465,7 +1455,6 @@ mod tests {
             ConnId::new(),
             ChangeDataRequestKvApi::TiDb,
             false,
-            false,
             ObservedRange::default(),
         );
         downstream.set_sink(sink);
@@ -1594,7 +1583,6 @@ mod tests {
                 id,
                 ConnId::new(),
                 ChangeDataRequestKvApi::TiDb,
-                false,
                 false,
                 ObservedRange::default(),
             )
@@ -1761,7 +1749,6 @@ mod tests {
             ConnId::new(),
             ChangeDataRequestKvApi::TiDb,
             false,
-            false,
             observed_range,
         );
         downstream.set_sink(sink);
@@ -1829,7 +1816,6 @@ mod tests {
             ConnId::new(),
             ChangeDataRequestKvApi::TiDb,
             filter_loop,
-            false,
             observed_range,
         );
         downstream.set_sink(sink);

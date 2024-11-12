@@ -117,7 +117,6 @@ pub(crate) struct Initializer<E> {
     pub(crate) ts_filter_ratio: f64,
     pub(crate) kv_api: ChangeDataRequestKvApi,
     pub(crate) filter_loop: bool,
-    pub(crate) skip_lightning_physical_imported: bool,
 }
 
 impl<E: KvEngine> Initializer<E> {
@@ -512,7 +511,6 @@ impl<E: KvEngine> Initializer<E> {
             self.request_id,
             entries,
             self.filter_loop,
-            self.skip_lightning_physical_imported,
             &self.observed_range,
         )?;
         if done {
@@ -712,7 +710,6 @@ mod tests {
         engine: Option<RocksEngine>,
         kv_api: ChangeDataRequestKvApi,
         filter_loop: bool,
-        skip_lightning_physical_imported: bool,
     ) -> (
         LazyWorker<Task>,
         Runtime,
@@ -763,7 +760,6 @@ mod tests {
             ts_filter_ratio: 1.0, // always enable it.
             kv_api,
             filter_loop,
-            skip_lightning_physical_imported,
         };
 
         (receiver_worker, pool, initializer, rx, drain)
@@ -859,10 +855,6 @@ mod tests {
 
         worker.stop();
     }
-    
-    fn test_initializer_lightning_physical_import(txn_source: TxnSource, skip_lightning_physical_imported: bool) {
-        
-    }
 
     fn test_initializer_txn_source_filter(txn_source: TxnSource, filter_loop: bool) {
         let mut engine = TestEngineBuilder::new().build_without_cache().unwrap();
@@ -886,7 +878,6 @@ mod tests {
             engine.kv_engine(),
             ChangeDataRequestKvApi::TiDb,
             filter_loop,
-            false,
         );
         let th = pool.spawn(async move {
             initializer

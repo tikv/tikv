@@ -354,7 +354,6 @@ impl Service {
             conn_id,
             request.kv_api,
             request.filter_loop,
-            request.skip_lightning_physical_imported,
             observed_range,
         );
         let task = Task::Register {
