@@ -349,7 +349,7 @@ impl<E: Engine> ImportSstService<E> {
 
         let mut threads = ResizableRuntime::new(
             4,
-            "import",
+            "import-worker",
             Box::new(create_tokio_runtime),
             Box::new(|_| ()),
         );

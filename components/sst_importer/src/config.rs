@@ -96,11 +96,12 @@ impl online_config::ConfigManager for ConfigManager {
         }
 
         let tx_clone = self.tx.clone();
-        self.runtime.block_on(async move {
+        let handle = self.runtime.spawn(async move {
             if let Err(e) = tx_clone.adjust_with(cfg.num_threads).await {
                 error!("failed to adjust thread pool size"; "error" => ?e);
             }
         });
+        tokio::runtime::Handle::current().block_on(handle).unwrap();
 
         *self.wl() = cfg;
         Ok(())
