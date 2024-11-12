@@ -28,6 +28,7 @@ pub struct RaftstoreReporterConfig {
     /// worker) is expected to tick it. But the interval is necessary in
     /// some internal calculations.
     pub inspect_interval: Duration,
+    pub inspect_kvdb_interval: Duration,
 
     pub unsensitive_cause: f64,
     pub unsensitive_result: f64,
@@ -49,7 +50,7 @@ pub struct RaftstoreReporterConfig {
 /// It's used to calculate the final slow score of a store.
 /// It contains multiple factors, each factor represents a different aspect of
 /// the store's performance. Typically, we have two factors: Raft Disk I/O and
-/// Apply Disk I/O. If there are more factors in the future, we can add them
+/// KvDB Disk I/O. If there are more factors in the future, we can add them
 /// here.
 pub struct UnifiedSlowScore {
     factors: Vec<SlowScore>,
@@ -68,14 +69,18 @@ impl UnifiedSlowScore {
         unified_slow_score
             .factors
             .push(SlowScore::new(cfg.inspect_interval));
-        // The second factor is for Apply Disk I/O.
-        // TODO: add configurations for Apply Disk I/O.
+        // The second factor is for KvDB Disk I/O.
+        let inspect_kvdb_interval = if cfg.inspect_kvdb_interval < cfg.inspect_interval {
+            // If the inspect_kvdb_interval is less than inspect_interval, it should
+            // use `inspect_interval` * 10 as an empirical inspect interval for KvDB Disk
+            // I/O.
+            cfg.inspect_interval * 10
+        } else {
+            cfg.inspect_kvdb_interval
+        };
         unified_slow_score
             .factors
-            .push(SlowScore::new_with_extra_config(
-                cfg.inspect_interval.mul_f64(5.0), // 5x inspect interval, 5*100ms by default.
-                10,
-            ));
+            .push(SlowScore::new_with_extra_config(inspect_kvdb_interval, 5));
         unified_slow_score
     }
 
@@ -118,7 +123,7 @@ impl UnifiedSlowScore {
 
     #[inline]
     pub fn get_inspect_interval(&self) -> Duration {
-        // Assume that Raft Disk I/O and Apply Disk I/O have the same inspect interval.
+        // Assume that Raft Disk I/O and KvDB Disk I/O have the same inspect interval.
         self.factors[InspectFactor::RaftDisk as usize].get_inspect_interval()
     }
 }

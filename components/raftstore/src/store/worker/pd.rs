@@ -610,13 +610,19 @@ where
     load_base_split_check_interval: Duration,
     collect_tick_interval: Duration,
     inspect_latency_interval: Duration,
+    inspect_kvdb_latency_interval: Duration,
 }
 
 impl<T> StatsMonitor<T>
 where
     T: StoreStatsReporter,
 {
-    pub fn new(interval: Duration, inspect_latency_interval: Duration, reporter: T) -> Self {
+    pub fn new(
+        interval: Duration,
+        inspect_latency_interval: Duration,
+        inspect_kvdb_latency_interval: Duration,
+        reporter: T,
+    ) -> Self {
         StatsMonitor {
             reporter,
             handle: None,
@@ -634,6 +640,7 @@ where
                 cmp::min(default_collect_tick_interval(), interval),
             ),
             inspect_latency_interval,
+            inspect_kvdb_latency_interval,
         }
     }
 
@@ -666,7 +673,9 @@ where
         let update_raftdisk_latency_stats_interval =
             self.inspect_latency_interval
                 .div_duration_f64(tick_interval) as u64;
-        let update_kvdisk_latency_stats_interval = update_raftdisk_latency_stats_interval * 5;
+        let update_kvdisk_latency_stats_interval =
+            self.inspect_kvdb_latency_interval
+                .div_duration_f64(tick_interval) as u64;
 
         let (timer_tx, timer_rx) = mpsc::channel();
         self.timer = Some(timer_tx);
@@ -731,7 +740,7 @@ where
                         reporter.update_latency_stats(timer_cnt, InspectFactor::RaftDisk);
                     }
                     if is_enable_tick(timer_cnt, update_kvdisk_latency_stats_interval) {
-                        reporter.update_latency_stats(timer_cnt, InspectFactor::ApplyDisk);
+                        reporter.update_latency_stats(timer_cnt, InspectFactor::KvDisk);
                     }
                     timer_cnt += 1;
                 }
@@ -921,6 +930,7 @@ where
         let mut stats_monitor = StatsMonitor::new(
             interval,
             cfg.inspect_interval.0,
+            cfg.inspect_kvdb_interval.0,
             WrappedScheduler(scheduler.clone()),
         );
         if let Err(e) = stats_monitor.start(auto_split_controller, collector_reg_handle) {
@@ -929,6 +939,7 @@ where
 
         let health_reporter_config = RaftstoreReporterConfig {
             inspect_interval: cfg.inspect_interval.0,
+            inspect_kvdb_interval: cfg.inspect_kvdb_interval.0,
 
             unsensitive_cause: cfg.slow_trend_unsensitive_cause,
             unsensitive_result: cfg.slow_trend_unsensitive_result,
@@ -1972,7 +1983,7 @@ where
                         }),
                     )
                 }
-                InspectFactor::ApplyDisk => LatencyInspector::new(
+                InspectFactor::KvDisk => LatencyInspector::new(
                     id,
                     Box::new(move |id, duration| {
                         STORE_INSPECT_DURATION_HISTOGRAM
@@ -2587,6 +2598,7 @@ mod tests {
                 let mut stats_monitor = StatsMonitor::new(
                     Duration::from_secs(interval),
                     Duration::from_secs(interval),
+                    Duration::default(),
                     WrappedScheduler(scheduler),
                 );
                 if let Err(e) = stats_monitor.start(
@@ -2835,6 +2847,7 @@ mod tests {
         let mut stats_monitor = StatsMonitor::new(
             Duration::from_secs(interval),
             Duration::from_secs(interval),
+            Duration::default(),
             WrappedScheduler(pd_worker.scheduler()),
         );
         stats_monitor

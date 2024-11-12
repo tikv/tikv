@@ -43,20 +43,24 @@ fn test_latency_inspect() {
     {
         // Test send LatencyInspect to V1.
         let (tx, rx) = std::sync::mpsc::sync_channel(10);
-        let inspector = LatencyInspector::new(
-            1,
-            Box::new(move |_, duration| {
-                let dur = duration.sum();
-                tx.send(dur).unwrap();
-            }),
-        );
-        let msg = StoreMsgV1::LatencyInspect {
-            factor: InspectFactor::RaftDisk,
-            send_time: Instant::now(),
-            inspector,
-        };
-        router_v1.send_control(msg).unwrap();
-        rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+        // Inspect different factors.
+        for factor in [InspectFactor::RaftDisk, InspectFactor::KvDisk].iter() {
+            let cloned_tx = tx.clone();
+            let inspector = LatencyInspector::new(
+                1,
+                Box::new(move |_, duration| {
+                    let dur = duration.sum();
+                    cloned_tx.send(dur).unwrap();
+                }),
+            );
+            let msg = StoreMsgV1::LatencyInspect {
+                factor: *factor,
+                send_time: Instant::now(),
+                inspector,
+            };
+            router_v1.send_control(msg).unwrap();
+            rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+        }
     }
     {
         // Test send LatencyInspect to V2.
@@ -84,18 +88,22 @@ fn test_sync_latency_inspect() {
     cluster.run();
     let router = cluster.sim.wl().get_router(1).unwrap();
     let (tx, rx) = std::sync::mpsc::sync_channel(10);
-    let inspector = LatencyInspector::new(
-        1,
-        Box::new(move |_, duration| {
-            let dur = duration.sum();
-            tx.send(dur).unwrap();
-        }),
-    );
-    let msg = StoreMsgV1::LatencyInspect {
-        factor: InspectFactor::RaftDisk,
-        send_time: Instant::now(),
-        inspector,
-    };
-    router.send_control(msg).unwrap();
-    rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+    // Inspect different factors.
+    for factor in [InspectFactor::RaftDisk, InspectFactor::KvDisk].iter() {
+        let cloned_tx = tx.clone();
+        let inspector = LatencyInspector::new(
+            1,
+            Box::new(move |_, duration| {
+                let dur = duration.sum();
+                cloned_tx.send(dur).unwrap();
+            }),
+        );
+        let msg = StoreMsgV1::LatencyInspect {
+            factor: *factor,
+            send_time: Instant::now(),
+            inspector,
+        };
+        router.send_control(msg).unwrap();
+        rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+    }
 }

@@ -906,7 +906,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                             self.ctx.raft_metrics.health_stats.reset();
                             self.ctx.pending_latency_inspect.push(inspector);
                         }
-                        InspectFactor::ApplyDisk => {
+                        InspectFactor::KvDisk => {
                             // Send LatencyInspector to ApplyContext
                             if let Err(e) = self.ctx.apply_router.send_control(
                                 ApplyControlMsg::LatencyInspect {

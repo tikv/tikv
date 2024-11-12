@@ -53,7 +53,7 @@ impl RaftstoreDuration {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum InspectFactor {
     RaftDisk = 0,
-    ApplyDisk,
+    KvDisk,
     // TODO: Add more factors, like network io.
 }
 
@@ -61,7 +61,7 @@ impl InspectFactor {
     pub fn as_str(&self) -> &str {
         match *self {
             InspectFactor::RaftDisk => "raft",
-            InspectFactor::ApplyDisk => "apply",
+            InspectFactor::KvDisk => "kvdb",
         }
     }
 }
