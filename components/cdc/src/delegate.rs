@@ -820,6 +820,9 @@ impl Delegate {
             {
                 continue;
             }
+            if TxnSource::is_lightning_physical_import(row.txn_source) {
+                continue;
+            }
             if current_rows_size + row_size >= CDC_EVENT_MAX_BYTES {
                 rows.push(Vec::with_capacity(entries_len));
                 current_rows_size = 0;
@@ -966,7 +969,9 @@ impl Delegate {
                 {
                     continue;
                 }
-
+                if TxnSource::is_lightning_physical_import(entry.txn_source) {
+                    continue;
+                }
                 filtered_entries.push(entry.clone());
             }
             if filtered_entries.is_empty() {
