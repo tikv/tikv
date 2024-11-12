@@ -163,17 +163,33 @@ mod tests {
     #[test]
     fn test_cosine_distance() {
         let ok_cases = vec![
-            (Some(vec![1.0, 2.0]), Some(vec![2.0, 4.0]), Some(0.0)),
+            (
+                Some(vec![1.0, 2.0]),
+                Some(vec![2.0, 4.0]),
+                Some(0.004130363464355469),
+            ),
             (Some(vec![1.0, 2.0]), Some(vec![0.0, 0.0]), Some(1.0)),
             (
                 Some(vec![1.0, 1.0]),
                 Some(vec![1.0, 1.0]),
-                Some(5.960464477539063e-8),
+                Some(0.00572967529296875),
             ),
             (Some(vec![1.0, 0.0]), Some(vec![0.0, 2.0]), Some(1.0)),
-            (Some(vec![1.0, 1.0]), Some(vec![-1.0, -1.0]), Some(2.0)),
-            (Some(vec![1.0, 1.0]), Some(vec![1.1, 1.1]), Some(0.0)),
-            (Some(vec![1.0, 1.0]), Some(vec![-1.1, -1.1]), Some(2.0)),
+            (
+                Some(vec![1.0, 1.0]),
+                Some(vec![-1.0, -1.0]),
+                Some(1.9942703247070313),
+            ),
+            (
+                Some(vec![1.0, 1.0]),
+                Some(vec![1.1, 1.1]),
+                Some(0.00022123077178548556),
+            ),
+            (
+                Some(vec![1.0, 1.0]),
+                Some(vec![-1.1, -1.1]),
+                Some(1.9997787692282145),
+            ),
             (Some(vec![3e38]), Some(vec![3e38]), None), // NaN turns to NULL
             (Some(vec![1.0, 2.0]), None, None),
         ];

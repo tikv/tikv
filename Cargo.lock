@@ -5923,9 +5923,9 @@ dependencies = [
 
 [[package]]
 name = "simsimd"
-version = "4.4.0"
+version = "5.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "efc843bc8f12d9c8e6b734a0fe8918fc497b42f6ae0f347dbfdad5b5138ab9b4"
+checksum = "5c3218742a3581f8b33d8b2351a6dbf9cc351337b08e3ce7407f8d087d2bb62c"
 dependencies = [
  "cc",
 ]
