@@ -2340,14 +2340,14 @@ where
                     // peer to campaign leader if there exists uncampaigned regions. It's used to
                     // ensure that a leader is elected promptly for the newly created Raft
                     // group, minimizing availability impact (e.g. #12410 and #17602.).
-                    self.uncampaigned_new_regions.as_mut().map(|new_regions| {
-                        for new_region in new_regions.0.drain(..) {
+                    if let Some(new_regions) = &self.uncampaigned_new_regions {
+                        for new_region in &new_regions.0 {
                             let _ = ctx.router.send(
-                                new_region,
+                                *new_region,
                                 PeerMsg::CasualMessage(Box::new(CasualMessage::Campaign)),
                             );
                         }
-                    });
+                    }
                 }
                 StateRole::Follower => {
                     self.leader_lease.expire();
