@@ -1,5 +1,4 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
-
 use std::{
     error::Error,
     result::Result,
@@ -7,10 +6,8 @@ use std::{
 };
 
 use online_config::{self, OnlineConfig};
-use tikv_util::{
-    config::ReadableDuration, HandyRwLock,
-};
-use tokio::sync::mpsc::Sender;
+use tikv_util::{config::ReadableDuration, resizable_threadpool::AdjustHandle, HandyRwLock};
+use tokio::runtime::{Handle, Runtime};
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
@@ -66,14 +63,16 @@ impl Config {
 #[derive(Clone)]
 pub struct ConfigManager {
     pub config: Arc<RwLock<Config>>,
-    tx: Sender<(usize, Sender<()>)>
+    tx: AdjustHandle,
+    runtime: Handle,
 }
 
 impl ConfigManager {
-    pub fn new(cfg: Config, tx: Sender<(usize, Sender<()>)>) -> Self {
+    pub fn new(cfg: Config, tx: AdjustHandle) -> Self {
         ConfigManager {
             config: Arc::new(RwLock::new(cfg)),
             tx,
+            runtime: Runtime::new().unwrap().handle().clone(),
         }
     }
 }
@@ -96,11 +95,13 @@ impl online_config::ConfigManager for ConfigManager {
             return Err(e);
         }
 
-        tokio::spawn(async {
-            //send the new config
-            self.tx.send(cfg.num_threads, self).await.unwrap();
-        })
-        
+        let tx_clone = self.tx.clone();
+        self.runtime.block_on(async move {
+            if let Err(e) = tx_clone.adjust_with(cfg.num_threads).await {
+                error!("failed to adjust thread pool size"; "error" => ?e);
+            }
+        });
+
         *self.wl() = cfg;
         Ok(())
     }

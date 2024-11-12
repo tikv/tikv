@@ -276,9 +276,9 @@ mod test {
             ..Config::default()
         };
 
-        let mut threads =
+        let threads =
             ResizableRuntime::new(4, "test", Box::new(create_tokio_runtime), Box::new(|_| {}));
-        let handle = RuntimeHandle::new(threads);
+        let handle = threads.handle();
 
         let switcher = ImportModeSwitcherV2::new(&cfg);
         let mut region = Region::default();

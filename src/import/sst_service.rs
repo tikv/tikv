@@ -37,15 +37,15 @@ use tikv_kv::{Engine, LocalTablets, Modify, WriteData};
 use tikv_util::{
     config::ReadableSize,
     future::{create_stream_with_buffer, paired_future_callback},
-    resizable_threadpool::{ResizableRuntime, RuntimeHandle},
+    resizable_threadpool::{AdjustHandle, ResizableRuntime, RuntimeHandle},
     sys::disk::{get_disk_status, DiskUsage},
     time::{Instant, Limiter},
     HandyRwLock,
 };
-use tokio::time::sleep;
 use tokio::{
-    runtime::{Handle, Runtime},
-    sync::mpsc as mpsc,
+    runtime::Runtime,
+    sync::{mpsc, oneshot},
+    time::sleep,
 };
 use txn_types::{Key, WriteRef, WriteType};
 
@@ -347,15 +347,14 @@ impl<E: Engine> ImportSstService<E> {
                 .build()
         };
 
-        let threads = ResizableRuntime::new(
+        let mut threads = ResizableRuntime::new(
             4,
             "import",
             Box::new(create_tokio_runtime),
             Box::new(|_| ()),
         );
-        let threads_clone = Arc::new(threads);
         // There would be 4 initial threads running forever.
-        let handle = RuntimeHandle::new(threads);
+        let handle = threads.handle();
         if let LocalTablets::Singleton(tablet) = &tablets {
             importer.start_switch_mode_check(&handle.clone(), Some(tablet.clone()));
         } else {
@@ -369,17 +368,20 @@ impl<E: Engine> ImportSstService<E> {
                 tokio::time::sleep(WRITER_GC_INTERVAL).await;
             }
         });
-        let (tx, mut rx) = mpsc::channel::<(usize, mpsc::Sender<()>)>(1);
-        tokio::spawn(async move {
-            while let Some((new_size, ack_tx)) = rx.recv().await {
-                threads_clone.adjust_with(new_size);
-                let _ = ack_tx.send(()).await;
+        let (tx, mut rx) = mpsc::channel::<(usize, oneshot::Sender<usize>)>(32);
+        let rt = Runtime::new().unwrap();
+        rt.spawn(async move {
+            while let Some((msg, response_tx)) = rx.recv().await {
+                let resp = threads.adjust_with(msg);
+
+                if let Err(err) = response_tx.send(resp) {
+                    error!("Failed to send response: {}", err);
+                }
             }
         });
-        let cfg_mgr = ConfigManager::new(cfg, tx.clone());
+        let cfg_mgr = ConfigManager::new(cfg, AdjustHandle::new(tx));
         handle.spawn(Self::tick(importer.clone(), cfg_mgr.clone()));
         // Drop the initial pool to accept new tasks
-        handle.adjust_with(cfg_mgr.rl().num_threads);
 
         ImportSstService {
             cfg: cfg_mgr,

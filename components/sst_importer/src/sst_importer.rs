@@ -1641,10 +1641,14 @@ mod tests {
     use test_sst_importer::*;
     use test_util::new_test_key_manager;
     use tikv_util::{
-        codec::stream_event::EventEncoder, resizable_threadpool::ResizableRuntime,
+        codec::stream_event::EventEncoder,
+        resizable_threadpool::{AdjustHandle, ResizableRuntime},
         stream::block_on_external_io,
     };
-    use tokio::io::{AsyncWrite, AsyncWriteExt};
+    use tokio::{
+        io::{AsyncWrite, AsyncWriteExt},
+        sync::{mpsc, oneshot},
+    };
     use tokio_util::compat::{FuturesAsyncWriteCompatExt, TokioAsyncWriteCompatExt};
     use txn_types::{Value, WriteType};
     use uuid::Uuid;
@@ -2299,16 +2303,27 @@ mod tests {
         };
         let change = cfg.diff(&cfg_new);
 
-        let threads = ResizableRuntime::new(
+        let mut threads = ResizableRuntime::new(
             cfg.num_threads,
             "test",
             Box::new(create_tokio_runtime),
             Box::new(|_| {}),
         );
-        let handle = threads.handle();
+
+        let rt = Runtime::new().unwrap();
+        let (tx, mut rx) = mpsc::channel::<(usize, oneshot::Sender<usize>)>(32);
+        rt.spawn(async move {
+            while let Some((msg, response_tx)) = rx.recv().await {
+                let resp = threads.adjust_with(msg);
+
+                if let Err(err) = response_tx.send(resp) {
+                    error!("Failed to send response: {}", err);
+                }
+            }
+        });
 
         // create config manager and update config.
-        let mut cfg_mgr = ImportConfigManager::new(cfg, handle);
+        let mut cfg_mgr = ImportConfigManager::new(cfg, AdjustHandle::new(tx));
         cfg_mgr.dispatch(change).unwrap();
         importer.update_config_memory_use_ratio(&cfg_mgr);
 
@@ -2332,22 +2347,34 @@ mod tests {
         };
         let change = cfg.diff(&cfg_new);
 
-        let threads = ResizableRuntime::new(
+        let mut threads = ResizableRuntime::new(
             cfg.num_threads,
             "test",
             Box::new(create_tokio_runtime),
             Box::new(|_| {}),
         );
-        let handle = threads.handle();
 
-        let mut cfg_mgr = ImportConfigManager::new(cfg, handle);
+        let rt = Runtime::new().unwrap();
+        let (tx, mut rx) = mpsc::channel::<(usize, oneshot::Sender<usize>)>(32);
+        rt.spawn(async move {
+            while let Some((msg, response_tx)) = rx.recv().await {
+                let resp = threads.adjust_with(msg);
+
+                if let Err(err) = response_tx.send(resp) {
+                    error!("Failed to send response: {}", err);
+                }
+            }
+        });
+
+        let mut cfg_mgr = ImportConfigManager::new(cfg, AdjustHandle::new(tx));
         let r = cfg_mgr.dispatch(change);
         assert!(r.is_err());
     }
 
     #[test]
     fn test_update_import_num_threads() {
-        let threads = ResizableRuntime::new(
+        let cfg = Config::default();
+        let mut threads = ResizableRuntime::new(
             Config::default().num_threads,
             "test",
             Box::new(create_tokio_runtime),
@@ -2355,8 +2382,19 @@ mod tests {
                 COUNTER.store(new_size, Ordering::SeqCst);
             }),
         );
-        let handle = threads.handle();
-        let mut cfg_mgr = ImportConfigManager::new(Config::default(), handle);
+
+        let rt = Runtime::new().unwrap();
+        let (tx, mut rx) = mpsc::channel::<(usize, oneshot::Sender<usize>)>(32);
+        rt.spawn(async move {
+            while let Some((msg, response_tx)) = rx.recv().await {
+                let resp = threads.adjust_with(msg);
+
+                if let Err(err) = response_tx.send(resp) {
+                    error!("Failed to send response: {}", err);
+                }
+            }
+        });
+        let mut cfg_mgr = ImportConfigManager::new(cfg, AdjustHandle::new(tx));
 
         assert_eq!(COUNTER.load(Ordering::SeqCst), cfg_mgr.rl().num_threads);
         assert_eq!(cfg_mgr.rl().num_threads, Config::default().num_threads);

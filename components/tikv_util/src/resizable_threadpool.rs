@@ -6,6 +6,7 @@ use futures::Future;
 use tokio::{
     io::Result as TokioResult,
     runtime::{Handle, Runtime},
+    sync::{mpsc, oneshot},
 };
 
 #[derive(Clone)]
@@ -22,6 +23,32 @@ pub struct ResizableRuntime {
     after_adjust: Box<dyn Fn(usize) + Send + Sync>,
 }
 
+#[derive(Clone)]
+pub struct AdjustHandle {
+    sender: Arc<mpsc::Sender<(usize, oneshot::Sender<usize>)>>,
+}
+
+impl AdjustHandle {
+    pub fn new(sender: mpsc::Sender<(usize, oneshot::Sender<usize>)>) -> Self {
+        Self {
+            sender: Arc::new(sender),
+        }
+    }
+
+    pub async fn adjust_with(&self, msg: usize) -> Result<usize, String> {
+        let (response_tx, response_rx) = oneshot::channel();
+
+        // Send the message to the receiver
+        self.sender
+            .send((msg, response_tx))
+            .await
+            .map_err(|_| "Send failed".to_string())?;
+
+        // Wait for the response from the receiver
+        response_rx.await.map_err(|_| "Receive failed".to_string())
+    }
+}
+
 impl RuntimeHandle {
     pub fn spawn<Fut>(&self, fut: Fut)
     where
@@ -31,7 +58,6 @@ impl RuntimeHandle {
         if let Some(handle) = inner.as_ref() {
             handle.spawn(fut);
         }
-
     }
 
     pub fn block_on<Fut>(&self, fut: Fut) -> Fut::Output
@@ -87,9 +113,9 @@ impl ResizableRuntime {
         self.pool.clone()
     }
 
-    pub fn adjust_with(&mut self, new_size: usize) {
+    pub fn adjust_with(&mut self, new_size: usize) -> usize {
         if self.size == new_size {
-            return;
+            return new_size;
         }
 
         let new_pool = (self.replace_pool_rule)(new_size, &self.thread_name)
@@ -104,12 +130,13 @@ impl ResizableRuntime {
 
         self.size = new_size;
         (self.after_adjust)(new_size);
+
+        new_size
     }
 }
 
 impl Drop for ResizableRuntime {
     fn drop(&mut self) {
-        println!("drop ResizableRuntime!");
         for runtime in self.all_pools.drain(..) {
             runtime.shutdown_background();
         }
@@ -119,8 +146,6 @@ impl Drop for ResizableRuntime {
 #[cfg(test)]
 mod test {
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::thread::sleep;
-    use std::time::Duration;
 
     use super::*;
 
@@ -150,7 +175,6 @@ mod test {
         assert_eq!(COUNTER.load(Ordering::SeqCst), 4);
         threads.adjust_with(8);
         handle.block_on(async {
-            sleep(Duration::from_millis(100));
             assert_eq!(COUNTER.load(Ordering::SeqCst), 8);
         });
     }
