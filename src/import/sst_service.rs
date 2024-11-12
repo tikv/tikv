@@ -22,6 +22,7 @@ use kvproto::{
     },
     metapb::RegionEpoch,
 };
+use raft::StateRole;
 use raftstore::{
     coprocessor::{RegionInfo, RegionInfoProvider},
     store::util::is_epoch_stale,
@@ -480,6 +481,15 @@ impl<E: Engine> ImportSstService<E> {
     }
 }
 
+fn check_region_is_leader(local_region_info: Option<RegionInfo>) -> bool {
+    if let Some(r) = local_region_info {
+        if r.role == StateRole::Leader {
+            return true;
+        }
+    }
+    false
+}
+
 fn check_local_region_stale(
     region_id: u64,
     epoch: &RegionEpoch,
@@ -584,7 +594,7 @@ macro_rules! impl_write {
                         Err(e) => return (Err(From::from(e)), Some(rx)),
                     };
                     if let Err(e) =
-                        check_local_region_stale(region_id, meta.get_region_epoch(), res)
+                        check_local_region_stale(region_id, meta.get_region_epoch(), res.clone())
                     {
                         return (Err(e), Some(rx));
                     };
@@ -602,7 +612,8 @@ macro_rules! impl_write {
                         }
                     };
 
-                    let writer = match import.$writer_fn(&*tablet, meta) {
+                    let is_leader = check_region_is_leader(res);
+                    let writer = match import.$writer_fn(is_leader, &*tablet, meta) {
                         Ok(w) => w,
                         Err(e) => {
                             error!("build writer failed {:?}", e);
@@ -1177,7 +1188,13 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         self.threads.spawn(handle_task);
     }
 
-    impl_write!(write, WriteRequest, WriteResponse, Chunk, new_txn_writer);
+    impl_write!(
+        write,
+        WriteRequest,
+        WriteResponse,
+        Chunk,
+        new_peer_txn_writer
+    );
 
     impl_write!(
         raw_write,
