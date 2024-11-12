@@ -50,7 +50,7 @@ use tikv_util::{
     timer::GLOBAL_TIMER_HANDLE,
     topn::TopN,
     warn,
-    worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler},
+    worker::{Runnable, ScheduleError, Scheduler},
 };
 use txn_types::TimeStamp;
 use yatp::Remote;
@@ -2292,21 +2292,6 @@ where
 
     fn shutdown(&mut self) {
         self.stats_monitor.stop();
-    }
-}
-
-impl<EK, ER, T> RunnableWithTimer for Runner<EK, ER, T>
-where
-    EK: KvEngine,
-    ER: RaftEngine,
-    T: PdClient + 'static,
-{
-    fn on_timeout(&mut self) {
-        debug!("notify pd timeout");
-    }
-
-    fn get_interval(&self) -> Duration {
-        self.health_reporter.get_tick_interval()
     }
 }
 

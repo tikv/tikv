@@ -7,6 +7,7 @@ use std::{
 
 use ordered_float::OrderedFloat;
 
+const DEFAULT_UPDATE_ROUND_INTERVALS: Duration = Duration::from_secs(10);
 // Slow score is a value that represents the speed of a store and ranges in [1,
 // 100]. It is maintained in the AIMD way.
 // If there are some inspecting requests timeout during a round, by default the
@@ -45,7 +46,7 @@ impl SlowScore {
 
             inspect_interval,
             ratio_thresh: OrderedFloat(0.1),
-            min_ttr: Duration::from_secs(5 * 60),
+            min_ttr: DEFAULT_UPDATE_ROUND_INTERVALS.mul_f64(30.0),
             last_record_time: Instant::now(),
             last_update_time: Instant::now(),
             round_ticks: 30,
@@ -54,7 +55,8 @@ impl SlowScore {
         }
     }
 
-    pub fn new_with_extra_config(inspect_interval: Duration, round_ticks: u64) -> SlowScore {
+    // Only for kvdb.
+    pub fn new_with_extra_config(inspect_interval: Duration, timeout_ratio: f64) -> SlowScore {
         SlowScore {
             value: OrderedFloat(1.0),
 
@@ -62,11 +64,11 @@ impl SlowScore {
             total_requests: 0,
 
             inspect_interval,
-            ratio_thresh: OrderedFloat(0.1),
-            min_ttr: Duration::from_secs(5 * 60),
+            ratio_thresh: OrderedFloat(timeout_ratio),
+            min_ttr: DEFAULT_UPDATE_ROUND_INTERVALS.mul_f64(30.0),
             last_record_time: Instant::now(),
             last_update_time: Instant::now(),
-            round_ticks,
+            round_ticks: DEFAULT_UPDATE_ROUND_INTERVALS.div_duration_f64(inspect_interval) as u64,
             last_tick_id: 0,
             last_tick_finished: true,
         }

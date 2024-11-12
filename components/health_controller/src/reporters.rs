@@ -80,7 +80,7 @@ impl UnifiedSlowScore {
         };
         unified_slow_score
             .factors
-            .push(SlowScore::new_with_extra_config(inspect_kvdb_interval, 5));
+            .push(SlowScore::new_with_extra_config(inspect_kvdb_interval, 0.6));
         unified_slow_score
     }
 
@@ -107,24 +107,14 @@ impl UnifiedSlowScore {
 
     // Returns the maximum score of all factors.
     pub fn get_score(&self) -> f64 {
-        let mut max = 0.0;
-        for factor in &self.factors {
-            let score = factor.get();
-            if score > max {
-                max = score;
-            }
-        }
-        max
+        self.factors
+            .iter()
+            .map(|factor| factor.get())
+            .fold(0.0, f64::max)
     }
 
     pub fn last_tick_finished(&self) -> bool {
         self.factors.iter().all(SlowScore::last_tick_finished)
-    }
-
-    #[inline]
-    pub fn get_inspect_interval(&self) -> Duration {
-        // Assume that Raft Disk I/O and KvDB Disk I/O have the same inspect interval.
-        self.factors[InspectFactor::RaftDisk as usize].get_inspect_interval()
     }
 }
 
@@ -145,10 +135,6 @@ impl RaftstoreReporter {
             slow_trend: SlowTrendStatistics::new(cfg),
             is_healthy: true,
         }
-    }
-
-    pub fn get_tick_interval(&self) -> Duration {
-        self.slow_score.get_inspect_interval()
     }
 
     pub fn get_slow_score(&self) -> f64 {
@@ -200,19 +186,19 @@ impl RaftstoreReporter {
         self.slow_trend.slow_cause.record(500_000, Instant::now());
 
         // healthy: The health status of the current store.
-        // last_tick_finished: The last tick of all factors is finished.
+        // all_ticks_finished: The last tick of all factors is finished.
         // factor_tick_finished: The last tick of the current factor is finished.
-        let (healthy, last_tick_finished, factor_tick_finished) = (
+        let (healthy, all_ticks_finished, factor_tick_finished) = (
             self.is_healthy(),
             self.slow_score.last_tick_finished(),
             self.slow_score.get(factor).last_tick_finished(),
         );
         // The health status is recovered to serving as long as any tick
         // does not timeout.
-        if !healthy && last_tick_finished {
+        if !healthy && all_ticks_finished {
             self.set_is_healthy(true);
         }
-        if !last_tick_finished {
+        if !all_ticks_finished {
             // If the last tick is not finished, it means that the current store might
             // be busy on handling requests or delayed on I/O operations. And only when
             // the current store is not busy, it should record the last_tick as a timeout.

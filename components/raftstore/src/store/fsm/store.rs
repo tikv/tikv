@@ -1951,7 +1951,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             causal_ts_provider,
             grpc_service_mgr,
         );
-        assert!(workers.pd_worker.start_with_timer(pd_runner));
+        assert!(workers.pd_worker.start(pd_runner));
 
         if let Err(e) = sys_util::thread::set_priority(sys_util::HIGH_PRI) {
             warn!("set thread priority for raftstore failed"; "error" => ?e);
