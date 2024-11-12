@@ -932,7 +932,7 @@ where
     /// The first element is the region id, the second element is the time when
     /// pending regions are added, used to clear the pending regions after an
     /// election timeout.
-    pub uncampaigned_new_regions: (Vec<u64>, Instant),
+    pub uncampaigned_new_regions: Option<(Vec<u64>, Instant)>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -1084,7 +1084,7 @@ where
             snapshot_recovery_state: None,
             busy_on_apply: Some(false),
             last_leader_committed_idx: None,
-            uncampaigned_new_regions: (vec![], Instant::now()),
+            uncampaigned_new_regions: None,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -2340,12 +2340,14 @@ where
                     // peer to campaign leader if there exists uncampaigned regions. It's used to
                     // ensure that a leader is elected promptly for the newly created Raft
                     // group, minimizing availability impact (e.g. #12410 and #17602.).
-                    for new_region in self.uncampaigned_new_regions.0.drain(..) {
-                        let _ = ctx.router.send(
-                            new_region,
-                            PeerMsg::CasualMessage(Box::new(CasualMessage::Campaign)),
-                        );
-                    }
+                    self.uncampaigned_new_regions.as_mut().map(|new_regions| {
+                        for new_region in new_regions.0.drain(..) {
+                            let _ = ctx.router.send(
+                                new_region,
+                                PeerMsg::CasualMessage(Box::new(CasualMessage::Campaign)),
+                            );
+                        }
+                    });
                 }
                 StateRole::Follower => {
                     self.leader_lease.expire();
@@ -2356,11 +2358,11 @@ where
                         let _ = self.get_store().clear_data();
                         self.delay_clean_data = false;
                     }
-                    // Clear the uncampaigned list.
-                    self.uncampaigned_new_regions.0.clear();
                 }
                 _ => {}
             }
+            // Clear the uncampaigned list.
+            self.uncampaigned_new_regions = None;
             self.on_leader_changed(ss.leader_id, self.term());
             ctx.coprocessor_host.on_role_change(
                 self.region(),
