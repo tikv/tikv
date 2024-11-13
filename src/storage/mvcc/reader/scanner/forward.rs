@@ -124,6 +124,7 @@ pub struct ForwardScanner<S: Snapshot, P: ScanPolicy<S>> {
     statistics: Statistics,
     scan_policy: P,
     met_newer_ts_data: NewerTsCheckState,
+    in_memory_engine_hit: bool,
 }
 
 impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
@@ -139,6 +140,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
             write: write_cursor,
             default: default_cursor,
         };
+        let in_memory_engine_hit = cfg.in_memory_engine_hit;
         ForwardScanner {
             met_newer_ts_data: if cfg.check_has_newer_ts_data {
                 NewerTsCheckState::NotMetYet
@@ -150,6 +152,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
             statistics: Statistics::default(),
             is_started: false,
             scan_policy,
+            in_memory_engine_hit,
         }
     }
 
@@ -174,6 +177,12 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                     self.cfg.lower_bound.as_ref().unwrap(),
                     &mut self.statistics.write,
                 )?;
+                info!(
+                    "jepsen on read_next";
+                    "lower_bound" => log_wrappers::Value(self.cfg.lower_bound.as_ref().unwrap().as_encoded()),
+                    "scanner_ts" => self.cfg.ts,
+                    "seek_valid" => self.cursors.write.valid().unwrap(),
+                );
                 if let Some(lock_cursor) = self.cursors.lock.as_mut() {
                     lock_cursor.seek(
                         self.cfg.lower_bound.as_ref().unwrap(),
@@ -331,6 +340,16 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                     return Ok(false);
                 }
                 let key_commit_ts = Key::decode_ts_from(current_key)?;
+
+                info!(
+                    "jepsen on move_write_cursor_to_ts";
+                    "user_key" => log_wrappers::hex_encode_upper(user_key.as_encoded().as_slice()),
+                    "current_key" => log_wrappers::hex_encode_upper(current_key),
+                    "scanner_ts" => self.cfg.ts,
+                    "current_key_commit_ts" => key_commit_ts,
+                    "in_memory_engine_hit" => self.in_memory_engine_hit,
+                );
+
                 if key_commit_ts <= self.cfg.ts {
                     // Founded, don't need to seek again.
                     return Ok(true);
@@ -357,12 +376,20 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
         }
         self.statistics.write.over_seek_bound += 1;
 
+        let seek_key = user_key.clone().append_ts(self.cfg.ts);
+        info!(
+            "jepsen on move_write_cursor_to_ts for seek";
+            "seek_key" => log_wrappers::hex_encode_upper(seek_key.as_encoded().as_slice()),
+            "user_key" => log_wrappers::hex_encode_upper(user_key.as_encoded().as_slice()),
+            "scanner_ts" => self.cfg.ts,
+            "in_memory_engine_hit" => self.in_memory_engine_hit,
+        );
+
         // `user_key` must have reserved space here, so its clone has reserved space
         // too. So no reallocation happens in `append_ts`.
-        self.cursors.write.seek(
-            &user_key.clone().append_ts(self.cfg.ts),
-            &mut self.statistics.write,
-        )?;
+        self.cursors
+            .write
+            .seek(&seek_key, &mut self.statistics.write)?;
         if !self.cursors.write.valid()? {
             // Key space ended.
             return Ok(false);
@@ -437,11 +464,24 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
         statistics: &mut Statistics,
     ) -> Result<HandleRes<Self::Output>> {
         let value: Option<Value> = loop {
-            let write = WriteRef::parse(cursors.write.value(&mut statistics.write))?;
+            let val = cursors.write.value(&mut statistics.write);
+            let write = WriteRef::parse(val)?;
 
             if !write.check_gc_fence_as_latest_version(cfg.ts) {
                 break None;
             }
+
+            let current_key = cursors.write.key(&mut statistics.write);
+            let key_commit_ts = Key::decode_ts_from(current_key)?;
+            info!(
+                "jepsen on handle_write";
+                "user_key" => log_wrappers::hex_encode_upper(current_user_key.as_encoded().as_slice()),
+                "current_key" => log_wrappers::hex_encode_upper(current_key),
+                "scanner_ts" => cfg.ts,
+                "current_key_commit_ts" => key_commit_ts,
+                "write" => ?write,
+                "write_val" => log_wrappers::hex_encode_upper(val),
+            );
 
             match write.write_type {
                 WriteType::Put => {

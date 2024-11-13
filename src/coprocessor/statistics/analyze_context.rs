@@ -73,6 +73,7 @@ impl<S: Snapshot, F: KvFormat> AnalyzeContext<S, F> {
             req_ctx.bypass_locks.clone(),
             req_ctx.access_locks.clone(),
             false,
+            false,
         );
         let is_auto_analyze = req.get_flags() & REQ_FLAG_TIDB_SYSSESSION > 0;
 

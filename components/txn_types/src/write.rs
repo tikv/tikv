@@ -265,7 +265,7 @@ impl Write {
     }
 }
 
-#[derive(PartialEq, Clone)]
+#[derive(PartialEq, Clone, Debug)]
 pub struct WriteRef<'a> {
     pub write_type: WriteType,
     pub start_ts: TimeStamp,

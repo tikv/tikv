@@ -115,6 +115,10 @@ impl<S: Snapshot> EngineSnapshot for RegionSnapshot<S> {
     fn ext(&self) -> RegionSnapshotExt<'_, S> {
         RegionSnapshotExt { snapshot: self }
     }
+
+    fn sequence_number(&self) -> u64 {
+        self.get_snapshot().sequence_number()
+    }
 }
 
 impl<S: Snapshot> EngineIterator for RegionIterator<S> {
