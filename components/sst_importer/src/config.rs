@@ -2,12 +2,11 @@
 use std::{
     error::Error,
     result::Result,
-    sync::{Arc, RwLock},
+    sync::{Arc, RwLock, Mutex},
 };
 
 use online_config::{self, OnlineConfig};
-use tikv_util::{config::ReadableDuration, resizable_threadpool::AdjustHandle, HandyRwLock};
-use tokio::runtime::{Handle, Runtime};
+use tikv_util::{config::ReadableDuration, resizable_threadpool::ResizableRuntime, HandyRwLock};
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
@@ -63,16 +62,14 @@ impl Config {
 #[derive(Clone)]
 pub struct ConfigManager {
     pub config: Arc<RwLock<Config>>,
-    tx: AdjustHandle,
-    runtime: Handle,
+    pool: Arc<Mutex<ResizableRuntime>>,
 }
 
 impl ConfigManager {
-    pub fn new(cfg: Config, tx: AdjustHandle) -> Self {
+    pub fn new(cfg: Config, pool : Arc<Mutex<ResizableRuntime>>) -> Self {
         ConfigManager {
             config: Arc::new(RwLock::new(cfg)),
-            tx,
-            runtime: Runtime::new().unwrap().handle().clone(),
+            pool,
         }
     }
 }
@@ -95,13 +92,10 @@ impl online_config::ConfigManager for ConfigManager {
             return Err(e);
         }
 
-        let tx_clone = self.tx.clone();
-        let handle = self.runtime.spawn(async move {
-            if let Err(e) = tx_clone.adjust_with(cfg.num_threads).await {
-                error!("failed to adjust thread pool size"; "error" => ?e);
-            }
-        });
-        tokio::runtime::Handle::current().block_on(handle).unwrap();
+        self.pool
+            .lock()
+            .unwrap()
+            .adjust_with(cfg.num_threads);
 
         *self.wl() = cfg;
         Ok(())

@@ -1616,7 +1616,7 @@ mod tests {
     use std::{
         io::{self, Cursor},
         ops::Sub,
-        sync::atomic::{AtomicUsize, Ordering},
+        sync::{atomic::{AtomicUsize, Ordering}, Mutex},
         usize,
     };
 
@@ -2303,27 +2303,17 @@ mod tests {
         };
         let change = cfg.diff(&cfg_new);
 
-        let mut threads = ResizableRuntime::new(
+        let threads = ResizableRuntime::new(
             cfg.num_threads,
             "test",
             Box::new(create_tokio_runtime),
             Box::new(|_| {}),
         );
 
-        let rt = Runtime::new().unwrap();
-        let (tx, mut rx) = mpsc::channel::<(usize, oneshot::Sender<usize>)>(32);
-        rt.spawn(async move {
-            while let Some((msg, response_tx)) = rx.recv().await {
-                let resp = threads.adjust_with(msg);
-
-                if let Err(err) = response_tx.send(resp) {
-                    error!("Failed to send response: {}", err);
-                }
-            }
-        });
+        let threads_clone = Arc::new(Mutex::new(threads));
 
         // create config manager and update config.
-        let mut cfg_mgr = ImportConfigManager::new(cfg, AdjustHandle::new(tx));
+        let mut cfg_mgr = ImportConfigManager::new(cfg, threads_clone);
         cfg_mgr.dispatch(change).unwrap();
         importer.update_config_memory_use_ratio(&cfg_mgr);
 
@@ -2347,26 +2337,16 @@ mod tests {
         };
         let change = cfg.diff(&cfg_new);
 
-        let mut threads = ResizableRuntime::new(
+        let threads = ResizableRuntime::new(
             cfg.num_threads,
             "test",
             Box::new(create_tokio_runtime),
             Box::new(|_| {}),
         );
 
-        let rt = Runtime::new().unwrap();
-        let (tx, mut rx) = mpsc::channel::<(usize, oneshot::Sender<usize>)>(32);
-        rt.spawn(async move {
-            while let Some((msg, response_tx)) = rx.recv().await {
-                let resp = threads.adjust_with(msg);
+        let threads_clone = Arc::new(Mutex::new(threads));
 
-                if let Err(err) = response_tx.send(resp) {
-                    error!("Failed to send response: {}", err);
-                }
-            }
-        });
-
-        let mut cfg_mgr = ImportConfigManager::new(cfg, AdjustHandle::new(tx));
+        let mut cfg_mgr = ImportConfigManager::new(cfg, threads_clone);
         let r = cfg_mgr.dispatch(change);
         assert!(r.is_err());
     }
@@ -2374,7 +2354,7 @@ mod tests {
     #[test]
     fn test_update_import_num_threads() {
         let cfg = Config::default();
-        let mut threads = ResizableRuntime::new(
+        let threads = ResizableRuntime::new(
             Config::default().num_threads,
             "test",
             Box::new(create_tokio_runtime),
@@ -2383,18 +2363,8 @@ mod tests {
             }),
         );
 
-        let rt = Runtime::new().unwrap();
-        let (tx, mut rx) = mpsc::channel::<(usize, oneshot::Sender<usize>)>(32);
-        rt.spawn(async move {
-            while let Some((msg, response_tx)) = rx.recv().await {
-                let resp = threads.adjust_with(msg);
-
-                if let Err(err) = response_tx.send(resp) {
-                    error!("Failed to send response: {}", err);
-                }
-            }
-        });
-        let mut cfg_mgr = ImportConfigManager::new(cfg, AdjustHandle::new(tx));
+        let threads_clone = Arc::new(Mutex::new(threads));
+        let mut cfg_mgr = ImportConfigManager::new(cfg, threads_clone);
 
         assert_eq!(COUNTER.load(Ordering::SeqCst), cfg_mgr.rl().num_threads);
         assert_eq!(cfg_mgr.rl().num_threads, Config::default().num_threads);

@@ -57,6 +57,8 @@ impl RuntimeHandle {
         let inner = self.inner.read().unwrap();
         if let Some(handle) = inner.as_ref() {
             handle.spawn(fut);
+        } else {
+            panic!("runtime is not running");
         }
     }
 

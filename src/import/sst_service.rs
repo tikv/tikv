@@ -36,17 +36,13 @@ use sst_importer::{
 use tikv_kv::{Engine, LocalTablets, Modify, WriteData};
 use tikv_util::{
     config::ReadableSize,
-    future::{create_stream_with_buffer, paired_future_callback},
-    resizable_threadpool::{AdjustHandle, ResizableRuntime, RuntimeHandle},
+    future::create_stream_with_buffer,
+    resizable_threadpool::{ResizableRuntime, RuntimeHandle},
     sys::disk::{get_disk_status, DiskUsage},
     time::{Instant, Limiter},
     HandyRwLock,
 };
-use tokio::{
-    runtime::Runtime,
-    sync::{mpsc, oneshot},
-    time::sleep,
-};
+use tokio::time::sleep;
 use txn_types::{Key, WriteRef, WriteType};
 
 use super::{
@@ -347,20 +343,20 @@ impl<E: Engine> ImportSstService<E> {
                 .build()
         };
 
-        let mut threads = ResizableRuntime::new(
+        let threads = ResizableRuntime::new(
             4,
             "import-worker",
             Box::new(create_tokio_runtime),
             Box::new(|_| ()),
         );
-        // There would be 4 initial threads running forever.
+        
         let handle = threads.handle();
+        let threads_clone = Arc::new(Mutex::new(threads));
         if let LocalTablets::Singleton(tablet) = &tablets {
             importer.start_switch_mode_check(&handle.clone(), Some(tablet.clone()));
         } else {
             importer.start_switch_mode_check(&handle.clone(), None);
         }
-
         let writer = raft_writer::ThrottledTlsEngineWriter::default();
         let gc_handle = writer.clone();
         handle.spawn(async move {
@@ -368,19 +364,7 @@ impl<E: Engine> ImportSstService<E> {
                 tokio::time::sleep(WRITER_GC_INTERVAL).await;
             }
         });
-        let (tx, mut rx) = mpsc::channel::<(usize, oneshot::Sender<usize>)>(32);
-        let rt = Runtime::new().unwrap();
-        rt.spawn(async move {
-            while let Some((msg, response_tx)) = rx.recv().await {
-                info!("thread pool size changed"; "size" => msg);
-                let resp = threads.adjust_with(msg);
-
-                if let Err(err) = response_tx.send(resp) {
-                    error!("Failed to send response: {}", err);
-                }
-            }
-        });
-        let cfg_mgr = ConfigManager::new(cfg, AdjustHandle::new(tx));
+        let cfg_mgr = ConfigManager::new(cfg, threads_clone);
         handle.spawn(Self::tick(importer.clone(), cfg_mgr.clone()));
         // Drop the initial pool to accept new tasks
 
