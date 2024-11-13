@@ -656,8 +656,10 @@ where
         // Create cdc worker.
         let mut cdc_worker = self.cdc_worker.take().unwrap();
         let cdc_scheduler = self.cdc_scheduler.clone().unwrap();
+
+        let cdc_memory_quota = self.cdc_memory_quota.as_ref().unwrap();
         // Register cdc observer.
-        let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone());
+        let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone(), cdc_memory_quota.clone());
         cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
         // Register cdc config manager.
         cfg_controller.register(
@@ -665,9 +667,6 @@ where
             Box::new(CdcConfigManager(cdc_scheduler.clone())),
         );
         // Start cdc endpoint.
-        let cdc_memory_quota = Arc::new(MemoryQuota::new(
-            self.core.config.cdc.sink_memory_quota.0 as _,
-        ));
         let cdc_endpoint = cdc::Endpoint::new(
             self.core.config.server.cluster_id,
             &self.core.config.cdc,
@@ -688,7 +687,6 @@ where
         );
         cdc_worker.start_with_timer(cdc_endpoint);
         self.core.to_stop.push(cdc_worker);
-        self.cdc_memory_quota = Some(cdc_memory_quota);
 
         // Create resolved ts.
         if self.core.config.resolved_ts.enable {
@@ -1548,8 +1546,11 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
 
         let cdc_worker = Box::new(LazyWorker::new("cdc"));
         let cdc_scheduler = cdc_worker.scheduler();
-        let txn_extra_scheduler = cdc::CdcTxnExtraScheduler::new(cdc_scheduler.clone());
-
+        let cdc_memory_quota = Arc::new(MemoryQuota::new(
+            self.core.config.cdc.sink_memory_quota.0 as _,
+        ));
+        let txn_extra_scheduler =
+            cdc::CdcTxnExtraScheduler::new(cdc_scheduler.clone(), cdc_memory_quota.clone());
         let mut engine = RaftKv2::new(router.clone(), region_info_accessor.region_leaders());
         // Set txn extra scheduler immediately to make sure every clone has the
         // scheduler.
@@ -1565,6 +1566,7 @@ impl<CER: ConfiguredRaftEngine> TikvServer<CER> {
         self.region_info_accessor = Some(region_info_accessor);
         self.cdc_worker = Some(cdc_worker);
         self.cdc_scheduler = Some(cdc_scheduler);
+        self.cdc_memory_quota = Some(cdc_memory_quota);
 
         engines_info
     }
