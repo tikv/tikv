@@ -1644,8 +1644,7 @@ mod tests {
     use test_sst_importer::*;
     use test_util::new_test_key_manager;
     use tikv_util::{
-        codec::stream_event::EventEncoder,
-        resizable_threadpool::ResizableRuntime,
+        codec::stream_event::EventEncoder, resizable_threadpool::ResizableRuntime,
         stream::block_on_external_io,
     };
     use tokio::io::{AsyncWrite, AsyncWriteExt};
