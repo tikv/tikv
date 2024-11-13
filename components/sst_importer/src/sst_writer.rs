@@ -1,11 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::io::Write;
 use std::sync::Arc;
 
 use api_version::{dispatch_api_version, match_template_api_version, KeyMode, KvFormat, RawValue};
 use encryption::DataKeyManager;
 use engine_traits::{raw_ttl::ttl_to_expire_ts, KvEngine, SstWriter};
 use kvproto::{import_sstpb::*, kvrpcpb::ApiVersion};
+use file_system::File;
 use tikv_util::time::Instant;
 use txn_types::{is_short_value, Key, TimeStamp, Write as KvWrite, WriteType};
 
@@ -15,6 +17,60 @@ use crate::{import_file::ImportPath, metrics::*, Error, Result};
 pub enum SstWriterType {
     Txn,
     Raw,
+}
+
+pub struct SstFileWriter {
+    default_path: ImportPath,
+    write_path: ImportPath,
+    default_meta: SstMeta,
+    write_meta: SstMeta,
+
+    default_file: File,
+    write_file: File,
+}
+
+impl SstFileWriter {
+    pub fn new(
+        default_path: ImportPath,
+        write_path: ImportPath,
+        default_meta: SstMeta,
+        write_meta: SstMeta,
+    ) -> Self {
+        let default_file = File::create(default_path.clone().temp).unwrap();
+        let write_file = File::create(write_path.clone().temp).unwrap();
+
+        SstFileWriter {
+            default_path,
+            write_path,
+            default_meta,
+            write_meta,
+            default_file,
+            write_file,
+        }
+    }
+
+    pub fn write(&mut self, batch: WriteBatch) -> Result<()> {
+        for m in batch.get_pairs().iter() {
+            self.default_file.write(m.get_key())?;
+            self.write_file.write(m.get_value())?;
+        }
+        Ok(())
+    }
+
+    pub fn finish(mut self) -> Result<Vec<SstMeta>> {
+        self.default_file.flush()?;
+        self.write_file.flush()?;
+
+        let mut metas = Vec::with_capacity(2);
+        if self.default_file.metadata()?.len() > 0 {
+            metas.push(self.default_meta);
+        }
+        if self.write_file.metadata()?.len() > 0 {
+            metas.push(self.write_meta);
+        }
+
+        Ok(metas)
+    }
 }
 
 pub struct TxnSstWriter<E: KvEngine> {
