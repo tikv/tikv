@@ -2,7 +2,7 @@
 use std::{
     error::Error,
     result::Result,
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, Mutex, RwLock}, rc::Weak,
 };
 
 use online_config::{self, OnlineConfig};
@@ -62,11 +62,11 @@ impl Config {
 #[derive(Clone)]
 pub struct ConfigManager {
     pub config: Arc<RwLock<Config>>,
-    pool: Arc<Mutex<ResizableRuntime>>,
+    pool: Weak<Mutex<ResizableRuntime>>,
 }
 
 impl ConfigManager {
-    pub fn new(cfg: Config, pool: Arc<Mutex<ResizableRuntime>>) -> Self {
+    pub fn new(cfg: Config, pool: Weak<Mutex<ResizableRuntime>>) -> Self {
         ConfigManager {
             config: Arc::new(RwLock::new(cfg)),
             pool,

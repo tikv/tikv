@@ -63,6 +63,7 @@ impl ImportModeSwitcherV2 {
             let mut prev_ranges = vec![];
             // loop until the switcher has been dropped
             while let Some(switcher) = switcher.upgrade() {
+                println!("check import mode");
                 let next_check = {
                     let now = Instant::now();
                     let mut switcher = switcher.lock().unwrap();
