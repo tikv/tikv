@@ -30,9 +30,7 @@ pub struct AdjustHandle {
 
 impl AdjustHandle {
     pub fn new(sender: mpsc::Sender<(usize, oneshot::Sender<usize>)>) -> Self {
-        Self {
-            sender: sender,
-        }
+        Self { sender }
     }
 
     pub async fn adjust_with(&self, msg: usize) -> Result<usize, String> {

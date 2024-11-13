@@ -1616,7 +1616,10 @@ mod tests {
     use std::{
         io::{self, Cursor},
         ops::Sub,
-        sync::{atomic::{AtomicUsize, Ordering}, Mutex},
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Mutex,
+        },
         usize,
     };
 

@@ -349,7 +349,7 @@ impl<E: Engine> ImportSstService<E> {
             Box::new(create_tokio_runtime),
             Box::new(|_| ()),
         );
-        
+
         let handle = threads.handle();
         let threads_clone = Arc::new(Mutex::new(threads));
         if let LocalTablets::Singleton(tablet) = &tablets {
