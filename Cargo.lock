@@ -3440,7 +3440,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#4a3e17f5e62dc3999e2c0f63293fdeffced80626"
+source = "git+https://github.com/yujuncen/kvproto?branch=lighting-pitr-compat#3aee058aec3e6e45fa58a4d2dffb3b317bb8e8a9"
 dependencies = [
  "futures 0.3.15",
  "grpcio",

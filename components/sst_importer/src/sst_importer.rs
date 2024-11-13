@@ -49,7 +49,7 @@ use txn_types::{Key, TimeStamp, WriteRef};
 
 use crate::{
     caching::cache_map::{CacheMap, ShareOwned},
-    hooking::{AfterIngestedCtx, BeforeProposeIngestCtx, NopHooks, SharedImportHook},
+    hooking::{AfterIngestedCtx, BeforeProposeIngestCtx, LocatedSst, NopHooks, SharedImportHook},
     import_file::{ImportDir, ImportFile},
     import_mode::{ImportModeSwitcher, RocksDbMetricsFn},
     import_mode2::{HashRange, ImportModeSwitcherV2},
@@ -214,7 +214,17 @@ impl<E: KvEngine> SstImporter<E> {
     pub async fn before_propose_ingest(&self, metas: &[SstMeta]) -> Result<()> {
         let cx = BeforeProposeIngestCtx {
             sst_meta: metas,
-            sst_to_path: &|path| self.sst_to_path(path),
+            locate: &|sst_meta| {
+                let mut sst = self.validate(sst_meta)?;
+                let local_path = self.sst_to_path(sst_meta)?;
+                sst.meta.total_kvs = sst.total_kvs;
+                sst.meta.total_bytes = sst.total_bytes;
+                Ok(LocatedSst {
+                    local_path,
+                    meta: sst.meta,
+                })
+            },
+            key_manager: &self.key_manager,
         };
         self.hooks.before_propose_ingest(cx).await
     }

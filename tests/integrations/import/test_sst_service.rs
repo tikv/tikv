@@ -685,19 +685,22 @@ fn test_ingest_hooks() {
     }
 
     impl sst_importer::hooking::ImportHook for TestHook {
-        fn before_propose_ingest(
-            &self,
-            cx: BeforeProposeIngestCtx<'_>,
-        ) -> BoxFuture<'_, sst_importer::Result<()>> {
+        fn before_propose_ingest<'a: 'r, 'b: 'r, 'r>(
+            &'a self,
+            cx: BeforeProposeIngestCtx<'b>,
+        ) -> BoxFuture<'r, sst_importer::Result<()>> {
             assert_eq!(cx.sst_meta.len(), 1);
             assert_eq!(cx.sst_meta.first().unwrap(), &*self.wants.lock().unwrap());
-            let path = (cx.sst_to_path)(&cx.sst_meta[0]).unwrap();
+            let path = cx.sst_to_path(&cx.sst_meta[0]).unwrap();
             assert!(path.exists(), "sst_path = {} but not exist", path.display());
 
             futures::future::ok(()).boxed()
         }
 
-        fn after_ingested(&self, cx: AfterIngestedCtx<'_>) -> BoxFuture<'_, ()> {
+        fn after_ingested<'a: 'r, 'b: 'r, 'r>(
+            &'a self,
+            cx: AfterIngestedCtx<'b>,
+        ) -> BoxFuture<'r, ()> {
             assert_eq!(cx.sst_meta.len(), 1);
             assert_eq!(cx.sst_meta.first().unwrap(), &*self.wants.lock().unwrap());
             futures::future::ready(()).boxed()
@@ -744,10 +747,10 @@ fn test_ingest_hook_abort() {
         "5aSp5Zyw546E6buDIOWuh+Wumea0quiNkiDml6XmnIjnm4jmmIMg6L6w5a6/5YiX5by1Cg==";
 
     impl sst_importer::hooking::ImportHook for TestHook {
-        fn before_propose_ingest(
+        fn before_propose_ingest<'a: 'r, 'b: 'r, 'r>(
             &self,
-            _cx: BeforeProposeIngestCtx<'_>,
-        ) -> BoxFuture<'_, sst_importer::Result<()>> {
+            _cx: BeforeProposeIngestCtx<'b>,
+        ) -> BoxFuture<'r, sst_importer::Result<()>> {
             futures::future::err(sst_importer::Error::Hooking(box_err!(
                 "you will receive this, our tiny little secret: {}",
                 MAGIC_STRING
@@ -755,7 +758,10 @@ fn test_ingest_hook_abort() {
             .boxed()
         }
 
-        fn after_ingested(&self, _cx: AfterIngestedCtx<'_>) -> BoxFuture<'_, ()> {
+        fn after_ingested<'a: 'r, 'b: 'r, 'r>(
+            &self,
+            _cx: AfterIngestedCtx<'b>,
+        ) -> BoxFuture<'r, ()> {
             futures::future::ready(()).boxed()
         }
     }

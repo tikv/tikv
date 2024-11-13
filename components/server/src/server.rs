@@ -958,7 +958,7 @@ where
         )
         .unwrap();
         if let Some(sched) = backup_stream_scheduler.as_ref() {
-            let upload_sst_for_log_backup = UploadSst::new(sched.clone());
+            let upload_sst_for_log_backup = UploadSst::new(sched.clone(), self.pd_client.clone());
             importer.replace_hooks(Arc::new(upload_sst_for_log_backup));
         }
         for (cf_name, compression_type) in &[
