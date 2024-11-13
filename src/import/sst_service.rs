@@ -372,6 +372,7 @@ impl<E: Engine> ImportSstService<E> {
         let rt = Runtime::new().unwrap();
         rt.spawn(async move {
             while let Some((msg, response_tx)) = rx.recv().await {
+                info!("thread pool size changed"; "size" => msg);
                 let resp = threads.adjust_with(msg);
 
                 if let Err(err) = response_tx.send(resp) {

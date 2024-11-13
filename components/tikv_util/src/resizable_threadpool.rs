@@ -25,13 +25,13 @@ pub struct ResizableRuntime {
 
 #[derive(Clone)]
 pub struct AdjustHandle {
-    sender: Arc<mpsc::Sender<(usize, oneshot::Sender<usize>)>>,
+    sender: mpsc::Sender<(usize, oneshot::Sender<usize>)>,
 }
 
 impl AdjustHandle {
     pub fn new(sender: mpsc::Sender<(usize, oneshot::Sender<usize>)>) -> Self {
         Self {
-            sender: Arc::new(sender),
+            sender: sender,
         }
     }
 
