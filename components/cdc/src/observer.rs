@@ -2,18 +2,20 @@
 
 use std::sync::{Arc, RwLock};
 
-use collections::HashMap;
+use collections::{HashMap, HashMapEntry};
 use engine_traits::KvEngine;
 use fail::fail_point;
-use kvproto::metapb::{Peer, Region};
+use kvproto::metapb::Region;
 use raft::StateRole;
 use raftstore::{coprocessor::*, store::RegionSnapshot, Error as RaftStoreError};
 use tikv::storage::Statistics;
 use tikv_util::{error, memory::MemoryQuota, warn, worker::Scheduler};
+use futures::channel::mpsc::UnboundedSender;
 
 use crate::{
     endpoint::{Deregister, Task},
-    old_value::{self, OldValueCache},
+    old_value::{self, OldValueCache, OldValueCallback},
+    delegate::DelegateTask,
     Error as CdcError,
 };
 
@@ -28,7 +30,7 @@ pub struct CdcObserver {
     memory_quota: Arc<MemoryQuota>,
     // A shared registry for managing observed regions.
     // TODO: it may become a bottleneck, find a better way to manage the registry.
-    observe_regions: Arc<RwLock<HashMap<u64, ObserveId>>>,
+    observe_regions: Arc<RwLock<HashMap<u64, (ObserveId, UnboundedSender<DelegateTask>)>>>,
 }
 
 impl CdcObserver {
@@ -62,11 +64,17 @@ impl CdcObserver {
     /// its scheduler.
     ///
     /// Return previous ObserveId if there is one.
-    pub fn subscribe_region(&self, region_id: u64, observe_id: ObserveId) -> Option<ObserveId> {
+    pub fn subscribe_region(
+        &self,
+        region_id: u64,
+        observe_id: ObserveId,
+        observed_events: UnboundedSender<DelegateTask>,
+    ) -> Option<ObserveId> {
         self.observe_regions
             .write()
             .unwrap()
-            .insert(region_id, observe_id)
+            .insert(region_id, (observe_id, observed_events))
+            .map(|x| x.0)
     }
 
     /// Stops observe the region.
@@ -75,9 +83,9 @@ impl CdcObserver {
     pub fn unsubscribe_region(&self, region_id: u64, observe_id: ObserveId) -> Option<ObserveId> {
         let mut regions = self.observe_regions.write().unwrap();
         // To avoid ABA problem, we must check the unique ObserveId.
-        if let Some(oid) = regions.get(&region_id) {
-            if *oid == observe_id {
-                return regions.remove(&region_id);
+        if let HashMapEntry::Occupied(x) = regions.entry(region_id) {
+            if x.get().0 == observe_id {
+                return Some(x.remove().0);
             }
         }
         None
@@ -89,7 +97,7 @@ impl CdcObserver {
             .read()
             .unwrap()
             .get(&region_id)
-            .cloned()
+            .map(|x| x.0)
     }
 }
 
@@ -106,36 +114,39 @@ impl<E: KvEngine> CmdObserver<E> for CdcObserver {
     ) {
         assert!(!cmd_batches.is_empty());
         fail_point!("before_cdc_flush_apply");
-
         if max_level < ObserveLevel::All {
             return;
         }
-        let cmd_batches: Vec<_> = cmd_batches
-            .iter()
-            .filter(|cb| cb.level == ObserveLevel::All && !cb.is_empty())
-            .cloned()
-            .collect();
-        if cmd_batches.is_empty() {
-            return;
-        }
-        let mut region = Region::default();
-        region.mut_peers().push(Peer::default());
-        // Create a snapshot here for preventing the old value was GC-ed.
-        let snapshot = RegionSnapshot::from_snapshot(Arc::new(engine.snapshot()), Arc::new(region));
-        let get_old_value = move |key,
-                                  query_ts,
-                                  old_value_cache: &mut OldValueCache,
-                                  statistics: &mut Statistics| {
-            old_value::get_old_value(&snapshot, key, query_ts, old_value_cache, statistics)
-        };
 
-        let size = cmd_batches.iter().map(|b| b.size()).sum();
-        self.memory_quota.alloc_force(size);
-        if let Err(e) = self.sched.schedule(Task::MultiBatch {
-            multi: cmd_batches,
-            old_value_cb: Box::new(get_old_value),
-        }) {
-            warn!("cdc schedule task failed"; "error" => ?e);
+        let mut snapshot = None;
+        for cb in cmd_batches {
+            if cb.level == ObserveLevel::All && !cb.is_empty() {
+                // Create a snapshot here for preventing the old value was GC-ed.
+                let snap = snapshot
+                    .get_or_insert_with(|| {
+                        let mut region = Region::default();
+                        region.mut_peers().push(Default::default());
+                        RegionSnapshot::from_snapshot(Arc::new(engine.snapshot()), Arc::new(region))
+                    })
+                    .clone();
+                let get_old_value = Box::new(
+                    move |key, ts, cache: &mut OldValueCache, stats: &mut Statistics| {
+                        old_value::get_old_value(&snap, key, ts, cache, stats)
+                    },
+                );
+
+                let regions = self.observe_regions.read().unwrap();
+                if let Some((_, tx)) = regions.get(&cb.region_id) {
+                    self.memory_quota.alloc_force(cb.size());
+                    let task = DelegateTask::ObservedEvent {
+                        cmds: cb.clone(),
+                        old_value_cb: get_old_value,
+                    };
+                    if let Err(e) = tx.unbounded_send(task) {
+                        warn!("cdc sends observed events fail"; "error" => ?e);
+                    }
+                }
+            }
         }
     }
 

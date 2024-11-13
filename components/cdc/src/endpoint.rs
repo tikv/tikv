@@ -18,6 +18,7 @@ use crossbeam::atomic::AtomicCell;
 use engine_traits::KvEngine;
 use fail::fail_point;
 use futures::compat::Future01CompatExt;
+use futures::channel::mpsc;
 use grpcio::Environment;
 use kvproto::{
     cdcpb::{
@@ -44,7 +45,7 @@ use tikv::{
 use tikv_util::{
     debug, defer, error, impl_display_as_debug, info,
     memory::MemoryQuota,
-    mpsc::bounded,
+    mpsc::{bounded},
     slow_log,
     sys::thread::ThreadBuildWrapper,
     time::{Instant, Limiter, SlowTimer},
@@ -60,7 +61,7 @@ use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler};
 
 use crate::{
     channel::{CdcEvent, SendError},
-    delegate::{on_init_downstream, Delegate, Downstream, DownstreamId, DownstreamState, MiniLock},
+    delegate::{on_init_downstream, Delegate, DelegateMeta, DelegateTask, Downstream, DownstreamId, DownstreamState, MiniLock},
     initializer::Initializer,
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
@@ -173,10 +174,6 @@ pub enum Task {
         version: semver::Version,
         explicit_features: Vec<&'static str>,
     },
-    MultiBatch {
-        multi: Vec<CmdBatch>,
-        old_value_cb: OldValueCallback,
-    },
     MinTs {
         regions: Vec<u64>,
         min_ts: TimeStamp,
@@ -245,10 +242,6 @@ impl fmt::Debug for Task {
                 .field("conn_id", conn_id)
                 .field("version", version)
                 .field("explicit_features", explicit_features)
-                .finish(),
-            Task::MultiBatch { multi, .. } => de
-                .field("type", &"multi_batch")
-                .field("multi_batch", &multi.len())
                 .finish(),
             Task::MinTs {
                 ref min_ts,
@@ -465,7 +458,7 @@ impl Advance {
 pub struct Endpoint<T, E, S> {
     cluster_id: u64,
 
-    capture_regions: HashMap<u64, Delegate>,
+    capture_regions: HashMap<u64, DelegateMeta>,
     connections: HashMap<ConnId, Conn>,
     scheduler: Scheduler<Task>,
     cdc_handle: T,
@@ -485,8 +478,10 @@ pub struct Endpoint<T, E, S> {
     resolved_ts_config: ResolvedTsConfig,
     api_version: ApiVersion,
 
-    // Incremental scan stuffs.
     workers: Runtime,
+
+    // Incremental scan stuffs.
+    scan_workers: Runtime,
     scan_task_counter: Arc<AtomicIsize>,
     scan_concurrency_semaphore: Arc<Semaphore>,
     scan_speed_limiter: Limiter,
@@ -527,6 +522,13 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
     ) -> Endpoint<T, E, S> {
         let workers = Builder::new_multi_thread()
+            .thread_name("cdcob")
+            .worker_threads(2)
+            .with_sys_hooks()
+            .build()
+            .unwrap();
+
+        let scan_workers = Builder::new_multi_thread()
             .thread_name("cdcwkr")
             .worker_threads(config.incremental_scan_threads)
             .with_sys_hooks()
@@ -594,6 +596,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             api_version,
 
             workers,
+
+            scan_workers,
             scan_task_counter: Arc::default(),
             scan_concurrency_semaphore,
             scan_speed_limiter,
@@ -686,15 +690,15 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         downstream_id: DownstreamId,
         err: Option<Error>,
     ) {
-        let mut delegate = match self.capture_regions.entry(region_id) {
-            HashMapEntry::Vacant(_) => return,
-            HashMapEntry::Occupied(x) => x,
-        };
-        if delegate.get_mut().unsubscribe(downstream_id, err) {
-            let observe_id = delegate.get().handle.id;
-            delegate.remove();
-            self.deregister_observe(region_id, observe_id);
-        }
+        // let mut delegate = match self.capture_regions.entry(region_id) {
+        //     HashMapEntry::Vacant(_) => return,
+        //     HashMapEntry::Occupied(x) => x,
+        // };
+        // if delegate.get_mut().unsubscribe(downstream_id, err) {
+        //     let observe_id = delegate.get().handle.id;
+        //     delegate.remove();
+        //     self.deregister_observe(region_id, observe_id);
+        // }
     }
 
     fn deregister_observe(&mut self, region_id: u64, observe_id: ObserveId) {
@@ -762,24 +766,24 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 observe_id,
                 err,
             } => {
-                let mut delegate = match self.capture_regions.entry(region_id) {
-                    HashMapEntry::Vacant(_) => return,
-                    HashMapEntry::Occupied(x) => {
-                        // To avoid ABA problem, we must check the unique ObserveId.
-                        if x.get().handle.id != observe_id {
-                            return;
-                        }
-                        x.remove()
-                    }
-                };
-                delegate.stop(err);
-                for downstream in delegate.downstreams() {
-                    let request_id = downstream.req_id;
-                    for conn in &mut self.connections.values_mut() {
-                        conn.unsubscribe(request_id, region_id);
-                    }
-                }
-                self.deregister_observe(region_id, delegate.handle.id);
+                // let mut delegate = match self.capture_regions.entry(region_id) {
+                //     HashMapEntry::Vacant(_) => return,
+                //     HashMapEntry::Occupied(x) => {
+                //         // To avoid ABA problem, we must check the unique ObserveId.
+                //         if x.get().handle.id != observe_id {
+                //             return;
+                //         }
+                //         x.remove()
+                //     }
+                // };
+                // delegate.stop(err);
+                // for downstream in delegate.downstreams() {
+                //     let request_id = downstream.req_id;
+                //     for conn in &mut self.connections.values_mut() {
+                //         conn.unsubscribe(request_id, region_id);
+                //     }
+                // }
+                // self.deregister_observe(region_id, delegate.handle.id);
             }
         }
     }
@@ -794,6 +798,9 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         let conn_id = downstream.conn_id;
         let downstream_id = downstream.id;
         let downstream_state = downstream.get_state();
+        let observed_range = downstream.observed_range.clone();
+        let sched = self.scheduler.clone();
+        let scan_truncated = downstream.scan_truncated.clone();
 
         // The connection can be deregistered by some internal errors. Clients will
         // always be notified by closing the GRPC server stream, so it's OK to drop
@@ -886,53 +893,29 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             return;
         }
 
-        let mut is_new_delegate = false;
-        let delegate = match self.capture_regions.entry(region_id) {
-            HashMapEntry::Occupied(e) => e.into_mut(),
+
+        let delegate_meta = match self.capture_regions.entry(region_id) {
+            HashMapEntry::Occupied(e) => e.get().clone(),
             HashMapEntry::Vacant(e) => {
-                is_new_delegate = true;
-                e.insert(Delegate::new(
-                    region_id,
-                    self.sink_memory_quota.clone(),
-                    txn_extra_op,
-                ))
+                let d = Delegate::new(sched.clone(), region_id, self.sink_memory_quota.clone(), txn_extra_op);
+                let meta = d.meta();
+                d.sched.unbounded_send(DelegateTask::Subscribe { downstream }).unwrap();
+                self.workers.spawn(d.handle_tasks());
+
+                let old_ob = self.observer.subscribe_region(region_id, d.handle.id, d.sched.clone());
+                assert!( old_ob.is_none(), "region {} should never be observed twice", region_id);
+                e.insert(meta.clone());
+                meta
             }
         };
 
-        let observe_id = delegate.handle.id;
+        let handle = delegate_meta.handle.clone();
         info!("cdc register region";
             "region_id" => region_id,
             "conn_id" => ?conn.get_id(),
             "req_id" => ?request_id,
-            "observe_id" => ?observe_id,
+            "observe_id" => ?handle.id,
             "downstream_id" => ?downstream_id);
-
-        let observed_range = downstream.observed_range.clone();
-        let downstream_state = downstream.get_state();
-        let sched = self.scheduler.clone();
-        let scan_truncated = downstream.scan_truncated.clone();
-
-        if let Err((err, downstream)) = delegate.subscribe(downstream) {
-            let error_event = err.into_error_event(region_id);
-            let _ = downstream.sink_error_event(region_id, error_event);
-            conn.unsubscribe(request_id, region_id);
-            if is_new_delegate {
-                self.capture_regions.remove(&region_id);
-            }
-            return;
-        }
-        if is_new_delegate {
-            // The region has never been registered.
-            // Subscribe the change events of the region.
-            let old_observe_id = self.observer.subscribe_region(region_id, observe_id);
-            assert!(
-                old_observe_id.is_none(),
-                "region {} must not be observed twice, old ObserveId {:?}, new ObserveId {:?}",
-                region_id,
-                old_observe_id,
-                observe_id
-            );
-        };
 
         let mut init = Initializer {
             region_id,
@@ -943,7 +926,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
 
             build_resolver: Arc::new(Default::default()),
             observed_range,
-            observe_handle: delegate.handle.clone(),
+            observe_handle: handle,
             downstream_id,
             downstream_state,
             scan_truncated,
@@ -964,7 +947,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         };
 
         let cdc_handle = self.cdc_handle.clone();
-        self.workers.spawn(async move {
+        self.scan_workers.spawn(async move {
             CDC_SCAN_TASKS.with_label_values(&["total"]).inc();
             match init.initialize(cdc_handle).await {
                 Ok(()) => {
@@ -983,6 +966,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         });
     }
 
+    /********************
     pub fn on_multi_batch(&mut self, multi: Vec<CmdBatch>, old_value_cb: OldValueCallback) {
         fail_point!("cdc_before_handle_multi_batch", |_| {});
         let size = multi.iter().map(|b| b.size()).sum();
@@ -1017,6 +1001,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         }
         flush_oldvalue_stats(&statistics, TAG_DELTA_CHANGE);
     }
+    ********************/
 
     fn finish_scan_locks(
         &mut self,
@@ -1024,48 +1009,12 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         region: Region,
         locks: BTreeMap<Key, MiniLock>,
     ) {
-        let region_id = region.get_id();
-        match self.capture_regions.get_mut(&region_id) {
-            None => {
-                debug!("cdc region not found on region ready (finish scan locks)";
-                    "region_id" => region.get_id());
-            }
-            Some(delegate) => {
-                if delegate.handle.id != observe_id {
-                    debug!("cdc stale region ready";
-                        "region_id" => region.get_id(),
-                        "observe_id" => ?observe_id,
-                        "current_id" => ?delegate.handle.id);
-                    return;
-                }
-                match delegate.finish_scan_locks(region, locks) {
-                    Ok(fails) => {
-                        let mut deregisters = Vec::new();
-                        for (downstream, e) in fails {
-                            deregisters.push(Deregister::Downstream {
-                                conn_id: downstream.conn_id,
-                                request_id: downstream.req_id,
-                                region_id,
-                                downstream_id: downstream.id,
-                                err: Some(e),
-                            });
-                        }
-                        // Deregister downstreams if there is any downstream fails to subscribe.
-                        for deregister in deregisters {
-                            self.on_deregister(deregister);
-                        }
-                    }
-                    Err(e) => self.on_deregister(Deregister::Delegate {
-                        region_id,
-                        observe_id,
-                        err: e,
-                    }),
-                }
-            }
-        }
+        /*********************
+        *********************/
     }
 
     fn on_min_ts(&mut self, regions: Vec<u64>, min_ts: TimeStamp, current_ts: TimeStamp) {
+        /*************
         self.current_ts = current_ts;
         self.min_resolved_ts = current_ts;
 
@@ -1081,6 +1030,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         advance.emit_resolved_ts(&self.connections);
         self.min_resolved_ts = advance.min_resolved_ts.into();
         self.min_ts_region_id = advance.min_ts_region_id;
+        *************/
     }
 
     fn register_min_ts_event(&self, mut leader_resolver: LeadershipResolver, event_time: Instant) {
@@ -1219,10 +1169,10 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
                 locks,
             } => self.finish_scan_locks(observe_id, region, locks),
             Task::Deregister(deregister) => self.on_deregister(deregister),
-            Task::MultiBatch {
-                multi,
-                old_value_cb,
-            } => self.on_multi_batch(multi, old_value_cb),
+            // Task::MultiBatch {
+            //     multi,
+            //     old_value_cb,
+            // } => self.on_multi_batch(multi, old_value_cb),
             Task::OpenConn { conn } => self.on_open_conn(conn),
             Task::SetConnVersion {
                 conn_id,
@@ -1245,6 +1195,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
                 incremental_scan_barrier,
                 cb,
             } => {
+                /********************
                 match self.capture_regions.get_mut(&region_id) {
                     Some(delegate) if delegate.handle.id == observe_id => {
                         if delegate.init_lock_tracker() {
@@ -1273,6 +1224,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
                         "downstream_id" => ?downstream_id);
                 }
                 cb();
+                ********************/
             }
             Task::TxnExtra(txn_extra) => {
                 let size = txn_extra.size();
@@ -1283,7 +1235,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
             }
             Task::Validate(validate) => match validate {
                 Validate::Region(region_id, validate) => {
-                    validate(self.capture_regions.get(&region_id));
+                    // validate(self.capture_regions.get(&region_id));
                 }
                 Validate::OldValueCache(validate) => {
                     validate(&self.old_value_cache);
@@ -2024,12 +1976,12 @@ mod tests {
         let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
 
         // Pause scan task runtime.
-        suite.endpoint.workers = Builder::new_multi_thread()
+        suite.endpoint.scan_workers = Builder::new_multi_thread()
             .worker_threads(1)
             .build()
             .unwrap();
         let (pause_tx, pause_rx) = std::sync::mpsc::channel::<()>();
-        suite.endpoint.workers.spawn(async move {
+        suite.endpoint.scan_workers.spawn(async move {
             let _ = pause_rx.recv();
         });
 

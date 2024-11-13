@@ -16,9 +16,10 @@ use std::{
 use api_version::{ApiV2, KeyMode, KvFormat};
 use collections::HashMap;
 use crossbeam::atomic::AtomicCell;
+use fail::fail_point;
 use kvproto::{
     cdcpb::{
-        ChangeDataRequestKvApi, Error as EventError, Event, EventEntries, EventLogType, EventRow,
+        ChangeDataRequestKvApi, Error as ErrorEvent, Event, EventEntries, EventLogType, EventRow,
         EventRowOpType, Event_oneof_event,
     },
     kvrpcpb::ExtraOp as TxnExtraOp,
@@ -27,6 +28,7 @@ use kvproto::{
         AdminCmdType, AdminRequest, AdminResponse, CmdType, DeleteRequest, PutRequest, Request,
     },
 };
+use raftstore::coprocessor::ObserveId;
 use raftstore::{
     coprocessor::{Cmd, CmdBatch, ObserveHandle},
     store::util::compare_region_epoch,
@@ -34,16 +36,19 @@ use raftstore::{
 };
 use tikv::storage::{txn::TxnEntry, Statistics};
 use tikv_util::{
-    debug, info,
+    debug, info, error,
     memory::{HeapSize, MemoryQuota},
     time::Instant,
     warn,
+    worker::{Scheduler},
 };
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteBatchFlags, WriteRef, WriteType};
+use futures::channel::mpsc::{self, UnboundedSender, UnboundedReceiver};
+use futures::StreamExt;
 
 use crate::{
     channel::{CdcEvent, SendError, Sink, CDC_EVENT_MAX_BYTES},
-    endpoint::Advance,
+    endpoint::{Advance,Task, Deregister},
     initializer::KvEntry,
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
@@ -194,9 +199,9 @@ impl Downstream {
         }
     }
 
-    // NOTE: it's not allowed to sink `EventError` directly by this function,
+    // NOTE: it's not allowed to sink `ErrorEvent` directly by this function,
     // because the sink can be also used by an incremental scan. We must ensure
-    // no more events can be pushed to the sink after an `EventError` is sent.
+    // no more events can be pushed to the sink after an `ErrorEvent` is sent.
     pub fn sink_event(&self, mut event: Event, force: bool) -> Result<()> {
         event.set_request_id(self.req_id.0);
         if self.sink.is_none() {
@@ -221,10 +226,10 @@ impl Downstream {
         }
     }
 
-    /// EventErrors must be sent by this function. And we must ensure no more
+    /// ErrorEvents must be sent by this function. And we must ensure no more
     /// events or ResolvedTs will be sent to the downstream after
     /// `sink_error_event` is called.
-    pub fn sink_error_event(&self, region_id: u64, err_event: EventError) -> Result<()> {
+    pub fn sink_error_event(&self, region_id: u64, err_event: ErrorEvent) -> Result<()> {
         info!("cdc downstream meets region error";
             "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => ?self.req_id);
 
@@ -325,6 +330,10 @@ impl MiniLock {
 pub struct Delegate {
     pub region_id: u64,
     pub handle: ObserveHandle,
+    pub sched: UnboundedSender<DelegateTask>,
+
+    tasks: UnboundedReceiver<DelegateTask>,
+    feedbacks: Scheduler<Task>,
     memory_quota: Arc<MemoryQuota>,
 
     lock_tracker: LockTracker,
@@ -497,13 +506,19 @@ impl Delegate {
 
     /// Create a Delegate the given region.
     pub fn new(
+        feedbacks: Scheduler<Task>,
         region_id: u64,
         memory_quota: Arc<MemoryQuota>,
         txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
     ) -> Delegate {
+        let (tx, rx) = mpsc::unbounded();
         Delegate {
             region_id,
             handle: ObserveHandle::new(),
+            sched: tx,
+
+            tasks: rx,
+            feedbacks,
             memory_quota,
 
             lock_tracker: LockTracker::Pending,
@@ -531,6 +546,10 @@ impl Delegate {
 
     pub fn downstream(&self, downstream_id: DownstreamId) -> Option<&Downstream> {
         self.downstreams().iter().find(|d| d.id == downstream_id)
+    }
+
+    pub fn downstream_mut(&mut self, downstream_id: DownstreamId) -> Option<&mut Downstream> {
+        self.downstreams().iter_mut().find(|d| d.id == downstream_id)
     }
 
     pub fn downstreams(&self) -> &Vec<Downstream> {
@@ -568,38 +587,6 @@ impl Delegate {
         self.failed
     }
 
-    /// Stop the delegate
-    ///
-    /// This means the region has met an unrecoverable error for CDC.
-    /// It broadcasts errors to all downstream and stops.
-    pub fn stop(&mut self, err: Error) {
-        self.mark_failed();
-        self.stop_observing();
-
-        info!("cdc met region error";
-            "region_id" => self.region_id, "error" => ?err);
-        let region_id = self.region_id;
-        let error = err.into_error_event(self.region_id);
-        let send = move |downstream: &Downstream| {
-            downstream.state.store(DownstreamState::Stopped);
-            let error_event = error.clone();
-            if let Err(err) = downstream.sink_error_event(region_id, error_event) {
-                warn!("cdc send region error failed";
-                    "region_id" => region_id, "error" => ?err, "origin_error" => ?error,
-                    "downstream_id" => ?downstream.id, "downstream" => ?downstream.peer,
-                    "request_id" => ?downstream.req_id, "conn_id" => ?downstream.conn_id);
-            } else {
-                info!("cdc send region error success";
-                    "region_id" => region_id, "origin_error" => ?error,
-                    "downstream_id" => ?downstream.id, "downstream" => ?downstream.peer,
-                    "request_id" => ?downstream.req_id, "conn_id" => ?downstream.conn_id);
-            }
-        };
-
-        for downstream in &self.downstreams {
-            send(downstream);
-        }
-    }
 
     /// `txn_extra_op` returns a shared flag which is accessed in TiKV's
     /// transaction layer to determine whether to capture modifications' old
@@ -1154,6 +1141,167 @@ impl Delegate {
         // To inform transaction layer no more old values are required for the region.
         self.txn_extra_op.store(TxnExtraOp::Noop);
     }
+
+    pub fn meta(&self) -> DelegateMeta {
+        DelegateMeta{
+            region_id: self.region_id,
+            handle: self.handle.clone(),
+            sched: self.sched.clone(),
+        }
+    }
+
+    pub async fn handle_tasks(&mut self) {
+        while let Some(task) = self.tasks.next().await {
+            match task {
+                DelegateTask::Subscribe { downstream } => {
+                    self.on_subscribe_downstream(downstream);
+                },
+                DelegateTask::ObservedEvent { cmds, old_value_cb } => {
+                    fail_point!("cdc_before_handle_multi_batch", |_| {});
+                    self.memory_quota.free( cmds.size());
+                    let mut statistics = Statistics::default();
+                    let mut cache; // TODO: lock the global old value cache.
+                    if let Err(e) = self.on_batch(
+                        cmds,
+                        &old_value_cb,
+                        &mut cache,
+                        &mut statistics,
+                    ) {
+                        self.on_stop(e);
+                    }
+                    flush_oldvalue_stats(&statistics, TAG_DELTA_CHANGE);
+                },
+                DelegateTask::Stop { err } => {
+                    self.on_stop(err);  
+                },
+                DelegateTask::StopDownstream => {}
+                DelegateTask::MinTs { min_ts, current_ts } => {
+                    // TODO: fix it.
+                    // self.on_min_ts(min_ts, current_ts);
+                }
+                DelegateTask::FinishScanLocks { observe_id, region, locks } => self.on_finish_scan_locks(observe_id, region, locks),
+                // The result of ChangeCmd should be returned from CDC Endpoint to ensure
+                // the downstream switches to Normal after the previous commands was sunk.
+                DelegateTask::InitDownstream {
+                    observe_id,
+                    downstream_id,
+                    build_resolver,
+                    incremental_scan_barrier,
+                    cb,
+                } =>  {
+                    self.on_init_downstream(
+                        observe_id, downstream_id,
+                        build_resolver,
+                        incremental_scan_barrier,
+                        cb,
+                    );
+                }
+            }
+        }
+    }
+
+    fn on_subscribe_downstream(&mut self, downstream: Downstream) {
+        if let Err((err, downstream)) = self.subscribe(downstream) {
+            let err_event = err.into_error_event(self.region_id);
+            self.deregister_downstream(err_event, &downstream);
+        }
+    }
+
+    fn deregister_downstream(&mut self, err_event: ErrorEvent, downstream: &Downstream) {
+        downstream.state.store(DownstreamState::Stopped);
+        if let Err(err) = downstream.sink_error_event(self.region_id, err_event) {
+            warn!("cdc send region error failed";
+                "region_id" => self.region_id, "error" => ?err,
+                "downstream_id" => ?downstream.id, "downstream" => ?downstream.peer,
+                "request_id" => ?downstream.req_id, "conn_id" => ?downstream.conn_id);
+        } else {
+            info!("cdc send region error success";
+                "region_id" => self.region_id,
+                "downstream_id" => ?downstream.id, "downstream" => ?downstream.peer,
+                "request_id" => ?downstream.req_id, "conn_id" => ?downstream.conn_id);
+        }
+        let _ = self.feedbacks.schedule_force(Task::Deregister(Deregister::Downstream{
+            conn_id: downstream.conn_id, 
+            request_id: downstream.req_id,
+            region_id: self.region_id,
+            downstream_id: downstream.id,
+            err: None,
+        }));
+    }
+
+
+    fn on_stop(&mut self, err: Error) {
+        info!("cdc met region error"; "region_id" => self.region_id, "error" => ?err);
+        self.mark_failed();
+        self.stop_observing();
+        let err_event = err.into_error_event(self.region_id);
+        for downstream in &self.downstreams {
+            self.deregister_downstream(err_event.clone(), downstream);
+        }
+    }
+
+    fn on_finish_scan_locks(&mut self, observe_id: ObserveId, region: Region, locks: BTreeMap<Key, MiniLock>) {
+        if self.handle.id != observe_id {
+            debug!("cdc stale region finish scan locks";
+                "region_id" => region.get_id(),
+                "observe_id" => ?observe_id,
+                "current_id" => ?self.handle.id);
+            return;
+        }
+        match self.finish_scan_locks(region, locks) {
+            Ok(fails) => {
+                for (downstream, err) in fails {
+                    let err_event = err.into_error_event(self.region_id);
+                    self.deregister_downstream(err_event, downstream);
+                }
+            }
+            Err(err) => self.on_stop(err),
+        }
+    }
+    
+    fn on_init_downstream(
+        &mut self,
+        observe_id: ObserveId,
+        downstream_id: DownstreamId,
+        build_resolver: Arc<AtomicBool>,
+        incremental_scan_barrier: CdcEvent,
+        cb: Box<dyn FnOnce() + Send>,
+    ) {
+        if self.handle.id != observe_id {
+            debug!("cdc stale region init downstream";
+                "region_id" => self.region_id,
+                "observe_id" => ?observe_id,
+                "current_id" => ?self.handle.id);
+            return;
+        }
+        if self.init_lock_tracker() {
+            build_resolver.store(true, Ordering::Release);
+        }
+        if let Some(d) = self.downstream(downstream_id) {
+            let sink = d.sink.as_mut().unwrap();
+            if let Err(e) = sink.unbounded_send(incremental_scan_barrier, true) {
+                error!("cdc failed to schedule barrier for delta before delta scan";
+                    "region_id" => self.region_id,
+                    "observe_id" => ?observe_id,
+                    "downstream_id" => ?downstream_id,
+                    "error" => ?e);
+                return;
+            }
+            let downstream_state = d.get_state();
+            if on_init_downstream(&downstream_state) {
+                info!("cdc downstream starts to initialize";
+                    "region_id" => self.region_id,
+                    "observe_id" => ?observe_id,
+                    "downstream_id" => ?downstream_id);
+            } else {
+                warn!("cdc downstream fails to initialize: canceled";
+                    "region_id" => self.region_id,
+                    "observe_id" => ?observe_id,
+                    "downstream_id" => ?downstream_id);
+            }
+        }
+        cb();
+    }
 }
 
 #[derive(Default)]
@@ -1417,6 +1565,45 @@ impl ObservedRange {
         };
         (start, end)
     }
+}
+
+pub enum DelegateTask {
+    Subscribe {
+        downstream: Downstream,
+    },
+    ObservedEvent {
+        cmds: CmdBatch,
+        old_value_cb: OldValueCallback,
+    },
+    Stop { err: Error },
+    StopDownstream,
+    MinTs {
+        min_ts: TimeStamp,
+        current_ts: TimeStamp,
+    },
+    FinishScanLocks {
+        observe_id: ObserveId,
+        region: Region,
+        locks: BTreeMap<Key, MiniLock>,
+    },
+    // The result of ChangeCmd should be returned from CDC Endpoint to ensure
+    // the downstream switches to Normal after the previous commands was sunk.
+    InitDownstream {
+        observe_id: ObserveId,
+        downstream_id: DownstreamId,
+        build_resolver: Arc<AtomicBool>,
+        // `incremental_scan_barrier` will be sent into `sink` to ensure all delta changes
+        // are delivered to the downstream. And then incremental scan can start.
+        incremental_scan_barrier: CdcEvent,
+        cb: Box<dyn FnOnce() + Send>,
+    },
+}
+
+#[derive(Clone)]
+pub struct DelegateMeta {
+    pub region_id: u64,
+    pub handle: ObserveHandle,
+    pub sched: UnboundedSender<DelegateTask>,
 }
 
 const WARN_LAG_THRESHOLD: Duration = Duration::from_secs(600);
