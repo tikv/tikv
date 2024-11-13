@@ -6,7 +6,6 @@ use futures::Future;
 use tokio::{
     io::Result as TokioResult,
     runtime::{Handle, Runtime},
-    sync::{mpsc, oneshot},
 };
 
 #[derive(Clone)]
@@ -21,30 +20,6 @@ pub struct ResizableRuntime {
     all_pools: Vec<Runtime>,
     replace_pool_rule: Box<dyn Fn(usize, &str) -> TokioResult<Runtime> + Send + Sync>,
     after_adjust: Box<dyn Fn(usize) + Send + Sync>,
-}
-
-#[derive(Clone)]
-pub struct AdjustHandle {
-    sender: mpsc::Sender<(usize, oneshot::Sender<usize>)>,
-}
-
-impl AdjustHandle {
-    pub fn new(sender: mpsc::Sender<(usize, oneshot::Sender<usize>)>) -> Self {
-        Self { sender }
-    }
-
-    pub async fn adjust_with(&self, msg: usize) -> Result<usize, String> {
-        let (response_tx, response_rx) = oneshot::channel();
-
-        // Send the message to the receiver
-        self.sender
-            .send((msg, response_tx))
-            .await
-            .map_err(|_| "Send failed".to_string())?;
-
-        // Wait for the response from the receiver
-        response_rx.await.map_err(|_| "Receive failed".to_string())
-    }
 }
 
 impl RuntimeHandle {

@@ -1648,10 +1648,7 @@ mod tests {
         resizable_threadpool::{AdjustHandle, ResizableRuntime},
         stream::block_on_external_io,
     };
-    use tokio::{
-        io::{AsyncWrite, AsyncWriteExt},
-        sync::{mpsc, oneshot},
-    };
+    use tokio::io::{AsyncWrite, AsyncWriteExt};
     use tokio_util::compat::{FuturesAsyncWriteCompatExt, TokioAsyncWriteCompatExt};
     use txn_types::{Value, WriteType};
     use uuid::Uuid;
