@@ -20,8 +20,6 @@ pub enum SstWriterType {
 }
 
 pub struct SstFileWriter {
-    default_path: ImportPath,
-    write_path: ImportPath,
     default_meta: SstMeta,
     write_meta: SstMeta,
 
@@ -40,8 +38,6 @@ impl SstFileWriter {
         let write_file = File::create(write_path.clone().temp).unwrap();
 
         SstFileWriter {
-            default_path,
-            write_path,
             default_meta,
             write_meta,
             default_file,
@@ -51,8 +47,8 @@ impl SstFileWriter {
 
     pub fn write(&mut self, batch: WriteBatch) -> Result<()> {
         for m in batch.get_pairs().iter() {
-            self.default_file.write(m.get_key())?;
-            self.write_file.write(m.get_value())?;
+            self.default_file.write_all(m.get_key())?;
+            self.write_file.write_all(m.get_value())?;
         }
         Ok(())
     }
