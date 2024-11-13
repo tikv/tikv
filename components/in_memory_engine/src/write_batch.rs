@@ -206,6 +206,16 @@ impl RegionCacheWriteBatch {
         Ok(())
     }
 
+    fn clear_written_regions(&mut self) {
+        if !self.written_regions.is_empty() {
+            self.engine
+                .core
+                .region_manager()
+                .clear_regions_in_being_written(&self.written_regions);
+            self.written_regions.clear();
+        }
+    }
+
     // Note: `seq` is the sequence number of the first key in this write batch in
     // the RocksDB, which will be incremented automatically for each key, so
     // that all keys have unique sequence numbers.
@@ -244,12 +254,7 @@ impl RegionCacheWriteBatch {
         fail::fail_point!("ime_on_region_cache_write_batch_write_consumed");
         fail::fail_point!("ime_before_clear_regions_in_being_written");
 
-        if !self.written_regions.is_empty() {
-            self.engine
-                .core
-                .region_manager()
-                .clear_regions_in_being_written(&self.written_regions);
-        }
+        self.clear_written_regions();
 
         self.engine
             .lock_modification_bytes
@@ -344,7 +349,7 @@ impl RegionCacheWriteBatch {
 
     #[inline]
     fn record_last_written_region(&mut self) {
-        // NOTE: event if the region is evcited due to memory limit, we still
+        // NOTE: even if the region is evcited due to memory limit, we still
         // need to track it because its "in written" flag has been set.
         if self.region_cache_status != RegionCacheStatus::NotInCache {
             let last_region = self.current_region.take().unwrap();
@@ -502,12 +507,7 @@ impl WriteBatch for RegionCacheWriteBatch {
             self.record_last_written_region();
             // region's `in_written` is not cleaned as `write_impl` is not called,
             // so we should do it here.
-            if !self.written_regions.is_empty() {
-                self.engine
-                    .core
-                    .region_manager()
-                    .clear_regions_in_being_written(&self.written_regions);
-            }
+            self.clear_written_regions();
         }
 
         self.region_cache_status = RegionCacheStatus::NotInCache;

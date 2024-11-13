@@ -13,9 +13,10 @@ use crossbeam::channel;
 use engine_traits::CF_LOCK;
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
-use kvproto::{kvrpcpb::*, tikvpb::TikvClient};
+use kvproto::{kvrpcpb::*, metapb::PeerRole, pdpb, tikvpb::TikvClient};
 use pd_client::PdClient;
-use raft::eraftpb::MessageType;
+use raft::eraftpb::{ConfChangeType, MessageType};
+use raftstore::store::Callback;
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
 use tikv::storage::Snapshot;
@@ -679,4 +680,286 @@ fn test_check_long_uncommitted_proposals_after_became_leader() {
     cluster.transfer_leader(1, new_peer(1, 1));
     rx.recv_timeout(2 * cluster.cfg.raft_store.long_uncommitted_base_threshold.0)
         .unwrap();
+}
+
+// This test simulates a scenario where a configuration change has been applied
+// on the transferee, allowing a leader transfer to that peer even if the
+// change hasn't been applied on the current leader.
+//
+// The setup involves a 4-node cluster where peer-1 starts as the leader. A
+// configuration change is initiated to remove peer-2. This change commits
+// successfully but only applies on peer-2 and peer-4.
+//
+// The expected result for leader transfer is:
+//   - It will fail to peer-2 because it has been removed.
+//   - It will fail to peer-3 because it has unapplied configuration change.
+//   - It will succeed to peer-4 because it has already applied the
+//     configuration change.
+#[test]
+fn test_when_applied_conf_change_on_transferee() {
+    let mut cluster = new_server_cluster(0, 4);
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+    let region_id = cluster.run_conf_change();
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+    pd_client.must_add_peer(region_id, new_peer(4, 4));
+
+    cluster.must_put(b"k1", b"v1");
+
+    fail::cfg("apply_on_conf_change_1_1", "pause").unwrap();
+    fail::cfg("apply_on_conf_change_3_1", "pause").unwrap();
+
+    pd_client.remove_peer(region_id, new_peer(2, 2));
+    sleep_ms(300);
+    // Peer 2 still exists since the leader hasn't applied the ConfChange
+    // yet.
+    pd_client.must_have_peer(region_id, new_peer(2, 2));
+
+    // Use async_put for insertion here to avoid timeout errors, as synchronize put
+    // would hang due to the leader's apply process being paused.
+    let _ = cluster.async_put(b"k2", b"v2").unwrap();
+
+    pd_client.transfer_leader(region_id, new_peer(2, 2), vec![]);
+    sleep_ms(300);
+    assert_eq!(
+        pd_client.check_region_leader(region_id, new_peer(2, 2)),
+        false
+    );
+
+    pd_client.transfer_leader(region_id, new_peer(3, 3), vec![]);
+    sleep_ms(300);
+    assert_eq!(
+        pd_client.check_region_leader(region_id, new_peer(3, 3)),
+        false
+    );
+
+    pd_client.transfer_leader(region_id, new_peer(4, 4), vec![]);
+    pd_client.region_leader_must_be(region_id, new_peer(4, 4));
+
+    // Verify the data completeness on the new leader.
+    must_get_equal(&cluster.get_engine(4), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(4), b"k2", b"v2");
+
+    pd_client.must_none_peer(region_id, new_peer(2, 2));
+}
+
+// This test verifies that a leader transfer is rejected when the transferee
+// has been demoted to a learner but the leader has not yet applied this
+// configuration change.
+#[test]
+fn test_when_applied_conf_change_on_learner_transferee() {
+    let mut cluster = new_server_cluster(0, 3);
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+    let region_id = cluster.run_conf_change();
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+    pd_client.region_leader_must_be(region_id, new_peer(1, 1));
+
+    fail::cfg("apply_on_conf_change_1_1", "pause").unwrap();
+
+    // Demote peer-2 to be a learner.
+    pd_client.joint_confchange(
+        region_id,
+        vec![(ConfChangeType::AddLearnerNode, new_learner_peer(2, 2))],
+    );
+    sleep_ms(300);
+
+    pd_client.transfer_leader(region_id, new_peer(2, 2), vec![]);
+    sleep_ms(300);
+    assert_eq!(
+        pd_client.check_region_leader(region_id, new_peer(2, 2)),
+        false
+    );
+
+    pd_client.transfer_leader(region_id, new_peer(3, 3), vec![]);
+    pd_client.region_leader_must_be(region_id, new_peer(3, 3));
+    let region = block_on(pd_client.get_region_by_id(region_id))
+        .unwrap()
+        .unwrap();
+    assert_eq!(region.get_peers()[1].get_role(), PeerRole::Learner);
+}
+
+// This test verifies that a leader transfer is allowed when the transferee
+// has applied a conf change but the leader has not yet applied.
+#[test]
+fn test_when_applied_conf_change_on_transferee_pessimistic_lock() {
+    let mut cluster = new_server_cluster(0, 4);
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+    let region_id = cluster.run_conf_change();
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+    pd_client.region_leader_must_be(region_id, new_peer(1, 1));
+
+    fail::cfg("apply_on_conf_change_1_1", "pause").unwrap();
+    fail::cfg("propose_locks_before_transfer_leader", "return").unwrap();
+
+    pd_client.remove_peer(region_id, new_peer(2, 2));
+    sleep_ms(300);
+    // Peer 2 still exists since the leader hasn't applied the ConfChange
+    // yet.
+    pd_client.must_have_peer(region_id, new_peer(2, 2));
+
+    pd_client.transfer_leader(region_id, new_peer(3, 3), vec![]);
+    pd_client.region_leader_must_be(region_id, new_peer(3, 3));
+
+    pd_client.must_none_peer(region_id, new_peer(2, 2));
+}
+
+// This test verifies that a leader transfer is allowed when the transferee
+// has applied a region split but the leader has not yet applied.
+#[test]
+fn test_when_applied_region_split_on_transferee_pessimistic_lock() {
+    let mut cluster = new_server_cluster(0, 3);
+    // To enable the transferee to quickly report the split region information.
+    cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(50);
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+    let region_id = cluster.run_conf_change();
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+    // Use peer_id 4 as the leader since we want to reuse the failpoint
+    // apply_before_split_1_3.
+    pd_client.transfer_leader(region_id, new_peer(3, 3), vec![]);
+    pd_client.region_leader_must_be(region_id, new_peer(3, 3));
+
+    fail::cfg("apply_before_split_1_1", "pause").unwrap();
+    fail::cfg("apply_before_split_1_3", "pause").unwrap();
+    fail::cfg("propose_locks_before_transfer_leader", "return").unwrap();
+
+    let region = pd_client.get_region(b"x1").unwrap();
+    cluster.split_region(&region, "x2".as_bytes(), Callback::None);
+    sleep_ms(300);
+    // Expect split is pending on the current leader.
+    assert_eq!(pd_client.get_regions_number(), 1);
+
+    pd_client.transfer_leader(region_id, new_peer(2, 2), vec![]);
+    sleep_ms(300);
+    pd_client.region_leader_must_be(region_id, new_peer(2, 2));
+    sleep_ms(300);
+    // TODO(hwy): We cannot enable this assertion yet since https://github.com/tikv/tikv/issues/12410.
+    // Expect split is finished on the new leader.
+    // assert_eq!(pd_client.get_regions_number(), 2);
+}
+
+// This test verifies that a leader transfer is:
+// - Not allowed for the source region when the transferee has applied a region
+//   commit-merge but the leader has not yet applied.
+// - Allowed for the source region when the transferee has applied a region
+//   prepare-merge but the leader has not yet applied.
+// - Allowed for the target region in both scenarios above.
+#[test]
+fn test_when_applied_region_merge_on_transferee_pessimistic_lock() {
+    let mut cluster = new_server_cluster(0, 4);
+    // To enable the transferee to quickly report the merged region information.
+    cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(50);
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+    let region_id = cluster.run_conf_change();
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    // Use peer_id 4 since we want to reuse the failpoint
+    // apply_before_commit_merge_except_1_4.
+    pd_client.must_add_peer(region_id, new_peer(4, 4));
+    pd_client.region_leader_must_be(region_id, new_peer(1, 1));
+
+    let region = cluster.get_region(b"x2");
+    let region_id = region.id;
+    pd_client.split_region(region, pdpb::CheckPolicy::Usekey, vec![b"x2".to_vec()]);
+    sleep_ms(300);
+    let left_region = cluster.get_region(b"x1");
+    let right_region = cluster.get_region(b"x3");
+    assert_eq!(region_id, right_region.get_id());
+    let left_region_peer_on_store1 = new_peer(
+        left_region.get_peers()[0].store_id,
+        left_region.get_peers()[0].id,
+    );
+    pd_client.region_leader_must_be(left_region.get_id(), left_region_peer_on_store1);
+    pd_client.region_leader_must_be(right_region.get_id(), new_peer(1, 1));
+
+    fail::cfg("apply_before_commit_merge_except_1_4", "pause").unwrap();
+    fail::cfg("propose_locks_before_transfer_leader", "return").unwrap();
+
+    assert_eq!(pd_client.get_regions_number(), 2);
+    // Merge right to left.
+    pd_client.merge_region(right_region.get_id(), left_region.get_id());
+    sleep_ms(300);
+
+    pd_client.transfer_leader(right_region.get_id(), new_peer(4, 4), vec![]);
+    sleep_ms(300);
+    assert_eq!(
+        pd_client.check_region_leader(right_region.get_id(), new_peer(4, 4)),
+        false
+    );
+
+    pd_client.transfer_leader(right_region.get_id(), new_peer(2, 2), vec![]);
+    sleep_ms(300);
+    assert_eq!(
+        pd_client.check_region_leader(right_region.get_id(), new_peer(2, 2)),
+        false
+    );
+
+    assert_eq!(left_region.get_peers()[2].store_id, 4);
+    let left_region_peer_on_store4 = new_peer(
+        left_region.get_peers()[2].store_id,
+        left_region.get_peers()[2].id,
+    );
+    pd_client.transfer_leader(
+        left_region.get_id(),
+        left_region_peer_on_store4.clone(),
+        vec![],
+    );
+    pd_client.region_leader_must_be(left_region.get_id(), left_region_peer_on_store4);
+    sleep_ms(300);
+
+    let left_region_peer_on_store2 = new_peer(
+        left_region.get_peers()[1].store_id,
+        left_region.get_peers()[1].id,
+    );
+    pd_client.transfer_leader(
+        left_region.get_id(),
+        left_region_peer_on_store2.clone(),
+        vec![],
+    );
+    pd_client.region_leader_must_be(left_region.get_id(), left_region_peer_on_store2);
+    sleep_ms(300);
+
+    assert_eq!(pd_client.get_regions_number(), 1);
+}
+
+// This test verifies that a leader transfer is allowed when the transferee
+// has applied a witness switch but the leader has not yet applied.
+#[test]
+fn test_when_applied_witness_switch_on_transferee_pessimistic_lock() {
+    let mut cluster = new_server_cluster(0, 3);
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+    let region_id = cluster.run_conf_change();
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+    pd_client.transfer_leader(region_id, new_peer(2, 2), vec![]);
+    pd_client.region_leader_must_be(region_id, new_peer(2, 2));
+
+    // Pause applying on the current leader (peer-2).
+    fail::cfg("before_exec_batch_switch_witness", "pause").unwrap();
+    fail::cfg("propose_locks_before_transfer_leader", "return").unwrap();
+
+    // Demote peer-3 to be a witness.
+    pd_client.switch_witnesses(region_id, vec![3], vec![true]);
+    sleep_ms(300);
+
+    pd_client.transfer_leader(region_id, new_peer(3, 3), vec![]);
+    sleep_ms(300);
+    assert_eq!(
+        pd_client.check_region_leader(region_id, new_peer(3, 3)),
+        false
+    );
+
+    pd_client.transfer_leader(region_id, new_peer(1, 1), vec![]);
+    pd_client.region_leader_must_be(region_id, new_peer(1, 1));
+    let region = block_on(pd_client.get_region_by_id(region_id))
+        .unwrap()
+        .unwrap();
+    assert!(region.get_peers()[2].is_witness);
 }
