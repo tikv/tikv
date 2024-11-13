@@ -252,7 +252,7 @@ mod tests {
     use super::*;
 
     fn create_tokio_runtime(_: usize, _: &str) -> TokioResult<Runtime> {
-        tokio::runtime::Builder::new_current_thread()
+        tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
     }
