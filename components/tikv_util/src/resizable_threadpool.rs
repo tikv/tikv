@@ -27,8 +27,12 @@ impl RuntimeHandle {
     where
         Fut: Future<Output = ()> + Send + 'static,
     {
-        let inner = self.inner.read().unwrap();
-        if let Some(handle) = inner.as_ref() {
+        let handle = {
+            let inner = self.inner.read().unwrap();
+            inner.as_ref().cloned() // Clone the handle to avoid holding the lock
+        };
+        
+        if let Some(handle) = handle {
             handle.spawn(fut);
         } else {
             panic!("runtime is not running");
@@ -39,8 +43,12 @@ impl RuntimeHandle {
     where
         Fut: Future,
     {
-        let inner = self.inner.read().unwrap();
-        if let Some(handle) = inner.as_ref() {
+        let handle = {
+            let inner = self.inner.read().unwrap();
+            inner.as_ref().cloned() // Clone the handle to avoid holding the lock
+        };
+        
+        if let Some(handle) = handle {
             handle.block_on(fut)
         } else {
             panic!("runtime is not running");
