@@ -34,8 +34,8 @@ impl SstFileWriter {
         default_meta: SstMeta,
         write_meta: SstMeta,
     ) -> Self {
-        let default_file = File::create(default_path.clone().temp).unwrap();
-        let write_file = File::create(write_path.clone().temp).unwrap();
+        let default_file = File::create(default_path.save).unwrap();
+        let write_file = File::create(write_path.save).unwrap();
 
         SstFileWriter {
             default_meta,
