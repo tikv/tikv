@@ -816,8 +816,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                     .duration_since(UNIX_EPOCH)
                     .unwrap()
                     .as_nanos() as u64;
-                let elapsed = now.saturating_sub(batch_msg.last_observed_time);
-                RAFT_MESSAGE_SEND_DURATION.observe(nanos_to_secs(elapsed));
+                let elapsed = nanos_to_secs(now.saturating_sub(batch_msg.last_observed_time));
+                RAFT_MESSAGE_DURATION
+                    .get(RaftMessageDurationKind::send)
+                    .observe(elapsed);
 
                 let len = batch_msg.get_msgs().len();
                 RAFT_MESSAGE_RECV_COUNTER.inc_by(len as u64);

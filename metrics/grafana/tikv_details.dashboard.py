@@ -2555,7 +2555,8 @@ def RaftMessage() -> RowPanel:
             graph_description="The time consumed waiting to send Raft Messages per TiKV instance",
             graph_by_labels=["instance"],
             yaxis_format=UNITS.SECONDS,
-            metric="tikv_server_raft_message_send_wait_duration_seconds",
+            metric="tikv_server_raft_message_duration_seconds",
+            label_selectors=['type="wait"'],
         )
     )
     layout.row(
@@ -2566,7 +2567,8 @@ def RaftMessage() -> RowPanel:
             graph_description="The time consumed to send Raft Messages",
             graph_by_labels=["instance"],
             yaxis_format=UNITS.SECONDS,
-            metric="tikv_server_raft_message_send_duration_seconds",
+            metric="tikv_server_raft_message_duration_seconds",
+            label_selectors=['type="send"'],
         )
     )
     return layout.row_panel

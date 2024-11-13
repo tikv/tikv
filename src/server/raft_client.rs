@@ -294,7 +294,9 @@ impl Buffer for BatchMessageBuffer {
         for msg in batch.msgs.iter_mut() {
             assert!(now > msg.last_observed_time);
             let elapsed = nanos_to_secs(now.saturating_sub(msg.last_observed_time));
-            RAFT_MESSAGE_SEND_WAIT_DURATION.observe(elapsed);
+            RAFT_MESSAGE_DURATION
+                .get(RaftMessageDurationKind::wait)
+                .observe(elapsed);
         }
         batch.last_observed_time = now;
 
