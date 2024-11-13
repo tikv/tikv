@@ -118,8 +118,9 @@ pub struct ImportSstService<E: Engine> {
     cfg: ConfigManager,
     tablets: LocalTablets<E::Local>,
     engine: E,
-    // TODO: (Ris) change to ResizableRuntime
-    handle: RuntimeHandle,
+    threads: RuntimeHandle,
+    // threads_ref is for safely cleanning
+    #[allow(dead_code)]
     threads_ref: Arc<Mutex<ResizableRuntime>>,
     importer: Arc<SstImporter<E::Local>>,
     limiter: Limiter,
@@ -372,7 +373,7 @@ impl<E: Engine> ImportSstService<E> {
         ImportSstService {
             cfg: cfg_mgr,
             tablets,
-            handle: handle.clone(),
+            threads: handle.clone(),
             threads_ref: threads_clone,
             engine,
             importer,
@@ -789,8 +790,8 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             crate::send_rpc_response!(res, sink, label, timer);
         };
 
-        self.handle.spawn(buf_driver);
-        self.handle.spawn(handle_task);
+        self.threads.spawn(buf_driver);
+        self.threads.spawn(handle_task);
     }
 
     // clear_files the KV files after apply finished.
@@ -823,7 +824,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 .observe(start.saturating_elapsed().as_secs_f64());
             crate::send_rpc_response!(Ok(resp), sink, label, timer);
         };
-        self.handle.spawn(handle_task);
+        self.threads.spawn(handle_task);
     }
 
     // Downloads KV file and performs key-rewrite then apply kv into this tikv
@@ -859,7 +860,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             debug!("finished apply kv file with {:?}", resp);
             send_rpc_response!(Ok(resp), sink, label, start);
         };
-        self.handle.spawn(handle_task);
+        self.threads.spawn(handle_task);
     }
 
     /// Downloads the file and performs key-rewrite for later ingesting.
@@ -947,7 +948,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             crate::send_rpc_response!(Ok(resp), sink, label, timer);
         };
 
-        self.handle.spawn(handle_task);
+        self.threads.spawn(handle_task);
     }
 
     /// Ingest the file by sending a raft command to raftstore.
@@ -989,7 +990,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             .await;
             crate::send_rpc_response!(res, sink, label, timer);
         };
-        self.handle.spawn(handle_task);
+        self.threads.spawn(handle_task);
     }
 
     /// Ingest multiple files by sending a raft command to raftstore.
@@ -1024,7 +1025,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             .await;
             crate::send_rpc_response!(res, sink, label, timer);
         };
-        self.handle.spawn(handle_task);
+        self.threads.spawn(handle_task);
     }
 
     fn compact(
@@ -1083,7 +1084,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             crate::send_rpc_response!(res, sink, label, timer);
         };
 
-        self.handle.spawn(handle_task);
+        self.threads.spawn(handle_task);
     }
 
     fn set_download_speed_limit(
@@ -1177,7 +1178,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             }
             let _ = sink.close().await;
         };
-        self.handle.spawn(handle_task);
+        self.threads.spawn(handle_task);
     }
 
     impl_write!(write, WriteRequest, WriteResponse, Chunk, new_txn_writer);
