@@ -31,7 +31,7 @@ impl RuntimeHandle {
             let inner = self.inner.read().unwrap();
             inner.as_ref().cloned() // Clone the handle to avoid holding the lock
         };
-        
+
         if let Some(handle) = handle {
             handle.spawn(fut);
         } else {
@@ -47,7 +47,7 @@ impl RuntimeHandle {
             let inner = self.inner.read().unwrap();
             inner.as_ref().cloned() // Clone the handle to avoid holding the lock
         };
-        
+
         if let Some(handle) = handle {
             handle.block_on(fut)
         } else {

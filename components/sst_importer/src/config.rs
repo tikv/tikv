@@ -2,7 +2,7 @@
 use std::{
     error::Error,
     result::Result,
-    sync::{Arc, Mutex, RwLock}, rc::Weak,
+    sync::{Arc, Mutex, RwLock, Weak},
 };
 
 use online_config::{self, OnlineConfig};
@@ -92,7 +92,10 @@ impl online_config::ConfigManager for ConfigManager {
             return Err(e);
         }
 
-        self.pool.lock().unwrap().adjust_with(cfg.num_threads);
+        if let Some(pool) = self.pool.upgrade() {
+            let mut pool = pool.lock().unwrap();
+            pool.adjust_with(cfg.num_threads);
+        }
 
         *self.wl() = cfg;
         Ok(())
