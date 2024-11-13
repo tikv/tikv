@@ -79,6 +79,12 @@ impl<S: Snapshot> ScannerBuilder<S> {
         self
     }
 
+    #[inline]
+    pub fn in_memory_engine_hit(mut self, in_memory_engine_hit: bool) -> Self {
+        self.0.in_memory_engine_hit = in_memory_engine_hit;
+        self
+    }
+
     /// Limit the range to `[lower_bound, upper_bound)` in which the
     /// `ForwardKvScanner` should scan. `None` means unbounded.
     ///
@@ -275,6 +281,7 @@ pub struct ScannerConfig<S: Snapshot> {
     access_locks: TsSet,
 
     check_has_newer_ts_data: bool,
+    in_memory_engine_hit: bool,
 }
 
 impl<S: Snapshot> ScannerConfig<S> {
@@ -293,6 +300,7 @@ impl<S: Snapshot> ScannerConfig<S> {
             bypass_locks: Default::default(),
             access_locks: Default::default(),
             check_has_newer_ts_data: false,
+            in_memory_engine_hit: false,
         }
     }
 

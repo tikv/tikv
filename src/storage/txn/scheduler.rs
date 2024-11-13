@@ -570,7 +570,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let cid = task.cid();
         let tracker_token = task.tracker_token();
         let cmd = task.cmd();
-        debug!("received new command"; "cid" => cid, "cmd" => ?cmd, "tracker" => ?tracker_token);
+        info!("received new command"; "cid" => cid, "cmd" => ?cmd, "tracker" => ?tracker_token);
 
         let tag = cmd.tag();
         let priority_tag = get_priority_tag(cmd.priority());
@@ -763,9 +763,9 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                     }
                     task.set_extra_op(extra_op);
 
-                    debug!(
+                    info!(
                         "process cmd with snapshot";
-                        "cid" => task.cid(), "term" => ?term, "extra_op" => ?extra_op,
+                        "cid" => task.cid(), "term" => ?term, "extra_op" => ?extra_op, "cmd" => ?&task.cmd(),
                         "task" => ?&task,
                     );
                     sched.process(snapshot, task).await;
@@ -810,6 +810,11 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let pr = ProcessResult::Failed {
             err: StorageError::from(err),
         };
+        info!(
+            "write command finished with error";
+            "cid" => cid,
+            "pr" => ?&pr,
+        );
         if let Some(details) = sched_details {
             let req_info = GLOBAL_TRACKERS.with_tracker(details.tracker, |tracker| {
                 tracker.metrics.scheduler_process_nanos = details
@@ -883,11 +888,12 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             SCHED_STAGE_COUNTER_VEC.get(tag).write_finish.inc();
         }
 
-        debug!("write_command_finished";
-            "req_info" => TrackerTokenArray::new(&[sched_details.tracker]),
-            "cid" => ?cid,
-            "pipelined" => ?pipelined,
-            "async_apply_prewrite" => ?async_apply_prewrite
+        info!(
+            "write command finished";
+            "cid" => cid,
+            "pipelined" => pipelined,
+            "async_apply_prewrite" => async_apply_prewrite,
+            "result" => ?result
         );
         drop(lock_guards);
 
@@ -1594,7 +1600,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         }
         let WriteResult {
             ctx,
-            to_be_write,
+            mut to_be_write,
             rows,
             pr,
             new_acquired_locks,
@@ -1670,6 +1676,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             }
         });
 
+        to_be_write.cid = Some(cid);
         let async_write_start = Instant::now_coarse();
         let mut res = unsafe {
             with_tls_engine(|e: &mut E| {
@@ -1728,6 +1735,9 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 WriteEvent::Finished(res) => {
                     fail_point!("scheduler_async_write_finish");
                     let ok = res.is_ok();
+                    info!("scheduler async write applied finish and callback";
+                        "cid" => cid,
+                        "ok" => ok);
 
                     txn_scheduler.on_write_finished(
                         cid,
@@ -1813,7 +1823,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 SCHED_STAGE_COUNTER_VEC.get(tag).prepare_write_err.inc();
                 let req_info =
                     GLOBAL_TRACKERS.with_tracker(tracker_token, |tracker| tracker.req_info.clone());
-                debug!("write command failed"; "cid" => cid, "err" => ?err, "req_info" => ?req_info);
+                info!("write command failed"; "cid" => cid, "err" => ?err);
                 self.finish_with_err(cid, err, Some(sched_details));
                 return;
             }

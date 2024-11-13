@@ -26,7 +26,7 @@ use tikv_util::{
     debug, error,
     lru::LruCache,
     store::find_peer_by_id,
-    time::{monotonic_raw_now, ThreadReadId},
+    time::{monotonic_raw_now, ThreadReadId}, info,
 };
 use time::Timespec;
 use tracker::GLOBAL_TRACKERS;
@@ -161,6 +161,11 @@ pub trait ReadExecutor {
                         let mut res = ReadIndexResponse::default();
                         res.set_read_index(read_index);
                         resp.set_read_index(res);
+                        info!("jepsen read_index response";
+                            "req.start_ts" => req.get_read_index().get_start_ts(),
+                            "req.key_ranges" => ?req.get_read_index().get_key_ranges(),
+                            "read_index" => read_index
+                        );
                     } else {
                         panic!("[region {}] can not get readindex", region.get_id());
                     }
@@ -1072,6 +1077,15 @@ where
     ) {
         match self.pre_propose_raft_command(&req) {
             Ok(Some((mut delegate, policy))) => {
+                req.get_requests()
+                    .iter()
+                    .filter(|r| r.has_read_index())
+                    .for_each(|r| {
+                        info!("jepsen using local reader";
+                            "start_ts" => r.get_read_index().get_start_ts(),
+                            "key_ranges" => ?r.get_read_index().get_key_ranges(),
+                        );
+                    });
                 let mut snap_updated = false;
                 let last_valid_ts = delegate.last_valid_ts;
                 let mut response = match policy {
@@ -1177,7 +1191,18 @@ where
                 cb.set_result(response);
             }
             // Forward to raftstore.
-            Ok(None) => self.redirect(RaftCommand::new(req, cb)),
+            Ok(None) => {
+                req.get_requests()
+                    .iter()
+                    .filter(|r| r.has_read_index())
+                    .for_each(|r| {
+                        info!("jepsen redirecting to raftstore";
+                            "start_ts" => r.get_read_index().get_start_ts(),
+                            "key_ranges" => ?r.get_read_index().get_key_ranges(),
+                        );
+                    });
+                self.redirect(RaftCommand::new(req, cb))
+            }
             Err(e) => {
                 let mut response = cmd_resp::new_error(e);
                 if let Some(delegate) = self

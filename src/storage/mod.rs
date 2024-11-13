@@ -606,6 +606,16 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         key: Key,
         start_ts: TimeStamp,
     ) -> impl Future<Output = Result<(Option<Value>, KvGetStatistics)>> {
+        info!(
+            "jepsen storage.get";
+            "key" => %key,
+            "start_ts" => start_ts,
+            "region_id" => ctx.get_region_id(),
+            "peer" => ?ctx.get_peer(),
+            "replica_read" => ctx.get_replica_read(),
+            "resolved_locks" => ?ctx.get_resolved_locks(),
+            "committed_locks" => ?ctx.get_committed_locks(),
+        );
         let stage_begin_ts = Instant::now();
         let deadline = Self::get_deadline(&ctx);
         const CMD: CommandKind = CommandKind::get;
@@ -679,6 +689,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     let begin_instant = Instant::now();
                     let stage_snap_recv_ts = begin_instant;
                     let buckets = snapshot.ext().get_buckets();
+                    let in_memory_engine_hit = snapshot.ext().in_memory_engine_hit();
                     let mut statistics = Statistics::default();
                     let result = Self::with_perf_context(CMD, || {
                         let _guard = sample.observe_cpu();
@@ -690,6 +701,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             bypass_locks,
                             access_locks,
                             false,
+                            in_memory_engine_hit,
                         );
                         snap_store
                             .get(&key, &mut statistics)
@@ -1268,6 +1280,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     let stage_snap_recv_ts = begin_instant;
                     let mut statistics = Vec::with_capacity(keys.len());
                     let buckets = snapshot.ext().get_buckets();
+                    let in_memory_engine_hit = snapshot.ext().in_memory_engine_hit();
                     let (result, stats) = Self::with_perf_context(CMD, || {
                         let _guard = sample.observe_cpu();
                         let snap_store = SnapshotStore::new(
@@ -1278,6 +1291,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             bypass_locks,
                             access_locks,
                             false,
+                            in_memory_engine_hit,
                         );
                         let mut stats = Statistics::default();
                         let result = snap_store
@@ -1503,6 +1517,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 Self::with_perf_context(CMD, || {
                     let begin_instant = Instant::now();
                     let buckets = snapshot.ext().get_buckets();
+                    let in_memory_engine_hit = snapshot.ext().in_memory_engine_hit();
 
                     let snap_store = SnapshotStore::new(
                         snapshot,
@@ -1512,6 +1527,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         bypass_locks,
                         access_locks,
                         false,
+                        in_memory_engine_hit,
                     );
 
                     let mut scanner =
@@ -3349,6 +3365,16 @@ fn prepare_snap_ctx<'a>(
     concurrency_manager: &ConcurrencyManager,
     cmd: CommandKind,
 ) -> Result<SnapContext<'a>> {
+    let keys_debug: Vec<_> = keys.clone().into_iter().collect();
+    info!(
+        "jepsen prepare_snap_ctx"; 
+        "cmd" => ?cmd, 
+        "start_ts" => start_ts, 
+        "stale_read" => pb_ctx.get_stale_read(),
+        "isolation_level" => ?pb_ctx.get_isolation_level(), 
+        "bypass_locks" => ?bypass_locks, 
+        "keys" => ?keys_debug
+    );
     // Update max_ts and check the in-memory lock table before getting the snapshot
     if !pb_ctx.get_stale_read() {
         concurrency_manager.update_max_ts(start_ts);

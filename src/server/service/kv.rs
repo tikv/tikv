@@ -7,7 +7,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc,
     },
-    time::Duration,
+    time::Duration, ops::Deref,
 };
 
 use api_version::KvFormat;
@@ -1552,6 +1552,11 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: GetRequest,
 ) -> impl Future<Output = ServerResult<GetResponse>> {
+    info!(
+        "jepsen future_get";
+        "region_id" => req.get_context().region_id,
+        "start_ts" => req.get_version(),
+    );
     let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
         req.get_context(),
         RequestType::KvGet,
@@ -2261,8 +2266,23 @@ fn future_copr<E: Engine>(
     peer: Option<String>,
     req: Request,
 ) -> impl Future<Output = ServerResult<MemoryTraceGuard<Response>>> {
+    let start_ts = req.start_ts;
+    info!(
+        "jepsen future_cop";
+        "region_id" => req.get_context().region_id,
+        "start_ts" => start_ts,
+    );
     let ret = copr.parse_and_handle_unary_request(req, peer);
-    async move { Ok(ret.await) }
+    async move {
+        let resp = ret.await;
+        let res = resp.deref();
+        info!(
+            "jepsen coprocessor response";
+            "start_ts" => start_ts,
+            "response" => ?res,
+        );
+        Ok(resp)
+    }
 }
 
 fn future_raw_coprocessor<E: Engine, L: LockManager, F: KvFormat>(
