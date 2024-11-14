@@ -2900,9 +2900,9 @@ dependencies = [
 
 [[package]]
 name = "lz4-sys"
-version = "1.9.4"
+version = "1.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57d27b317e207b10f69f5e75494119e391a96f48861ae870d1da6edac98ca900"
+checksum = "e9764018d143cc854c9f17f0b907de70f14393b1f502da6375dce70f00514eb3"
 dependencies = [
  "cc",
  "libc 0.2.139",
@@ -4095,7 +4095,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.3.0"
-source = "git+https://github.com/tikv/raft-engine.git?branch=tikv-6.5#895ca932caee427a731ee02e898daf9f2a89d348"
+source = "git+https://github.com/tikv/raft-engine.git?branch=tikv-6.5#2a4faff8358245640eeb5585c945dffe7ede8776"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -4129,7 +4129,7 @@ dependencies = [
 [[package]]
 name = "raft-engine-ctl"
 version = "0.3.0"
-source = "git+https://github.com/tikv/raft-engine.git?branch=tikv-6.5#895ca932caee427a731ee02e898daf9f2a89d348"
+source = "git+https://github.com/tikv/raft-engine.git?branch=tikv-6.5#2a4faff8358245640eeb5585c945dffe7ede8776"
 dependencies = [
  "clap 3.1.6",
  "env_logger 0.10.0",

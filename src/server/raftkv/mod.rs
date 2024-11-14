@@ -529,6 +529,10 @@ where
                     });
                     let mut res = match on_write_result::<E::Snapshot>(resp) {
                         Ok(CmdRes::Resp(_)) => {
+                            ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();
+                            ASYNC_REQUESTS_DURATIONS_VEC
+                                .write
+                                .observe(begin_instant.saturating_elapsed_secs());
                             fail_point!("raftkv_async_write_finish");
                             Ok(())
                         }
@@ -562,18 +566,9 @@ where
             tx.notify(res);
         }
         rx.inspect(move |ev| {
-            let WriteEvent::Finished(res) = ev else { return };
-            match res {
-                Ok(()) => {
-                    ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();
-                    ASYNC_REQUESTS_DURATIONS_VEC
-                        .write
-                        .observe(begin_instant.saturating_elapsed_secs());
-                }
-                Err(e) => {
-                    let status_kind = get_status_kind_from_engine_error(e);
-                    ASYNC_REQUESTS_COUNTER_VEC.write.get(status_kind).inc();
-                }
+            if let WriteEvent::Finished(Err(e)) = ev {
+                let status_kind = get_status_kind_from_engine_error(e);
+                ASYNC_REQUESTS_COUNTER_VEC.write.get(status_kind).inc();
             }
         })
     }
@@ -620,16 +615,20 @@ where
         let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);
         cmd.set_requests(vec![req].into());
+        let store_cb = StoreCallback::read(Box::new(move |resp| {
+            let res = on_read_result(resp).map_err(Error::into);
+            if res.is_ok() {
+                let elapse = begin_instant.saturating_elapsed_secs();
+                ASYNC_REQUESTS_DURATIONS_VEC.snapshot.observe(elapse);
+                ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
+            }
+            cb(res);
+        }));
+
         if res.is_ok() {
             res = self
                 .router
-                .read(
-                    ctx.read_id,
-                    cmd,
-                    StoreCallback::read(Box::new(move |resp| {
-                        cb(on_read_result(resp).map_err(Error::into));
-                    })),
-                )
+                .read(ctx.read_id, cmd, store_cb)
                 .map_err(kv::Error::from);
         }
         async move {
@@ -655,13 +654,7 @@ where
                     };
                     Err(e)
                 }
-                Ok(CmdRes::Snap(s)) => {
-                    ASYNC_REQUESTS_DURATIONS_VEC
-                        .snapshot
-                        .observe(begin_instant.saturating_elapsed_secs());
-                    ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
-                    Ok(s)
-                }
+                Ok(CmdRes::Snap(s)) => Ok(s),
                 Err(e) => {
                     let status_kind = get_status_kind_from_engine_error(&e);
                     ASYNC_REQUESTS_COUNTER_VEC.snapshot.get(status_kind).inc();
