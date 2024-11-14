@@ -227,4 +227,48 @@ mod tests {
             slow_score.update_impl(Duration::from_secs(57))
         );
     }
+
+    #[test]
+    fn test_slow_score_extra() {
+        let mut slow_score = SlowScore::new_with_extra_config(Duration::from_millis(1000), 0.6);
+        slow_score.timeout_requests = 1;
+        slow_score.total_requests = 10;
+        let score = slow_score.update_impl(Duration::from_secs(10));
+        assert!(score > OrderedFloat(1.16));
+        assert!(score < OrderedFloat(1.17));
+
+        slow_score.timeout_requests = 2;
+        slow_score.total_requests = 10;
+        let score = slow_score.update_impl(Duration::from_secs(10));
+        assert!(score > OrderedFloat(1.5));
+        assert!(score < OrderedFloat(1.6));
+
+        slow_score.timeout_requests = 0;
+        slow_score.total_requests = 100;
+        assert_eq!(
+            OrderedFloat(1.0),
+            slow_score.update_impl(Duration::from_secs(57))
+        );
+
+        slow_score.timeout_requests = 3;
+        slow_score.total_requests = 10;
+        assert_eq!(
+            OrderedFloat(1.5),
+            slow_score.update_impl(Duration::from_secs(10))
+        );
+
+        slow_score.timeout_requests = 6;
+        slow_score.total_requests = 10;
+        assert_eq!(
+            OrderedFloat(3.0),
+            slow_score.update_impl(Duration::from_secs(10))
+        );
+
+        slow_score.timeout_requests = 10;
+        slow_score.total_requests = 10;
+        assert_eq!(
+            OrderedFloat(6.0),
+            slow_score.update_impl(Duration::from_secs(10))
+        );
+    }
 }
