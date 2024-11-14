@@ -704,13 +704,8 @@ dependencies = [
  "quote",
  "regex",
  "rustc-hash",
-<<<<<<< HEAD
  "shlex 1.1.0",
- "syn 2.0.18",
-=======
- "shlex 1.3.0",
  "syn 2.0.79",
->>>>>>> c24f4eeb13 (chore: Fix yanked futures-util 0.3.15 (#17611))
 ]
 
 [[package]]
@@ -3510,11 +3505,7 @@ checksum = "ed3955f1a9c7c0c15e092f9c887db08b1fc683305fdf6eb6684f22555355e202"
 dependencies = [
  "proc-macro2",
  "quote",
-<<<<<<< HEAD
- "syn 2.0.18",
-=======
  "syn 2.0.79",
->>>>>>> c24f4eeb13 (chore: Fix yanked futures-util 0.3.15 (#17611))
 ]
 
 [[package]]
@@ -4069,11 +4060,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3b69d39aab54d069e7f2fe8cb970493e7834601ca2d8c65fd7bbd183578080d1"
 dependencies = [
  "proc-macro2",
-<<<<<<< HEAD
- "syn 2.0.18",
-=======
  "syn 2.0.79",
->>>>>>> c24f4eeb13 (chore: Fix yanked futures-util 0.3.15 (#17611))
 ]
 
 [[package]]
@@ -4102,15 +4089,9 @@ dependencies = [
 
 [[package]]
 name = "proc-macro2"
-<<<<<<< HEAD
-version = "1.0.60"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dec2b086b7a862cf4de201096214fa870344cf922b2b30c167badb3af3195406"
-=======
 version = "1.0.87"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b3e4daa0dcf6feba26f985457cdf104d4b4256fc5a09547140f3631bb076b19a"
->>>>>>> c24f4eeb13 (chore: Fix yanked futures-util 0.3.15 (#17611))
 dependencies = [
  "unicode-ident",
 ]
@@ -5833,11 +5814,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "rustversion",
-<<<<<<< HEAD
- "syn 2.0.18",
-=======
  "syn 2.0.79",
->>>>>>> c24f4eeb13 (chore: Fix yanked futures-util 0.3.15 (#17611))
 ]
 
 [[package]]
@@ -5881,15 +5858,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-<<<<<<< HEAD
-version = "2.0.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32d41677bcbe24c20c52e7c70b0d8db04134c5d1066bf98662e2871ad200ea3e"
-=======
 version = "2.0.79"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "89132cd0bf050864e1d38dc3bbc07a0eb8e7530af26344d3d2bbbef83499f590"
->>>>>>> c24f4eeb13 (chore: Fix yanked futures-util 0.3.15 (#17611))
 dependencies = [
  "proc-macro2",
  "quote",
@@ -7211,11 +7182,7 @@ checksum = "cc6b8ad3567499f98a1db7a752b07a7c8c7c7c34c332ec00effb2b0027974b7c"
 dependencies = [
  "proc-macro2",
  "quote",
-<<<<<<< HEAD
  "syn 1.0.103",
-=======
- "syn 2.0.79",
->>>>>>> c24f4eeb13 (chore: Fix yanked futures-util 0.3.15 (#17611))
 ]
 
 [[package]]
@@ -7787,29 +7754,6 @@ dependencies = [
 ]
 
 [[package]]
-<<<<<<< HEAD
-=======
-name = "zerocopy"
-version = "0.7.32"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "74d4d3961e53fa4c9a25a8637fc2bfaf2595b3d3ae34875568a5cf64787716be"
-dependencies = [
- "zerocopy-derive",
-]
-
-[[package]]
-name = "zerocopy-derive"
-version = "0.7.32"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9ce1b18ccd8e73a9321186f97e46f9f04b778851177567b1975109d26a08d2a6"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.79",
-]
-
-[[package]]
->>>>>>> c24f4eeb13 (chore: Fix yanked futures-util 0.3.15 (#17611))
 name = "zeroize"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
