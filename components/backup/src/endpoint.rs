@@ -24,18 +24,21 @@ use online_config::OnlineConfig;
 use raft::StateRole;
 use raftstore::coprocessor::RegionInfoProvider;
 use resource_control::{with_resource_limiter, ResourceGroupManager, ResourceLimiter};
+use tidb_query_datatype::codec::table as table_codec;
 use tikv::{
     config::BackupConfig,
     storage::{
         kv::{CursorBuilder, Engine, LocalTablets, ScanMode, SnapContext},
-        mvcc::Error as MvccError,
+        mvcc::{EntryScanner, Error as MvccError},
         raw::raw_mvcc::RawMvccSnapshot,
         txn::{EntryBatch, Error as TxnError, SnapshotStore, TxnEntryScanner, TxnEntryStore},
         Snapshot, Statistics,
     },
 };
 use tikv_util::{
-    box_err, debug, error, error_unknown,
+    box_err,
+    codec::bytes::encode_bytes,
+    debug, error, error_unknown,
     future::RescheduleChecker,
     impl_display_as_debug, info,
     resizable_threadpool::ResizableRuntime,
@@ -64,6 +67,7 @@ struct Request {
     start_key: Vec<u8>,
     end_key: Vec<u8>,
     sub_ranges: Vec<KeyRange>,
+    sub_ranges_groups: Vec<SubRanges>,
     start_ts: TimeStamp,
     end_ts: TimeStamp,
     limiter: Limiter,
@@ -132,6 +136,7 @@ impl Task {
                 start_key: req.get_start_key().to_owned(),
                 end_key: req.get_end_key().to_owned(),
                 sub_ranges: req.get_sub_ranges().to_owned(),
+                sub_ranges_groups: req.get_sub_ranges_groups().to_owned(),
                 start_ts: req.get_start_version().into(),
                 end_ts: req.get_end_version().into(),
                 backend: req.get_storage_backend().clone(),
@@ -168,8 +173,7 @@ impl Task {
 
 #[derive(Debug)]
 pub struct BackupRange {
-    start_key: Option<Key>,
-    end_key: Option<Key>,
+    ranges: Vec<(Option<Key>, Option<Key>)>,
     region: Region,
     peer: Peer,
     codec: KeyValueCodec,
@@ -308,20 +312,15 @@ async fn send_to_worker_with_metrics<EK: KvEngine>(
 }
 
 impl BackupRange {
-    /// Get entries from the scanner and save them to storage
-    async fn backup<E: Engine>(
+    fn backup_scanner<E: Engine>(
         &self,
-        writer_builder: BackupWriterBuilder<E::Local>,
         mut engine: E,
         concurrency_manager: ConcurrencyManager,
+        start_key: Option<Key>,
+        end_key: Option<Key>,
         backup_ts: TimeStamp,
         begin_ts: TimeStamp,
-        saver: async_channel::Sender<InMemBackupFiles<E::Local>>,
-        storage_name: &str,
-        resource_limiter: Option<Arc<ResourceLimiter>>,
-    ) -> Result<Statistics> {
-        assert!(!self.codec.is_raw_kv);
-
+    ) -> Result<EntryScanner<<E as Engine>::Snap>> {
         let mut ctx = Context::default();
         ctx.set_region_id(self.region.get_id());
         ctx.set_region_epoch(self.region.get_region_epoch().to_owned());
@@ -337,10 +336,10 @@ impl BackupRange {
         if self.uses_replica_read {
             snap_ctx.start_ts = Some(backup_ts);
             let mut key_range = KeyRange::default();
-            if let Some(start_key) = self.start_key.as_ref() {
+            if let Some(start_key) = start_key.as_ref() {
                 key_range.set_start_key(start_key.clone().into_encoded());
             }
-            if let Some(end_key) = self.end_key.as_ref() {
+            if let Some(end_key) = end_key.as_ref() {
                 key_range.set_end_key(end_key.clone().into_encoded());
             }
             snap_ctx.key_ranges = vec![key_range];
@@ -348,25 +347,21 @@ impl BackupRange {
             // Update max_ts and check the in-memory lock table before getting the snapshot
             concurrency_manager.update_max_ts(backup_ts);
             concurrency_manager
-                .read_range_check(
-                    self.start_key.as_ref(),
-                    self.end_key.as_ref(),
-                    |key, lock| {
-                        Lock::check_ts_conflict(
-                            Cow::Borrowed(lock),
-                            key,
-                            backup_ts,
-                            &Default::default(),
-                            IsolationLevel::Si,
-                        )
-                    },
-                )
+                .read_range_check(start_key.as_ref(), end_key.as_ref(), |key, lock| {
+                    Lock::check_ts_conflict(
+                        Cow::Borrowed(lock),
+                        key,
+                        backup_ts,
+                        &Default::default(),
+                        IsolationLevel::Si,
+                    )
+                })
                 .map_err(MvccError::from)
                 .map_err(TxnError::from)?;
         }
 
         let start_snapshot = Instant::now();
-        let snapshot = match engine.snapshot(snap_ctx) {
+        let snapshot = match Engine::snapshot(&mut engine, snap_ctx) {
             Ok(s) => s,
             Err(e) => {
                 error!(?e; "backup snapshot failed");
@@ -376,6 +371,7 @@ impl BackupRange {
         BACKUP_RANGE_HISTOGRAM_VEC
             .with_label_values(&["snapshot"])
             .observe(start_snapshot.saturating_elapsed().as_secs_f64());
+
         let snap_store = SnapshotStore::new(
             snapshot,
             backup_ts,
@@ -385,94 +381,123 @@ impl BackupRange {
             Default::default(),
             false,
         );
-        let start_key = self.start_key.clone();
-        let end_key = self.end_key.clone();
         // Incremental backup needs to output delete records.
         let incremental = !begin_ts.is_zero();
-        let mut scanner = snap_store
+        let scanner = snap_store
             .entry_scanner(start_key, end_key, begin_ts, incremental)
             .unwrap();
+        Ok(scanner)
+    }
 
-        let start_scan = Instant::now();
-        let mut batch = EntryBatch::with_capacity(BACKUP_BATCH_LIMIT);
-        let mut next_file_start_key = self
-            .start_key
-            .clone()
+    /// Get entries from the scanner and save them to storage
+    async fn backup<E: Engine>(
+        &self,
+        writer_builder: BackupWriterBuilder<E::Local>,
+        engine: E,
+        concurrency_manager: ConcurrencyManager,
+        backup_ts: TimeStamp,
+        begin_ts: TimeStamp,
+        saver: async_channel::Sender<InMemBackupFiles<E::Local>>,
+        storage_name: &str,
+        resource_limiter: Option<Arc<ResourceLimiter>>,
+    ) -> Result<Statistics> {
+        assert!(!self.codec.is_raw_kv);
+
+        let brange_end_key = <[_]>::last(&self.ranges).and_then(|(_, end_key)| end_key.clone());
+        let mut next_file_start_key = <[_]>::first(&self.ranges)
+            .and_then(|(start_key, _)| start_key.clone())
             .map_or_else(Vec::new, |k| k.into_raw().unwrap());
-        let mut writer = writer_builder.build(next_file_start_key.clone(), storage_name)?;
-        let mut reschedule_checker =
-            RescheduleChecker::new(tokio::task::yield_now, TASK_YIELD_DURATION);
-        loop {
-            if let Err(e) = scanner.scan_entries(&mut batch) {
-                error!(?e; "backup scan entries failed");
-                return Err(e.into());
-            };
-            if batch.is_empty() {
-                break;
-            }
-            debug!("backup scan entries"; "len" => batch.len());
-
-            let entries = batch.drain();
-            if writer.need_split_keys() {
-                let this_end_key = entries.as_slice().first().map_or_else(
-                    || Err(Error::Other(box_err!("get entry error: nothing in batch"))),
-                    |x| {
-                        x.to_key().map(|k| k.into_raw().unwrap()).map_err(|e| {
-                            error!(?e; "backup save file failed");
-                            Error::Other(box_err!("Decode error: {:?}", e))
-                        })
-                    },
-                )?;
-                let this_start_key = next_file_start_key.clone();
-                let msg = InMemBackupFiles {
-                    files: KvWriter::Txn(writer),
-                    start_key: this_start_key,
-                    end_key: this_end_key.clone(),
-                    start_version: begin_ts,
-                    end_version: backup_ts,
-                    region: self.region.clone(),
-                    limiter: resource_limiter.clone(),
+        let mut writer = writer_builder
+            .build(next_file_start_key.clone(), storage_name)
+            .map_err(|e| {
+                error_unknown!(?e; "backup writer failed");
+                e
+            })?;
+        let mut batch = EntryBatch::with_capacity(BACKUP_BATCH_LIMIT);
+        let mut total_stat = Statistics::default();
+        for (start_key, end_key) in &self.ranges {
+            let mut scanner = self.backup_scanner(
+                engine.clone(),
+                concurrency_manager.clone(),
+                start_key.clone(),
+                end_key.clone(),
+                backup_ts,
+                begin_ts,
+            )?;
+            let start_scan = Instant::now();
+            let mut reschedule_checker =
+                RescheduleChecker::new(tokio::task::yield_now, TASK_YIELD_DURATION);
+            loop {
+                if let Err(e) = scanner.scan_entries(&mut batch) {
+                    error!(?e; "backup scan entries failed");
+                    return Err(e.into());
                 };
-                send_to_worker_with_metrics(&saver, msg).await?;
-                next_file_start_key = this_end_key;
-                writer = writer_builder
-                    .build(next_file_start_key.clone(), storage_name)
-                    .map_err(|e| {
-                        error_unknown!(?e; "backup writer failed");
-                        e
-                    })?;
-            }
+                if batch.is_empty() {
+                    break;
+                }
+                debug!("backup scan entries"; "len" => batch.len());
 
-            // Build sst files.
-            if let Err(e) = writer.write(entries, true) {
-                error_unknown!(?e; "backup build sst failed");
-                return Err(e);
+                let entries = batch.drain();
+                if writer.need_split_keys() {
+                    let this_end_key = entries.as_slice().first().map_or_else(
+                        || Err(Error::Other(box_err!("get entry error: nothing in batch"))),
+                        |x| {
+                            x.to_key().map(|k| k.into_raw().unwrap()).map_err(|e| {
+                                error!(?e; "backup save file failed");
+                                Error::Other(box_err!("Decode error: {:?}", e))
+                            })
+                        },
+                    )?;
+                    let this_start_key = next_file_start_key.clone();
+                    let msg = InMemBackupFiles {
+                        files: KvWriter::Txn(writer),
+                        start_key: this_start_key,
+                        end_key: this_end_key.clone(),
+                        start_version: begin_ts,
+                        end_version: backup_ts,
+                        region: self.region.clone(),
+                        limiter: resource_limiter.clone(),
+                    };
+                    send_to_worker_with_metrics(&saver, msg).await?;
+                    next_file_start_key = this_end_key;
+                    writer = writer_builder
+                        .build(next_file_start_key.clone(), storage_name)
+                        .map_err(|e| {
+                            error_unknown!(?e; "backup writer failed");
+                            e
+                        })?;
+                }
+
+                // Build sst files.
+                if let Err(e) = writer.write(entries, true) {
+                    error_unknown!(?e; "backup build sst failed");
+                    return Err(e);
+                }
+                if resource_limiter.is_some() {
+                    reschedule_checker.check().await;
+                }
             }
-            if resource_limiter.is_some() {
-                reschedule_checker.check().await;
+            let stat = scanner.take_statistics();
+            let take = start_scan.saturating_elapsed_secs();
+            if take > 30.0 {
+                warn!("backup scan takes long time.";
+                    "take(s)" => %take,
+                    "region" => ?self.region,
+                    "start_key" => %redact_option_key(start_key),
+                    "end_key" => %redact_option_key(end_key),
+                    "stat" => ?stat,
+                );
             }
+            BACKUP_RANGE_HISTOGRAM_VEC
+                .with_label_values(&["scan"])
+                .observe(take);
+            total_stat.add(&stat);
         }
-        drop(snap_store);
-        let stat = scanner.take_statistics();
-        let take = start_scan.saturating_elapsed_secs();
-        if take > 30.0 {
-            warn!("backup scan takes long time.";
-                "take(s)" => %take,
-                "region" => ?self.region,
-                "start_key" => %redact_option_key(&self.start_key),
-                "end_key" => %redact_option_key(&self.end_key),
-                "stat" => ?stat,
-            );
-        }
-        BACKUP_RANGE_HISTOGRAM_VEC
-            .with_label_values(&["scan"])
-            .observe(take);
 
         let msg = InMemBackupFiles {
             files: KvWriter::Txn(writer),
             start_key: next_file_start_key,
-            end_key: self
-                .end_key
+            end_key: brange_end_key
                 .clone()
                 .map_or_else(Vec::new, |k| k.into_raw().unwrap()),
             start_version: begin_ts,
@@ -482,11 +507,13 @@ impl BackupRange {
         };
         send_to_worker_with_metrics(&saver, msg).await?;
 
-        Ok(stat)
+        Ok(total_stat)
     }
 
     fn backup_raw<EK: KvEngine, S: Snapshot>(
         &self,
+        start_key: Option<Key>,
+        end_key: Option<Key>,
         writer: &mut BackupRawKvWriter<EK>,
         snapshot: &S,
     ) -> Result<Statistics> {
@@ -495,11 +522,11 @@ impl BackupRange {
         let mut statistics = Statistics::default();
         let cfstatistics = statistics.mut_cf_statistics(self.cf);
         let mut cursor = CursorBuilder::new(snapshot, self.cf)
-            .range(None, self.end_key.clone())
+            .range(None, end_key)
             .scan_mode(ScanMode::Forward)
             .fill_cache(false)
             .build()?;
-        if let Some(begin) = self.start_key.clone() {
+        if let Some(begin) = start_key {
             if !cursor.seek(&begin, cfstatistics)? {
                 return Ok(statistics);
             }
@@ -548,6 +575,8 @@ impl BackupRange {
 
     async fn backup_raw_kv_to_file<E: Engine>(
         &self,
+        start_key: Option<Key>,
+        end_key: Option<Key>,
         mut engine: E,
         db: E::Local,
         limiter: &Limiter,
@@ -584,7 +613,7 @@ impl BackupRange {
             pb_ctx: &ctx,
             ..Default::default()
         };
-        let engine_snapshot = match engine.snapshot(snap_ctx) {
+        let engine_snapshot = match Engine::snapshot(&mut engine, snap_ctx) {
             Ok(s) => s,
             Err(e) => {
                 error!(?e; "backup raw kv snapshot failed");
@@ -593,18 +622,25 @@ impl BackupRange {
         };
         let backup_ret = if self.codec.use_raw_mvcc_snapshot() {
             self.backup_raw(
+                start_key.clone(),
+                end_key.clone(),
                 &mut writer,
                 &RawMvccSnapshot::from_snapshot(engine_snapshot),
             )
         } else {
-            self.backup_raw(&mut writer, &engine_snapshot)
+            self.backup_raw(
+                start_key.clone(),
+                end_key.clone(),
+                &mut writer,
+                &engine_snapshot,
+            )
         };
         let stat = match backup_ret {
             Ok(s) => s,
             Err(e) => return Err(e),
         };
-        let start_key = self.codec.decode_backup_key(self.start_key.clone())?;
-        let end_key = self.codec.decode_backup_key(self.end_key.clone())?;
+        let start_key = self.codec.decode_backup_key(start_key)?;
+        let end_key = self.codec.decode_backup_key(end_key)?;
         let msg = InMemBackupFiles {
             files: KvWriter::Raw(writer),
             start_key,
@@ -717,6 +753,72 @@ pub struct Endpoint<E: Engine, R: RegionInfoProvider + Clone + 'static> {
     pub(crate) region_info: R,
 }
 
+pub struct ProgressGroup<R: RegionInfoProvider> {
+    ranges_groups_desc: Vec<Vec<(Option<Key>, Option<Key>)>>,
+    progress: Progress<R>,
+    finished: bool,
+}
+
+impl<R: RegionInfoProvider> ProgressGroup<R> {
+    fn new(
+        store_id: u64,
+        ranges_groups_desc: Vec<Vec<(Option<Key>, Option<Key>)>>,
+        region_info: R,
+        codec: KeyValueCodec,
+        cf: CfName,
+    ) -> Self {
+        let mut prs_group = ProgressGroup {
+            ranges_groups_desc,
+            progress: Progress::new(store_id, region_info, codec, cf),
+            finished: false,
+        };
+        prs_group.try_next_group();
+        prs_group
+    }
+
+    fn new_with_range(
+        store_id: u64,
+        next_start: Option<Key>,
+        end_key: Option<Key>,
+        region_info: R,
+        codec: KeyValueCodec,
+        cf: CfName,
+    ) -> Self {
+        let ranges_groups = vec![vec![(next_start, end_key)]];
+        Self::new(store_id, ranges_groups, region_info, codec, cf)
+    }
+
+    // try the next ranges group if the currnet progress is finished.
+    fn try_next_group(&mut self) {
+        if self.finished {
+            return;
+        }
+        loop {
+            if !self.progress.finished {
+                return;
+            }
+            let next_ranges_group = match self.ranges_groups_desc.pop() {
+                Some(next_ranges_group) => next_ranges_group,
+                None => {
+                    self.finished = true;
+                    return;
+                }
+            };
+            self.progress.reset(next_ranges_group);
+        }
+    }
+
+    fn forward(&mut self, limit: usize, replica_read: bool) -> Option<Vec<BackupRange>> {
+        if self.finished {
+            return None;
+        }
+        let branges = self.progress.forward(limit, replica_read);
+        self.try_next_group();
+
+        branges
+    }
+}
+
 /// The progress of a backup task
 pub struct Progress<R: RegionInfoProvider> {
     store_id: u64,
@@ -727,54 +829,145 @@ pub struct Progress<R: RegionInfoProvider> {
     region_info: R,
     finished: bool,
     codec: KeyValueCodec,
+    // only backup the specified column family, which is used for raw backup
     cf: CfName,
 }
 
 impl<R: RegionInfoProvider> Progress<R> {
-    fn new_with_range(
-        store_id: u64,
-        next_start: Option<Key>,
-        end_key: Option<Key>,
-        region_info: R,
-        codec: KeyValueCodec,
-        cf: CfName,
-    ) -> Self {
-        let ranges = vec![(next_start, end_key)];
-        Self::new_with_ranges(store_id, ranges, region_info, codec, cf)
-    }
-
-    fn new_with_ranges(
-        store_id: u64,
-        ranges: Vec<(Option<Key>, Option<Key>)>,
-        region_info: R,
-        codec: KeyValueCodec,
-        cf: CfName,
-    ) -> Self {
-        let mut prs = Progress {
+    fn new(store_id: u64, region_info: R, codec: KeyValueCodec, cf: CfName) -> Self {
+        Progress {
             store_id,
-            ranges,
+            ranges: vec![],
             next_index: 0,
             next_start: None,
             end_key: None,
             region_info,
-            finished: false,
+            finished: true,
             codec,
             cf,
-        };
-        prs.try_next();
-        prs
+        }
+    }
+
+    fn reset(&mut self, ranges: Vec<(Option<Key>, Option<Key>)>) {
+        self.ranges = ranges;
+        self.next_index = 0;
+        self.next_start = None;
+        self.end_key = None;
+        self.finished = false;
+        self.try_next_range();
+    }
+
+    fn next_range(&mut self) {
+        (self.next_start, self.end_key) = self.ranges[self.next_index].clone();
+        self.next_index += 1;
     }
 
     /// try the next range. If all the ranges are consumed,
     /// set self.finish true.
-    fn try_next(&mut self) {
+    fn try_next_range(&mut self) {
         if self.ranges.len() > self.next_index {
-            (self.next_start, self.end_key) = self.ranges[self.next_index].clone();
-
-            self.next_index += 1;
+            self.next_range();
         } else {
             self.finished = true;
         }
+    }
+
+    const RAW_TABLE_TABLE_PREFIX: usize = table_codec::TABLE_PREFIX_KEY_LEN + 1;
+    fn try_next_range_over_this_region(&mut self, brange: &mut BackupRange) {
+        if self.codec.is_raw_kv {
+            self.try_next_range();
+            return;
+        }
+        // get the current range's table prefix key
+        let table_prefix_key = match &self.end_key {
+            Some(encode_key) => {
+                let mut key = match encode_key.to_raw() {
+                    Ok(raw_key) => raw_key,
+                    Err(e) => {
+                        error!(?e; "failed to decode range key");
+                        self.try_next_range();
+                        return;
+                    }
+                };
+                if !key.starts_with(table_codec::TABLE_PREFIX)
+                    || key.len() < Self::RAW_TABLE_TABLE_PREFIX
+                {
+                    self.try_next_range();
+                    return;
+                }
+                key.truncate(Self::RAW_TABLE_TABLE_PREFIX);
+                key
+            }
+            None => {
+                self.try_next_range();
+                return;
+            }
+        };
+        let region_end_key = brange.region.get_end_key();
+        while self.ranges.len() > self.next_index {
+            self.next_range();
+            // collect until the range is not in the region
+            match &self.next_start {
+                Some(this_start_key)
+                    if !region_end_key.is_empty()
+                        && region_end_key <= this_start_key.as_encoded().as_slice() =>
+                {
+                    return;
+                }
+                _ => {}
+            }
+            // collect the current range when all the data of the table is in the region
+            let range_end_key = match &self.end_key {
+                Some(range_end_key) => range_end_key,
+                None => return,
+            };
+            let mut range_raw_end_key = match range_end_key.to_raw() {
+                Ok(raw_end_key) => raw_end_key,
+                Err(e) => {
+                    error!(?e; "failed to decode range key");
+                    return;
+                }
+            };
+            // if the range is encoded by table/index, the range end key must start
+            // with "t{table_id}_r" or "t{table_id}_i{index_id}".
+            //
+            // so we can use "t{table_id}\xFF" as the table end key
+            if !range_raw_end_key.starts_with(table_codec::TABLE_PREFIX)
+                || range_raw_end_key.len() < Self::RAW_TABLE_TABLE_PREFIX
+            {
+                return;
+            }
+            // collect the remaining ranges when it is the last region
+            if brange.region.get_end_key().is_empty() {
+                brange
+                    .ranges
+                    .push((self.next_start.clone(), self.end_key.clone()));
+                continue;
+            }
+            // collect the range if they are from the same table
+            if table_prefix_key.as_slice() != &range_raw_end_key[..Self::RAW_TABLE_TABLE_PREFIX] {
+                range_raw_end_key.truncate(table_codec::TABLE_PREFIX_KEY_LEN);
+                range_raw_end_key.push(u8::MAX);
+                let table_end_key = encode_bytes(&range_raw_end_key);
+                let table_end_key_ref = table_end_key.as_slice();
+                if table_end_key_ref > brange.region.get_end_key() {
+                    return;
+                }
+            }
+            // now both region end key and range end key is not empty
+            if range_end_key.as_encoded().as_slice() > brange.region.get_end_key() {
+                let next_end_key = Some(Key::from_encoded_slice(brange.region.get_end_key()));
+                brange
+                    .ranges
+                    .push((self.next_start.clone(), next_end_key.clone()));
+                self.next_start = next_end_key;
+                return;
+            }
+            brange
+                .ranges
+                .push((self.next_start.clone(), self.end_key.clone()));
+        }
+        self.finished = true;
     }
 
     /// Forward the progress by `ranges` BackupRanges
@@ -827,8 +1020,7 @@ impl<R: RegionInfoProvider> Progress<R> {
                         let skey = get_max_start_key(start_key.as_ref(), region);
                         assert!(!(skey == ekey && ekey.is_some()), "{:?} {:?}", skey, ekey);
                         let backup_range = BackupRange {
-                            start_key: skey,
-                            end_key: ekey,
+                            ranges: vec![(skey, ekey)],
                             region: region.clone(),
                             peer,
                             codec,
@@ -849,18 +1041,20 @@ impl<R: RegionInfoProvider> Progress<R> {
             error!(?e; "backup seek region failed");
         }
 
-        let branges: Vec<_> = rx.iter().collect();
-        if let Some(b) = branges.last() {
+        let mut branges: Vec<_> = rx.iter().collect();
+        if let Some(b) = branges.last_mut() {
+            assert!(b.ranges.len() == 1);
+            let (_, brange_end_key) = &b.ranges.last().unwrap();
             // The region's end key is empty means it is the last
             // region, we need to set the `finished` flag here in case
             // we run with `next_start` set to None
-            if b.region.get_end_key().is_empty() || b.end_key == self.end_key {
-                self.try_next();
+            if b.region.get_end_key().is_empty() || brange_end_key.eq(&self.end_key) {
+                self.try_next_range_over_this_region(b);
             } else {
-                self.next_start = b.end_key.clone();
+                self.next_start = brange_end_key.clone();
             }
         } else {
-            self.try_next();
+            self.try_next_range();
         }
         Some(branges)
     }
@@ -926,7 +1120,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
 
     fn spawn_backup_worker(
         &self,
-        prs: Arc<Mutex<Progress<R>>>,
+        prs: Arc<Mutex<ProgressGroup<R>>>,
         request: Request,
         saver_tx: async_channel::Sender<InMemBackupFiles<E::Local>>,
         resp_tx: UnboundedSender<BackupResponse>,
@@ -971,9 +1165,9 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                     // Anyway, even tokio itself doesn't recommend to use it unless the lock guard needs to be `Send`.
                     // (See https://tokio.rs/tokio/tutorial/shared-state)
                     // Use &mut and mark the type for making rust-analyzer happy.
-                    let progress: &mut Progress<_> = &mut prs.lock().unwrap();
+                    let progress: &mut ProgressGroup<_> = &mut prs.lock().unwrap();
                     match progress.forward(batch_size, request.replica_read) {
-                        Some(batch) => (batch, progress.codec.is_raw_kv, progress.cf),
+                        Some(batch) => (batch, progress.progress.codec.is_raw_kv, request.cf),
                         None => return,
                     }
                 };
@@ -987,13 +1181,6 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                         warn!("backup task has canceled"; "range" => ?brange);
                         return;
                     }
-                    // TODO: make file_name unique and short
-                    let key = brange.start_key.clone().and_then(|k| {
-                        // use start_key sha256 instead of start_key to avoid file name too long os error
-                        let input = brange.codec.decode_backup_key(Some(k)).unwrap_or_default();
-                        file_system::sha256(&input).ok().map(hex::encode)
-                    });
-                    let name = backup_file_name(store_id, &brange.region, key, _backend.name());
                     let ct = to_sst_compression_type(request.compression_type);
                     let db = match tablets.get(brange.region.id) {
                         Some(t) => t,
@@ -1004,8 +1191,19 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                     };
 
                     let stat = if is_raw_kv {
+                        // TODO: make file_name unique and short
+                        assert!(brange.ranges.len() == 1);
+                        let (start_key, end_key) = brange.ranges.last().unwrap().clone();
+                        let key = start_key.clone().and_then(|k| {
+                            // use start_key sha256 instead of start_key to avoid file name too long os error
+                            let input = brange.codec.decode_backup_key(Some(k)).unwrap_or_default();
+                            file_system::sha256(&input).ok().map(hex::encode)
+                        });
+                        let name = backup_file_name(store_id, &brange.region, key, _backend.name());
                         brange
                             .backup_raw_kv_to_file(
+                                start_key,
+                                end_key,
                                 engine,
                                 db.into_owned(),
                                 &request.limiter,
@@ -1066,11 +1264,11 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         &self,
         request: &Request,
         codec: KeyValueCodec,
-    ) -> Arc<Mutex<Progress<R>>> {
-        if request.sub_ranges.is_empty() {
+    ) -> Arc<Mutex<ProgressGroup<R>>> {
+        if request.sub_ranges.is_empty() && request.sub_ranges_groups.is_empty() {
             let start_key = codec.encode_backup_key(request.start_key.clone());
             let end_key = codec.encode_backup_key(request.end_key.clone());
-            Arc::new(Mutex::new(Progress::new_with_range(
+            Arc::new(Mutex::new(ProgressGroup::new_with_range(
                 self.store_id,
                 start_key,
                 end_key,
@@ -1078,16 +1276,34 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                 codec,
                 request.cf,
             )))
-        } else {
-            let mut ranges = Vec::with_capacity(request.sub_ranges.len());
-            for k in &request.sub_ranges {
+        } else if request.sub_ranges_groups.is_empty() {
+            let mut ranges_groups = Vec::with_capacity(request.sub_ranges.len());
+            for k in <[KeyRange]>::iter(&request.sub_ranges).rev() {
                 let start_key = codec.encode_backup_key(k.start_key.clone());
                 let end_key = codec.encode_backup_key(k.end_key.clone());
-                ranges.push((start_key, end_key));
+                ranges_groups.push(vec![(start_key, end_key)]);
             }
-            Arc::new(Mutex::new(Progress::new_with_ranges(
+            Arc::new(Mutex::new(ProgressGroup::new(
                 self.store_id,
-                ranges,
+                ranges_groups,
+                self.region_info.clone(),
+                codec,
+                request.cf,
+            )))
+        } else {
+            let mut ranges_groups = Vec::with_capacity(request.sub_ranges_groups.len());
+            for groups in <[SubRanges]>::iter(&request.sub_ranges_groups).rev() {
+                let mut ranges = Vec::with_capacity(groups.sub_ranges.len());
+                for rg in &groups.sub_ranges {
+                    let start_key = codec.encode_backup_key(rg.start_key.clone());
+                    let end_key = codec.encode_backup_key(rg.end_key.clone());
+                    ranges.push((start_key, end_key));
+                }
+                ranges_groups.push(ranges);
+            }
+            Arc::new(Mutex::new(ProgressGroup::new(
+                self.store_id,
+                ranges_groups,
                 self.region_info.clone(),
                 codec,
                 request.cf,
@@ -1560,7 +1776,7 @@ pub mod tests {
             |start_key: &[u8], end_key: &[u8], expect: Vec<(&[u8], &[u8])>| {
                 let start_key = (!start_key.is_empty()).then_some(Key::from_raw(start_key));
                 let end_key = (!end_key.is_empty()).then_some(Key::from_raw(end_key));
-                let mut prs = Progress::new_with_range(
+                let mut prs = ProgressGroup::new_with_range(
                     endpoint.store_id,
                     start_key,
                     end_key,
@@ -1590,12 +1806,18 @@ pub mod tests {
                 }
 
                 for (a, b) in ranges.into_iter().zip(expect) {
+                    assert_eq!(a.ranges.len(), 1);
+                    let (start_key, end_key) = a.ranges.last().unwrap();
                     assert_eq!(
-                        a.start_key.map_or_else(Vec::new, |k| k.into_raw().unwrap()),
+                        start_key
+                            .clone()
+                            .map_or_else(Vec::new, |k| k.into_raw().unwrap()),
                         b.0
                     );
                     assert_eq!(
-                        a.end_key.map_or_else(Vec::new, |k| k.into_raw().unwrap()),
+                        end_key
+                            .clone()
+                            .map_or_else(Vec::new, |k| k.into_raw().unwrap()),
                         b.1
                     );
                 }
@@ -1613,6 +1835,7 @@ pub mod tests {
                         start_key: start_key.to_vec(),
                         end_key: end_key.to_vec(),
                         sub_ranges: Vec::new(),
+                        sub_ranges_groups: Vec::new(),
                         start_ts: 1.into(),
                         end_ts: 1.into(),
                         backend,
@@ -1724,6 +1947,7 @@ pub mod tests {
                 start_key: b"1".to_vec(),
                 end_key: b"2".to_vec(),
                 sub_ranges: ranges.clone(),
+                sub_ranges_groups: Vec::new(),
                 start_ts: 1.into(),
                 end_ts: 1.into(),
                 backend: backend.clone(),
@@ -1755,6 +1979,7 @@ pub mod tests {
                 start_key: b"".to_vec(),
                 end_key: b"3".to_vec(),
                 sub_ranges: ranges.clone(),
+                sub_ranges_groups: Vec::new(),
                 start_ts: 1.into(),
                 end_ts: 1.into(),
                 backend,
@@ -1803,12 +2028,12 @@ pub mod tests {
         let test_seek_backup_ranges =
             |sub_ranges: Vec<(&[u8], &[u8])>, expect: Vec<(&[u8], &[u8])>| {
                 let mut ranges = Vec::with_capacity(sub_ranges.len());
-                for &(start_key, end_key) in &sub_ranges {
+                for (start_key, end_key) in sub_ranges.iter().rev() {
                     let start_key = (!start_key.is_empty()).then_some(Key::from_raw(start_key));
                     let end_key = (!end_key.is_empty()).then_some(Key::from_raw(end_key));
-                    ranges.push((start_key, end_key));
+                    ranges.push(vec![(start_key, end_key)]);
                 }
-                let mut prs = Progress::new_with_ranges(
+                let mut prs = ProgressGroup::new(
                     endpoint.store_id,
                     ranges,
                     endpoint.region_info.clone(),
@@ -1832,12 +2057,18 @@ pub mod tests {
                 }
 
                 for (a, b) in ranges.into_iter().zip(expect) {
+                    assert_eq!(a.ranges.len(), 1);
+                    let (start_key, end_key) = a.ranges.last().unwrap();
                     assert_eq!(
-                        a.start_key.map_or_else(Vec::new, |k| k.into_raw().unwrap()),
+                        start_key
+                            .clone()
+                            .map_or_else(Vec::new, |k| k.into_raw().unwrap()),
                         b.0
                     );
                     assert_eq!(
-                        a.end_key.map_or_else(Vec::new, |k| k.into_raw().unwrap()),
+                        end_key
+                            .clone()
+                            .map_or_else(Vec::new, |k| k.into_raw().unwrap()),
                         b.1
                     );
                 }
@@ -1865,6 +2096,7 @@ pub mod tests {
                         start_key: b"1".to_vec(),
                         end_key: b"2".to_vec(),
                         sub_ranges: ranges,
+                        sub_ranges_groups: Vec::new(),
                         start_ts: 1.into(),
                         end_ts: 1.into(),
                         backend,
@@ -1971,8 +2203,7 @@ pub mod tests {
 
     fn fake_empty_marker() -> Vec<super::BackupRange> {
         vec![super::BackupRange {
-            start_key: None,
-            end_key: None,
+            ranges: Vec::new(),
             region: Region::new(),
             peer: Peer::new(),
             codec: KeyValueCodec::new(false, ApiVersion::V1, ApiVersion::V1),
@@ -1993,12 +2224,12 @@ pub mod tests {
         let expect: Vec<(&[u8], &[u8])> = vec![(b"", b""), (b"3", b"4"), (b"6", b"7"), (b"", b"")];
 
         let mut ranges = Vec::with_capacity(sub_ranges.len());
-        for &(start_key, end_key) in &sub_ranges {
+        for &(start_key, end_key) in sub_ranges.iter().rev() {
             let start_key = (!start_key.is_empty()).then_some(Key::from_raw(start_key));
             let end_key = (!end_key.is_empty()).then_some(Key::from_raw(end_key));
-            ranges.push((start_key, end_key));
+            ranges.push(vec![(start_key, end_key)]);
         }
-        let mut prs = Progress::new_with_ranges(
+        let mut prs = ProgressGroup::new(
             endpoint.store_id,
             ranges,
             endpoint.region_info.clone(),
@@ -2026,15 +2257,170 @@ pub mod tests {
 
         assert!(ranges.len() == expect.len());
         for (a, b) in ranges.into_iter().zip(expect) {
+            if b.0.len() + b.1.len() == 0 {
+                assert_eq!(a.ranges.len(), 0);
+            } else {
+                assert_eq!(a.ranges.len(), 1);
+            }
+            let (start_key, end_key) = a.ranges.last().unwrap_or(&(None, None));
             assert_eq!(
-                a.start_key.map_or_else(Vec::new, |k| k.into_raw().unwrap()),
+                start_key
+                    .clone()
+                    .map_or_else(Vec::new, |k| k.into_raw().unwrap()),
                 b.0
             );
             assert_eq!(
-                a.end_key.map_or_else(Vec::new, |k| k.into_raw().unwrap()),
+                end_key
+                    .clone()
+                    .map_or_else(Vec::new, |k| k.into_raw().unwrap()),
                 b.1
             );
         }
+    }
+
+    #[test]
+    fn test_seek_ranges_3() {
+        use tidb_query_datatype::codec::table;
+        let (_tmp, endpoint) = new_endpoint();
+
+        // [t1_i1, t1_i1, t1_r] means that the table with id 1 has index with id 1 and 2
+        // and row data on the region. {[t1_r]} means that the table with id 1
+        // has row data on the region, but the region is not in this TiKV.
+        //
+        // [t1_i1, t1_i2, t1_r], {[t1_r]}, [t1_r, t2_i1, t2_i2, t2_r, t3_i1, t3_r, t4_r,
+        // t5_i1, t5_i2], [t5_r]
+        endpoint.region_info.set_regions(vec![
+            (
+                table::encode_index_seek_key(1, 1, b"1"),
+                table::encode_row_key(1, 100),
+                1,
+            ),
+            (
+                table::encode_row_key(1, 300),
+                table::encode_index_seek_key(5, 2, b"2"),
+                2,
+            ),
+            (
+                table::encode_row_key(5, 100),
+                table::encode_row_key(5, 300),
+                3,
+            ),
+        ]);
+        let request_ranges: Vec<(Vec<u8>, Vec<u8>)> = vec![
+            (
+                table::encode_index_seek_key(1, 1, b""),
+                table::encode_index_seek_key(1, 1, &[u8::MAX]),
+            ),
+            (
+                table::encode_index_seek_key(1, 2, b""),
+                table::encode_index_seek_key(1, 2, &[u8::MAX]),
+            ),
+            (
+                table::encode_row_key(1, 0),
+                table::encode_row_key(1, i64::MAX),
+            ),
+            (
+                table::encode_index_seek_key(2, 1, b""),
+                table::encode_index_seek_key(2, 1, &[u8::MAX]),
+            ),
+            (
+                table::encode_index_seek_key(2, 2, b""),
+                table::encode_index_seek_key(2, 2, &[u8::MAX]),
+            ),
+            (
+                table::encode_row_key(2, 0),
+                table::encode_row_key(2, i64::MAX),
+            ),
+            (
+                table::encode_index_seek_key(3, 1, b""),
+                table::encode_index_seek_key(3, 1, &[u8::MAX]),
+            ),
+            (
+                table::encode_row_key(3, 0),
+                table::encode_row_key(3, i64::MAX),
+            ),
+            (
+                table::encode_row_key(4, 0),
+                table::encode_row_key(4, i64::MAX),
+            ),
+            (
+                table::encode_index_seek_key(5, 1, b""),
+                table::encode_index_seek_key(5, 1, &[u8::MAX]),
+            ),
+            (
+                table::encode_index_seek_key(5, 2, b""),
+                table::encode_index_seek_key(5, 2, &[u8::MAX]),
+            ),
+            (
+                table::encode_row_key(5, 0),
+                table::encode_row_key(5, i64::MAX),
+            ),
+        ];
+        let expect: Vec<(Vec<u8>, Vec<u8>)> = vec![
+            (
+                table::encode_index_seek_key(1, 1, b"1"),
+                table::encode_row_key(1, 100),
+            ),
+            (
+                table::encode_row_key(1, 300),
+                table::encode_row_key(4, i64::MAX),
+            ),
+            (
+                table::encode_index_seek_key(5, 1, b""),
+                table::encode_index_seek_key(5, 2, b"2"),
+            ),
+            (table::encode_row_key(5, 100), table::encode_row_key(5, 300)),
+        ];
+
+        let tmp = TempDir::new().unwrap();
+        let backend = make_local_backend(tmp.path());
+        let (tx, rx) = unbounded();
+
+        let mut ranges = SubRanges::default();
+        let mut sub_ranges = Vec::with_capacity(request_ranges.len());
+        for (start_key, end_key) in request_ranges {
+            let mut key_range = KeyRange::default();
+            key_range.set_start_key(start_key);
+            key_range.set_end_key(end_key);
+            sub_ranges.push(key_range);
+        }
+        ranges.set_sub_ranges(sub_ranges.into());
+        let task = Task {
+            request: Request {
+                start_key: Vec::new(),
+                end_key: Vec::new(),
+                sub_ranges: Vec::new(),
+                sub_ranges_groups: vec![ranges],
+                start_ts: 1.into(),
+                end_ts: 1.into(),
+                backend,
+                limiter: Limiter::new(f64::INFINITY),
+                cancel: Arc::default(),
+                is_raw_kv: false,
+                dst_api_ver: ApiVersion::V1,
+                cf: engine_traits::CF_DEFAULT,
+                compression_type: CompressionType::Unknown,
+                compression_level: 0,
+                cipher: CipherInfo::default(),
+                replica_read: false,
+                resource_group_name: "".into(),
+                source_tag: "br".into(),
+            },
+            resp: tx,
+        };
+        endpoint.handle_backup_task(task);
+        let resps: Vec<_> = block_on(rx.collect());
+        for a in &resps {
+            assert!(
+                expect
+                    .iter()
+                    .any(|b| { a.get_start_key() == b.0 && a.get_end_key() == b.1 }),
+                "{:?} {:?}",
+                resps,
+                expect
+            );
+        }
+        assert_eq!(resps.len(), expect.len());
     }
 
     #[test]

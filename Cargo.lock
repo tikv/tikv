@@ -841,6 +841,7 @@ dependencies = [
  "slog-global",
  "tempfile",
  "thiserror",
+ "tidb_query_datatype",
  "tikv",
  "tikv_alloc",
  "tikv_util",
@@ -3433,7 +3434,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#4a3e17f5e62dc3999e2c0f63293fdeffced80626"
+source = "git+https://github.com/leavrth/kvproto.git?branch=merged_backup_sst#7e6ef5047444cfaa3c6456560cc5c8bc09f1d88b"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
