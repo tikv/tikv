@@ -49,7 +49,7 @@ See [Governance](https://github.com/tikv/community/blob/master/GOVERNANCE.md).
 
 ## Documentation
 
-For instructions on deployment, configuration, and maintenance of TiKV,see TiKV documentation on our [website](https://tikv.org/docs/4.0/tasks/introduction/). For more details on concepts and designs behind TiKV, see [Deep Dive TiKV](https://tikv.org/deep-dive/introduction/).
+For detailed instructions on deploying, configuring, and maintaining TiKV, please refer to the TiKV documentation available on our [website](https://tikv.org/docs/4.0/tasks/introduction/). For more details on concepts and designs behind TiKV, see [Deep Dive TiKV](https://tikv.org/deep-dive/introduction/).
 
 > **Note:**
 >
