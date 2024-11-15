@@ -292,7 +292,6 @@ impl Buffer for BatchMessageBuffer {
             .unwrap()
             .as_nanos() as u64;
         for msg in batch.msgs.iter_mut() {
-            assert!(now > msg.last_observed_time);
             let elapsed = nanos_to_secs(now.saturating_sub(msg.last_observed_time));
             RAFT_MESSAGE_DURATION.wait.observe(elapsed);
         }
