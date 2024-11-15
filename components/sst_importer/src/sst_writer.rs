@@ -25,6 +25,7 @@ pub struct SstFileWriter {
 
     default_file: File,
     write_file: File,
+    has_default: bool,
 }
 
 impl SstFileWriter {
@@ -42,12 +43,17 @@ impl SstFileWriter {
             write_meta,
             default_file,
             write_file,
+            has_default: false,
         }
     }
 
     pub fn write(&mut self, batch: WriteBatch) -> Result<()> {
         for m in batch.get_pairs().iter() {
-            self.default_file.write_all(m.get_key())?;
+            let default_content = m.get_keys();
+            if default_content.len() > 0 {
+                self.has_default = true;
+                self.default_file.write_all(default_content)?;
+            }
             self.write_file.write_all(m.get_value())?;
         }
         Ok(())
@@ -58,12 +64,10 @@ impl SstFileWriter {
         self.write_file.flush()?;
 
         let mut metas = Vec::with_capacity(2);
-        if self.default_file.metadata()?.len() > 0 {
+        if self.has_default {
             metas.push(self.default_meta);
         }
-        if self.write_file.metadata()?.len() > 0 {
-            metas.push(self.write_meta);
-        }
+        metas.push(self.write_meta);
 
         Ok(metas)
     }
