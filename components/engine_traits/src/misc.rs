@@ -56,12 +56,25 @@ pub trait StatisticsReporter<T: ?Sized> {
 
 #[derive(Default)]
 pub struct RangeStats {
-    // The number of entries
+    // The number of entries in write cf.
     pub num_entries: u64,
     // The number of MVCC versions of all rows (num_entries - tombstones).
     pub num_versions: u64,
     // The number of rows.
     pub num_rows: u64,
+    // The number of MVCC deletes of all rows.
+    pub num_deletes: u64,
+}
+
+impl RangeStats {
+    /// The number of redundant keys in the range.
+    /// It's calculated by `num_entries - num_versions + num_deleted`.
+    pub fn redundant_keys(&self) -> u64 {
+        // Consider the number of `mvcc_deletes` as the number of redundant keys.
+        self.num_entries
+            .saturating_sub(self.num_rows)
+            .saturating_add(self.num_deletes)
+    }
 }
 
 pub trait MiscExt: CfNamesExt + FlowControlFactorsExt {
@@ -106,6 +119,12 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt {
     fn path(&self) -> &str;
 
     fn sync_wal(&self) -> Result<()>;
+
+    /// Disable manual compactions, some on-going manual compactions may be
+    /// aborted.
+    fn disable_manual_compaction(&self) -> Result<()>;
+
+    fn enable_manual_compaction(&self) -> Result<()>;
 
     /// Depending on the implementation, some on-going manual compactions may be
     /// aborted.

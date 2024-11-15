@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "7.1.3"
+version = "7.1.6"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -12,7 +12,13 @@ edition = "2018"
 publish = false
 
 [features]
-default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "cloud-aws", "cloud-gcp", "cloud-azure"]
+default = [
+  "test-engine-kv-rocksdb",
+  "test-engine-raft-raft-engine",
+  "cloud-aws",
+  "cloud-gcp",
+  "cloud-azure",
+]
 trace-tablet-lifetime = ["engine_rocks/trace-lifetime"]
 tcmalloc = ["tikv_alloc/tcmalloc"]
 jemalloc = ["tikv_alloc/jemalloc", "engine_rocks/jemalloc"]
@@ -27,31 +33,21 @@ failpoints = [
   "tikv_util/failpoints",
   "engine_rocks/failpoints",
 ]
-cloud-aws = [
-  "encryption_export/cloud-aws",
-  "sst_importer/cloud-aws",
+cloud-aws = ["encryption_export/cloud-aws", "sst_importer/cloud-aws"]
+cloud-gcp = ["encryption_export/cloud-gcp", "sst_importer/cloud-gcp"]
+cloud-azure = ["encryption_export/cloud-azure", "sst_importer/cloud-azure"]
+testexport = [
+  "raftstore/testexport",
+  "api_version/testexport",
+  "causal_ts/testexport",
+  "engine_traits/testexport",
+  "engine_rocks/testexport",
+  "engine_panic/testexport",
 ]
-cloud-gcp = [
-  "encryption_export/cloud-gcp",
-  "sst_importer/cloud-gcp",
-]
-cloud-azure = [
-  "encryption_export/cloud-azure",
-  "sst_importer/cloud-azure",
-]
-testexport = ["raftstore/testexport", "api_version/testexport", "causal_ts/testexport", "engine_traits/testexport", "engine_rocks/testexport", "engine_panic/testexport"]
-test-engine-kv-rocksdb = [
-  "engine_test/test-engine-kv-rocksdb"
-]
-test-engine-raft-raft-engine = [
-  "engine_test/test-engine-raft-raft-engine"
-]
-test-engines-rocksdb = [
-  "engine_test/test-engines-rocksdb",
-]
-test-engines-panic = [
-  "engine_test/test-engines-panic",
-]
+test-engine-kv-rocksdb = ["engine_test/test-engine-kv-rocksdb"]
+test-engine-raft-raft-engine = ["engine_test/test-engine-raft-raft-engine"]
+test-engines-rocksdb = ["engine_test/test-engines-rocksdb"]
+test-engines-panic = ["engine_test/test-engines-panic"]
 cloud-storage-grpc = ["sst_importer/cloud-storage-grpc"]
 cloud-storage-dylib = ["sst_importer/cloud-storage-dylib"]
 pprof-fp = ["pprof/frame-pointer"]
@@ -95,7 +91,10 @@ flate2 = { version = "1.0", default-features = false, features = ["zlib"] }
 futures = { version = "0.3", features = ["thread-pool", "compat"] }
 futures-executor = "0.3.1"
 futures-timer = "3.0"
-futures-util = { version = "0.3.1", default-features = false, features = ["io", "async-await"] }
+futures-util = { version = "0.3.1", default-features = false, features = [
+  "io",
+  "async-await",
+] }
 fxhash = "0.2.1"
 getset = "0.1"
 grpcio = { workspace = true }
@@ -112,7 +111,10 @@ kvproto = { workspace = true }
 lazy_static = "1.3"
 libc = "0.2"
 libloading = "0.7"
-log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
+log = { version = "0.4", features = [
+  "max_level_trace",
+  "release_max_level_debug",
+] }
 log_wrappers = { workspace = true }
 match-template = "0.0.1"
 memory_trace_macros = { workspace = true }
@@ -130,11 +132,16 @@ paste = "1.0"
 pd_client = { workspace = true }
 pin-project = "1.0"
 pnet_datalink = "0.23"
-pprof = { version = "0.11", default-features = false, features = ["flamegraph", "protobuf-codec"] }
+pprof = { version = "0.11", default-features = false, features = [
+  "flamegraph",
+  "protobuf-codec",
+] }
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
 protobuf = { version = "2.8", features = ["bytes"] }
-raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
+raft = { version = "0.7.0", default-features = false, features = [
+  "protobuf-codec",
+] }
 raft_log_engine = { workspace = true }
 raftstore = { workspace = true, features = ["engine_rocks"] }
 raftstore-v2 = { workspace = true }
@@ -183,7 +190,7 @@ yatp = { workspace = true }
 
 [dev-dependencies]
 api_version = { workspace = true, features = ["testexport"] }
-example_coprocessor_plugin = { workspace = true } # should be a binary dependency
+example_coprocessor_plugin = { workspace = true }                              # should be a binary dependency
 hyper-openssl = "0.9"
 panic_hook = { workspace = true }
 raftstore = { workspace = true, features = ["testexport"] }
@@ -216,7 +223,7 @@ fs2 = { git = "https://github.com/tabokie/fs2-rs", branch = "tikv" }
 # Remove this when a new version is release. We need to solve rust-lang/cmake-rs#143.
 cmake = { git = "https://github.com/rust-lang/cmake-rs" }
 
-sysinfo ={ git = "https://github.com/tikv/sysinfo", branch = "0.26-fix-cpu" }
+sysinfo = { git = "https://github.com/tikv/sysinfo", branch = "0.26-fix-cpu" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "6599eb9dca74229b2c1fcc44118bef7eff127128" }
@@ -252,9 +259,9 @@ members = [
   "components/encryption",
   "components/encryption/export",
   "components/engine_rocks_helper",
-# Only enable tirocks in local development, otherwise it can slow down compilation.
-# TODO: always enable tirocks and remove engine_rocks.
-#  "components/engine_tirocks",
+  # Only enable tirocks in local development, otherwise it can slow down compilation.
+  # TODO: always enable tirocks and remove engine_rocks.
+  #  "components/engine_tirocks",
   "components/error_code",
   "components/external_storage",
   "components/external_storage/export",
@@ -379,14 +386,23 @@ tipb_helper = { path = "components/tipb_helper" }
 tracker = { path = "components/tracker" }
 txn_types = { path = "components/txn_types" }
 # External libs
-grpcio = { version = "0.10.4", default-features = false, features = ["openssl-vendored", "protobuf-codec", "nightly"] }
-grpcio-health = { version = "0.10.4", default-features = false, features = ["protobuf-codec"] }
+grpcio = { version = "0.10.4", default-features = false, features = [
+  "openssl-vendored",
+  "protobuf-codec",
+  "nightly",
+] }
+grpcio-health = { version = "0.10.4", default-features = false, features = [
+  "protobuf-codec",
+] }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git", branch = "release-7.1" }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 tokio-executor = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
-slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+slog = { version = "2.3", features = [
+  "max_level_trace",
+  "release_max_level_debug",
+] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 
 [profile.dev.package.grpcio-sys]

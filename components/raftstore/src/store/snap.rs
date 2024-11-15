@@ -717,21 +717,11 @@ impl Snapshot {
                     ));
                 }
                 if meta.get_size() != 0 {
-                    let file_path = self.cf_files[cf_idx].add_file_with_size_checksum(
+                    let _ = self.cf_files[cf_idx].add_file_with_size_checksum(
                         file_idx,
                         meta.get_size(),
                         meta.get_checksum(),
                     );
-                    if file_exists(&file_path) {
-                        let mgr = self.mgr.encryption_key_manager.as_ref();
-                        let file_path = Path::new(&file_path);
-                        let (_, size) = calc_checksum_and_size(file_path, mgr)?;
-                        check_file_size(
-                            size,
-                            *(self.cf_files[cf_idx].size.last().unwrap()),
-                            file_path,
-                        )?;
-                    }
                 }
                 file_idx += 1;
                 if file_idx >= cf_file_count_from_meta[cf_idx] {
@@ -1692,6 +1682,20 @@ impl SnapManager {
             ))));
         }
         Ok(Box::new(s))
+    }
+
+    pub fn meta_file_exist(&self, key: &SnapKey) -> RaftStoreResult<()> {
+        let _lock = self.core.registry.rl();
+        let base = &self.core.base;
+        // Use CheckPolicy::None to avoid reading meta file
+        let s = Snapshot::new(base, key, false, CheckPolicy::None, &self.core)?;
+        if !file_exists(s.meta_file.path.as_path()) {
+            return Err(RaftStoreError::Other(From::from(format!(
+                "snapshot of {:?} not exists.",
+                key
+            ))));
+        }
+        Ok(())
     }
 
     /// Get the approximate size of snap file exists in snap directory.
@@ -2713,26 +2717,6 @@ pub mod tests {
         assert!(s2.exists());
     }
 
-    // Make all the snapshot in the specified dir corrupted to have incorrect size.
-    fn corrupt_snapshot_size_in<T: Into<PathBuf>>(dir: T) {
-        let dir_path = dir.into();
-        let read_dir = file_system::read_dir(dir_path).unwrap();
-        for p in read_dir {
-            if p.is_ok() {
-                let e = p.as_ref().unwrap();
-                if !e
-                    .file_name()
-                    .into_string()
-                    .unwrap()
-                    .ends_with(META_FILE_SUFFIX)
-                {
-                    let mut f = OpenOptions::new().append(true).open(e.path()).unwrap();
-                    f.write_all(b"xxxxx").unwrap();
-                }
-            }
-        }
-    }
-
     // Make all the snapshot in the specified dir corrupted to have incorrect
     // checksum.
     fn corrupt_snapshot_checksum_in<T: Into<PathBuf>>(dir: T) -> Vec<SnapshotMeta> {
@@ -2833,7 +2817,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_snap_corruption_on_size_or_checksum() {
+    fn test_snap_corruption_on_checksum() {
         let region_id = 1;
         let region = gen_test_region(region_id, 1, 1);
         let db_dir = Builder::new()
@@ -2852,21 +2836,10 @@ pub mod tests {
         let mut s1 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s1.exists());
 
-        let _ = s1
+        let snap_data = s1
             .build(&db, &snapshot, &region, true, false, UnixSecs::now())
             .unwrap();
         assert!(s1.exists());
-
-        corrupt_snapshot_size_in(dir.path());
-
-        Snapshot::new_for_sending(dir.path(), &key, &mgr_core).unwrap_err();
-
-        let mut s2 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
-        assert!(!s2.exists());
-        let snap_data = s2
-            .build(&db, &snapshot, &region, true, false, UnixSecs::now())
-            .unwrap();
-        assert!(s2.exists());
 
         let dst_dir = Builder::new()
             .prefix("test-snap-corruption-dst")
@@ -2880,12 +2853,11 @@ pub mod tests {
             snap_data.get_meta().clone(),
         );
 
-        let mut metas = corrupt_snapshot_checksum_in(dst_dir.path());
+        let metas = corrupt_snapshot_checksum_in(dst_dir.path());
         assert_eq!(1, metas.len());
-        let snap_meta = metas.pop().unwrap();
 
-        let mut s5 = Snapshot::new_for_applying(dst_dir.path(), &key, &mgr_core).unwrap();
-        assert!(s5.exists());
+        let mut s2 = Snapshot::new_for_applying(dst_dir.path(), &key, &mgr_core).unwrap();
+        assert!(s2.exists());
 
         let dst_db_dir = Builder::new()
             .prefix("test-snap-corruption-dst-db")
@@ -2899,11 +2871,7 @@ pub mod tests {
             write_batch_size: TEST_WRITE_BATCH_SIZE,
             coprocessor_host: CoprocessorHost::<KvTestEngine>::default(),
         };
-        s5.apply(options).unwrap_err();
-
-        corrupt_snapshot_size_in(dst_dir.path());
-        Snapshot::new_for_receiving(dst_dir.path(), &key, &mgr_core, snap_meta).unwrap_err();
-        Snapshot::new_for_applying(dst_dir.path(), &key, &mgr_core).unwrap_err();
+        s2.apply(options).unwrap_err();
     }
 
     #[test]

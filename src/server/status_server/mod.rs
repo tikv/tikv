@@ -249,7 +249,7 @@ where
         }
     }
 
-    async fn get_config(
+    fn get_config(
         req: Request<Body>,
         cfg_controller: &ConfigController,
     ) -> hyper::Result<Response<Body>> {
@@ -323,7 +323,7 @@ where
         })
     }
 
-    async fn update_config_from_toml_file(
+    fn update_config_from_toml_file(
         cfg_controller: ConfigController,
         _req: Request<Body>,
     ) -> hyper::Result<Response<Body>> {
@@ -415,7 +415,7 @@ where
         }
     }
 
-    async fn get_engine_type(cfg_controller: &ConfigController) -> hyper::Result<Response<Body>> {
+    fn get_engine_type(cfg_controller: &ConfigController) -> hyper::Result<Response<Body>> {
         let engine_type = cfg_controller.get_engine_type();
         let response = Response::builder()
             .header("Content-Type", mime::TEXT_PLAIN.to_string())
@@ -442,7 +442,7 @@ impl<R> StatusServer<R>
 where
     R: 'static + Send + RaftExtension + Clone,
 {
-    async fn handle_pause_grpc(
+    fn handle_pause_grpc(
         mut grpc_service_mgr: GrpcServiceManager,
     ) -> hyper::Result<Response<Body>> {
         if let Err(err) = grpc_service_mgr.pause() {
@@ -457,7 +457,7 @@ where
         ))
     }
 
-    async fn handle_resume_grpc(
+    fn handle_resume_grpc(
         mut grpc_service_mgr: GrpcServiceManager,
     ) -> hyper::Result<Response<Body>> {
         if let Err(err) = grpc_service_mgr.resume() {
@@ -650,22 +650,17 @@ where
                             // (Method::GET, "/debug/pprof/heap") => {
                             //     Self::dump_heap_prof_to_resp(req).await
                             // }
-                            (Method::GET, "/config") => {
-                                Self::get_config(req, &cfg_controller).await
-                            }
+                            (Method::GET, "/config") => Self::get_config(req, &cfg_controller),
                             (Method::POST, "/config") => {
                                 Self::update_config(cfg_controller.clone(), req).await
                             }
-                            (Method::GET, "/engine_type") => {
-                                Self::get_engine_type(&cfg_controller).await
-                            }
+                            (Method::GET, "/engine_type") => Self::get_engine_type(&cfg_controller),
                             // This interface is used for configuration file hosting scenarios,
                             // TiKV will not update configuration files, and this interface will
                             // silently ignore configration items that cannot be updated online,
                             // hand it over to the hosting platform for processing.
                             (Method::PUT, "/config/reload") => {
                                 Self::update_config_from_toml_file(cfg_controller.clone(), req)
-                                    .await
                             }
                             (Method::GET, "/debug/pprof/profile") => {
                                 Self::dump_cpu_prof_to_resp(req).await
@@ -686,10 +681,10 @@ where
                                 Self::handle_get_all_resource_groups(resource_manager.as_ref())
                             }
                             (Method::PUT, "/pause_grpc") => {
-                                Self::handle_pause_grpc(grpc_service_mgr).await
+                                Self::handle_pause_grpc(grpc_service_mgr)
                             }
                             (Method::PUT, "/resume_grpc") => {
-                                Self::handle_resume_grpc(grpc_service_mgr).await
+                                Self::handle_resume_grpc(grpc_service_mgr)
                             }
                             _ => Ok(make_response(StatusCode::NOT_FOUND, "path not found")),
                         }

@@ -7,7 +7,7 @@ use std::{
     io, mem,
     sync::{
         atomic::Ordering,
-        mpsc::{self, Receiver, Sender},
+        mpsc::{self, Receiver, Sender, SyncSender},
         Arc,
     },
     thread::{Builder, JoinHandle},
@@ -52,6 +52,7 @@ use tikv_util::{
 use txn_types::TimeStamp;
 use yatp::Remote;
 
+use super::split_controller::AutoSplitControllerContext;
 use crate::{
     coprocessor::CoprocessorHost,
     router::RaftStoreRouter,
@@ -71,6 +72,10 @@ use crate::{
 };
 
 pub const NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT: u32 = 2;
+/// The upper bound of buffered stats messages.
+/// It prevents unexpected memory buildup when AutoSplitController
+/// runs slowly.
+const STATS_CHANNEL_CAPACITY_LIMIT: usize = 128;
 
 type RecordPairVec = Vec<pdpb::RecordPair>;
 
@@ -545,8 +550,8 @@ where
     reporter: T,
     handle: Option<JoinHandle<()>>,
     timer: Option<Sender<bool>>,
-    read_stats_sender: Option<Sender<ReadStats>>,
-    cpu_stats_sender: Option<Sender<Arc<RawRecords>>>,
+    read_stats_sender: Option<SyncSender<ReadStats>>,
+    cpu_stats_sender: Option<SyncSender<Arc<RawRecords>>>,
     collect_store_infos_interval: Duration,
     load_base_split_check_interval: Duration,
     collect_tick_interval: Duration,
@@ -604,10 +609,12 @@ where
         let (timer_tx, timer_rx) = mpsc::channel();
         self.timer = Some(timer_tx);
 
-        let (read_stats_sender, read_stats_receiver) = mpsc::channel();
+        let (read_stats_sender, read_stats_receiver) =
+            mpsc::sync_channel(STATS_CHANNEL_CAPACITY_LIMIT);
         self.read_stats_sender = Some(read_stats_sender);
 
-        let (cpu_stats_sender, cpu_stats_receiver) = mpsc::channel();
+        let (cpu_stats_sender, cpu_stats_receiver) =
+            mpsc::sync_channel(STATS_CHANNEL_CAPACITY_LIMIT);
         self.cpu_stats_sender = Some(cpu_stats_sender);
 
         let reporter = self.reporter.clone();
@@ -626,6 +633,8 @@ where
                 let mut collect_store_infos_thread_stats = ThreadInfoStatistics::new();
                 let mut load_base_split_thread_stats = ThreadInfoStatistics::new();
                 let mut region_cpu_records_collector = None;
+                let mut auto_split_controller_ctx =
+                    AutoSplitControllerContext::new(STATS_CHANNEL_CAPACITY_LIMIT);
                 // Register the region CPU records collector.
                 if auto_split_controller
                     .cfg
@@ -647,6 +656,7 @@ where
                     if is_enable_tick(timer_cnt, load_base_split_check_interval) {
                         StatsMonitor::load_base_split(
                             &mut auto_split_controller,
+                            &mut auto_split_controller_ctx,
                             &read_stats_receiver,
                             &cpu_stats_receiver,
                             &mut load_base_split_thread_stats,
@@ -681,6 +691,7 @@ where
 
     pub fn load_base_split(
         auto_split_controller: &mut AutoSplitController,
+        auto_split_controller_ctx: &mut AutoSplitControllerContext,
         read_stats_receiver: &Receiver<ReadStats>,
         cpu_stats_receiver: &Receiver<Arc<RawRecords>>,
         thread_stats: &mut ThreadInfoStatistics,
@@ -702,18 +713,14 @@ where
             }
             SplitConfigChange::Noop => {}
         }
-        let mut read_stats_vec = vec![];
-        while let Ok(read_stats) = read_stats_receiver.try_recv() {
-            read_stats_vec.push(read_stats);
-        }
-        let mut cpu_stats_vec = vec![];
-        while let Ok(cpu_stats) = cpu_stats_receiver.try_recv() {
-            cpu_stats_vec.push(cpu_stats);
-        }
-        thread_stats.record();
-        let (top_qps, split_infos) =
-            auto_split_controller.flush(read_stats_vec, cpu_stats_vec, thread_stats);
+        let (top_qps, split_infos) = auto_split_controller.flush(
+            auto_split_controller_ctx,
+            read_stats_receiver,
+            cpu_stats_receiver,
+            thread_stats,
+        );
         auto_split_controller.clear();
+        auto_split_controller_ctx.maybe_gc();
         reporter.auto_split(split_infos);
         for i in 0..TOP_N {
             if i < top_qps.len() {
@@ -741,8 +748,8 @@ where
     #[inline]
     pub fn maybe_send_read_stats(&self, read_stats: ReadStats) {
         if let Some(sender) = &self.read_stats_sender {
-            if sender.send(read_stats).is_err() {
-                warn!("send read_stats failed, are we shutting down?")
+            if sender.try_send(read_stats).is_err() {
+                debug!("send read_stats failed, are we shutting down or channel is full?")
             }
         }
     }
@@ -750,8 +757,8 @@ where
     #[inline]
     pub fn maybe_send_cpu_stats(&self, cpu_stats: &Arc<RawRecords>) {
         if let Some(sender) = &self.cpu_stats_sender {
-            if sender.send(cpu_stats.clone()).is_err() {
-                warn!("send region cpu info failed, are we shutting down?")
+            if sender.try_send(cpu_stats.clone()).is_err() {
+                debug!("send region cpu info failed, are we shutting down or channel is full?")
             }
         }
     }
@@ -1630,7 +1637,7 @@ where
                             cb: Callback::None,
                         }
                     };
-                    if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(msg)) {
+                    if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(Box::new(msg))) {
                         error!("send halfsplit request failed"; "region_id" => region_id, "err" => ?e);
                     }
                 } else if resp.has_merge() {
@@ -1820,7 +1827,7 @@ where
             match resp.await {
                 Ok(Some((region, leader))) => {
                     if leader.get_store_id() != 0 {
-                        let msg = CasualMessage::QueryRegionLeaderResp { region, leader };
+                        let msg = Box::new(CasualMessage::QueryRegionLeaderResp { region, leader });
                         if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(msg)) {
                             error!("send region info message failed"; "region_id" => region_id, "err" => ?e);
                         }
@@ -2046,14 +2053,14 @@ where
                             let start_key = split_info.start_key.unwrap();
                             let end_key = split_info.end_key.unwrap();
                             let region_id = region.get_id();
-                            let msg = CasualMessage::HalfSplitRegion {
+                            let msg = Box::new(CasualMessage::HalfSplitRegion {
                                 region_epoch: region.get_region_epoch().clone(),
                                 start_key: Some(start_key.clone()),
                                 end_key: Some(end_key.clone()),
                                 policy: pdpb::CheckPolicy::Scan,
                                 source: "auto_split",
                                 cb: Callback::None,
-                            };
+                            });
                             if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(msg)) {
                                 error!("send auto half split request failed";
                                     "region_id" => region_id,
@@ -2543,12 +2550,14 @@ fn get_read_query_num(stat: &pdpb::QueryStats) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use std::thread::sleep;
+    use std::{sync::Mutex, thread::sleep};
 
     use kvproto::{kvrpcpb, pdpb::QueryKind};
     use pd_client::{new_bucket_stats, BucketMeta};
+    use tikv_util::worker::LazyWorker;
 
     use super::*;
+    use crate::store::{fsm::StoreMeta, util::build_key_range};
 
     const DEFAULT_TEST_STORE_ID: u64 = 1;
 
@@ -2558,7 +2567,6 @@ mod tests {
         use std::{sync::Mutex, time::Instant};
 
         use engine_test::{kv::KvTestEngine, raft::RaftTestEngine};
-        use tikv_util::worker::LazyWorker;
 
         use crate::store::fsm::StoreMeta;
 
@@ -2870,5 +2878,69 @@ mod tests {
         assert_eq!(cap, 444);
         assert_eq!(used, 111);
         assert_eq!(avail, 333);
+    }
+
+    #[test]
+    fn test_pd_worker_send_stats_on_read_and_cpu() {
+        let mut pd_worker: LazyWorker<Task<KvTestEngine, RaftTestEngine>> =
+            LazyWorker::new("test-pd-worker-collect-stats");
+        // Set the interval long enough for mocking the channel full state.
+        let interval = 600_u64;
+        let mut stats_monitor = StatsMonitor::new(
+            Duration::from_secs(interval),
+            Duration::from_secs(interval),
+            WrappedScheduler(pd_worker.scheduler()),
+        );
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
+        let region_read_progress = store_meta.lock().unwrap().region_read_progress.clone();
+        stats_monitor
+            .start(
+                AutoSplitController::default(),
+                region_read_progress,
+                CollectorRegHandle::new_for_test(),
+                0,
+            )
+            .unwrap();
+        // Add some read stats and cpu stats to the stats monitor.
+        {
+            for _ in 0..=STATS_CHANNEL_CAPACITY_LIMIT + 10 {
+                let mut read_stats = ReadStats::with_sample_num(1);
+                read_stats.add_query_num(
+                    1,
+                    &Peer::default(),
+                    build_key_range(b"a", b"b", false),
+                    QueryKind::Get,
+                );
+                stats_monitor.maybe_send_read_stats(read_stats);
+            }
+
+            let raw_records = Arc::new(RawRecords {
+                begin_unix_time_secs: UnixSecs::now().into_inner(),
+                duration: Duration::default(),
+                records: {
+                    let mut records = HashMap::default();
+                    records.insert(
+                        Arc::new(TagInfos {
+                            store_id: 0,
+                            region_id: 1,
+                            peer_id: 0,
+                            key_ranges: vec![],
+                            extra_attachment: b"a".to_vec(),
+                        }),
+                        RawRecord {
+                            cpu_time: 111,
+                            read_keys: 1,
+                            write_keys: 0,
+                        },
+                    );
+                    records
+                },
+            });
+            for _ in 0..=STATS_CHANNEL_CAPACITY_LIMIT + 10 {
+                stats_monitor.maybe_send_cpu_stats(&raw_records);
+            }
+        }
+
+        pd_worker.stop();
     }
 }

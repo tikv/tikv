@@ -11,7 +11,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc,
     },
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 use dashmap::{mapref::entry::Entry, DashMap};
@@ -236,7 +236,7 @@ impl SstImporter {
     }
 
     pub fn get_path(&self, meta: &SstMeta) -> PathBuf {
-        let path = self.dir.join(meta).unwrap();
+        let path = self.dir.join_for_read(meta).unwrap();
         path.save
     }
 
@@ -1032,7 +1032,7 @@ impl SstImporter {
         engine: E,
         ext: DownloadExt<'_>,
     ) -> Result<Option<Range>> {
-        let path = self.dir.join(meta)?;
+        let path = self.dir.join_for_write(meta)?;
 
         let file_crypter = crypter.map(|c| FileEncryptionInfo {
             method: to_engine_encryption_method(c.cipher_type),
@@ -1288,31 +1288,24 @@ impl SstImporter {
             Ok(Some(final_range))
         } else {
             // nothing is written: prevents finishing the SST at all.
+            // also delete the empty sst file that is created when creating sst_writer
+            drop(sst_writer);
+            let _ = file_system::remove_file(&path.save);
             Ok(None)
         }
     }
 
     /// List the basic information of the current SST files.
-    /// The information contains UUID, region ID, region Epoch.
-    /// Other fields may be left blank.
-    pub fn list_ssts(&self) -> Result<Vec<SstMeta>> {
+    /// The information contains UUID, region ID, region Epoch, api version,
+    /// last modified time. Other fields may be left blank.
+    pub fn list_ssts(&self) -> Result<Vec<(SstMeta, i32, SystemTime)>> {
         self.dir.list_ssts()
-    }
-
-    /// Load the start key by a metadata.
-    /// This will open the internal SST and try to load the first user key.
-    /// (For RocksEngine, that is the key without the 'z' prefix.)
-    /// When the SST is empty or the first key cannot be parsed as user key,
-    /// return None.
-    pub fn load_start_key_by_meta<S: SstExt>(&self, meta: &SstMeta) -> Result<Option<Vec<u8>>> {
-        self.dir
-            .load_start_key_by_meta::<S>(meta, self.key_manager.clone())
     }
 
     pub fn new_txn_writer<E: KvEngine>(&self, db: &E, meta: SstMeta) -> Result<TxnSstWriter<E>> {
         let mut default_meta = meta.clone();
         default_meta.set_cf_name(CF_DEFAULT.to_owned());
-        let default_path = self.dir.join(&default_meta)?;
+        let default_path = self.dir.join_for_write(&default_meta)?;
         let default = E::SstWriterBuilder::new()
             .set_db(db)
             .set_cf(CF_DEFAULT)
@@ -1322,7 +1315,7 @@ impl SstImporter {
 
         let mut write_meta = meta;
         write_meta.set_cf_name(CF_WRITE.to_owned());
-        let write_path = self.dir.join(&write_meta)?;
+        let write_path = self.dir.join_for_write(&write_meta)?;
         let write = E::SstWriterBuilder::new()
             .set_db(db)
             .set_cf(CF_WRITE)
@@ -1348,7 +1341,7 @@ impl SstImporter {
         mut meta: SstMeta,
     ) -> Result<RawSstWriter<E>> {
         meta.set_cf_name(CF_DEFAULT.to_owned());
-        let default_path = self.dir.join(&meta)?;
+        let default_path = self.dir.join_for_write(&meta)?;
         let default = E::SstWriterBuilder::new()
             .set_db(db)
             .set_cf(CF_DEFAULT)
@@ -1429,7 +1422,7 @@ mod tests {
         let mut meta = SstMeta::default();
         meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
 
-        let path = dir.join(&meta).unwrap();
+        let path = dir.join_for_write(&meta).unwrap();
 
         // Test ImportDir::create()
         {
@@ -1495,9 +1488,9 @@ mod tests {
         for sst in &ssts {
             ingested
                 .iter()
-                .find(|s| s.get_uuid() == sst.get_uuid())
+                .find(|s| s.get_uuid() == sst.0.get_uuid())
                 .unwrap();
-            dir.delete(sst, key_manager.as_deref()).unwrap();
+            dir.delete(&sst.0, key_manager.as_deref()).unwrap();
         }
         assert!(dir.list_ssts().unwrap().is_empty());
     }
@@ -2239,7 +2232,7 @@ mod tests {
         assert_eq!(range.get_end(), b"t123_r13");
 
         // verifies that the file is saved to the correct place.
-        let sst_file_path = importer.dir.join(&meta).unwrap().save;
+        let sst_file_path = importer.dir.join_for_read(&meta).unwrap().save;
         let sst_file_metadata = sst_file_path.metadata().unwrap();
         assert!(sst_file_metadata.is_file());
         assert_eq!(sst_file_metadata.len(), meta.get_length());
@@ -2298,7 +2291,7 @@ mod tests {
         assert_eq!(range.get_end(), b"t123_r13");
 
         // verifies that the file is saved to the correct place.
-        let sst_file_path = importer.dir.join(&meta).unwrap().save;
+        let sst_file_path = importer.dir.join_for_read(&meta).unwrap().save;
         let sst_file_metadata = sst_file_path.metadata().unwrap();
         assert!(sst_file_metadata.is_file());
         assert_eq!(sst_file_metadata.len(), meta.get_length());
@@ -2348,7 +2341,7 @@ mod tests {
 
         // verifies that the file is saved to the correct place.
         // (the file size may be changed, so not going to check the file size)
-        let sst_file_path = importer.dir.join(&meta).unwrap().save;
+        let sst_file_path = importer.dir.join_for_read(&meta).unwrap().save;
         assert!(sst_file_path.is_file());
 
         // verifies the SST content is correct.
@@ -2393,7 +2386,7 @@ mod tests {
 
         // verifies that the file is saved to the correct place.
         // (the file size may be changed, so not going to check the file size)
-        let sst_file_path = importer.dir.join(&meta).unwrap().save;
+        let sst_file_path = importer.dir.join_for_read(&meta).unwrap().save;
         assert!(sst_file_path.is_file());
 
         // verifies the SST content is correct.
@@ -2437,7 +2430,7 @@ mod tests {
 
         // verifies that the file is saved to the correct place.
         // (the file size may be changed, so not going to check the file size)
-        let sst_file_path = importer.dir.join(&meta).unwrap().save;
+        let sst_file_path = importer.dir.join_for_read(&meta).unwrap().save;
         assert!(sst_file_path.is_file());
 
         // verifies the SST content is correct.
@@ -2578,7 +2571,7 @@ mod tests {
 
         // verifies that the file is saved to the correct place.
         // (the file size is changed, so not going to check the file size)
-        let sst_file_path = importer.dir.join(&meta).unwrap().save;
+        let sst_file_path = importer.dir.join_for_read(&meta).unwrap().save;
         assert!(sst_file_path.is_file());
 
         // verifies the SST content is correct.
@@ -2622,7 +2615,7 @@ mod tests {
         assert_eq!(range.get_end(), b"t5_r07");
 
         // verifies that the file is saved to the correct place.
-        let sst_file_path = importer.dir.join(&meta).unwrap().save;
+        let sst_file_path = importer.dir.join_for_read(&meta).unwrap().save;
         assert!(sst_file_path.is_file());
 
         // verifies the SST content is correct.
@@ -2686,6 +2679,9 @@ mod tests {
             Limiter::new(f64::INFINITY),
             db,
         );
+
+        let path = importer.dir.join_for_read(&meta).unwrap();
+        assert!(!file_system::file_exists(path.save));
 
         match result {
             Ok(None) => {}
@@ -2755,7 +2751,7 @@ mod tests {
         assert_eq!(range.get_end(), b"d");
 
         // verifies that the file is saved to the correct place.
-        let sst_file_path = importer.dir.join(&meta).unwrap().save;
+        let sst_file_path = importer.dir.join_for_read(&meta).unwrap().save;
         let sst_file_metadata = sst_file_path.metadata().unwrap();
         assert!(sst_file_metadata.is_file());
         assert_eq!(sst_file_metadata.len(), meta.get_length());
@@ -2814,7 +2810,7 @@ mod tests {
         assert_eq!(range.get_end(), b"c\x00");
 
         // verifies that the file is saved to the correct place.
-        let sst_file_path = importer.dir.join(&meta).unwrap().save;
+        let sst_file_path = importer.dir.join_for_read(&meta).unwrap().save;
         let sst_file_metadata = sst_file_path.metadata().unwrap();
         assert!(sst_file_metadata.is_file());
 
@@ -2869,7 +2865,7 @@ mod tests {
         assert_eq!(range.get_end(), b"c");
 
         // verifies that the file is saved to the correct place.
-        let sst_file_path = importer.dir.join(&meta).unwrap().save;
+        let sst_file_path = importer.dir.join_for_read(&meta).unwrap().save;
         let sst_file_metadata = sst_file_path.metadata().unwrap();
         assert!(sst_file_metadata.is_file());
 
@@ -2914,7 +2910,7 @@ mod tests {
             .unwrap();
 
         // verifies the SST is compressed using Snappy.
-        let sst_file_path = importer.dir.join(&meta).unwrap().save;
+        let sst_file_path = importer.dir.join_for_read(&meta).unwrap().save;
         assert!(sst_file_path.is_file());
 
         let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
@@ -2960,7 +2956,7 @@ mod tests {
 
         // verifies SST compression algorithm...
         for meta in metas {
-            let sst_file_path = importer.dir.join(&meta).unwrap().save;
+            let sst_file_path = importer.dir.join_for_read(&meta).unwrap().save;
             assert!(sst_file_path.is_file());
 
             let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);

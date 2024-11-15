@@ -205,8 +205,9 @@ fn test_stale_peer_destroy_when_apply_snapshot() {
     fail::remove(region_apply_snap_fp);
     // Wait for peer 3 changing `SnapState`
     sleep_ms(100);
-    cluster.sim.wl().send_raft_msg(tombstone_msg).unwrap();
 
+    // we expect the peer would be destroyed after applying the snapshot without
+    // another message trigger
     must_get_none(&cluster.get_engine(3), b"k1");
 }
 
