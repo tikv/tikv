@@ -7371,7 +7371,7 @@ mod tests {
         let mut req = RaftCmdRequest::default();
         let mut put = PutRequest::default();
         put.set_key(b"aaaa".to_vec());
-        let val = (0..200_000).into_iter().map(|_| 0).collect_vec();
+        let val = (0..200_000).map(|_| 0).collect_vec();
         put.set_value(val);
         q.set_cmd_type(CmdType::Put);
         q.set_put(put);
@@ -7386,7 +7386,7 @@ mod tests {
         let mut req = RaftCmdRequest::default();
         let mut put = PutRequest::default();
         put.set_key(b"aaaa".to_vec());
-        let val = (0..900_000).into_iter().map(|_| 0).collect_vec();
+        let val = (0..900_000).map(|_| 0).collect_vec();
         put.set_value(val);
         q.set_cmd_type(CmdType::Put);
         q.set_put(put);
