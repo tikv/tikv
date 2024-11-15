@@ -1,13 +1,12 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::io::Write;
-use std::sync::Arc;
+use std::{io::Write, sync::Arc};
 
 use api_version::{dispatch_api_version, match_template_api_version, KeyMode, KvFormat, RawValue};
 use encryption::DataKeyManager;
 use engine_traits::{raw_ttl::ttl_to_expire_ts, KvEngine, SstWriter};
-use kvproto::{import_sstpb::*, kvrpcpb::ApiVersion};
 use file_system::File;
+use kvproto::{import_sstpb::*, kvrpcpb::ApiVersion};
 use tikv_util::time::Instant;
 use txn_types::{is_short_value, Key, TimeStamp, Write as KvWrite, WriteType};
 

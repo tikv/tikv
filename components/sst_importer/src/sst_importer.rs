@@ -55,10 +55,9 @@ use crate::{
     import_mode::{ImportModeSwitcher, RocksDbMetricsFn},
     import_mode2::{HashRange, ImportModeSwitcherV2},
     metrics::*,
-    sst_writer::{RawSstWriter, TxnSstWriter},
+    sst_writer::{RawSstWriter, SstFileWriter, TxnSstWriter},
     util, Config, ConfigManager as ImportConfigManager, Error, Result,
 };
-use crate::sst_writer::SstFileWriter;
 
 pub struct LoadedFile {
     _permit: OwnedAllocated,
@@ -1439,7 +1438,12 @@ impl<E: KvEngine> SstImporter<E> {
         write_meta.set_cf_name(CF_WRITE.to_owned());
         let write_path = self.dir.join_for_write(&write_meta)?;
 
-        Ok(SstFileWriter::new(default_path, write_path, default_meta, write_meta))
+        Ok(SstFileWriter::new(
+            default_path,
+            write_path,
+            default_meta,
+            write_meta,
+        ))
     }
 
     pub fn new_txn_writer(&self, db: &E, meta: SstMeta) -> Result<TxnSstWriter<E>> {
