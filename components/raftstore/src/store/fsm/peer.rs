@@ -133,7 +133,7 @@ const MAX_REGIONS_IN_ERROR: usize = 10;
 const REGION_SPLIT_SKIP_MAX_COUNT: usize = 3;
 /// Limits the request size that can be batched in a single RaftCmdRequest.
 // todo: this fugure maybe changed to a more suitable value.
-const DEFAULT_MAX_BATCH_SIZE_LIMIT: u64 = 1 * 1024 * 1024;
+const MAX_BATCH_SIZE_LIMIT: u64 = 1 * 1024 * 1024;
 const UNSAFE_RECOVERY_STATE_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub const MAX_PROPOSAL_SIZE_RATIO: f64 = 0.4;
@@ -449,7 +449,7 @@ where
         // limit the number of requests batched within a single RaftCmdRequest.
         if req.get_requests().is_empty()
             || req_size as u64 > (cfg.raft_entry_max_size.0 as f64 * 0.2) as u64
-            || (self.batch_req_size + req_size as u64) > DEFAULT_MAX_BATCH_SIZE_LIMIT
+            || (self.batch_req_size + req_size as u64) > MAX_BATCH_SIZE_LIMIT
         {
             return false;
         }
