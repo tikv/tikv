@@ -49,7 +49,7 @@ impl SstFileWriter {
 
     pub fn write(&mut self, batch: WriteBatch) -> Result<()> {
         for m in batch.get_pairs().iter() {
-            let default_content = m.get_keys();
+            let default_content = m.get_key();
             if default_content.len() > 0 {
                 self.has_default = true;
                 self.default_file.write_all(default_content)?;
