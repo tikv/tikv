@@ -2288,7 +2288,7 @@ pub mod tests {
         // has row data on the region, but the region is not in this TiKV.
         //
         // [t1_i1, t1_i2, t1_r], {[t1_r]}, [t1_r, t2_i1, t2_i2, t2_r, t3_i1, t3_r, t4_r,
-        // t5_i1, t5_i2], [t5_r]
+        // t5_i1, t5_i2], [t5_r], [t5_r, \xFF\xFF], [+inf]
         endpoint.region_info.set_regions(vec![
             (
                 table::encode_index_seek_key(1, 1, b"1"),
@@ -2305,6 +2305,8 @@ pub mod tests {
                 table::encode_row_key(5, 300),
                 3,
             ),
+            (table::encode_row_key(5, 500), vec![u8::MAX, u8::MAX], 4),
+            (vec![u8::MAX, u8::MAX, u8::MAX], vec![], 5),
         ]);
         let request_ranges: Vec<(Vec<u8>, Vec<u8>)> = vec![
             (
@@ -2355,6 +2357,8 @@ pub mod tests {
                 table::encode_row_key(5, 0),
                 table::encode_row_key(5, i64::MAX),
             ),
+            (vec![u8::MAX, 0], vec![u8::MAX, 2]),
+            (vec![u8::MAX, 3], vec![u8::MAX, u8::MAX, u8::MAX, 1]),
         ];
         let expect: Vec<(Vec<u8>, Vec<u8>)> = vec![
             (
@@ -2370,6 +2374,16 @@ pub mod tests {
                 table::encode_index_seek_key(5, 2, b"2"),
             ),
             (table::encode_row_key(5, 100), table::encode_row_key(5, 300)),
+            (
+                table::encode_row_key(5, 500),
+                table::encode_row_key(5, i64::MAX),
+            ),
+            (vec![u8::MAX, 0], vec![u8::MAX, 2]),
+            (vec![u8::MAX, 3], vec![u8::MAX, u8::MAX]),
+            (
+                vec![u8::MAX, u8::MAX, u8::MAX],
+                vec![u8::MAX, u8::MAX, u8::MAX, 1],
+            ),
         ];
 
         let tmp = TempDir::new().unwrap();
