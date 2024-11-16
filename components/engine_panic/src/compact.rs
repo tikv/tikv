@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use engine_traits::{CompactExt, CompactedEvent, Result};
+use engine_traits::{CompactExt, CompactedEvent, ManualCompactionOptions, Result};
 
 use crate::engine::PanicEngine;
 
@@ -18,8 +18,7 @@ impl CompactExt for PanicEngine {
         cf: &str,
         start_key: Option<&[u8]>,
         end_key: Option<&[u8]>,
-        exclusive_manual: bool,
-        max_subcompactions: u32,
+        compaction_option: ManualCompactionOptions,
     ) -> Result<()> {
         panic!()
     }

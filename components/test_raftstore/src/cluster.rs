@@ -15,8 +15,8 @@ use encryption_export::DataKeyManager;
 use engine_rocks::{RocksEngine, RocksSnapshot, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
-    CompactExt, Engines, Iterable, MiscExt, Mutable, Peekable, RaftEngineReadOnly, SyncMutable,
-    WriteBatch, WriteBatchExt, CF_DEFAULT, CF_RAFT,
+    CompactExt, Engines, Iterable, ManualCompactionOptions, MiscExt, Mutable, Peekable,
+    RaftEngineReadOnly, SyncMutable, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_RAFT,
 };
 use file_system::IoRateLimiter;
 use futures::{self, channel::oneshot, executor::block_on, future::BoxFuture};
@@ -317,8 +317,13 @@ impl<T: Simulator> Cluster<T> {
     pub fn compact_data(&self) {
         for engine in self.engines.values() {
             let db = &engine.kv;
-            db.compact_range_cf(CF_DEFAULT, None, None, false, 1)
-                .unwrap();
+            db.compact_range_cf(
+                CF_DEFAULT,
+                None,
+                None,
+                ManualCompactionOptions::new(false, 1, false),
+            )
+            .unwrap();
         }
     }
 
