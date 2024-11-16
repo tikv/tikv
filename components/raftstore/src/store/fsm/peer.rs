@@ -133,6 +133,7 @@ const MAX_REGIONS_IN_ERROR: usize = 10;
 const REGION_SPLIT_SKIP_MAX_COUNT: usize = 3;
 /// Limits the request size that can be batched in a single RaftCmdRequest.
 // todo: this fugure maybe changed to a more suitable value.
+#[allow(clippy::identity_op)]
 const MAX_BATCH_SIZE_LIMIT: u64 = 1 * 1024 * 1024;
 const UNSAFE_RECOVERY_STATE_TIMEOUT: Duration = Duration::from_secs(60);
 
