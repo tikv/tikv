@@ -588,12 +588,23 @@ fn test_duplicate_detect_with_client_stop() {
     duplicate.set_context(ctx);
     duplicate.set_start_key((0_u64).to_string().as_bytes().to_vec());
 
-    // drop stream in client. A stopped remote must not cause panic at server.
+    // failed to get snapshot. and stream is normal, it will get response with err.
+    fail::cfg("failed_to_async_snapshot", "return()").unwrap();
+    let mut stream = import.duplicate_detect(&duplicate).unwrap();
+    let resp = block_on(async move {
+        let resp: DuplicateDetectResponse = stream.next().await.unwrap().unwrap();
+        resp
+    });
+    assert_eq!(resp.get_region_error().get_message(), "faild to get snapshot");
+
+    // failed to get snapshot, and stream stops. 
+    // A stopeed remote don't cause panic in server.
     let stream = import.duplicate_detect(&duplicate).unwrap();
     drop(stream);
 
-    // drop stream after receive part of response.  A stopped remote must not cause
-    // panic at server.
+    // drop stream after received part of response.  
+    // A stopped remote must not cause panic at server.
+    fail::remove("failed_to_async_snapshot");
     let mut stream = import.duplicate_detect(&duplicate).unwrap();
     let ret: Vec<KvPair> = block_on(async move {
         let mut resp: DuplicateDetectResponse = stream.next().await.unwrap().unwrap();
@@ -602,9 +613,10 @@ fn test_duplicate_detect_with_client_stop() {
         drop(stream);
         pairs.into()
     });
+
     assert_eq!(ret.len(), 4096);
 
-    // duplicate_tect() again.
+    // call duplicate_detect() successfully.
     let mut stream = import.duplicate_detect(&duplicate).unwrap();
     let ret = block_on(async move {
         let mut ret: Vec<KvPair> = vec![];
