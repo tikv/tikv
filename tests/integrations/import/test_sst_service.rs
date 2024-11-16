@@ -559,6 +559,80 @@ fn test_duplicate_and_close() {
 }
 
 #[test]
+fn test_duplicate_detect_with_client_stop() {
+    let (_cluster, ctx, _, import) = new_cluster_and_tikv_import_client();
+    let mut req = SwitchModeRequest::default();
+    req.set_mode(SwitchMode::Import);
+    import.switch_mode(&req).unwrap();
+
+    let data_count: u64 = 4096;
+    for commit_ts in 0..4 {
+        let mut meta = new_sst_meta(0, 0);
+        meta.set_region_id(ctx.get_region_id());
+        meta.set_region_epoch(ctx.get_region_epoch().clone());
+
+        let mut keys = vec![];
+        let mut values = vec![];
+        for i in 1000..data_count {
+            let key = i.to_string();
+            keys.push(key.as_bytes().to_vec());
+            values.push(key.as_bytes().to_vec());
+        }
+        let resp = send_write_sst(&import, &meta, keys, values, commit_ts).unwrap();
+        for m in resp.metas.into_iter() {
+            must_ingest_sst(&import, ctx.clone(), m.clone());
+        }
+    }
+
+    let mut duplicate = DuplicateDetectRequest::default();
+    duplicate.set_context(ctx);
+    duplicate.set_start_key((0_u64).to_string().as_bytes().to_vec());
+
+    // drop stream in client. A stopped remote must not cause panic at server.
+    let stream = import.duplicate_detect(&duplicate).unwrap();
+    drop(stream);
+
+    // drop stream after receive part of response.  A stopped remote must not cause
+    // panic at server.
+    let mut stream = import.duplicate_detect(&duplicate).unwrap();
+    let ret: Vec<KvPair> = block_on(async move {
+        let mut resp: DuplicateDetectResponse = stream.next().await.unwrap().unwrap();
+        let pairs = resp.take_pairs();
+        // drop stream, Do not cause panic at server.
+        drop(stream);
+        pairs.into()
+    });
+    assert_eq!(ret.len(), 4096);
+
+    // duplicate_tect() again.
+    let mut stream = import.duplicate_detect(&duplicate).unwrap();
+    let ret = block_on(async move {
+        let mut ret: Vec<KvPair> = vec![];
+        while let Some(resp) = stream.next().await {
+            match resp {
+                Ok(mut resp) => {
+                    if resp.has_key_error() || resp.has_region_error() {
+                        break;
+                    }
+                    let pairs = resp.take_pairs();
+                    ret.append(&mut pairs.into());
+                }
+                Err(e) => {
+                    println!("receive error: {:?}", e);
+                    break;
+                }
+            }
+        }
+
+        
+        ret
+    });
+    assert_eq!(ret.len(), (data_count - 1000) as usize * 4);
+    req.set_mode(SwitchMode::Normal);
+    import.switch_mode(&req).unwrap();
+}
+
+#[test]
 fn test_suspend_import() {
     let (_cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client();
     let sst_range = (0, 10);
