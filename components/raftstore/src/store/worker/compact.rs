@@ -337,7 +337,12 @@ mod tests {
             let _ = db.disable_manual_compaction();
 
             // Manually compact range.
-            let _ = db.compact_range_cf(CF_DEFAULT, None, None, false, 1);
+            let _ = db.compact_range_cf(
+                CF_DEFAULT,
+                None,
+                None,
+                ManualCompactionOptions::new(false, 1, false),
+            );
 
             // Get the total SST files size after compact range.
             let new_sst_files_size = db.get_total_sst_files_size_cf(CF_DEFAULT).unwrap().unwrap();
@@ -348,7 +353,12 @@ mod tests {
             let _ = db.enable_manual_compaction();
 
             // Manually compact range.
-            let _ = db.compact_range_cf(CF_DEFAULT, None, None, false, 1);
+            let _ = db.compact_range_cf(
+                CF_DEFAULT,
+                None,
+                None,
+                ManualCompactionOptions::new(false, 1, false),
+            );
 
             // Get the total SST files size after compact range.
             let new_sst_files_size = db.get_total_sst_files_size_cf(CF_DEFAULT).unwrap().unwrap();
