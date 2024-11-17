@@ -49,6 +49,10 @@ impl SstFileWriter {
     pub fn write(&mut self, batch: WriteBatch) -> Result<()> {
         for m in batch.get_pairs().iter() {
             let default_content = m.get_key();
+            info!(
+                "lance test write default_content";
+                "" => ?default_content,
+            );
             if default_content.len() > 0 {
                 self.has_default = true;
                 self.default_file.write_all(default_content)?;
@@ -544,5 +548,37 @@ mod tests {
         batch.set_pairs(pairs.into());
 
         w.write(batch).unwrap();
+    }
+
+    #[test]
+    fn test_file_writer() {
+        let import_path_default = ImportPath{
+            save: "/tmp/default_cf".into(),
+            clone: "/tmp/default_cf".into(),
+            temp: "/tmp/default_cf".into(),
+        };
+        let import_path_write = ImportPath{
+            save: "/tmp/write_cf".into(),
+            clone: "/tmp/write_cf".into(),
+            temp: "/tmp/write_cf".into(),
+        };
+        let mut meta = SstMeta::default();
+        meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
+
+        let mut w = SstFileWriter::new(import_path_default, import_path_write, meta.clone(), meta);
+        let mut batch = WriteBatch::default();
+        batch.set_commit_ts(1);
+
+        // put an invalid key
+        let mut pair = Pair::default();
+        pair.set_key(b"".to_vec());
+        pair.set_value(b"short_value".to_vec());
+        let pairs = vec![pair];
+        batch.set_pairs(pairs.into());
+
+        w.write(batch.clone()).unwrap();
+
+        let metas = w.finish().unwrap();
+        assert_eq!(metas.len(), 1);
     }
 }
