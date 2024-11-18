@@ -1417,7 +1417,11 @@ where
         }
 
         // Set sync log hint if the cmd requires so.
-        apply_ctx.sync_log_hint |= should_sync_log(&req);
+        // Moreover, if there exists any Inspector that needs to inspect the latency of
+        // the command, we should also set the sync log hint to ensure the latency is
+        // correctly recorded.
+        apply_ctx.sync_log_hint |=
+            should_sync_log(&req) || !apply_ctx.pending_latency_inspect.is_empty();
 
         apply_ctx.host.pre_apply(&self.region, &req);
         let (mut cmd, exec_result, should_write) = self.apply_raft_cmd(apply_ctx, index, term, req);

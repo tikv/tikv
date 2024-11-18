@@ -1933,7 +1933,6 @@ where
             .health_reporter
             .tick(self.store_stat.maybe_busy(), factor);
         if let Some(score) = slow_score_tick_result.updated_score {
-            // TODO: use sub metric to record different factor's slow score.
             STORE_SLOW_SCORE_GAUGE
                 .with_label_values(&[factor.as_str()])
                 .set(score as i64);
@@ -1954,6 +1953,7 @@ where
                     LatencyInspector::new(
                         id,
                         Box::new(move |id, duration| {
+                            // TODO: use sub metric to record different durations.
                             STORE_INSPECT_DURATION_HISTOGRAM
                                 .with_label_values(&["store_process"])
                                 .observe(tikv_util::time::duration_to_sec(
@@ -1986,6 +1986,11 @@ where
                 InspectFactor::KvDisk => LatencyInspector::new(
                     id,
                     Box::new(move |id, duration| {
+                        STORE_INSPECT_DURATION_HISTOGRAM
+                            .with_label_values(&["apply_wait"])
+                            .observe(tikv_util::time::duration_to_sec(
+                                duration.apply_wait_duration.unwrap_or_default(),
+                            ));
                         STORE_INSPECT_DURATION_HISTOGRAM
                             .with_label_values(&["apply_process"])
                             .observe(tikv_util::time::duration_to_sec(
