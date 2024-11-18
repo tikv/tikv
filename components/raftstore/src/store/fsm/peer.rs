@@ -1286,13 +1286,10 @@ where
                 }
             }
             CasualMessage::Campaign { notify_by_parent } => {
-                // If the message is sent by the parent, it means the parent is already the
-                // leader. So this peer will be likely to become the leader
-                // soon.
                 if notify_by_parent {
-                    // The new peer is likely to become leader, send a heartbeat immediately to
-                    // reduce client query miss.
-                    self.fsm.peer.heartbeat_pd(self.ctx);
+                    // If the message is sent by the parent, it means the parent is already the
+                    // leader. So this peer will be likely to become the leader
+                    // soon.
                     let _ = self.fsm.peer.maybe_campaign(true);
                 } else {
                     let _ = self.fsm.peer.raft_group.campaign();
