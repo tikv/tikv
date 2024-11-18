@@ -347,7 +347,7 @@ impl<E: Engine> ImportSstService<E> {
 
         let threads = ResizableRuntime::new(
             4,
-            "import-worker",
+            "impwkr",
             Box::new(create_tokio_runtime),
             Box::new(|_| ()),
         );

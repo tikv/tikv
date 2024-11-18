@@ -143,7 +143,7 @@ impl ResizableRuntime {
     ) -> Self {
         let keeper = Builder::new_multi_thread()
             .worker_threads(1)
-            .thread_name("runtime-keeper")
+            .thread_name("rtkp")
             .enable_all()
             .build()
             .expect("Failed to create runtime-keeper");
@@ -223,6 +223,7 @@ impl ResizableRuntime {
             inner: Some(new_pool),
             task_count: Arc::new(AtomicUsize::new(0)),
         });
+        self.pool.name = thread_name;
 
         self.size = new_size;
         (self.after_adjust)(new_size);
@@ -283,20 +284,28 @@ mod test {
     }
 
     #[test]
-    fn test_multi_block_on() {
+    fn test_multi_tasks() {
         let threads =
-            ResizableRuntime::new(4, "test", Box::new(replace_pool_rule), Box::new(|_| {}));
+            ResizableRuntime::new(32, "test", Box::new(replace_pool_rule), Box::new(|_| {}));
         let handle = threads.handle();
 
-        let handles: Vec<_> = (0..4)
+        let handles: Vec<_> = (0..32)
             .map(|i| {
                 let runtime_handle = handle.clone();
                 thread::spawn(move || {
-                    runtime_handle.block_on(async move {
-                        println!("Thread {} sleeping", i);
-                        sleep(Duration::from_secs(5));
-                        println!("Thread {} finished sleeping", i);
-                    });
+                    if i % 2 == 0 {
+                        runtime_handle.block_on(async move {
+                            println!("Thread {} sleeping", i);
+                            sleep(Duration::from_secs(10));
+                            println!("Thread {} finished sleeping", i);
+                        });
+                    } else {
+                        runtime_handle.spawn(async move {
+                            println!("Thread {} sleeping", i);
+                            sleep(Duration::from_secs(10));
+                            println!("Thread {} finished sleeping", i);
+                        })
+                    }
                 })
             })
             .collect();
