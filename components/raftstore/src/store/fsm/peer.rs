@@ -1289,11 +1289,7 @@ where
                 if notify_by_parent {
                     // If the message is sent by the parent, it means that the parent is already
                     // the leader of the parent region.
-                    if !self.fsm.peer.has_valid_leader() && self.fsm.peer.is_follower() {
-                        // And only if the split region has no leader and does not enter election
-                        // state, will it be safe to campaign.
-                        let _ = self.fsm.peer.maybe_campaign(true);
-                    }
+                    let _ = self.fsm.peer.maybe_campaign(true);
                 } else {
                     // Forcely campaign to be the leader of the region.
                     let _ = self.fsm.peer.raft_group.campaign();
@@ -2020,6 +2016,7 @@ where
     /// Check whether the peer has any uncleared records in the
     /// uncampaigned_new_regions list.
     fn check_uncampaigned_regions(&mut self) {
+        fail_point!("on_skip_check_uncampaigned_regions", |_| {});
         let has_uncompaigned_regions = !self
             .fsm
             .peer

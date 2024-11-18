@@ -74,7 +74,10 @@ use super::{
     cmd_resp,
     local_metrics::{IoType, RaftMetrics},
     metrics::*,
-    peer_storage::{write_peer_state, CheckApplyingSnapStatus, HandleReadyResult, PeerStorage},
+    peer_storage::{
+        write_peer_state, CheckApplyingSnapStatus, HandleReadyResult, PeerStorage,
+        RAFT_INIT_LOG_TERM,
+    },
     read_queue::{ReadIndexQueue, ReadIndexRequest},
     transport::Transport,
     util::{
@@ -1617,6 +1620,11 @@ where
             }
         }
         false
+    }
+
+    #[inline]
+    pub fn uncampaigned(&self) -> bool {
+        self.term() <= RAFT_INIT_LOG_TERM
     }
 
     /// Pings if followers are still connected.
@@ -3791,6 +3799,12 @@ where
         }
 
         if !parent_is_leader {
+            return false;
+        }
+
+        // And only if the split region does not enter election state, will it be
+        // safe to campaign.
+        if !self.uncampaigned() {
             return false;
         }
 
