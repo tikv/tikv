@@ -647,6 +647,12 @@ where
         };
 
         for m in msgs.drain(..) {
+            // skip handling remain messages if fsm is destroyed. This can aviod handling
+            // arbitary messages(e.g. CasualMessage::ForceCompactRaftLogs) that may need
+            // to read raft logs which maybe lead to panic.
+            if self.fsm.stopped {
+                break;
+            }
             distribution[m.discriminant()] += 1;
             match m {
                 PeerMsg::RaftMessage(msg, sent_time) => {
@@ -3972,6 +3978,7 @@ where
             )
             .flush()
             .when_done(move || {
+                fail_point!("destroy_region_before_gc_flush");
                 if let Err(e) = mb.force_send(PeerMsg::SignificantMsg(Box::new(
                     SignificantMsg::RaftLogGcFlushed,
                 ))) {
@@ -3983,6 +3990,7 @@ where
                         region_id, peer_id, e
                     );
                 }
+                fail_point!("destroy_region_after_gc_flush");
             });
             if let Err(e) = self.ctx.raftlog_gc_scheduler.schedule(task) {
                 if tikv_util::thread_group::is_shutdown(!cfg!(test)) {
