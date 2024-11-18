@@ -5,17 +5,17 @@ use std::sync::{Arc, RwLock};
 use collections::{HashMap, HashMapEntry};
 use engine_traits::KvEngine;
 use fail::fail_point;
+use futures::channel::mpsc::UnboundedSender;
 use kvproto::metapb::Region;
 use raft::StateRole;
 use raftstore::{coprocessor::*, store::RegionSnapshot, Error as RaftStoreError};
 use tikv::storage::Statistics;
 use tikv_util::{error, memory::MemoryQuota, warn, worker::Scheduler};
-use futures::channel::mpsc::UnboundedSender;
 
 use crate::{
+    delegate::DelegateTask,
     endpoint::{Deregister, Task},
     old_value::{self, OldValueCache, OldValueCallback},
-    delegate::DelegateTask,
     Error as CdcError,
 };
 

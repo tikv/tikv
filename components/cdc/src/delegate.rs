@@ -17,6 +17,11 @@ use api_version::{ApiV2, KeyMode, KvFormat};
 use collections::HashMap;
 use crossbeam::atomic::AtomicCell;
 use fail::fail_point;
+use futures::{
+    channel::mpsc::{self, UnboundedReceiver, UnboundedSender},
+    lock::Mutex,
+    StreamExt,
+};
 use kvproto::{
     cdcpb::{
         ChangeDataRequestKvApi, Error as ErrorEvent, Event, EventEntries, EventLogType, EventRow,
@@ -28,27 +33,24 @@ use kvproto::{
         AdminCmdType, AdminRequest, AdminResponse, CmdType, DeleteRequest, PutRequest, Request,
     },
 };
-use raftstore::coprocessor::ObserveId;
 use raftstore::{
-    coprocessor::{Cmd, CmdBatch, ObserveHandle},
+    coprocessor::{Cmd, CmdBatch, ObserveHandle, ObserveId},
     store::util::compare_region_epoch,
     Error as RaftStoreError,
 };
 use tikv::storage::{txn::TxnEntry, Statistics};
 use tikv_util::{
-    debug, info, error,
+    debug, error, info,
     memory::{HeapSize, MemoryQuota},
     time::Instant,
     warn,
-    worker::{Scheduler},
+    worker::Scheduler,
 };
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteBatchFlags, WriteRef, WriteType};
-use futures::channel::mpsc::{self, UnboundedSender, UnboundedReceiver};
-use futures::StreamExt;
 
 use crate::{
     channel::{CdcEvent, SendError, Sink, CDC_EVENT_MAX_BYTES},
-    endpoint::{Advance,Task, Deregister},
+    endpoint::{Advance, Deregister, Task},
     initializer::KvEntry,
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
@@ -145,7 +147,7 @@ pub struct Downstream {
     pub filter_loop: bool,
     pub observed_range: ObservedRange,
 
-    sink: Option<Sink>,
+    sink: Sink,
     state: Arc<AtomicCell<DownstreamState>>,
     pub(crate) scan_truncated: Arc<AtomicBool>,
 
@@ -178,6 +180,7 @@ impl Downstream {
         kv_api: ChangeDataRequestKvApi,
         filter_loop: bool,
         observed_range: ObservedRange,
+        sink: Sink,
     ) -> Downstream {
         Downstream {
             id: DownstreamId::new(),
@@ -190,7 +193,7 @@ impl Downstream {
 
             observed_range,
 
-            sink: None,
+            sink,
             state: Arc::new(AtomicCell::new(DownstreamState::default())),
             scan_truncated: Arc::new(AtomicBool::new(false)),
 
@@ -204,13 +207,7 @@ impl Downstream {
     // no more events can be pushed to the sink after an `ErrorEvent` is sent.
     pub fn sink_event(&self, mut event: Event, force: bool) -> Result<()> {
         event.set_request_id(self.req_id.0);
-        if self.sink.is_none() {
-            info!("cdc drop event, no sink";
-                "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => ?self.req_id);
-            return Err(Error::Sink(SendError::Disconnected));
-        }
-        let sink = self.sink.as_ref().unwrap();
-        match sink.unbounded_send(CdcEvent::Event(event), force) {
+        match self.sink.unbounded_send(CdcEvent::Event(event), force) {
             Ok(_) => Ok(()),
             Err(SendError::Disconnected) => {
                 debug!("cdc send event failed, disconnected";
@@ -240,10 +237,6 @@ impl Downstream {
         // Try it's best to send error events.
         let force_send = true;
         self.sink_event(change_data_event, force_send)
-    }
-
-    pub fn set_sink(&mut self, sink: Sink) {
-        self.sink = Some(sink);
     }
 
     pub fn get_state(&self) -> Arc<AtomicCell<DownstreamState>> {
@@ -335,12 +328,14 @@ pub struct Delegate {
     tasks: UnboundedReceiver<DelegateTask>,
     feedbacks: Scheduler<Task>,
     memory_quota: Arc<MemoryQuota>,
+    old_value_cache: Arc<Mutex<OldValueCache>>,
+    txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
 
     lock_tracker: LockTracker,
     downstreams: Vec<Downstream>,
-    txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
     failed: bool,
 
+    old_value_stats: Statistics,
     created: Instant,
     last_lag_warn: Instant,
 }
@@ -479,7 +474,7 @@ impl Delegate {
         &mut self,
         region: Region,
         locks: BTreeMap<Key, MiniLock>,
-    ) -> Result<Vec<(&Downstream, Error)>> {
+    ) -> Result<Vec<(Downstream, Error)>> {
         fail::fail_point!("cdc_finish_scan_locks_memory_quota_exceed", |_| Err(
             Error::MemoryQuotaExceeded(tikv_util::memory::MemoryQuotaExceeded)
         ));
@@ -494,13 +489,14 @@ impl Delegate {
 
         // Check observed key range in region.
         let mut failed_downstreams = Vec::new();
-        for downstream in &mut self.downstreams {
+        for mut downstream in std::mem::take(&mut self.downstreams) {
             downstream.observed_range.update_region_key_range(region);
-            if let Err(e) = Self::check_epoch_on_ready(downstream, region) {
-                failed_downstreams.push((&*downstream, e));
+            if let Err(e) = Self::check_epoch_on_ready(&downstream, region) {
+                failed_downstreams.push((downstream, e));
+            } else {
+                self.downstreams.push(downstream);
             }
         }
-
         Ok(failed_downstreams)
     }
 
@@ -509,6 +505,7 @@ impl Delegate {
         feedbacks: Scheduler<Task>,
         region_id: u64,
         memory_quota: Arc<MemoryQuota>,
+        old_value_cache: Arc<Mutex<OldValueCache>>,
         txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
     ) -> Delegate {
         let (tx, rx) = mpsc::unbounded();
@@ -520,12 +517,14 @@ impl Delegate {
             tasks: rx,
             feedbacks,
             memory_quota,
+            old_value_cache,
+            txn_extra_op,
 
             lock_tracker: LockTracker::Pending,
             downstreams: Vec::new(),
-            txn_extra_op,
             failed: false,
 
+            old_value_stats: Statistics::default(),
             created: Instant::now_coarse(),
             last_lag_warn: Instant::now_coarse(),
         }
@@ -545,11 +544,11 @@ impl Delegate {
     }
 
     pub fn downstream(&self, downstream_id: DownstreamId) -> Option<&Downstream> {
-        self.downstreams().iter().find(|d| d.id == downstream_id)
+        self.downstreams.iter().find(|d| d.id == downstream_id)
     }
 
     pub fn downstream_mut(&mut self, downstream_id: DownstreamId) -> Option<&mut Downstream> {
-        self.downstreams().iter_mut().find(|d| d.id == downstream_id)
+        self.downstreams.iter_mut().find(|d| d.id == downstream_id)
     }
 
     pub fn downstreams(&self) -> &Vec<Downstream> {
@@ -586,7 +585,6 @@ impl Delegate {
     pub fn has_failed(&self) -> bool {
         self.failed
     }
-
 
     /// `txn_extra_op` returns a shared flag which is accessed in TiKV's
     /// transaction layer to determine whether to capture modifications' old
@@ -695,13 +693,7 @@ impl Delegate {
         }
     }
 
-    pub fn on_batch(
-        &mut self,
-        batch: CmdBatch,
-        old_value_cb: &OldValueCallback,
-        old_value_cache: &mut OldValueCache,
-        statistics: &mut Statistics,
-    ) -> Result<()> {
+    async fn on_batch(&mut self, batch: CmdBatch, old_value_cb: OldValueCallback) -> Result<()> {
         // Stale CmdBatch, drop it silently.
         if batch.cdc_id != self.handle.id {
             return Ok(());
@@ -719,14 +711,8 @@ impl Delegate {
             }
             if !request.has_admin_request() {
                 let flags = WriteBatchFlags::from_bits_truncate(request.get_header().get_flags());
-                self.sink_data(
-                    index,
-                    request.requests.into(),
-                    flags,
-                    old_value_cb,
-                    old_value_cache,
-                    statistics,
-                )?;
+                self.sink_data(index, request.requests.into(), flags, &old_value_cb)
+                    .await?;
             } else {
                 self.sink_admin(request.take_admin_request(), response.take_admin_response())?;
             }
@@ -834,30 +820,22 @@ impl Delegate {
         Ok(rows)
     }
 
-    fn sink_data(
+    async fn sink_data(
         &mut self,
         index: u64,
         requests: Vec<Request>,
         flags: WriteBatchFlags,
         old_value_cb: &OldValueCallback,
-        old_value_cache: &mut OldValueCache,
-        statistics: &mut Statistics,
     ) -> Result<()> {
         debug_assert_eq!(self.txn_extra_op.load(), TxnExtraOp::ReadOldValue);
-
-        let mut read_old_value = |row: &mut EventRow, read_old_ts| -> Result<()> {
-            let key = Key::from_raw(&row.key).append_ts(row.start_ts.into());
-            let old_value = old_value_cb(key, read_old_ts, old_value_cache, statistics)?;
-            row.old_value = old_value.unwrap_or_default();
-            Ok(())
-        };
 
         let mut rows_builder = RowsBuilder::default();
         rows_builder.is_one_pc = flags.contains(WriteBatchFlags::ONE_PC);
         for mut req in requests {
             match req.get_cmd_type() {
                 CmdType::Put => {
-                    self.sink_put(req.take_put(), &mut rows_builder, &mut read_old_value)?
+                    self.sink_put(req.take_put(), &mut rows_builder, old_value_cb)
+                        .await?
                 }
                 CmdType::Delete => self.sink_delete(req.take_delete(), &mut rows_builder)?,
                 _ => debug!("cdc skip other command";
@@ -973,17 +951,17 @@ impl Delegate {
         Ok(())
     }
 
-    fn sink_put(
+    async fn sink_put(
         &mut self,
         put: PutRequest,
         rows_builder: &mut RowsBuilder,
-        read_old_value: impl FnMut(&mut EventRow, TimeStamp) -> Result<()>,
+        old_value_cb: &OldValueCallback,
     ) -> Result<()> {
         let key_mode = ApiV2::parse_key_mode(put.get_key());
         if key_mode == KeyMode::Raw {
             self.sink_raw_put(put, rows_builder)
         } else {
-            self.sink_txn_put(put, read_old_value, rows_builder)
+            self.sink_txn_put(put, old_value_cb, rows_builder).await
         }
     }
 
@@ -994,12 +972,23 @@ impl Delegate {
         Ok(())
     }
 
-    fn sink_txn_put(
+    async fn sink_txn_put(
         &mut self,
         mut put: PutRequest,
-        mut read_old_value: impl FnMut(&mut EventRow, TimeStamp) -> Result<()>,
+        old_value_cb: &OldValueCallback,
         rows: &mut RowsBuilder,
     ) -> Result<()> {
+        let mut read_old_value = |row: &mut EventRow,
+                                  cache: &mut OldValueCache,
+                                  ts: TimeStamp,
+                                  stats: &mut Statistics|
+         -> Result<()> {
+            let key = Key::from_raw(&row.key).append_ts(row.start_ts.into());
+            let old_value = old_value_cb(key, ts, cache, stats)?;
+            row.old_value = old_value.unwrap_or_default();
+            Ok(())
+        };
+
         match put.cf.as_str() {
             "write" => {
                 let key = Key::from_encoded_slice(&put.key).truncate_ts().unwrap();
@@ -1016,8 +1005,9 @@ impl Delegate {
 
                 if rows.is_one_pc {
                     set_event_row_type(&mut row.v, EventLogType::Committed);
-                    let read_old_ts = TimeStamp::from(row.v.commit_ts).prev();
-                    read_old_value(&mut row.v, read_old_ts)?;
+                    let old_ts = TimeStamp::from(row.v.commit_ts).prev();
+                    let mut cache = self.old_value_cache.lock().await;
+                    read_old_value(&mut row.v, &mut *cache, old_ts, &mut self.old_value_stats)?;
                 }
             }
             "lock" => {
@@ -1036,8 +1026,9 @@ impl Delegate {
                 let mini_lock = MiniLock::new(row.v.start_ts, txn_source, generation);
                 row.lock_count_modify = self.push_lock(key, mini_lock)?;
 
-                let read_old_ts = std::cmp::max(for_update_ts, row.v.start_ts.into());
-                read_old_value(&mut row.v, read_old_ts)?;
+                let old_ts = std::cmp::max(for_update_ts, row.v.start_ts.into());
+                let mut cache = self.old_value_cache.lock().await;
+                read_old_value(&mut row.v, &mut *cache, old_ts, &mut self.old_value_stats)?;
             }
             "" | "default" => {
                 let key = Key::from_encoded(put.take_key()).truncate_ts().unwrap();
@@ -1143,7 +1134,7 @@ impl Delegate {
     }
 
     pub fn meta(&self) -> DelegateMeta {
-        DelegateMeta{
+        DelegateMeta {
             region_id: self.region_id,
             handle: self.handle.clone(),
             sched: self.sched.clone(),
@@ -1155,31 +1146,28 @@ impl Delegate {
             match task {
                 DelegateTask::Subscribe { downstream } => {
                     self.on_subscribe_downstream(downstream);
-                },
+                }
                 DelegateTask::ObservedEvent { cmds, old_value_cb } => {
                     fail_point!("cdc_before_handle_multi_batch", |_| {});
-                    self.memory_quota.free( cmds.size());
-                    let mut statistics = Statistics::default();
-                    let mut cache; // TODO: lock the global old value cache.
-                    if let Err(e) = self.on_batch(
-                        cmds,
-                        &old_value_cb,
-                        &mut cache,
-                        &mut statistics,
-                    ) {
+                    self.memory_quota.free(cmds.size());
+                    if let Err(e) = self.on_batch(cmds, old_value_cb).await {
                         self.on_stop(e);
                     }
-                    flush_oldvalue_stats(&statistics, TAG_DELTA_CHANGE);
-                },
+                    // flush_oldvalue_stats(&statistics, TAG_DELTA_CHANGE);
+                }
                 DelegateTask::Stop { err } => {
-                    self.on_stop(err);  
-                },
+                    self.on_stop(err);
+                }
                 DelegateTask::StopDownstream => {}
                 DelegateTask::MinTs { min_ts, current_ts } => {
                     // TODO: fix it.
                     // self.on_min_ts(min_ts, current_ts);
                 }
-                DelegateTask::FinishScanLocks { observe_id, region, locks } => self.on_finish_scan_locks(observe_id, region, locks),
+                DelegateTask::FinishScanLocks {
+                    observe_id,
+                    region,
+                    locks,
+                } => self.on_finish_scan_locks(observe_id, region, locks),
                 // The result of ChangeCmd should be returned from CDC Endpoint to ensure
                 // the downstream switches to Normal after the previous commands was sunk.
                 DelegateTask::InitDownstream {
@@ -1188,9 +1176,10 @@ impl Delegate {
                     build_resolver,
                     incremental_scan_barrier,
                     cb,
-                } =>  {
+                } => {
                     self.on_init_downstream(
-                        observe_id, downstream_id,
+                        observe_id,
+                        downstream_id,
                         build_resolver,
                         incremental_scan_barrier,
                         cb,
@@ -1203,11 +1192,11 @@ impl Delegate {
     fn on_subscribe_downstream(&mut self, downstream: Downstream) {
         if let Err((err, downstream)) = self.subscribe(downstream) {
             let err_event = err.into_error_event(self.region_id);
-            self.deregister_downstream(err_event, &downstream);
+            self.deregister_downstream(err_event, downstream);
         }
     }
 
-    fn deregister_downstream(&mut self, err_event: ErrorEvent, downstream: &Downstream) {
+    fn deregister_downstream(&mut self, err_event: ErrorEvent, downstream: Downstream) {
         downstream.state.store(DownstreamState::Stopped);
         if let Err(err) = downstream.sink_error_event(self.region_id, err_event) {
             warn!("cdc send region error failed";
@@ -1220,27 +1209,33 @@ impl Delegate {
                 "downstream_id" => ?downstream.id, "downstream" => ?downstream.peer,
                 "request_id" => ?downstream.req_id, "conn_id" => ?downstream.conn_id);
         }
-        let _ = self.feedbacks.schedule_force(Task::Deregister(Deregister::Downstream{
-            conn_id: downstream.conn_id, 
-            request_id: downstream.req_id,
-            region_id: self.region_id,
-            downstream_id: downstream.id,
-            err: None,
-        }));
+        let _ = self
+            .feedbacks
+            .schedule_force(Task::Deregister(Deregister::Downstream {
+                conn_id: downstream.conn_id,
+                request_id: downstream.req_id,
+                region_id: self.region_id,
+                downstream_id: downstream.id,
+                err: None,
+            }));
     }
-
 
     fn on_stop(&mut self, err: Error) {
         info!("cdc met region error"; "region_id" => self.region_id, "error" => ?err);
         self.mark_failed();
         self.stop_observing();
         let err_event = err.into_error_event(self.region_id);
-        for downstream in &self.downstreams {
+        for downstream in std::mem::take(&mut self.downstreams) {
             self.deregister_downstream(err_event.clone(), downstream);
         }
     }
 
-    fn on_finish_scan_locks(&mut self, observe_id: ObserveId, region: Region, locks: BTreeMap<Key, MiniLock>) {
+    fn on_finish_scan_locks(
+        &mut self,
+        observe_id: ObserveId,
+        region: Region,
+        locks: BTreeMap<Key, MiniLock>,
+    ) {
         if self.handle.id != observe_id {
             debug!("cdc stale region finish scan locks";
                 "region_id" => region.get_id(),
@@ -1258,7 +1253,7 @@ impl Delegate {
             Err(err) => self.on_stop(err),
         }
     }
-    
+
     fn on_init_downstream(
         &mut self,
         observe_id: ObserveId,
@@ -1278,8 +1273,7 @@ impl Delegate {
             build_resolver.store(true, Ordering::Release);
         }
         if let Some(d) = self.downstream(downstream_id) {
-            let sink = d.sink.as_mut().unwrap();
-            if let Err(e) = sink.unbounded_send(incremental_scan_barrier, true) {
+            if let Err(e) = d.sink.unbounded_send(incremental_scan_barrier, true) {
                 error!("cdc failed to schedule barrier for delta before delta scan";
                     "region_id" => self.region_id,
                     "observe_id" => ?observe_id,
@@ -1575,7 +1569,9 @@ pub enum DelegateTask {
         cmds: CmdBatch,
         old_value_cb: OldValueCallback,
     },
-    Stop { err: Error },
+    Stop {
+        err: Error,
+    },
     StopDownstream,
     MinTs {
         min_ts: TimeStamp,

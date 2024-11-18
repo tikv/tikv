@@ -329,10 +329,11 @@ impl Service {
         peer: &str,
         request: ChangeDataRequest,
         conn_id: ConnId,
+        sink: &Sink,
     ) -> Result<(), String> {
         match request.request {
             None | Some(ChangeDataRequest_oneof_request::Register(_)) => {
-                Self::handle_register(scheduler, peer, request, conn_id)
+                Self::handle_register(scheduler, peer, request, conn_id, sink.clone())
             }
             Some(ChangeDataRequest_oneof_request::Deregister(_)) => {
                 Self::handle_deregister(scheduler, request, conn_id)
@@ -346,6 +347,7 @@ impl Service {
         peer: &str,
         request: ChangeDataRequest,
         conn_id: ConnId,
+        sink: Sink,
     ) -> Result<(), String> {
         let observed_range = ObservedRange::new(request.start_key.clone(), request.end_key.clone())
             .unwrap_or_else(|e| {
@@ -368,6 +370,7 @@ impl Service {
             request.kv_api,
             request.filter_loop,
             observed_range,
+            sink,
         );
         let task = Task::Register {
             request,
@@ -414,14 +417,13 @@ impl Service {
         &mut self,
         ctx: RpcContext<'_>,
         stream: RequestStream<ChangeDataRequest>,
-        mut sink: DuplexSink<ChangeDataEvent>,
+        mut rpc_sink: DuplexSink<ChangeDataEvent>,
         event_feed_v2: bool,
     ) {
-        sink.enhance_batch(true);
+        rpc_sink.enhance_batch(true);
         let conn_id = ConnId::new();
-        let (event_sink, mut event_drain) =
-            channel(conn_id, CDC_CHANNLE_CAPACITY, self.memory_quota.clone());
-        let conn = Conn::new(conn_id, event_sink, ctx.peer());
+        let (sink, mut drain) = channel(conn_id, CDC_CHANNLE_CAPACITY, self.memory_quota.clone());
+        let conn = Conn::new(conn_id, sink.clone(), ctx.peer());
         let mut explicit_features = vec![];
 
         if event_feed_v2 {
@@ -432,7 +434,7 @@ impl Service {
                     error!("cdc connection with bad headers"; "downstream" => ?peer, "headers" => &e);
                     ctx.spawn(async move {
                         let status = RpcStatus::with_message(RpcStatusCode::UNIMPLEMENTED, e);
-                        if let Err(e) = sink.fail(status).await {
+                        if let Err(e) = rpc_sink.fail(status).await {
                             error!("cdc failed to send error"; "downstream" => ?peer, "error" => ?e);
                         }
                     });
@@ -448,7 +450,7 @@ impl Service {
             error!("cdc connection initiate failed"; "downstream" => ?peer, "error" => ?e);
             ctx.spawn(async move {
                 let status = RpcStatus::with_message(RpcStatusCode::UNKNOWN, format!("{:?}", e));
-                if let Err(e) = sink.fail(status).await {
+                if let Err(e) = rpc_sink.fail(status).await {
                     error!("cdc failed to send error"; "downstream" => ?peer, "error" => ?e);
                 }
             });
@@ -463,10 +465,10 @@ impl Service {
                 // Get version from the first request in the stream.
                 let version = Self::parse_version_from_request_header(&request, &peer);
                 Self::set_conn_version(&scheduler, conn_id, version, explicit_features)?;
-                Self::handle_request(&scheduler, &peer, request, conn_id)?;
+                Self::handle_request(&scheduler, &peer, request, conn_id, &sink)?;
             }
             while let Some(request) = stream.try_next().await? {
-                Self::handle_request(&scheduler, &peer, request, conn_id)?;
+                Self::handle_request(&scheduler, &peer, request, conn_id, &sink)?;
             }
             let deregister = Deregister::Conn(conn_id);
             if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
@@ -489,7 +491,7 @@ impl Service {
         workers.spawn(async move {
             #[cfg(feature = "failpoints")]
             sleep_before_drain_change_event().await;
-            if let Err(e) = event_drain.forward(&mut sink).await {
+            if let Err(e) = drain.forward(&mut rpc_sink).await {
                 warn!("cdc send failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
             } else {
                 info!("cdc send closed"; "downstream" => peer, "conn_id" => ?conn_id);

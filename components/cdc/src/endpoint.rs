@@ -17,8 +17,7 @@ use concurrency_manager::ConcurrencyManager;
 use crossbeam::atomic::AtomicCell;
 use engine_traits::KvEngine;
 use fail::fail_point;
-use futures::compat::Future01CompatExt;
-use futures::channel::mpsc;
+use futures::{channel::mpsc, compat::Future01CompatExt, executor::block_on, lock::Mutex};
 use grpcio::Environment;
 use kvproto::{
     cdcpb::{
@@ -45,7 +44,7 @@ use tikv::{
 use tikv_util::{
     debug, defer, error, impl_display_as_debug, info,
     memory::MemoryQuota,
-    mpsc::{bounded},
+    mpsc::bounded,
     slow_log,
     sys::thread::ThreadBuildWrapper,
     time::{Instant, Limiter, SlowTimer},
@@ -61,7 +60,10 @@ use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler};
 
 use crate::{
     channel::{CdcEvent, SendError},
-    delegate::{on_init_downstream, Delegate, DelegateMeta, DelegateTask, Downstream, DownstreamId, DownstreamState, MiniLock},
+    delegate::{
+        on_init_downstream, Delegate, DelegateMeta, DelegateTask, Downstream, DownstreamId,
+        DownstreamState, MiniLock,
+    },
     initializer::Initializer,
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
@@ -490,7 +492,7 @@ pub struct Endpoint<T, E, S> {
     max_scan_batch_size: usize,
     sink_memory_quota: Arc<MemoryQuota>,
 
-    old_value_cache: OldValueCache,
+    old_value_cache: Arc<Mutex<OldValueCache>>,
 
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
 
@@ -606,7 +608,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             max_scan_batch_size,
             sink_memory_quota,
 
-            old_value_cache,
+            old_value_cache: Arc::new(Mutex::new(old_value_cache)),
             causal_ts_provider,
 
             current_ts: TimeStamp::zero(),
@@ -643,8 +645,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         // Maybe the cache will be lost due to smaller capacity,
         // but it is acceptable.
         if change.get("old_value_cache_memory_quota").is_some() {
-            self.old_value_cache
-                .resize(self.config.old_value_cache_memory_quota);
+            let mut cache = block_on(self.old_value_cache.lock());
+            cache.resize(self.config.old_value_cache_memory_quota);
         }
 
         // Maybe the limit will be exceeded for a while after the concurrency becomes
@@ -766,12 +768,13 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 observe_id,
                 err,
             } => {
-                // let mut delegate = match self.capture_regions.entry(region_id) {
+                // let mut delegate = match
+                // self.capture_regions.entry(region_id) {
                 //     HashMapEntry::Vacant(_) => return,
                 //     HashMapEntry::Occupied(x) => {
-                //         // To avoid ABA problem, we must check the unique ObserveId.
-                //         if x.get().handle.id != observe_id {
-                //             return;
+                //         // To avoid ABA problem, we must check the unique
+                // ObserveId.         if x.get().handle.id !=
+                // observe_id {             return;
                 //         }
                 //         x.remove()
                 //     }
@@ -816,7 +819,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 return;
             }
         };
-        downstream.set_sink(conn.get_sink().clone());
 
         // Check if the cluster id matches if supported.
         if conn.features().contains(FeatureGate::VALIDATE_CLUSTER_ID) {
@@ -893,17 +895,30 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             return;
         }
 
-
         let delegate_meta = match self.capture_regions.entry(region_id) {
             HashMapEntry::Occupied(e) => e.get().clone(),
             HashMapEntry::Vacant(e) => {
-                let d = Delegate::new(sched.clone(), region_id, self.sink_memory_quota.clone(), txn_extra_op);
+                let mut d = Delegate::new(
+                    sched.clone(),
+                    region_id,
+                    self.sink_memory_quota.clone(),
+                    self.old_value_cache.clone(),
+                    txn_extra_op,
+                );
                 let meta = d.meta();
-                d.sched.unbounded_send(DelegateTask::Subscribe { downstream }).unwrap();
+                d.sched
+                    .unbounded_send(DelegateTask::Subscribe { downstream })
+                    .unwrap();
                 self.workers.spawn(d.handle_tasks());
 
-                let old_ob = self.observer.subscribe_region(region_id, d.handle.id, d.sched.clone());
-                assert!( old_ob.is_none(), "region {} should never be observed twice", region_id);
+                let old_ob =
+                    self.observer
+                        .subscribe_region(region_id, d.handle.id, d.sched.clone());
+                assert!(
+                    old_ob.is_none(),
+                    "region {} should never be observed twice",
+                    region_id
+                );
                 e.insert(meta.clone());
                 meta
             }
@@ -966,42 +981,42 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         });
     }
 
-    /********************
-    pub fn on_multi_batch(&mut self, multi: Vec<CmdBatch>, old_value_cb: OldValueCallback) {
-        fail_point!("cdc_before_handle_multi_batch", |_| {});
-        let size = multi.iter().map(|b| b.size()).sum();
-        self.sink_memory_quota.free(size);
-        let mut statistics = Statistics::default();
-        for batch in multi {
-            let region_id = batch.region_id;
-            let mut deregister = None;
-            if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
-                if delegate.has_failed() {
-                    // Skip the batch if the delegate has failed.
-                    continue;
-                }
-                if let Err(e) = delegate.on_batch(
-                    batch,
-                    &old_value_cb,
-                    &mut self.old_value_cache,
-                    &mut statistics,
-                ) {
-                    delegate.mark_failed();
-                    // Delegate has error, deregister the delegate.
-                    deregister = Some(Deregister::Delegate {
-                        region_id,
-                        observe_id: delegate.handle.id,
-                        err: e,
-                    });
-                }
-            }
-            if let Some(deregister) = deregister {
-                self.on_deregister(deregister);
-            }
-        }
-        flush_oldvalue_stats(&statistics, TAG_DELTA_CHANGE);
-    }
-    ********************/
+    /// ******************
+    /// pub fn on_multi_batch(&mut self, multi: Vec<CmdBatch>, old_value_cb:
+    /// OldValueCallback) { fail_point!("cdc_before_handle_multi_batch", |_|
+    /// {}); let size = multi.iter().map(|b| b.size()).sum();
+    /// self.sink_memory_quota.free(size);
+    /// let mut statistics = Statistics::default();
+    /// for batch in multi {
+    /// let region_id = batch.region_id;
+    /// let mut deregister = None;
+    /// if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
+    /// if delegate.has_failed() {
+    /// Skip the batch if the delegate has failed.
+    /// continue;
+    /// }
+    /// if let Err(e) = delegate.on_batch(
+    /// batch,
+    /// &old_value_cb,
+    /// &mut self.old_value_cache,
+    /// &mut statistics,
+    /// ) {
+    /// delegate.mark_failed();
+    /// Delegate has error, deregister the delegate.
+    /// deregister = Some(Deregister::Delegate {
+    /// region_id,
+    /// observe_id: delegate.handle.id,
+    /// err: e,
+    /// });
+    /// }
+    /// }
+    /// if let Some(deregister) = deregister {
+    /// self.on_deregister(deregister);
+    /// }
+    /// }
+    /// flush_oldvalue_stats(&statistics, TAG_DELTA_CHANGE);
+    /// }
+    /// *****************
 
     fn finish_scan_locks(
         &mut self,
@@ -1009,28 +1024,28 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         region: Region,
         locks: BTreeMap<Key, MiniLock>,
     ) {
-        /*********************
-        *********************/
+        /// *******************
+        /// ******************
     }
 
     fn on_min_ts(&mut self, regions: Vec<u64>, min_ts: TimeStamp, current_ts: TimeStamp) {
-        /*************
-        self.current_ts = current_ts;
-        self.min_resolved_ts = current_ts;
-
-        let mut advance = Advance::default();
-        for region_id in regions {
-            if let Some(d) = self.capture_regions.get_mut(&region_id) {
-                d.on_min_ts(min_ts, current_ts, &self.connections, &mut advance);
-            }
-        }
-
-        self.resolved_region_count = advance.scan_finished;
-        self.unresolved_region_count = advance.blocked_on_scan;
-        advance.emit_resolved_ts(&self.connections);
-        self.min_resolved_ts = advance.min_resolved_ts.into();
-        self.min_ts_region_id = advance.min_ts_region_id;
-        *************/
+        /// ***********
+        /// self.current_ts = current_ts;
+        /// self.min_resolved_ts = current_ts;
+        ///
+        /// let mut advance = Advance::default();
+        /// for region_id in regions {
+        /// if let Some(d) = self.capture_regions.get_mut(&region_id) {
+        /// d.on_min_ts(min_ts, current_ts, &self.connections, &mut advance);
+        /// }
+        /// }
+        ///
+        /// self.resolved_region_count = advance.scan_finished;
+        /// self.unresolved_region_count = advance.blocked_on_scan;
+        /// advance.emit_resolved_ts(&self.connections);
+        /// self.min_resolved_ts = advance.min_resolved_ts.into();
+        /// self.min_ts_region_id = advance.min_ts_region_id;
+        /// **********
     }
 
     fn register_min_ts_event(&self, mut leader_resolver: LeadershipResolver, event_time: Instant) {
@@ -1228,9 +1243,11 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
             }
             Task::TxnExtra(txn_extra) => {
                 let size = txn_extra.size();
+                let mut cache = block_on(self.old_value_cache.lock());
                 for (k, v) in txn_extra.old_values {
-                    self.old_value_cache.insert(k, v);
+                    cache.insert(k, v);
                 }
+                drop(cache);
                 self.sink_memory_quota.free(size);
             }
             Task::Validate(validate) => match validate {
@@ -1238,7 +1255,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
                     // validate(self.capture_regions.get(&region_id));
                 }
                 Validate::OldValueCache(validate) => {
-                    validate(&self.old_value_cache);
+                    let cache = block_on(self.old_value_cache.lock());
+                    validate(&*cache);
                 }
             },
             Task::ChangeConfig(change) => self.on_change_cfg(change),
@@ -1278,7 +1296,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
         self.current_ts = TimeStamp::max();
         self.min_ts_region_id = 0;
 
-        self.old_value_cache.flush_metrics();
+        block_on(self.old_value_cache.lock()).flush_metrics();
         CDC_SINK_BYTES.set(self.sink_memory_quota.in_use() as i64);
     }
 
