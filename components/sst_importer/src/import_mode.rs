@@ -11,7 +11,7 @@ use std::{
 use engine_traits::{CfOptions, DbOptions, KvEngine};
 use futures_util::compat::Future01CompatExt;
 use kvproto::import_sstpb::*;
-use tikv_util::{resizable_threadpool::RuntimeHandle, timer::GLOBAL_TIMER_HANDLE};
+use tikv_util::{resizable_threadpool::RcRuntime, timer::GLOBAL_TIMER_HANDLE};
 
 use super::{Config, Result};
 
@@ -88,7 +88,7 @@ impl ImportModeSwitcher {
     }
 
     // start_resizable_threads only serves for resizable runtime
-    pub fn start_resizable_threads<E: KvEngine>(&self, executor: &RuntimeHandle, db: E) {
+    pub fn start_resizable_threads<E: KvEngine>(&self, executor: &RcRuntime, db: E) {
         // spawn a background future to put TiKV back into normal mode after timeout
         let inner = self.inner.clone();
         let switcher = Arc::downgrade(&inner);
