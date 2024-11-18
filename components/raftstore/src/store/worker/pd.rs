@@ -2003,7 +2003,7 @@ where
             }
         };
         let msg = StoreMsg::LatencyInspect {
-            factor: InspectFactor::RaftDisk,
+            factor,
             send_time: TiInstant::now(),
             inspector,
         };
