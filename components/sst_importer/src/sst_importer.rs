@@ -49,7 +49,10 @@ use txn_types::{Key, TimeStamp, WriteRef};
 
 use crate::{
     caching::cache_map::{CacheMap, ShareOwned},
-    hooking::{AfterIngestedCtx, BeforeProposeIngestCtx, LocatedSst, NopHooks, SharedImportHook},
+    hooking::{
+        AfterIngestedCtx, BeforeProposeIngestCtx, ImportHook, ImportHookWithInitialize, LocatedSst,
+        NopHooks, SharedImportHook,
+    },
     import_file::{ImportDir, ImportFile},
     import_mode::{ImportModeSwitcher, RocksDbMetricsFn},
     import_mode2::{HashRange, ImportModeSwitcherV2},
@@ -235,7 +238,15 @@ impl<E: KvEngine> SstImporter<E> {
     }
 
     pub fn replace_hooks(&mut self, hook: SharedImportHook) {
-        self.hooks = hook
+        self.hooks = hook;
+    }
+
+    pub fn replace_hooks_with_init<H>(&mut self, hook: Arc<H>)
+    where
+        H: ImportHook + ImportHookWithInitialize + Send + Sync,
+    {
+        Arc::clone(&hook).init(self._download_rt.handle());
+        self.hooks = hook as _;
     }
 
     pub fn ranges_enter_import_mode(&self, ranges: Vec<Range>) {

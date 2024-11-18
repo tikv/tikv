@@ -5,6 +5,7 @@ use std::{any::Any, marker::PhantomData, path::PathBuf, sync::Arc};
 use encryption::DataKeyManager;
 use futures_util::{future::BoxFuture, lock::OwnedMutexGuard};
 use kvproto::import_sstpb::SstMeta;
+use tokio::runtime::Handle;
 
 use crate::errors::Result;
 
@@ -42,6 +43,15 @@ pub trait ImportHook: Any {
         cx: BeforeProposeIngestCtx<'b>,
     ) -> BoxFuture<'r, Result<()>>;
     fn after_ingested<'a: 'r, 'b: 'r, 'r>(&'a self, cx: AfterIngestedCtx<'b>) -> BoxFuture<'r, ()>;
+}
+
+/// HookWithInitialize is an extension of hooks that allows the hook to do
+/// something when it was registered.
+///
+/// This only takes effect when loaded with
+/// [`SstImporter::replace_hooks_with_init`].
+pub trait ImportHookWithInitialize {
+    fn init(self: Arc<Self>, tokio: &Handle);
 }
 
 #[derive(Default)]
