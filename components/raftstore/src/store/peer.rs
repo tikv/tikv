@@ -2342,18 +2342,16 @@ where
                     // ensure that a leader is elected promptly for the newly
                     // created Raft group, minimizing availability impact (e.g.
                     // #12410 and #17602.).
-                    if let Some(new_regions) = &self.uncampaigned_new_regions {
-                        for new_region in &new_regions.0 {
+                    if let Some((new_regions, _)) = self.uncampaigned_new_regions.take() {
+                        for new_region in new_regions {
                             let _ = ctx.router.send(
-                                *new_region,
+                                new_region,
                                 PeerMsg::CasualMessage(Box::new(CasualMessage::Campaign {
                                     notify_by_parent: true,
                                 })),
                             );
                         }
                     }
-                    // Clear the uncampaigned list.
-                    self.uncampaigned_new_regions = None;
                 }
                 StateRole::Follower => {
                     self.leader_lease.expire();
