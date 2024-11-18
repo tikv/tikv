@@ -985,6 +985,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
 
     pub fn on_multi_batch(&mut self, multi: Vec<CmdBatch>, old_value_cb: OldValueCallback) {
         fail_point!("cdc_before_handle_multi_batch", |_| {});
+        let size = multi.iter().map(|b| b.size()).sum();
+        self.sink_memory_quota.free(size);
         let mut statistics = Statistics::default();
         for batch in multi {
             let region_id = batch.region_id;
@@ -1273,9 +1275,11 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
                 cb();
             }
             Task::TxnExtra(txn_extra) => {
+                let size = txn_extra.size();
                 for (k, v) in txn_extra.old_values {
                     self.old_value_cache.insert(k, v);
                 }
+                self.sink_memory_quota.free(size);
             }
             Task::Validate(validate) => match validate {
                 Validate::Region(region_id, validate) => {
@@ -1334,16 +1338,27 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
 
 pub struct CdcTxnExtraScheduler {
     scheduler: Scheduler<Task>,
+    memory_quota: Arc<MemoryQuota>,
 }
 
 impl CdcTxnExtraScheduler {
-    pub fn new(scheduler: Scheduler<Task>) -> CdcTxnExtraScheduler {
-        CdcTxnExtraScheduler { scheduler }
+    pub fn new(scheduler: Scheduler<Task>, memory_quota: Arc<MemoryQuota>) -> CdcTxnExtraScheduler {
+        CdcTxnExtraScheduler {
+            scheduler,
+            memory_quota,
+        }
     }
 }
 
 impl TxnExtraScheduler for CdcTxnExtraScheduler {
     fn schedule(&self, txn_extra: TxnExtra) {
+        let size = txn_extra.size();
+        if let Err(e) = self.memory_quota.alloc(size) {
+            CDC_DROP_TXN_EXTRA_TASKS_COUNT.inc();
+            debug!("cdc schedule txn extra failed on alloc memory quota";
+                "in_use" => self.memory_quota.in_use(), "err" => ?e);
+            return;
+        }
         if let Err(e) = self.scheduler.schedule(Task::TxnExtra(txn_extra)) {
             error!("cdc schedule txn extra failed"; "err" => ?e);
         }
@@ -1477,6 +1492,8 @@ mod tests {
             region_read_progress,
             store_resolver_gc_interval,
         );
+
+        let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
         let ep = Endpoint::new(
             DEFAULT_CLUSTER_ID,
             cfg,
@@ -1493,12 +1510,12 @@ mod tests {
                     .kv_engine()
                     .unwrap()
             })),
-            CdcObserver::new(task_sched),
+            CdcObserver::new(task_sched, memory_quota.clone()),
             Arc::new(StdMutex::new(store_meta)),
             ConcurrencyManager::new(1.into()),
             env,
             security_mgr,
-            Arc::new(MemoryQuota::new(usize::MAX)),
+            memory_quota,
             causal_ts_provider,
         );
 

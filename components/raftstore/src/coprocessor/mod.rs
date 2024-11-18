@@ -295,8 +295,7 @@ pub struct RoleChange {
 }
 
 impl RoleChange {
-    #[cfg(any(test, feature = "testexport"))]
-    pub fn new(state: StateRole) -> Self {
+    pub fn new_for_test(state: StateRole) -> Self {
         RoleChange {
             state,
             leader_id: raft::INVALID_ID,
@@ -609,6 +608,11 @@ pub trait ReadIndexObserver: Coprocessor {
 pub trait UpdateSafeTsObserver: Coprocessor {
     /// Hook after update self safe_ts and received leader safe_ts.
     fn on_update_safe_ts(&self, _: u64, _: u64, _: u64) {}
+}
+
+pub trait DestroyPeerObserver: Coprocessor {
+    /// Hook to call when destroying a peer.
+    fn on_destroy_peer(&self, _: &Region) {}
 }
 
 #[cfg(test)]

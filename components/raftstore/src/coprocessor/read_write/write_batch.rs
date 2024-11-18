@@ -2,7 +2,8 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use engine_traits::{CacheRegion, Mutable, Result, WriteBatch, WriteOptions, CF_DEFAULT};
+use engine_traits::{Mutable, Result, WriteBatch, WriteOptions, CF_DEFAULT};
+use kvproto::metapb;
 
 pub trait WriteBatchObserver: Send {
     fn create_observable_write_batch(&self) -> Box<dyn ObservableWriteBatch>;
@@ -12,11 +13,9 @@ pub trait WriteBatchObserver: Send {
 /// additional methods to specify which region the write operations belong to.
 // TODO: May be we can unified it with `CmdObserver`?
 pub trait ObservableWriteBatch: WriteBatch + Send {
-    // It declares that the following consecutive write will be within this
-    // region.
-    // TODO: move `prepare_for_region` from `WriteBatch` to here.
-    // fn prepare_for_region(&mut self, _: CacheRegion);
-
+    /// It declares that the following consecutive write will be within this
+    /// region.
+    fn prepare_for_region(&mut self, region: &metapb::Region);
     /// Commit the WriteBatch with the given options and sequence number.
     fn write_opt_seq(&mut self, opts: &WriteOptions, seq_num: u64);
     /// It is called after a write operation is finished.
@@ -36,6 +35,12 @@ impl<WB> WriteBatchWrapper<WB> {
         Self {
             write_batch,
             observable_write_batch,
+        }
+    }
+
+    pub fn prepare_for_region(&mut self, region: &metapb::Region) {
+        if let Some(w) = self.observable_write_batch.as_mut() {
+            w.prepare_for_region(region)
         }
     }
 }
@@ -112,12 +117,6 @@ impl<WB: WriteBatch> WriteBatch for WriteBatchWrapper<WB> {
     fn merge(&mut self, _: Self) -> Result<()> {
         unimplemented!("WriteBatchWrapper does not support merge")
     }
-
-    fn prepare_for_region(&mut self, region: CacheRegion) {
-        if let Some(w) = self.observable_write_batch.as_mut() {
-            w.prepare_for_region(region)
-        }
-    }
 }
 
 impl<WB: WriteBatch> Mutable for WriteBatchWrapper<WB> {
@@ -150,8 +149,6 @@ impl<WB: WriteBatch> Mutable for WriteBatchWrapper<WB> {
     }
 
     fn delete_range(&mut self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
-        // delete_range in range cache engine means eviction -- all ranges overlapped
-        // with [begin_key, end_key] will be evicted.
         if let Some(w) = self.observable_write_batch.as_mut() {
             w.delete_range_cf(CF_DEFAULT, begin_key, end_key)?;
         }
@@ -159,8 +156,6 @@ impl<WB: WriteBatch> Mutable for WriteBatchWrapper<WB> {
     }
 
     fn delete_range_cf(&mut self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
-        // delete_range in range cache engine means eviction -- all ranges overlapped
-        // with [begin_key, end_key] will be evicted.
         if let Some(w) = self.observable_write_batch.as_mut() {
             w.delete_range_cf(cf, begin_key, end_key)?;
         }

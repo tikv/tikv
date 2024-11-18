@@ -16,7 +16,7 @@ use std::{
     u64,
 };
 
-use batch_system::{BasicMailbox, Fsm};
+use batch_system::{BasicMailbox, Fsm, FsmType};
 use collections::{HashMap, HashSet};
 use engine_traits::{
     Engines, KvEngine, RaftEngine, RaftLogBatch, SstMetaInfo, WriteBatchExt, CF_LOCK, CF_RAFT,
@@ -133,6 +133,10 @@ enum DelayReason {
 /// in most case.
 const MAX_REGIONS_IN_ERROR: usize = 10;
 const REGION_SPLIT_SKIP_MAX_COUNT: usize = 3;
+/// Limits the request size that can be batched in a single RaftCmdRequest.
+// todo: this fugure maybe changed to a more suitable value.
+#[allow(clippy::identity_op)]
+const MAX_BATCH_SIZE_LIMIT: u64 = 1 * 1024 * 1024;
 const UNSAFE_RECOVERY_STATE_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub const MAX_PROPOSAL_SIZE_RATIO: f64 = 0.4;
@@ -255,7 +259,7 @@ where
     pub fn create(
         store_id: u64,
         cfg: &Config,
-        region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+        region_scheduler: Scheduler<RegionTask>,
         raftlog_fetch_scheduler: Scheduler<ReadTask<EK>>,
         engines: Engines<EK, ER>,
         region: &metapb::Region,
@@ -317,7 +321,7 @@ where
     pub fn replicate(
         store_id: u64,
         cfg: &Config,
-        region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+        region_scheduler: Scheduler<RegionTask>,
         raftlog_fetch_scheduler: Scheduler<ReadTask<EK>>,
         engines: Engines<EK, ER>,
         region_id: u64,
@@ -442,8 +446,13 @@ where
         // No batch request whose size exceed 20% of raft_entry_max_size,
         // so total size of request in batch_raft_request would not exceed
         // (40% + 20%) of raft_entry_max_size
+        // Also, to prevent the write batch size from becoming too large when
+        // raft_entry_max_size is set too high (all requests in a RaftCmdRequest will be
+        // written in one RocksDB write batch), we use MAX_APPLY_BATCH_SIZE to
+        // limit the number of requests batched within a single RaftCmdRequest.
         if req.get_requests().is_empty()
             || req_size as u64 > (cfg.raft_entry_max_size.0 as f64 * 0.2) as u64
+            || (self.batch_req_size + req_size as u64) > MAX_BATCH_SIZE_LIMIT
         {
             return false;
         }
@@ -575,6 +584,8 @@ where
     ER: RaftEngine,
 {
     type Message = PeerMsg<EK>;
+
+    const FSM_TYPE: FsmType = FsmType::store;
 
     #[inline]
     fn is_stopped(&self) -> bool {
@@ -761,22 +772,27 @@ where
         // Propose batch request which may be still waiting for more raft-command
         if should_propose && !force_delay_fp() {
             self.propose_pending_batch_raft_command();
-        } else if self.fsm.batch_req_builder.has_proposed_cb
-            && self.fsm.batch_req_builder.propose_checked.is_none()
-            && let Some(cmd) = self.fsm.batch_req_builder.request.take()
-        {
-            // We are delaying these requests to next loop. Try to fulfill their
-            // proposed callback early.
-            self.fsm.batch_req_builder.propose_checked = Some(false);
-            if let Ok(None) = self.pre_propose_raft_command(&cmd) {
-                if self.fsm.peer.will_likely_propose(&cmd) {
-                    self.fsm.batch_req_builder.propose_checked = Some(true);
-                    for cb in &mut self.fsm.batch_req_builder.callbacks {
-                        cb.invoke_proposed();
+        } else {
+            if self.fsm.batch_req_builder.has_proposed_cb
+                && self.fsm.batch_req_builder.propose_checked.is_none()
+                && let Some(cmd) = self.fsm.batch_req_builder.request.take()
+            {
+                // We are delaying these requests to next loop. Try to fulfill their
+                // proposed callback early.
+                self.fsm.batch_req_builder.propose_checked = Some(false);
+                if let Ok(None) = self.pre_propose_raft_command(&cmd) {
+                    if self.fsm.peer.will_likely_propose(&cmd) {
+                        self.fsm.batch_req_builder.propose_checked = Some(true);
+                        for cb in &mut self.fsm.batch_req_builder.callbacks {
+                            cb.invoke_proposed();
+                        }
                     }
                 }
+                self.fsm.batch_req_builder.request = Some(cmd);
             }
-            self.fsm.batch_req_builder.request = Some(cmd);
+            if self.fsm.batch_req_builder.request.is_some() {
+                self.ctx.raft_metrics.ready.propose_delay.inc();
+            }
         }
     }
 
@@ -2663,21 +2679,25 @@ where
                 && !is_initialized_peer
                 && msg_type == target_msg_type
         };
+        #[cfg(feature = "failpoints")]
         fail_point!(
             "on_snap_msg_1000_2",
             fp_enable(MessageType::MsgSnapshot),
             |_| Ok(())
         );
+        #[cfg(feature = "failpoints")]
         fail_point!(
             "on_vote_msg_1000_2",
             fp_enable(MessageType::MsgRequestVote),
             |_| Ok(())
         );
+        #[cfg(feature = "failpoints")]
         fail_point!(
             "on_append_msg_1000_2",
             fp_enable(MessageType::MsgAppend),
             |_| Ok(())
         );
+        #[cfg(feature = "failpoints")]
         fail_point!(
             "on_heartbeat_msg_1000_2",
             fp_enable(MessageType::MsgHeartbeat),
@@ -3689,6 +3709,9 @@ where
         }
     }
 
+    // NOTE: This method is used by both the leader and the follower.
+    // Both the request and response for transfer-leader share the MessageType
+    // `MsgTransferLeader`.
     fn on_transfer_leader_msg(&mut self, msg: &eraftpb::Message, peer_disk_usage: DiskUsage) {
         // log_term is set by original leader, represents the term last log is written
         // in, which should be equal to the original leader's term.
@@ -3725,6 +3748,7 @@ where
                             "region_id" => self.fsm.region_id(),
                             "peer_id" => self.fsm.peer_id(),
                             "to" => ?from,
+                            "last_index" => self.fsm.peer.get_store().last_index(),
                         );
                         let mut cmd = new_admin_request(
                             self.fsm.peer.region().get_id(),
@@ -3783,6 +3807,11 @@ where
         {
             return false;
         }
+
+        fail_point!("propose_locks_before_transfer_leader", |_| {
+            pessimistic_locks.status = LocksStatus::TransferringLeader;
+            true
+        });
 
         // If it is not writable, it's probably because it's a retried TransferLeader
         // and the locks have been proposed. But we still need to return true to
@@ -3952,6 +3981,7 @@ where
 
     // [PerformanceCriticalPath] TODO: spin off the I/O code (self.fsm.peer.destroy)
     fn destroy_peer(&mut self, merged_by_target: bool) -> bool {
+        self.ctx.coprocessor_host.on_destroy_peer(self.region());
         fail_point!("destroy_peer");
         // Mark itself as pending_remove
         self.fsm.peer.pending_remove = true;
@@ -5823,7 +5853,7 @@ where
                 let is_admin_request = msg.has_admin_request();
                 info_or_debug!(
                     is_admin_request;
-                    "failed to propose";
+                    "failed to pre propose";
                     "region_id" => self.region_id(),
                     "peer_id" => self.fsm.peer_id(),
                     "message" => ?msg,
@@ -5856,8 +5886,20 @@ where
         let mut resp = RaftCmdResponse::default();
         let term = self.fsm.peer.term();
         bind_term(&mut resp, term);
+        // Save important details from `msg` so we can log them later if the proposal
+        // fails. This is a workaround because `msg` gets moved when proposed.
+        let is_admin_request = msg.has_admin_request();
+        let admin_cmd_type = is_admin_request.then(|| msg.get_admin_request().get_cmd_type());
         if self.fsm.peer.propose(self.ctx, cb, msg, resp, diskfullopt) {
             self.fsm.has_ready = true;
+        } else {
+            info_or_debug!(
+                is_admin_request;
+                "failed to propose";
+                "region_id" => self.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "admin_cmd_type" => ?admin_cmd_type,
+            );
         }
 
         if self.fsm.peer.should_wake_up {
@@ -7529,5 +7571,40 @@ mod tests {
         for flag in cbs_flags {
             assert!(flag.load(Ordering::Acquire));
         }
+    }
+
+    #[test]
+    fn test_batch_raft_cmd_request_builder_size_limit() {
+        let mut cfg = Config::default();
+        cfg.raft_entry_max_size = ReadableSize::gb(1);
+        let mut q = Request::default();
+        let mut builder = BatchRaftCmdRequestBuilder::<KvTestEngine>::new();
+
+        let mut req = RaftCmdRequest::default();
+        let mut put = PutRequest::default();
+        put.set_key(b"aaaa".to_vec());
+        let val = (0..200_000).map(|_| 0).collect_vec();
+        put.set_value(val);
+        q.set_cmd_type(CmdType::Put);
+        q.set_put(put);
+        req.mut_requests().push(q.clone());
+        let _ = q.take_put();
+        let req_size = req.compute_size();
+        assert!(builder.can_batch(&cfg, &req, req_size));
+        let cb = Callback::write_ext(Box::new(move |_| {}), None, None);
+        let cmd = RaftCommand::new(req.clone(), cb);
+        builder.add(cmd, req_size);
+
+        let mut req = RaftCmdRequest::default();
+        let mut put = PutRequest::default();
+        put.set_key(b"aaaa".to_vec());
+        let val = (0..900_000).map(|_| 0).collect_vec();
+        put.set_value(val);
+        q.set_cmd_type(CmdType::Put);
+        q.set_put(put);
+        req.mut_requests().push(q.clone());
+        let _ = q.take_put();
+        let req_size = req.compute_size();
+        assert!(!builder.can_batch(&cfg, &req, req_size));
     }
 }

@@ -136,7 +136,6 @@ fn test_stale_learner_restart() {
     must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
 }
 
-/// pass
 /// Test if a peer can be destroyed through tombstone msg when applying
 /// snapshot.
 //#[test_case(test_raftstore_v2::new_node_cluster)] // unstable test case
@@ -216,7 +215,6 @@ fn test_stale_peer_destroy_when_apply_snapshot() {
     must_get_none(&cluster.get_engine(3), b"k1");
 }
 
-/// pass
 /// Test if destroy a uninitialized peer through tombstone msg would allow a
 /// staled peer be created again.
 #[test_case(test_raftstore::new_node_cluster)]

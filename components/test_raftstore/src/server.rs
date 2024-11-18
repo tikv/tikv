@@ -2,7 +2,7 @@
 
 use std::{
     path::Path,
-    sync::{atomic::AtomicU64, Arc, Mutex, RwLock},
+    sync::{atomic::AtomicU64, mpsc::Receiver, Arc, Mutex, RwLock},
     thread,
     time::Duration,
     usize,
@@ -14,7 +14,7 @@ use causal_ts::CausalTsProviderImpl;
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::{FlowInfo, RocksEngine, RocksSnapshot};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{Engines, MiscExt};
 use futures::executor::block_on;
@@ -144,6 +144,7 @@ struct ServerMeta {
     raw_router: RaftRouter<RocksEngine, RaftTestEngine>,
     raw_apply_router: ApplyRouter<RocksEngine>,
     gc_worker: GcWorker<RaftKv<RocksEngine, SimulateStoreTransport>>,
+    _reciever: Receiver<FlowInfo>,
     rts_worker: Option<LazyWorker<resolved_ts::Task>>,
     rsmeter_cleanup: Box<dyn FnOnce()>,
 }
@@ -159,7 +160,7 @@ pub struct ServerCluster {
     pub region_info_accessors: HashMap<u64, RegionInfoAccessor>,
     pub importers: HashMap<u64, Arc<SstImporter<RocksEngine>>>,
     pub pending_services: HashMap<u64, PendingServices>,
-    pub coprocessor_hooks: HashMap<u64, CopHooks<RocksEngine>>,
+    pub coprocessor_hosts: HashMap<u64, CopHooks<RocksEngine>>,
     pub health_controllers: HashMap<u64, HealthController>,
     pub security_mgr: Arc<SecurityManager>,
     pub txn_extra_schedulers: HashMap<u64, Arc<dyn TxnExtraScheduler>>,
@@ -210,7 +211,7 @@ impl ServerCluster {
             snap_paths: HashMap::default(),
             snap_mgrs: HashMap::default(),
             pending_services: HashMap::default(),
-            coprocessor_hooks: HashMap::default(),
+            coprocessor_hosts: HashMap::default(),
             health_controllers: HashMap::default(),
             raft_clients: HashMap::default(),
             conn_builder,
@@ -224,10 +225,6 @@ impl ServerCluster {
 
     pub fn get_addr(&self, node_id: u64) -> String {
         self.addrs.get(node_id).unwrap()
-    }
-
-    pub fn get_apply_router(&self, node_id: u64) -> ApplyRouter<RocksEngine> {
-        self.metas.get(&node_id).unwrap().raw_apply_router.clone()
     }
 
     pub fn get_server_router(&self, node_id: u64) -> SimulateStoreTransport {
@@ -310,13 +307,13 @@ impl ServerCluster {
 
         // Create coprocessor.
         let enable_region_stats_mgr_cb: Arc<dyn Fn() -> bool + Send + Sync> =
-            if cfg.in_memory_engine.enabled {
+            if cfg.in_memory_engine.enable {
                 Arc::new(|| true)
             } else {
                 Arc::new(|| false)
             };
         let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
-        if let Some(hooks) = self.coprocessor_hooks.get(&node_id) {
+        if let Some(hooks) = self.coprocessor_hosts.get(&node_id) {
             for hook in hooks {
                 hook(&mut coprocessor_host);
             }
@@ -324,9 +321,7 @@ impl ServerCluster {
 
         // In-memory engine
         let mut in_memory_engine_config = cfg.in_memory_engine.clone();
-        let _ = in_memory_engine_config
-            .expected_region_size
-            .get_or_insert(cfg.coprocessor.region_split_size());
+        in_memory_engine_config.expected_region_size = cfg.coprocessor.region_split_size();
         let in_memory_engine_config = Arc::new(VersionTrack::new(in_memory_engine_config));
         let in_memory_engine_config_clone = in_memory_engine_config.clone();
 
@@ -342,7 +337,7 @@ impl ServerCluster {
 
         let in_memory_engine_context =
             InMemoryEngineContext::new(in_memory_engine_config.clone(), self.pd_client.clone());
-        let in_memory_engine = if cfg.in_memory_engine.enabled {
+        let in_memory_engine = if cfg.in_memory_engine.enable {
             let in_memory_engine = build_hybrid_engine(
                 in_memory_engine_context,
                 engines.kv.clone(),
@@ -351,7 +346,8 @@ impl ServerCluster {
                 Box::new(router.clone()),
             );
             // Eviction observer
-            let observer = LoadEvictionObserver::new(Arc::new(in_memory_engine.clone()));
+            let observer =
+                LoadEvictionObserver::new(Arc::new(in_memory_engine.region_cache_engine().clone()));
             observer.register_to(&mut coprocessor_host);
             // Write batch observer
             let write_batch_observer =
@@ -399,7 +395,7 @@ impl ServerCluster {
             block_on(self.pd_client.get_tso()).expect("failed to get timestamp from PD");
         let concurrency_manager = ConcurrencyManager::new(latest_ts);
 
-        let (tx, _rx) = std::sync::mpsc::channel();
+        let (tx, rx) = std::sync::mpsc::channel();
         let mut gc_worker = GcWorker::new(
             raft_kv.clone(),
             tx,
@@ -407,7 +403,7 @@ impl ServerCluster {
             Default::default(),
             Arc::new(region_info_accessor.clone()),
         );
-        gc_worker.start(node_id).unwrap();
+        gc_worker.start(node_id, coprocessor_host.clone()).unwrap();
 
         let txn_status_cache = Arc::new(TxnStatusCache::new_for_test());
         let rts_worker = if cfg.resolved_ts.enable {
@@ -722,6 +718,7 @@ impl ServerCluster {
                 sim_router,
                 sim_trans: simulate_trans,
                 gc_worker,
+                _reciever: rx,
                 rts_worker,
                 rsmeter_cleanup,
             },
@@ -888,6 +885,10 @@ impl Simulator for ServerCluster {
     fn get_router(&self, node_id: u64) -> Option<RaftRouter<RocksEngine, RaftTestEngine>> {
         self.metas.get(&node_id).map(|m| m.raw_router.clone())
     }
+
+    fn get_apply_router(&self, node_id: u64) -> Option<ApplyRouter<RocksEngine>> {
+        self.metas.get(&node_id).map(|m| m.raw_apply_router.clone())
+    }
 }
 
 impl Cluster<ServerCluster> {
@@ -940,7 +941,7 @@ impl Cluster<ServerCluster> {
     ) {
         self.sim
             .wl()
-            .coprocessor_hooks
+            .coprocessor_hosts
             .entry(node_id)
             .or_default()
             .push(register);
@@ -953,10 +954,7 @@ pub fn new_server_cluster(id: u64, count: usize) -> Cluster<ServerCluster> {
     Cluster::new(id, count, sim, pd_client, ApiVersion::V1)
 }
 
-pub fn new_server_cluster_with_hybrid_engine_with_no_region_cache(
-    id: u64,
-    count: usize,
-) -> Cluster<ServerCluster> {
+pub fn new_server_cluster_with_hybrid_engine(id: u64, count: usize) -> Cluster<ServerCluster> {
     let pd_client = Arc::new(TestPdClient::new(id, false));
     let sim = Arc::new(RwLock::new(ServerCluster::new(Arc::clone(&pd_client))));
     let mut cluster = Cluster::new(id, count, sim, pd_client, ApiVersion::V1);
