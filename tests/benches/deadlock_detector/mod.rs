@@ -17,7 +17,7 @@ impl DetectGenerator {
         Self {
             rng: ThreadRng::default(),
             range,
-            timestamp: 0,
+            timestamp: 1,
         }
     }
 
