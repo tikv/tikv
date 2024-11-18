@@ -1,25 +1,33 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{Arc, RwLock};
+use std::{sync::{Arc, RwLock, atomic::{AtomicUsize, Ordering}}, collections::HashSet, time::Duration, hash::{Hasher, Hash}};
 
 use futures::Future;
 use tokio::{
     io::Result as TokioResult,
-    runtime::{Handle, Runtime},
+    runtime::{Handle, Runtime, Builder},
+    time::interval,
 };
 
 #[derive(Clone)]
 pub struct RuntimeHandle {
-    inner: Arc<RwLock<Option<Handle>>>,
+    name: String,
+    inner: Arc<Option<Runtime>>,
+    task_count: Arc<AtomicUsize>,
 }
 
-pub struct ResizableRuntime {
-    pub size: usize,
-    thread_name: String,
-    pool: RuntimeHandle,
-    all_pools: Vec<Runtime>,
-    replace_pool_rule: Box<dyn Fn(usize, &str) -> TokioResult<Runtime> + Send + Sync>,
-    after_adjust: Box<dyn Fn(usize) + Send + Sync>,
+impl PartialEq for RuntimeHandle {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+    }
+}
+
+impl Eq for RuntimeHandle {}
+
+impl Hash for RuntimeHandle {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+    }
 }
 
 impl RuntimeHandle {
@@ -27,13 +35,18 @@ impl RuntimeHandle {
     where
         Fut: Future<Output = ()> + Send + 'static,
     {
-        let handle = {
-            let inner = self.inner.read().unwrap();
-            inner.as_ref().cloned() // Clone the handle to avoid holding the lock
-        };
+        let mut handle: Option<Handle> = None;
+        if let Some(inner) = self.inner.as_ref() {
+            handle = Some(inner.handle().clone());
+        }
+        self.task_count.fetch_add(1, Ordering::SeqCst);
+        let task_count = self.task_count.clone();
 
         if let Some(handle) = handle {
-            handle.spawn(fut);
+            handle.spawn(async move {
+                fut.await;
+                task_count.fetch_sub(1, Ordering::SeqCst);
+            });
         } else {
             panic!("runtime is not running");
         }
@@ -43,17 +56,90 @@ impl RuntimeHandle {
     where
         Fut: Future,
     {
-        let handle = {
-            let inner = self.inner.read().unwrap();
-            inner.as_ref().cloned() // Clone the handle to avoid holding the lock
-        };
+        let mut handle: Option<Handle> = None;
+        if let Some(inner) = self.inner.as_ref() {
+            handle = Some(inner.handle().clone());
+        }
 
+        self.task_count.fetch_add(1, Ordering::SeqCst);
+        let task_count = self.task_count.clone();
         if let Some(handle) = handle {
-            handle.block_on(fut)
+            handle.block_on( {
+                async move {
+                    let res = fut.await;
+                    task_count.fetch_sub(1, Ordering::SeqCst);
+                    res
+                }
+            })
         } else {
             panic!("runtime is not running");
         }
     }
+}
+
+pub struct ReplacedRuntimeKeeper {
+    pools: HashSet<RuntimeHandle>,
+    keeper: Runtime,
+}
+
+impl ReplacedRuntimeKeeper {
+    fn new () -> Self {
+        let keeper = Builder::new_multi_thread()
+        .worker_threads(1)
+        .thread_name("management-runtime")
+        .enable_all()
+        .build()
+        .expect("Failed to create management runtime");
+
+        let mut ret = ReplacedRuntimeKeeper {
+            pools: HashSet::new(),
+            keeper: keeper,
+        };
+        ret
+    }
+
+    fn insert (&mut self, runtime: Runtime) {
+        self.pools.insert(RuntimeHandle {
+            name: "aadaf".to_owned(),
+            inner: Arc::new(Some(runtime)),
+            task_count: Arc::new(AtomicUsize::new(0)),
+        });
+    }
+
+    fn start_cleanup(self: Arc<Self>) {
+        tokio::spawn(async move {
+            let mut interval = interval(Duration::from_secs(10));
+            loop {
+                interval.tick().await;
+                
+                let to_clean = {
+                    self
+                        .pools
+                        .iter()
+                        .filter(|p| p.task_count.load(Ordering::SeqCst) == 0)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                };
+
+                    for p in to_clean {
+                        if let Some(runtime) = p.inner.as_ref() {
+                            runtime.shutdown_background();
+                        }
+                        self.pools.remove(&p); 
+                    }
+            }
+        });
+    }
+}
+
+pub struct ResizableRuntime {
+    pub size: usize,
+    count: usize,
+    thread_name: String,
+    pool: Arc<RwLock<Option<RuntimeHandle>>>,
+    used_pools: Arc<ReplacedRuntimeKeeper>,
+    replace_pool_rule: Box<dyn Fn(usize, &str) -> TokioResult<Runtime> + Send + Sync>,
+    after_adjust: Box<dyn Fn(usize) + Send + Sync>,
 }
 
 impl ResizableRuntime {
@@ -63,18 +149,19 @@ impl ResizableRuntime {
         replace_pool_rule: Box<dyn Fn(usize, &str) -> TokioResult<Runtime> + Send + Sync>,
         after_adjust: Box<dyn Fn(usize) + Send + Sync>,
     ) -> Self {
+        
         let mut ret = ResizableRuntime {
             size: 0,
+            count: 0,
             thread_name: thread_name.to_owned(),
-            pool: RuntimeHandle {
-                inner: Arc::new(RwLock::new(None)),
-            },
-            all_pools: Vec::new(),
-            replace_pool_rule,
-            after_adjust,
+            pool: Arc::new(RwLock::new(None)),
+            used_pools: Arc::new(ReplacedRuntimeKeeper::new()),
+            replace_pool_rule: replace_pool_rule,
+            after_adjust: after_adjust,
         };
 
         ret.adjust_with(thread_size);
+        ret.used_pools.start_cleanup();
         ret
     }
 
@@ -82,18 +169,18 @@ impl ResizableRuntime {
     where
         Fut: Future<Output = ()> + Send + 'static,
     {
-        self.pool.spawn(fut);
+        self.pool.read().unwrap().as_ref().unwrap().spawn(fut)
     }
 
     pub fn block_on<F>(&self, f: F) -> F::Output
     where
         F: Future,
     {
-        self.pool.block_on(f)
+        self.pool.read().unwrap().as_ref().unwrap().block_on(f)
     }
 
     pub fn handle(&self) -> RuntimeHandle {
-        self.pool.clone()
+        self.pool.read().unwrap().as_ref().unwrap().clone()
     }
 
     pub fn adjust_with(&mut self, new_size: usize) -> usize {
@@ -101,15 +188,21 @@ impl ResizableRuntime {
             return new_size;
         }
 
-        let new_pool = (self.replace_pool_rule)(new_size, &self.thread_name)
+        self.count += 1;
+        let thread_name = self.thread_name.to_string() +"-" + &self.count.to_string();
+        let new_pool = (self.replace_pool_rule)(new_size, thread_name.as_str())
             .expect("failed to create tokio runtime for backup worker.");
         let handle = new_pool.handle().clone();
-        self.all_pools.push(new_pool);
 
-        {
-            let mut pool_guard = self.pool.inner.write().unwrap();
-            *pool_guard = Some(handle);
+        //insert the old pool to keeper
+        if let Some(pool) = self.pool.read().unwrap().as_ref() {
+            self.used_pools.insert(pool.inner.unwrap());
         }
+        *self.pool.write().unwrap() = Some(RuntimeHandle {
+            name: thread_name,
+            inner: Arc::new(Some(new_pool)),
+            task_count: Arc::new(AtomicUsize::new(0)),
+        });
 
         self.size = new_size;
         (self.after_adjust)(new_size);
@@ -120,9 +213,9 @@ impl ResizableRuntime {
 
 impl Drop for ResizableRuntime {
     fn drop(&mut self) {
-        for runtime in self.all_pools.drain(..) {
-            runtime.shutdown_background();
+        if let Some(pool) = self.pool.read().unwrap().as_ref() {
         }
+
     }
 }
 
