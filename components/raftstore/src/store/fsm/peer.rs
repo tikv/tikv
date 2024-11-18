@@ -1286,12 +1286,16 @@ where
                 }
             }
             CasualMessage::Campaign { notify_by_parent } => {
-                if notify_by_parent && !self.fsm.peer.has_valid_leader() {
-                    // If the message is sent by the parent, it means that the parent is already the
-                    // leader of the parent region. And only if the split region has no leader, will
-                    // it be safe to campaign.
-                    let _ = self.fsm.peer.maybe_campaign(true);
+                if notify_by_parent {
+                    // If the message is sent by the parent, it means that the parent is already
+                    // the leader of the parent region.
+                    if !self.fsm.peer.has_valid_leader() && self.fsm.peer.is_follower() {
+                        // And only if the split region has no leader and does not enter election
+                        // state, will it be safe to campaign.
+                        let _ = self.fsm.peer.maybe_campaign(true);
+                    }
                 } else {
+                    // Forcely campaign to be the leader of the region.
                     let _ = self.fsm.peer.raft_group.campaign();
                 }
                 self.fsm.has_ready = true;
