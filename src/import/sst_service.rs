@@ -37,7 +37,7 @@ use tikv_kv::{Engine, LocalTablets, Modify, WriteData};
 use tikv_util::{
     config::ReadableSize,
     future::{create_stream_with_buffer, paired_future_callback},
-    resizable_threadpool::{RcRuntime, ResizableRuntime},
+    resizable_threadpool::{RcRuntimeHandle, ResizableRuntime},
     sys::disk::{get_disk_status, DiskUsage},
     time::{Instant, Limiter},
     HandyRwLock,
@@ -118,7 +118,7 @@ pub struct ImportSstService<E: Engine> {
     cfg: ConfigManager,
     tablets: LocalTablets<E::Local>,
     engine: E,
-    threads: RcRuntime,
+    threads: RcRuntimeHandle,
     // threads_ref is for safely cleanning
     #[allow(dead_code)]
     threads_ref: Arc<Mutex<ResizableRuntime>>,
