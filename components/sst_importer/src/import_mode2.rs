@@ -8,7 +8,7 @@ use std::{
 use collections::{HashMap, HashSet};
 use futures_util::compat::Future01CompatExt;
 use kvproto::{import_sstpb::Range, metapb::Region};
-use tikv_util::{resizable_threadpool::RcRuntime, timer::GLOBAL_TIMER_HANDLE};
+use tikv_util::{resizable_threadpool::RcRuntimeHandle, timer::GLOBAL_TIMER_HANDLE};
 
 use super::Config;
 
@@ -55,7 +55,7 @@ impl ImportModeSwitcherV2 {
         ImportModeSwitcherV2 { inner }
     }
 
-    pub fn start_resizable_threads(&self, executor: &RcRuntime) {
+    pub fn start_resizable_threads(&self, executor: &RcRuntimeHandle) {
         // spawn a background future to put regions back into normal mode after timeout
         let inner = self.inner.clone();
         let switcher = Arc::downgrade(&inner);

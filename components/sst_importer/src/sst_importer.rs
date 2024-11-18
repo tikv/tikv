@@ -39,7 +39,7 @@ use tikv_util::{
     },
     future::RescheduleChecker,
     memory::{MemoryQuota, OwnedAllocated},
-    resizable_threadpool::RcRuntime,
+    resizable_threadpool::RcRuntimeHandle,
     sys::{thread::ThreadBuildWrapper, SysQuota},
     time::{Instant, Limiter},
     Either, HandyRwLock,
@@ -265,7 +265,7 @@ impl<E: KvEngine> SstImporter<E> {
         }
     }
 
-    pub fn start_switch_mode_check(&self, executor: &RcRuntime, db: Option<E>) {
+    pub fn start_switch_mode_check(&self, executor: &RcRuntimeHandle, db: Option<E>) {
         match &self.switcher {
             Either::Left(switcher) => switcher.start_resizable_threads(executor, db.unwrap()),
             Either::Right(switcher) => switcher.start_resizable_threads(executor),
