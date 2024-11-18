@@ -336,6 +336,11 @@ impl<S: Snapshot> PointGetter<S> {
                             let start_ts = write.start_ts;
                             let value = self.load_data_from_default_cf(start_ts, user_key)?;
                             self.statistics.processed_size += user_key.len() + value.len();
+                            info!(
+                                "jepsen load data";
+                                "key" => ?seek_key,
+                                "start_ts" => ?self.ts,
+                            );
                             return Ok(Some(value));
                         }
                     }
