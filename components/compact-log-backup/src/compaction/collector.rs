@@ -37,8 +37,8 @@ impl<S: Stream<Item = Result<LogFile>>> CollectSubcompaction<S> {
 
 pub struct CollectSubcompactionConfig {
     /// Lower bound of timestamps.
-    /// Files donesn't contain any record with a timestamp greater than this
-    /// will be filtered out.
+    /// Files donesn't contain any record with a timestamp greater than or equal
+    /// to this will be filtered out.
     pub compact_from_ts: u64,
     /// Upper bound of timestamps.
     pub compact_to_ts: u64,

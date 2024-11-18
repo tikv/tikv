@@ -35,6 +35,19 @@ impl Future for Step {
     }
 }
 
+impl Default for Cooperate {
+    fn default() -> Self {
+        /// The default operations can be done before yielding the current
+        /// thread to another coroutine. The value `4096` is randomly
+        /// chosen.
+        ///
+        /// NOTE: Perhaps we can obtain better performance by tuning this or
+        /// pinning some critial tasks to a CPU.
+        const DEFAULT_YIELD_INTERVAL: usize = 4096;
+        Self::new(DEFAULT_YIELD_INTERVAL)
+    }
+}
+
 impl Cooperate {
     /// Create a new [`Cooperate`] that yields when a fixed number of works
     /// done.

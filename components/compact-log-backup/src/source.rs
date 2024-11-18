@@ -95,7 +95,7 @@ impl Source {
     ) -> Result<()> {
         let content = self.load_remote(input, &mut stat).await?;
 
-        let mut co = Cooperate::new(4096);
+        let mut co = Cooperate::default();
         let mut iter = stream_event::EventIterator::new(&content);
         while let Some((k, v)) = iter.get_next()? {
             co.step().await;

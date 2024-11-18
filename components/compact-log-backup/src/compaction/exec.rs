@@ -78,11 +78,12 @@ impl<DB> From<SubcompactionExecArg<DB>> for SubcompactionExec<DB> {
         Self {
             source: Source::new(Arc::clone(&value.storage)),
             output: value.storage,
-            co: Cooperate::new(4096),
             out_prefix: value
                 .out_prefix
                 .unwrap_or_else(|| Path::new(COMPACTION_OUT_PREFIX).to_owned()),
             db: value.db,
+
+            co: Default::default(),
             load_stat: Default::default(),
             compact_stat: Default::default(),
         }
@@ -344,16 +345,16 @@ where
         let begin = Instant::now();
         let (sorted_items, cdiff) = self.process_input(items).await;
         self.compact_stat.sort_duration += begin.saturating_elapsed();
+        if sorted_items.is_empty() {
+            self.compact_stat.empty_generation += 1;
+            return Ok(result);
+        }
+
         if let Some(v) = result.expected_crc64.as_mut() {
             *v ^= cdiff.crc64xor_diff;
         }
         result.expected_keys -= cdiff.removed_key;
         result.expected_size -= cdiff.decreaed_size;
-
-        if sorted_items.is_empty() {
-            self.compact_stat.empty_generation += 1;
-            return Ok(result);
-        }
 
         let out_name = self
             .out_prefix
