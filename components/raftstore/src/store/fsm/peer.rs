@@ -1286,10 +1286,10 @@ where
                 }
             }
             CasualMessage::Campaign { notify_by_parent } => {
-                if notify_by_parent {
-                    // If the message is sent by the parent, it means the parent is already the
-                    // leader. So this peer will be likely to become the leader
-                    // soon.
+                if notify_by_parent && !self.fsm.peer.has_valid_leader() {
+                    // If the message is sent by the parent, it means that the parent is already the
+                    // leader of the parent region. And only if the split region has no leader, will
+                    // it be safe to campaign.
                     let _ = self.fsm.peer.maybe_campaign(true);
                 } else {
                     let _ = self.fsm.peer.raft_group.campaign();

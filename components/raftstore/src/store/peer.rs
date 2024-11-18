@@ -1691,7 +1691,7 @@ where
 
     #[inline]
     pub fn is_follower(&self) -> bool {
-        self.raft_group.raft.state == StateRole::Follower
+        self.raft_group.raft.state == StateRole::Follower && self.peer.role != PeerRole::Learner
     }
 
     #[inline]
@@ -2352,6 +2352,8 @@ where
                             );
                         }
                     }
+                    // Clear the uncampaigned list.
+                    self.uncampaigned_new_regions = None;
                 }
                 StateRole::Follower => {
                     self.leader_lease.expire();
@@ -2362,11 +2364,11 @@ where
                         let _ = self.get_store().clear_data();
                         self.delay_clean_data = false;
                     }
+                    // Clear the uncampaigned list.
+                    self.uncampaigned_new_regions = None;
                 }
                 _ => {}
             }
-            // Clear the uncampaigned list.
-            self.uncampaigned_new_regions = None;
             self.on_leader_changed(ss.leader_id, self.term());
             ctx.coprocessor_host.on_role_change(
                 self.region(),
@@ -4029,7 +4031,6 @@ where
         if last_index >= index + ctx.cfg.leader_transfer_max_log_lag {
             return Some("log gap");
         }
-
         None
     }
 
