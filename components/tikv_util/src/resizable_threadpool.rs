@@ -14,12 +14,12 @@ use std::{
 use futures::Future;
 use tokio::{
     io::Result as TokioResult,
-    runtime::{Builder, Runtime, Handle},
+    runtime::{Builder, Handle, Runtime},
     time::interval,
 };
 
 pub struct RcRuntime {
-    inner: Option<Runtime>, 
+    inner: Option<Runtime>,
     task_count: Arc<AtomicUsize>,
 }
 
@@ -38,7 +38,8 @@ impl RcRuntime {
 
 impl Drop for RcRuntime {
     fn drop(&mut self) {
-        if let Some(runtime) = self.inner.take() { // Safely take ownership
+        if let Some(runtime) = self.inner.take() {
+            // Safely take ownership
             runtime.shutdown_background();
         }
     }
@@ -63,7 +64,6 @@ impl Hash for RcRuntimeHandle {
         self.name.hash(state);
     }
 }
-
 
 impl RcRuntimeHandle {
     pub fn new(name: &str) -> Self {
@@ -210,12 +210,16 @@ impl ResizableRuntime {
         }
 
         self.count += 1;
-        let thread_name = self.thread_name.to_string() + "-" + &self.count.to_string() + "-" + &new_size.to_string();
+        let thread_name = self.thread_name.to_string()
+            + "-"
+            + &self.count.to_string()
+            + "-"
+            + &new_size.to_string();
         let new_pool = (self.replace_pool_rule)(new_size, thread_name.as_str())
             .expect("failed to create tokio runtime for backup worker.");
 
         self.pools.lock().unwrap().insert(self.pool.clone());
-        *self.pool.inner.lock().unwrap() = Some(RcRuntime{
+        *self.pool.inner.lock().unwrap() = Some(RcRuntime {
             inner: Some(new_pool),
             task_count: Arc::new(AtomicUsize::new(0)),
         });
@@ -229,23 +233,27 @@ impl ResizableRuntime {
 
 #[cfg(test)]
 mod test {
-    use std::{sync::atomic::{AtomicUsize, Ordering}, thread::sleep};
+    use std::{
+        sync::atomic::{AtomicUsize, Ordering},
+        thread::{self, sleep},
+    };
 
     use super::*;
 
     static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
+    fn replace_pool_rule(thread_count: usize, thread_name: &str) -> TokioResult<Runtime> {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(thread_count)
+            .thread_name(thread_name)
+            .enable_all()
+            .build()
+            .unwrap();
+        Ok(rt)
+    }
+
     #[test]
     fn test_adjust_thread_num() {
-        let replace_pool_rule = |thread_count: usize, thread_name: &str| {
-            let rt = tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(thread_count)
-                .thread_name(thread_name)
-                .enable_all()
-                .build()
-                .unwrap();
-            Ok(rt)
-        };
         let after_adjust = |new_size: usize| {
             COUNTER.store(new_size, Ordering::SeqCst);
         };
@@ -257,22 +265,45 @@ mod test {
         );
         let handle = threads.handle();
         assert_eq!(COUNTER.load(Ordering::SeqCst), 4);
-        println!("pool count: {}", threads.pools.lock().unwrap().len());
         handle.block_on(async {
             assert_eq!(COUNTER.load(Ordering::SeqCst), 4);
         });
-        println!("pool count: {}", threads.pools.lock().unwrap().len());
+        assert!(!threads.pools.lock().unwrap().is_empty());
+
+        // The old pool should be added into the pools
         threads.adjust_with(8);
-        println!("pool count: {}", threads.pools.lock().unwrap().len());
-        handle.block_on(async {
-            assert_eq!(COUNTER.load(Ordering::SeqCst), 8);
-        });
+        assert!(!threads.pools.lock().unwrap().is_empty());
+
+        // The old pool should be cleaned after 10s
         sleep(Duration::from_secs(12));
-        println!("pool count: {}", threads.pools.lock().unwrap().len());
         assert!(threads.pools.lock().unwrap().is_empty());
         handle.block_on(async {
             assert_eq!(COUNTER.load(Ordering::SeqCst), 8);
         });
-        println!("pool count: {}", threads.pools.lock().unwrap().len());
+    }
+
+    #[test]
+    fn test_multi_block_on() {
+        let threads =
+            ResizableRuntime::new(4, "test", Box::new(replace_pool_rule), Box::new(|_| {}));
+        let handle = threads.handle();
+
+        let handles: Vec<_> = (0..4)
+            .map(|i| {
+                let runtime_handle = handle.clone();
+                thread::spawn(move || {
+                    runtime_handle.block_on(async move {
+                        println!("Thread {} sleeping", i);
+                        sleep(Duration::from_secs(5));
+                        println!("Thread {} finished sleeping", i);
+                    });
+                })
+            })
+            .collect();
+
+        // Wait for all threads to complete
+        for handle in handles {
+            handle.join().expect("Thread panicked");
+        }
     }
 }
