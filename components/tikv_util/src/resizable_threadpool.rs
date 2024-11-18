@@ -1,18 +1,26 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{sync::{Arc, RwLock, atomic::{AtomicUsize, Ordering}, Mutex}, collections::HashSet, time::Duration, hash::{Hasher, Hash}};
+use std::{
+    collections::HashSet,
+    hash::{Hash, Hasher},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex, RwLock,
+    },
+    time::Duration,
+};
 
 use futures::Future;
 use tokio::{
     io::Result as TokioResult,
-    runtime::{Handle, Runtime, Builder},
+    runtime::{Builder, Handle, Runtime},
     time::interval,
 };
 
 #[derive(Clone)]
 pub struct RuntimeHandle {
     name: String,
-    inner: Arc<Mutex<Option<Runtime>>>,  
+    inner: Arc<Mutex<Option<Runtime>>>,
     task_count: Arc<AtomicUsize>,
 }
 
@@ -65,7 +73,7 @@ impl RuntimeHandle {
         self.task_count.fetch_add(1, Ordering::SeqCst);
         let task_count = self.task_count.clone();
         if let Some(handle) = handle {
-            handle.block_on( {
+            handle.block_on({
                 async move {
                     let res = fut.await;
                     task_count.fetch_sub(1, Ordering::SeqCst);
@@ -106,28 +114,28 @@ impl ResizableRuntime {
         after_adjust: Box<dyn Fn(usize) + Send + Sync>,
     ) -> Self {
         let keeper = Builder::new_multi_thread()
-        .worker_threads(1)
-        .thread_name("management-runtime")
-        .enable_all()
-        .build()
-        .expect("Failed to create management runtime");
+            .worker_threads(1)
+            .thread_name("management-runtime")
+            .enable_all()
+            .build()
+            .expect("Failed to create management runtime");
 
         let keeper_handle = keeper.handle().clone();
         let pools = Arc::new(Mutex::new(HashSet::new()));
-        
+
         let mut ret = ResizableRuntime {
             size: 0,
             count: 0,
             thread_name: thread_name.to_owned(),
             pool: Arc::new(RwLock::new(None)),
             pools: pools.clone(),
-            keeper: keeper,
-            replace_pool_rule: replace_pool_rule,
-            after_adjust: after_adjust,
+            keeper,
+            replace_pool_rule,
+            after_adjust,
         };
 
         ret.adjust_with(thread_size);
-        
+
         let pools_clone = pools.clone();
         keeper_handle.spawn(async move {
             let mut interval = interval(Duration::from_secs(10));
@@ -176,12 +184,12 @@ impl ResizableRuntime {
         }
 
         self.count += 1;
-        let thread_name = self.thread_name.to_string() +"-" + &self.count.to_string();
+        let thread_name = self.thread_name.to_string() + "-" + &self.count.to_string();
         let new_pool = (self.replace_pool_rule)(new_size, thread_name.as_str())
             .expect("failed to create tokio runtime for backup worker.");
 
-        //insert the old pool to keeper
-        if let Some(pool) = self.pool.write().unwrap().take(){
+        // insert the old pool to keeper
+        if let Some(pool) = self.pool.write().unwrap().take() {
             self.pools.lock().unwrap().insert(pool);
         }
         *self.pool.write().unwrap() = Some(RuntimeHandle {
