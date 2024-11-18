@@ -649,7 +649,9 @@ pub enum CasualMessage<EK: KvEngine> {
 
     // Trigger raft to campaign which is used after exiting force leader
     // or make new splitted peers campaign to get votes.
-    Campaign,
+    Campaign {
+        notify_by_parent: bool,
+    },
     // Trigger loading pending region for in_memory_engine,
     InMemoryEngineLoadRegion {
         region_id: u64,
@@ -725,7 +727,9 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
                 "SnapshotApplied, peer_id={}, tombstone={}",
                 peer_id, tombstone
             ),
-            CasualMessage::Campaign => write!(fmt, "Campaign"),
+            CasualMessage::Campaign { notify_by_parent } => {
+                write!(fmt, "Campaign, notify_by_parent={}", notify_by_parent)
+            }
             CasualMessage::InMemoryEngineLoadRegion { region_id, .. } => write!(
                 fmt,
                 "[region={}] try load in memory region cache",

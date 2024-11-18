@@ -125,7 +125,9 @@ where
     }
 
     fn force_leader(&self, region_id: u64) -> Result<()> {
-        let msg = CasualMessage::Campaign;
+        let msg = CasualMessage::Campaign {
+            notify_by_parent: false,
+        };
         self.router.send(region_id, msg)?;
         // We have nothing to do...
         Ok(())
@@ -192,7 +194,7 @@ mod test {
             msg: raftstore::store::CasualMessage<EK>,
         ) -> raftstore::errors::Result<()> {
             match msg {
-                raftstore::store::CasualMessage::Campaign => {
+                raftstore::store::CasualMessage::Campaign { .. } => {
                     if !self.regions.contains(&region_id) {
                         return Err(raftstore::Error::RegionNotFound(region_id));
                     }

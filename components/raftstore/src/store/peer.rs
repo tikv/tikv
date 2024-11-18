@@ -2336,15 +2336,19 @@ where
                             "region_id" => self.region_id,
                         );
                     }
-                    // After the leadership changed, send `CasualMessage::Campaign` to the target
-                    // peer to campaign leader if there exists uncampaigned regions. It's used to
-                    // ensure that a leader is elected promptly for the newly created Raft
-                    // group, minimizing availability impact (e.g. #12410 and #17602.).
+                    // After the leadership changed, send `CasualMessage::Campaign
+                    // {notify_by_parent: true}` to the target peer to campaign
+                    // leader if there exists uncampaigned regions. It's used to
+                    // ensure that a leader is elected promptly for the newly
+                    // created Raft group, minimizing availability impact (e.g.
+                    // #12410 and #17602.).
                     if let Some(new_regions) = &self.uncampaigned_new_regions {
                         for new_region in &new_regions.0 {
                             let _ = ctx.router.send(
                                 *new_region,
-                                PeerMsg::CasualMessage(Box::new(CasualMessage::Campaign)),
+                                PeerMsg::CasualMessage(Box::new(CasualMessage::Campaign {
+                                    notify_by_parent: true,
+                                })),
                             );
                         }
                     }

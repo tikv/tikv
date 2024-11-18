@@ -1285,11 +1285,18 @@ where
                     self.maybe_destroy();
                 }
             }
-            CasualMessage::Campaign => {
-                // The new peer is likely to become leader, send a heartbeat immediately to
-                // reduce client query miss.
-                self.fsm.peer.heartbeat_pd(self.ctx);
-                let _ = self.fsm.peer.raft_group.campaign();
+            CasualMessage::Campaign { notify_by_parent } => {
+                // If the message is sent by the parent, it means the parent is already the
+                // leader. So this peer will be likely to become the leader
+                // soon.
+                if notify_by_parent {
+                    // The new peer is likely to become leader, send a heartbeat immediately to
+                    // reduce client query miss.
+                    self.fsm.peer.heartbeat_pd(self.ctx);
+                    let _ = self.fsm.peer.maybe_campaign(true);
+                } else {
+                    let _ = self.fsm.peer.raft_group.campaign();
+                }
                 self.fsm.has_ready = true;
             }
             CasualMessage::InMemoryEngineLoadRegion {
@@ -1886,7 +1893,9 @@ where
             // follower state
             let _ = self.ctx.router.send(
                 self.region_id(),
-                PeerMsg::CasualMessage(Box::new(CasualMessage::Campaign)),
+                PeerMsg::CasualMessage(Box::new(CasualMessage::Campaign {
+                    notify_by_parent: false,
+                })),
             );
         }
         self.fsm.has_ready = true;
@@ -2008,8 +2017,7 @@ where
 
     #[inline]
     /// Check whether the peer has any uncleared records in the
-    /// uncampaigned_new_regions list. If the timestamp exceeds the election
-    /// timeout, clear them.
+    /// uncampaigned_new_regions list.
     fn check_uncampaigned_regions(&mut self) {
         let has_uncompaigned_regions = !self
             .fsm
@@ -2017,7 +2025,13 @@ where
             .uncampaigned_new_regions
             .as_ref()
             .map_or(false, |r| r.0.is_empty());
+        // If the peer has any uncleared records in the uncampaigned_new_regions list,
+        // check whether the election timeout has been exceeded.
         if has_uncompaigned_regions {
+            // Max election timeout is the maximum time that the peer can stay in the
+            // uncampaigned_new_regions list. If it exceeds this time, the relative
+            // raft group will elect a new leader, and the peer will be removed from the
+            // uncampaigned_new_regions list.
             let max_election_timeout = self.ctx.cfg.raft_base_tick_interval.0
                 * self.ctx.cfg.raft_max_election_timeout_ticks as u32;
             let ts = self
@@ -4628,7 +4642,7 @@ where
 
             if !campaigned {
                 // The new peer has not campaigned yet, record it for later campaign.
-                if is_follower {
+                if is_follower && self.fsm.peer.region().get_peers().len() > 1 {
                     if self.fsm.peer.uncampaigned_new_regions.is_none() {
                         self.fsm.peer.uncampaigned_new_regions = Some((vec![], Instant::now()));
                     }
