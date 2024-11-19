@@ -1502,7 +1502,7 @@ dependencies = [
  "file_system",
  "futures 0.3.15",
  "futures-io",
- "hex 0.4.2",
+ "hex 0.4.3",
  "keys",
  "kvproto",
  "lazy_static",
