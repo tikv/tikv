@@ -1187,7 +1187,10 @@ mod tests {
             ),
             (Some(f64::NAN), None),
             (Some(f64::INFINITY), Some(Real::new(f64::INFINITY).unwrap())),
-            (Some(1.0E308), Some(Real::new(1.0E308 * (std::f64::consts::PI / 180_f64)).unwrap()))
+            (
+                Some(1.0E308),
+                Some(Real::new(1.0E308 * (std::f64::consts::PI / 180_f64)).unwrap()),
+            ),
         ];
         for (input, expect) in test_cases {
             let output = RpnFnScalarEvaluator::new()
@@ -1230,7 +1233,11 @@ mod tests {
             (None, None, false),
             (Some(f64::NAN), None, false),
             (Some(0f64), Some(Real::new(0f64).unwrap()), false),
-            (Some(1f64), Some(Real::new(57.29577951308232_f64).unwrap()), false),
+            (
+                Some(1f64),
+                Some(Real::new(57.29577951308232_f64).unwrap()),
+                false,
+            ),
             (
                 Some(std::f64::consts::PI),
                 Some(Real::new(180.0_f64).unwrap()),
