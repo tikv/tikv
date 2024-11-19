@@ -12,6 +12,7 @@ pub struct RaftstoreDuration {
     pub store_commit_duration: Option<std::time::Duration>,
     pub apply_wait_duration: Option<std::time::Duration>,
     pub apply_process_duration: Option<std::time::Duration>,
+    pub disk_health_check_duration: Option<std::time::Duration>,
 }
 
 impl RaftstoreDuration {
@@ -25,7 +26,8 @@ impl RaftstoreDuration {
     pub fn delays_on_disk_io(&self, include_wait_duration: bool) -> std::time::Duration {
         let duration = self.store_process_duration.unwrap_or_default()
             + self.store_write_duration.unwrap_or_default()
-            + self.apply_process_duration.unwrap_or_default();
+            + self.apply_process_duration.unwrap_or_default()
+            + self.disk_health_check_duration.unwrap_or_default();
         if include_wait_duration {
             duration
                 + self.store_wait_duration.unwrap_or_default()
@@ -114,6 +116,10 @@ impl LatencyInspector {
 
     pub fn record_apply_process(&mut self, duration: std::time::Duration) {
         self.duration.apply_process_duration = Some(duration);
+    }
+
+    pub fn record_disk_health_check(&mut self, duration: std::time::Duration) {
+        self.duration.disk_health_check_duration = Some(duration);
     }
 
     /// Call the callback.

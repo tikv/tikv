@@ -1996,6 +1996,11 @@ where
                             .observe(tikv_util::time::duration_to_sec(
                                 duration.apply_process_duration.unwrap_or_default(),
                             ));
+                        STORE_INSPECT_DURATION_HISTOGRAM
+                            .with_label_values(&["disk_health_check"])
+                            .observe(tikv_util::time::duration_to_sec(
+                                duration.disk_health_check_duration.unwrap_or_default(),
+                            ));
                         if let Err(e) = scheduler.schedule(Task::UpdateSlowScore {
                             id,
                             factor,

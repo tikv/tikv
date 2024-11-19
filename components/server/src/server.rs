@@ -1030,6 +1030,7 @@ where
                 server.transport(),
                 snap_mgr,
                 pd_worker,
+                self.core.config.storage.data_dir.clone(),
                 engines.store_meta.clone(),
                 self.coprocessor_host.clone().unwrap(),
                 importer.clone(),
