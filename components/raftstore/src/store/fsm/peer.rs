@@ -3787,16 +3787,10 @@ where
             )
             .flush()
             .when_done(move || {
-<<<<<<< HEAD
+                fail_point!("destroy_region_before_gc_flush");
                 if let Err(e) =
                     mb.force_send(PeerMsg::SignificantMsg(SignificantMsg::RaftLogGcFlushed))
                 {
-=======
-                fail_point!("destroy_region_before_gc_flush");
-                if let Err(e) = mb.force_send(PeerMsg::SignificantMsg(Box::new(
-                    SignificantMsg::RaftLogGcFlushed,
-                ))) {
->>>>>>> 1174d1fc5c (raftstore: skip handle remaining messages if peer is destroyed (#17841))
                     if tikv_util::thread_group::is_shutdown(!cfg!(test)) {
                         return;
                     }
