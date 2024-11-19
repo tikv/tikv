@@ -86,6 +86,7 @@ engine_rocks = { workspace = true }
 engine_traits = { workspace = true }
 error_code = { workspace = true }
 fail = "0.5"
+farmhash = "1.1.5"
 file_system = { workspace = true }
 flate2 = { version = "1.0", default-features = false, features = ["zlib"] }
 futures = { version = "0.3", features = ["thread-pool", "compat"] }

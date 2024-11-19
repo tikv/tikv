@@ -21,6 +21,13 @@ impl DetectGenerator {
         }
     }
 
+    fn generate_key(&mut self) -> Vec<u8> {
+        let mut res = Vec::with_capacity(19);
+        res.extend_from_slice(b"t\x80\x00\x00\x00\x00\x00\x00\x01_r\x80\x00\x00\x00");
+        res.extend_from_slice(&self.rng.gen::<u32>().to_be_bytes());
+        res
+    }
+
     /// Generates n detect requests with the same timestamp
     fn generate(&mut self, n: u64) -> Vec<WaitForEntry> {
         let mut entries = Vec::with_capacity(n as usize);
@@ -38,7 +45,8 @@ impl DetectGenerator {
                 wait_for_txn = self.rng.gen_range(low..high);
             }
             entry.set_wait_for_txn(wait_for_txn);
-            entry.set_key_hash(self.rng.gen());
+            entry.set_key(self.generate_key());
+            entry.set_key_hash(farmhash::hash64(entry.get_key()));
             entries.push(entry);
         });
         self.timestamp += 1;
@@ -56,17 +64,20 @@ struct Config {
 fn bench_detect(b: &mut Bencher<'_>, cfg: &Config) {
     let mut detect_table = DetectTable::new(cfg.ttl);
     let mut generator = DetectGenerator::new(cfg.range);
-    b.iter(|| {
-        for entry in generator.generate(cfg.n) {
-            detect_table.detect(
-                entry.get_txn().into(),
-                entry.get_wait_for_txn().into(),
-                entry.get_key_hash(),
-                &[],
-                &[],
-            );
-        }
-    });
+    b.iter_with_setup(
+        || generator.generate(cfg.n),
+        |entries| {
+            for entry in entries {
+                detect_table.detect(
+                    entry.get_txn().into(),
+                    entry.get_wait_for_txn().into(),
+                    entry.get_key_hash(),
+                    entry.get_key(),
+                    &[],
+                );
+            }
+        },
+    );
 }
 
 fn bench_dense_detect_without_cleanup(c: &mut Criterion) {

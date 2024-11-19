@@ -82,6 +82,7 @@ encryption = { workspace = true }
 engine_rocks_helper = { workspace = true }
 error_code = { workspace = true }
 fail = "0.5"
+farmhash = "1.1.5"
 file_system = { workspace = true }
 futures = "0.3"
 grpcio = { workspace = true }
