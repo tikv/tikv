@@ -1088,6 +1088,55 @@ dependencies = [
 ]
 
 [[package]]
+<<<<<<< HEAD
+=======
+name = "compact-log-backup"
+version = "0.1.0"
+dependencies = [
+ "async-compression",
+ "bytes",
+ "chrono",
+ "codec",
+ "crc64fast",
+ "dashmap",
+ "derive_more",
+ "encryption",
+ "engine_rocks",
+ "engine_traits",
+ "external_storage",
+ "fail",
+ "file_system",
+ "futures 0.3.15",
+ "futures-io",
+ "hex 0.4.3",
+ "keys",
+ "kvproto",
+ "lazy_static",
+ "pin-project",
+ "pprof",
+ "prometheus",
+ "protobuf",
+ "serde",
+ "serde_json",
+ "slog",
+ "slog-global",
+ "tempdir",
+ "test_util",
+ "thiserror",
+ "tidb_query_datatype",
+ "tikv_alloc",
+ "tikv_util",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tracing",
+ "tracing-active-tree",
+ "txn_types",
+ "zstd 0.11.2+zstd.1.5.2",
+]
+
+[[package]]
+>>>>>>> 4776689cbd (import: call sink.fail() when failed to send message by grpc (#17834))
 name = "concurrency_manager"
 version = "0.0.1"
 dependencies = [
