@@ -1727,12 +1727,21 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             .thread_count(cfg.value().snap_generator_pool_size)
             .thread_count_limits(1, SNAP_GENERATOR_MAX_POOL_SIZE)
             .create();
+
+        // The disk check mechanism only cares about the latency of the most
+        // recent request; older requests become stale and irrelevant. To avoid
+        // unnecessary accumulation of multiple requests, we set a small
+        // `pending_capacity` for the disk check worker.
+        let disk_check_worker = WorkerBuilder::new("disk-check-worker")
+            .pending_capacity(2)
+            .create();
+
         let workers = Workers {
             pd_worker,
             background_worker,
             cleanup_worker: Worker::new("cleanup-worker"),
             snap_gen_worker,
-            disk_check_worker: Worker::new("disk-check-worker"),
+            disk_check_worker,
             region_worker: Worker::new("region-worker"),
             purge_worker,
             raftlog_fetch_worker: Worker::new("raftlog-fetch-worker"),
@@ -1767,7 +1776,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let disk_check_runner = DiskCheckRunner::new(data_dir.into());
         let disk_check_scheduler: Scheduler<_> = workers
             .disk_check_worker
-            .start("disk-check", disk_check_runner);
+            .start("disk-check-worker", disk_check_runner);
 
         let raftlog_gc_runner = RaftlogGcRunner::new(
             engines.clone(),
