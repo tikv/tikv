@@ -3797,7 +3797,7 @@ where
 
         // And only if the split region does not enter election state, will it be
         // safe to campaign.
-        if !self.term() <= RAFT_INIT_LOG_TERM {
+        if self.term() > RAFT_INIT_LOG_TERM {
             return false;
         }
 
