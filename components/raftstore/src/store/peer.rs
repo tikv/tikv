@@ -103,7 +103,7 @@ use crate::{
         },
         hibernate_state::GroupState,
         memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES},
-        msg::{CasualMessage, ErrorCallback, RaftCommand},
+        msg::{CampaignType, CasualMessage, ErrorCallback, RaftCommand},
         peer_storage::HandleSnapshotResult,
         snapshot_backup::{AbortReason, SnapshotBrState},
         txn_ext::LocksStatus,
@@ -932,10 +932,8 @@ where
     /// Used to record uncampaigned regions, which are the new regions
     /// created when a follower applies a split. If the follower becomes a
     /// leader, a campaign is triggered for those regions.
-    /// The first element is the region id, the second element is the time when
-    /// pending regions are added, used to clear the pending regions after an
-    /// election timeout.
-    pub uncampaigned_new_regions: Option<(Vec<u64>, Instant)>,
+    /// Once the parent region has valid leader, this list will be cleared.
+    pub uncampaigned_new_regions: Option<Vec<u64>>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -1620,11 +1618,6 @@ where
             }
         }
         false
-    }
-
-    #[inline]
-    pub fn uncampaigned(&self) -> bool {
-        self.term() <= RAFT_INIT_LOG_TERM
     }
 
     /// Pings if followers are still connected.
@@ -2350,13 +2343,13 @@ where
                     // ensure that a leader is elected promptly for the newly
                     // created Raft group, minimizing availability impact (e.g.
                     // #12410 and #17602.).
-                    if let Some((new_regions, _)) = self.uncampaigned_new_regions.take() {
+                    if let Some(new_regions) = self.uncampaigned_new_regions.take() {
                         for new_region in new_regions {
                             let _ = ctx.router.send(
                                 new_region,
-                                PeerMsg::CasualMessage(Box::new(CasualMessage::Campaign {
-                                    notify_by_parent: true,
-                                })),
+                                PeerMsg::CasualMessage(Box::new(CasualMessage::Campaign(
+                                    CampaignType::UnsafeSplitCampaign,
+                                ))),
                             );
                         }
                     }
@@ -3804,7 +3797,7 @@ where
 
         // And only if the split region does not enter election state, will it be
         // safe to campaign.
-        if !self.uncampaigned() {
+        if !self.term() <= RAFT_INIT_LOG_TERM {
             return false;
         }
 

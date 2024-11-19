@@ -88,7 +88,7 @@ use crate::{
         local_metrics::{RaftMetrics, TimeTracker},
         memory::*,
         metrics::*,
-        msg::{Callback, ExtCallback, InspectedRaftMessage},
+        msg::{Callback, CampaignType, ExtCallback, InspectedRaftMessage},
         peer::{
             ConsistencyState, Peer, PersistSnapshotResult, StaleState,
             TRANSFER_LEADER_COMMAND_REPLY_CTX,
@@ -1285,14 +1285,17 @@ where
                     self.maybe_destroy();
                 }
             }
-            CasualMessage::Campaign { notify_by_parent } => {
-                if notify_by_parent {
-                    // If the message is sent by the parent, it means that the parent is already
-                    // the leader of the parent region.
-                    let _ = self.fsm.peer.maybe_campaign(true);
-                } else {
-                    // Forcely campaign to be the leader of the region.
-                    let _ = self.fsm.peer.raft_group.campaign();
+            CasualMessage::Campaign(campaign_type) => {
+                match campaign_type {
+                    CampaignType::ForceLeader => {
+                        // Forcely campaign to be the leader of the region.
+                        let _ = self.fsm.peer.raft_group.campaign();
+                    }
+                    CampaignType::UnsafeSplitCampaign => {
+                        // If the message is sent by the parent, it means that the parent is already
+                        // the leader of the parent region.
+                        let _ = self.fsm.peer.maybe_campaign(true);
+                    }
                 }
                 self.fsm.has_ready = true;
             }
@@ -1890,9 +1893,9 @@ where
             // follower state
             let _ = self.ctx.router.send(
                 self.region_id(),
-                PeerMsg::CasualMessage(Box::new(CasualMessage::Campaign {
-                    notify_by_parent: false,
-                })),
+                PeerMsg::CasualMessage(Box::new(CasualMessage::Campaign(
+                    CampaignType::ForceLeader,
+                ))),
             );
         }
         self.fsm.has_ready = true;
@@ -2022,25 +2025,11 @@ where
             .peer
             .uncampaigned_new_regions
             .as_ref()
-            .map_or(false, |r| r.0.is_empty());
+            .map_or(false, |r| r.is_empty());
         // If the peer has any uncleared records in the uncampaigned_new_regions list,
-        // check whether the election timeout has been exceeded.
-        if has_uncompaigned_regions {
-            // Max election timeout is the maximum time that the peer can stay in the
-            // uncampaigned_new_regions list. If it exceeds this time, the relative
-            // raft group will elect a new leader, and the peer will be removed from the
-            // uncampaigned_new_regions list.
-            let max_election_timeout = self.ctx.cfg.raft_base_tick_interval.0
-                * self.ctx.cfg.raft_max_election_timeout_ticks as u32;
-            let ts = self
-                .fsm
-                .peer
-                .uncampaigned_new_regions
-                .as_ref()
-                .map_or(Instant::now(), |r| r.1);
-            if ts.elapsed() > max_election_timeout {
-                self.fsm.peer.uncampaigned_new_regions = None;
-            }
+        // and there has valid leader in the region, it's safely to clear the records.
+        if has_uncompaigned_regions && self.fsm.peer.has_valid_leader() {
+            self.fsm.peer.uncampaigned_new_regions = None;
         }
     }
 
@@ -4495,11 +4484,6 @@ where
                     "err" => %e,
                 );
             }
-        } else {
-            // It means that there does not exist pending uncompleted split (previous splits
-            // are already finished), so we can clear the previous uncompaigned
-            // list.
-            self.fsm.peer.uncampaigned_new_regions = None;
         }
 
         let last_key = enc_end_key(regions.last().unwrap());
@@ -4642,14 +4626,13 @@ where
                 // The new peer has not campaigned yet, record it for later campaign.
                 if is_follower && self.fsm.peer.region().get_peers().len() > 1 {
                     if self.fsm.peer.uncampaigned_new_regions.is_none() {
-                        self.fsm.peer.uncampaigned_new_regions = Some((vec![], Instant::now()));
+                        self.fsm.peer.uncampaigned_new_regions = Some(vec![]);
                     }
                     self.fsm
                         .peer
                         .uncampaigned_new_regions
                         .as_mut()
                         .unwrap()
-                        .0
                         .push(new_region_id);
                 }
                 if let Some(msg) = meta
