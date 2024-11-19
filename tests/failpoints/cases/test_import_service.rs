@@ -5,20 +5,16 @@ use std::{
     time::Duration,
 };
 
-<<<<<<< HEAD
 use file_system::calc_crc32;
-use futures::{executor::block_on, stream, SinkExt};
+use futures::{
+    executor::block_on,
+    stream::{self, StreamExt},
+    SinkExt,
+};
 use grpcio::{Result, WriteFlags};
 use kvproto::{disk_usage::DiskUsage, import_sstpb::*};
 use tempfile::Builder;
 use test_raftstore::Simulator;
-=======
-use futures::{executor::block_on, stream::StreamExt};
-use grpcio::{ChannelBuilder, Environment};
-use kvproto::{disk_usage::DiskUsage, import_sstpb::*, tikvpb_grpc::TikvClient};
-use tempfile::{Builder, TempDir};
-use test_raftstore::{must_raw_put, Simulator};
->>>>>>> 4776689cbd (import: call sink.fail() when failed to send message by grpc (#17834))
 use test_sst_importer::*;
 use tikv_util::{sys::disk, HandyRwLock};
 
@@ -29,6 +25,7 @@ use self::util::{
     check_ingested_kvs, new_cluster_and_tikv_import_client, new_cluster_and_tikv_import_client_tde,
     open_cluster_and_tikv_import_client_v2, send_upload_sst,
 };
+use crate::cases::test_import_service::util::{new_sst_meta, send_write_sst};
 
 // Opening sst writer involves IO operation, it may block threads for a while.
 // Test if download sst works when opening sst writer is blocked.
@@ -361,7 +358,11 @@ fn test_duplicate_detect_with_client_stop() {
         }
         let resp = send_write_sst(&import, &meta, keys, values, commit_ts).unwrap();
         for m in resp.metas.into_iter() {
-            must_ingest_sst(&import, ctx.clone(), m.clone());
+            let mut ingest = IngestRequest::default();
+            ingest.set_context(ctx.clone());
+            ingest.set_sst(m.clone());
+            let resp = import.ingest(&ingest).unwrap();
+            assert!(!resp.has_error());
         }
     }
 
