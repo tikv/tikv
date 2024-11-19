@@ -1502,7 +1502,7 @@ dependencies = [
  "file_system",
  "futures 0.3.15",
  "futures-io",
- "hex 0.4.2",
+ "hex 0.4.3",
  "keys",
  "kvproto",
  "lazy_static",
@@ -7103,9 +7103,11 @@ name = "tikv-ctl"
 version = "0.0.1"
 dependencies = [
  "api_version",
+ "base64 0.13.0",
  "cc",
  "clap 2.33.0",
  "collections",
+ "compact-log-backup",
  "crypto",
  "encryption_export",
  "engine_rocks",
@@ -7133,6 +7135,7 @@ dependencies = [
  "slog",
  "slog-global",
  "structopt",
+ "tempfile",
  "tikv",
  "tikv_util",
  "time 0.1.43",

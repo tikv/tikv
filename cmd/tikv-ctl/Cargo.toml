@@ -35,6 +35,9 @@ nortcheck = ["engine_rocks/nortcheck"]
 api_version = { workspace = true }
 clap = { workspace = true }
 collections = { workspace = true }
+compact-log-backup = { workspace = true }
+tempfile = "3.0"
+base64 = "0.13.0"
 crypto = { workspace = true }
 encryption_export = { workspace = true }
 engine_rocks = { workspace = true }
