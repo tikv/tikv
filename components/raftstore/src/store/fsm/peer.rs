@@ -84,7 +84,7 @@ use crate::{
         local_metrics::{RaftMetrics, TimeTracker},
         memory::*,
         metrics::*,
-        msg::{Callback, ExtCallback, InspectedRaftMessage},
+        msg::{Callback, CampaignType, ExtCallback, InspectedRaftMessage},
         peer::{
             ConsistencyState, ForceLeaderState, Peer, PersistSnapshotResult, StaleState,
             UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
@@ -1254,8 +1254,18 @@ where
                     self.maybe_destroy();
                 }
             }
-            CasualMessage::Campaign => {
-                let _ = self.fsm.peer.raft_group.campaign();
+            CasualMessage::Campaign(campaign_type) => {
+                match campaign_type {
+                    CampaignType::ForceLeader => {
+                        // Forcely campaign to be the leader of the region.
+                        let _ = self.fsm.peer.raft_group.campaign();
+                    }
+                    CampaignType::UnsafeSplitCampaign => {
+                        // If the message is sent by the parent, it means that the parent is already
+                        // the leader of the parent region.
+                        let _ = self.fsm.peer.maybe_campaign(true);
+                    }
+                }
                 self.fsm.has_ready = true;
             }
         }
@@ -1799,7 +1809,13 @@ where
             // follower state
             let _ = self.ctx.router.send(
                 self.region_id(),
+<<<<<<< HEAD
                 PeerMsg::CasualMessage(CasualMessage::Campaign),
+=======
+                PeerMsg::CasualMessage(Box::new(CasualMessage::Campaign(
+                    CampaignType::ForceLeader,
+                ))),
+>>>>>>> 361a8ebfc6 (raftstore: `campaign` newly created regions in time after `Split` (#17625))
             );
         }
         self.fsm.has_ready = true;
@@ -1913,6 +1929,24 @@ where
                     self.on_enter_force_leader();
                 }
             }
+        }
+    }
+
+    #[inline]
+    /// Check whether the peer has any uncleared records in the
+    /// uncampaigned_new_regions list.
+    fn check_uncampaigned_regions(&mut self) {
+        fail_point!("on_skip_check_uncampaigned_regions", |_| {});
+        let has_uncompaigned_regions = !self
+            .fsm
+            .peer
+            .uncampaigned_new_regions
+            .as_ref()
+            .map_or(false, |r| r.is_empty());
+        // If the peer has any uncleared records in the uncampaigned_new_regions list,
+        // and there has valid leader in the region, it's safely to clear the records.
+        if has_uncompaigned_regions && self.fsm.peer.has_valid_leader() {
+            self.fsm.peer.uncampaigned_new_regions = None;
         }
     }
 
@@ -2694,6 +2728,8 @@ where
         }
 
         result?;
+
+        self.check_uncampaigned_regions();
 
         if self.fsm.peer.any_new_peer_catch_up(from_peer_id) {
             self.fsm.peer.heartbeat_pd(self.ctx);
@@ -4123,10 +4159,14 @@ where
         );
         self.fsm.peer.post_split();
 
+<<<<<<< HEAD
         // It's not correct anymore, so set it to false to schedule a split check task.
         self.fsm.peer.may_skip_split_check = false;
 
         let is_leader = self.fsm.peer.is_leader();
+=======
+        let (is_leader, is_follower) = (self.fsm.peer.is_leader(), self.fsm.peer.is_follower());
+>>>>>>> 361a8ebfc6 (raftstore: `campaign` newly created regions in time after `Split` (#17625))
         if is_leader {
             if share_source_region_size {
                 self.fsm.peer.approximate_size = share_size;
@@ -4297,6 +4337,18 @@ where
                 .unwrap();
 
             if !campaigned {
+                // The new peer has not campaigned yet, record it for later campaign.
+                if is_follower && self.fsm.peer.region().get_peers().len() > 1 {
+                    if self.fsm.peer.uncampaigned_new_regions.is_none() {
+                        self.fsm.peer.uncampaigned_new_regions = Some(vec![]);
+                    }
+                    self.fsm
+                        .peer
+                        .uncampaigned_new_regions
+                        .as_mut()
+                        .unwrap()
+                        .push(new_region_id);
+                }
                 if let Some(msg) = meta
                     .pending_msgs
                     .swap_remove_front(|m| m.get_to_peer() == &meta_peer)
