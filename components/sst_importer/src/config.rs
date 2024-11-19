@@ -7,13 +7,14 @@ use std::{
 };
 
 use online_config::{self, OnlineConfig};
-use tikv_util::{config::ReadableDuration, HandyRwLock};
+use tikv_util::{
+    config::ReadableDuration, resizable_threadpool::ResizableRuntimeHandle, HandyRwLock,
+};
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    #[online_config(skip)]
     pub num_threads: usize,
     #[online_config(skip)]
     pub stream_channel_window: usize,
@@ -62,11 +63,17 @@ impl Config {
 }
 
 #[derive(Clone)]
-pub struct ConfigManager(pub Arc<RwLock<Config>>);
+pub struct ConfigManager {
+    pub config: Arc<RwLock<Config>>,
+    threads: ResizableRuntimeHandle,
+}
 
 impl ConfigManager {
-    pub fn new(cfg: Config) -> Self {
-        ConfigManager(Arc::new(RwLock::new(cfg)))
+    pub fn new(cfg: Config, threads: ResizableRuntimeHandle) -> Self {
+        ConfigManager {
+            config: Arc::new(RwLock::new(cfg)),
+            threads,
+        }
     }
 }
 
@@ -88,6 +95,7 @@ impl online_config::ConfigManager for ConfigManager {
             return Err(e);
         }
 
+        self.threads.adjust_with(cfg.num_threads);
         *self.wl() = cfg;
         Ok(())
     }
@@ -97,6 +105,6 @@ impl std::ops::Deref for ConfigManager {
     type Target = RwLock<Config>;
 
     fn deref(&self) -> &Self::Target {
-        self.0.as_ref()
+        self.config.as_ref()
     }
 }

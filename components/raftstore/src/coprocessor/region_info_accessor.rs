@@ -610,6 +610,7 @@ impl RegionCollector {
                     .filter(|ri| {
                         ri.role == StateRole::Leader
                             && ac.region_stat.cop_detail.iterated_count() != 0
+                            && !ri.region.is_in_flashback
                     })
                     .map(|ri| (ri, ac))
             })
@@ -1163,6 +1164,8 @@ impl RegionInfoProvider for MockRegionInfoProvider {
 
 #[cfg(test)]
 mod tests {
+    use kvproto::metapb::RegionEpoch;
+    use pd_client::RegionWriteCfCopDetail;
     use txn_types::Key;
 
     use super::*;
@@ -1807,5 +1810,102 @@ mod tests {
                 }),
             )
             .unwrap();
+    }
+
+    #[test]
+    fn test_get_top_regions() {
+        let mut collector =
+            RegionCollector::new(Arc::new(RwLock::new(HashSet::default())), Box::new(|| 10));
+
+        let test_set = vec![
+            // mvcc amp 5000
+            (1, b"".to_vec(), b"k10".to_vec(), 1_000_000, 0, 200 - 1),
+            // mvcc amp 5
+            (
+                2,
+                b"k10".to_vec(),
+                b"k20".to_vec(),
+                1_000_000,
+                0,
+                2_000_000 - 1,
+            ),
+            // mvcc amp 50, filtered by mvcc amp
+            (3, b"k20".to_vec(), b"k30".to_vec(), 0, 100_000, 2_000 - 1),
+            // mvcc amp 100
+            (
+                4,
+                b"k30".to_vec(),
+                b"k40".to_vec(),
+                100_000,
+                100_000,
+                2_000 - 1,
+            ),
+            // mvcc amp 1000, filtered by next + prev
+            (5, b"k40".to_vec(), b"k50".to_vec(), 1000, 0, 0),
+        ];
+
+        let mut region1 = None;
+        let mut region4 = None;
+        for (id, start, end, next, prev, processed_keys) in test_set {
+            let mut region = Region::default();
+            region.set_id(id);
+            region.set_start_key(start);
+            region.set_end_key(end);
+            let mut epoch = RegionEpoch::new();
+            epoch.set_version(10);
+            region.set_region_epoch(epoch);
+            if id == 1 {
+                region1 = Some(region.clone());
+            } else if id == 4 {
+                region4 = Some(region.clone());
+            }
+
+            collector.handle_raftstore_event(RaftStoreEvent::CreateRegion {
+                region: region.clone(),
+                role: StateRole::Leader,
+            });
+            let mut stat = RegionStat::default();
+            stat.cop_detail = RegionWriteCfCopDetail::new(next, prev, processed_keys);
+            collector.handle_raftstore_event(RaftStoreEvent::UpdateRegionActivity {
+                region,
+                activity: RegionActivity { region_stat: stat },
+            });
+        }
+
+        let (tx, rx) = mpsc::channel();
+        let cb = Box::new(move |regions| {
+            tx.send(regions).unwrap();
+        });
+
+        collector.handle_get_top_regions(4, cb.clone());
+        let regions = rx
+            .recv()
+            .unwrap()
+            .into_iter()
+            .map(|(r, _)| r.id)
+            .collect::<Vec<_>>();
+        assert_eq!(regions, vec![1, 4, 3]);
+
+        let mut region1 = region1.unwrap();
+        region1.set_is_in_flashback(true);
+        collector.handle_raftstore_event(RaftStoreEvent::UpdateRegion {
+            region: region1,
+            role: StateRole::Leader,
+        });
+
+        collector.handle_raftstore_event(RaftStoreEvent::RoleChange {
+            region: region4.unwrap(),
+            role: StateRole::Follower,
+            initialized: true,
+        });
+
+        collector.handle_get_top_regions(4, cb);
+        let regions = rx
+            .recv()
+            .unwrap()
+            .into_iter()
+            .map(|(r, _)| r.id)
+            .collect::<Vec<_>>();
+        assert_eq!(vec![3], regions);
     }
 }

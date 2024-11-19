@@ -20,7 +20,7 @@ make_auto_flush_static_metric! {
         select,
         select_by_in_memory_engine,
         index,
-        index_by_region_cache,
+        index_by_in_memory_engine,
         // For AnalyzeType::{TypeColumn,TypeMixed}.
         analyze_table,
         // For AnalyzeType::{TypeIndex,TypeCommonHandle}.

@@ -5,7 +5,6 @@ use std::{
     time::Duration,
 };
 
-use file_system::calc_crc32;
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{disk_usage::DiskUsage, import_sstpb::*, tikvpb_grpc::TikvClient};
@@ -107,7 +106,7 @@ fn test_download_to_full_disk() {
 
 #[test]
 fn test_ingest_reentrant() {
-    let (cluster, ctx, _tikv, import) = new_cluster_and_tikv_import_client();
+    let (_cluster, ctx, _tikv, import) = new_cluster_and_tikv_import_client();
 
     let temp_dir = Builder::new()
         .prefix("test_ingest_reentrant")
@@ -124,25 +123,9 @@ fn test_ingest_reentrant() {
     // Don't delete ingested sst file or we cannot find sst file in next ingest.
     fail::cfg("dont_delete_ingested_sst", "1*return").unwrap();
 
-    let node_id = *cluster.sim.rl().get_node_ids().iter().next().unwrap();
-    // Use sst save path to track the sst file checksum.
-    let save_path = cluster
-        .sim
-        .rl()
-        .importers
-        .get(&node_id)
-        .unwrap()
-        .get_path(&meta);
-
-    let checksum1 = calc_crc32(save_path.clone()).unwrap();
     // Do ingest and it will ingest success.
     must_ingest_sst(&import, ctx.clone(), meta.clone());
 
-    let checksum2 = calc_crc32(save_path).unwrap();
-    // TODO: Remove this once write_global_seqno is deprecated.
-    // Checksums are the same since the global seqno in the SST file no longer gets
-    // updated with the default setting, which is write_global_seqno=false.
-    assert_eq!(checksum1, checksum2);
     // Do ingest again and it can be reentrant
     must_ingest_sst(&import, ctx.clone(), meta);
 }
@@ -486,6 +469,7 @@ fn test_flushed_applied_index_after_ingset() {
 
     // file a write to trigger ready flush, even if the write is not flushed.
     must_raw_put(&client, ctx, b"key1".to_vec(), b"value1".to_vec());
+    std::thread::sleep(std::time::Duration::from_millis(50));
     let count = sst_file_count(&cluster.paths);
     assert_eq!(0, count);
 

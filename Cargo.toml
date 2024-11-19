@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "8.4.0-alpha"
+version = "8.5.0-alpha"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -35,7 +35,6 @@ testexport = [
   "engine_traits/testexport",
   "engine_rocks/testexport",
   "engine_panic/testexport",
-  "hybrid_engine/testexport",
   "encryption/testexport",
 ]
 test-engine-kv-rocksdb = ["engine_test/test-engine-kv-rocksdb"]
@@ -205,18 +204,9 @@ raft-proto = { git = "https://github.com/tikv/raft-rs", branch = "master" }
 protobuf = { git = "https://github.com/pingcap/rust-protobuf", branch = "v2.8" }
 protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", branch = "v2.8" }
 
-# TODO: remove this replacement after rusoto_s3 truly supports virtual-host style (https://github.com/rusoto/rusoto/pull/1823).
-# UPDATE: use openssl for signature to support fips 140
-rusoto_core = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
-rusoto_credential = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
-rusoto_kms = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
-rusoto_mock = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
-rusoto_s3 = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
-rusoto_sts = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
+snappy-sys = { git = "https://github.com/tikv/rust-snappy.git", branch = "static-link" }
 # NOTICE: use openssl for signature to support fips 140
 tame-oauth = { git = "https://github.com/tikv/tame-oauth", branch = "fips-0.9" }
-
-snappy-sys = { git = "https://github.com/tikv/rust-snappy.git", branch = "static-link" }
 
 # remove this when https://github.com/danburkert/fs2-rs/pull/42 is merged.
 fs2 = { git = "https://github.com/tikv/fs2-rs", branch = "tikv" }
@@ -254,7 +244,7 @@ members = [
   "components/cloud/azure",
   "components/cloud/gcp",
   "components/codec",
-  "components/collections",
+  "components/collections", "components/compact-log-backup",
   "components/concurrency_manager",
   "components/coprocessor_plugin_api",
   "components/crossbeam-skiplist",
@@ -458,6 +448,7 @@ tracing = { version = "0.1.39", default-features = false, features = [
 ] }
 openssl = "0.10"
 openssl-sys = "0.9"
+compact-log-backup = { path = "components/compact-log-backup" }
 heck = "0.3"
 crossbeam = "0.8"
 crossbeam-channel = "0.5"

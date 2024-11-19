@@ -97,7 +97,7 @@ fn test_region_ready_after_deregister_impl<F: KvFormat>() {
         .obs
         .get(&leader.get_store_id())
         .unwrap()
-        .on_role_change(&mut context, &RoleChange::new(StateRole::Follower));
+        .on_role_change(&mut context, &RoleChange::new_for_test(StateRole::Follower));
 
     // Then CDC should not panic
     fail::remove(fp);

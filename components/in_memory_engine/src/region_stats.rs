@@ -138,10 +138,21 @@ impl RegionStatsManager {
     ) -> (Vec<Region>, Vec<Region>) {
         // Get regions' stat of the cached region and sort them by next + prev in
         // descending order.
-        let mut regions_stat = self
+        let mut regions_stat = match self
             .info_provider
             .get_regions_stat(cached_region_ids.clone())
-            .unwrap();
+        {
+            Ok(regions_stat) => regions_stat,
+            Err(e) => {
+                error!(
+                    "ime get regions stat failed";
+                    "err" => ?e,
+                );
+                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
+                return (vec![], vec![]);
+            }
+        };
+
         regions_stat.sort_by(|a, b| {
             let next_prev_a = a.1.cop_detail.iterated_count();
             let next_prev_b = b.1.cop_detail.iterated_count();
@@ -179,13 +190,24 @@ impl RegionStatsManager {
             / self.expected_region_size();
         let expected_num_regions = usize::max(1, current_region_count + expected_new_count);
         info!("ime collect_changed_ranges"; "num_regions" => expected_num_regions);
-        let curr_top_regions = self
+        let curr_top_regions = match self
             .info_provider
             .get_top_regions(NonZeroUsize::try_from(expected_num_regions).unwrap())
-            .unwrap() // TODO (afeinberg): Potentially custom error handling here.
-            .iter()
-            .map(|(r, region_stats)| (r.id, (r.clone(), region_stats.clone())))
-            .collect::<BTreeMap<_, _>>();
+        {
+            Ok(top_regions) => top_regions
+                .iter()
+                .map(|(r, region_stats)| (r.id, (r.clone(), region_stats.clone())))
+                .collect::<BTreeMap<_, _>>(),
+            Err(e) => {
+                error!(
+                    "ime get top regions failed";
+                    "err" => ?e,
+                );
+                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
+                return (vec![], vec![]);
+            }
+        };
+
         {
             let mut region_loaded_map = self.region_loaded_at.write().unwrap();
             for &region_id in curr_top_regions.keys() {
@@ -220,7 +242,7 @@ impl RegionStatsManager {
         };
 
         info!(
-            "IME mvcc amplification reduction filter";
+            "ime mvcc amplification reduction filter";
             "mvcc_amplification_to_filter" => mvcc_amplification_to_filter,
         );
 
@@ -265,7 +287,7 @@ impl RegionStatsManager {
                             r.cop_detail.mvcc_amplification()
                                 < mvcc_amplification_to_filter
                         } else {
-                            // In this case, memory usage is relarively low, we only evict those that should not be cached apparently.
+                            // In this case, memory usage is relatively low, we only evict those that should not be cached apparently.
                             r.cop_detail.mvcc_amplification()
                                 <= self.config.value().mvcc_amplification_threshold as f64 / MVCC_AMPLIFICATION_FILTER_FACTOR
                                 || r.cop_detail.iterated_count()  < avg_top_next_prev / ITERATED_COUNT_FILTER_FACTOR
@@ -329,10 +351,20 @@ impl RegionStatsManager {
     {
         // Get regions' stat of the cached region and sort them by next + prev in
         // descending order.
-        let regions_activity = self
+        let regions_activity = match self
             .info_provider
             .get_regions_stat(cached_region_ids.clone())
-            .unwrap();
+        {
+            Ok(regions_stat) => regions_stat,
+            Err(e) => {
+                error!(
+                    "ime get regions stat failed";
+                    "err" => ?e,
+                );
+                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
+                return;
+            }
+        };
         if regions_activity.is_empty() {
             return;
         }
@@ -377,7 +409,7 @@ impl RegionStatsManager {
         // Evict two regions each time to reduce the probability that an un-dropped
         // ongoing snapshot blocks the process
         for regions in evict_candidates.chunks(2) {
-            let mut deleteable_regions = vec![];
+            let mut deletable_regions = vec![];
 
             let (tx, mut rx) = mpsc::channel(3);
             for r in regions {
@@ -387,7 +419,7 @@ impl RegionStatsManager {
                 );
 
                 let tx_clone = tx.clone();
-                deleteable_regions.extend(evict_region(
+                deletable_regions.extend(evict_region(
                     &CacheRegion::from_region(r),
                     EvictReason::MemoryLimitReached,
                     // This callback will be executed when eviction finishes at `on_delete_regions`
@@ -400,12 +432,12 @@ impl RegionStatsManager {
                 ));
                 self.handle_region_evicted(r);
             }
-            if !deleteable_regions.is_empty() {
+            if !deletable_regions.is_empty() {
                 if let Err(e) = delete_range_scheduler
-                    .schedule_force(BackgroundTask::DeleteRegions(deleteable_regions))
+                    .schedule_force(BackgroundTask::DeleteRegions(deletable_regions))
                 {
                     error!(
-                        "ime schedule deletet range failed";
+                        "ime schedule delete regions failed";
                         "err" => ?e,
                     );
                     assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
