@@ -595,14 +595,17 @@ fn test_duplicate_detect_with_client_stop() {
         let resp: DuplicateDetectResponse = stream.next().await.unwrap().unwrap();
         resp
     });
-    assert_eq!(resp.get_region_error().get_message(), "faild to get snapshot");
+    assert_eq!(
+        resp.get_region_error().get_message(),
+        "faild to get snapshot"
+    );
 
-    // failed to get snapshot, and stream stops. 
+    // failed to get snapshot, and stream stops.
     // A stopeed remote don't cause panic in server.
     let stream = import.duplicate_detect(&duplicate).unwrap();
     drop(stream);
 
-    // drop stream after received part of response.  
+    // drop stream after received part of response.
     // A stopped remote must not cause panic at server.
     fail::remove("failed_to_async_snapshot");
     let mut stream = import.duplicate_detect(&duplicate).unwrap();
@@ -636,7 +639,6 @@ fn test_duplicate_detect_with_client_stop() {
             }
         }
 
-        
         ret
     });
     assert_eq!(ret.len(), (data_count - 1000) as usize * 4);
