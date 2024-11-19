@@ -31,7 +31,7 @@ openssl req -new -key "$SERVER_KEY" -out "$SERVER_CSR" \
     -addext "basicConstraints = critical, CA:FALSE" \
     -addext "keyUsage = critical, digitalSignature, keyEncipherment" \
     -addext "extendedKeyUsage = serverAuth, clientAuth" \
-    -addext "subjectAltName = IP.1:172.16.5.40, IP.2:127.0.0.1"
+    -addext "subjectAltName = IP.1:172.16.5.40, IP.2:127.0.0.1, DNS.1:tikv-server, DNS.2:localhost"
 openssl x509 -req -days "$VALID_DAYS" \
     -CA "$CA_CERT" -CAkey "$CA_KEY" -CAcreateserial \
     -copy_extensions copyall \
