@@ -516,6 +516,7 @@ impl<R: RaftExtension + 'static> Runnable for Runner<R> {
         match task {
             Task::Recv { stream, sink } => {
                 if let Some(status) = self.receiving_busy() {
+                    SNAP_TASK_COUNTER_STATIC.recv_dropped.inc();
                     self.pool.spawn(sink.fail(status));
                     return;
                 }
@@ -583,6 +584,7 @@ impl<R: RaftExtension + 'static> Runnable for Runner<R> {
                 let region_id = msg.get_region_id();
                 if self.sending_count.load(Ordering::SeqCst) >= self.cfg.concurrent_send_snap_limit
                 {
+                    SNAP_TASK_COUNTER_STATIC.send_dropped.inc();
                     warn!(
                         "too many sending snapshot tasks, drop Send Snap[to: {}, snap: {:?}]",
                         addr, msg
