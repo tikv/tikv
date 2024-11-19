@@ -18,19 +18,12 @@ use tokio::{
     time::interval,
 };
 
-pub struct RcRuntime {
+struct RcRuntime {
     inner: Option<Runtime>,
     task_count: Arc<AtomicUsize>,
 }
 
 impl RcRuntime {
-    pub fn new(runtime: Runtime) -> Self {
-        Self {
-            inner: Some(runtime),
-            task_count: Arc::new(AtomicUsize::new(0)),
-        }
-    }
-
     pub fn handle(&self) -> Option<Handle> {
         self.inner.as_ref().map(|runtime| runtime.handle().clone())
     }
