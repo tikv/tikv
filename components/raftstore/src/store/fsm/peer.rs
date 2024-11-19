@@ -3624,7 +3624,6 @@ where
             )
             .flush()
             .when_done(move || {
-                fail_point!("destroy_region_before_gc_flush");
                 if let Err(e) =
                     mb.force_send(PeerMsg::SignificantMsg(SignificantMsg::RaftLogGcFlushed))
                 {
@@ -3636,7 +3635,6 @@ where
                         region_id, peer_id, e
                     );
                 }
-                fail_point!("destroy_region_after_gc_flush");
             });
             if let Err(e) = self.ctx.raftlog_gc_scheduler.schedule(task) {
                 if tikv_util::thread_group::is_shutdown(!cfg!(test)) {
