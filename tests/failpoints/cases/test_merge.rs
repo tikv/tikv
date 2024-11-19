@@ -2199,8 +2199,9 @@ fn test_raft_log_gc_after_merge() {
     .unwrap();
 
     let (tx, rx) = channel();
+    let tx = Arc::new(Mutex::new(tx));
     fail::cfg_callback("destroy_region_after_gc_flush", move || {
-        tx.send(()).unwrap();
+        tx.lock().unwrap().send(()).unwrap();
     })
     .unwrap();
 
