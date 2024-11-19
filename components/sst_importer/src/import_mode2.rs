@@ -315,8 +315,8 @@ mod test {
         handle.block_on(tokio::task::yield_now());
 
         // the range covering region and region2 should be cleared due to timeout.
-        // assert!(!switcher.region_in_import_mode(&region));
-        // assert!(!switcher.region_in_import_mode(&region2));
+        assert!(!switcher.region_in_import_mode(&region));
+        assert!(!switcher.region_in_import_mode(&region2));
         assert!(switcher.region_in_import_mode(&region3));
 
         thread::sleep(Duration::from_millis(400));
