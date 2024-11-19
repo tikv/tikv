@@ -280,7 +280,7 @@ fn sqrt(arg: &Real) -> Result<Option<Real>> {
 #[inline]
 #[rpn_fn]
 fn radians(arg: &Real) -> Result<Option<Real>> {
-    Ok(Real::new(**arg * std::f64::consts::PI / 180_f64).ok())
+    Ok(Real::new(**arg * (std::f64::consts::PI / 180_f64)).ok())
 }
 
 #[inline]
@@ -353,7 +353,12 @@ fn rand_with_seed_first_gen(seed: Option<&i64>) -> Result<Option<Real>> {
 #[inline]
 #[rpn_fn]
 fn degrees(arg: &Real) -> Result<Option<Real>> {
-    Ok(Real::new(arg.to_degrees()).ok())
+    let ret = arg.to_degrees();
+    if ret.is_infinite() {
+        Err(Error::overflow("DOUBLE", format!("degrees({})", arg)).into())
+    } else {
+        Ok(Real::new(ret).ok())
+    }
 }
 
 #[inline]
@@ -1182,6 +1187,7 @@ mod tests {
             ),
             (Some(f64::NAN), None),
             (Some(f64::INFINITY), Some(Real::new(f64::INFINITY).unwrap())),
+            (Some(1.0E308), Some(Real::new(1.0E308 * (std::f64::consts::PI / 180_f64)).unwrap()))
         ];
         for (input, expect) in test_cases {
             let output = RpnFnScalarEvaluator::new()
@@ -1221,25 +1227,30 @@ mod tests {
     #[test]
     fn test_degrees() {
         let tests_cases = vec![
-            (None, None),
-            (Some(f64::NAN), None),
-            (Some(0f64), Some(Real::new(0f64).unwrap())),
-            (Some(1f64), Some(Real::new(57.29577951308232_f64).unwrap())),
+            (None, None, false),
+            (Some(f64::NAN), None, false),
+            (Some(0f64), Some(Real::new(0f64).unwrap()), false),
+            (Some(1f64), Some(Real::new(57.29577951308232_f64).unwrap()), false),
             (
                 Some(std::f64::consts::PI),
                 Some(Real::new(180.0_f64).unwrap()),
+                false,
             ),
             (
                 Some(-std::f64::consts::PI / 2.0_f64),
                 Some(Real::new(-90.0_f64).unwrap()),
+                false,
             ),
+            (Some(1.0E307), None, true),
         ];
-        for (input, expect) in tests_cases {
+        for (input, expect, is_err) in tests_cases {
             let output = RpnFnScalarEvaluator::new()
                 .push_param(input)
-                .evaluate(ScalarFuncSig::Degrees)
-                .unwrap();
-            assert_eq!(expect, output, "{:?}", input);
+                .evaluate(ScalarFuncSig::Degrees);
+            assert_eq!(is_err, output.is_err());
+            if let Ok(out) = output {
+                assert_eq!(expect, out, "{:?}", input);
+            }
         }
     }
 
