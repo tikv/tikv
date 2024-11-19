@@ -18,12 +18,7 @@ use kvproto::{
 };
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
-<<<<<<< HEAD
-use raftstore::store::*;
-=======
 use raftstore::{router::RaftStoreRouter, store::*};
-use raftstore_v2::router::{PeerMsg, PeerTick};
->>>>>>> 1174d1fc5c (raftstore: skip handle remaining messages if peer is destroyed (#17841))
 use test_raftstore::*;
 use tikv::storage::{kv::SnapshotExt, Snapshot};
 use tikv_util::{config::*, time::Instant, HandyRwLock};
@@ -1842,8 +1837,9 @@ fn test_raft_log_gc_after_merge() {
     .unwrap();
 
     let (tx, rx) = channel();
+    let tx = Arc::new(Mutex::new(tx));
     fail::cfg_callback("destroy_region_after_gc_flush", move || {
-        tx.send(()).unwrap();
+        tx.lock().unwrap().send(()).unwrap();
     })
     .unwrap();
 
