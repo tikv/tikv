@@ -246,7 +246,7 @@ impl Default for Config {
             status_thread_pool_size: 1,
             max_grpc_send_msg_len: DEFAULT_MAX_GRPC_SEND_MSG_LEN,
             raft_client_grpc_send_msg_buffer: 512 * 1024,
-            // As of https://github.com/tikv/tikv/pull/17821, raft_client_queue_size has been
+            // As of https://github.com/tikv/tikv/pull/17821, the raft_client_queue_size has been
             // increased from 8192 to 16384 to reduce the message delays under too many messages
             // load. Additionally, the raft_msg_max_batch_size has also been increased.
             raft_client_queue_size: 16384,
