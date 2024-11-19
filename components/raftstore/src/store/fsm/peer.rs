@@ -2332,8 +2332,6 @@ where
 
         self.check_force_leader();
 
-        self.check_uncampaigned_regions();
-
         let mut res = None;
         if self.ctx.cfg.hibernate_regions {
             if self.fsm.hibernate_state.group_state() == GroupState::Idle {
@@ -2865,6 +2863,8 @@ where
         }
 
         result?;
+
+        self.check_uncampaigned_regions();
 
         if self.fsm.peer.any_new_peer_catch_up(from_peer_id) {
             self.fsm.peer.heartbeat_pd(self.ctx);
