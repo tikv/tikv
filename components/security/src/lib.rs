@@ -32,6 +32,7 @@ pub struct SecurityConfig {
     #[serde(skip)]
     pub override_ssl_target: String,
     pub cert_allowed_cn: HashSet<String>,
+    pub cert_allowed_san: HashSet<String>,
     pub redact_info_log: RedactOption,
     pub encryption: EncryptionConfig,
 }
@@ -178,6 +179,12 @@ impl SecurityManager {
                 };
                 sb = sb.add_checker(cn_checker);
             }
+            if !self.cfg.cert_allowed_san.is_empty() {
+                let san_checker = SANChecker {
+                    allowed_san: Arc::new(self.cfg.cert_allowed_san.clone()),
+                };
+                sb = sb.add_checker(san_checker)
+            }
             let fetcher = Box::new(Fetcher {
                 cfg: self.cfg.clone(),
                 last_modified_time: Arc::new(Mutex::new(None)),
@@ -210,6 +217,30 @@ impl ServerChecker for CnChecker {
                 format!(
                     "Common name check fail, reason: {}, cert_allowed_cn: {:?}",
                     reason, self.allowed_cn
+                ),
+            )),
+        }
+    }
+
+    fn box_clone(&self) -> Box<dyn ServerChecker> {
+        Box::new(self.clone())
+    }
+}
+
+#[derive(Clone)]
+struct SANChecker {
+    allowed_san: Arc<HashSet<String>>,
+}
+
+impl ServerChecker for SANChecker {
+    fn check(&mut self, ctx: &RpcContext<'_>) -> CheckResult {
+        match check_subject_alternative_name(&self.allowed_san, ctx) {
+            Ok(()) => CheckResult::Continue,
+            Err(reason) => CheckResult::Abort(RpcStatus::with_message(
+                RpcStatusCode::UNAUTHENTICATED,
+                format!(
+                    "subject alternative name check fail, reason: {}, cert_allowed_san: {:?}",
+                    reason, self.allowed_san
                 ),
             )),
         }
@@ -276,10 +307,35 @@ fn check_common_name(
     }
 }
 
-/// Check peer CN with a set of allowed CN.
-pub fn match_peer_names(allowed_cn: &HashSet<String>, name: &str) -> bool {
-    for cn in allowed_cn {
-        if cn == name {
+/// Check peer SAN with cert-allowed-san field.
+/// Similar to check_common_name, but allows for a match on any available certificate SAN (there
+/// may be multiple).
+fn check_subject_alternative_name(
+    cert_allowed_san: &HashSet<String>,
+    ctx: &RpcContext<'_>,
+) -> Result<(), String> {
+    if let Some(auth_ctx) = ctx.auth_context() {
+        let auth_property_sans = auth_ctx
+            .into_iter()
+            .filter(|x| x.name() == "x509_subject_alternative_name");
+
+        for auth_property in auth_property_sans {
+            let peer_san = auth_property.value_str().unwrap();
+            if match_peer_names(cert_allowed_san, peer_san) {
+                return Ok(());
+            }
+        }
+
+        Err("no matching x509_subject_alternative_name or doesn't exist".to_string())
+    } else {
+        Ok(())
+    }
+}
+
+/// Check peer name with a set of allowed CN or SANs.
+pub fn match_peer_names(allowed_names: &HashSet<String>, name: &str) -> bool {
+    for cert_name in allowed_names {
+        if name.contains(cert_name) {
             return true;
         }
     }

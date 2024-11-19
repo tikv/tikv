@@ -1217,6 +1217,7 @@
 # cert-path = ""
 # key-path = ""
 # cert-allowed-cn = []
+# cert-allowed-san = []
 #
 ## Avoid outputing data (e.g. user keys) to info log. It currently does not avoid printing
 ## user data altogether, but greatly reduce those logs.

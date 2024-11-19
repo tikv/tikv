@@ -7,7 +7,7 @@ use encryption_export::EncryptionConfig;
 use grpcio::{ChannelCredentials, ChannelCredentialsBuilder};
 use security::SecurityConfig;
 
-pub fn new_security_cfg(cn: Option<HashSet<String>>) -> SecurityConfig {
+pub fn new_security_cfg(cn: Option<HashSet<String>>, san: Option<HashSet<String>>) -> SecurityConfig {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     SecurityConfig {
         ca_path: format!("{}", p.join("data/ca.pem").display()),
@@ -15,6 +15,7 @@ pub fn new_security_cfg(cn: Option<HashSet<String>>) -> SecurityConfig {
         key_path: format!("{}", p.join("data/key.pem").display()),
         override_ssl_target: "".to_owned(),
         cert_allowed_cn: cn.unwrap_or_default(),
+        cert_allowed_san: san.unwrap_or_default(),
         encryption: EncryptionConfig::default(),
         redact_info_log: log_wrappers::RedactOption::Flag(true),
     }
