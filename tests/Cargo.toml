@@ -102,6 +102,7 @@ rand = "0.8.3"
 resource_control = { workspace = true }
 server = { workspace = true }
 service = { workspace = true }
+sst_importer = {workspace = true}
 slog = { workspace = true }
 slog-global = { workspace = true }
 tempfile = "3.0"

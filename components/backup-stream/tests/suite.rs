@@ -936,7 +936,7 @@ impl Suite {
 
     pub fn wait_for_flush(&self) {
         self.wait_with_router(move |r| {
-            let task_names = r.select_task(TaskSelector::All.reference());
+            let task_names = r.select_task_name(TaskSelector::All.reference());
             for task_name in task_names {
                 let tsk = r.get_task_handler(&task_name);
                 if tsk.unwrap().is_flushing() {

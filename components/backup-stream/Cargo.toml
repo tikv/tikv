@@ -43,6 +43,8 @@ file_system = { workspace = true }
 futures = "0.3"
 grpcio = { workspace = true }
 hex = "0.4"
+# For `ingest_listener`.
+sst_importer = { workspace = true }
 kvproto = { workspace = true }
 lazy_static = "1.4"
 log_wrappers = { workspace = true }

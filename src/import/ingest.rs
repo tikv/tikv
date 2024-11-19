@@ -186,6 +186,7 @@ async fn ingest_files_impl<E: Engine>(
     if !importer.check_api_version(&ssts)? {
         return Err(Error::IncompatibleApiVersion);
     }
+    importer.before_propose_ingest(&ssts).await?;
 
     let snapshot_res = async_snapshot(&mut engine, &context);
     let mut resp = IngestResponse::default();
@@ -243,6 +244,8 @@ async fn ingest_files_impl<E: Engine>(
                 .set_message(format!("[region {}] ingest failed: {:?}", region_id, e));
         }
     }
+
+    importer.after_ingested(&ssts).await;
     Ok(resp)
 }
 
