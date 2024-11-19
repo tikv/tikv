@@ -17,7 +17,8 @@ use file_system::{set_io_type, IoType};
 use futures::{sink::SinkExt, stream::TryStreamExt, TryFutureExt};
 use futures_executor::{ThreadPool, ThreadPoolBuilder};
 use grpcio::{
-    ClientStreamingSink, RequestStream, RpcContext, ServerStreamingSink, UnarySink, WriteFlags,
+    ClientStreamingSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink,
+    UnarySink, WriteFlags,
 };
 use kvproto::{
     encryptionpb::EncryptionMethod,
@@ -1195,15 +1196,18 @@ where
                             IMPORT_RPC_DURATION
                                 .with_label_values(&[label, "ok"])
                                 .observe(timer.saturating_elapsed_secs());
+                            let _ = sink.close().await;
                         }
                         Err(e) => {
                             warn!(
                                 "connection send message fail";
                                 "err" => %e
                             );
+                            let status =
+                                RpcStatus::with_message(RpcStatusCode::UNKNOWN, format!("{:?}", e));
+                            let _ = sink.fail(status).await;
                         }
                     }
-                    let _ = sink.close().await;
                     return;
                 }
             };
@@ -1219,7 +1223,10 @@ where
                         "connection send message fail";
                         "err" => %e
                     );
-                    break;
+                    let status =
+                        RpcStatus::with_message(RpcStatusCode::UNKNOWN, format!("{:?}", e));
+                    let _ = sink.fail(status).await;
+                    return;
                 }
             }
             let _ = sink.close().await;
