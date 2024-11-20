@@ -621,6 +621,12 @@ where
         #[allow(const_evaluatable_unchecked)]
         let mut distribution = [0; PeerMsg::<EK>::COUNT];
         for m in msgs.drain(..) {
+            // skip handling remain messages if fsm is destroyed. This can aviod handling
+            // arbitary messages(e.g. CasualMessage::ForceCompactRaftLogs) that may need
+            // to read raft logs which maybe lead to panic.
+            if self.fsm.stopped {
+                break;
+            }
             distribution[m.discriminant()] += 1;
             match m {
                 PeerMsg::RaftMessage(msg) => {
@@ -5521,7 +5527,7 @@ where
         }
         fail_point!("on_raft_log_gc_tick_1", self.fsm.peer_id() == 1, |_| {});
         fail_point!("on_raft_gc_log_tick", |_| {});
-        debug_assert!(!self.fsm.stopped);
+        assert!(!self.fsm.stopped);
 
         // As leader, we would not keep caches for the peers that didn't response
         // heartbeat in the last few seconds. That happens probably because
