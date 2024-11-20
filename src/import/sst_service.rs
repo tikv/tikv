@@ -366,9 +366,11 @@ impl<E: Engine> ImportSstService<E> {
                 tokio::time::sleep(WRITER_GC_INTERVAL).await;
             }
         });
+        let num_threads = cfg.num_threads;
         let cfg_mgr = ConfigManager::new(cfg, Arc::downgrade(&threads_clone));
         handle.spawn(Self::tick(importer.clone(), cfg_mgr.clone()));
         // Drop the initial pool to accept new tasks
+        threads_clone.lock().unwrap().adjust_with(num_threads);
 
         ImportSstService {
             cfg: cfg_mgr,

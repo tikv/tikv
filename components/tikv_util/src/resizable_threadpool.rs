@@ -1,6 +1,5 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use core::panic;
 use std::{
     collections::HashSet,
     hash::{Hash, Hasher},
@@ -75,13 +74,10 @@ impl RcRuntimeHandle {
 
         {
             let lock = self.inner.lock().unwrap();
-            if let Some(rc_runtime) = lock.as_ref() {
-                task_count = rc_runtime.task_count.clone();
-                handle = rc_runtime.handle().expect("Failed to get runtime handle");
-                task_count.fetch_add(1, Ordering::SeqCst);
-            } else {
-                panic!("RcRuntime is not set");
-            }
+            let rc_runtime = lock.as_ref().expect("RcRuntime is cleaned");
+            task_count = rc_runtime.task_count.clone();
+            handle = rc_runtime.handle().expect("Failed to get runtime handle");
+            task_count.fetch_add(1, Ordering::SeqCst);
         }
 
         handle.spawn(async move {
@@ -99,13 +95,10 @@ impl RcRuntimeHandle {
 
         {
             let lock = self.inner.lock().unwrap();
-            if let Some(rc_runtime) = lock.as_ref() {
-                task_count = rc_runtime.task_count.clone();
-                handle = rc_runtime.handle().expect("Failed to get runtime handle");
-                task_count.fetch_add(1, Ordering::SeqCst);
-            } else {
-                panic!("RcRuntime is not set");
-            }
+            let rc_runtime = lock.as_ref().expect("RcRuntime is cleaned");
+            task_count = rc_runtime.task_count.clone();
+            handle = rc_runtime.handle().expect("Failed to get runtime handle");
+            task_count.fetch_add(1, Ordering::SeqCst);
         }
 
         handle.block_on(async move {
@@ -113,6 +106,15 @@ impl RcRuntimeHandle {
             task_count.fetch_sub(1, Ordering::SeqCst);
             output
         })
+    }
+
+    // In case someone wants to drop the runtime manually
+    // Don't call spawn or block_on after this
+    pub fn shutdown(&mut self) {
+        let mut lock = self.inner.lock().unwrap();
+        if let Some(rc_runtime) = lock.as_mut() {
+            rc_runtime.inner.take().unwrap().shutdown_background();
+        }
     }
 }
 
@@ -203,25 +205,37 @@ impl ResizableRuntime {
         }
 
         self.count += 1;
-        let thread_name = self.thread_name.to_string()
-            + "-"
-            + &self.count.to_string()
-            + "-"
-            + &new_size.to_string();
+        let thread_name = format!(
+            "{}-{}-{}",
+            self.thread_name,
+            self.count,
+            new_size.to_string()
+        );
         let new_pool = (self.replace_pool_rule)(new_size, thread_name.as_str())
             .expect("failed to create tokio runtime for backup worker.");
 
-        self.pools.lock().unwrap().insert(self.pool.clone());
-        *self.pool.inner.lock().unwrap() = Some(RcRuntime {
-            inner: Some(new_pool),
-            task_count: Arc::new(AtomicUsize::new(0)),
-        });
-        self.pool.name = thread_name;
+        {
+            let mut pools_guard = self.pools.lock().unwrap();
+
+            pools_guard.insert(self.pool.clone());
+
+            *self.pool.inner.lock().unwrap() = Some(RcRuntime {
+                inner: Some(new_pool),
+                task_count: Arc::new(AtomicUsize::new(0)),
+            });
+            self.pool.name = thread_name;
+        }
 
         self.size = new_size;
         (self.after_adjust)(new_size);
 
         new_size
+    }
+}
+
+impl Drop for ResizableRuntime {
+    fn drop(&mut self) {
+        self.pool.shutdown();
     }
 }
 
@@ -274,6 +288,13 @@ mod test {
         handle.block_on(async {
             assert_eq!(COUNTER.load(Ordering::SeqCst), 8);
         });
+        handle.spawn(async {
+            sleep(Duration::from_secs(5));
+            COUNTER.fetch_add(1, Ordering::SeqCst);
+        });
+        drop(threads);
+        // after drop, pool should be cleaned
+        assert_eq!(COUNTER.load(Ordering::SeqCst), 8);
     }
 
     #[test]
