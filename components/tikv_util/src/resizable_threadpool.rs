@@ -149,7 +149,10 @@ impl ResizableRuntime {
             thread_name: thread_name.to_owned(),
             pool: RcRuntimeHandle {
                 name: thread_name.to_owned() + "-init",
-                inner: Arc::new(Mutex::new(None)),
+                inner: Arc::new(Mutex::new(Some(RcRuntime {
+                    inner: None,
+                    task_count: Arc::new(AtomicUsize::new(0)),
+                }))),
             },
             pools: Arc::new(Mutex::new(HashSet::new())),
             keeper,
@@ -174,6 +177,7 @@ impl ResizableRuntime {
                     if let Some(rc_runtime) = handle.inner.lock().unwrap().as_ref() {
                         rc_runtime.task_count.load(Ordering::SeqCst) > 0
                     } else {
+                        info!("RcRuntime is cleaned"; "name" => handle.name.as_str());
                         false
                     }
                 });
@@ -211,14 +215,19 @@ impl ResizableRuntime {
 
         {
             let mut pools_guard = self.pools.lock().unwrap();
-
             pools_guard.insert(self.pool.clone());
-
-            *self.pool.inner.lock().unwrap() = Some(RcRuntime {
-                inner: Some(new_pool),
-                task_count: Arc::new(AtomicUsize::new(0)),
-            });
-            self.pool.name = thread_name;
+            self.pool = RcRuntimeHandle {
+                name: thread_name.clone(),
+                inner: Arc::new(Mutex::new(Some(RcRuntime {
+                    inner: Some(new_pool),
+                    task_count: Arc::new(AtomicUsize::new(0)),
+                }))),
+            };
+            info!(
+                "Resizing thread pool";
+                "thread_name" => thread_name.as_str(),
+                "new_size" => new_size
+            );
         }
 
         self.size = new_size;
@@ -290,6 +299,49 @@ mod test {
         drop(threads);
         // after drop, pool should be cleaned
         assert_eq!(COUNTER.load(Ordering::SeqCst), 8);
+    }
+
+    #[test]
+    fn test_infinite_loop() {
+        let after_adjust = |new_size: usize| {
+            COUNTER.store(new_size, Ordering::SeqCst);
+        };
+        let mut threads = ResizableRuntime::new(
+            4,
+            "test",
+            Box::new(replace_pool_rule),
+            Box::new(after_adjust),
+        );
+        let handle = threads.handle();
+        assert_eq!(COUNTER.load(Ordering::SeqCst), 4);
+        // infinite loop should not be cleaned
+        handle.spawn(async {
+            loop {
+                sleep(Duration::from_secs(10));
+            }
+        });
+
+        // The old pool should be added into the pools
+        threads.adjust_with(8);
+        assert!(!threads.pools.lock().unwrap().is_empty());
+
+        // The old pool should be cleaned after 10s
+        sleep(Duration::from_secs(12));
+        assert_eq!(
+            "test-1-4",
+            threads
+                .pools
+                .lock()
+                .unwrap()
+                .iter()
+                .last()
+                .unwrap()
+                .name
+                .as_str()
+        );
+        handle.block_on(async {
+            assert_eq!(COUNTER.load(Ordering::SeqCst), 8);
+        });
     }
 
     #[test]
