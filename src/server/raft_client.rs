@@ -297,7 +297,6 @@ impl Buffer for BatchMessageBuffer {
             .unwrap()
             .as_nanos() as u64;
         batch_msgs.last_observed_time = now;
-        self.batch = Vec::with_capacity(self.cfg.raft_msg_max_batch_size);
 
         let res = Pin::new(sender).start_send((
             batch_msgs,
@@ -1068,10 +1067,7 @@ where
     /// the message is enqueued to buffer. Caller is expected to call `flush` to
     /// ensure all buffered messages are sent out.
     pub fn send(&mut self, mut msg: RaftMessage) -> result::Result<(), DiscardReason> {
-        msg.last_observed_time = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos() as u64;
+        let wait_send_start = Instant::now();
         let store_id = msg.get_to_peer().store_id;
         let grpc_raft_conn_num = self.builder.cfg.value().grpc_raft_conn_num as u64;
         let conn_id = if grpc_raft_conn_num == 1 {
@@ -1109,7 +1105,7 @@ where
         transport_on_send_store_fp();
         loop {
             if let Some(s) = self.cache.get_mut(&(store_id, conn_id)) {
-                match s.queue.push((msg, Instant::now())) {
+                match s.queue.push((msg, wait_send_start)) {
                     Ok(_) => {
                         if !s.dirty {
                             s.dirty = true;
