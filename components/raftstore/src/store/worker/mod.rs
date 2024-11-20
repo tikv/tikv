@@ -6,6 +6,7 @@ mod cleanup_snapshot;
 mod cleanup_sst;
 mod compact;
 mod consistency_check;
+mod disk_check;
 pub mod metrics;
 mod pd;
 mod raftlog_gc;
@@ -27,6 +28,7 @@ pub use self::{
         Task as CompactTask,
     },
     consistency_check::{Runner as ConsistencyCheckRunner, Task as ConsistencyCheckTask},
+    disk_check::{init_disk_check_worker, Runner as DiskCheckRunner, Task as DiskCheckTask},
     pd::{
         new_change_peer_v2_request, FlowStatistics, FlowStatsReporter, HeartbeatTask,
         Runner as PdRunner, StatsMonitor as PdStatsMonitor, StoreStatsReporter, Task as PdTask,
