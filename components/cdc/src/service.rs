@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicUsize, Ordering, AtomicU64},
     Arc,
 };
 
@@ -18,6 +18,7 @@ use kvproto::{
 };
 use tikv_util::{error, info, memory::MemoryQuota, warn, worker::*};
 use tokio::runtime::{self, Runtime};
+use semver::Version;
 
 use crate::{
     channel::{channel, Sink, CDC_CHANNLE_CAPACITY},
@@ -64,31 +65,29 @@ bitflags::bitflags! {
 }
 
 impl FeatureGate {
-    fn default_features(version: &semver::Version) -> FeatureGate {
-        let mut features = FeatureGate::empty();
-        if *version >= semver::Version::new(4, 0, 8) {
-            features.set(FeatureGate::BATCH_RESOLVED_TS, true);
+    fn add_features(&mut self, version: &Version) {
+        if *version >= Version::new(4, 0, 8) {
+            self.set(FeatureGate::BATCH_RESOLVED_TS, true);
         }
-        if *version >= semver::Version::new(5, 3, 0) {
-            features.set(FeatureGate::VALIDATE_CLUSTER_ID, true);
+        if *version >= Version::new(5, 3, 0) {
+            self.set(FeatureGate::VALIDATE_CLUSTER_ID, true);
         }
-        features
     }
 
     /// Returns the first version (v4.0.8) that supports batch resolved ts.
-    pub fn batch_resolved_ts() -> semver::Version {
-        semver::Version::new(4, 0, 8)
+    pub fn batch_resolved_ts() -> Version {
+        Version::new(4, 0, 8)
     }
 }
 
 pub struct Conn {
-    id: ConnId,
-    sink: Sink,
-    downstreams: HashMap<DownstreamKey, DownstreamValue>,
-    peer: String,
+    pub id: ConnId,
+    pub peer: String,
+    pub sink: Sink,
+    pub version: Version,
+    pub features: FeatureGate,
 
-    // Set when the connection established, or the first request received.
-    version: Option<(semver::Version, FeatureGate)>,
+    downstreams: HashMap<DownstreamKey, DownstreamValue>,
 }
 
 #[derive(PartialEq, Eq, Hash)]
@@ -101,50 +100,24 @@ struct DownstreamKey {
 struct DownstreamValue {
     id: DownstreamId,
     state: Arc<AtomicCell<DownstreamState>>,
+    advanced_to: Arc<AtomicU64>,
 }
 
 impl Conn {
-    pub fn new(conn_id: ConnId, sink: Sink, peer: String) -> Conn {
-        Conn {
+    pub fn new(conn_id: ConnId, peer: String, sink: Sink, version: Version, features: Vec<&'static str>) -> Conn {
+        let mut conn = Conn {
             id: conn_id,
-            sink,
-            downstreams: HashMap::default(),
             peer,
-            version: None,
+            sink,
+            version,
+            features: FeatureGate::empty(),
+            downstreams: HashMap::default(),
+        };
+        conn.features.add_features(&conn.version);
+        if features.contains(&EventFeedHeaders::STREAM_MULTIPLEXING) {
+            conn.features.set(FeatureGate::STREAM_MULTIPLEXING, true);
         }
-    }
-
-    pub fn check_version_and_set_feature(
-        &mut self,
-        version: semver::Version,
-        explicit_features: Vec<&'static str>,
-    ) {
-        let mut features = FeatureGate::default_features(&version);
-        if explicit_features.contains(&EventFeedHeaders::STREAM_MULTIPLEXING) {
-            features.set(FeatureGate::STREAM_MULTIPLEXING, true);
-        } else {
-            // NOTE: we can handle more explicit features here.
-        }
-
-        if self.version.replace((version, features)).is_some() {
-            panic!("should never be some");
-        }
-    }
-
-    pub fn features(&self) -> &FeatureGate {
-        self.version.as_ref().map(|(_, f)| f).unwrap()
-    }
-
-    pub fn get_peer(&self) -> &str {
-        &self.peer
-    }
-
-    pub fn get_id(&self) -> ConnId {
-        self.id
-    }
-
-    pub fn get_sink(&self) -> &Sink {
-        &self.sink
+        conn
     }
 
     pub fn get_downstream(&self, request_id: RequestId, region_id: u64) -> Option<DownstreamId> {
@@ -159,8 +132,7 @@ impl Conn {
         &mut self,
         request_id: RequestId,
         region_id: u64,
-        downstream_id: DownstreamId,
-        downstream_state: Arc<AtomicCell<DownstreamState>>,
+        downstream: &Downstream,
     ) -> Option<DownstreamId> {
         let key = DownstreamKey {
             request_id,
@@ -170,8 +142,9 @@ impl Conn {
             HashMapEntry::Occupied(value) => Some(value.get().id),
             HashMapEntry::Vacant(v) => {
                 v.insert(DownstreamValue {
-                    id: downstream_id,
-                    state: downstream_state,
+                    id: downstream.id,
+                    state: downstream.get_state(),
+                    advanced_to: downstream.advanced_to.clone(),
                 });
                 None
             }
@@ -200,10 +173,10 @@ impl Conn {
 
     pub fn iter_downstreams<F>(&self, mut f: F)
     where
-        F: FnMut(RequestId, u64, DownstreamId, &Arc<AtomicCell<DownstreamState>>),
+        F: FnMut(RequestId, u64, DownstreamId, &Arc<AtomicCell<DownstreamState>>, &Arc<AtomicU64>),
     {
         for (key, value) in &self.downstreams {
-            f(key.request_id, key.region_id, value.id, &value.state);
+            f(key.request_id, key.region_id, value.id, &value.state, &value.advanced_to);
         }
     }
 
@@ -290,31 +263,17 @@ impl Service {
     fn parse_version_from_request_header(
         request: &ChangeDataRequest,
         peer: &str,
-    ) -> semver::Version {
+    ) -> Version {
         let version_field = request.get_header().get_ticdc_version();
-        semver::Version::parse(version_field).unwrap_or_else(|e| {
+        Version::parse(version_field).unwrap_or_else(|e| {
             warn!(
                 "empty or invalid TiCDC version, please upgrading TiCDC";
                 "version" => version_field,
                 "downstream" => ?peer, "region_id" => request.region_id,
                 "error" => ?e,
             );
-            semver::Version::new(0, 0, 0)
+            Version::new(0, 0, 0)
         })
-    }
-
-    fn set_conn_version(
-        scheduler: &Scheduler<Task>,
-        conn_id: ConnId,
-        version: semver::Version,
-        explicit_features: Vec<&'static str>,
-    ) -> Result<(), String> {
-        let task = Task::SetConnVersion {
-            conn_id,
-            version,
-            explicit_features,
-        };
-        scheduler.schedule(task).map_err(|e| format!("{:?}", e))
     }
 
     // ### Command types:
@@ -363,10 +322,10 @@ impl Service {
                 ObservedRange::default()
             });
         let downstream = Downstream::new(
-            peer.to_owned(),
-            request.get_region_epoch().clone(),
             RequestId(request.request_id),
             conn_id,
+            peer.to_owned(),
+            request.get_region_epoch().clone(),
             request.kv_api,
             request.filter_loop,
             observed_range,
@@ -423,8 +382,7 @@ impl Service {
         rpc_sink.enhance_batch(true);
         let conn_id = ConnId::new();
         let (sink, mut drain) = channel(conn_id, CDC_CHANNLE_CAPACITY, self.memory_quota.clone());
-        let conn = Conn::new(conn_id, sink.clone(), ctx.peer());
-        let mut explicit_features = vec![];
+        let mut features = vec![];
 
         if event_feed_v2 {
             let headers = match Self::parse_headers(&ctx) {
@@ -441,21 +399,9 @@ impl Service {
                     return;
                 }
             };
-            explicit_features = headers.features;
+            features = headers.features;
         }
-        info!("cdc connection created"; "downstream" => ctx.peer(), "features" => ?explicit_features);
-
-        if let Err(e) = self.scheduler.schedule(Task::OpenConn { conn }) {
-            let peer = ctx.peer();
-            error!("cdc connection initiate failed"; "downstream" => ?peer, "error" => ?e);
-            ctx.spawn(async move {
-                let status = RpcStatus::with_message(RpcStatusCode::UNKNOWN, format!("{:?}", e));
-                if let Err(e) = rpc_sink.fail(status).await {
-                    error!("cdc failed to send error"; "downstream" => ?peer, "error" => ?e);
-                }
-            });
-            return;
-        }
+        info!("cdc connection created"; "downstream" => ctx.peer(), "conn_id" => ?conn_id, "features" => ?features);
 
         let peer = ctx.peer();
         let scheduler = self.scheduler.clone();
@@ -464,7 +410,10 @@ impl Service {
             if let Some(request) = stream.try_next().await? {
                 // Get version from the first request in the stream.
                 let version = Self::parse_version_from_request_header(&request, &peer);
-                Self::set_conn_version(&scheduler, conn_id, version, explicit_features)?;
+                let conn = Conn::new(conn_id, peer, sink.clone(), version, features);
+                self.scheduler.schedule(Task::OpenConn { conn })
+                    .map_err(|e| format!("{:?}", e))?;
+
                 Self::handle_request(&scheduler, &peer, request, conn_id, &sink)?;
             }
             while let Some(request) = stream.try_next().await? {

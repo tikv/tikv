@@ -7,7 +7,7 @@ use std::{
     result::Result as StdResult,
     string::String,
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering, AtomicU64},
         Arc,
     },
     time::Duration,
@@ -135,13 +135,14 @@ impl DownstreamState {
 pub struct Downstream {
     /// A unique identifier of the Downstream.
     pub id: DownstreamId,
-    /// The IP address of downstream.
-    pub peer: String,
-    pub region_epoch: RegionEpoch,
     /// The request ID set by CDC to identify events corresponding different
     /// requests.
     pub req_id: RequestId,
     pub conn_id: ConnId,
+
+    /// The IP address of downstream.
+    pub peer: String,
+    pub region_epoch: RegionEpoch,
 
     pub kv_api: ChangeDataRequestKvApi,
     pub filter_loop: bool,
@@ -154,7 +155,7 @@ pub struct Downstream {
     // Fields to handle ResolvedTs advancing. If `lock_heap` is none it means
     // the downstream hasn't finished the incremental scanning.
     lock_heap: Option<BTreeMap<TimeStamp, isize>>,
-    advanced_to: TimeStamp,
+    pub advanced_to: Arc<AtomicU64>,
 }
 
 impl fmt::Debug for Downstream {
@@ -173,10 +174,10 @@ impl Downstream {
     /// peer is the address of the downstream.
     /// sink sends data to the downstream.
     pub fn new(
-        peer: String,
-        region_epoch: RegionEpoch,
         req_id: RequestId,
         conn_id: ConnId,
+        peer: String,
+        region_epoch: RegionEpoch,
         kv_api: ChangeDataRequestKvApi,
         filter_loop: bool,
         observed_range: ObservedRange,
@@ -184,13 +185,14 @@ impl Downstream {
     ) -> Downstream {
         Downstream {
             id: DownstreamId::new(),
-            peer,
-            region_epoch,
             req_id,
             conn_id,
+
+            peer,
+            region_epoch,
+
             kv_api,
             filter_loop,
-
             observed_range,
 
             sink,
@@ -198,7 +200,7 @@ impl Downstream {
             scan_truncated: Arc::new(AtomicBool::new(false)),
 
             lock_heap: None,
-            advanced_to: TimeStamp::zero(),
+            advanced_to: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -601,8 +603,6 @@ impl Delegate {
         &mut self,
         min_ts: TimeStamp,
         current_ts: TimeStamp,
-        connections: &HashMap<ConnId, Conn>,
-        advance: &mut Advance,
     ) {
         let locks = match &self.lock_tracker {
             LockTracker::Prepared { locks, .. } => locks,
@@ -624,12 +624,10 @@ impl Delegate {
             }
         };
 
-        let mut handle_downstream = |downstream: &mut Downstream| -> Option<TimeStamp> {
+        let mut handle_downstream = |downstream: &mut Downstream| {
             if !downstream.state.load().ready_for_advancing_ts() {
-                advance.blocked_on_scan += 1;
-                return None;
+                return;
             }
-            advance.scan_finished += 1;
 
             if downstream.lock_heap.is_none() {
                 let mut lock_heap = BTreeMap::<TimeStamp, isize>::new();
@@ -642,41 +640,23 @@ impl Delegate {
 
             let lock_heap = downstream.lock_heap.as_ref().unwrap();
             let min_lock = lock_heap.keys().next().cloned().unwrap_or(min_ts);
-            let advanced_to = std::cmp::min(min_lock, min_ts);
-            if advanced_to > downstream.advanced_to {
-                downstream.advanced_to = advanced_to;
-            } else {
-                advance.blocked_on_locks += 1;
+            let advanced_to = std::cmp::min(min_lock, min_ts).into_inner();
+            if advanced_to > downstream.advanced_to.load(Ordering::Acquire) {
+                downstream.advanced_to.store(advanced_to, Ordering::Release);
             }
-            Some(downstream.advanced_to)
         };
 
         let mut slow_downstreams = Vec::new();
         for d in &mut self.downstreams {
-            let advanced_to = match handle_downstream(d) {
-                Some(ts) => ts,
-                None => continue,
-            };
-
-            let features = connections.get(&d.conn_id).unwrap().features();
-            if features.contains(FeatureGate::STREAM_MULTIPLEXING) {
-                let k = (d.conn_id, d.req_id);
-                let v = advance.multiplexing.entry(k).or_default();
-                v.push(self.region_id, advanced_to);
-            } else if features.contains(FeatureGate::BATCH_RESOLVED_TS) {
-                let v = advance.exclusive.entry(d.conn_id).or_default();
-                v.push(self.region_id, advanced_to);
-            } else {
-                let k = (d.conn_id, self.region_id);
-                let v = (d.req_id, advanced_to);
-                advance.compat.insert(k, v);
-            }
-
-            let lag = current_ts
-                .physical()
-                .saturating_sub(d.advanced_to.physical());
-            if Duration::from_millis(lag) > WARN_LAG_THRESHOLD {
-                slow_downstreams.push(d.id);
+            handle_downstream(d);
+            let advanced_to = d.advanced_to.load(Ordering::Relaxed);
+            if advanced_to > 0 {
+                let lag = current_ts
+                    .physical()
+                    .saturating_sub(TimeStamp::from(advanced_to).physical());
+                if Duration::from_millis(lag) > WARN_LAG_THRESHOLD {
+                    slow_downstreams.push(d.id);
+                }
             }
         }
 
@@ -1160,8 +1140,7 @@ impl Delegate {
                 }
                 DelegateTask::StopDownstream => {}
                 DelegateTask::MinTs { min_ts, current_ts } => {
-                    // TODO: fix it.
-                    // self.on_min_ts(min_ts, current_ts);
+                    self.on_min_ts(min_ts, current_ts);
                 }
                 DelegateTask::FinishScanLocks {
                     observe_id,

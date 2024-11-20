@@ -171,11 +171,6 @@ pub enum Task {
     OpenConn {
         conn: Conn,
     },
-    SetConnVersion {
-        conn_id: ConnId,
-        version: semver::Version,
-        explicit_features: Vec<&'static str>,
-    },
     MinTs {
         regions: Vec<u64>,
         min_ts: TimeStamp,
@@ -233,17 +228,7 @@ impl fmt::Debug for Task {
                 .finish(),
             Task::OpenConn { ref conn } => de
                 .field("type", &"open_conn")
-                .field("conn_id", &conn.get_id())
-                .finish(),
-            Task::SetConnVersion {
-                ref conn_id,
-                ref version,
-                ref explicit_features,
-            } => de
-                .field("type", &"set_conn_version")
-                .field("conn_id", conn_id)
-                .field("version", version)
-                .field("explicit_features", explicit_features)
+                .field("conn_id", &conn.id)
                 .finish(),
             Task::MinTs {
                 ref min_ts,
@@ -359,12 +344,6 @@ pub(crate) struct Advance {
     // map[(ConnId, region_id)]->(request_id, ts).
     pub(crate) compat: HashMap<(ConnId, u64), (RequestId, TimeStamp)>,
 
-    pub(crate) scan_finished: usize,
-
-    pub(crate) blocked_on_scan: usize,
-
-    pub(crate) blocked_on_locks: usize,
-
     min_resolved_ts: u64,
     min_ts_region_id: u64,
 }
@@ -375,11 +354,11 @@ impl Advance {
             Ok(_) => {}
             Err(SendError::Disconnected) => {
                 debug!("cdc send event failed, disconnected";
-                        "conn_id" => ?conn.get_id(), "downstream" => ?conn.get_peer());
+                        "conn_id" => ?conn.id, "downstream" => ?conn.peer);
             }
             Err(SendError::Full) | Err(SendError::Congested) => {
                 info!("cdc send event failed, full";
-                        "conn_id" => ?conn.get_id(), "downstream" => ?conn.get_peer());
+                        "conn_id" => ?conn.id, "downstream" => ?conn.peer);
             }
         };
 
@@ -399,7 +378,7 @@ impl Advance {
             *resolved_ts.mut_regions() = regions;
 
             let res = conn
-                .get_sink()
+                .sink
                 .unbounded_send(CdcEvent::ResolvedTs(resolved_ts), false);
             handle_send_result(conn, res);
         };
@@ -419,7 +398,7 @@ impl Advance {
                 ..Default::default()
             };
             let res = conn
-                .get_sink()
+                .sink
                 .unbounded_send(CdcEvent::Event(event), false);
             handle_send_result(conn, res);
         };
@@ -435,9 +414,7 @@ impl Advance {
             let mut batch_count = 8;
             while !region_ts_heap.is_empty() {
                 let (ts, regions) = region_ts_heap.pop(batch_count);
-                if conn.features().contains(FeatureGate::BATCH_RESOLVED_TS) {
-                    batch_send(ts.into_inner(), conn, req_id, Vec::from_iter(regions));
-                }
+                batch_send(ts.into_inner(), conn, req_id, Vec::from_iter(regions));
                 batch_count *= 4;
             }
         }
@@ -719,7 +696,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         match deregister {
             Deregister::Conn(conn_id) => {
                 let conn = self.connections.remove(&conn_id).unwrap();
-                conn.iter_downstreams(|_, region_id, downstream_id, _| {
+                conn.iter_downstreams(|_, region_id, downstream_id, _, _| {
                     self.deregister_downstream(region_id, downstream_id, None);
                 });
             }
@@ -821,7 +798,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         };
 
         // Check if the cluster id matches if supported.
-        if conn.features().contains(FeatureGate::VALIDATE_CLUSTER_ID) {
+        if conn.features.contains(FeatureGate::VALIDATE_CLUSTER_ID) {
             let request_cluster_id = request.get_header().get_cluster_id();
             if self.cluster_id != request_cluster_id {
                 let mut err_event = EventError::default();
@@ -878,10 +855,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             }
         };
 
-        if conn
-            .subscribe(request_id, region_id, downstream_id, downstream_state)
-            .is_some()
-        {
+        if conn.subscribe(request_id, region_id, &downstream).is_some() {
             let mut err_event = EventError::default();
             let mut err = ErrorDuplicateRequest::default();
             err.set_region_id(region_id);
@@ -927,7 +901,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         let handle = delegate_meta.handle.clone();
         info!("cdc register region";
             "region_id" => region_id,
-            "conn_id" => ?conn.get_id(),
+            "conn_id" => ?conn.id,
             "req_id" => ?request_id,
             "observe_id" => ?handle.id,
             "downstream_id" => ?downstream_id);
@@ -948,7 +922,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
 
             tablet: self.tablets.get(region_id).map(|t| t.into_owned()),
             sched,
-            sink: conn.get_sink().clone(),
+            sink: conn.sink.clone(),
             concurrency_semaphore: self.scan_concurrency_semaphore.clone(),
 
             scan_speed_limiter: self.scan_speed_limiter.clone(),
@@ -981,43 +955,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         });
     }
 
-    /// ******************
-    /// pub fn on_multi_batch(&mut self, multi: Vec<CmdBatch>, old_value_cb:
-    /// OldValueCallback) { fail_point!("cdc_before_handle_multi_batch", |_|
-    /// {}); let size = multi.iter().map(|b| b.size()).sum();
-    /// self.sink_memory_quota.free(size);
-    /// let mut statistics = Statistics::default();
-    /// for batch in multi {
-    /// let region_id = batch.region_id;
-    /// let mut deregister = None;
-    /// if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
-    /// if delegate.has_failed() {
-    /// Skip the batch if the delegate has failed.
-    /// continue;
-    /// }
-    /// if let Err(e) = delegate.on_batch(
-    /// batch,
-    /// &old_value_cb,
-    /// &mut self.old_value_cache,
-    /// &mut statistics,
-    /// ) {
-    /// delegate.mark_failed();
-    /// Delegate has error, deregister the delegate.
-    /// deregister = Some(Deregister::Delegate {
-    /// region_id,
-    /// observe_id: delegate.handle.id,
-    /// err: e,
-    /// });
-    /// }
-    /// }
-    /// if let Some(deregister) = deregister {
-    /// self.on_deregister(deregister);
-    /// }
-    /// }
-    /// flush_oldvalue_stats(&statistics, TAG_DELTA_CHANGE);
-    /// }
-    /// *****************
-
     fn finish_scan_locks(
         &mut self,
         observe_id: ObserveId,
@@ -1029,23 +966,46 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
     }
 
     fn on_min_ts(&mut self, regions: Vec<u64>, min_ts: TimeStamp, current_ts: TimeStamp) {
-        /// ***********
-        /// self.current_ts = current_ts;
-        /// self.min_resolved_ts = current_ts;
-        ///
-        /// let mut advance = Advance::default();
-        /// for region_id in regions {
-        /// if let Some(d) = self.capture_regions.get_mut(&region_id) {
-        /// d.on_min_ts(min_ts, current_ts, &self.connections, &mut advance);
-        /// }
-        /// }
-        ///
-        /// self.resolved_region_count = advance.scan_finished;
-        /// self.unresolved_region_count = advance.blocked_on_scan;
-        /// advance.emit_resolved_ts(&self.connections);
-        /// self.min_resolved_ts = advance.min_resolved_ts.into();
-        /// self.min_ts_region_id = advance.min_ts_region_id;
-        /// **********
+        self.current_ts = current_ts;
+        self.min_resolved_ts = current_ts;
+
+        for region_id in regions {
+            if let Some(d) = self.capture_regions.get(&region_id) {
+                let _ = d.sched.unbounded_send(DelegateTask::MinTs { min_ts, current_ts });
+            }
+        }
+
+        let mut advance = Advance::default();
+        for (conn_id, conn) in &self.connections {
+            if conn.features.contains(FeatureGate::STREAM_MULTIPLEXING) {
+                conn.iter_downstreams(|req_id, region_id, _, _, advanced_to| {
+                    let advanced_to = TimeStamp::from(advanced_to.load(Ordering::Acquire));
+                    if !advanced_to.is_zero() {
+                        let heap = advance.multiplexing.entry((*conn_id, req_id)).or_default();
+                        heap.push(region_id, advanced_to);
+                    }
+                });
+            } else if conn.features.contains(FeatureGate::BATCH_RESOLVED_TS) {
+                conn.iter_downstreams(|req_id, region_id, _, _, advanced_to| {
+                    let advanced_to = TimeStamp::from(advanced_to.load(Ordering::Acquire));
+                    if !advanced_to.is_zero() {
+                        let heap = advance.exclusive.entry(*conn_id).or_default();
+                        heap.push(region_id, advanced_to);
+                    }
+                });
+            } else {
+                conn.iter_downstreams(|req_id, region_id, _, _, advanced_to| {
+                    let advanced_to = TimeStamp::from(advanced_to.load(Ordering::Acquire));
+                    if !advanced_to.is_zero() {
+                        advance.compat.insert((*conn_id, region_id), (req_id, advanced_to));
+                    }
+                });
+            }
+
+        }
+        advance.emit_resolved_ts(&self.connections);
+        self.min_resolved_ts = advance.min_resolved_ts.into();
+        self.min_ts_region_id = advance.min_ts_region_id;
     }
 
     fn register_min_ts_event(&self, mut leader_resolver: LeadershipResolver, event_time: Instant) {
@@ -1146,17 +1106,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
     }
 
     fn on_open_conn(&mut self, conn: Conn) {
-        self.connections.insert(conn.get_id(), conn);
-    }
-
-    fn on_set_conn_version(
-        &mut self,
-        conn_id: ConnId,
-        version: semver::Version,
-        explicit_features: Vec<&'static str>,
-    ) {
-        let conn = self.connections.get_mut(&conn_id).unwrap();
-        conn.check_version_and_set_feature(version, explicit_features);
+        self.connections.insert(conn.id, conn);
     }
 }
 
@@ -1184,18 +1134,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
                 locks,
             } => self.finish_scan_locks(observe_id, region, locks),
             Task::Deregister(deregister) => self.on_deregister(deregister),
-            // Task::MultiBatch {
-            //     multi,
-            //     old_value_cb,
-            // } => self.on_multi_batch(multi, old_value_cb),
             Task::OpenConn { conn } => self.on_open_conn(conn),
-            Task::SetConnVersion {
-                conn_id,
-                version,
-                explicit_features,
-            } => {
-                self.on_set_conn_version(conn_id, version, explicit_features);
-            }
             Task::RegisterMinTsEvent {
                 leader_resolver,
                 event_time,
@@ -1368,14 +1307,6 @@ mod tests {
         recv_timeout,
     };
 
-    fn set_conn_version_task(conn_id: ConnId, version: semver::Version) -> Task {
-        Task::SetConnVersion {
-            conn_id,
-            version,
-            explicit_features: vec![],
-        }
-    }
-
     struct TestEndpointSuite {
         // The order must ensure `endpoint` be dropped before other fields.
         endpoint: Endpoint<CdcRaftRouter<MockRaftStoreRouter>, RocksEngine, StoreMeta>,
@@ -1511,7 +1442,7 @@ mod tests {
         let mut rx = rx.drain();
 
         let conn = Conn::new(ConnId::default(), tx, String::new());
-        let conn_id = conn.get_id();
+        let conn_id = conn.id;
         suite.run(Task::OpenConn { conn });
         suite.run(set_conn_version_task(
             conn_id,
@@ -1795,7 +1726,7 @@ mod tests {
         suite.fill_raft_rx(1);
 
         let conn = Conn::new(ConnId::default(), tx, String::new());
-        let conn_id = conn.get_id();
+        let conn_id = conn.id;
         suite.run(Task::OpenConn { conn });
         suite.run(set_conn_version_task(
             conn_id,
@@ -1846,7 +1777,7 @@ mod tests {
         let mut rx = rx.drain();
 
         let conn = Conn::new(ConnId::default(), tx, String::new());
-        let conn_id = conn.get_id();
+        let conn_id = conn.id;
         suite.run(Task::OpenConn { conn });
 
         // Enable batch resolved ts in the test.
@@ -2009,7 +1940,7 @@ mod tests {
         let mut rx = rx.drain();
 
         let conn = Conn::new(ConnId::default(), tx, String::new());
-        let conn_id = conn.get_id();
+        let conn_id = conn.id;
         suite.run(Task::OpenConn { conn });
 
         // Enable batch resolved ts in the test.
@@ -2113,7 +2044,7 @@ mod tests {
         let mut region = Region::default();
         region.set_id(1);
         let conn = Conn::new(ConnId::default(), tx, String::new());
-        let conn_id = conn.get_id();
+        let conn_id = conn.id;
         suite.run(Task::OpenConn { conn });
 
         // Enable batch resolved ts in the test.
@@ -2209,7 +2140,7 @@ mod tests {
         let mut region = Region::default();
         region.set_id(3);
         let conn = Conn::new(ConnId::default(), tx, String::new());
-        let conn_id = conn.get_id();
+        let conn_id = conn.id;
         suite.run(Task::OpenConn { conn });
         suite.run(set_conn_version_task(
             conn_id,
@@ -2285,7 +2216,7 @@ mod tests {
         let mut rx = rx.drain();
 
         let conn = Conn::new(ConnId::default(), tx, String::new());
-        let conn_id = conn.get_id();
+        let conn_id = conn.id;
         suite.run(Task::OpenConn { conn });
         suite.run(set_conn_version_task(
             conn_id,
@@ -2437,7 +2368,7 @@ mod tests {
             let (tx, rx) = channel::channel(ConnId::default(), 1, quota.clone());
             conn_rxs.push(rx);
             let conn = Conn::new(ConnId::default(), tx, String::new());
-            let conn_id = conn.get_id();
+            let conn_id = conn.id;
             suite.run(Task::OpenConn { conn });
             let version = FeatureGate::batch_resolved_ts();
             suite.run(set_conn_version_task(conn_id, version));
@@ -2713,7 +2644,7 @@ mod tests {
         let mut rx = rx.drain();
 
         let conn = Conn::new(ConnId::default(), tx, String::new());
-        let conn_id = conn.get_id();
+        let conn_id = conn.id;
         suite.run(Task::OpenConn { conn });
         // Enable batch resolved ts in the test.
         let version = FeatureGate::batch_resolved_ts();
@@ -2810,7 +2741,7 @@ mod tests {
         let mut rx = rx.drain();
 
         let conn = Conn::new(ConnId::default(), tx, String::new());
-        let conn_id = conn.get_id();
+        let conn_id = conn.id;
         suite.run(Task::OpenConn { conn });
 
         let version = FeatureGate::batch_resolved_ts();
@@ -3063,7 +2994,7 @@ mod tests {
         let (tx, _rx) = channel::channel(ConnId::default(), 1, quota);
 
         let conn = Conn::new(ConnId::default(), tx, String::new());
-        let conn_id = conn.get_id();
+        let conn_id = conn.id;
         suite.run(Task::OpenConn { conn });
 
         suite.run(Task::Deregister(Deregister::Conn(conn_id)));
