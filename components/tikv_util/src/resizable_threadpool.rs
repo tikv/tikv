@@ -205,12 +205,7 @@ impl ResizableRuntime {
         }
 
         self.count += 1;
-        let thread_name = format!(
-            "{}-{}-{}",
-            self.thread_name,
-            self.count,
-            new_size.to_string()
-        );
+        let thread_name = format!("{}-{}-{}", self.thread_name, self.count, new_size,);
         let new_pool = (self.replace_pool_rule)(new_size, thread_name.as_str())
             .expect("failed to create tokio runtime for backup worker.");
 
