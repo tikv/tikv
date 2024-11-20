@@ -16,6 +16,7 @@ use engine_traits::{
     TablePropertiesExt, UserCollectedProperties, CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN,
 };
 use fail::fail_point;
+use futures::channel::mpsc::UnboundedSender;
 use keys::{data_end_key, data_key};
 use kvproto::{
     cdcpb::ChangeDataRequestKvApi,
@@ -54,7 +55,7 @@ use txn_types::{Key, KvPair, LockType, OldValue, TimeStamp};
 use crate::{
     channel::CdcEvent,
     delegate::{
-        post_init_downstream, Delegate, DownstreamId, DownstreamState, MiniLock, ObservedRange,
+        post_init_downstream, Delegate, DownstreamId, DownstreamState, MiniLock, ObservedRange, DelegateTask,
     },
     endpoint::Deregister,
     metrics::*,
@@ -104,7 +105,7 @@ pub(crate) struct Initializer<E> {
     pub(crate) scan_truncated: Arc<AtomicBool>,
 
     pub(crate) tablet: Option<E>,
-    pub(crate) sched: Scheduler<Task>,
+    pub(crate) sched: UnboundedSender<DelegateTask>,
     pub(crate) sink: crate::channel::Sink,
     pub(crate) concurrency_semaphore: Arc<Semaphore>,
 
@@ -161,17 +162,14 @@ impl<E: KvEngine> Initializer<E> {
             // That's why we can determine whether to build a lock resolver or not
             // without check and compare snapshot sequence number.
             Callback::read(Box::new(move |resp| {
-                if let Err(e) = sched.schedule(Task::InitDownstream {
-                    region_id,
+                if let Err(e) = sched.unbounded_send(DelegateTask::InitDownstream {
                     observe_id,
                     downstream_id,
-                    downstream_state,
-                    sink,
                     build_resolver,
                     incremental_scan_barrier: barrier,
                     cb: Box::new(move || cb(resp)),
                 }) {
-                    error!("cdc schedule cdc task failed"; "error" => ?e);
+                    error!("cdc schedule delegate task failed"; "error" => ?e);
                 }
             })),
         ) {
@@ -549,41 +547,34 @@ impl<E: KvEngine> Initializer<E> {
         );
 
         fail_point!("before_schedule_resolver_ready");
-        if let Err(e) = self.sched.schedule(Task::FinishScanLocks {
+        if let Err(e) = self.sched.unbounded_send(DelegateTask::FinishScanLocks {
             observe_id,
             region,
             locks,
         }) {
-            error!("cdc schedule task failed"; "error" => ?e);
+            error!("cdc schedule delegate task failed"; "error" => ?e);
         }
     }
 
     // Deregister downstream when the Initializer fails to initialize.
     pub(crate) fn deregister_downstream(&self, err: Error) {
         let build_resolver = self.build_resolver.load(Ordering::Acquire);
-        let deregister = if build_resolver || err.has_region_error() {
+        let stop_task = if build_resolver || err.has_region_error() {
             // Deregister delegate on the conditions,
             // * It fails to build a resolver. A delegate requires a resolver to advance
             //   resolved ts.
             // * A region error. It usually mean a peer is not leader or a leader meets an
             //   error and can not serve.
-            Deregister::Delegate {
-                region_id: self.region_id,
-                observe_id: self.observe_handle.id,
-                err,
-            }
+            DelegateTask::Stop { err: Some(err) }
         } else {
-            Deregister::Downstream {
-                conn_id: self.conn_id,
-                request_id: self.request_id,
-                region_id: self.region_id,
+            DelegateTask::StopDownstream {
+                err:Some(err),
                 downstream_id: self.downstream_id,
-                err: Some(err),
             }
         };
 
-        if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
-            error!("cdc schedule cdc task failed"; "error" => ?e);
+        if let Err(e) = self.sched.unbounded_send(stop_task) {
+            error!("cdc schedule delegate task failed"; "error" => ?e);
         }
     }
 

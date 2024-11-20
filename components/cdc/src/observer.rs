@@ -169,15 +169,11 @@ impl RoleObserver for CdcObserver {
                     .and_then(|x| ctx.region().get_peers().iter().find(|p| p.id == x))
                     .cloned();
 
-                // Unregister all downstreams.
-                let store_err = RaftStoreError::NotLeader(region_id, leader);
-                let deregister = Deregister::Delegate {
-                    region_id,
-                    observe_id,
-                    err: CdcError::request(store_err.into()),
-                };
-                if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
-                    error!("cdc schedule cdc task failed"; "error" => ?e);
+                let regions = self.observe_regions.read().unwrap();
+                if let Some((_, tx)) = regions.get(&region_id) {
+                    let store_err = RaftStoreError::NotLeader(region_id, leader);
+                    let err = Some(CdcError::request(store_err.into()));
+                    let _ = tx.unbounded_send(DelegateTask::Stop { err });
                 }
             }
         }
@@ -197,17 +193,11 @@ impl RegionChangeObserver for CdcObserver {
                 RegionChangeReason::Split | RegionChangeReason::CommitMerge,
             ) => {
                 let region_id = ctx.region().get_id();
-                if let Some(observe_id) = self.is_subscribed(region_id) {
-                    // Unregister all downstreams.
+                let regions = self.observe_regions.read().unwrap();
+                if let Some((_, tx)) = regions.get(&region_id) {
                     let store_err = RaftStoreError::RegionNotFound(region_id);
-                    let deregister = Deregister::Delegate {
-                        region_id,
-                        observe_id,
-                        err: CdcError::request(store_err.into()),
-                    };
-                    if let Err(e) = self.sched.schedule(Task::Deregister(deregister)) {
-                        error!("cdc schedule cdc task failed"; "error" => ?e);
-                    }
+                    let err = Some(CdcError::request(store_err.into()));
+                    let _ = tx.unbounded_send(DelegateTask::Stop { err });
                 }
             }
             _ => {}

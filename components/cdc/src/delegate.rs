@@ -335,7 +335,6 @@ pub struct Delegate {
 
     lock_tracker: LockTracker,
     downstreams: Vec<Downstream>,
-    failed: bool,
 
     old_value_stats: Statistics,
     created: Instant,
@@ -504,8 +503,8 @@ impl Delegate {
 
     /// Create a Delegate the given region.
     pub fn new(
-        feedbacks: Scheduler<Task>,
         region_id: u64,
+        feedbacks: Scheduler<Task>,
         memory_quota: Arc<MemoryQuota>,
         old_value_cache: Arc<Mutex<OldValueCache>>,
         txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
@@ -524,7 +523,6 @@ impl Delegate {
 
             lock_tracker: LockTracker::Pending,
             downstreams: Vec::new(),
-            failed: false,
 
             old_value_stats: Statistics::default(),
             created: Instant::now_coarse(),
@@ -578,14 +576,6 @@ impl Delegate {
             d.state.store(DownstreamState::Stopped);
         }
         self.downstreams().is_empty()
-    }
-
-    pub fn mark_failed(&mut self) {
-        self.failed = true;
-    }
-
-    pub fn has_failed(&self) -> bool {
-        self.failed
     }
 
     /// `txn_extra_op` returns a shared flag which is accessed in TiKV's
@@ -1106,7 +1096,6 @@ impl Delegate {
     }
 
     fn stop_observing(&self) {
-        info!("cdc stop observing"; "region_id" => self.region_id, "failed" => self.failed);
         // Stop observe further events.
         self.handle.stop_observing();
         // To inform transaction layer no more old values are required for the region.
@@ -1131,14 +1120,16 @@ impl Delegate {
                     fail_point!("cdc_before_handle_multi_batch", |_| {});
                     self.memory_quota.free(cmds.size());
                     if let Err(e) = self.on_batch(cmds, old_value_cb).await {
-                        self.on_stop(e);
+                        self.on_stop(Some(e));
                     }
                     // flush_oldvalue_stats(&statistics, TAG_DELTA_CHANGE);
                 }
                 DelegateTask::Stop { err } => {
                     self.on_stop(err);
                 }
-                DelegateTask::StopDownstream => {}
+                DelegateTask::StopDownstream { err, downstream_id }=> {
+                    self.on_stop_downstream(err, downstream_id);
+                }
                 DelegateTask::MinTs { min_ts, current_ts } => {
                     self.on_min_ts(min_ts, current_ts);
                 }
@@ -1170,24 +1161,26 @@ impl Delegate {
 
     fn on_subscribe_downstream(&mut self, downstream: Downstream) {
         if let Err((err, downstream)) = self.subscribe(downstream) {
-            let err_event = err.into_error_event(self.region_id);
+            let err_event = Some(err.into_error_event(self.region_id));
             self.deregister_downstream(err_event, downstream);
         }
     }
 
-    fn deregister_downstream(&mut self, err_event: ErrorEvent, downstream: Downstream) {
-        downstream.state.store(DownstreamState::Stopped);
-        if let Err(err) = downstream.sink_error_event(self.region_id, err_event) {
-            warn!("cdc send region error failed";
-                "region_id" => self.region_id, "error" => ?err,
-                "downstream_id" => ?downstream.id, "downstream" => ?downstream.peer,
-                "request_id" => ?downstream.req_id, "conn_id" => ?downstream.conn_id);
-        } else {
-            info!("cdc send region error success";
-                "region_id" => self.region_id,
-                "downstream_id" => ?downstream.id, "downstream" => ?downstream.peer,
-                "request_id" => ?downstream.req_id, "conn_id" => ?downstream.conn_id);
+    fn deregister_downstream(&mut self, err_event: Option<ErrorEvent>, downstream: Downstream) {
+        if let Some(err_event) = err_event {
+            if let Err(err) = downstream.sink_error_event(self.region_id, err_event) {
+                warn!("cdc send region error failed";
+                    "region_id" => self.region_id, "error" => ?err,
+                    "downstream_id" => ?downstream.id, "downstream" => ?downstream.peer,
+                    "request_id" => ?downstream.req_id, "conn_id" => ?downstream.conn_id);
+            } else {
+                info!("cdc send region error success";
+                    "region_id" => self.region_id,
+                    "downstream_id" => ?downstream.id, "downstream" => ?downstream.peer,
+                    "request_id" => ?downstream.req_id, "conn_id" => ?downstream.conn_id);
+            }
         }
+        downstream.state.store(DownstreamState::Stopped);
         let _ = self
             .feedbacks
             .schedule_force(Task::Deregister(Deregister::Downstream {
@@ -1195,17 +1188,32 @@ impl Delegate {
                 request_id: downstream.req_id,
                 region_id: self.region_id,
                 downstream_id: downstream.id,
-                err: None,
             }));
+        if self.downstreams.is_empty() {
+            self.on_stop(None);
+        }
     }
 
-    fn on_stop(&mut self, err: Error) {
-        info!("cdc met region error"; "region_id" => self.region_id, "error" => ?err);
-        self.mark_failed();
+    fn on_stop(&mut self, err: Option<Error>) {
+        info!("cdc stop delegate"; "region_id" => self.region_id, "error" => ?err);
         self.stop_observing();
-        let err_event = err.into_error_event(self.region_id);
-        for downstream in std::mem::take(&mut self.downstreams) {
+        let err_event = err.map(|x| x.into_error_event(self.region_id));
+        while !self.downstreams.is_empty() {
+            let downstream = self.downstreams.swap_remove(0);
             self.deregister_downstream(err_event.clone(), downstream);
+        }
+        let _ = self.feedbacks.schedule_force(Task::Deregister(Deregister::Delegate {
+            region_id: self.region_id,
+            observe_id: self.handle.id.clone(),
+        }));
+    }
+
+    fn on_stop_downstream(&mut self, err: Option<Error>, downstream_id: DownstreamId) {
+        info!("cdc stop downstream"; "region_id" => self.region_id, "downstream_id" => ?downstream_id, "error" => ?err);
+        if let Some(x)  = self.downstreams.iter().position(|d| d.id == downstream_id) {
+            let downstream = self.downstreams.swap_remove(x);
+            let err_event = err.map(|x| x.into_error_event(self.region_id));
+            self.deregister_downstream(err_event, downstream);
         }
     }
 
@@ -1225,11 +1233,11 @@ impl Delegate {
         match self.finish_scan_locks(region, locks) {
             Ok(fails) => {
                 for (downstream, err) in fails {
-                    let err_event = err.into_error_event(self.region_id);
+                    let err_event = Some(err.into_error_event(self.region_id));
                     self.deregister_downstream(err_event, downstream);
                 }
             }
-            Err(err) => self.on_stop(err),
+            Err(err) => self.on_stop(Some(err)),
         }
     }
 
@@ -1549,9 +1557,12 @@ pub enum DelegateTask {
         old_value_cb: OldValueCallback,
     },
     Stop {
-        err: Error,
+        err: Option<Error>,
     },
-    StopDownstream,
+    StopDownstream {
+        err: Option<Error>,
+        downstream_id: DownstreamId,
+    },
     MinTs {
         min_ts: TimeStamp,
         current_ts: TimeStamp,

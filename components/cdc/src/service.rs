@@ -410,8 +410,8 @@ impl Service {
             if let Some(request) = stream.try_next().await? {
                 // Get version from the first request in the stream.
                 let version = Self::parse_version_from_request_header(&request, &peer);
-                let conn = Conn::new(conn_id, peer, sink.clone(), version, features);
-                self.scheduler.schedule(Task::OpenConn { conn })
+                let conn = Conn::new(conn_id, peer.clone(), sink.clone(), version, features);
+                scheduler.schedule(Task::OpenConn { conn })
                     .map_err(|e| format!("{:?}", e))?;
 
                 Self::handle_request(&scheduler, &peer, request, conn_id, &sink)?;

@@ -90,12 +90,10 @@ pub enum Deregister {
         request_id: RequestId,
         region_id: u64,
         downstream_id: DownstreamId,
-        err: Option<Error>,
     },
     Delegate {
         region_id: u64,
         observe_id: ObserveId,
-        err: Error,
     },
 }
 
@@ -132,24 +130,20 @@ impl fmt::Debug for Deregister {
                 ref request_id,
                 ref region_id,
                 ref downstream_id,
-                ref err,
             } => de
                 .field("deregister", &"downstream")
                 .field("conn_id", conn_id)
                 .field("request_id", request_id)
                 .field("region_id", region_id)
                 .field("downstream_id", downstream_id)
-                .field("err", err)
                 .finish(),
             Deregister::Delegate {
                 ref region_id,
                 ref observe_id,
-                ref err,
             } => de
                 .field("deregister", &"delegate")
                 .field("region_id", region_id)
                 .field("observe_id", observe_id)
-                .field("err", err)
                 .finish(),
         }
     }
@@ -163,23 +157,18 @@ pub enum Validate {
 }
 
 pub enum Task {
+    OpenConn {
+        conn: Conn,
+    },
     Register {
         request: ChangeDataRequest,
         downstream: Downstream,
     },
     Deregister(Deregister),
-    OpenConn {
-        conn: Conn,
-    },
     MinTs {
         regions: Vec<u64>,
         min_ts: TimeStamp,
         current_ts: TimeStamp,
-    },
-    FinishScanLocks {
-        observe_id: ObserveId,
-        region: Region,
-        locks: BTreeMap<Key, MiniLock>,
     },
     RegisterMinTsEvent {
         leader_resolver: LeadershipResolver,
@@ -188,21 +177,9 @@ pub enum Task {
     },
     // The result of ChangeCmd should be returned from CDC Endpoint to ensure
     // the downstream switches to Normal after the previous commands was sunk.
-    InitDownstream {
-        region_id: u64,
-        observe_id: ObserveId,
-        downstream_id: DownstreamId,
-        downstream_state: Arc<AtomicCell<DownstreamState>>,
-        sink: crate::channel::Sink,
-        build_resolver: Arc<AtomicBool>,
-        // `incremental_scan_barrier` will be sent into `sink` to ensure all delta changes
-        // are delivered to the downstream. And then incremental scan can start.
-        incremental_scan_barrier: CdcEvent,
-        cb: InitCallback,
-    },
     TxnExtra(TxnExtra),
-    Validate(Validate),
     ChangeConfig(ConfigChange),
+    Validate(Validate),
 }
 
 impl_display_as_debug!(Task);
@@ -211,6 +188,10 @@ impl fmt::Debug for Task {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut de = f.debug_struct("CdcTask");
         match self {
+            Task::OpenConn { ref conn } => de
+                .field("type", &"open_conn")
+                .field("conn_id", &conn.id)
+                .finish(),
             Task::Register {
                 ref request,
                 ref downstream,
@@ -226,10 +207,6 @@ impl fmt::Debug for Task {
                 .field("type", &"deregister")
                 .field("deregister", deregister)
                 .finish(),
-            Task::OpenConn { ref conn } => de
-                .field("type", &"open_conn")
-                .field("conn_id", &conn.id)
-                .finish(),
             Task::MinTs {
                 ref min_ts,
                 ref current_ts,
@@ -239,38 +216,18 @@ impl fmt::Debug for Task {
                 .field("current_ts", current_ts)
                 .field("min_ts", min_ts)
                 .finish(),
-            Task::FinishScanLocks {
-                ref observe_id,
-                ref region,
-                ..
-            } => de
-                .field("type", &"finish_scan_locks")
-                .field("observe_id", &observe_id)
-                .field("region_id", &region.get_id())
-                .finish(),
             Task::RegisterMinTsEvent { ref event_time, .. } => {
                 de.field("event_time", &event_time).finish()
             }
-            Task::InitDownstream {
-                ref region_id,
-                ref observe_id,
-                ref downstream_id,
-                ..
-            } => de
-                .field("type", &"init_downstream")
-                .field("region_id", &region_id)
-                .field("observe_id", &observe_id)
-                .field("downstream", &downstream_id)
-                .finish(),
             Task::TxnExtra(_) => de.field("type", &"txn_extra").finish(),
-            Task::Validate(validate) => match validate {
-                Validate::Region(region_id, _) => de.field("region_id", &region_id).finish(),
-                Validate::OldValueCache(_) => de.finish(),
-            },
             Task::ChangeConfig(change) => de
                 .field("type", &"change_config")
                 .field("change", change)
                 .finish(),
+            Task::Validate(validate) => match validate {
+                Validate::Region(region_id, _) => de.field("region_id", &region_id).finish(),
+                Validate::OldValueCache(_) => de.finish(),
+            },
         }
     }
 }
@@ -663,33 +620,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         self.max_scan_batch_size = max_scan_batch_size;
     }
 
-    fn deregister_downstream(
-        &mut self,
-        region_id: u64,
-        downstream_id: DownstreamId,
-        err: Option<Error>,
-    ) {
-        // let mut delegate = match self.capture_regions.entry(region_id) {
-        //     HashMapEntry::Vacant(_) => return,
-        //     HashMapEntry::Occupied(x) => x,
-        // };
-        // if delegate.get_mut().unsubscribe(downstream_id, err) {
-        //     let observe_id = delegate.get().handle.id;
-        //     delegate.remove();
-        //     self.deregister_observe(region_id, observe_id);
-        // }
-    }
-
-    fn deregister_observe(&mut self, region_id: u64, observe_id: ObserveId) {
-        let oid = self.observer.unsubscribe_region(region_id, observe_id);
-        assert!(
-            oid.is_some(),
-            "unsubscribe region {} failed, ObserveId {:?}",
-            region_id,
-            observe_id,
-        );
-    }
-
     fn on_deregister(&mut self, deregister: Deregister) {
         info!("cdc deregister"; "deregister" => ?deregister);
         fail_point!("cdc_before_handle_deregister", |_| {});
@@ -697,7 +627,12 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             Deregister::Conn(conn_id) => {
                 let conn = self.connections.remove(&conn_id).unwrap();
                 conn.iter_downstreams(|_, region_id, downstream_id, _, _| {
-                    self.deregister_downstream(region_id, downstream_id, None);
+                    if let Some(delegate) = self.capture_regions.get(&region_id) {
+                        let _ = delegate.sched.unbounded_send(DelegateTask::StopDownstream {
+                            err: None,
+                            downstream_id: downstream_id,
+                        });
+                    }
                 });
             }
             Deregister::Request {
@@ -705,9 +640,13 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 request_id,
             } => {
                 let conn = self.connections.get_mut(&conn_id).unwrap();
-                for (region_id, downstream) in conn.unsubscribe_request(request_id) {
-                    let err = Some(Error::Other("region not found".into()));
-                    self.deregister_downstream(region_id, downstream, err);
+                for (region_id, downstream_id) in conn.unsubscribe_request(request_id) {
+                    if let Some(delegate) = self.capture_regions.get(&region_id) {
+                        let _ = delegate.sched.unbounded_send(DelegateTask::StopDownstream {
+                            err : Some(Error::Other("region not found".into())),
+                            downstream_id: downstream_id,
+                        });
+                    }
                 }
             }
             Deregister::Region {
@@ -716,9 +655,13 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 region_id,
             } => {
                 let conn = self.connections.get_mut(&conn_id).unwrap();
-                if let Some(downstream) = conn.unsubscribe(request_id, region_id) {
-                    let err = Some(Error::Other("region not found".into()));
-                    self.deregister_downstream(region_id, downstream, err);
+                if let Some(downstream_id) = conn.get_downstream(request_id, region_id) {
+                    if let Some(delegate) = self.capture_regions.get(&region_id) {
+                        let _ = delegate.sched.unbounded_send(DelegateTask::StopDownstream {
+                            err : Some(Error::Other("region not found".into())),
+                            downstream_id: downstream_id,
+                        });
+                    }
                 }
             }
             Deregister::Downstream {
@@ -726,7 +669,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 request_id,
                 region_id,
                 downstream_id,
-                err,
             } => {
                 let conn = match self.connections.get_mut(&conn_id) {
                     Some(conn) => conn,
@@ -736,39 +678,30 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                     // To avoid ABA problem, we must check the unique DownstreamId.
                     if new_downstream_id == downstream_id {
                         conn.unsubscribe(request_id, region_id);
-                        self.deregister_downstream(region_id, downstream_id, err);
                     }
                 }
             }
             Deregister::Delegate {
                 region_id,
                 observe_id,
-                err,
             } => {
-                // let mut delegate = match
-                // self.capture_regions.entry(region_id) {
-                //     HashMapEntry::Vacant(_) => return,
-                //     HashMapEntry::Occupied(x) => {
-                //         // To avoid ABA problem, we must check the unique
-                // ObserveId.         if x.get().handle.id !=
-                // observe_id {             return;
-                //         }
-                //         x.remove()
-                //     }
-                // };
-                // delegate.stop(err);
-                // for downstream in delegate.downstreams() {
-                //     let request_id = downstream.req_id;
-                //     for conn in &mut self.connections.values_mut() {
-                //         conn.unsubscribe(request_id, region_id);
-                //     }
-                // }
-                // self.deregister_observe(region_id, delegate.handle.id);
+                let mut delegate = match self.capture_regions.entry(region_id) {
+                    HashMapEntry::Vacant(_) => return,
+                    HashMapEntry::Occupied(x) => {
+                        // To avoid ABA problem, we must check the unique ObserveId.
+                        if x.get().handle.id != observe_id {
+                            return;
+                        }
+                        x.remove()
+                    }
+                };
+                self.observer.unsubscribe_region(region_id, observe_id).unwrap();
+                delegate.sched.close_channel();
             }
         }
     }
 
-    pub fn on_register(&mut self, mut request: ChangeDataRequest, mut downstream: Downstream) {
+    pub fn on_register(&mut self, mut request: ChangeDataRequest, downstream: Downstream) {
         let kv_api = request.get_kv_api();
         let api_version = self.api_version;
         let filter_loop = downstream.filter_loop;
@@ -779,7 +712,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         let downstream_id = downstream.id;
         let downstream_state = downstream.get_state();
         let observed_range = downstream.observed_range.clone();
-        let sched = self.scheduler.clone();
         let scan_truncated = downstream.scan_truncated.clone();
 
         // The connection can be deregistered by some internal errors. Clients will
@@ -869,36 +801,30 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             return;
         }
 
-        let delegate_meta = match self.capture_regions.entry(region_id) {
+        let delegate = match self.capture_regions.entry(region_id) {
             HashMapEntry::Occupied(e) => e.get().clone(),
             HashMapEntry::Vacant(e) => {
                 let mut d = Delegate::new(
-                    sched.clone(),
                     region_id,
+                    self.scheduler.clone(),
                     self.sink_memory_quota.clone(),
                     self.old_value_cache.clone(),
                     txn_extra_op,
                 );
-                let meta = d.meta();
+                let delegate = d.meta();
+                e.insert(delegate.clone());
                 d.sched
                     .unbounded_send(DelegateTask::Subscribe { downstream })
                     .unwrap();
-                self.workers.spawn(d.handle_tasks());
+                self.workers.spawn(async move {drop(d.handle_tasks()) } );
 
-                let old_ob =
-                    self.observer
-                        .subscribe_region(region_id, d.handle.id, d.sched.clone());
-                assert!(
-                    old_ob.is_none(),
-                    "region {} should never be observed twice",
-                    region_id
-                );
-                e.insert(meta.clone());
-                meta
+                let old_ob = self.observer.subscribe_region(region_id, delegate.handle.id, delegate.sched.clone());
+                assert!(old_ob.is_none());
+                delegate
             }
         };
 
-        let handle = delegate_meta.handle.clone();
+        let handle = delegate.handle.clone();
         info!("cdc register region";
             "region_id" => region_id,
             "conn_id" => ?conn.id,
@@ -921,7 +847,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             scan_truncated,
 
             tablet: self.tablets.get(region_id).map(|t| t.into_owned()),
-            sched,
+            sched: delegate.sched.clone(),
             sink: conn.sink.clone(),
             concurrency_semaphore: self.scan_concurrency_semaphore.clone(),
 
@@ -948,21 +874,10 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                         "cdc initialize fail: {}", e; "region_id" => region_id,
                         "conn_id" => ?init.conn_id, "request_id" => ?init.request_id,
                     );
-                    init.deregister_downstream(e)
                 }
             }
             drop(release_scan_task_counter);
         });
-    }
-
-    fn finish_scan_locks(
-        &mut self,
-        observe_id: ObserveId,
-        region: Region,
-        locks: BTreeMap<Key, MiniLock>,
-    ) {
-        /// *******************
-        /// ******************
     }
 
     fn on_min_ts(&mut self, regions: Vec<u64>, min_ts: TimeStamp, current_ts: TimeStamp) {
@@ -1128,58 +1043,12 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
                 request,
                 downstream,
             } => self.on_register(request, downstream),
-            Task::FinishScanLocks {
-                observe_id,
-                region,
-                locks,
-            } => self.finish_scan_locks(observe_id, region, locks),
             Task::Deregister(deregister) => self.on_deregister(deregister),
             Task::OpenConn { conn } => self.on_open_conn(conn),
             Task::RegisterMinTsEvent {
                 leader_resolver,
                 event_time,
             } => self.register_min_ts_event(leader_resolver, event_time),
-            Task::InitDownstream {
-                region_id,
-                observe_id,
-                downstream_id,
-                downstream_state,
-                sink,
-                build_resolver,
-                incremental_scan_barrier,
-                cb,
-            } => {
-                /********************
-                match self.capture_regions.get_mut(&region_id) {
-                    Some(delegate) if delegate.handle.id == observe_id => {
-                        if delegate.init_lock_tracker() {
-                            build_resolver.store(true, Ordering::Release);
-                        }
-                    }
-                    _ => return,
-                }
-                if let Err(e) = sink.unbounded_send(incremental_scan_barrier, true) {
-                    error!("cdc failed to schedule barrier for delta before delta scan";
-                        "region_id" => region_id,
-                        "observe_id" => ?observe_id,
-                        "downstream_id" => ?downstream_id,
-                        "error" => ?e);
-                    return;
-                }
-                if on_init_downstream(&downstream_state) {
-                    info!("cdc downstream starts to initialize";
-                        "region_id" => region_id,
-                        "observe_id" => ?observe_id,
-                        "downstream_id" => ?downstream_id);
-                } else {
-                    warn!("cdc downstream fails to initialize: canceled";
-                        "region_id" => region_id,
-                        "observe_id" => ?observe_id,
-                        "downstream_id" => ?downstream_id);
-                }
-                cb();
-                ********************/
-            }
             Task::TxnExtra(txn_extra) => {
                 let size = txn_extra.size();
                 let mut cache = block_on(self.old_value_cache.lock());
