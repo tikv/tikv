@@ -15,7 +15,7 @@ use tikv_util::{
     debug, error,
     memory::HeapSize,
     time::{duration_to_sec, monotonic_raw_now},
-    MustConsumeVec,
+    MustConsumeVec, info,
 };
 use time::Timespec;
 use uuid::Uuid;
@@ -275,6 +275,13 @@ impl<C: ErrorCallback> ReadIndexQueue<C> {
                         continue;
                     }
                 }
+                info!(
+                    "jepsen advance_replica_reads";
+                    // "start_ts" => self.reads[offset].start_ts,
+                    "uuid" => ?uuid,
+                    "read_index" => index,
+                    "offset" => offset
+                );
                 self.reads[offset].read_index = Some(index);
                 min_changed_offset = cmp::min(min_changed_offset, offset);
                 max_changed_offset = cmp::max(max_changed_offset, offset);
