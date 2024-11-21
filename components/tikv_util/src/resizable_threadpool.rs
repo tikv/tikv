@@ -37,27 +37,27 @@ impl DeamonRuntimeHandle {
     pub fn spawn<Fut>(&self, fut: Fut)
     where
         Fut: Future<Output = ()> + Send + 'static,
-        {
-            let rc_runtime = match self.inner.upgrade() {
-                Some(runtime) => runtime,
-                None => return,
-            };
-        
-            let inner = match rc_runtime.inner.as_ref() {
-                Some(inner) => inner,
-                None => return,
-            };
-        
-            let handle = inner.handle().clone();
-            let task_count = rc_runtime.task_count.clone();
-        
-            task_count.fetch_add(1, Ordering::SeqCst);
-            
-            handle.spawn(async move {
-                fut.await;
-                task_count.fetch_sub(1, Ordering::SeqCst);
-            });
-        }
+    {
+        let rc_runtime = match self.inner.upgrade() {
+            Some(runtime) => runtime,
+            None => return,
+        };
+
+        let inner = match rc_runtime.inner.as_ref() {
+            Some(inner) => inner,
+            None => return,
+        };
+
+        let handle = inner.handle().clone();
+        let task_count = rc_runtime.task_count.clone();
+
+        task_count.fetch_add(1, Ordering::SeqCst);
+
+        handle.spawn(async move {
+            fut.await;
+            task_count.fetch_sub(1, Ordering::SeqCst);
+        });
+    }
 
     pub fn block_on<Fut>(&self, fut: Fut) -> Option<Fut::Output>
     where
@@ -69,10 +69,10 @@ impl DeamonRuntimeHandle {
             let handle = inner.handle().clone();
             let task_count = rc_runtime.task_count.clone();
             (handle, task_count)
-        };    
-    
+        };
+
         task_count.fetch_add(1, Ordering::SeqCst);
-    
+
         Some(handle.block_on(async move {
             let output = fut.await;
             task_count.fetch_sub(1, Ordering::SeqCst);
@@ -100,8 +100,8 @@ impl ResizableRuntime {
         after_adjust: Box<dyn Fn(usize) + Send + Sync>,
     ) -> Self {
         let init_thread_name = format!("{}-v0-{}", thread_name, thread_size);
-        let current_runtime = replace_pool_rule(thread_size, init_thread_name.as_str()).expect(
-            "failed to create tokio runtime for backup worker.");
+        let current_runtime = replace_pool_rule(thread_size, init_thread_name.as_str())
+            .expect("failed to create tokio runtime for backup worker.");
         let keeper = Builder::new_multi_thread()
             .worker_threads(1)
             .thread_name("rtkp")
@@ -137,9 +137,10 @@ impl ResizableRuntime {
                 interval.tick().await;
 
                 if let Some(pools) = pools_clone.upgrade() {
-                    pools.lock().unwrap().retain(|handle| {
-                        handle.task_count.load(Ordering::SeqCst) > 0
-                    });
+                    pools
+                        .lock()
+                        .unwrap()
+                        .retain(|handle| handle.task_count.load(Ordering::SeqCst) > 0);
                 }
             }
         });
@@ -167,6 +168,8 @@ impl ResizableRuntime {
         }
     }
 
+    // TODO: after tokio supports adjusting thread pool size(https://github.com/tokio-rs/tokio/issues/3329),
+    //   adapt it.
     pub fn adjust_with(&mut self, new_size: usize) -> usize {
         if self.size == new_size {
             return new_size;
@@ -178,7 +181,7 @@ impl ResizableRuntime {
             self.count += 1;
             let thread_name = format!("{}-{}-{}", self.thread_name, self.count, new_size,);
             let new_pool = (self.replace_pool_rule)(new_size, thread_name.as_str())
-                .expect("failed to create tokio runtime for backup worker.");
+                .expect(format!("failed to create tokio runtime {}", thread_name).as_str());
 
             used_runtime_guard.push(self.current_runtime.clone());
 
@@ -216,9 +219,8 @@ mod test {
         thread::{self, sleep},
     };
 
-    use crate::time::Instant;
-
     use super::*;
+    use crate::time::Instant;
 
     static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -297,27 +299,23 @@ mod test {
     #[test]
     fn test_drop() {
         let start = Instant::now();
-        let threads = ResizableRuntime::new(
-            4,
-            "test",
-            Box::new(replace_pool_rule),
-            Box::new(|_| {}),
-        );
+        let threads =
+            ResizableRuntime::new(4, "test", Box::new(replace_pool_rule), Box::new(|_| {}));
         let handle = threads.handle();
         let handle_clone = handle.clone();
         handle.spawn(async {
             sleep(Duration::from_secs(10));
         });
-        let thread = thread::spawn(move ||{
-            handle_clone.block_on(async{
+        let thread = thread::spawn(move || {
+            handle_clone.block_on(async {
                 sleep(Duration::from_secs(10));
             });
         });
         drop(threads);
-        handle.spawn(async{
+        handle.spawn(async {
             sleep(Duration::from_secs(10));
         });
-        handle.block_on(async{
+        handle.block_on(async {
             sleep(Duration::from_secs(10));
         });
         thread.join().unwrap();
