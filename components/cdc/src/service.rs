@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::{
-    atomic::{AtomicUsize, Ordering, AtomicU64},
+    atomic::{AtomicU64, AtomicUsize, Ordering},
     Arc,
 };
 
@@ -16,9 +16,9 @@ use kvproto::{
     },
     kvrpcpb::ApiVersion,
 };
+use semver::Version;
 use tikv_util::{error, info, memory::MemoryQuota, warn, worker::*};
 use tokio::runtime::{self, Runtime};
-use semver::Version;
 
 use crate::{
     channel::{channel, Sink, CDC_CHANNLE_CAPACITY},
@@ -104,7 +104,13 @@ struct DownstreamValue {
 }
 
 impl Conn {
-    pub fn new(conn_id: ConnId, peer: String, sink: Sink, version: Version, features: Vec<&'static str>) -> Conn {
+    pub fn new(
+        conn_id: ConnId,
+        peer: String,
+        sink: Sink,
+        version: Version,
+        features: Vec<&'static str>,
+    ) -> Conn {
         let mut conn = Conn {
             id: conn_id,
             peer,
@@ -176,7 +182,13 @@ impl Conn {
         F: FnMut(RequestId, u64, DownstreamId, &Arc<AtomicCell<DownstreamState>>, &Arc<AtomicU64>),
     {
         for (key, value) in &self.downstreams {
-            f(key.request_id, key.region_id, value.id, &value.state, &value.advanced_to);
+            f(
+                key.request_id,
+                key.region_id,
+                value.id,
+                &value.state,
+                &value.advanced_to,
+            );
         }
     }
 
@@ -260,10 +272,7 @@ impl Service {
         Ok(header)
     }
 
-    fn parse_version_from_request_header(
-        request: &ChangeDataRequest,
-        peer: &str,
-    ) -> Version {
+    fn parse_version_from_request_header(request: &ChangeDataRequest, peer: &str) -> Version {
         let version_field = request.get_header().get_ticdc_version();
         Version::parse(version_field).unwrap_or_else(|e| {
             warn!(
@@ -411,7 +420,8 @@ impl Service {
                 // Get version from the first request in the stream.
                 let version = Self::parse_version_from_request_header(&request, &peer);
                 let conn = Conn::new(conn_id, peer.clone(), sink.clone(), version, features);
-                scheduler.schedule(Task::OpenConn { conn })
+                scheduler
+                    .schedule(Task::OpenConn { conn })
                     .map_err(|e| format!("{:?}", e))?;
 
                 Self::handle_request(&scheduler, &peer, request, conn_id, &sink)?;

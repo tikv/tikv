@@ -10,12 +10,11 @@ use kvproto::metapb::Region;
 use raft::StateRole;
 use raftstore::{coprocessor::*, store::RegionSnapshot, Error as RaftStoreError};
 use tikv::storage::Statistics;
-use tikv_util::{error, memory::MemoryQuota, warn, worker::Scheduler};
+use tikv_util::{memory::MemoryQuota, warn};
 
 use crate::{
     delegate::DelegateTask,
-    endpoint::{Deregister, Task},
-    old_value::{self, OldValueCache, OldValueCallback},
+    old_value::{self, OldValueCache},
     Error as CdcError,
 };
 
@@ -26,7 +25,6 @@ use crate::{
 ///   2. Apply command events.
 #[derive(Clone)]
 pub struct CdcObserver {
-    sched: Scheduler<Task>,
     memory_quota: Arc<MemoryQuota>,
     // A shared registry for managing observed regions.
     // TODO: it may become a bottleneck, find a better way to manage the registry.
@@ -35,12 +33,8 @@ pub struct CdcObserver {
 
 impl CdcObserver {
     /// Create a new `CdcObserver`.
-    ///
-    /// Events are strong ordered, so `sched` must be implemented as
-    /// a FIFO queue.
-    pub fn new(sched: Scheduler<Task>, memory_quota: Arc<MemoryQuota>) -> CdcObserver {
+    pub fn new(memory_quota: Arc<MemoryQuota>) -> CdcObserver {
         CdcObserver {
-            sched,
             memory_quota,
             observe_regions: Arc::default(),
         }
@@ -92,7 +86,7 @@ impl CdcObserver {
     }
 
     /// Check whether the region is subscribed or not.
-    pub fn is_subscribed(&self, region_id: u64) -> Option<ObserveId> {
+    pub fn get_subscribed(&self, region_id: u64) -> Option<ObserveId> {
         self.observe_regions
             .read()
             .unwrap()
@@ -157,7 +151,7 @@ impl RoleObserver for CdcObserver {
     fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role_change: &RoleChange) {
         if role_change.state != StateRole::Leader {
             let region_id = ctx.region().get_id();
-            if let Some(observe_id) = self.is_subscribed(region_id) {
+            if self.get_subscribed(region_id).is_some() {
                 let leader_id = if role_change.leader_id != raft::INVALID_ID {
                     Some(role_change.leader_id)
                 } else if role_change.prev_lead_transferee == role_change.vote {

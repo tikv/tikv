@@ -45,9 +45,7 @@ use tikv_util::{
     debug, defer, error, info,
     sys::inspector::{self_thread_inspector, ThreadInspector},
     time::{duration_to_sec, Instant, Limiter},
-    warn,
-    worker::Scheduler,
-    Either,
+    warn, Either,
 };
 use tokio::sync::Semaphore;
 use txn_types::{Key, KvPair, LockType, OldValue, TimeStamp};
@@ -55,13 +53,13 @@ use txn_types::{Key, KvPair, LockType, OldValue, TimeStamp};
 use crate::{
     channel::CdcEvent,
     delegate::{
-        post_init_downstream, Delegate, DownstreamId, DownstreamState, MiniLock, ObservedRange, DelegateTask,
+        post_init_downstream, Delegate, DelegateTask, DownstreamId, DownstreamState, MiniLock,
+        ObservedRange,
     },
-    endpoint::Deregister,
     metrics::*,
     old_value::{near_seek_old_value, OldValueCursors},
     service::{ConnId, RequestId},
-    Error, Result, Task,
+    Error, Result,
 };
 
 #[derive(Copy, Clone, Debug, Default)]
@@ -147,9 +145,7 @@ impl<E: KvEngine> Initializer<E> {
         // we need to acquire scan concurrency permit before taking snapshot.
         let sched = self.sched.clone();
         let region_epoch = self.region_epoch.clone();
-        let downstream_state = self.downstream_state.clone();
         let (cb, fut) = tikv_util::future::paired_future_callback();
-        let sink = self.sink.clone();
         let build_resolver = self.build_resolver.clone();
         let (incremental_scan_barrier_cb, incremental_scan_barrier_fut) =
             tikv_util::future::paired_future_callback();
@@ -568,7 +564,7 @@ impl<E: KvEngine> Initializer<E> {
             DelegateTask::Stop { err: Some(err) }
         } else {
             DelegateTask::StopDownstream {
-                err:Some(err),
+                err: Some(err),
                 downstream_id: self.downstream_id,
             }
         };

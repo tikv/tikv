@@ -2,10 +2,10 @@
 
 use std::{
     cmp::{Ord, Ordering as CmpOrdering, PartialOrd, Reverse},
-    collections::{BTreeMap, BinaryHeap},
+    collections::BinaryHeap,
     fmt,
     sync::{
-        atomic::{AtomicBool, AtomicIsize, Ordering},
+        atomic::{AtomicIsize, Ordering},
         Arc, Mutex as StdMutex,
     },
     time::Duration,
@@ -14,10 +14,9 @@ use std::{
 use causal_ts::{CausalTsProvider, CausalTsProviderImpl};
 use collections::{HashMap, HashMapEntry, HashSet};
 use concurrency_manager::ConcurrencyManager;
-use crossbeam::atomic::AtomicCell;
 use engine_traits::KvEngine;
 use fail::fail_point;
-use futures::{channel::mpsc, compat::Future01CompatExt, executor::block_on, lock::Mutex};
+use futures::{compat::Future01CompatExt, executor::block_on, lock::Mutex};
 use grpcio::Environment;
 use kvproto::{
     cdcpb::{
@@ -26,20 +25,15 @@ use kvproto::{
         Error as EventError, Event, Event_oneof_event, ResolvedTs,
     },
     kvrpcpb::ApiVersion,
-    metapb::Region,
 };
 use online_config::{ConfigChange, OnlineConfig};
 use pd_client::{Feature, PdClient};
-use raftstore::{
-    coprocessor::{CmdBatch, ObserveId},
-    router::CdcHandle,
-    store::fsm::store::StoreRegionMeta,
-};
+use raftstore::{coprocessor::ObserveId, router::CdcHandle, store::fsm::store::StoreRegionMeta};
 use resolved_ts::{resolve_by_raft, LeadershipResolver};
 use security::SecurityManager;
 use tikv::{
     config::{CdcConfig, ResolvedTsConfig},
-    storage::{kv::LocalTablets, Statistics},
+    storage::kv::LocalTablets,
 };
 use tikv_util::{
     debug, defer, error, impl_display_as_debug, info,
@@ -56,17 +50,14 @@ use tokio::{
     runtime::{Builder, Runtime},
     sync::Semaphore,
 };
-use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler};
+use txn_types::{TimeStamp, TxnExtra, TxnExtraScheduler};
 
 use crate::{
     channel::{CdcEvent, SendError},
-    delegate::{
-        on_init_downstream, Delegate, DelegateMeta, DelegateTask, Downstream, DownstreamId,
-        DownstreamState, MiniLock,
-    },
+    delegate::{Delegate, DelegateMeta, DelegateTask, Downstream, DownstreamId},
     initializer::Initializer,
     metrics::*,
-    old_value::{OldValueCache, OldValueCallback},
+    old_value::OldValueCache,
     service::{validate_kv_api, Conn, ConnId, FeatureGate, RequestId},
     CdcObserver, Error,
 };
@@ -148,8 +139,6 @@ impl fmt::Debug for Deregister {
         }
     }
 }
-
-type InitCallback = Box<dyn FnOnce() + Send>;
 
 pub enum Validate {
     Region(u64, Box<dyn FnOnce(Option<&Delegate>) + Send>),
@@ -354,9 +343,7 @@ impl Advance {
                 event: Some(Event_oneof_event::ResolvedTs(ts)),
                 ..Default::default()
             };
-            let res = conn
-                .sink
-                .unbounded_send(CdcEvent::Event(event), false);
+            let res = conn.sink.unbounded_send(CdcEvent::Event(event), false);
             handle_send_result(conn, res);
         };
 
@@ -630,7 +617,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                     if let Some(delegate) = self.capture_regions.get(&region_id) {
                         let _ = delegate.sched.unbounded_send(DelegateTask::StopDownstream {
                             err: None,
-                            downstream_id: downstream_id,
+                            downstream_id,
                         });
                     }
                 });
@@ -643,8 +630,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 for (region_id, downstream_id) in conn.unsubscribe_request(request_id) {
                     if let Some(delegate) = self.capture_regions.get(&region_id) {
                         let _ = delegate.sched.unbounded_send(DelegateTask::StopDownstream {
-                            err : Some(Error::Other("region not found".into())),
-                            downstream_id: downstream_id,
+                            err: Some(Error::Other("region not found".into())),
+                            downstream_id,
                         });
                     }
                 }
@@ -658,8 +645,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 if let Some(downstream_id) = conn.get_downstream(request_id, region_id) {
                     if let Some(delegate) = self.capture_regions.get(&region_id) {
                         let _ = delegate.sched.unbounded_send(DelegateTask::StopDownstream {
-                            err : Some(Error::Other("region not found".into())),
-                            downstream_id: downstream_id,
+                            err: Some(Error::Other("region not found".into())),
+                            downstream_id,
                         });
                     }
                 }
@@ -685,7 +672,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 region_id,
                 observe_id,
             } => {
-                let mut delegate = match self.capture_regions.entry(region_id) {
+                let delegate = match self.capture_regions.entry(region_id) {
                     HashMapEntry::Vacant(_) => return,
                     HashMapEntry::Occupied(x) => {
                         // To avoid ABA problem, we must check the unique ObserveId.
@@ -695,7 +682,9 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                         x.remove()
                     }
                 };
-                self.observer.unsubscribe_region(region_id, observe_id).unwrap();
+                self.observer
+                    .unsubscribe_region(region_id, observe_id)
+                    .unwrap();
                 delegate.sched.close_channel();
             }
         }
@@ -816,9 +805,13 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 d.sched
                     .unbounded_send(DelegateTask::Subscribe { downstream })
                     .unwrap();
-                self.workers.spawn(async move {drop(d.handle_tasks()) } );
+                self.workers.spawn(async move { drop(d.handle_tasks()) });
 
-                let old_ob = self.observer.subscribe_region(region_id, delegate.handle.id, delegate.sched.clone());
+                let old_ob = self.observer.subscribe_region(
+                    region_id,
+                    delegate.handle.id,
+                    delegate.sched.clone(),
+                );
                 assert!(old_ob.is_none());
                 delegate
             }
@@ -874,6 +867,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                         "cdc initialize fail: {}", e; "region_id" => region_id,
                         "conn_id" => ?init.conn_id, "request_id" => ?init.request_id,
                     );
+                    init.deregister_downstream(e);
                 }
             }
             drop(release_scan_task_counter);
@@ -886,7 +880,9 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
 
         for region_id in regions {
             if let Some(d) = self.capture_regions.get(&region_id) {
-                let _ = d.sched.unbounded_send(DelegateTask::MinTs { min_ts, current_ts });
+                let _ = d
+                    .sched
+                    .unbounded_send(DelegateTask::MinTs { min_ts, current_ts });
             }
         }
 
@@ -901,7 +897,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                     }
                 });
             } else if conn.features.contains(FeatureGate::BATCH_RESOLVED_TS) {
-                conn.iter_downstreams(|req_id, region_id, _, _, advanced_to| {
+                conn.iter_downstreams(|_, region_id, _, _, advanced_to| {
                     let advanced_to = TimeStamp::from(advanced_to.load(Ordering::Acquire));
                     if !advanced_to.is_zero() {
                         let heap = advance.exclusive.entry(*conn_id).or_default();
@@ -912,11 +908,12 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 conn.iter_downstreams(|req_id, region_id, _, _, advanced_to| {
                     let advanced_to = TimeStamp::from(advanced_to.load(Ordering::Acquire));
                     if !advanced_to.is_zero() {
-                        advance.compat.insert((*conn_id, region_id), (req_id, advanced_to));
+                        advance
+                            .compat
+                            .insert((*conn_id, region_id), (req_id, advanced_to));
                     }
                 });
             }
-
         }
         advance.emit_resolved_ts(&self.connections);
         self.min_resolved_ts = advance.min_resolved_ts.into();
@@ -1059,7 +1056,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
                 self.sink_memory_quota.free(size);
             }
             Task::Validate(validate) => match validate {
-                Validate::Region(region_id, validate) => {
+                Validate::Region(_region_id, _validate) => {
                     // validate(self.capture_regions.get(&region_id));
                 }
                 Validate::OldValueCache(validate) => {

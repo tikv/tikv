@@ -7,7 +7,7 @@ use std::{
     result::Result as StdResult,
     string::String,
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering, AtomicU64},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc,
     },
     time::Duration,
@@ -50,11 +50,11 @@ use txn_types::{Key, Lock, LockType, TimeStamp, WriteBatchFlags, WriteRef, Write
 
 use crate::{
     channel::{CdcEvent, SendError, Sink, CDC_EVENT_MAX_BYTES},
-    endpoint::{Advance, Deregister, Task},
+    endpoint::{Deregister, Task},
     initializer::KvEntry,
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
-    service::{Conn, ConnId, FeatureGate, RequestId},
+    service::{ConnId, RequestId},
     txn_source::TxnSource,
     Error, Result,
 };
@@ -589,11 +589,7 @@ impl Delegate {
     }
 
     /// Try advance and broadcast resolved ts.
-    pub(crate) fn on_min_ts(
-        &mut self,
-        min_ts: TimeStamp,
-        current_ts: TimeStamp,
-    ) {
+    pub(crate) fn on_min_ts(&mut self, min_ts: TimeStamp, current_ts: TimeStamp) {
         let locks = match &self.lock_tracker {
             LockTracker::Prepared { locks, .. } => locks,
             _ => {
@@ -614,7 +610,7 @@ impl Delegate {
             }
         };
 
-        let mut handle_downstream = |downstream: &mut Downstream| {
+        let handle_downstream = |downstream: &mut Downstream| {
             if !downstream.state.load().ready_for_advancing_ts() {
                 return;
             }
@@ -948,10 +944,10 @@ impl Delegate {
         old_value_cb: &OldValueCallback,
         rows: &mut RowsBuilder,
     ) -> Result<()> {
-        let mut read_old_value = |row: &mut EventRow,
-                                  cache: &mut OldValueCache,
-                                  ts: TimeStamp,
-                                  stats: &mut Statistics|
+        let read_old_value = |row: &mut EventRow,
+                              cache: &mut OldValueCache,
+                              ts: TimeStamp,
+                              stats: &mut Statistics|
          -> Result<()> {
             let key = Key::from_raw(&row.key).append_ts(row.start_ts.into());
             let old_value = old_value_cb(key, ts, cache, stats)?;
@@ -1127,7 +1123,7 @@ impl Delegate {
                 DelegateTask::Stop { err } => {
                     self.on_stop(err);
                 }
-                DelegateTask::StopDownstream { err, downstream_id }=> {
+                DelegateTask::StopDownstream { err, downstream_id } => {
                     self.on_stop_downstream(err, downstream_id);
                 }
                 DelegateTask::MinTs { min_ts, current_ts } => {
@@ -1202,15 +1198,17 @@ impl Delegate {
             let downstream = self.downstreams.swap_remove(0);
             self.deregister_downstream(err_event.clone(), downstream);
         }
-        let _ = self.feedbacks.schedule_force(Task::Deregister(Deregister::Delegate {
-            region_id: self.region_id,
-            observe_id: self.handle.id.clone(),
-        }));
+        let _ = self
+            .feedbacks
+            .schedule_force(Task::Deregister(Deregister::Delegate {
+                region_id: self.region_id,
+                observe_id: self.handle.id.clone(),
+            }));
     }
 
     fn on_stop_downstream(&mut self, err: Option<Error>, downstream_id: DownstreamId) {
         info!("cdc stop downstream"; "region_id" => self.region_id, "downstream_id" => ?downstream_id, "error" => ?err);
-        if let Some(x)  = self.downstreams.iter().position(|d| d.id == downstream_id) {
+        if let Some(x) = self.downstreams.iter().position(|d| d.id == downstream_id) {
             let downstream = self.downstreams.swap_remove(x);
             let err_event = err.map(|x| x.into_error_event(self.region_id));
             self.deregister_downstream(err_event, downstream);
