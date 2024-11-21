@@ -48,12 +48,10 @@ impl DeamonRuntimeHandle {
             None => return,
         };
 
-        let handle = inner.handle().clone();
         let task_count = rc_runtime.task_count.clone();
-
         task_count.fetch_add(1, Ordering::SeqCst);
 
-        handle.spawn(async move {
+        inner.spawn(async move {
             fut.await;
             task_count.fetch_sub(1, Ordering::SeqCst);
         });
@@ -87,7 +85,6 @@ pub struct ResizableRuntime {
     thread_name: String,
     current_runtime: Arc<DeamonRuntime>,
     used_runtime: Arc<Mutex<Vec<Arc<DeamonRuntime>>>>,
-    keeper: Option<Runtime>,
     replace_pool_rule: Box<dyn Fn(usize, &str) -> TokioResult<Runtime> + Send + Sync>,
     after_adjust: Box<dyn Fn(usize) + Send + Sync>,
 }
@@ -99,9 +96,6 @@ impl ResizableRuntime {
         replace_pool_rule: Box<dyn Fn(usize, &str) -> TokioResult<Runtime> + Send + Sync>,
         after_adjust: Box<dyn Fn(usize) + Send + Sync>,
     ) -> Self {
-        let init_thread_name = format!("{}-v0-{}", thread_name, thread_size);
-        let current_runtime = replace_pool_rule(thread_size, init_thread_name.as_str())
-            .expect("failed to create tokio runtime for backup worker.");
         let keeper = Builder::new_multi_thread()
             .worker_threads(1)
             .thread_name("rtkp")
@@ -110,28 +104,26 @@ impl ResizableRuntime {
             .expect("Failed to create runtime-keeper");
 
         let mut ret = ResizableRuntime {
-            size: 0,
+            size: 1,
             count: 0,
             thread_name: thread_name.to_owned(),
             current_runtime: Arc::new(DeamonRuntime {
-                inner: Some(current_runtime),
+                inner: Some(keeper),
                 task_count: Arc::new(AtomicUsize::new(0)),
             }),
             used_runtime: Arc::new(Mutex::new(Vec::new())),
-            keeper: Some(keeper),
             replace_pool_rule,
             after_adjust,
         };
 
-        ret.adjust_with(thread_size);
         ret.start_clean_loop();
+        ret.adjust_with(thread_size);
         ret
     }
 
     fn start_clean_loop(&self) {
         let pools_clone = Arc::downgrade(&self.used_runtime);
-        let handle = self.keeper.as_ref().unwrap().handle().clone();
-        handle.spawn(async move {
+        self.spawn(async move {
             let mut interval = interval(Duration::from_secs(10));
             loop {
                 interval.tick().await;
@@ -179,9 +171,9 @@ impl ResizableRuntime {
             let mut used_runtime_guard = self.used_runtime.lock().unwrap();
 
             self.count += 1;
-            let thread_name = format!("{}-{}-{}", self.thread_name, self.count, new_size,);
-            let new_pool = (self.replace_pool_rule)(new_size, thread_name.as_str())
-                .expect(format!("failed to create tokio runtime {}", thread_name).as_str());
+            let thread_name = format!("{}-v{}-{}", self.thread_name, self.count, new_size,);
+            let new_pool = (self.replace_pool_rule)(new_size, &thread_name)
+                .unwrap_or_else(|_| panic!("failed to create tokio runtime {}", thread_name));
 
             used_runtime_guard.push(self.current_runtime.clone());
 
@@ -201,14 +193,6 @@ impl ResizableRuntime {
         (self.after_adjust)(new_size);
 
         new_size
-    }
-}
-
-impl Drop for ResizableRuntime {
-    fn drop(&mut self) {
-        if let Some(keeper) = self.keeper.take() {
-            keeper.shutdown_background();
-        }
     }
 }
 
@@ -250,15 +234,15 @@ mod test {
         handle.block_on(async {
             assert_eq!(COUNTER.load(Ordering::SeqCst), 4);
         });
-        assert!(!threads.used_runtime.lock().unwrap().is_empty());
+        // keeper runtime should not be cleaned
+        assert_eq!(threads.used_runtime.lock().unwrap().len(), 1);
 
-        // The old pool should be added into the pools
         threads.adjust_with(8);
-        assert!(!threads.used_runtime.lock().unwrap().is_empty());
+        assert_eq!(threads.used_runtime.lock().unwrap().len(), 2);
 
-        // The old pool should be cleaned after 10s
+        // The idle runtime should be cleaned after 10s
         sleep(Duration::from_secs(12));
-        assert!(threads.used_runtime.lock().unwrap().is_empty());
+        assert_eq!(threads.used_runtime.lock().unwrap().len(), 1);
         handle.block_on(async {
             assert_eq!(COUNTER.load(Ordering::SeqCst), 8);
         });
@@ -284,13 +268,12 @@ mod test {
             }
         });
 
-        // The old pool should be added into the pools
         threads.adjust_with(8);
-        assert!(!threads.used_runtime.lock().unwrap().is_empty());
+        assert_eq!(threads.used_runtime.lock().unwrap().len(), 2);
 
-        // The old pool should be cleaned after 10s
+        // The running runtime should not be cleaned after 10s
         sleep(Duration::from_secs(12));
-        assert!(!threads.used_runtime.lock().unwrap().is_empty());
+        assert_eq!(threads.used_runtime.lock().unwrap().len(), 2);
         handle.block_on(async {
             assert_eq!(COUNTER.load(Ordering::SeqCst), 8);
         });
