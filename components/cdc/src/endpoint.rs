@@ -613,7 +613,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         match deregister {
             Deregister::Conn(conn_id) => {
                 let conn = self.connections.remove(&conn_id).unwrap();
-                conn.iter_downstreams(|_, region_id, downstream_id, _, _| {
+                conn.iter_downstreams(|_, region_id, downstream_id,  _| {
                     if let Some(delegate) = self.capture_regions.get(&region_id) {
                         let _ = delegate.sched.unbounded_send(DelegateTask::StopDownstream {
                             err: None,
@@ -889,7 +889,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         let mut advance = Advance::default();
         for (conn_id, conn) in &self.connections {
             if conn.features.contains(FeatureGate::STREAM_MULTIPLEXING) {
-                conn.iter_downstreams(|req_id, region_id, _, _, advanced_to| {
+                conn.iter_downstreams(|req_id, region_id, _, advanced_to| {
                     let advanced_to = TimeStamp::from(advanced_to.load(Ordering::Acquire));
                     if !advanced_to.is_zero() {
                         let heap = advance.multiplexing.entry((*conn_id, req_id)).or_default();
@@ -897,7 +897,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                     }
                 });
             } else if conn.features.contains(FeatureGate::BATCH_RESOLVED_TS) {
-                conn.iter_downstreams(|_, region_id, _, _, advanced_to| {
+                conn.iter_downstreams(|_, region_id, _, advanced_to| {
                     let advanced_to = TimeStamp::from(advanced_to.load(Ordering::Acquire));
                     if !advanced_to.is_zero() {
                         let heap = advance.exclusive.entry(*conn_id).or_default();
@@ -905,7 +905,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                     }
                 });
             } else {
-                conn.iter_downstreams(|req_id, region_id, _, _, advanced_to| {
+                conn.iter_downstreams(|req_id, region_id, _, advanced_to| {
                     let advanced_to = TimeStamp::from(advanced_to.load(Ordering::Acquire));
                     if !advanced_to.is_zero() {
                         advance

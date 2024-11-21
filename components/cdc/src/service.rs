@@ -6,7 +6,6 @@ use std::sync::{
 };
 
 use collections::{HashMap, HashMapEntry};
-use crossbeam::atomic::AtomicCell;
 use futures::stream::TryStreamExt;
 use grpcio::{DuplexSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode};
 use kvproto::{
@@ -22,7 +21,7 @@ use tokio::runtime::{self, Runtime};
 
 use crate::{
     channel::{channel, Sink, CDC_CHANNLE_CAPACITY},
-    delegate::{Downstream, DownstreamId, DownstreamState, ObservedRange},
+    delegate::{Downstream, DownstreamId, ObservedRange},
     endpoint::{Deregister, Task},
 };
 
@@ -99,7 +98,6 @@ struct DownstreamKey {
 #[derive(Clone)]
 struct DownstreamValue {
     id: DownstreamId,
-    state: Arc<AtomicCell<DownstreamState>>,
     advanced_to: Arc<AtomicU64>,
 }
 
@@ -149,7 +147,6 @@ impl Conn {
             HashMapEntry::Vacant(v) => {
                 v.insert(DownstreamValue {
                     id: downstream.id,
-                    state: downstream.get_state(),
                     advanced_to: downstream.advanced_to.clone(),
                 });
                 None
@@ -179,14 +176,13 @@ impl Conn {
 
     pub fn iter_downstreams<F>(&self, mut f: F)
     where
-        F: FnMut(RequestId, u64, DownstreamId, &Arc<AtomicCell<DownstreamState>>, &Arc<AtomicU64>),
+        F: FnMut(RequestId, u64, DownstreamId, &Arc<AtomicU64>),
     {
         for (key, value) in &self.downstreams {
             f(
                 key.request_id,
                 key.region_id,
                 value.id,
-                &value.state,
                 &value.advanced_to,
             );
         }
