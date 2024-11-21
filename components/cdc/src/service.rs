@@ -179,12 +179,7 @@ impl Conn {
         F: FnMut(RequestId, u64, DownstreamId, &Arc<AtomicU64>),
     {
         for (key, value) in &self.downstreams {
-            f(
-                key.request_id,
-                key.region_id,
-                value.id,
-                &value.advanced_to,
-            );
+            f(key.request_id, key.region_id, value.id, &value.advanced_to);
         }
     }
 
@@ -340,7 +335,9 @@ impl Service {
             request,
             downstream,
         };
-        scheduler.schedule(task).map_err(|e| format!("{:?}", e))
+        scheduler
+            .schedule(task)
+            .map_err(|e| format!("cdc failed to schedule Register {:?}", e))
     }
 
     fn handle_deregister(
@@ -360,7 +357,9 @@ impl Service {
                 request_id: RequestId(request.request_id),
             })
         };
-        scheduler.schedule(task).map_err(|e| format!("{:?}", e))
+        scheduler
+            .schedule(task)
+            .map_err(|e| format!("cdc failed to schedule Request {:?}", e))
     }
 
     // Differences between `Self::event_feed` and `Self::event_feed_v2`:
@@ -418,17 +417,16 @@ impl Service {
                 let conn = Conn::new(conn_id, peer.clone(), sink.clone(), version, features);
                 scheduler
                     .schedule(Task::OpenConn { conn })
-                    .map_err(|e| format!("{:?}", e))?;
+                    .map_err(|e| format!("cdc failed to schedule OpenConn {:?}", e))?;
 
                 Self::handle_request(&scheduler, &peer, request, conn_id, &sink)?;
             }
             while let Some(request) = stream.try_next().await? {
                 Self::handle_request(&scheduler, &peer, request, conn_id, &sink)?;
             }
-            let deregister = Deregister::Conn(conn_id);
-            if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
-                error!("cdc deregister failed"; "error" => ?e, "conn_id" => ?conn_id);
-            }
+            scheduler
+                .schedule(Task::Deregister(Deregister::Conn(conn_id)))
+                .map_err(|e| format!("cdc failed to schedule Deregister {:?}", e))?;
             Ok::<(), String>(())
         };
 

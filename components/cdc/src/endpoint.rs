@@ -613,7 +613,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         match deregister {
             Deregister::Conn(conn_id) => {
                 let conn = self.connections.remove(&conn_id).unwrap();
-                conn.iter_downstreams(|_, region_id, downstream_id,  _| {
+                conn.iter_downstreams(|_, region_id, downstream_id, _| {
                     if let Some(delegate) = self.capture_regions.get(&region_id) {
                         let _ = delegate.sched.unbounded_send(DelegateTask::StopDownstream {
                             err: None,
@@ -975,9 +975,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                         event_time: Instant::now(),
                     }) {
                         Ok(_) | Err(ScheduleError::Stopped(_)) => (),
-                        // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not
-                        // advance normally.
-                        Err(err) => panic!("failed to register min ts event, error: {:?}", err),
+                        Err(e) => warn!("cdc failed to schedule RegisterMinTsEvent"; "err" => ?e),
                     }
                 } else {
                     // During shutdown, tso runtime drops future immediately,
@@ -1008,9 +1006,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                     current_ts: min_ts_pd,
                 }) {
                     Ok(_) | Err(ScheduleError::Stopped(_)) => (),
-                    // Must schedule `MinTS` event otherwise resolved ts can not
-                    // advance normally.
-                    Err(err) => panic!("failed to schedule min ts event, error: {:?}", err),
+                    Err(err) => warn!("cdc failed to schedule MinTs"; "err" => ?err),
                 }
             }
         };
@@ -1047,13 +1043,12 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
                 event_time,
             } => self.register_min_ts_event(leader_resolver, event_time),
             Task::TxnExtra(txn_extra) => {
-                let size = txn_extra.size();
+                self.sink_memory_quota.free(txn_extra.size());
                 let mut cache = block_on(self.old_value_cache.lock());
                 for (k, v) in txn_extra.old_values {
                     cache.insert(k, v);
                 }
                 drop(cache);
-                self.sink_memory_quota.free(size);
             }
             Task::Validate(validate) => match validate {
                 Validate::Region(_region_id, _validate) => {
@@ -1135,7 +1130,7 @@ impl TxnExtraScheduler for CdcTxnExtraScheduler {
             return;
         }
         if let Err(e) = self.scheduler.schedule(Task::TxnExtra(txn_extra)) {
-            error!("cdc schedule txn extra failed"; "err" => ?e);
+            warn!("cdc failed to schedule TxnExtra"; "err" => ?e);
         }
     }
 }
