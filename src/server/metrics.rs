@@ -80,7 +80,9 @@ make_auto_flush_static_metric! {
 
     pub label_enum SnapTask {
         send,
+        send_dropped,
         recv,
+        recv_dropped,
         recv_v2,
     }
 
