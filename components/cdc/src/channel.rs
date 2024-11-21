@@ -62,9 +62,9 @@ pub enum CdcEvent {
 }
 
 impl CdcEvent {
-    pub fn size(&self) -> u32 {
+    pub fn size(&self) -> usize {
         fail::fail_point!("cdc_event_size", |size| size
-            .map(|s| s.parse::<u32>().unwrap())
+            .map(|s| s.parse::<usize>().unwrap())
             .unwrap_or(0));
         match self {
             CdcEvent::ResolvedTs(ref r) => {
@@ -81,11 +81,11 @@ impl CdcEvent {
                 let tag_bytes = 1;
 
                 // Bytes of an array of region id.
-                r.regions.len() as u32 * (tag_bytes + approximate_region_id_bytes)
+                r.regions.len() * (tag_bytes + approximate_region_id_bytes)
                 // Bytes of a TSO.
                 + (tag_bytes + approximate_tso_bytes)
             }
-            CdcEvent::Event(ref e) => e.compute_size(),
+            CdcEvent::Event(ref e) => e.compute_size() as _,
             CdcEvent::Barrier(_) => 0,
         }
     }
@@ -295,14 +295,21 @@ impl ScanedEvent {
 
 #[derive(Clone)]
 pub struct Sink {
-    unbounded_sender: UnboundedSender<ObservedEvent>,
-    bounded_sender: Sender<ScanedEvent>,
+    tx: UnboundedSender<ObservedEvent>,
     memory_quota: Arc<MemoryQuota>,
 }
 
 impl Sink {
     /// Only observed events can be sent by `unbounded_send`.
-    pub fn unbounded_send(&self, observed_event: CdcEvent, force: bool) -> Result<(), SendError> {
+    pub fn send(&self, observed_event: CdcEvent, force: bool) -> Result<(), SendError> {
+        let bytes = observed_event.size();
+        if force {
+            self.memory_quota.alloc_force(bytes);
+        } else {
+            self.memory_quota.alloc(bytes)?;
+        }
+
+
         // Try it's best to send error events.
         let bytes = if !force {
             observed_event.size() as usize
@@ -310,7 +317,6 @@ impl Sink {
             0
         };
         if bytes != 0 {
-            self.memory_quota.alloc(bytes)?;
         }
         let ob_event = ObservedEvent::new(Instant::now_coarse(), observed_event, bytes);
         match self.unbounded_sender.unbounded_send(ob_event) {
