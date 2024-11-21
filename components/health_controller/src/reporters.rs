@@ -92,15 +92,7 @@ impl UnifiedSlowScore {
         duration: &RaftstoreDuration,
         not_busy: bool,
     ) {
-        let include_wait_duration = match factor {
-            InspectFactor::RaftDisk => false,
-            InspectFactor::KvDisk => true,
-        };
-        self.factors[factor as usize].record(
-            id,
-            duration.delays_on_disk_io(include_wait_duration),
-            not_busy,
-        );
+        self.factors[factor as usize].record(id, duration.delays_on_disk_io(false), not_busy);
     }
 
     #[inline]
