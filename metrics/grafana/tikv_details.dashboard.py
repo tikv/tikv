@@ -2556,7 +2556,7 @@ def RaftMessage() -> RowPanel:
             graph_by_labels=["instance"],
             yaxis_format=UNITS.SECONDS,
             metric="tikv_server_raft_message_duration_seconds",
-            label_selectors=['type="wait"'],
+            label_selectors=['type="send_wait"'],
         )
     )
     layout.row(
@@ -2564,11 +2564,11 @@ def RaftMessage() -> RowPanel:
             heatmap_title="Raft Message Receive Delay duration",
             heatmap_description="The time consumed to transmit Raft Messages over the network, reported by the receiver",
             graph_title="99% Raft Message Receive Delay Duration",
-            graph_description="The time consumed to transmit Raft Messages over the network, reported by the receiver",
+            graph_description="The time consumed to transmit Raft Messages over the network per TiKV instance, reported by the receiver",
             graph_by_labels=["instance"],
             yaxis_format=UNITS.SECONDS,
             metric="tikv_server_raft_message_duration_seconds",
-            label_selectors=['type="send"'],
+            label_selectors=['type="receive_delay"'],
         )
     )
     return layout.row_panel

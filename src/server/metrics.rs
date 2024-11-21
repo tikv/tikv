@@ -440,7 +440,7 @@ lazy_static! {
     .unwrap();
     pub static ref RAFT_MESSAGE_DURATION_VEC: HistogramVec = register_histogram_vec!(
         "tikv_server_raft_message_duration_seconds",
-        "Duration of for raft messages.",
+        "Duration of raft messages.",
         &["type"],
         exponential_buckets(0.00001, 2.0, 26).unwrap()
     )

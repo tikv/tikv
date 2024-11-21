@@ -23835,7 +23835,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(increase(\n    tikv_server_raft_message_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"wait\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_server_raft_message_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"send_wait\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -23843,7 +23843,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(increase(\n    tikv_server_raft_message_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"wait\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_server_raft_message_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"send_wait\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -23982,7 +23982,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_server_raft_message_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"wait\"}\n    [$__rate_interval]\n)) by (instance, le, $additional_groupby) \n    \n    \n))  ",
+              "expr": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_server_raft_message_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"send_wait\"}\n    [$__rate_interval]\n)) by (instance, le, $additional_groupby) \n    \n    \n))  ",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -23990,14 +23990,14 @@
               "intervalFactor": 1,
               "legendFormat": "99.99%-{{instance}} {{$additional_groupby}}",
               "metric": "",
-              "query": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_server_raft_message_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"wait\"}\n    [$__rate_interval]\n)) by (instance, le, $additional_groupby) \n    \n    \n))  ",
+              "query": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_server_raft_message_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"send_wait\"}\n    [$__rate_interval]\n)) by (instance, le, $additional_groupby) \n    \n    \n))  ",
               "refId": "",
               "step": 10,
               "target": ""
             },
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_server_raft_message_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"wait\"}\n    [$__rate_interval]\n)) by (instance, le, $additional_groupby) \n    \n    \n))  ",
+              "expr": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_server_raft_message_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"send_wait\"}\n    [$__rate_interval]\n)) by (instance, le, $additional_groupby) \n    \n    \n))  ",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -24005,14 +24005,14 @@
               "intervalFactor": 1,
               "legendFormat": "99%-{{instance}} {{$additional_groupby}}",
               "metric": "",
-              "query": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_server_raft_message_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"wait\"}\n    [$__rate_interval]\n)) by (instance, le, $additional_groupby) \n    \n    \n))  ",
+              "query": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_server_raft_message_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"send_wait\"}\n    [$__rate_interval]\n)) by (instance, le, $additional_groupby) \n    \n    \n))  ",
               "refId": "",
               "step": 10,
               "target": ""
             },
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "(sum(rate(\n    tikv_server_raft_message_duration_seconds_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"wait\"}\n    [$__rate_interval]\n)) by (instance, $additional_groupby)  / sum(rate(\n    tikv_server_raft_message_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"wait\"}\n    [$__rate_interval]\n)) by (instance, $additional_groupby) )",
+              "expr": "(sum(rate(\n    tikv_server_raft_message_duration_seconds_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"send_wait\"}\n    [$__rate_interval]\n)) by (instance, $additional_groupby)  / sum(rate(\n    tikv_server_raft_message_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"send_wait\"}\n    [$__rate_interval]\n)) by (instance, $additional_groupby) )",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -24020,14 +24020,14 @@
               "intervalFactor": 1,
               "legendFormat": "avg-{{instance}} {{$additional_groupby}}",
               "metric": "",
-              "query": "(sum(rate(\n    tikv_server_raft_message_duration_seconds_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"wait\"}\n    [$__rate_interval]\n)) by (instance, $additional_groupby)  / sum(rate(\n    tikv_server_raft_message_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"wait\"}\n    [$__rate_interval]\n)) by (instance, $additional_groupby) )",
+              "query": "(sum(rate(\n    tikv_server_raft_message_duration_seconds_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"send_wait\"}\n    [$__rate_interval]\n)) by (instance, $additional_groupby)  / sum(rate(\n    tikv_server_raft_message_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"send_wait\"}\n    [$__rate_interval]\n)) by (instance, $additional_groupby) )",
               "refId": "",
               "step": 10,
               "target": ""
             },
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_server_raft_message_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"wait\"}\n    [$__rate_interval]\n)) by (instance, $additional_groupby) ",
+              "expr": "sum(rate(\n    tikv_server_raft_message_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"send_wait\"}\n    [$__rate_interval]\n)) by (instance, $additional_groupby) ",
               "format": "time_series",
               "hide": true,
               "instant": false,
@@ -24035,7 +24035,7 @@
               "intervalFactor": 1,
               "legendFormat": "count-{{instance}} {{$additional_groupby}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_server_raft_message_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"wait\"}\n    [$__rate_interval]\n)) by (instance, $additional_groupby) ",
+              "query": "sum(rate(\n    tikv_server_raft_message_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"send_wait\"}\n    [$__rate_interval]\n)) by (instance, $additional_groupby) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -24141,7 +24141,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(increase(\n    tikv_server_raft_message_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"send\"}\n    [$__rate_interval]\n)) by (le) ",
+              "expr": "sum(increase(\n    tikv_server_raft_message_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"receive_delay\"}\n    [$__rate_interval]\n)) by (le) ",
               "format": "heatmap",
               "hide": false,
               "instant": false,
@@ -24149,7 +24149,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{le}}",
               "metric": "",
-              "query": "sum(increase(\n    tikv_server_raft_message_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"send\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "sum(increase(\n    tikv_server_raft_message_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"receive_delay\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -24195,7 +24195,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The time consumed to transmit Raft Messages over the network, reported by the receiver",
+          "description": "The time consumed to transmit Raft Messages over the network per TiKV instance, reported by the receiver",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -24288,7 +24288,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_server_raft_message_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"send\"}\n    [$__rate_interval]\n)) by (instance, le, $additional_groupby) \n    \n    \n))  ",
+              "expr": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_server_raft_message_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"receive_delay\"}\n    [$__rate_interval]\n)) by (instance, le, $additional_groupby) \n    \n    \n))  ",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -24296,14 +24296,14 @@
               "intervalFactor": 1,
               "legendFormat": "99.99%-{{instance}} {{$additional_groupby}}",
               "metric": "",
-              "query": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_server_raft_message_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"send\"}\n    [$__rate_interval]\n)) by (instance, le, $additional_groupby) \n    \n    \n))  ",
+              "query": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_server_raft_message_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"receive_delay\"}\n    [$__rate_interval]\n)) by (instance, le, $additional_groupby) \n    \n    \n))  ",
               "refId": "",
               "step": 10,
               "target": ""
             },
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_server_raft_message_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"send\"}\n    [$__rate_interval]\n)) by (instance, le, $additional_groupby) \n    \n    \n))  ",
+              "expr": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_server_raft_message_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"receive_delay\"}\n    [$__rate_interval]\n)) by (instance, le, $additional_groupby) \n    \n    \n))  ",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -24311,14 +24311,14 @@
               "intervalFactor": 1,
               "legendFormat": "99%-{{instance}} {{$additional_groupby}}",
               "metric": "",
-              "query": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_server_raft_message_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"send\"}\n    [$__rate_interval]\n)) by (instance, le, $additional_groupby) \n    \n    \n))  ",
+              "query": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_server_raft_message_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"receive_delay\"}\n    [$__rate_interval]\n)) by (instance, le, $additional_groupby) \n    \n    \n))  ",
               "refId": "",
               "step": 10,
               "target": ""
             },
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "(sum(rate(\n    tikv_server_raft_message_duration_seconds_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"send\"}\n    [$__rate_interval]\n)) by (instance, $additional_groupby)  / sum(rate(\n    tikv_server_raft_message_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"send\"}\n    [$__rate_interval]\n)) by (instance, $additional_groupby) )",
+              "expr": "(sum(rate(\n    tikv_server_raft_message_duration_seconds_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"receive_delay\"}\n    [$__rate_interval]\n)) by (instance, $additional_groupby)  / sum(rate(\n    tikv_server_raft_message_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"receive_delay\"}\n    [$__rate_interval]\n)) by (instance, $additional_groupby) )",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -24326,14 +24326,14 @@
               "intervalFactor": 1,
               "legendFormat": "avg-{{instance}} {{$additional_groupby}}",
               "metric": "",
-              "query": "(sum(rate(\n    tikv_server_raft_message_duration_seconds_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"send\"}\n    [$__rate_interval]\n)) by (instance, $additional_groupby)  / sum(rate(\n    tikv_server_raft_message_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"send\"}\n    [$__rate_interval]\n)) by (instance, $additional_groupby) )",
+              "query": "(sum(rate(\n    tikv_server_raft_message_duration_seconds_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"receive_delay\"}\n    [$__rate_interval]\n)) by (instance, $additional_groupby)  / sum(rate(\n    tikv_server_raft_message_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"receive_delay\"}\n    [$__rate_interval]\n)) by (instance, $additional_groupby) )",
               "refId": "",
               "step": 10,
               "target": ""
             },
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_server_raft_message_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"send\"}\n    [$__rate_interval]\n)) by (instance, $additional_groupby) ",
+              "expr": "sum(rate(\n    tikv_server_raft_message_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"receive_delay\"}\n    [$__rate_interval]\n)) by (instance, $additional_groupby) ",
               "format": "time_series",
               "hide": true,
               "instant": false,
@@ -24341,7 +24341,7 @@
               "intervalFactor": 1,
               "legendFormat": "count-{{instance}} {{$additional_groupby}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_server_raft_message_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"send\"}\n    [$__rate_interval]\n)) by (instance, $additional_groupby) ",
+              "query": "sum(rate(\n    tikv_server_raft_message_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"receive_delay\"}\n    [$__rate_interval]\n)) by (instance, $additional_groupby) ",
               "refId": "",
               "step": 10,
               "target": ""
