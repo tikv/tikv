@@ -24102,7 +24102,7 @@
           },
           "dataFormat": "tsbuckets",
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The time consumed to send Raft Messages",
+          "description": "The time consumed to transmit Raft Messages over the network, reported by the receiver",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -24157,7 +24157,7 @@
           ],
           "timeFrom": null,
           "timeShift": null,
-          "title": "Raft Message Send duration",
+          "title": "Raft Message Receive Delay duration",
           "tooltip": {
             "msResolution": true,
             "shared": true,
@@ -24195,7 +24195,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The time consumed to send Raft Messages",
+          "description": "The time consumed to transmit Raft Messages over the network, reported by the receiver",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -24350,7 +24350,7 @@
           "thresholds": [],
           "timeFrom": null,
           "timeShift": null,
-          "title": "99% Raft Message Send Duration",
+          "title": "99% Raft Message Receive Delay Duration",
           "tooltip": {
             "msResolution": true,
             "shared": true,

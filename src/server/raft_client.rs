@@ -288,7 +288,7 @@ impl Buffer for BatchMessageBuffer {
         let mut batch_msgs = BatchRaftMessage::default();
         self.batch.drain(..).for_each(|(msg, time)| {
             RAFT_MESSAGE_DURATION
-                .wait
+                .send_wait
                 .observe(time.saturating_elapsed().as_secs_f64());
             batch_msgs.msgs.push(msg);
         });

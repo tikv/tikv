@@ -2561,10 +2561,10 @@ def RaftMessage() -> RowPanel:
     )
     layout.row(
         heatmap_panel_graph_panel_histogram_quantile_pairs(
-            heatmap_title="Raft Message Send duration",
-            heatmap_description="The time consumed to send Raft Messages",
-            graph_title="99% Raft Message Send Duration",
-            graph_description="The time consumed to send Raft Messages",
+            heatmap_title="Raft Message Receive Delay duration",
+            heatmap_description="The time consumed to transmit Raft Messages over the network, reported by the receiver",
+            graph_title="99% Raft Message Receive Delay Duration",
+            graph_description="The time consumed to transmit Raft Messages over the network, reported by the receiver",
             graph_by_labels=["instance"],
             yaxis_format=UNITS.SECONDS,
             metric="tikv_server_raft_message_duration_seconds",
