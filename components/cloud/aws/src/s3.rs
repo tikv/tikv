@@ -274,11 +274,11 @@ impl S3Storage {
         Creds: ProvideCredentials + 'static,
     {
         // Don't block the current thread, as it would prevent handling responses
-        tokio::task::block_in_place(move || block_on(Self::new_with_creds_client_async(
+        block_on(Self::new_with_creds_client_async(
             config,
             client,
             credentials_provider,
-        )))
+        ))
     }
 
     async fn new_with_creds_client_async<Creds, Http>(
