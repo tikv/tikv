@@ -508,9 +508,9 @@ impl<E: KvEngine> SstImporter<E> {
             })?;
         }
 
-        let ext_storage = tokio::task::block_in_place(move ||
+        let ext_storage = tokio::task::block_in_place(move || {
             self.external_storage_or_cache(backend, cache_key)
-        )?;
+        })?;
         let ext_storage = self.wrap_kms(ext_storage, support_kms);
 
         let result = ext_storage
