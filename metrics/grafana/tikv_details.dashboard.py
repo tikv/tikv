@@ -2547,6 +2547,30 @@ def RaftMessage() -> RowPanel:
             ),
         ]
     )
+    layout.row(
+        heatmap_panel_graph_panel_histogram_quantile_pairs(
+            heatmap_title="Raft Message Send Wait duration",
+            heatmap_description="The time consumed waiting to send Raft Messages",
+            graph_title="99% Raft Message Send Wait Duration",
+            graph_description="The time consumed waiting to send Raft Messages per TiKV instance",
+            graph_by_labels=["instance"],
+            yaxis_format=UNITS.SECONDS,
+            metric="tikv_server_raft_message_duration_seconds",
+            label_selectors=['type="send_wait"'],
+        )
+    )
+    layout.row(
+        heatmap_panel_graph_panel_histogram_quantile_pairs(
+            heatmap_title="Raft Message Receive Delay duration",
+            heatmap_description="The time consumed to transmit Raft Messages over the network, reported by the receiver",
+            graph_title="99% Raft Message Receive Delay Duration",
+            graph_description="The time consumed to transmit Raft Messages over the network per TiKV instance, reported by the receiver",
+            graph_by_labels=["instance"],
+            yaxis_format=UNITS.SECONDS,
+            metric="tikv_server_raft_message_duration_seconds",
+            label_selectors=['type="receive_delay"'],
+        )
+    )
     return layout.row_panel
 
 

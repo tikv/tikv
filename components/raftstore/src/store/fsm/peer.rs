@@ -88,7 +88,7 @@ use crate::{
         local_metrics::{RaftMetrics, TimeTracker},
         memory::*,
         metrics::*,
-        msg::{Callback, ExtCallback, InspectedRaftMessage},
+        msg::{Callback, CampaignType, ExtCallback, InspectedRaftMessage},
         peer::{
             ConsistencyState, Peer, PersistSnapshotResult, StaleState,
             TRANSFER_LEADER_COMMAND_REPLY_CTX,
@@ -647,6 +647,12 @@ where
         };
 
         for m in msgs.drain(..) {
+            // skip handling remain messages if fsm is destroyed. This can aviod handling
+            // arbitary messages(e.g. CasualMessage::ForceCompactRaftLogs) that may need
+            // to read raft logs which maybe lead to panic.
+            if self.fsm.stopped {
+                break;
+            }
             distribution[m.discriminant()] += 1;
             match m {
                 PeerMsg::RaftMessage(msg, sent_time) => {
@@ -1301,8 +1307,18 @@ where
                     self.maybe_destroy();
                 }
             }
-            CasualMessage::Campaign => {
-                let _ = self.fsm.peer.raft_group.campaign();
+            CasualMessage::Campaign(campaign_type) => {
+                match campaign_type {
+                    CampaignType::ForceLeader => {
+                        // Forcely campaign to be the leader of the region.
+                        let _ = self.fsm.peer.raft_group.campaign();
+                    }
+                    CampaignType::UnsafeSplitCampaign => {
+                        // If the message is sent by the parent, it means that the parent is already
+                        // the leader of the parent region.
+                        let _ = self.fsm.peer.maybe_campaign(true);
+                    }
+                }
                 self.fsm.has_ready = true;
             }
             CasualMessage::InMemoryEngineLoadRegion {
@@ -1899,7 +1915,9 @@ where
             // follower state
             let _ = self.ctx.router.send(
                 self.region_id(),
-                PeerMsg::CasualMessage(Box::new(CasualMessage::Campaign)),
+                PeerMsg::CasualMessage(Box::new(CasualMessage::Campaign(
+                    CampaignType::ForceLeader,
+                ))),
             );
         }
         self.fsm.has_ready = true;
@@ -2016,6 +2034,24 @@ where
                     self.on_enter_force_leader();
                 }
             }
+        }
+    }
+
+    #[inline]
+    /// Check whether the peer has any uncleared records in the
+    /// uncampaigned_new_regions list.
+    fn check_uncampaigned_regions(&mut self) {
+        fail_point!("on_skip_check_uncampaigned_regions", |_| {});
+        let has_uncompaigned_regions = !self
+            .fsm
+            .peer
+            .uncampaigned_new_regions
+            .as_ref()
+            .map_or(false, |r| r.is_empty());
+        // If the peer has any uncleared records in the uncampaigned_new_regions list,
+        // and there has valid leader in the region, it's safely to clear the records.
+        if has_uncompaigned_regions && self.fsm.peer.has_valid_leader() {
+            self.fsm.peer.uncampaigned_new_regions = None;
         }
     }
 
@@ -2853,6 +2889,8 @@ where
         }
 
         result?;
+
+        self.check_uncampaigned_regions();
 
         if self.fsm.peer.any_new_peer_catch_up(from_peer_id) {
             self.fsm.peer.heartbeat_pd(self.ctx);
@@ -3940,6 +3978,7 @@ where
             )
             .flush()
             .when_done(move || {
+                fail_point!("destroy_region_before_gc_flush");
                 if let Err(e) = mb.force_send(PeerMsg::SignificantMsg(Box::new(
                     SignificantMsg::RaftLogGcFlushed,
                 ))) {
@@ -3951,6 +3990,7 @@ where
                         region_id, peer_id, e
                     );
                 }
+                fail_point!("destroy_region_after_gc_flush");
             });
             if let Err(e) = self.ctx.raftlog_gc_scheduler.schedule(task) {
                 if tikv_util::thread_group::is_shutdown(!cfg!(test)) {
@@ -4455,7 +4495,7 @@ where
         );
         self.fsm.peer.post_split();
 
-        let is_leader = self.fsm.peer.is_leader();
+        let (is_leader, is_follower) = (self.fsm.peer.is_leader(), self.fsm.peer.is_follower());
         if is_leader {
             if share_source_region_size {
                 self.fsm.peer.set_approximate_size(share_size);
@@ -4621,6 +4661,18 @@ where
                 .unwrap();
 
             if !campaigned {
+                // The new peer has not campaigned yet, record it for later campaign.
+                if is_follower && self.fsm.peer.region().get_peers().len() > 1 {
+                    if self.fsm.peer.uncampaigned_new_regions.is_none() {
+                        self.fsm.peer.uncampaigned_new_regions = Some(vec![]);
+                    }
+                    self.fsm
+                        .peer
+                        .uncampaigned_new_regions
+                        .as_mut()
+                        .unwrap()
+                        .push(new_region_id);
+                }
                 if let Some(msg) = meta
                     .pending_msgs
                     .swap_remove_front(|m| m.get_to_peer() == &meta_peer)
@@ -5971,7 +6023,7 @@ where
         }
         fail_point!("on_raft_log_gc_tick_1", self.fsm.peer_id() == 1, |_| {});
         fail_point!("on_raft_gc_log_tick", |_| {});
-        debug_assert!(!self.fsm.stopped);
+        assert!(!self.fsm.stopped);
 
         // As leader, we would not keep caches for the peers that didn't response
         // heartbeat in the last few seconds. That happens probably because
