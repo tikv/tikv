@@ -30,7 +30,7 @@ impl Drop for DeamonRuntime {
 
 #[derive(Clone)]
 pub struct DeamonRuntimeHandle {
-    inner: Weak<DeamonRuntime>,
+    inner: Weak<Mutex<DeamonRuntime>>,
 }
 
 impl DeamonRuntimeHandle {
@@ -38,20 +38,17 @@ impl DeamonRuntimeHandle {
     where
         Fut: Future<Output = ()> + Send + 'static,
     {
-        let rc_runtime = match self.inner.upgrade() {
+        let runtime = match self.inner.upgrade() {
             Some(runtime) => runtime,
             None => return,
         };
 
-        let inner = match rc_runtime.inner.as_ref() {
-            Some(inner) => inner,
-            None => return,
-        };
+        let lock_guard = runtime.lock().unwrap();
 
-        let task_count = rc_runtime.task_count.clone();
+        let task_count = lock_guard.task_count.clone();
         task_count.fetch_add(1, Ordering::SeqCst);
 
-        inner.spawn(async move {
+        lock_guard.inner.as_ref().unwrap().spawn(async move {
             fut.await;
             task_count.fetch_sub(1, Ordering::SeqCst);
         });
@@ -62,10 +59,10 @@ impl DeamonRuntimeHandle {
         Fut: Future,
     {
         let (handle, task_count) = {
-            let rc_runtime = self.inner.upgrade()?;
-            let inner = rc_runtime.inner.as_ref()?;
-            let handle = inner.handle().clone();
-            let task_count = rc_runtime.task_count.clone();
+            let runtime = self.inner.upgrade()?;
+            let lock_guard = runtime.lock().unwrap();
+            let handle = lock_guard.inner.as_ref().unwrap().handle().clone();
+            let task_count = lock_guard.task_count.clone();
             (handle, task_count)
         };
 
@@ -83,8 +80,8 @@ pub struct ResizableRuntime {
     pub size: usize,
     count: usize,
     thread_name: String,
-    current_runtime: Arc<DeamonRuntime>,
-    used_runtime: Arc<Mutex<Vec<Arc<DeamonRuntime>>>>,
+    current_runtime: Arc<Mutex<DeamonRuntime>>,
+    used_runtime: Arc<Mutex<Vec<DeamonRuntime>>>,
     replace_pool_rule: Box<dyn Fn(usize, &str) -> TokioResult<Runtime> + Send + Sync>,
     after_adjust: Box<dyn Fn(usize) + Send + Sync>,
 }
@@ -107,10 +104,10 @@ impl ResizableRuntime {
             size: 1,
             count: 0,
             thread_name: thread_name.to_owned(),
-            current_runtime: Arc::new(DeamonRuntime {
+            current_runtime: Arc::new(Mutex::new(DeamonRuntime {
                 inner: Some(keeper),
                 task_count: Arc::new(AtomicUsize::new(0)),
-            }),
+            })),
             used_runtime: Arc::new(Mutex::new(Vec::new())),
             replace_pool_rule,
             after_adjust,
@@ -169,18 +166,21 @@ impl ResizableRuntime {
 
         {
             let mut used_runtime_guard = self.used_runtime.lock().unwrap();
+            let mut current_runtime_guard = self.current_runtime.lock().unwrap();
 
             self.count += 1;
             let thread_name = format!("{}-v{}-{}", self.thread_name, self.count, new_size,);
-            let new_pool = (self.replace_pool_rule)(new_size, &thread_name)
+            let new_runtime = (self.replace_pool_rule)(new_size, &thread_name)
                 .unwrap_or_else(|_| panic!("failed to create tokio runtime {}", thread_name));
 
-            used_runtime_guard.push(self.current_runtime.clone());
-
-            self.current_runtime = Arc::new(DeamonRuntime {
-                inner: Some(new_pool),
-                task_count: Arc::new(AtomicUsize::new(0)),
-            });
+            let old_runtime = std::mem::replace(
+                &mut *current_runtime_guard,
+                DeamonRuntime {
+                    inner: Some(new_runtime),
+                    task_count: Arc::new(AtomicUsize::new(0)),
+                },
+            );
+            used_runtime_guard.push(old_runtime);
 
             info!(
                 "Resizing thread pool";
@@ -206,8 +206,6 @@ mod test {
     use super::*;
     use crate::time::Instant;
 
-    static COUNTER: AtomicUsize = AtomicUsize::new(0);
-
     fn replace_pool_rule(thread_count: usize, thread_name: &str) -> TokioResult<Runtime> {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(thread_count)
@@ -220,6 +218,7 @@ mod test {
 
     #[test]
     fn test_adjust_thread_num() {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let after_adjust = |new_size: usize| {
             COUNTER.store(new_size, Ordering::SeqCst);
         };
@@ -229,27 +228,32 @@ mod test {
             Box::new(replace_pool_rule),
             Box::new(after_adjust),
         );
-        let handle = threads.handle();
-        assert_eq!(COUNTER.load(Ordering::SeqCst), 4);
-        handle.block_on(async {
-            assert_eq!(COUNTER.load(Ordering::SeqCst), 4);
-        });
         // keeper runtime should not be cleaned
         assert_eq!(threads.used_runtime.lock().unwrap().len(), 1);
+        assert_eq!(COUNTER.load(Ordering::SeqCst), 4);
+
+        let handle = threads.handle();
+        handle.block_on(async {
+            COUNTER.store(5, Ordering::SeqCst);
+        });
+        assert_eq!(COUNTER.load(Ordering::SeqCst), 5);
 
         threads.adjust_with(8);
+        assert_eq!(COUNTER.load(Ordering::SeqCst), 8);
         assert_eq!(threads.used_runtime.lock().unwrap().len(), 2);
 
         // The idle runtime should be cleaned after 10s
         sleep(Duration::from_secs(12));
         assert_eq!(threads.used_runtime.lock().unwrap().len(), 1);
         handle.block_on(async {
-            assert_eq!(COUNTER.load(Ordering::SeqCst), 8);
+            COUNTER.store(9, Ordering::SeqCst);
         });
+        assert_eq!(COUNTER.load(Ordering::SeqCst), 9);
     }
 
     #[test]
     fn test_infinite_loop() {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let after_adjust = |new_size: usize| {
             COUNTER.store(new_size, Ordering::SeqCst);
         };
@@ -274,9 +278,7 @@ mod test {
         // The running runtime should not be cleaned after 10s
         sleep(Duration::from_secs(12));
         assert_eq!(threads.used_runtime.lock().unwrap().len(), 2);
-        handle.block_on(async {
-            assert_eq!(COUNTER.load(Ordering::SeqCst), 8);
-        });
+        assert_eq!(COUNTER.load(Ordering::SeqCst), 8);
     }
 
     #[test]
