@@ -607,10 +607,17 @@ impl RegionCacheEngineExt for RegionCacheMemoryEngine {
         }
     }
 
-    fn region_cached(&self, region: &Region) -> bool {
+    fn region_cached(&self, region: &Region, include_loading: bool) -> bool {
         let regions_map = self.core.region_manager().regions_map().read();
         if let Some(meta) = regions_map.region_meta(region.get_id()) {
-            matches!(meta.get_state(), RegionState::Active | RegionState::Loading)
+            if include_loading {
+                matches!(
+                    meta.get_state(),
+                    RegionState::Active | RegionState::Loading | RegionState::Pending
+                )
+            } else {
+                matches!(meta.get_state(), RegionState::Active)
+            }
         } else {
             false
         }

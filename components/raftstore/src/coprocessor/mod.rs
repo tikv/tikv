@@ -140,14 +140,6 @@ pub trait AdminObserver: Coprocessor {
     ) -> bool {
         false
     }
-
-    fn pre_transfer_leader(
-        &self,
-        _ctx: &mut ObserverContext<'_>,
-        _tr: &TransferLeaderRequest,
-    ) -> Result<Option<ExtraMessage>> {
-        Ok(None)
-    }
 }
 
 pub trait QueryObserver: Coprocessor {
@@ -613,6 +605,35 @@ pub trait UpdateSafeTsObserver: Coprocessor {
 pub trait DestroyPeerObserver: Coprocessor {
     /// Hook to call when destroying a peer.
     fn on_destroy_peer(&self, _: &Region) {}
+}
+
+#[derive(PartialEq)]
+pub struct TransferLeaderCustomContext {
+    pub key: Vec<u8>,
+    pub value: Vec<u8>,
+}
+
+impl fmt::Debug for TransferLeaderCustomContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TransferLeaderCustomContext")
+            .field("key", &log_wrappers::Value(&self.key))
+            .field("value", &log_wrappers::Value(&self.value))
+            .finish()
+    }
+}
+
+pub trait TransferLeaderObserver: Coprocessor {
+    fn pre_transfer_leader(
+        &self,
+        _ctx: &mut ObserverContext<'_>,
+        _tr: &TransferLeaderRequest,
+    ) -> Result<Option<TransferLeaderCustomContext>> {
+        Ok(None)
+    }
+
+    fn pre_ack_transfer_leader(&self, _: &mut ObserverContext<'_>, _: &eraftpb::Message) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]

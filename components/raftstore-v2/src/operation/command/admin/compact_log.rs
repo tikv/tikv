@@ -202,8 +202,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         // leader may call `get_term()` on the latest replicated index, so compact
         // entries before `alive_cache_idx` instead of `alive_cache_idx + 1`.
-        self.entry_storage_mut()
-            .compact_entry_cache(std::cmp::min(alive_cache_idx, applied_idx + 1));
+        let mut cache_warmup_state = self.transfer_leader_state_mut().cache_warmup_state.take();
+        self.entry_storage_mut().compact_entry_cache(
+            std::cmp::min(alive_cache_idx, applied_idx + 1),
+            &mut cache_warmup_state,
+        );
+        self.transfer_leader_state_mut().cache_warmup_state = cache_warmup_state;
 
         let mut compact_idx = if force && replicated_idx > first_idx {
             replicated_idx
@@ -495,14 +499,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         // Since this peer may be warming up the entry cache, log compaction should be
         // temporarily skipped. Otherwise, the warmup task may fail.
-        if let Some(state) = self.entry_storage_mut().entry_cache_warmup_state_mut() {
+        if let Some(state) = &mut self.transfer_leader_state_mut().cache_warmup_state {
             if !state.check_stale(MAX_WARMED_UP_CACHE_KEEP_TIME) {
                 return;
             }
         }
 
+        let mut cache_warmup_state = self.transfer_leader_state_mut().cache_warmup_state.take();
         self.entry_storage_mut()
-            .compact_entry_cache(res.compact_index);
+            .compact_entry_cache(res.compact_index, &mut cache_warmup_state);
+        self.transfer_leader_state_mut().cache_warmup_state = cache_warmup_state;
+
         self.storage_mut()
             .cancel_generating_snap_due_to_compacted(res.compact_index);
 

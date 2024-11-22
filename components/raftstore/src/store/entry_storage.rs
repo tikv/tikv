@@ -651,7 +651,6 @@ pub struct EntryStorage<EK: KvEngine, ER> {
     read_scheduler: Scheduler<ReadTask<EK>>,
     raftlog_fetch_stats: AsyncFetchStats,
     async_fetch_results: RefCell<HashMap<u64, RaftlogFetchState>>,
-    cache_warmup_state: Option<CacheWarmupState>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
@@ -685,7 +684,6 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
             read_scheduler,
             raftlog_fetch_stats: AsyncFetchStats::default(),
             async_fetch_results: RefCell::new(HashMap::default()),
-            cache_warmup_state: None,
         })
     }
 
@@ -1104,29 +1102,19 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
         self.last_term = last_term;
     }
 
-    pub fn entry_cache_warmup_state(&self) -> &Option<CacheWarmupState> {
-        &self.cache_warmup_state
-    }
-
-    pub fn entry_cache_warmup_state_mut(&mut self) -> &mut Option<CacheWarmupState> {
-        &mut self.cache_warmup_state
-    }
-
-    pub fn clear_entry_cache_warmup_state(&mut self) {
-        self.cache_warmup_state = None;
-    }
-
     /// Trigger a task to warm up the entry cache.
     ///
     /// This will ensure the range [low..=last_index] are loaded into
     /// cache. Return the high index of the warmup range if a task is
     /// successfully triggered.
-    pub fn async_warm_up_entry_cache(&mut self, low: u64) -> Option<u64> {
+    pub fn async_warm_up_entry_cache(
+        &mut self,
+        low: u64,
+    ) -> (Option<u64>, Option<CacheWarmupState>) {
         let high = if let Some(first_index) = self.entry_cache_first_index() {
             if low >= first_index {
                 // Already warmed up.
-                self.cache_warmup_state = Some(CacheWarmupState::new());
-                return None;
+                return (None, Some(CacheWarmupState::new()));
             }
             // Partially warmed up.
             first_index
@@ -1135,24 +1123,24 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
         };
 
         // Fetch entries [low, high) to trigger an async fetch task in background.
-        self.cache_warmup_state = Some(CacheWarmupState::new_with_range(low, high));
+        let cache_warmup_state = Some(CacheWarmupState::new_with_range(low, high));
         match self.entries(low, high, u64::MAX, GetEntriesContext::empty(true)) {
             Ok(_) => {
                 // This should not happen, but it's OK :)
                 debug_assert!(false, "entries should not have been fetched");
                 error!("entries are fetched unexpectedly during warming up");
-                None
+                (None, cache_warmup_state)
             }
             Err(raft::Error::Store(raft::StorageError::LogTemporarilyUnavailable)) => {
                 WARM_UP_ENTRY_CACHE_COUNTER.started.inc();
-                Some(high)
+                (Some(high), cache_warmup_state)
             }
             Err(e) => {
                 error!(
                     "fetching entries met unexpected error during warming up";
                     "err" => ?e,
                 );
-                None
+                (None, cache_warmup_state)
             }
         }
     }
@@ -1160,11 +1148,14 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
     /// Warm up entry cache if the result is valid.
     ///
     /// Return true when the warmup operation succeed within the timeout.
-    pub fn maybe_warm_up_entry_cache(&mut self, res: RaftlogFetchResult) -> bool {
+    pub fn on_async_warm_up_entry_cache_fetched(
+        &mut self,
+        res: RaftlogFetchResult,
+        state: &CacheWarmupState,
+    ) -> bool {
         let low = res.low;
         // Warm up the entry cache if the low and high index are
         // exactly the same as the warmup range.
-        let state = self.entry_cache_warmup_state().as_ref().unwrap();
         let range = state.range();
         let is_task_timeout = state.is_task_timeout();
 
@@ -1228,11 +1219,14 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
         false
     }
 
-    pub fn compact_entry_cache(&mut self, idx: u64) {
+    pub fn compact_entry_cache(&mut self, idx: u64, state: &mut Option<CacheWarmupState>) {
         let mut can_compact = true;
-        if let Some(state) = self.entry_cache_warmup_state_mut() {
-            if state.check_stale(MAX_WARMED_UP_CACHE_KEEP_TIME) {
-                self.clear_entry_cache_warmup_state();
+        let is_stale = state
+            .as_mut()
+            .map(|s| s.check_stale(MAX_WARMED_UP_CACHE_KEEP_TIME));
+        if let Some(is_stale) = is_stale {
+            if is_stale {
+                *state = None;
             } else {
                 can_compact = false;
             }
@@ -1300,7 +1294,7 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
 
 #[cfg(test)]
 pub mod tests {
-    use std::sync::mpsc;
+    use std::{assert_matches::assert_matches, sync::mpsc};
 
     use engine_test::{kv::KvTestEngine, raft::RaftTestEngine};
     use engine_traits::RaftEngineReadOnly;
@@ -1790,6 +1784,7 @@ pub mod tests {
         let (dummy_scheduler, _) = dummy_scheduler();
         let mut store = new_storage_from_ents(sched, dummy_scheduler, &td, &ents);
         store.cache.cache.clear();
+        let mut cache_warmup_state = None;
 
         // initial cache
         let mut entries = vec![new_entry(6, 5), new_entry(7, 5)];
@@ -1828,20 +1823,20 @@ pub mod tests {
 
         // compact to min(5 + 1, 7)
         store.cache.persisted = 5;
-        store.compact_entry_cache(7);
+        store.compact_entry_cache(7, &mut cache_warmup_state);
         exp_res = vec![new_entry(6, 7), new_entry(7, 8)];
         validate_cache(&store, &exp_res);
 
         // compact to min(7 + 1, 7)
         store.cache.persisted = 7;
-        store.compact_entry_cache(7);
+        store.compact_entry_cache(7, &mut cache_warmup_state);
         exp_res = vec![new_entry(7, 8)];
         validate_cache(&store, &exp_res);
         // compact all
-        store.compact_entry_cache(8);
+        store.compact_entry_cache(8, &mut cache_warmup_state);
         validate_cache(&store, &[]);
         // invalid compaction should be ignored.
-        store.compact_entry_cache(6);
+        store.compact_entry_cache(6, &mut cache_warmup_state);
     }
 
     #[test]
@@ -1858,14 +1853,14 @@ pub mod tests {
         assert_eq!(store.entry_cache_first_index().unwrap(), 6);
 
         // The return value should be None when it is already warmed up.
-        assert!(store.async_warm_up_entry_cache(6).is_none());
+        assert_matches!(store.async_warm_up_entry_cache(6), (None, _));
 
         // The high index should be equal to the entry_cache_first_index.
-        assert_eq!(store.async_warm_up_entry_cache(5).unwrap(), 6);
+        assert_matches!(store.async_warm_up_entry_cache(5), (Some(6), _));
 
         store.cache.compact_to(7); // Clean cache.
         // The high index should be equal to the last_index + 1.
-        assert_eq!(store.async_warm_up_entry_cache(5).unwrap(), 7);
+        assert_matches!(store.async_warm_up_entry_cache(5), (Some(7), _));
     }
 
     #[test]
@@ -1878,7 +1873,7 @@ pub mod tests {
         let (dummy_scheduler, _rx) = dummy_scheduler();
         let mut store = new_storage_from_ents(region_scheduler, dummy_scheduler, &td, &ents);
         store.cache.compact_to(6);
-        store.cache_warmup_state = Some(CacheWarmupState::new_with_range(5, 6));
+        let cache_warmup_state = CacheWarmupState::new_with_range(5, 6);
 
         let res = RaftlogFetchResult {
             ents: Ok(ents[1..3].to_vec()),
@@ -1888,7 +1883,7 @@ pub mod tests {
             tried_cnt: MAX_ASYNC_FETCH_TRY_CNT,
             term: 1,
         };
-        store.maybe_warm_up_entry_cache(res);
+        store.on_async_warm_up_entry_cache_fetched(res, &cache_warmup_state);
         // Cache should be warmed up.
         assert_eq!(store.entry_cache_first_index().unwrap(), 5);
     }

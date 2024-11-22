@@ -2,7 +2,6 @@
 
 use std::cmp::Ordering;
 
-use bytes::Bytes;
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{
     disk_usage::DiskUsage,
@@ -15,7 +14,7 @@ use raft::{eraftpb, ProgressState, Storage};
 use raftstore::{
     store::{
         fsm::new_admin_request, make_transfer_leader_response, metrics::PEER_ADMIN_CMD_COUNTER,
-        Transport, TRANSFER_LEADER_COMMAND_REPLY_CTX,
+        TransferLeaderContext, Transport,
     },
     Result,
 };
@@ -64,7 +63,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     ///    1. Leader firstly proposes pessimistic locks and then proposes a
     ///       TransferLeader command.
     ///    2. The follower applies the TransferLeader command and replies an ACK
-    ///       with special context TRANSFER_LEADER_COMMAND_REPLY_CTX.
+    ///       with special context TransferLeaderContext::CommandReply.
     ///
     /// See also: tikv/rfcs#37.
     pub fn propose_transfer_leader<T>(
@@ -295,19 +294,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
 
         // Check if the warmup operation is timeout if warmup is already started.
-        if let Some(state) = self
-            .storage_mut()
-            .entry_storage_mut()
-            .entry_cache_warmup_state_mut()
-        {
+        if let Some(state) = &mut self.transfer_leader_state_mut().cache_warmup_state {
             // If it is timeout, this peer should ack the message so that
             // the leadership transfer process can continue.
             state.check_task_timeout(ctx.cfg.max_entry_cache_warmup_duration.0)
         } else {
-            self.storage_mut()
+            let (warmup_high_index, state) = self
+                .storage_mut()
                 .entry_storage_mut()
-                .async_warm_up_entry_cache(low)
-                .is_none()
+                .async_warm_up_entry_cache(low);
+            self.transfer_leader_state_mut().cache_warmup_state = state;
+            warmup_high_index.is_none()
         }
     }
 
@@ -322,7 +319,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         msg.set_index(self.storage().apply_state().applied_index);
         msg.set_log_term(self.term());
         if reply_cmd {
-            msg.set_context(Bytes::from_static(TRANSFER_LEADER_COMMAND_REPLY_CTX));
+            msg.set_context(TransferLeaderContext::CommandReply.to_bytes().unwrap());
         }
         self.raft_group_mut().raft.msgs.push(msg);
     }
