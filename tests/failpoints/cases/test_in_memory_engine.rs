@@ -37,7 +37,7 @@ use test_coprocessor::{
 };
 use test_raftstore::{
     get_tso, new_learner_peer, new_peer, new_put_cf_cmd, new_server_cluster_with_hybrid_engine,
-    CloneFilterFactory, Cluster, Direction, RegionPacketFilter, ServerCluster,
+    sleep_ms, CloneFilterFactory, Cluster, Direction, RegionPacketFilter, ServerCluster,
 };
 use test_util::eventually;
 use tidb_query_datatype::{
@@ -668,33 +668,57 @@ fn test_eviction_after_ingest_sst() {
 }
 
 #[test]
-fn test_pre_load_when_transfer_ledaer() {
+fn test_pre_load_when_transfer_leader() {
     let mut cluster = new_server_cluster_with_hybrid_engine(0, 3);
+    // Using a large warmup timeout to stable the test.
+    cluster.cfg.raft_store.max_entry_cache_warmup_duration.0 = Duration::from_secs(u64::MAX);
     cluster.run();
-
-    let (tx, rx) = unbounded();
-    fail::cfg_callback("ime_on_completes_batch_loading", move || {
-        tx.send(true).unwrap();
-    })
-    .unwrap();
 
     let r = cluster.get_region(b"");
     cluster.must_transfer_leader(r.id, new_peer(1, 1));
+    let cache_region = CacheRegion::from_region(&r);
     let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
     region_cache_engine
-        .load_region(CacheRegion::from_region(&r))
+        .load_region(cache_region.clone())
         .unwrap();
     // put some key to trigger load
     cluster.must_put(b"k", b"val");
-    let _ = rx.recv_timeout(Duration::from_secs(500)).unwrap();
+    eventually(Duration::from_millis(100), Duration::from_secs(5), || {
+        region_cache_engine
+            .snapshot(cache_region.clone(), 100, 100)
+            .is_ok()
+    });
 
-    cluster.must_transfer_leader(r.id, new_peer(2, 2));
+    let (tx, rx) = unbounded::<()>();
+    fail::cfg_callback("ime_on_snapshot_load_finished", move || {
+        let _ = rx.recv();
+    })
+    .unwrap();
+
+    cluster.transfer_leader(r.id, new_peer(2, 2));
+    // Transfer leader will not complete until the region is cached.
+    sleep_ms(1000);
+    cluster.reset_leader_of_region(r.id);
+    let leader = cluster.leader_of_region(r.id).unwrap();
+    assert_eq!(leader, new_peer(1, 1));
+
+    // Unpause the snapshot load.
+    drop(tx);
+    fail::remove("ime_on_snapshot_load_finished");
+    eventually(Duration::from_millis(100), Duration::from_secs(50), || {
+        cluster.reset_leader_of_region(r.id);
+        let leader = cluster.leader_of_region(r.id).unwrap();
+        leader == new_peer(2, 2)
+    });
+
     // put some key to trigger load
     cluster.must_put(b"k2", b"val");
-    let _ = rx.recv_timeout(Duration::from_secs(500)).unwrap();
-
     let region_cache_engine = cluster.sim.rl().get_region_cache_engine(2);
-    assert!(region_cache_engine.region_cached(&r));
+    eventually(Duration::from_millis(100), Duration::from_secs(5), || {
+        region_cache_engine
+            .snapshot(cache_region.clone(), 100, 100)
+            .is_ok()
+    });
 }
 
 #[test]
@@ -717,7 +741,7 @@ fn test_background_loading_pending_region() {
     .unwrap();
 
     rx.recv_timeout(Duration::from_secs(2)).unwrap();
-    assert!(region_cache_engine.region_cached(&r));
+    assert!(region_cache_engine.region_cached(&r, true));
 }
 
 // test delete range and unsafe destroy range
@@ -783,7 +807,7 @@ fn test_delete_range() {
         {
             let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
             let cache_range = new_region(1, "", "");
-            assert!(!region_cache_engine.region_cached(&cache_range));
+            assert!(!region_cache_engine.region_cached(&cache_range, true));
         }
     };
 
@@ -1021,7 +1045,7 @@ fn test_eviction_when_destroy_peer() {
 
     {
         let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
-        assert!(!region_cache_engine.region_cached(&r));
+        assert!(!region_cache_engine.region_cached(&r, true));
     }
 }
 

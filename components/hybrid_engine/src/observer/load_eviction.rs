@@ -219,6 +219,7 @@ impl AdminObserver for LoadEvictionObserver {
         ctx: &mut ObserverContext<'_>,
         _tr: &kvproto::raft_cmdpb::TransferLeaderRequest,
     ) -> raftstore::coprocessor::Result<Option<kvproto::raft_serverpb::ExtraMessage>> {
+        // Warm up transferee's cache when a region is in active or in loading.
         let include_loading = true;
         if !self
             .cache_engine
@@ -256,6 +257,7 @@ impl TransferLeaderObserver for LoadEvictionObserver {
             }
         }
         if need_to_be_cached {
+            // Exclude loading states to make sure the region is cached and active.
             let include_loading = false;
             let has_cached = self.cache_engine.region_cached(r.region(), include_loading);
             info!("ime dbg pre_ack_transfer_leader region"; "region" => ?region, "has_cached" => has_cached);
