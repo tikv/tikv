@@ -36,6 +36,8 @@ use crate::{
     util, ErrorKind,
 };
 
+const COMPACTION_V1_PREFIX: &str = "v1/compactions";
+
 /// The config for an execution of a compaction.
 ///
 /// This structure itself fully defines what work the compaction need to do.
@@ -99,7 +101,12 @@ impl ExecutionConfig {
         hasher.write(&util::compression_type_to_u8(self.compression).to_le_bytes());
         hasher.write(&self.compression_level.unwrap_or(0).to_le_bytes());
 
-        format!("{}_{}", name, util::aligned_u64(hasher.sum64()))
+        format!(
+            "{}/{}_{}",
+            COMPACTION_V1_PREFIX,
+            name,
+            util::aligned_u64(hasher.sum64())
+        )
     }
 }
 
