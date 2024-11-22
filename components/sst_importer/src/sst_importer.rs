@@ -508,6 +508,9 @@ impl<E: KvEngine> SstImporter<E> {
             })?;
         }
 
+        // The `DashMap` locks the entry to ensure that only one thread loads the credentials at a time.
+        // However, if the thread gets blocked during the loading process, it can lead to a deadlock.
+        // To avoid this, blocking operations must be performed outside of the `DashMap`.
         let ext_storage = tokio::task::block_in_place(move || {
             self.external_storage_or_cache(backend, cache_key)
         })?;
