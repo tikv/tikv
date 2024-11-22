@@ -40,6 +40,7 @@ use tikv_util::{
     future::RescheduleChecker,
     memory::{MemoryQuota, OwnedAllocated},
     resizable_threadpool::ResizableRuntimeHandle,
+    stream::block_on_external_io,
     sys::{thread::ThreadBuildWrapper, SysQuota},
     time::{Instant, Limiter},
     Either, HandyRwLock,
@@ -468,8 +469,19 @@ impl<E: KvEngine> SstImporter<E> {
     }
 
     /// Create an external storage by the backend, and cache it with the key.
-    /// If the cache exists, return it directly.
+    /// If the cache exists, return it directly. This will block the current
+    /// thread and will be useful when we are not in an async context.
     pub fn external_storage_or_cache(
+        &self,
+        backend: &StorageBackend,
+        cache_id: &str,
+    ) -> Result<Arc<dyn ExternalStorage>> {
+        block_on_external_io(self.external_storage_or_cache_async(backend, cache_id))
+    }
+
+    /// Create an external storage by the backend, and cache it with the key.
+    /// If the cache exists, return it directly.
+    pub async fn external_storage_or_cache_async(
         &self,
         backend: &StorageBackend,
         cache_id: &str,
@@ -481,7 +493,9 @@ impl<E: KvEngine> SstImporter<E> {
             let s = external_storage::create_storage(backend, Default::default())?;
             Arc::from(s)
         } else {
-            self.cached_storage.cached_or_create(cache_id, backend)?
+            self.cached_storage
+                .cached_or_create_async(cache_id, backend)
+                .await?
         };
         Ok(ext_storage)
     }
@@ -507,7 +521,9 @@ impl<E: KvEngine> SstImporter<E> {
             })?;
         }
 
-        let ext_storage = self.external_storage_or_cache(backend, cache_key)?;
+        let ext_storage = self
+            .external_storage_or_cache_async(backend, cache_key)
+            .await?;
         let ext_storage = self.auto_encrypt_local_file_if_needed(ext_storage);
 
         let result = ext_storage

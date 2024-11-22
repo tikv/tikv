@@ -418,7 +418,11 @@ impl<E: Engine> ImportSstService<E> {
         }
         let ext_storage = importer.auto_encrypt_local_file_if_needed(
             importer
-                .external_storage_or_cache(req.get_storage_backend(), req.get_storage_cache_id())?,
+                .external_storage_or_cache_async(
+                    req.get_storage_backend(),
+                    req.get_storage_cache_id(),
+                )
+                .await?,
         );
 
         let mut inflight_futures = VecDeque::new();

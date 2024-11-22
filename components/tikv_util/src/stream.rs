@@ -68,12 +68,17 @@ pub fn error_stream(e: io::Error) -> impl Stream<Item = io::Result<Bytes>> + Unp
 ///
 /// This function must never be nested. The future invoked by
 /// `block_on_external_io` must never call `block_on_external_io` again itself,
-/// otherwise the executor's states may be disrupted.
+/// otherwise the executor's states may be disrupted. (For now, this result in a
+/// panic.)
 ///
 /// This means the future must only use async functions.
 // FIXME: get rid of this function, so that futures_executor::block_on is
 // sufficient.
 pub fn block_on_external_io<F: Future>(f: F) -> F::Output {
+    if let Ok(hnd) = tokio::runtime::Handle::try_current() {
+        return tokio::task::block_in_place(|| hnd.block_on(f));
+    }
+
     // we need a Tokio runtime, Tokio futures require Tokio executor.
     Builder::new_current_thread()
         .enable_io()
