@@ -7,7 +7,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc,
     },
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use api_version::KvFormat;
@@ -42,7 +42,7 @@ use tikv_util::{
     future::{paired_future_callback, poll_future_notify},
     mpsc::future::{unbounded, BatchReceiver, Sender, WakePolicy},
     sys::memory_usage_reaches_high_water,
-    time::Instant,
+    time::{nanos_to_secs, Instant},
     worker::Scheduler,
 };
 use tracker::{set_tls_tracker_token, RequestInfo, RequestType, Tracker, GLOBAL_TRACKERS};
@@ -759,6 +759,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             let mut stream = stream.map_err(Error::from);
             while let Some(msg) = stream.try_next().await? {
                 RAFT_MESSAGE_RECV_COUNTER.inc();
+
                 let reject = needs_reject_raft_append(reject_messages_on_memory_ratio);
                 if let Err(err @ RaftStoreError::StoreNotMatch { .. }) =
                     Self::handle_raft_message(store_id, &ch, msg, reject)
@@ -811,6 +812,13 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         let res = async move {
             let mut stream = stream.map_err(Error::from);
             while let Some(mut batch_msg) = stream.try_next().await? {
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos() as u64;
+                let elapsed = nanos_to_secs(now.saturating_sub(batch_msg.last_observed_time));
+                RAFT_MESSAGE_DURATION.receive_delay.observe(elapsed);
+
                 let len = batch_msg.get_msgs().len();
                 RAFT_MESSAGE_RECV_COUNTER.inc_by(len as u64);
                 RAFT_MESSAGE_BATCH_SIZE.observe(len as f64);
