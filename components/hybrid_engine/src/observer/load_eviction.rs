@@ -219,7 +219,11 @@ impl AdminObserver for LoadEvictionObserver {
         ctx: &mut ObserverContext<'_>,
         _tr: &kvproto::raft_cmdpb::TransferLeaderRequest,
     ) -> raftstore::coprocessor::Result<Option<kvproto::raft_serverpb::ExtraMessage>> {
-        if !self.cache_engine.region_cached(ctx.region()) {
+        let include_loading = true;
+        if !self
+            .cache_engine
+            .region_cached(ctx.region(), include_loading)
+        {
             return Ok(None);
         }
         let mut msg = ExtraMessage::new();
@@ -252,7 +256,8 @@ impl TransferLeaderObserver for LoadEvictionObserver {
             }
         }
         if need_to_be_cached {
-            let has_cached = self.cache_engine.region_cached(r.region());
+            let include_loading = false;
+            let has_cached = self.cache_engine.region_cached(r.region(), include_loading);
             info!("ime dbg pre_ack_transfer_leader region"; "region" => ?region, "has_cached" => has_cached);
             has_cached
         } else {
@@ -354,7 +359,7 @@ mod tests {
             self.region_events.lock().unwrap().push(event);
         }
 
-        fn region_cached(&self, _: &Region) -> bool {
+        fn region_cached(&self, _: &Region, _: bool) -> bool {
             unreachable!()
         }
 
