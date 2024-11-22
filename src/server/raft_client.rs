@@ -4,7 +4,6 @@ use std::{
     collections::VecDeque,
     ffi::CString,
     marker::Unpin,
-    mem,
     pin::Pin,
     result,
     sync::{
@@ -40,7 +39,7 @@ use tikv_kv::RaftExtension;
 use tikv_util::{
     config::{Tracker, VersionTrack},
     lru::LruCache,
-    time::{duration_to_sec, nanos_to_secs, InstantExt},
+    time::{duration_to_sec, InstantExt},
     timer::GLOBAL_TIMER_HANDLE,
     worker::Scheduler,
 };
