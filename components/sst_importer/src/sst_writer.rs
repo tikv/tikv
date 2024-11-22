@@ -99,9 +99,10 @@ impl<E: KvEngine> TxnSstWriter<E> {
                 self.default.put(&k, value)?;
                 self.default_entries += 1;
                 self.default_bytes += (k.len() + value.len()) as u64;
-                KvWrite::new(WriteType::Put, commit_ts, None).set_txn_source(1 << 16)
+                KvWrite::new(WriteType::Put, commit_ts, None)
             }
         };
+        let w = w.set_txn_source(1<<16);
         let write = w.as_ref().to_bytes();
         self.write.put(&k, &write)?;
         self.write_entries += 1;
