@@ -41,6 +41,7 @@ use kvproto::{
     replication_modepb::{
         DrAutoSyncState, RegionReplicationState, RegionReplicationStatus, ReplicationMode,
     },
+    tikvpb::BatchRaftMessage,
 };
 use parking_lot::RwLockUpgradableReadGuard;
 use pd_client::{Feature, INVALID_ID};
@@ -934,6 +935,8 @@ where
     /// leader, a campaign is triggered for those regions.
     /// Once the parent region has valid leader, this list will be cleared.
     pub uncampaigned_new_regions: Option<Vec<u64>>,
+
+    pending_transfer_leader_msg: Option<eraftpb::Message>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -1086,6 +1089,7 @@ where
             busy_on_apply: Some(false),
             last_leader_committed_idx: None,
             uncampaigned_new_regions: None,
+            pending_transfer_leader_msg: None,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -3973,8 +3977,8 @@ where
         // log is always its current term. Not just set term because raft library
         // forbids setting it for MsgTransferLeader messages.
         msg.set_log_term(self.term());
-        self.raft_group.raft.msgs.push(msg);
 
+        let mut batch_extra_msgs = Vec::with_capacity(extra_msgs.len());
         extra_msgs.into_iter().for_each(|extra_msg| {
             let mut msg = RaftMessage::default();
             msg.set_region_id(self.region_id);
@@ -3982,8 +3986,14 @@ where
             msg.set_to_peer(peer.clone());
             msg.set_region_epoch(self.region().get_region_epoch().clone());
             msg.set_extra_msg(extra_msg);
-            self.send_raft_messages(ctx, vec![msg]);
+            batch_extra_msgs.push(msg);
         });
+        self.send_raft_messages(ctx, batch_extra_msgs.clone());
+
+        let mut batch_msgs = BatchRaftMessage::default();
+        batch_msgs.set_msgs(batch_extra_msgs.into());
+        msg.set_context(batch_msgs.write_to_bytes().unwrap().into());
+        self.raft_group.raft.msgs.push(msg);
 
         true
     }
@@ -4763,25 +4773,47 @@ where
         false
     }
 
+    pub fn maybe_ack_transfer_leader_msg<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) -> bool {
+        if self.pending_transfer_leader_msg.is_none() {
+            return false;
+        }
+        if self.is_leader() {
+            self.pending_transfer_leader_msg = None;
+            return false;
+        }
+        if self.is_ready_ack_transfer_leader_msg(ctx) {
+            self.ack_transfer_leader_msg(false);
+            self.pending_transfer_leader_msg = None;
+            true
+        } else {
+            false
+        }
+    }
+
     /// Before ack the transfer leader message sent by the leader.
     /// Currently, it only warms up the entry cache in this stage.
     ///
     /// This return whether the msg should be acked. When cache is warmed up
     /// or the warmup operation is timeout, it is true.
-    pub fn pre_ack_transfer_leader_msg<T>(
+    pub fn is_ready_ack_transfer_leader_msg<T>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
-        msg: &eraftpb::Message,
     ) -> bool {
         if !ctx.cfg.warmup_entry_cache_enabled() {
+            self.pending_transfer_leader_msg = None;
             return true;
         }
+        let Some(msg) = self.pending_transfer_leader_msg.as_ref() else {
+            return false;
+        };
+        let mut should_ack_now = ctx
+            .coprocessor_host
+            .pre_ack_transfer_leader(self.region(), msg);
 
         // The start index of warmup range. It is leader's entry_cache_first_index,
         // which in general is equal to the lowest matched index.
         let mut low = msg.get_index();
         let last_index = self.get_store().last_index();
-        let mut should_ack_now = false;
 
         // Need not to warm up when the index is 0.
         // There are two cases where index can be 0:
@@ -4792,7 +4824,7 @@ where
             // is larger than the last index. Check the test case
             // `test_when_warmup_range_start_is_larger_than_last_index`
             // for details.
-            should_ack_now = true;
+            should_ack_now &= true;
         } else {
             if low < self.last_compacted_idx {
                 low = self.last_compacted_idx
@@ -4801,7 +4833,7 @@ where
             if let Some(first_index) = self.get_store().entry_cache_first_index() {
                 if low >= first_index {
                     fail_point!("entry_cache_already_warmed_up");
-                    should_ack_now = true;
+                    should_ack_now &= true;
                 }
             }
         }
@@ -4818,6 +4850,16 @@ where
         } else {
             self.mut_store().async_warm_up_entry_cache(low).is_none()
         }
+    }
+
+    pub fn pending_transfer_leader_msg(&mut self, msg: &eraftpb::Message) {
+        assert!(
+            msg.get_msg_type() == eraftpb::MessageType::MsgTransferLeader,
+            "{} unexpected message type {:?}",
+            self.tag,
+            msg.get_msg_type(),
+        );
+        self.pending_transfer_leader_msg = Some(msg.clone());
     }
 
     pub fn ack_transfer_leader_msg(

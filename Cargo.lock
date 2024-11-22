@@ -3118,6 +3118,7 @@ dependencies = [
  "online_config",
  "prometheus",
  "prometheus-static-metric",
+ "protobuf",
  "raft",
  "raftstore",
  "slog",
