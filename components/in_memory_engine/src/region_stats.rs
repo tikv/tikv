@@ -138,10 +138,21 @@ impl RegionStatsManager {
     ) -> (Vec<Region>, Vec<Region>) {
         // Get regions' stat of the cached region and sort them by next + prev in
         // descending order.
-        let mut regions_stat = self
+        let mut regions_stat = match self
             .info_provider
             .get_regions_stat(cached_region_ids.clone())
-            .unwrap();
+        {
+            Ok(regions_stat) => regions_stat,
+            Err(e) => {
+                error!(
+                    "ime get regions stat failed";
+                    "err" => ?e,
+                );
+                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
+                return (vec![], vec![]);
+            }
+        };
+
         regions_stat.sort_by(|a, b| {
             let next_prev_a = a.1.cop_detail.iterated_count();
             let next_prev_b = b.1.cop_detail.iterated_count();
@@ -179,13 +190,24 @@ impl RegionStatsManager {
             / self.expected_region_size();
         let expected_num_regions = usize::max(1, current_region_count + expected_new_count);
         info!("ime collect_changed_ranges"; "num_regions" => expected_num_regions);
-        let curr_top_regions = self
+        let curr_top_regions = match self
             .info_provider
             .get_top_regions(NonZeroUsize::try_from(expected_num_regions).unwrap())
-            .unwrap() // TODO (afeinberg): Potentially custom error handling here.
-            .iter()
-            .map(|(r, region_stats)| (r.id, (r.clone(), region_stats.clone())))
-            .collect::<BTreeMap<_, _>>();
+        {
+            Ok(top_regions) => top_regions
+                .iter()
+                .map(|(r, region_stats)| (r.id, (r.clone(), region_stats.clone())))
+                .collect::<BTreeMap<_, _>>(),
+            Err(e) => {
+                error!(
+                    "ime get top regions failed";
+                    "err" => ?e,
+                );
+                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
+                return (vec![], vec![]);
+            }
+        };
+
         {
             let mut region_loaded_map = self.region_loaded_at.write().unwrap();
             for &region_id in curr_top_regions.keys() {
@@ -329,10 +351,20 @@ impl RegionStatsManager {
     {
         // Get regions' stat of the cached region and sort them by next + prev in
         // descending order.
-        let regions_activity = self
+        let regions_activity = match self
             .info_provider
             .get_regions_stat(cached_region_ids.clone())
-            .unwrap();
+        {
+            Ok(regions_stat) => regions_stat,
+            Err(e) => {
+                error!(
+                    "ime get regions stat failed";
+                    "err" => ?e,
+                );
+                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
+                return;
+            }
+        };
         if regions_activity.is_empty() {
             return;
         }
