@@ -2183,13 +2183,15 @@ mod tests {
 
         // test do_download_kv_file().
         assert!(importer.import_support_download());
-        let output = block_on_external_io(importer.read_from_kv_file(
-            &kv_meta,
-            ext_storage,
-            &backend,
-            &Limiter::new(f64::INFINITY),
-        ))
-        .unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let output = runtime
+            .block_on(importer.read_from_kv_file(
+                &kv_meta,
+                ext_storage,
+                &backend,
+                &Limiter::new(f64::INFINITY),
+            ))
+            .unwrap();
         assert_eq!(*output, buff);
         check_file_exists(&path.save, None);
 
