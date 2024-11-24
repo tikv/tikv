@@ -918,12 +918,17 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 }
             };
 
+            let mut rewrite_rules = req.get_rewrite_rules();
+            if rewrite_rules.is_empty() {
+                rewrite_rules = std::slice::from_ref(req.get_rewrite_rule());
+            }
+
             let res = with_resource_limiter(
                 importer.download_ext(
                     req.get_sst(),
                     req.get_storage_backend(),
                     req.get_name(),
-                    req.get_rewrite_rule(),
+                    rewrite_rules,
                     cipher,
                     limiter,
                     tablet.into_owned(),

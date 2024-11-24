@@ -407,6 +407,9 @@ impl BackupRange {
         let mut next_file_start_key = <[_]>::first(&self.ranges)
             .and_then(|(start_key, _)| start_key.clone())
             .map_or_else(Vec::new, |k| k.into_raw().unwrap());
+        // Notice that make sure the last key of each SST and the end key of the range from the 
+        // same table, so that sst importer can rewrite the range end key correctly.
+        let mut last_key: &Option<Key> = &None;
         let mut writer = writer_builder
             .build(next_file_start_key.clone(), storage_name)
             .map_err(|e| {
@@ -424,6 +427,7 @@ impl BackupRange {
                 backup_ts,
                 begin_ts,
             )?;
+            let mut first_scan = true;
             let start_scan = Instant::now();
             let mut reschedule_checker =
                 RescheduleChecker::new(tokio::task::yield_now, TASK_YIELD_DURATION);
@@ -439,27 +443,33 @@ impl BackupRange {
 
                 let entries = batch.drain();
                 if writer.need_split_keys() {
-                    let this_end_key = entries.as_slice().first().map_or_else(
-                        || Err(Error::Other(box_err!("get entry error: nothing in batch"))),
-                        |x| {
-                            x.to_key().map(|k| k.into_raw().unwrap()).map_err(|e| {
-                                error!(?e; "backup save file failed");
-                                Error::Other(box_err!("Decode error: {:?}", e))
-                            })
-                        },
-                    )?;
-                    let this_start_key = next_file_start_key.clone();
+                    let this_start_key = next_file_start_key;
+                    let this_end_key = if first_scan {
+                        next_file_start_key = start_key.as_ref().map_or_else(Vec::new, |k| k.to_raw().unwrap());
+                        // the last_key can not be empty.
+                        last_key.as_ref().unwrap().to_raw().unwrap()
+                    } else {
+                        next_file_start_key = entries.as_slice().first().map_or_else(
+                            || Err(Error::Other(box_err!("get entry error: nothing in batch"))),
+                            |x| {
+                                x.to_key().map(|k| k.into_raw().unwrap()).map_err(|e| {
+                                    error!(?e; "backup save file failed");
+                                    Error::Other(box_err!("Decode error: {:?}", e))
+                                })
+                            },
+                        )?;
+                        next_file_start_key.clone()
+                    };
                     let msg = InMemBackupFiles {
                         files: KvWriter::Txn(writer),
                         start_key: this_start_key,
-                        end_key: this_end_key.clone(),
+                        end_key: this_end_key,
                         start_version: begin_ts,
                         end_version: backup_ts,
                         region: self.region.clone(),
                         limiter: resource_limiter.clone(),
                     };
                     send_to_worker_with_metrics(&saver, msg).await?;
-                    next_file_start_key = this_end_key;
                     writer = writer_builder
                         .build(next_file_start_key.clone(), storage_name)
                         .map_err(|e| {
@@ -476,6 +486,7 @@ impl BackupRange {
                 if resource_limiter.is_some() {
                     reschedule_checker.check().await;
                 }
+                first_scan = false;
             }
             let stat = scanner.take_statistics();
             let take = start_scan.saturating_elapsed_secs();
@@ -492,6 +503,7 @@ impl BackupRange {
                 .with_label_values(&["scan"])
                 .observe(take);
             total_stat.add(&stat);
+            last_key = end_key;
         }
 
         let msg = InMemBackupFiles {
@@ -1537,7 +1549,7 @@ pub mod tests {
 
     use api_version::{api_v2::RAW_KEY_PREFIX, dispatch_api_version, KvFormat, RawValue};
     use collections::HashSet;
-    use engine_traits::MiscExt;
+    use engine_traits::{MiscExt, CF_WRITE};
     use external_storage::{make_local_backend, make_noop_backend};
     use file_system::{IoOp, IoRateLimiter, IoType};
     use futures::{executor::block_on, stream::StreamExt};
@@ -1545,6 +1557,7 @@ pub mod tests {
     use raftstore::coprocessor::{RegionCollector, Result as CopResult, SeekRegionCallback};
     use rand::Rng;
     use tempfile::TempDir;
+    use tidb_query_datatype::codec::table;
     use tikv::{
         coprocessor::checksum_crc64_xor,
         storage::{
@@ -1555,7 +1568,7 @@ pub mod tests {
     };
     use tikv_util::{config::ReadableSize, store::new_peer};
     use tokio::time;
-    use txn_types::SHORT_VALUE_MAX_LEN;
+    use txn_types::{SHORT_VALUE_MAX_LEN, Write, WriteType};
 
     use super::*;
 
@@ -2416,6 +2429,244 @@ pub mod tests {
                 compression_type: CompressionType::Unknown,
                 compression_level: 0,
                 cipher: CipherInfo::default(),
+                replica_read: false,
+                resource_group_name: "".into(),
+                source_tag: "br".into(),
+            },
+            resp: tx,
+        };
+        endpoint.handle_backup_task(task);
+        let resps: Vec<_> = block_on(rx.collect());
+        for a in &resps {
+            assert!(
+                expect
+                    .iter()
+                    .any(|b| { a.get_start_key() == b.0 && a.get_end_key() == b.1 }),
+                "{:?} {:?}",
+                resps,
+                expect
+            );
+        }
+        assert_eq!(resps.len(), expect.len());
+    }
+
+    fn write_kv(engine: &RocksEngine, key: Vec<u8>) {
+        let ctx = Context::default();
+        let encoded_key = Key::from_raw(&key).append_ts(TimeStamp::from(1));
+        let write = Write::new(WriteType::Put, TimeStamp::from(1), Some(b"short_value".to_vec()));
+        engine.put_cf(&ctx, CF_WRITE, encoded_key, write.as_ref().to_bytes()).unwrap();
+    }
+
+    fn write_rows(engine: &RocksEngine, table_id: i64, handle_offset: i64) {
+        let ctx = Context::default();
+        for handle in handle_offset+1..handle_offset+2*(BACKUP_BATCH_LIMIT as i64) {
+            let raw_key = table::encode_row_key(table_id, handle);
+            let encoded_key = Key::from_raw(&raw_key).append_ts(TimeStamp::from(1));
+            let write = Write::new(WriteType::Put, TimeStamp::from(1), Some(b"short_value".to_vec()));
+            engine.put_cf(&ctx, CF_WRITE, encoded_key, write.as_ref().to_bytes()).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_seek_ranges_4() {
+        let (_tmp, endpoint) = new_endpoint();
+
+        // modify the sst_max_size to trigger writer split
+        let config_manager = endpoint.get_config_manager();
+        config_manager.0.write().unwrap().sst_max_size = ReadableSize(1);
+
+        // [t1_i1, t1_i1, t1_r] means that the table with id 1 has index with id 1 and 2
+        // and row data on the region. {[t1_r]} means that the table with id 1
+        // has row data on the region, but the region is not in this TiKV.
+        //
+        // [t1_i1, t1_i2, t1_r], {[t1_r]}, [t1_r, t2_i1, t2_i2, t2_r, t3_i1, t3_r, t4_r,
+        // t5_i1, t5_i2], [t5_r], [t5_r, \xFF\xFF], [+inf]
+        write_kv(&endpoint.engine, table::encode_index_seek_key(1, 1, b"11"));
+        write_kv(&endpoint.engine, table::encode_index_seek_key(1, 2, b"11"));
+        write_kv(&endpoint.engine, table::encode_row_key(1, 10));
+        write_kv(&endpoint.engine, table::encode_row_key(1, 400));
+        write_kv(&endpoint.engine, table::encode_index_seek_key(2, 1, b"11"));
+        write_kv(&endpoint.engine, table::encode_index_seek_key(2, 2, b"11"));
+        write_rows(&endpoint.engine, 2, 10);
+        write_kv(&endpoint.engine, table::encode_index_seek_key(3, 1, b"11"));
+        write_kv(&endpoint.engine, table::encode_row_key(3, 10));
+        write_kv(&endpoint.engine, table::encode_row_key(4, 10));
+        write_kv(&endpoint.engine, table::encode_index_seek_key(5, 1, b"11"));
+        write_kv(&endpoint.engine, table::encode_index_seek_key(5, 2, b"11"));
+        write_kv(&endpoint.engine, table::encode_row_key(5, 200));
+        write_kv(&endpoint.engine, table::encode_row_key(5, 600));
+        write_kv(&endpoint.engine, vec![u8::MAX, 1]);
+        write_kv(&endpoint.engine, vec![u8::MAX, u8::MAX, u8::MAX, 0]);
+        endpoint.region_info.set_regions(vec![
+            (
+                table::encode_index_seek_key(1, 1, b"1"),
+                table::encode_row_key(1, 100),
+                1,
+            ),
+            (
+                table::encode_row_key(1, 300),
+                table::encode_index_seek_key(5, 2, b"2"),
+                2,
+            ),
+            (
+                table::encode_row_key(5, 100),
+                table::encode_row_key(5, 300),
+                3,
+            ),
+            (table::encode_row_key(5, 500), vec![u8::MAX, u8::MAX], 4),
+            (vec![u8::MAX, u8::MAX, u8::MAX], vec![], 5),
+        ]);
+        let request_ranges: Vec<(Vec<u8>, Vec<u8>)> = vec![
+            (
+                table::encode_index_seek_key(1, 1, b""),
+                table::encode_index_seek_key(1, 1, &[u8::MAX]),
+            ),
+            (
+                table::encode_index_seek_key(1, 2, b""),
+                table::encode_index_seek_key(1, 2, &[u8::MAX]),
+            ),
+            (
+                table::encode_row_key(1, 0),
+                table::encode_row_key(1, i64::MAX),
+            ),
+            (
+                table::encode_index_seek_key(2, 1, b""),
+                table::encode_index_seek_key(2, 1, &[u8::MAX]),
+            ),
+            (
+                table::encode_index_seek_key(2, 2, b""),
+                table::encode_index_seek_key(2, 2, &[u8::MAX]),
+            ),
+            (
+                table::encode_row_key(2, 0),
+                table::encode_row_key(2, i64::MAX),
+            ),
+            (
+                table::encode_index_seek_key(3, 1, b""),
+                table::encode_index_seek_key(3, 1, &[u8::MAX]),
+            ),
+            (
+                table::encode_row_key(3, 0),
+                table::encode_row_key(3, i64::MAX),
+            ),
+            (
+                table::encode_row_key(4, 0),
+                table::encode_row_key(4, i64::MAX),
+            ),
+            (
+                table::encode_index_seek_key(5, 1, b""),
+                table::encode_index_seek_key(5, 1, &[u8::MAX]),
+            ),
+            (
+                table::encode_index_seek_key(5, 2, b""),
+                table::encode_index_seek_key(5, 2, &[u8::MAX]),
+            ),
+            (
+                table::encode_row_key(5, 0),
+                table::encode_row_key(5, i64::MAX),
+            ),
+            (vec![u8::MAX, 0], vec![u8::MAX, 2]),
+            (vec![u8::MAX, 3], vec![u8::MAX, u8::MAX, u8::MAX, 1]),
+        ];
+        let expect: Vec<(Vec<u8>, Vec<u8>)> = vec![
+            (
+                table::encode_index_seek_key(1, 1, b"1"),
+                table::encode_index_seek_key(1, 1, &[u8::MAX]),
+            ),
+            (
+                table::encode_index_seek_key(1, 2, b""),
+                table::encode_index_seek_key(1, 2, &[u8::MAX]),
+            ),
+            (
+                table::encode_row_key(1, 0),
+                table::encode_row_key(1, 100),
+            ),
+            (
+                table::encode_row_key(1, 300),
+                table::encode_row_key(1, i64::MAX),
+            ),
+            (
+                table::encode_index_seek_key(2, 1, b""),
+                table::encode_index_seek_key(2, 1, &[u8::MAX]),
+            ),
+            (
+                table::encode_index_seek_key(2, 2, b""),
+                table::encode_index_seek_key(2, 2, &[u8::MAX]),
+            ),
+            (
+                table::encode_row_key(2, 0),
+                table::encode_row_key(2, 1035),
+            ),
+            (
+                table::encode_row_key(2, 1035),
+                table::encode_row_key(2, i64::MAX),
+            ),
+            (
+                table::encode_index_seek_key(3, 1, b""),
+                table::encode_index_seek_key(3, 1, &[u8::MAX]),
+            ),
+            (
+                table::encode_row_key(3, 0),
+                table::encode_row_key(3, i64::MAX),
+            ),
+            (
+                table::encode_row_key(4, 0),
+                table::encode_row_key(4, i64::MAX),
+            ),
+            (
+                table::encode_index_seek_key(5, 1, b""),
+                table::encode_index_seek_key(5, 1, &[u8::MAX]),
+            ),
+            (
+                table::encode_index_seek_key(5, 2, b""),
+                table::encode_index_seek_key(5, 2, b"2"),
+            ),
+            (
+                table::encode_row_key(5, 100),
+                table::encode_row_key(5, 300),
+            ),
+            (
+                table::encode_row_key(5, 500),
+                table::encode_row_key(5, i64::MAX),
+            ),
+
+            (vec![u8::MAX, 0], vec![u8::MAX, 2]),
+            (vec![u8::MAX, 3], vec![u8::MAX, u8::MAX]),
+            (vec![u8::MAX, u8::MAX, u8::MAX], vec![u8::MAX, u8::MAX, u8::MAX, 1]),
+        ];
+
+        let tmp = TempDir::new().unwrap();
+        let backend = make_local_backend(tmp.path());
+        let (tx, rx) = unbounded();
+
+        let mut ranges = SubRanges::default();
+        let mut sub_ranges = Vec::with_capacity(request_ranges.len());
+        for (start_key, end_key) in request_ranges {
+            let mut key_range = KeyRange::default();
+            key_range.set_start_key(start_key);
+            key_range.set_end_key(end_key);
+            sub_ranges.push(key_range);
+        }
+        ranges.set_sub_ranges(sub_ranges.into());
+        let mut cipher = CipherInfo::default();
+        cipher.set_cipher_type(EncryptionMethod::Plaintext);
+        let task = Task {
+            request: Request {
+                start_key: Vec::new(),
+                end_key: Vec::new(),
+                sub_ranges: Vec::new(),
+                sub_ranges_groups: vec![ranges],
+                start_ts: 0.into(),
+                end_ts: 100.into(),
+                backend,
+                limiter: Limiter::new(f64::INFINITY),
+                cancel: Arc::default(),
+                is_raw_kv: false,
+                dst_api_ver: ApiVersion::V1,
+                cf: engine_traits::CF_DEFAULT,
+                compression_type: CompressionType::Unknown,
+                compression_level: 0,
+                cipher,
                 replica_read: false,
                 resource_group_name: "".into(),
                 source_tag: "br".into(),

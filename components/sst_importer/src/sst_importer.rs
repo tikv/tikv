@@ -384,7 +384,7 @@ impl<E: KvEngine> SstImporter<E> {
         meta: &SstMeta,
         backend: &StorageBackend,
         name: &str,
-        rewrite_rule: &RewriteRule,
+        rewrite_rules: &[RewriteRule],
         crypter: Option<CipherInfo>,
         speed_limiter: Limiter,
         engine: E,
@@ -394,14 +394,14 @@ impl<E: KvEngine> SstImporter<E> {
             "meta" => ?meta,
             "url" => ?backend,
             "name" => name,
-            "rewrite_rule" => ?rewrite_rule,
+            "rewrite_rule" => ?rewrite_rules,
             "speed_limit" => speed_limiter.speed_limit(),
         );
         let r = self.do_download_ext(
             meta,
             backend,
             name,
-            rewrite_rule,
+            rewrite_rules,
             crypter,
             &speed_limiter,
             engine,
@@ -1124,7 +1124,7 @@ impl<E: KvEngine> SstImporter<E> {
         meta: &SstMeta,
         backend: &StorageBackend,
         name: &str,
-        rewrite_rule: &RewriteRule,
+        rewrite_rules: &[RewriteRule],
         crypter: Option<CipherInfo>,
         speed_limiter: Limiter,
         engine: E,
@@ -1133,7 +1133,7 @@ impl<E: KvEngine> SstImporter<E> {
             meta,
             backend,
             name,
-            rewrite_rule,
+            rewrite_rules,
             crypter,
             speed_limiter,
             engine,
@@ -1146,7 +1146,7 @@ impl<E: KvEngine> SstImporter<E> {
         meta: &SstMeta,
         backend: &StorageBackend,
         name: &str,
-        rewrite_rule: &RewriteRule,
+        rewrite_rules: &[RewriteRule],
         crypter: Option<CipherInfo>,
         speed_limiter: &Limiter,
         engine: E,
@@ -1181,6 +1181,7 @@ impl<E: KvEngine> SstImporter<E> {
         let sst_reader = E::SstReader::open(dst_file_name, self.key_manager.clone())?;
         sst_reader.verify_checksum()?;
 
+        let prefix_replacer = util::PrefixReplacer::new(rewrite_rules);
         // undo key rewrite so we could compare with the keys inside SST
         let old_prefix = rewrite_rule.get_old_key_prefix();
         let new_prefix = rewrite_rule.get_new_key_prefix();

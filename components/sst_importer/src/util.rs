@@ -1,12 +1,16 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::path::Path;
+use std::{
+    ops::Bound,
+    path::Path,
+};
 
 use encryption::DataKeyManager;
 use external_storage::ExternalStorage;
 use file_system::File;
+use kvproto::import_sstpb::RewriteRule;
 
-use super::Result;
+use crate::Result;
 
 /// Prepares the SST file for ingestion.
 /// The purpose is to make the ingestion retryable when using the `move_files`
@@ -115,6 +119,24 @@ pub fn url_for<E: ExternalStorage>(storage: &E) -> String {
         .url()
         .map(|url| url.to_string())
         .unwrap_or_else(|err| format!("ErrUrl({})", err))
+}
+
+pub struct PrefixReplacer<'a> {
+    rewrite_rules: &'a [RewriteRule],
+    next_index: usize,
+}
+
+impl<'a> PrefixReplacer<'a> {
+    pub fn new(rewrite_rules: &'a [RewriteRule]) -> Self {
+        PrefixReplacer {
+            rewrite_rules,
+            next_index: 0,
+        }
+    }
+
+    pub fn rewrite_start(&self, start: Bound<&[u8]>) -> Result<Bound<Vec<u8>>> {
+
+    }
 }
 
 #[cfg(test)]

@@ -3434,7 +3434,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/leavrth/kvproto.git?branch=merged_backup_sst#7e6ef5047444cfaa3c6456560cc5c8bc09f1d88b"
+source = "git+https://github.com/leavrth/kvproto.git?branch=merged_backup_sst#0b4b0a77a627a986ed18ce9adb34ce58048f8f95"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
