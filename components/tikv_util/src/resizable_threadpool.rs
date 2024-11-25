@@ -150,37 +150,36 @@ impl ResizableRuntime {
     // TODO: after tokio supports adjusting thread pool size(https://github.com/tokio-rs/tokio/issues/3329),
     //   adapt it.
     pub fn adjust_with(&mut self, new_size: usize) -> usize {
+        let mut runtime_guard = self.current_runtime.lock().unwrap();
+        
         if self.size == new_size {
             return new_size;
         }
 
-        {
-            let mut runtime_guard = self.current_runtime.lock().unwrap();
-            self.count += 1;
-            let thread_name = format!("{}-v{}-{}", self.thread_name, self.count, new_size);
+        self.count += 1;
+        let thread_name = format!("{}-v{}-{}", self.thread_name, self.count, new_size);
 
-            let new_runtime = (self.replace_pool_rule)(new_size, &thread_name)
-                .unwrap_or_else(|_| panic!("failed to create tokio runtime {}", thread_name));
+        let new_runtime = (self.replace_pool_rule)(new_size, &thread_name)
+            .unwrap_or_else(|_| panic!("failed to create tokio runtime {}", thread_name));
 
-            let old_runtime = std::mem::replace(
-                &mut *runtime_guard,
-                DeamonRuntime {
-                    inner: Some(new_runtime),
-                    tracker: TaskTracker::new(),
-                },
-            );
-            self.gc_runtime.spawn(async move {
-                old_runtime.tracker.close();
-                old_runtime.tracker.wait().await;
-                drop(old_runtime);
-            });
+        let old_runtime = std::mem::replace(
+            &mut *runtime_guard,
+            DeamonRuntime {
+                inner: Some(new_runtime),
+                tracker: TaskTracker::new(),
+            },
+        );
+        self.gc_runtime.spawn(async move {
+            old_runtime.tracker.close();
+            old_runtime.tracker.wait().await;
+            drop(old_runtime);
+        });
 
-            info!(
-                "Resizing thread pool";
-                "thread_name" => thread_name.as_str(),
-                "new_size" => new_size
-            );
-        }
+        info!(
+            "Resizing thread pool";
+            "thread_name" => thread_name.as_str(),
+            "new_size" => new_size
+        );
 
         self.size = new_size;
         (self.after_adjust)(new_size);
