@@ -247,13 +247,13 @@ impl Downstream {
 // In `PendingLock`,  `key` is encoded.
 pub enum PendingLock {
     Track { key: Key, start_ts: MiniLock },
-    Untrack { key: Key },
+    Untrack { key: Key, start_ts: TimeStamp },
 }
 
 impl HeapSize for PendingLock {
     fn approximate_heap_size(&self) -> usize {
         match self {
-            PendingLock::Track { key, .. } | PendingLock::Untrack { key } => {
+            PendingLock::Track { key, .. } | PendingLock::Untrack { key, .. } => {
                 key.approximate_heap_size()
             }
         }
@@ -386,7 +386,7 @@ impl Delegate {
         Ok(lock_count_modify)
     }
 
-    fn pop_lock(&mut self, key: Key) -> Result<isize> {
+    fn pop_lock(&mut self, key: Key, start_ts: TimeStamp) -> Result<isize> {
         let mut lock_count_modify = 0;
         match &mut self.lock_tracker {
             LockTracker::Pending => unreachable!(),
@@ -394,14 +394,16 @@ impl Delegate {
                 let bytes = key.approximate_heap_size();
                 self.memory_quota.alloc(bytes)?;
                 CDC_PENDING_BYTES_GAUGE.add(bytes as _);
-                locks.push(PendingLock::Untrack { key });
+                locks.push(PendingLock::Untrack { key, start_ts });
             }
             LockTracker::Prepared { locks, .. } => {
-                if let Some((key, _)) = locks.remove_entry(&key) {
-                    let bytes = key.approximate_heap_size();
-                    self.memory_quota.free(bytes);
-                    CDC_PENDING_BYTES_GAUGE.sub(bytes as _);
-                    lock_count_modify = -1;
+                if let BTreeMapEntry::Occupied(x) = locks.entry(key) {
+                    if x.get().ts == start_ts {
+                        let bytes = x.key().approximate_heap_size();
+                        self.memory_quota.free(bytes);
+                        CDC_PENDING_BYTES_GAUGE.sub(bytes as _);
+                        lock_count_modify = -1;
+                    }
                 }
             }
         }
@@ -439,15 +441,13 @@ impl Delegate {
                         assert!(x.get().generation <= start_ts.generation);
                     }
                 },
-                PendingLock::Untrack { key } => match locks.entry(key.clone()) {
-                    BTreeMapEntry::Vacant(..) => {
-                        warn!("untrack lock not found when try to finish prepare lock tracker";
-                        "key" => %key);
+                PendingLock::Untrack { key, start_ts } => {
+                    if let BTreeMapEntry::Occupied(x) = locks.entry(key) {
+                        if x.get().ts == start_ts {
+                            x.remove();
+                        }
                     }
-                    BTreeMapEntry::Occupied(x) => {
-                        x.remove();
-                    }
-                },
+                }
             }
         }
         self.memory_quota.free(free_bytes);
@@ -1032,7 +1032,8 @@ impl Delegate {
                     row.needs_old_value = Some(read_old_ts);
                 } else {
                     assert_eq!(row.lock_count_modify, 0);
-                    row.lock_count_modify = self.pop_lock(key)?;
+                    let start_ts = TimeStamp::from(row.v.start_ts);
+                    row.lock_count_modify = self.pop_lock(key, start_ts)?;
                 }
             }
             "lock" => {
@@ -1891,7 +1892,14 @@ mod tests {
         assert_eq!(delegate.push_lock(k1, MiniLock::from_ts(100)).unwrap(), 0);
         assert_eq!(quota.in_use(), 100);
 
-        delegate.pop_lock(Key::from_raw(b"key1")).unwrap();
+        delegate
+            .pop_lock(Key::from_raw(b"key1"), TimeStamp::from(99))
+            .unwrap();
+        assert_eq!(quota.in_use(), 100);
+
+        delegate
+            .pop_lock(Key::from_raw(b"key1"), TimeStamp::from(100))
+            .unwrap();
         assert_eq!(quota.in_use(), 117);
 
         let mut k2 = Vec::with_capacity(200);
@@ -1909,8 +1917,12 @@ mod tests {
             .unwrap();
         assert_eq!(quota.in_use(), 34);
 
-        delegate.pop_lock(Key::from_raw(b"key2")).unwrap();
-        delegate.pop_lock(Key::from_raw(b"key3")).unwrap();
+        delegate
+            .pop_lock(Key::from_raw(b"key2"), TimeStamp::from(100))
+            .unwrap();
+        delegate
+            .pop_lock(Key::from_raw(b"key3"), TimeStamp::from(100))
+            .unwrap();
         assert_eq!(quota.in_use(), 0);
 
         let v = delegate
@@ -1932,7 +1944,9 @@ mod tests {
         assert!(delegate.init_lock_tracker());
         assert!(!delegate.init_lock_tracker());
 
-        delegate.pop_lock(Key::from_raw(b"key1")).unwrap();
+        delegate
+            .pop_lock(Key::from_raw(b"key1"), TimeStamp::zero())
+            .unwrap();
         let mut scaned_locks = BTreeMap::default();
         scaned_locks.insert(Key::from_raw(b"key2"), MiniLock::from_ts(100));
         delegate
