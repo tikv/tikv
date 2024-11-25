@@ -399,7 +399,8 @@ impl Delegate {
             LockTracker::Prepared { locks, .. } => {
                 if let BTreeMapEntry::Occupied(x) = locks.entry(key) {
                     if x.get().ts == start_ts {
-                        let bytes = x.key().approximate_heap_size();
+                        let (key, _) = x.remove_entry();
+                        let bytes = key.approximate_heap_size();
                         self.memory_quota.free(bytes);
                         CDC_PENDING_BYTES_GAUGE.sub(bytes as _);
                         lock_count_modify = -1;
@@ -1895,18 +1896,18 @@ mod tests {
         delegate
             .pop_lock(Key::from_raw(b"key1"), TimeStamp::from(99))
             .unwrap();
-        assert_eq!(quota.in_use(), 100);
+        assert_eq!(quota.in_use(), 117);
 
         delegate
             .pop_lock(Key::from_raw(b"key1"), TimeStamp::from(100))
             .unwrap();
-        assert_eq!(quota.in_use(), 117);
+        assert_eq!(quota.in_use(), 134);
 
         let mut k2 = Vec::with_capacity(200);
         k2.extend_from_slice(Key::from_raw(b"key2").as_encoded());
         let k2 = Key::from_encoded(k2);
         assert_eq!(delegate.push_lock(k2, MiniLock::from_ts(100)).unwrap(), 0);
-        assert_eq!(quota.in_use(), 317);
+        assert_eq!(quota.in_use(), 334);
 
         let mut scaned_locks = BTreeMap::default();
         scaned_locks.insert(Key::from_raw(b"key1"), MiniLock::from_ts(100));
