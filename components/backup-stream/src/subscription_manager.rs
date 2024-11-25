@@ -927,7 +927,8 @@ mod test {
                 feedback_channel: tx.clone(),
                 // Note: Maybe make here a Box<dyn FnOnce()> or some other trait?
                 _work: wg.work(),
-            })).unwrap();
+            }))
+            .unwrap();
         }
 
         should_finish_in(move || drop(pool), Duration::from_secs(5));
