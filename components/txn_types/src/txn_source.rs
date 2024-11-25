@@ -30,11 +30,11 @@ const LIGHTNING_PHYSICAL_IMPORT_SHIFT: u64 = 16;
 /// The 17th bit is reserved for the lightning physical import mode.
 /// The remaining 48 bits are reserved for extendability.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub(crate) struct TxnSource(u64);
+pub struct TxnSource(u64);
 
 impl TxnSource {
     #[cfg(test)]
-    pub(crate) fn set_cdc_write_source(&mut self, value: u64) {
+    pub fn set_cdc_write_source(&mut self, value: u64) {
         if value > CDC_WRITE_SOURCE_MAX {
             unreachable!("Only use it in tests")
         }
@@ -42,16 +42,16 @@ impl TxnSource {
     }
 
     #[cfg(test)]
-    pub(crate) fn get_cdc_write_source(&self) -> u64 {
+    pub fn get_cdc_write_source(&self) -> u64 {
         self.0 & CDC_WRITE_SOURCE_MAX
     }
 
-    pub(crate) fn is_cdc_write_source_set(txn_source: u64) -> bool {
+    pub fn is_cdc_write_source_set(txn_source: u64) -> bool {
         (txn_source & CDC_WRITE_SOURCE_MAX) != 0
     }
 
     #[cfg(test)]
-    pub(crate) fn set_lossy_ddl_reorg_source(&mut self, value: u64) {
+    pub fn set_lossy_ddl_reorg_source(&mut self, value: u64) {
         if value > LOSSY_DDL_REORG_SOURCE_MAX {
             unreachable!("Only use it in tests")
         }
@@ -59,15 +59,15 @@ impl TxnSource {
     }
 
     #[cfg(test)]
-    pub(crate) fn get_lossy_ddl_reorg_source(&self) -> u64 {
+    pub fn get_lossy_ddl_reorg_source(&self) -> u64 {
         (self.0 >> LOSSY_DDL_REORG_SOURCE_SHIFT) & LOSSY_DDL_REORG_SOURCE_MAX
     }
 
-    pub(crate) fn is_lossy_ddl_reorg_source_set(txn_source: u64) -> bool {
+    pub fn is_lossy_ddl_reorg_source_set(txn_source: u64) -> bool {
         (txn_source >> LOSSY_DDL_REORG_SOURCE_SHIFT) != 0
     }
     
-    pub(crate) fn is_lightning_physical_import(txn_source: u64) -> bool {
+    pub fn is_lightning_physical_import(txn_source: u64) -> bool {
         (txn_source & (1 << LIGHTNING_PHYSICAL_IMPORT_SHIFT)) != 0
     }
 }

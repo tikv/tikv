@@ -23,6 +23,7 @@ mod lock;
 mod timestamp;
 mod types;
 mod write;
+pub mod txn_source;
 
 #[derive(Debug, Error)]
 pub enum ErrorInner {
