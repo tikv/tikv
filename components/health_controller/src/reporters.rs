@@ -70,17 +70,12 @@ impl UnifiedSlowScore {
             .factors
             .push(SlowScore::new(cfg.inspect_interval));
         // The second factor is for KvDB Disk I/O.
-        let inspect_kvdb_interval = if cfg.inspect_kvdb_interval < cfg.inspect_interval {
-            // If the inspect_kvdb_interval is less than inspect_interval, it should
-            // use `inspect_interval` * 10 as an empirical inspect interval for KvDB Disk
-            // I/O.
-            cfg.inspect_interval * 10
-        } else {
-            cfg.inspect_kvdb_interval
-        };
         unified_slow_score
             .factors
-            .push(SlowScore::new_with_extra_config(inspect_kvdb_interval, 0.6));
+            .push(SlowScore::new_with_extra_config(
+                cfg.inspect_kvdb_interval,
+                0.6,
+            ));
         unified_slow_score
     }
 

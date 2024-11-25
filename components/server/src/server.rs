@@ -814,6 +814,13 @@ where
         self.core
             .config
             .raft_store
+            .optimize_inspector(path_in_diff_mount_point(
+                engines.engines.raft.get_engine_path().to_string().as_str(),
+                engines.engines.kv.path(),
+            ));
+        self.core
+            .config
+            .raft_store
             .validate(
                 self.core.config.coprocessor.region_split_size(),
                 self.core.config.coprocessor.enable_region_bucket(),
