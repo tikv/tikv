@@ -60,9 +60,10 @@ sysinfo = "0.26"
 thiserror = "1.0"
 tikv_alloc = { workspace = true }
 time = { workspace = true }
-tokio = { version = "1.5", features = ["rt-multi-thread","time", "rt", "macros", "sync"] }
+tokio = { version = "1.5", features = ["rt-multi-thread","time", "rt", "macros", "sync", "full"] }
 tokio-executor = { workspace = true }
 tokio-timer = { workspace = true }
+tokio-util = { version = "0.7", features = ["rt"] }
 tracker = { workspace = true }
 url = "2"
 yatp = { workspace = true }

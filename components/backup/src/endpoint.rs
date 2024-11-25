@@ -2556,20 +2556,20 @@ pub mod tests {
         endpoint.get_config_manager().set_num_threads(15);
         let (task, _) = Task::new(req.clone(), tx.clone()).unwrap();
         endpoint.handle_backup_task(task);
-        assert!(endpoint.pool.borrow().size == 15);
+        assert!(endpoint.pool.borrow().size() == 15);
 
         // shrink thread pool
         endpoint.get_config_manager().set_num_threads(10);
         req.set_start_key(vec![b'2']);
         let (task, _) = Task::new(req.clone(), tx.clone()).unwrap();
         endpoint.handle_backup_task(task);
-        assert!(endpoint.pool.borrow().size == 10);
+        assert!(endpoint.pool.borrow().size() == 10);
 
         endpoint.get_config_manager().set_num_threads(3);
         req.set_start_key(vec![b'3']);
         let (task, _) = Task::new(req, tx).unwrap();
         endpoint.handle_backup_task(task);
-        assert!(endpoint.pool.borrow().size == 3);
+        assert!(endpoint.pool.borrow().size() == 3);
 
         // make sure all tasks can finish properly.
         let responses = block_on(rx.collect::<Vec<_>>());

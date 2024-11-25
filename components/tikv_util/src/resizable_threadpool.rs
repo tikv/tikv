@@ -1,23 +1,29 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc, Mutex, Weak,
-    },
-    time::Duration,
-};
+use std::sync::{Arc, Mutex, Weak};
 
 use futures::Future;
 use tokio::{
     io::Result as TokioResult,
-    runtime::{Builder, Runtime},
-    time::interval,
+    runtime::{Builder, Handle, Runtime},
 };
+use tokio_util::task::task_tracker::TaskTracker;
 
 struct DeamonRuntime {
     inner: Option<Runtime>,
-    task_count: Arc<AtomicUsize>,
+    tracker: TaskTracker,
+}
+
+impl DeamonRuntime {
+    pub fn spawn<Fut>(&self, fut: Fut)
+    where
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        self.inner
+            .as_ref()
+            .unwrap()
+            .spawn(self.tracker.track_future(fut));
+    }
 }
 
 impl Drop for DeamonRuntime {
@@ -44,44 +50,39 @@ impl DeamonRuntimeHandle {
         };
 
         let lock_guard = runtime.lock().unwrap();
-
-        let task_count = lock_guard.task_count.clone();
-        task_count.fetch_add(1, Ordering::SeqCst);
-
-        lock_guard.inner.as_ref().unwrap().spawn(async move {
-            fut.await;
-            task_count.fetch_sub(1, Ordering::SeqCst);
-        });
+        lock_guard
+            .inner
+            .as_ref()
+            .unwrap()
+            .spawn(lock_guard.tracker.track_future(fut));
     }
 
-    pub fn block_on<Fut>(&self, fut: Fut) -> Option<Fut::Output>
+    pub fn block_on<Fut>(&self, fut: Fut)
     where
-        Fut: Future,
+        Fut: Future<Output = ()> + Send + 'static,
     {
-        let (handle, task_count) = {
-            let runtime = self.inner.upgrade()?;
-            let lock_guard = runtime.lock().unwrap();
-            let handle = lock_guard.inner.as_ref().unwrap().handle().clone();
-            let task_count = lock_guard.task_count.clone();
-            (handle, task_count)
+        let runtime = match self.inner.upgrade() {
+            Some(runtime) => runtime,
+            None => return,
         };
 
-        task_count.fetch_add(1, Ordering::SeqCst);
-
-        Some(handle.block_on(async move {
-            let output = fut.await;
-            task_count.fetch_sub(1, Ordering::SeqCst);
-            output
-        }))
+        let handle: Handle;
+        let tracker: TaskTracker;
+        {
+            let lock_guard = runtime.lock().unwrap();
+            handle = lock_guard.inner.as_ref().unwrap().handle().clone();
+            tracker = lock_guard.tracker.clone();
+        }
+        handle.block_on(tracker.track_future(fut));
     }
 }
 
 pub struct ResizableRuntime {
-    pub size: usize,
+    size: usize,
     count: usize,
     thread_name: String,
+    gc_runtime: DeamonRuntime,
     current_runtime: Arc<Mutex<DeamonRuntime>>,
-    used_runtime: Arc<Mutex<Vec<DeamonRuntime>>>,
     replace_pool_rule: Box<dyn Fn(usize, &str) -> TokioResult<Runtime> + Send + Sync>,
     after_adjust: Box<dyn Fn(usize) + Send + Sync>,
 }
@@ -93,46 +94,35 @@ impl ResizableRuntime {
         replace_pool_rule: Box<dyn Fn(usize, &str) -> TokioResult<Runtime> + Send + Sync>,
         after_adjust: Box<dyn Fn(usize) + Send + Sync>,
     ) -> Self {
+        let init_name = format!("{}-v0-{}", thread_name, thread_size);
         let keeper = Builder::new_multi_thread()
             .worker_threads(1)
             .thread_name("rtkp")
             .enable_all()
             .build()
             .expect("Failed to create runtime-keeper");
+        let new_runtime = (replace_pool_rule)(thread_size, &init_name)
+            .unwrap_or_else(|_| panic!("failed to create tokio runtime {}", thread_name));
 
-        let mut ret = ResizableRuntime {
+        ResizableRuntime {
             size: 1,
             count: 0,
             thread_name: thread_name.to_owned(),
-            current_runtime: Arc::new(Mutex::new(DeamonRuntime {
+            gc_runtime: DeamonRuntime {
                 inner: Some(keeper),
-                task_count: Arc::new(AtomicUsize::new(0)),
+                tracker: TaskTracker::new(),
+            },
+            current_runtime: Arc::new(Mutex::new(DeamonRuntime {
+                inner: Some(new_runtime),
+                tracker: TaskTracker::new(),
             })),
-            used_runtime: Arc::new(Mutex::new(Vec::new())),
             replace_pool_rule,
             after_adjust,
-        };
-
-        ret.start_clean_loop();
-        ret.adjust_with(thread_size);
-        ret
+        }
     }
 
-    fn start_clean_loop(&self) {
-        let pools_clone = Arc::downgrade(&self.used_runtime);
-        self.spawn(async move {
-            let mut interval = interval(Duration::from_secs(10));
-            loop {
-                interval.tick().await;
-
-                if let Some(pools) = pools_clone.upgrade() {
-                    pools
-                        .lock()
-                        .unwrap()
-                        .retain(|handle| handle.task_count.load(Ordering::SeqCst) > 0);
-                }
-            }
-        });
+    pub fn size(&self) -> usize {
+        self.size
     }
 
     pub fn spawn<Fut>(&self, fut: Fut)
@@ -143,12 +133,12 @@ impl ResizableRuntime {
         handle.spawn(fut);
     }
 
-    pub fn block_on<Fut>(&self, fut: Fut) -> Option<Fut::Output>
+    pub fn block_on<Fut>(&self, fut: Fut)
     where
-        Fut: Future,
+        Fut: Future<Output = ()> + Send + 'static,
     {
         let handle = self.handle();
-        handle.block_on(fut)
+        handle.block_on(fut);
     }
 
     pub fn handle(&self) -> DeamonRuntimeHandle {
@@ -165,22 +155,24 @@ impl ResizableRuntime {
         }
 
         {
-            let mut used_runtime_guard = self.used_runtime.lock().unwrap();
-            let mut current_runtime_guard = self.current_runtime.lock().unwrap();
+            let mut runtime_guard = self.current_runtime.lock().unwrap();
+            let thread_name = format!("{}-v{}-{}", self.thread_name, self.count, new_size);
 
-            self.count += 1;
-            let thread_name = format!("{}-v{}-{}", self.thread_name, self.count, new_size,);
             let new_runtime = (self.replace_pool_rule)(new_size, &thread_name)
                 .unwrap_or_else(|_| panic!("failed to create tokio runtime {}", thread_name));
 
             let old_runtime = std::mem::replace(
-                &mut *current_runtime_guard,
+                &mut *runtime_guard,
                 DeamonRuntime {
                     inner: Some(new_runtime),
-                    task_count: Arc::new(AtomicUsize::new(0)),
+                    tracker: TaskTracker::new(),
                 },
             );
-            used_runtime_guard.push(old_runtime);
+            self.gc_runtime.spawn(async move {
+                old_runtime.tracker.close();
+                old_runtime.tracker.wait().await;
+                drop(old_runtime);
+            });
 
             info!(
                 "Resizing thread pool";
@@ -201,6 +193,7 @@ mod test {
     use std::{
         sync::atomic::{AtomicUsize, Ordering},
         thread::{self, sleep},
+        time::Duration,
     };
 
     use super::*;
@@ -228,25 +221,23 @@ mod test {
             Box::new(replace_pool_rule),
             Box::new(after_adjust),
         );
-        // keeper runtime should not be cleaned
-        assert_eq!(threads.used_runtime.lock().unwrap().len(), 1);
-        assert_eq!(COUNTER.load(Ordering::SeqCst), 4);
 
         let handle = threads.handle();
         handle.block_on(async {
-            COUNTER.store(5, Ordering::SeqCst);
+            COUNTER.fetch_add(1, Ordering::SeqCst);
         });
-        assert_eq!(COUNTER.load(Ordering::SeqCst), 5);
+        assert_eq!(COUNTER.load(Ordering::SeqCst), 1);
 
         threads.adjust_with(8);
+        assert!(!threads.gc_runtime.tracker.is_empty());
         assert_eq!(COUNTER.load(Ordering::SeqCst), 8);
-        assert_eq!(threads.used_runtime.lock().unwrap().len(), 2);
 
-        // The idle runtime should be cleaned after 10s
-        sleep(Duration::from_secs(12));
-        assert_eq!(threads.used_runtime.lock().unwrap().len(), 1);
+        sleep(Duration::from_secs(11));
+        assert!(threads.gc_runtime.tracker.is_empty());
+
+        // New task should be scheduled to the new runtime
         handle.block_on(async {
-            COUNTER.store(9, Ordering::SeqCst);
+            COUNTER.fetch_add(1, Ordering::SeqCst);
         });
         assert_eq!(COUNTER.load(Ordering::SeqCst), 9);
     }
@@ -264,7 +255,6 @@ mod test {
             Box::new(after_adjust),
         );
         let handle = threads.handle();
-        assert_eq!(COUNTER.load(Ordering::SeqCst), 4);
         // infinite loop should not be cleaned
         handle.spawn(async {
             loop {
@@ -273,11 +263,11 @@ mod test {
         });
 
         threads.adjust_with(8);
-        assert_eq!(threads.used_runtime.lock().unwrap().len(), 2);
+        assert!(!threads.gc_runtime.tracker.is_empty());
 
         // The running runtime should not be cleaned after 10s
-        sleep(Duration::from_secs(12));
-        assert_eq!(threads.used_runtime.lock().unwrap().len(), 2);
+        sleep(Duration::from_secs(11));
+        assert!(!threads.gc_runtime.tracker.is_empty());
         assert_eq!(COUNTER.load(Ordering::SeqCst), 8);
     }
 
