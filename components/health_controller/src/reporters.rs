@@ -52,14 +52,9 @@ pub struct RaftstoreReporterConfig {
 /// the store's performance. Typically, we have two factors: Raft Disk I/O and
 /// KvDB Disk I/O. If there are more factors in the future, we can add them
 /// here.
+#[derive(Default)]
 pub struct UnifiedSlowScore {
     factors: Vec<SlowScore>,
-}
-
-impl Default for UnifiedSlowScore {
-    fn default() -> Self {
-        Self { factors: vec![] }
-    }
 }
 
 impl UnifiedSlowScore {
@@ -209,7 +204,7 @@ impl RaftstoreReporter {
         }
 
         // Publish the slow score to health controller
-        if let Some(_) = slow_score_tick_result.updated_score {
+        if slow_score_tick_result.updated_score.is_some() {
             self.health_controller_inner
                 .update_raftstore_slow_score(self.slow_score.get_score());
         }
