@@ -30,6 +30,7 @@ pub struct TxnSstWriter<E: KvEngine> {
     write_meta: SstMeta,
     key_manager: Option<Arc<DataKeyManager>>,
     api_version: ApiVersion,
+    txn_source: u64,
 }
 
 impl<E: KvEngine> TxnSstWriter<E> {
@@ -42,6 +43,7 @@ impl<E: KvEngine> TxnSstWriter<E> {
         write_meta: SstMeta,
         key_manager: Option<Arc<DataKeyManager>>,
         api_version: ApiVersion,
+        txn_source: u64,
     ) -> Self {
         TxnSstWriter {
             default,
@@ -56,6 +58,7 @@ impl<E: KvEngine> TxnSstWriter<E> {
             write_meta,
             key_manager,
             api_version,
+            txn_source,
         }
     }
 
@@ -102,7 +105,7 @@ impl<E: KvEngine> TxnSstWriter<E> {
                 KvWrite::new(WriteType::Put, commit_ts, None)
             }
         };
-        let w = w.set_txn_source(1<<16);
+        let w = w.set_txn_source(self.txn_source);
         let write = w.as_ref().to_bytes();
         self.write.put(&k, &write)?;
         self.write_entries += 1;
