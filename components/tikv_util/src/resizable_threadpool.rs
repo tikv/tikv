@@ -105,7 +105,7 @@ impl ResizableRuntime {
             .unwrap_or_else(|_| panic!("failed to create tokio runtime {}", thread_name));
 
         ResizableRuntime {
-            size: 1,
+            size: thread_size,
             count: 0,
             thread_name: thread_name.to_owned(),
             gc_runtime: DeamonRuntime {
@@ -151,7 +151,7 @@ impl ResizableRuntime {
     //   adapt it.
     pub fn adjust_with(&mut self, new_size: usize) -> usize {
         let mut runtime_guard = self.current_runtime.lock().unwrap();
-        
+
         if self.size == new_size {
             return new_size;
         }
@@ -211,26 +211,27 @@ mod test {
 
     #[test]
     fn test_adjust_thread_num() {
-        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        static COUNTER: AtomicUsize = AtomicUsize::new(4);
         let after_adjust = |new_size: usize| {
             COUNTER.store(new_size, Ordering::SeqCst);
         };
         let mut threads = ResizableRuntime::new(
-            4,
+            COUNTER.load(Ordering::SeqCst),
             "test",
             Box::new(replace_pool_rule),
             Box::new(after_adjust),
         );
+        assert_eq!(COUNTER.load(Ordering::SeqCst), threads.size());
 
         let handle = threads.handle();
         handle.block_on(async {
             COUNTER.fetch_add(1, Ordering::SeqCst);
         });
-        assert_eq!(COUNTER.load(Ordering::SeqCst), 1);
+        assert_eq!(COUNTER.load(Ordering::SeqCst), threads.size() + 1);
 
         threads.adjust_with(8);
         assert!(!threads.gc_runtime.tracker.is_empty());
-        assert_eq!(COUNTER.load(Ordering::SeqCst), 8);
+        assert_eq!(COUNTER.load(Ordering::SeqCst), threads.size());
 
         sleep(Duration::from_secs(11));
         assert!(threads.gc_runtime.tracker.is_empty());
@@ -239,21 +240,23 @@ mod test {
         handle.block_on(async {
             COUNTER.fetch_add(1, Ordering::SeqCst);
         });
-        assert_eq!(COUNTER.load(Ordering::SeqCst), 9);
+        assert_eq!(COUNTER.load(Ordering::SeqCst), threads.size() + 1);
     }
 
     #[test]
     fn test_infinite_loop() {
-        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        static COUNTER: AtomicUsize = AtomicUsize::new(4);
         let after_adjust = |new_size: usize| {
             COUNTER.store(new_size, Ordering::SeqCst);
         };
         let mut threads = ResizableRuntime::new(
-            4,
+            COUNTER.load(Ordering::SeqCst),
             "test",
             Box::new(replace_pool_rule),
             Box::new(after_adjust),
         );
+        assert_eq!(COUNTER.load(Ordering::SeqCst), threads.size());
+
         let handle = threads.handle();
         // infinite loop should not be cleaned
         handle.spawn(async {
@@ -263,6 +266,7 @@ mod test {
         });
 
         threads.adjust_with(8);
+        assert_eq!(COUNTER.load(Ordering::SeqCst), threads.size());
         assert!(!threads.gc_runtime.tracker.is_empty());
 
         // The running runtime should not be cleaned after 10s
@@ -299,8 +303,12 @@ mod test {
 
     #[test]
     fn test_multi_tasks() {
-        let threads =
-            ResizableRuntime::new(32, "test", Box::new(replace_pool_rule), Box::new(|_| {}));
+        let threads = Arc::new(ResizableRuntime::new(
+            32,
+            "test",
+            Box::new(replace_pool_rule),
+            Box::new(|_| {}),
+        ));
         let handle = threads.handle();
 
         let handles: Vec<_> = (0..32)
