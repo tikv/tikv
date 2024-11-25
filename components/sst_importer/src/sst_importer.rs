@@ -509,7 +509,13 @@ impl<E: KvEngine> SstImporter<E> {
             })?;
         }
 
-        let ext_storage = self.external_storage_or_cache(backend, cache_key)?;
+        // The `DashMap` locks the entry to ensure that only one thread loads the
+        // credentials at a time. However, if the thread gets blocked during the
+        // loading process, it can lead to a deadlock. To avoid this, blocking
+        // operations must be performed outside of the `DashMap`.
+        let ext_storage = tokio::task::block_in_place(move || {
+            self.external_storage_or_cache(backend, cache_key)
+        })?;
         let ext_storage = self.auto_encrypt_local_file_if_needed(ext_storage);
 
         let result = ext_storage
@@ -2471,15 +2477,17 @@ mod tests {
 
         // test do_download_kv_file().
         assert!(importer.download_to_disk_only());
-        let output = block_on_external_io(importer.download_kv_file(
-            &kv_meta,
-            ext_storage,
-            &backend,
-            &Limiter::new(f64::INFINITY),
-            None,
-            Vec::new(),
-        ))
-        .unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let output = runtime
+            .block_on(importer.download_kv_file(
+                &kv_meta,
+                ext_storage,
+                &backend,
+                &Limiter::new(f64::INFINITY),
+                None,
+                Vec::new(),
+            ))
+            .unwrap();
         assert_eq!(*output, buff);
         check_file_exists(&path.save, Some(&*key_manager));
 
@@ -3566,15 +3574,17 @@ mod tests {
             )
             .unwrap();
 
-        let output = block_on_external_io(importer.download_kv_file(
-            &kv_meta,
-            ext_storage,
-            &storage_backend,
-            &Limiter::new(f64::INFINITY),
-            opt_cipher_info,
-            master_key_configs,
-        ))
-        .unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let output = runtime
+            .block_on(importer.download_kv_file(
+                &kv_meta,
+                ext_storage,
+                &storage_backend,
+                &Limiter::new(f64::INFINITY),
+                opt_cipher_info,
+                master_key_configs,
+            ))
+            .unwrap();
         assert_eq!(*output, file_content);
         if !in_mem {
             check_file_exists(&path.save, opt_key_manager.as_deref());
