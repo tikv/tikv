@@ -114,7 +114,7 @@ impl<E: Engine> Tracker<E> {
             if self.req_ctx.tag == ReqTag::select {
                 self.req_ctx.tag = ReqTag::select_by_in_memory_engine;
             } else if self.req_ctx.tag == ReqTag::index {
-                self.req_ctx.tag = ReqTag::index_by_region_cache;
+                self.req_ctx.tag = ReqTag::index_by_in_memory_engine;
             }
         }
     }
@@ -378,7 +378,7 @@ impl<E: Engine> Tracker<E> {
         if self.req_ctx.tag == ReqTag::select
             || self.req_ctx.tag == ReqTag::index
             || self.req_ctx.tag == ReqTag::select_by_in_memory_engine
-            || self.req_ctx.tag == ReqTag::index_by_region_cache
+            || self.req_ctx.tag == ReqTag::index_by_in_memory_engine
         {
             tls_collect_query(
                 region_id,
@@ -406,7 +406,7 @@ impl<E: Engine> Tracker<E> {
             static SELECT: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
             static SELECT_BY_IN_MEMORY_ENGINE: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
             static INDEX: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
-            static INDEX_BY_REGION_CACHE: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
+            static INDEX_BY_IN_MEMORY_ENGINE: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
             static ANALYZE_TABLE: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
             static ANALYZE_INDEX: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
             static ANALYZE_FULL_SAMPLING: RefCell<Option<Box<dyn PerfContext>>> = RefCell::new(None);
@@ -418,7 +418,7 @@ impl<E: Engine> Tracker<E> {
             ReqTag::select => &SELECT,
             ReqTag::select_by_in_memory_engine => &SELECT_BY_IN_MEMORY_ENGINE,
             ReqTag::index => &INDEX,
-            ReqTag::index_by_region_cache => &INDEX_BY_REGION_CACHE,
+            ReqTag::index_by_in_memory_engine => &INDEX_BY_IN_MEMORY_ENGINE,
             ReqTag::analyze_table => &ANALYZE_TABLE,
             ReqTag::analyze_index => &ANALYZE_INDEX,
             ReqTag::analyze_full_sampling => &ANALYZE_FULL_SAMPLING,

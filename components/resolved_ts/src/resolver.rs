@@ -2,7 +2,7 @@
 
 use std::{cmp, collections::BTreeMap, sync::Arc, time::Duration};
 
-use collections::{HashMap, HashMapEntry, HashSet};
+use collections::{HashMap, HashMapEntry};
 use raftstore::store::RegionReadProgress;
 use tikv::storage::txn::txn_status_cache::{TxnState, TxnStatusCache};
 use tikv_util::{
@@ -81,9 +81,9 @@ pub struct Resolver {
     locks_by_key: HashMap<Arc<[u8]>, TimeStamp>,
     // start_ts -> locked keys.
     lock_ts_heap: BTreeMap<TimeStamp, TxnLocks>,
-    // the start_ts of large transactions, which use a different tracking strategy with normal
-    // transactions.
-    large_txn_ts: HashSet<TimeStamp>,
+    // the start_ts and lock samples of large transactions, which use a different tracking strategy
+    // from normal transactions.
+    large_txns: HashMap<TimeStamp, TxnLocks>,
     // each large transaction tracked by this resolver has a representative key tracked. So that
     // when the large transaction is rolled back, we can rely on this key to guarantee that
     // eventually there will be orphaned transactions.
@@ -207,7 +207,7 @@ impl Resolver {
             resolved_ts: TimeStamp::zero(),
             locks_by_key: HashMap::default(),
             lock_ts_heap: BTreeMap::new(),
-            large_txn_ts: HashSet::<TimeStamp>::default(),
+            large_txns: Default::default(),
             large_txn_key_representative: HashMap::<Vec<u8>, TimeStamp>::default(),
             last_aggressive_shrink_time: Instant::now_coarse(),
             read_progress,
@@ -275,9 +275,9 @@ impl Resolver {
             + self
                 .large_txn_key_representative
                 .keys()
-                .map(|k| k.len() + std::mem::size_of::<TimeStamp>())
+            .map(|k| k.len() * 2 /* count for the key in TxnLocks */ + std::mem::size_of::<TimeStamp>())
                 .sum::<usize>()
-            + self.large_txn_ts.len() * std::mem::size_of::<TimeStamp>()
+            + self.large_txns.len() * (std::mem::size_of::<TimeStamp>() + std::mem::size_of::<TxnLocks>())
     }
 
     fn lock_heap_size(&self, key: &[u8]) -> usize {
@@ -388,8 +388,11 @@ impl Resolver {
             let shrink_ratio = 8;
             self.shrink_ratio(shrink_ratio);
         } else if let Some(start_ts) = self.large_txn_key_representative.remove(key) {
-            let is_new = self.large_txn_ts.remove(&start_ts);
-            debug_assert!(is_new, "large txn lock should be untracked only once");
+            let entry = self.large_txns.remove(&start_ts);
+            debug_assert!(
+                entry.is_some(),
+                "large txn lock should be untracked only once"
+            );
             debug!(
                 "untrack lock {}@{}",
                 &log_wrappers::Value::key(key),
@@ -504,9 +507,9 @@ impl Resolver {
 
     fn log_min_large_txn(&self, lower_bound: TimeStamp) {
         let min_min_commit_ts_txn = self
-            .large_txn_ts
+            .large_txns
             .iter()
-            .filter_map(|&start_ts| {
+            .filter_map(|(&start_ts, _)| {
                 self.lookup_min_commit_ts(start_ts)
                     .map(|min_commit_ts| (start_ts, min_commit_ts))
             })
@@ -541,23 +544,41 @@ impl Resolver {
         }
     }
 
+    // This may be inaccurate for large transactions. But it's just for monitoring
+    // and diagnosis.
+    // The inaccuracy comes from
+    // 1. Untracking large txn locks, because we do not know the ts when untracking
+    //    a lock.
+    // 2. The same key written in multiple generations can also be counted multiple
+    //    times.
     pub(crate) fn num_locks(&self) -> u64 {
-        // this is inaccurate, but it's just for monitoring.
-        // TODO: count the number of locks of large transactions, namely also track
-        // TxnLocks
-        (self.locks_by_key.len() + self.large_txn_ts.len()) as u64
+        (self.locks_by_key.len()
+            + self
+                .large_txns
+                .values()
+                .map(|locks| locks.lock_count)
+                .sum::<usize>()) as u64
     }
 
     pub(crate) fn num_transactions(&self) -> u64 {
-        (self.lock_ts_heap.len() + self.large_txn_ts.len()) as u64
+        (self.lock_ts_heap.len() + self.large_txns.len()) as u64
     }
 
     pub(crate) fn read_progress(&self) -> Option<&Arc<RegionReadProgress>> {
         self.read_progress.as_ref()
     }
 
-    // Return the transaction with the smallest min_commit_ts. When min_commit_ts
-    // is unknown, use start_ts instead.
+    // Returns the minimum possible (commit_ts - 1), based on the knowledge we have,
+    // i.e. from all locks currently being tracked.
+    // The function is to provide an upper bound of resolved-ts. By definition
+    // resolved-ts must be strictly smaller than a future commit_ts.
+    //
+    // "Oldest" doesn't mean it started first, but means it may have the smallest
+    // commit_ts, which is the returned ts + 1.
+    //
+    // **NOTE**:
+    // For normal txns, we return start_ts.
+    // For large txns, we return its min_commit_ts-1.
     pub(crate) fn oldest_transaction(&self) -> Option<(TimeStamp, TxnLocks)> {
         let oldest_normal_txn = self
             .lock_ts_heap
@@ -566,20 +587,13 @@ impl Resolver {
             .map(|(ts, txn_locks)| (ts, txn_locks.clone()));
 
         let oldest_large_txn = self
-            .large_txn_ts
+            .large_txns
             .iter()
-            .filter_map(|start_ts| self.lookup_min_commit_ts(*start_ts))
-            .min()
-            .map(|ts| {
-                (
-                    ts,
-                    TxnLocks {
-                        lock_count: 1,
-                        // TODO: maybe fill this
-                        sample_lock: None,
-                    },
-                )
-            });
+            .filter_map(|(start_ts, txn_locks)| {
+                self.lookup_min_commit_ts(*start_ts)
+                    .map(|ts| (ts.prev(), txn_locks.clone()))
+            })
+            .min_by_key(|(ts, _)| *ts);
 
         match (oldest_normal_txn, oldest_large_txn) {
             (Some((&ts1, txn_locks1)), Some((ts2, txn_locks2))) => {
@@ -604,10 +618,18 @@ impl Resolver {
         start_ts: TimeStamp,
         key: Vec<u8>,
     ) -> Result<(), MemoryQuotaExceeded> {
-        let is_new = self.large_txn_ts.insert(start_ts);
-        if is_new {
-            self.large_txn_key_representative.insert(key, start_ts);
-        }
+        self.large_txns
+            .entry(start_ts)
+            .and_modify(|entry| entry.lock_count += 1)
+            .or_insert_with(|| {
+                self.large_txn_key_representative
+                    .insert(key.clone(), start_ts);
+                TxnLocks {
+                    lock_count: 1,
+                    sample_lock: Some(key.into_boxed_slice().into()),
+                }
+            });
+
         Ok(())
     }
 }
@@ -864,22 +886,26 @@ mod tests {
         let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
         let txn_status_cache = Arc::new(TxnStatusCache::new(100));
         let mut resolver = Resolver::new(1, memory_quota, txn_status_cache.clone());
-        let key: Vec<u8> = vec![1, 2, 3, 4];
+        let key1: Vec<u8> = vec![1, 2, 3, 4];
         let key2: Vec<u8> = vec![5, 6, 7, 8];
+        let key3: Vec<u8> = vec![9, 10, 11, 12];
 
-        // track 2 large txns
-        resolver.track_lock(1.into(), key.clone(), None, 1).unwrap();
+        // track 2 large txns, T1{key1}, T2{key2, key3}
+        resolver
+            .track_lock(1.into(), key1.clone(), None, 1)
+            .unwrap();
         resolver
             .track_lock(2.into(), key2.clone(), None, 1)
             .unwrap();
-        assert_eq!(resolver.num_locks(), 2);
+        resolver.track_lock(2.into(), key3, None, 2).unwrap();
+        assert_eq!(resolver.num_locks(), 3);
         assert_eq!(resolver.num_transactions(), 2);
         assert_eq!(resolver.locks_by_key.len(), 0);
-        assert_eq!(resolver.large_txn_ts.len(), 2);
+        assert_eq!(resolver.large_txns.len(), 2);
         assert_eq!(resolver.large_txn_key_representative.len(), 2);
         assert_eq!(resolver.resolved_ts(), TimeStamp::zero());
 
-        assert_eq!(resolver.resolve(20.into(), None, TsSource::PdTso), 1.into());
+        assert_eq!(resolver.resolve(20.into(), None, TsSource::PdTso), 0.into());
 
         txn_status_cache.upsert(
             1.into(),
@@ -896,6 +922,35 @@ mod tests {
             SystemTime::now(),
         );
 
-        assert_eq!(resolver.resolve(20.into(), None, TsSource::PdTso), 5.into());
+        assert_eq!(resolver.resolve(20.into(), None, TsSource::PdTso), 4.into());
+        let oldest_txn = resolver.oldest_transaction().unwrap();
+        assert_eq!(oldest_txn.0, 4.into());
+        assert_eq!(oldest_txn.1.lock_count, 2);
+    }
+
+    #[test]
+    fn test_resolved_ts_always_greater_than_following_commit_ts() {
+        // A later commit_ts must be strictly larger than resolved-ts. Equality is not
+        // allowed. The case may not happen in real implementation, but we want
+        // to ensure the correctness and robustness of every submodule.
+        let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
+        let txn_status_cache = Arc::new(TxnStatusCache::new(100));
+        let mut resolver = Resolver::new(1, memory_quota, txn_status_cache.clone());
+        let key: Vec<u8> = vec![1, 2, 3, 4];
+
+        resolver.track_lock(1.into(), key.clone(), None, 1).unwrap();
+        // PD TSO = 9. A read request with ts 9 reads, and pushes the min_commit_ts to
+        // 10, which is greater than current PD TS.
+        txn_status_cache.upsert(
+            1.into(),
+            TxnState::Ongoing {
+                min_commit_ts: 10.into(),
+            },
+            SystemTime::now(),
+        );
+        // We assert the resolved-ts cannot be 10. Because a later commit ts could be
+        // 10.
+        assert_eq!(resolver.resolve(10.into(), None, TsSource::PdTso), 9.into());
+        // Now the txn can commit, with the smallest possible commit_ts = 10.
     }
 }

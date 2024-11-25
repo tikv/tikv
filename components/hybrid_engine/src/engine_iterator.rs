@@ -18,13 +18,13 @@ where
     EK: KvEngine,
     EC: RegionCacheEngine,
 {
-    pub fn disk_engine_iterator(iter: <EK::Snapshot as Iterable>::Iterator) -> Self {
+    pub(crate) fn disk_engine_iterator(iter: <EK::Snapshot as Iterable>::Iterator) -> Self {
         Self {
             iter: Either::Left(iter),
         }
     }
 
-    pub fn region_cache_engine_iterator(iter: <EC::Snapshot as Iterable>::Iterator) -> Self {
+    pub(crate) fn region_cache_engine_iterator(iter: <EC::Snapshot as Iterable>::Iterator) -> Self {
         Self {
             iter: Either::Right(iter),
         }

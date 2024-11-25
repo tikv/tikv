@@ -315,6 +315,11 @@ impl_box_observer!(
     SnapshotObserver,
     WrappedBoxSnapshotObserver
 );
+impl_box_observer!(
+    BoxDestroyPeerObserver,
+    DestroyPeerObserver,
+    WrappedBoxDestroyPeerObserver
+);
 
 /// Registry contains all registered coprocessors.
 #[derive(Clone)]
@@ -336,6 +341,7 @@ where
     raft_message_observers: Vec<Entry<BoxRaftMessageObserver>>,
     extra_message_observers: Vec<Entry<BoxExtraMessageObserver>>,
     region_heartbeat_observers: Vec<Entry<BoxRegionHeartbeatObserver>>,
+    destroy_peer_observers: Vec<Entry<BoxDestroyPeerObserver>>,
     // For now, `write_batch_observer` and `snapshot_observer` can only have one
     // observer solely because of simplicity. However, it is possible to have
     // multiple observers in the future if needed.
@@ -361,6 +367,7 @@ impl<E: KvEngine> Default for Registry<E> {
             raft_message_observers: Default::default(),
             extra_message_observers: Default::default(),
             region_heartbeat_observers: Default::default(),
+            destroy_peer_observers: Default::default(),
             write_batch_observer: None,
             snapshot_observer: None,
         }
@@ -446,6 +453,14 @@ impl<E: KvEngine> Registry<E> {
         qo: BoxRegionHeartbeatObserver,
     ) {
         push!(priority, qo, self.region_heartbeat_observers);
+    }
+
+    pub fn register_destroy_peer_observer(
+        &mut self,
+        priority: u32,
+        destroy_peer_observer: BoxDestroyPeerObserver,
+    ) {
+        push!(priority, destroy_peer_observer, self.destroy_peer_observers);
     }
 
     pub fn register_write_batch_observer(&mut self, write_batch_observer: BoxWriteBatchObserver) {
@@ -939,9 +954,6 @@ impl<E: KvEngine> CoprocessorHost<E> {
     }
 
     pub fn on_applied_current_term(&self, role: StateRole, region: &Region) {
-        if self.registry.cmd_observers.is_empty() {
-            return;
-        }
         for observer in &self.registry.cmd_observers {
             let observer = observer.observer.inner();
             observer.on_applied_current_term(role, region);
@@ -971,6 +983,13 @@ impl<E: KvEngine> CoprocessorHost<E> {
             .as_ref()
             .map(|observer| observer.inner().create_observable_write_batch());
         WriteBatchWrapper::new(wb, observable_wb)
+    }
+
+    pub fn on_destroy_peer(&self, region: &Region) {
+        for observer in &self.registry.destroy_peer_observers {
+            let observer = observer.observer.inner();
+            observer.on_destroy_peer(region);
+        }
     }
 
     pub fn on_snapshot(
@@ -1375,7 +1394,7 @@ mod tests {
         index += ObserverIndex::PostApplyQuery as usize;
         assert_all!([&ob.called], &[index]);
 
-        host.on_role_change(&region, RoleChange::new(StateRole::Leader));
+        host.on_role_change(&region, RoleChange::new_for_test(StateRole::Leader));
         index += ObserverIndex::OnRoleChange as usize;
         assert_all!([&ob.called], &[index]);
 

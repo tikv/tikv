@@ -39,14 +39,12 @@ use tikv_util::{
     },
     future::RescheduleChecker,
     memory::{MemoryQuota, OwnedAllocated},
+    resizable_threadpool::ResizableRuntimeHandle,
     sys::{thread::ThreadBuildWrapper, SysQuota},
     time::{Instant, Limiter},
     Either, HandyRwLock,
 };
-use tokio::{
-    runtime::{Handle, Runtime},
-    sync::OnceCell,
-};
+use tokio::{runtime::Runtime, sync::OnceCell};
 use txn_types::{Key, TimeStamp, WriteRef};
 
 use crate::{
@@ -267,10 +265,10 @@ impl<E: KvEngine> SstImporter<E> {
         }
     }
 
-    pub fn start_switch_mode_check(&self, executor: &Handle, db: Option<E>) {
+    pub fn start_switch_mode_check(&self, executor: &ResizableRuntimeHandle, db: Option<E>) {
         match &self.switcher {
-            Either::Left(switcher) => switcher.start(executor, db.unwrap()),
-            Either::Right(switcher) => switcher.start(executor),
+            Either::Left(switcher) => switcher.start_resizable_threads(executor, db.unwrap()),
+            Either::Right(switcher) => switcher.start_resizable_threads(executor),
         }
     }
 
@@ -1618,6 +1616,7 @@ mod tests {
     use std::{
         io::{self, Cursor},
         ops::Sub,
+        sync::atomic::{AtomicUsize, Ordering},
         usize,
     };
 
@@ -1641,7 +1640,10 @@ mod tests {
     use tempfile::{Builder, TempDir};
     use test_sst_importer::*;
     use test_util::new_test_key_manager;
-    use tikv_util::{codec::stream_event::EventEncoder, stream::block_on_external_io};
+    use tikv_util::{
+        codec::stream_event::EventEncoder, resizable_threadpool::ResizableRuntime,
+        stream::block_on_external_io,
+    };
     use tokio::io::{AsyncWrite, AsyncWriteExt};
     use tokio_util::compat::{FuturesAsyncWriteCompatExt, TokioAsyncWriteCompatExt};
     use txn_types::{Value, WriteType};
@@ -1649,6 +1651,15 @@ mod tests {
 
     use super::*;
     use crate::{import_file::ImportPath, *};
+
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+    type TokioResult<T> = std::io::Result<T>;
+
+    fn create_tokio_runtime(_: usize, _: &str) -> TokioResult<Runtime> {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+    }
 
     fn do_test_import_dir(key_manager: Option<Arc<DataKeyManager>>) {
         let temp_dir = Builder::new().prefix("test_import_dir").tempdir().unwrap();
@@ -2288,8 +2299,12 @@ mod tests {
         };
         let change = cfg.diff(&cfg_new);
 
+        let threads =
+            ResizableRuntime::new("test", Box::new(create_tokio_runtime), Box::new(|_| {}));
+        let handle = ResizableRuntimeHandle::new(threads);
+
         // create config manager and update config.
-        let mut cfg_mgr = ImportConfigManager::new(cfg);
+        let mut cfg_mgr = ImportConfigManager::new(cfg, handle);
         cfg_mgr.dispatch(change).unwrap();
         importer.update_config_memory_use_ratio(&cfg_mgr);
 
@@ -2312,9 +2327,42 @@ mod tests {
             ..Default::default()
         };
         let change = cfg.diff(&cfg_new);
-        let mut cfg_mgr = ImportConfigManager::new(cfg);
+
+        let threads =
+            ResizableRuntime::new("test", Box::new(create_tokio_runtime), Box::new(|_| {}));
+        let handle = ResizableRuntimeHandle::new(threads);
+
+        let mut cfg_mgr = ImportConfigManager::new(cfg, handle);
         let r = cfg_mgr.dispatch(change);
         assert!(r.is_err());
+    }
+
+    #[test]
+    fn test_update_import_num_threads() {
+        let mut threads = ResizableRuntime::new(
+            "test",
+            Box::new(create_tokio_runtime),
+            Box::new(|new_size: usize| {
+                COUNTER.store(new_size, Ordering::SeqCst);
+            }),
+        );
+        threads.adjust_with(Config::default().num_threads);
+        let handle = ResizableRuntimeHandle::new(threads);
+        let mut cfg_mgr = ImportConfigManager::new(Config::default(), handle);
+
+        assert_eq!(COUNTER.load(Ordering::SeqCst), cfg_mgr.rl().num_threads);
+        assert_eq!(cfg_mgr.rl().num_threads, Config::default().num_threads);
+
+        let cfg_new = Config {
+            num_threads: 10,
+            ..Default::default()
+        };
+        let change = Config::default().diff(&cfg_new);
+        let r = cfg_mgr.dispatch(change);
+
+        r.unwrap();
+        assert_eq!(cfg_mgr.rl().num_threads, cfg_new.num_threads);
+        assert_eq!(COUNTER.load(Ordering::SeqCst), cfg_mgr.rl().num_threads);
     }
 
     #[test]

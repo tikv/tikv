@@ -21,7 +21,7 @@ use crate::{
     keys::{encode_key, InternalBytes, ValueType, ENC_KEY_SEQ_LENGTH},
     memory_controller::{MemoryController, MemoryUsage},
     metrics::{
-        IN_MEMORY_ENGINE_PREPARE_FOR_WRITE_DURATION_HISTOGRAM,
+        count_operations_for_cfs, IN_MEMORY_ENGINE_PREPARE_FOR_WRITE_DURATION_HISTOGRAM,
         IN_MEMORY_ENGINE_WRITE_DURATION_HISTOGRAM,
     },
     region_manager::RegionCacheStatus,
@@ -42,7 +42,7 @@ pub(crate) const MEM_CONTROLLER_OVERHEAD: usize = 8;
 // default, the memtable size for lock cf is 32MB. As not all ranges will be
 // cached in the memory, just use half of it here.
 const AMOUNT_TO_CLEAN_TOMBSTONE: u64 = ReadableSize::mb(16).0;
-// The value of the delete entry in the in-memory engine. It's just a emptry
+// The value of the delete entry in the in-memory engine. It's just a empty
 // slice.
 const DELETE_ENTRY_VAL: &[u8] = b"";
 
@@ -73,8 +73,8 @@ pub struct RegionCacheWriteBatch {
     // ... -> PollHandler::end), although the same region can call `prepare_for_region`
     // multiple times, it can only call sequentially. This is say, we will not have this:
     // prepare_for_region(region1), prepare_for_region(region2), prepare_for_region(region1).
-    // In case to avoid this asssumption being broken, we record the regions that have called
-    // prepare_for_region and ensure that if the region is not the `currnet_region`, it is not
+    // In case to avoid this assumption being broken, we record the regions that have called
+    // prepare_for_region and ensure that if the region is not the `current_region`, it is not
     // recorded in this vec.
     prepared_regions: SmallVec<[u64; 10]>,
 }
@@ -123,6 +123,36 @@ impl RegionCacheWriteBatch {
             written_regions: vec![],
             prepared_regions: SmallVec::new(),
         }
+    }
+
+    pub fn prepare_for_region(&mut self, region: &metapb::Region) {
+        // If the region is already prepared for write, we do not need to prepare it
+        // again. See comments for the `prepared_regions` field for more details.
+        if let Some(current_region) = &self.current_region
+            && current_region.id == region.id
+        {
+            return;
+        }
+        let time = Instant::now();
+        // verify that the region is not prepared before
+        if self.prepared_regions.contains(&region.id) {
+            panic!(
+                "region {} is prepared for write before, but it is not the current region",
+                region.id
+            );
+        }
+        self.prepared_regions.push(region.id);
+        // record last region for clearing region in written flags.
+        self.record_last_written_region();
+
+        let cached_region = CacheRegion::from_region(region);
+        self.set_region_cache_status(
+            self.engine
+                .prepare_for_apply(&cached_region, region.is_in_flashback),
+        );
+        self.current_region = Some(cached_region);
+        self.current_region_evicted = false;
+        self.prepare_for_write_duration += time.saturating_elapsed();
     }
 
     /// Trigger a CleanLockTombstone task if the accumulated lock cf
@@ -176,6 +206,16 @@ impl RegionCacheWriteBatch {
         Ok(())
     }
 
+    fn clear_written_regions(&mut self) {
+        if !self.written_regions.is_empty() {
+            self.engine
+                .core
+                .region_manager()
+                .clear_regions_in_being_written(&self.written_regions);
+            self.written_regions.clear();
+        }
+    }
+
     // Note: `seq` is the sequence number of the first key in this write batch in
     // the RocksDB, which will be incremented automatically for each key, so
     // that all keys have unique sequence numbers.
@@ -188,27 +228,33 @@ impl RegionCacheWriteBatch {
         let start = Instant::now();
         let mut lock_modification: u64 = 0;
         let engine = self.engine.core.engine();
+
+        // record the number of insertions and deletions for each cf
+        let mut put = [0, 0, 0];
+        let mut delete = [0, 0, 0];
         // Some entries whose ranges may be marked as evicted above, but it does not
         // matter, they will be deleted later.
         std::mem::take(&mut self.buffer).into_iter().for_each(|e| {
             if is_lock_cf(e.cf) {
                 lock_modification += e.data_size() as u64;
             }
+            if e.is_insertion() {
+                put[e.cf] += 1;
+            } else {
+                delete[e.cf] += 1;
+            }
+
             e.write_to_memory(seq, &engine, self.memory_controller.clone(), guard);
             seq += 1;
         });
         let duration = start.saturating_elapsed_secs();
         IN_MEMORY_ENGINE_WRITE_DURATION_HISTOGRAM.observe(duration);
+        count_operations_for_cfs(&put, &delete);
 
         fail::fail_point!("ime_on_region_cache_write_batch_write_consumed");
         fail::fail_point!("ime_before_clear_regions_in_being_written");
 
-        if !self.written_regions.is_empty() {
-            self.engine
-                .core
-                .region_manager()
-                .clear_regions_in_being_written(&self.written_regions);
-        }
+        self.clear_written_regions();
 
         self.engine
             .lock_modification_bytes
@@ -303,7 +349,7 @@ impl RegionCacheWriteBatch {
 
     #[inline]
     fn record_last_written_region(&mut self) {
-        // NOTE: event if the region is evcited due to memory limit, we still
+        // NOTE: even if the region is evcited due to memory limit, we still
         // need to track it because its "in written" flag has been set.
         if self.region_cache_status != RegionCacheStatus::NotInCache {
             let last_region = self.current_region.take().unwrap();
@@ -348,6 +394,10 @@ pub(crate) struct RegionCacheWriteBatchEntry {
 }
 
 impl RegionCacheWriteBatchEntry {
+    pub fn is_insertion(&self) -> bool {
+        matches!(self.inner, WriteBatchEntryInternal::PutValue(_))
+    }
+
     pub fn put_value(cf: &str, key: &[u8], value: &[u8]) -> Self {
         Self {
             cf: cf_to_id(cf),
@@ -448,6 +498,18 @@ impl WriteBatch for RegionCacheWriteBatch {
     }
 
     fn clear(&mut self) {
+        // `current_region` is some means `write_impl` is not called, so we need to
+        // clear the `in_written` flag.
+        // This can happen when apply fsm do `commit`(e.g. after handling Msg::Change),
+        // and then do not handle other kvs. Thus, the write batch is empty,
+        // and `write_impl` is not called.
+        if self.current_region.is_some() {
+            self.record_last_written_region();
+            // region's `in_written` is not cleaned as `write_impl` is not called,
+            // so we should do it here.
+            self.clear_written_regions();
+        }
+
         self.region_cache_status = RegionCacheStatus::NotInCache;
         self.buffer.clear();
         self.save_points.clear();
@@ -482,37 +544,6 @@ impl WriteBatch for RegionCacheWriteBatch {
     fn merge(&mut self, mut other: Self) -> Result<()> {
         self.buffer.append(&mut other.buffer);
         Ok(())
-    }
-
-    fn prepare_for_region(&mut self, region: &metapb::Region) {
-        // If the region is already prepared for write, we do not need to prepare it
-        // again. See comments for the `prepared_regions` field for more details.
-        if let Some(current_region) = &self.current_region
-            && current_region.id == region.id
-        {
-            return;
-        }
-        let time = Instant::now();
-        // verify that the region is not prepared before
-        if self.prepared_regions.contains(&region.id) {
-            panic!(
-                "region {} is prepared for write before, but it is not the current region",
-                region.id
-            );
-        }
-        self.prepared_regions.push(region.id);
-        // record last region for clearing region in written flags.
-        self.record_last_written_region();
-
-        let cached_region = CacheRegion::from_region(region);
-        // TODO: remote range.
-        self.set_region_cache_status(
-            self.engine
-                .prepare_for_apply(&cached_region, region.is_in_flashback),
-        );
-        self.current_region = Some(cached_region);
-        self.current_region_evicted = false;
-        self.prepare_for_write_duration += time.saturating_elapsed();
     }
 }
 

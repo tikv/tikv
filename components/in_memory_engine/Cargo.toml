@@ -14,6 +14,11 @@ name = "failpoints"
 path = "tests/failpoints/mod.rs"
 required-features = ["failpoints"]
 
+[[bench]]
+name = "load_region"
+path = "benches/load_region.rs"
+harness = false
+
 [dependencies]
 engine_traits = { workspace = true }
 collections = { workspace = true }
@@ -51,7 +56,9 @@ tokio = { version = "1.5", features = ["rt-multi-thread"] }
 smallvec = "1.4"
 
 [dev-dependencies]
+criterion = "0.3"
 tempfile = "3.0"
 test_pd = { workspace = true }
 test_util = { workspace = true }
 proptest = "1.0.0"
+tikv_alloc = { workspace = true, features = ["jemalloc"] }

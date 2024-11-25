@@ -2,6 +2,8 @@
 
 mod load_eviction;
 mod snapshot;
+#[cfg(test)]
+mod test_write_batch;
 mod write_batch;
 
 pub use load_eviction::LoadEvictionObserver;
