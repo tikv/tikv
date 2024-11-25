@@ -156,6 +156,7 @@ impl ResizableRuntime {
 
         {
             let mut runtime_guard = self.current_runtime.lock().unwrap();
+            self.count += 1;
             let thread_name = format!("{}-v{}-{}", self.thread_name, self.count, new_size);
 
             let new_runtime = (self.replace_pool_rule)(new_size, &thread_name)
