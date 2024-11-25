@@ -6013,7 +6013,7 @@ def RocksDB() -> RowPanel:
                                     "tikv_engine_bloom_efficiency",
                                     label_selectors=[
                                         'db="$db"',
-                                        'type="not_last_level_seek_filtered"',
+                                        'type="non_last_level_seek_filtered"',
                                     ],
                                     by_labels=[],  # override default by instance.
                                 ),
@@ -6034,7 +6034,7 @@ def RocksDB() -> RowPanel:
                                         "tikv_engine_bloom_efficiency",
                                         label_selectors=[
                                             'db="$db"',
-                                            'type="not_last_level_seek_filtered"',
+                                            'type="non_last_level_seek_filtered"',
                                         ],
                                         by_labels=[],  # override default by instance.
                                     ),
@@ -6054,7 +6054,7 @@ def RocksDB() -> RowPanel:
                                         "tikv_engine_bloom_efficiency",
                                         label_selectors=[
                                             'db="$db"',
-                                            'type="not_last_level_seek_filter_match"',
+                                            'type="non_last_level_seek_filter_match"',
                                         ],
                                         by_labels=[],  # override default by instance.
                                     ),
