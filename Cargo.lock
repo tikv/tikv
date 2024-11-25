@@ -5667,12 +5667,6 @@ dependencies = [
 ]
 
 [[package]]
-<<<<<<< HEAD
-name = "serde"
-version = "1.0.194"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b114498256798c94a0689e1a15fec6005dee8ac1f41de56404b67afc2a4b773"
-=======
 name = "separator"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5680,10 +5674,9 @@ checksum = "f97841a747eef040fcd2e7b3b9a220a7205926e60488e673d9e4926d27772ce5"
 
 [[package]]
 name = "serde"
-version = "1.0.193"
+version = "1.0.194"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25dd9975e68d0cb5aa1120c288333fc98731bd1dd12f561e468ea4728c042b89"
->>>>>>> d434617430 (aws: switch to aws-sdk (#13814))
+checksum = "0b114498256798c94a0689e1a15fec6005dee8ac1f41de56404b67afc2a4b773"
 dependencies = [
  "serde_derive",
 ]
@@ -5700,15 +5693,9 @@ dependencies = [
 
 [[package]]
 name = "serde_derive"
-<<<<<<< HEAD
 version = "1.0.194"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a3385e45322e8f9931410f01b3031ec534c3947d0e94c18049af4d9f9907d4e0"
-=======
-version = "1.0.193"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43576ca501357b9b071ac53cdc7da8ef0cbd9493d8df094cd821777ea6e894d3"
->>>>>>> d434617430 (aws: switch to aws-sdk (#13814))
 dependencies = [
  "proc-macro2",
  "quote",
