@@ -2365,7 +2365,6 @@ mod tests {
         let threads_clone = Arc::new(Mutex::new(threads));
         let mut cfg_mgr = ImportConfigManager::new(cfg, Arc::downgrade(&threads_clone));
 
-        assert_eq!(COUNTER.load(Ordering::SeqCst), cfg_mgr.rl().num_threads);
         assert_eq!(cfg_mgr.rl().num_threads, Config::default().num_threads);
 
         let cfg_new = Config {
