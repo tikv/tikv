@@ -230,7 +230,9 @@ async fn save_backup_file_worker<EK: KvEngine>(
 ) {
     while let Ok(msg) = rx.recv().await {
         let files = if msg.files.need_flush_keys() {
-            match with_resource_limiter(msg.files.save(&storage), msg.resource_limiter.clone()).await {
+            match with_resource_limiter(msg.files.save(&storage), msg.resource_limiter.clone())
+                .await
+            {
                 Ok(mut split_files) => {
                     let mut has_err = false;
                     for file in split_files.iter_mut() {
@@ -637,8 +639,8 @@ impl ConfigManager {
     }
 }
 
-/// SoftLimitKeeper can run in the background and adjust the number of threads running based on
-/// CPU stats.
+/// SoftLimitKeeper can run in the background and adjust the number of threads
+/// running based on CPU stats.
 /// It only starts to work when enable_auto_tune is turned on in BackupConfig.
 /// The initial number of threads is controlled by num_threads in BackupConfig.
 #[derive(Clone)]
