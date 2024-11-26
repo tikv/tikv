@@ -326,7 +326,8 @@ mod tests {
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
         let importer =
-            SstImporter::<RocksEngine>::new(&cfg, &importer_dir, None, ApiVersion::V1, false).unwrap();
+            SstImporter::<RocksEngine>::new(&cfg, &importer_dir, None, ApiVersion::V1, false)
+                .unwrap();
         let db_path = importer_dir.path().join("db");
         let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
 
