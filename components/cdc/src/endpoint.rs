@@ -325,7 +325,7 @@ impl Advance {
 
             let res = conn
                 .sink
-                .unbounded_send(CdcEvent::ResolvedTs(resolved_ts), false);
+                .send(CdcEvent::ResolvedTs(resolved_ts), false);
             handle_send_result(conn, res);
         };
 
@@ -343,7 +343,7 @@ impl Advance {
                 event: Some(Event_oneof_event::ResolvedTs(ts)),
                 ..Default::default()
             };
-            let res = conn.sink.unbounded_send(CdcEvent::Event(event), false);
+            let res = conn.sink.send(CdcEvent::Event(event), false);
             handle_send_result(conn, res);
         };
 

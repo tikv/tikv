@@ -207,7 +207,7 @@ impl Downstream {
     // no more events can be pushed to the sink after an `ErrorEvent` is sent.
     pub fn sink_event(&self, mut event: Event, force: bool) -> Result<()> {
         event.set_request_id(self.req_id.0);
-        match self.sink.unbounded_send(CdcEvent::Event(event), force) {
+        match self.sink.send(CdcEvent::Event(event), force) {
             Ok(_) => Ok(()),
             Err(SendError::Disconnected) => {
                 debug!("cdc send event failed, disconnected";
@@ -791,15 +791,11 @@ impl Delegate {
         requests: Vec<Request>,
         flags: WriteBatchFlags,
         old_value_cb: &OldValueCallback,
-        old_value_cache: &mut OldValueCache,
-        statistics: &mut Statistics,
     ) -> Result<()> {
         debug_assert_eq!(self.txn_extra_op.load(), TxnExtraOp::ReadOldValue);
 
-        let read_old_value = |row: &mut EventRow, read_old_ts| -> Result<()> {
-            let key = Key::from_raw(&row.key).append_ts(row.start_ts.into());
-            let old_value = old_value_cb(key, read_old_ts, old_value_cache, statistics)?;
-            row.old_value = old_value.unwrap_or_default();
+        let read_old_value = |_: &mut EventRow, _| -> Result<()> {
+            // TODO: fix it.
             Ok(())
         };
 
@@ -1235,7 +1231,7 @@ impl Delegate {
             build_resolver.store(true, Ordering::Release);
         }
         if let Some(d) = self.downstream(downstream_id) {
-            if let Err(e) = d.sink.unbounded_send(incremental_scan_barrier, true) {
+            if let Err(e) = d.sink.send(incremental_scan_barrier, true) {
                 error!("cdc failed to schedule barrier for delta before delta scan";
                     "region_id" => self.region_id,
                     "observe_id" => ?observe_id,

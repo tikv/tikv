@@ -7,7 +7,8 @@ use std::sync::{
 
 use collections::{HashMap, HashMapEntry};
 use futures::stream::TryStreamExt;
-use grpcio::{DuplexSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode};
+use futures::stream::StreamExt;
+use grpcio::{DuplexSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode, WriteFlags};
 use kvproto::{
     cdcpb::{
         ChangeData, ChangeDataEvent, ChangeDataRequest, ChangeDataRequestKvApi,
@@ -383,7 +384,6 @@ impl Service {
         mut rpc_sink: DuplexSink<ChangeDataEvent>,
         event_feed_v2: bool,
     ) {
-        rpc_sink.enhance_batch(true);
         let conn_id = ConnId::new();
         let (sink, mut drain) = channel(conn_id, CDC_CHANNLE_CAPACITY, self.memory_quota.clone());
         let mut features = vec![];
@@ -444,7 +444,11 @@ impl Service {
         workers.spawn(async move {
             #[cfg(feature = "failpoints")]
             sleep_before_drain_change_event().await;
-            if let Err(e) = drain.forward(&mut rpc_sink).await {
+
+            // NOTE: enhance_batch so that we can set `buffer_hint(true)` for all messages.
+            rpc_sink.enhance_batch(true);
+            let flags = WriteFlags::default().buffer_hint(true);
+            if let Err(e) = drain.map(|x| Ok((x, flags))).forward(&mut rpc_sink).await {
                 warn!("cdc send failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
             } else {
                 info!("cdc send closed"; "downstream" => peer, "conn_id" => ?conn_id);

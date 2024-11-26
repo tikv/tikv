@@ -514,7 +514,7 @@ impl<E: KvEngine> Initializer<E> {
         }
         if let Err(e) = self
             .sink
-            .send_all(events, self.scan_truncated.clone())
+            .send_all(events)
             .await
         {
             error!("cdc send scan event failed"; "req_id" => ?self.request_id);

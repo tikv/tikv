@@ -1,5 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::pin::Pin;
 use std::{
     fmt,
     sync::{
@@ -8,13 +9,16 @@ use std::{
     },
     time::Duration,
 };
+use std::task::Context;
 
 use futures::{
+    ready,
     channel::mpsc::{
         channel as bounded, unbounded, Receiver, SendError as FuturesSendError, Sender,
         TrySendError, UnboundedReceiver, UnboundedSender,
     },
     executor::block_on,
+    task::Poll,
     stream, SinkExt, Stream, StreamExt,
 };
 use grpcio::WriteFlags;
@@ -46,7 +50,7 @@ const CDC_EVENT_MAX_COUNT: usize = 64;
 pub const CDC_CHANNLE_CAPACITY: usize = 128;
 
 /// The maximum bytes of ChangeDataEvent, 6MB.
-const CDC_RESP_MAX_BYTES: u32 = 6 * 1024 * 1024;
+const CDC_RESP_MAX_BYTES: usize = 6 * 1024 * 1024;
 
 /// Assume the average size of batched `CdcEvent::Event`s is 32KB and
 /// the average count of batched `CdcEvent::Event`s is 64.
@@ -131,83 +135,18 @@ impl fmt::Debug for CdcEvent {
     }
 }
 
-pub struct EventBatcher {
-    buffer: Vec<ChangeDataEvent>,
-    last_size: u32,
-
-    // statistics
-    total_event_bytes: usize,
-    total_resolved_ts_bytes: usize,
-}
-
-impl EventBatcher {
-    pub fn with_capacity(cap: usize) -> EventBatcher {
-        EventBatcher {
-            buffer: Vec::with_capacity(cap),
-            last_size: 0,
-
-            total_event_bytes: 0,
-            total_resolved_ts_bytes: 0,
-        }
-    }
-
-    // The size of the response should not exceed CDC_MAX_RESP_SIZE.
-    // Split the events into multiple responses by CDC_MAX_RESP_SIZE here.
-    pub fn push(&mut self, event: CdcEvent) {
-        let size = event.size();
-        if size >= CDC_RESP_MAX_BYTES {
-            warn!("cdc event too large"; "size" => size, "event" => ?event);
-        }
-        match event {
-            CdcEvent::Event(e) => {
-                if self.buffer.is_empty() || self.last_size + size >= CDC_RESP_MAX_BYTES {
-                    self.last_size = 0;
-                    self.buffer.push(ChangeDataEvent::default());
-                }
-                self.last_size += size;
-                self.buffer.last_mut().unwrap().mut_events().push(e);
-                self.total_event_bytes += size as usize;
-            }
-            CdcEvent::ResolvedTs(r) => {
-                let mut change_data_event = ChangeDataEvent::default();
-                change_data_event.set_resolved_ts(r);
-                self.buffer.push(change_data_event);
-
-                // Make sure the next message is not batched with ResolvedTs.
-                self.last_size = CDC_RESP_MAX_BYTES;
-                self.total_resolved_ts_bytes += size as usize;
-            }
-            CdcEvent::Barrier(_) => {
-                // Barrier requires events must be batched across the barrier.
-                self.last_size = CDC_RESP_MAX_BYTES;
-            }
-        }
-    }
-
-    pub fn build(self) -> Vec<ChangeDataEvent> {
-        self.buffer
-    }
-
-    // Return the total bytes of event and resolved ts.
-    pub fn statistics(&self) -> (usize, usize) {
-        (self.total_event_bytes, self.total_resolved_ts_bytes)
-    }
-}
-
 pub fn channel(conn_id: ConnId, buffer: usize, memory_quota: Arc<MemoryQuota>) -> (Sink, Drain) {
-    let (unbounded_sender, unbounded_receiver) = unbounded();
-    let (bounded_sender, bounded_receiver) = bounded(buffer);
+    let (tx, rx) = unbounded();
     (
         Sink {
-            unbounded_sender,
-            bounded_sender,
+            tx,
             memory_quota: memory_quota.clone(),
         },
         Drain {
-            unbounded_receiver,
-            bounded_receiver,
+            rx,
             memory_quota,
             conn_id,
+            buffer: None,
         },
     )
 }
@@ -288,7 +227,7 @@ impl Sink {
         }
 
         let event = ObservedEvent::new(Instant::now_coarse(), event, bytes);
-        match self.tx.unbounded_send(ob_event) {
+        match self.tx.unbounded_send(event) {
             Ok(_) => Ok(()),
             Err(e) => {
                 self.memory_quota.free(bytes);
@@ -300,7 +239,7 @@ impl Sink {
     pub async fn send_all(&mut self, events: Vec<CdcEvent>) -> Result<(), SendError> {
         let now = Instant::now_coarse();
         let mut bytes = 0;
-        for event in scaned_events {
+        for event in events {
             bytes += event.size();
             let event = ObservedEvent::new(now, event, bytes);
             if let Err(e) = self.tx.feed(event).await {
@@ -320,88 +259,56 @@ pub struct Drain {
     rx: UnboundedReceiver<ObservedEvent>,
     memory_quota: Arc<MemoryQuota>,
     conn_id: ConnId,
+
+    buffer: Option<ChangeDataEvent>,
 }
 
-impl<'a> Drain {
-    pub fn drain(&'a mut self) -> impl Stream<Item = (CdcEvent, usize)> + 'a {
-        let observed = (&mut self.unbounded_receiver).map(|x| (x.created, x.event, x.size));
-        let scaned = (&mut self.bounded_receiver).filter_map(|x| {
-            if x.truncated.load(Ordering::Acquire) {
-                self.memory_quota.free(x.size as _);
-                return futures::future::ready(None);
-            }
-            futures::future::ready(Some((x.created, x.event, x.size)))
-        });
-        self.rx.
+impl Stream for Drain {
+    type Item = ChangeDataEvent;
 
-        stream::select(scaned, observed).map(|(start, mut event, size)| {
-            CDC_EVENTS_PENDING_DURATION.observe(start.saturating_elapsed_secs() * 1000.0);
-            if let CdcEvent::Barrier(ref mut barrier) = event {
-                if let Some(barrier) = barrier.take() {
-                    // Unset barrier when it is received.
-                    barrier(());
-                }
-            }
-            (event, size)
-        })
-    }
-
-    // Forwards contents to the sink, simulates StreamExt::forward.
-    pub async fn forward<S, E>(&'a mut self, sink: &mut S) -> Result<(), E>
-    where
-        S: futures::Sink<(ChangeDataEvent, WriteFlags), Error = E> + Unpin,
-    {
-        sink.send_all
-
-        let total_event_bytes = CDC_GRPC_ACCUMULATE_MESSAGE_BYTES.with_label_values(&["event"]);
-        let total_resolved_ts_bytes =
-            CDC_GRPC_ACCUMULATE_MESSAGE_BYTES.with_label_values(&["resolved_ts"]);
-
-        let memory_quota = self.memory_quota.clone();
-        let mut chunks = self.drain().ready_chunks(CDC_EVENT_MAX_COUNT);
-        while let Some(events) = chunks.next().await {
-            let mut bytes = 0;
-            let mut batcher = EventBatcher::with_capacity(CDC_RESP_MAX_BATCH_COUNT);
-            events.into_iter().for_each(|(e, size)| {
-                bytes += size;
-                batcher.push(e);
-            });
-            let (event_bytes, resolved_ts_bytes) = batcher.statistics();
-            let resps = batcher.build();
-            let resps_len = resps.len();
-            // Events are about to be sent, free pending events memory counter.
-            memory_quota.free(bytes as _);
-            for (i, e) in resps.into_iter().enumerate() {
-                // Buffer messages and flush them at once.
-                let write_flags = WriteFlags::default().buffer_hint(i + 1 != resps_len);
-                sink.feed((e, write_flags)).await?;
-            }
-            sink.flush().await?;
-            total_event_bytes.inc_by(event_bytes as u64);
-            total_resolved_ts_bytes.inc_by(resolved_ts_bytes as u64);
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let mut this = self.as_mut();
+        if let Some(event) = this.buffer.take() {
+            return Poll::Ready(Some(event));
         }
-        Ok(())
+
+        let mut event = ChangeDataEvent::default();
+        let mut size = 0;
+        Poll::Ready(loop {
+            if let Some(item)= ready!(Pin::new(&mut this.rx).poll_next(cx)) {
+                this.memory_quota.free(item.size);
+                CDC_EVENTS_PENDING_DURATION.observe(item.created.saturating_elapsed_secs() * 1000.0);
+                match item.event {
+                    CdcEvent::Barrier(Some(barrier)) => barrier(()),
+                    CdcEvent::Barrier(None) => {},
+                    CdcEvent::ResolvedTs(x) => {
+                        let mut ts_event = ChangeDataEvent::default();
+                        ts_event.set_resolved_ts(x);
+                        self.buffer = Some(ts_event);
+                        break Some(event);
+                    }
+                    CdcEvent::Event(x) => {
+                        event.mut_events().push(x);
+                        size += item.size;
+                        if size >= CDC_RESP_MAX_BYTES {
+                            break Some(event);
+                        }
+                    }
+                }
+            } else {
+                break None;
+            }
+        })
     }
 }
 
 impl Drop for Drain {
     fn drop(&mut self) {
-        self.bounded_receiver.close();
-        self.unbounded_receiver.close();
+        self.rx.close();
         let start = Instant::now();
-        let mut total_bytes = 0;
-        let mut drain = Box::pin(async move {
-            let conn_id = self.conn_id;
-            let memory_quota = self.memory_quota.clone();
-            let mut drain = self.drain();
-            while let Some((_, bytes)) = drain.next().await {
-                total_bytes += bytes;
-            }
-            memory_quota.free(total_bytes);
-            info!("drop Drain finished, free memory"; "conn_id" => ?conn_id,
-                "freed_bytes" => total_bytes, "inuse_bytes" => memory_quota.in_use());
+        block_on(async {
+            while self.next().await.is_some() {}
         });
-        block_on(&mut drain);
         let takes = start.saturating_elapsed();
         if takes >= Duration::from_millis(200) {
             warn!("drop Drain too slow"; "takes" => ?takes);
