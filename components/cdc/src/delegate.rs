@@ -819,6 +819,9 @@ impl Delegate {
             {
                 continue;
             }
+            if TxnSource::is_lightning_physical_import(row.txn_source) {
+                continue;
+            }
             if current_rows_size + row_size >= CDC_EVENT_MAX_BYTES {
                 rows.push(Vec::with_capacity(entries_len));
                 current_rows_size = 0;
@@ -973,6 +976,9 @@ impl Delegate {
                 if TxnSource::is_lossy_ddl_reorg_source_set(v.txn_source)
                     || downstream.filter_loop && TxnSource::is_cdc_write_source_set(v.txn_source)
                 {
+                    continue;
+                }
+                if TxnSource::is_lightning_physical_import(v.txn_source) {
                     continue;
                 }
 
