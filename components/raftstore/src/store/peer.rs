@@ -2734,19 +2734,19 @@ where
             // If the snapshot gen precheck feature is enabled, the leader needs
             // to complete a precheck with the target follower before the
             // snapshot generation.
-            if ctx.feature_gate.can_enable(SNAP_GEN_PRECHECK_FEATURE) {
-                // Continuously send snap gen precheck requests to the follower
-                // until an approval is received.
-                if let Some(to_peer) = self.get_store().need_gen_snap_precheck() {
-                    self.send_snap_gen_precheck_request(ctx, &to_peer);
-                }
-            } else {
-                let gen_task = self.mut_store().take_gen_snap_task().unwrap();
-                self.pending_request_snapshot_count
-                    .fetch_add(1, Ordering::SeqCst);
-                ctx.apply_router
-                    .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
-            }
+            // if ctx.feature_gate.can_enable(SNAP_GEN_PRECHECK_FEATURE) {
+            //     // Continuously send snap gen precheck requests to the follower
+            //     // until an approval is received.
+            //     if let Some(to_peer) = self.get_store().need_gen_snap_precheck() {
+            //         self.send_snap_gen_precheck_request(ctx, &to_peer);
+            //     }
+            // } else {
+            let gen_task = self.mut_store().take_gen_snap_task().unwrap();
+            self.pending_request_snapshot_count
+                .fetch_add(1, Ordering::SeqCst);
+            ctx.apply_router
+                .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
+            // }
         }
     }
 
