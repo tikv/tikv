@@ -7,7 +7,12 @@ use std::{
 
 use ordered_float::OrderedFloat;
 
-const DEFAULT_UPDATE_ROUND_INTERVALS: Duration = Duration::from_secs(10);
+/// Interval for updating the slow score.
+const UPDATE_INTERVALS: Duration = Duration::from_secs(10);
+/// Recovery intervals for the slow score.
+/// If the score has reached 100 and there is no timeout inspecting requests
+/// during this interval, the score will go back to 1 in at least 5min.
+const RECOVERY_INTERVALS: Duration = Duration::from_secs(60 * 5);
 // Slow score is a value that represents the speed of a store and ranges in [1,
 // 100]. It is maintained in the AIMD way.
 // If there are some inspecting requests timeout during a round, by default the
@@ -46,7 +51,7 @@ impl SlowScore {
 
             inspect_interval,
             ratio_thresh: OrderedFloat(0.1),
-            min_ttr: DEFAULT_UPDATE_ROUND_INTERVALS.mul_f64(30.0),
+            min_ttr: RECOVERY_INTERVALS,
             last_record_time: Instant::now(),
             last_update_time: Instant::now(),
             round_ticks: 30,
@@ -65,10 +70,14 @@ impl SlowScore {
 
             inspect_interval,
             ratio_thresh: OrderedFloat(timeout_ratio),
-            min_ttr: DEFAULT_UPDATE_ROUND_INTERVALS.mul_f64(30.0),
+            min_ttr: RECOVERY_INTERVALS,
             last_record_time: Instant::now(),
             last_update_time: Instant::now(),
-            round_ticks: DEFAULT_UPDATE_ROUND_INTERVALS.div_duration_f64(inspect_interval) as u64,
+            // The minimal round ticks is 1 for kvdb.
+            round_ticks: cmp::max(
+                UPDATE_INTERVALS.div_duration_f64(inspect_interval) as u64,
+                1_u64,
+            ),
             last_tick_id: 0,
             last_tick_finished: true,
         }
@@ -270,5 +279,9 @@ mod tests {
             OrderedFloat(6.0),
             slow_score.update_impl(Duration::from_secs(10))
         );
+
+        // Test too large inspect interval.
+        let slow_score = SlowScore::new_with_extra_config(Duration::from_secs(11), 0.1);
+        assert_eq!(slow_score.round_ticks, 1);
     }
 }

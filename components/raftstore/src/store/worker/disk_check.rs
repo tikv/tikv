@@ -19,10 +19,9 @@ pub fn init_disk_check_worker() -> Worker {
     // recent request; older requests become stale and irrelevant. To avoid
     // unnecessary accumulation of multiple requests, we set a small
     // `pending_capacity` for the disk check worker.
-    let worker = WorkerBuilder::new("disk-check-worker")
-        .pending_capacity(2)
-        .create();
-    worker
+    WorkerBuilder::new("disk-check-worker")
+        .pending_capacity(3)
+        .create()
 }
 
 /// A simple inspector to measure the latency of disk IO.

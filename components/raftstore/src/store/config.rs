@@ -371,6 +371,8 @@ pub struct Config {
     // Interval to inspect the latency of flushing raft logs for slow store detection.
     pub inspect_interval: ReadableDuration,
     // Interval to inspect the latency of flushes on kvdb for slow store detection.
+    // If the kvdb uses the same mount path with raftdb, the default value will be
+    // optimized to `0` to avoid duplicated inspection.
     #[doc(hidden)]
     #[online_config(hidden)]
     pub inspect_kvdb_interval: ReadableDuration,

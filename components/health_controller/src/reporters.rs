@@ -47,8 +47,8 @@ pub struct RaftstoreReporterConfig {
 
 /// A unified slow score that combines multiple slow scores.
 ///
-/// It's used to calculate the final slow score of a store.
-/// It contains multiple factors, each factor represents a different aspect of
+/// It calculates the final slow score of a store by picking the maximum
+/// score among multiple factors. Each factor represents a different aspect of
 /// the store's performance. Typically, we have two factors: Raft Disk I/O and
 /// KvDB Disk I/O. If there are more factors in the future, we can add them
 /// here.
