@@ -1427,7 +1427,12 @@ impl<E: KvEngine> SstImporter<E> {
         self.dir.list_ssts()
     }
 
-    pub fn new_txn_writer(&self, db: &E, meta: SstMeta, txn_source: u64) -> Result<TxnSstWriter<E>> {
+    pub fn new_txn_writer(
+        &self,
+        db: &E,
+        meta: SstMeta,
+        txn_source: u64,
+    ) -> Result<TxnSstWriter<E>> {
         let mut default_meta = meta.clone();
         default_meta.set_cf_name(CF_DEFAULT.to_owned());
         let default_path = self.dir.join_for_write(&default_meta)?;
