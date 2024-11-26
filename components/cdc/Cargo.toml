@@ -61,7 +61,7 @@ thiserror = "1.0"
 tikv = { workspace = true }
 tikv_kv = { workspace = true }
 tikv_util = { workspace = true }
-tokio = { version = "1.5", features = ["rt-multi-thread", "time"] }
+tokio = { version = "1.41", features = ["rt-multi-thread", "time"] }
 txn_types = { workspace = true }
 
 [dev-dependencies]

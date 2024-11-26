@@ -17,6 +17,7 @@ use kvproto::{
     kvrpcpb::ApiVersion,
 };
 use tikv_util::{error, info, memory::MemoryQuota, warn, worker::*};
+use tokio::runtime::{self, Runtime};
 
 use crate::{
     channel::{channel, Sink, CDC_CHANNLE_CAPACITY},
@@ -248,16 +249,28 @@ impl EventFeedHeaders {
 pub struct Service {
     scheduler: Scheduler<Task>,
     memory_quota: Arc<MemoryQuota>,
+    workers: Arc<Runtime>,
 }
 
 impl Service {
     /// Create a ChangeData service.
     ///
     /// It requires a scheduler of an `Endpoint` in order to schedule tasks.
-    pub fn new(scheduler: Scheduler<Task>, memory_quota: Arc<MemoryQuota>) -> Service {
+    pub fn new(
+        scheduler: Scheduler<Task>,
+        memory_quota: Arc<MemoryQuota>,
+        workers: usize,
+    ) -> Service {
+        let workers = runtime::Builder::new_multi_thread()
+            .thread_name("cdc-responsers")
+            .worker_threads(workers)
+            .build()
+            .unwrap();
+        let workers = Arc::new(workers);
         Service {
             scheduler,
             memory_quota,
+            workers,
         }
     }
 
@@ -472,7 +485,8 @@ impl Service {
         });
 
         let peer = ctx.peer();
-        ctx.spawn(async move {
+        let workers = self.workers.clone();
+        workers.spawn(async move {
             #[cfg(feature = "failpoints")]
             sleep_before_drain_change_event().await;
             if let Err(e) = event_drain.forward(&mut sink).await {
