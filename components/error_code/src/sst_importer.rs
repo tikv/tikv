@@ -16,6 +16,7 @@ define_error_codes!(
     ENGINE => ("Engine", "", ""),
     CANNOT_READ_EXTERNAL_STORAGE => ("CannotReadExternalStorage", "", ""),
     WRONG_KEY_PREFIX => ("WrongKeyPrefix", "", ""),
+    WRONG_REWRITE_RULES => ("WrongRewriteRules", "", ""),
     BAD_FORMAT => ("BadFormat", "", ""),
     FILE_CONFLICT => ("FileConflict", "", ""),
     TTL_NOT_ENABLED => ("TtlNotEnabled", "", ""),

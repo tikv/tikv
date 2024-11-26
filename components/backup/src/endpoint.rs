@@ -407,8 +407,9 @@ impl BackupRange {
         let mut next_file_start_key = <[_]>::first(&self.ranges)
             .and_then(|(start_key, _)| start_key.clone())
             .map_or_else(Vec::new, |k| k.into_raw().unwrap());
-        // Notice that make sure the last key of each SST and the end key of the range from the 
-        // same table, so that sst importer can rewrite the range end key correctly.
+        // Notice that make sure the last key of each SST and the end key of the range
+        // from the same table, so that sst importer can rewrite the range end
+        // key correctly.
         let mut last_key: &Option<Key> = &None;
         let mut writer = writer_builder
             .build(next_file_start_key.clone(), storage_name)
@@ -445,7 +446,9 @@ impl BackupRange {
                 if writer.need_split_keys() {
                     let this_start_key = next_file_start_key;
                     let this_end_key = if first_scan {
-                        next_file_start_key = start_key.as_ref().map_or_else(Vec::new, |k| k.to_raw().unwrap());
+                        next_file_start_key = start_key
+                            .as_ref()
+                            .map_or_else(Vec::new, |k| k.to_raw().unwrap());
                         // the last_key can not be empty.
                         last_key.as_ref().unwrap().to_raw().unwrap()
                     } else {
@@ -1568,7 +1571,7 @@ pub mod tests {
     };
     use tikv_util::{config::ReadableSize, store::new_peer};
     use tokio::time;
-    use txn_types::{SHORT_VALUE_MAX_LEN, Write, WriteType};
+    use txn_types::{Write, WriteType, SHORT_VALUE_MAX_LEN};
 
     use super::*;
 
@@ -2453,17 +2456,29 @@ pub mod tests {
     fn write_kv(engine: &RocksEngine, key: Vec<u8>) {
         let ctx = Context::default();
         let encoded_key = Key::from_raw(&key).append_ts(TimeStamp::from(1));
-        let write = Write::new(WriteType::Put, TimeStamp::from(1), Some(b"short_value".to_vec()));
-        engine.put_cf(&ctx, CF_WRITE, encoded_key, write.as_ref().to_bytes()).unwrap();
+        let write = Write::new(
+            WriteType::Put,
+            TimeStamp::from(1),
+            Some(b"short_value".to_vec()),
+        );
+        engine
+            .put_cf(&ctx, CF_WRITE, encoded_key, write.as_ref().to_bytes())
+            .unwrap();
     }
 
     fn write_rows(engine: &RocksEngine, table_id: i64, handle_offset: i64) {
         let ctx = Context::default();
-        for handle in handle_offset+1..handle_offset+2*(BACKUP_BATCH_LIMIT as i64) {
+        for handle in handle_offset + 1..handle_offset + 2 * (BACKUP_BATCH_LIMIT as i64) {
             let raw_key = table::encode_row_key(table_id, handle);
             let encoded_key = Key::from_raw(&raw_key).append_ts(TimeStamp::from(1));
-            let write = Write::new(WriteType::Put, TimeStamp::from(1), Some(b"short_value".to_vec()));
-            engine.put_cf(&ctx, CF_WRITE, encoded_key, write.as_ref().to_bytes()).unwrap();
+            let write = Write::new(
+                WriteType::Put,
+                TimeStamp::from(1),
+                Some(b"short_value".to_vec()),
+            );
+            engine
+                .put_cf(&ctx, CF_WRITE, encoded_key, write.as_ref().to_bytes())
+                .unwrap();
         }
     }
 
@@ -2577,10 +2592,7 @@ pub mod tests {
                 table::encode_index_seek_key(1, 2, b""),
                 table::encode_index_seek_key(1, 2, &[u8::MAX]),
             ),
-            (
-                table::encode_row_key(1, 0),
-                table::encode_row_key(1, 100),
-            ),
+            (table::encode_row_key(1, 0), table::encode_row_key(1, 100)),
             (
                 table::encode_row_key(1, 300),
                 table::encode_row_key(1, i64::MAX),
@@ -2593,10 +2605,7 @@ pub mod tests {
                 table::encode_index_seek_key(2, 2, b""),
                 table::encode_index_seek_key(2, 2, &[u8::MAX]),
             ),
-            (
-                table::encode_row_key(2, 0),
-                table::encode_row_key(2, 1035),
-            ),
+            (table::encode_row_key(2, 0), table::encode_row_key(2, 1035)),
             (
                 table::encode_row_key(2, 1035),
                 table::encode_row_key(2, i64::MAX),
@@ -2621,18 +2630,17 @@ pub mod tests {
                 table::encode_index_seek_key(5, 2, b""),
                 table::encode_index_seek_key(5, 2, b"2"),
             ),
-            (
-                table::encode_row_key(5, 100),
-                table::encode_row_key(5, 300),
-            ),
+            (table::encode_row_key(5, 100), table::encode_row_key(5, 300)),
             (
                 table::encode_row_key(5, 500),
                 table::encode_row_key(5, i64::MAX),
             ),
-
             (vec![u8::MAX, 0], vec![u8::MAX, 2]),
             (vec![u8::MAX, 3], vec![u8::MAX, u8::MAX]),
-            (vec![u8::MAX, u8::MAX, u8::MAX], vec![u8::MAX, u8::MAX, u8::MAX, 1]),
+            (
+                vec![u8::MAX, u8::MAX, u8::MAX],
+                vec![u8::MAX, u8::MAX, u8::MAX, 1],
+            ),
         ];
 
         let tmp = TempDir::new().unwrap();

@@ -6113,6 +6113,7 @@ dependencies = [
  "test_sst_importer",
  "test_util",
  "thiserror",
+ "tidb_query_datatype",
  "tikv_alloc",
  "tikv_util",
  "tokio",
