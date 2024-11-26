@@ -5,12 +5,8 @@ use std::{
     time::Duration,
 };
 
-<<<<<<< HEAD
 use file_system::calc_crc32;
-use futures::executor::block_on;
-=======
 use futures::{executor::block_on, stream::StreamExt};
->>>>>>> 4776689cbd (import: call sink.fail() when failed to send message by grpc (#17834))
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{disk_usage::DiskUsage, import_sstpb::*, tikvpb_grpc::TikvClient};
 use tempfile::{Builder, TempDir};
