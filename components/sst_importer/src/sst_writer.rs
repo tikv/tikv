@@ -322,6 +322,22 @@ mod tests {
     }
 
     #[test]
+    fn test_new_txn_writer_with_lightning_txn_source() {
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let importer =
+            SstImporter::<RocksEngine>::new(&cfg, &importer_dir, None, ApiVersion::V1, false).unwrap();
+        let db_path = importer_dir.path().join("db");
+        let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
+
+        let mut meta = SstMeta::default();
+        meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
+
+        let writer = SstImporter::new_txn_writer(&importer, &db, meta, 1 << 16);
+        assert_eq!(writer.unwrap().txn_source, 1 << 16);
+    }
+
+    #[test]
     fn test_write_txn_sst() {
         let (mut w, _handle) = new_writer(SstImporter::new_txn_writer, ApiVersion::V1);
         let mut batch = WriteBatch::default();

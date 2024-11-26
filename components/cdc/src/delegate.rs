@@ -1829,6 +1829,13 @@ mod tests {
     }
 
     #[test]
+    fn test_downstream_filter_lightning_physical_import() {
+        let mut txn_source = TxnSource::default();
+        txn_source.set_lightning_physical_import();
+        test_downstream_txn_source_filter(txn_source, false);
+    }
+
+    #[test]
     fn test_downstream_filter_lossy_ddl_entires() {
         let mut txn_source = TxnSource::default();
         txn_source.set_lossy_ddl_reorg_source(1);
