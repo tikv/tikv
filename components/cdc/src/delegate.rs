@@ -29,9 +29,7 @@ use kvproto::{
     },
     kvrpcpb::ExtraOp as TxnExtraOp,
     metapb::{Region, RegionEpoch},
-    raft_cmdpb::{
-        AdminCmdType, AdminRequest, AdminResponse, CmdType, DeleteRequest, PutRequest, Request,
-    },
+    raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CmdType, PutRequest, Request},
 };
 use raftstore::{
     coprocessor::{Cmd, CmdBatch, ObserveHandle, ObserveId},
@@ -249,13 +247,13 @@ impl Downstream {
 // In `PendingLock`,  `key` is encoded.
 pub enum PendingLock {
     Track { key: Key, start_ts: MiniLock },
-    Untrack { key: Key },
+    Untrack { key: Key, start_ts: TimeStamp },
 }
 
 impl HeapSize for PendingLock {
     fn approximate_heap_size(&self) -> usize {
         match self {
-            PendingLock::Track { key, .. } | PendingLock::Untrack { key } => {
+            PendingLock::Track { key, .. } | PendingLock::Untrack { key, .. } => {
                 key.approximate_heap_size()
             }
         }
@@ -393,7 +391,7 @@ impl Delegate {
         Ok(lock_count_modify)
     }
 
-    fn pop_lock(&mut self, key: Key) -> Result<isize> {
+    fn pop_lock(&mut self, key: Key, start_ts: TimeStamp) -> Result<isize> {
         let mut lock_count_modify = 0;
         match &mut self.lock_tracker {
             LockTracker::Pending => unreachable!(),
@@ -401,14 +399,17 @@ impl Delegate {
                 let bytes = key.approximate_heap_size();
                 self.memory_quota.alloc(bytes)?;
                 CDC_PENDING_BYTES_GAUGE.add(bytes as _);
-                locks.push(PendingLock::Untrack { key });
+                locks.push(PendingLock::Untrack { key, start_ts });
             }
             LockTracker::Prepared { locks, .. } => {
-                if let Some((key, _)) = locks.remove_entry(&key) {
-                    let bytes = key.approximate_heap_size();
-                    self.memory_quota.free(bytes);
-                    CDC_PENDING_BYTES_GAUGE.sub(bytes as _);
-                    lock_count_modify = -1;
+                if let BTreeMapEntry::Occupied(x) = locks.entry(key) {
+                    if x.get().ts == start_ts {
+                        let (key, _) = x.remove_entry();
+                        let bytes = key.approximate_heap_size();
+                        self.memory_quota.free(bytes);
+                        CDC_PENDING_BYTES_GAUGE.sub(bytes as _);
+                        lock_count_modify = -1;
+                    }
                 }
             }
         }
@@ -446,15 +447,13 @@ impl Delegate {
                         assert!(x.get().generation <= start_ts.generation);
                     }
                 },
-                PendingLock::Untrack { key } => match locks.entry(key.clone()) {
-                    BTreeMapEntry::Vacant(..) => {
-                        warn!("untrack lock not found when try to finish prepare lock tracker";
-                        "key" => %key);
+                PendingLock::Untrack { key, start_ts } => {
+                    if let BTreeMapEntry::Occupied(x) = locks.entry(key) {
+                        if x.get().ts == start_ts {
+                            x.remove();
+                        }
                     }
-                    BTreeMapEntry::Occupied(x) => {
-                        x.remove();
-                    }
-                },
+                }
             }
         }
         self.memory_quota.free(free_bytes);
@@ -792,18 +791,23 @@ impl Delegate {
         requests: Vec<Request>,
         flags: WriteBatchFlags,
         old_value_cb: &OldValueCallback,
+        old_value_cache: &mut OldValueCache,
+        statistics: &mut Statistics,
     ) -> Result<()> {
         debug_assert_eq!(self.txn_extra_op.load(), TxnExtraOp::ReadOldValue);
+
+        let read_old_value = |row: &mut EventRow, read_old_ts| -> Result<()> {
+            let key = Key::from_raw(&row.key).append_ts(row.start_ts.into());
+            let old_value = old_value_cb(key, read_old_ts, old_value_cache, statistics)?;
+            row.old_value = old_value.unwrap_or_default();
+            Ok(())
+        };
 
         let mut rows_builder = RowsBuilder::default();
         rows_builder.is_one_pc = flags.contains(WriteBatchFlags::ONE_PC);
         for mut req in requests {
             match req.get_cmd_type() {
-                CmdType::Put => {
-                    self.sink_put(req.take_put(), &mut rows_builder, old_value_cb)
-                        .await?
-                }
-                CmdType::Delete => self.sink_delete(req.take_delete(), &mut rows_builder)?,
+                CmdType::Put => self.sink_put(req.take_put(), &mut rows_builder).await?,
                 _ => debug!("cdc skip other command";
                     "region_id" => self.region_id,
                     "command" => ?req),
@@ -812,7 +816,7 @@ impl Delegate {
 
         let (raws, txns) = rows_builder.finish_build();
         self.sink_downstream_raw(raws, index)?;
-        self.sink_downstream_tidb(txns)?;
+        self.sink_downstream_tidb(txns, read_old_value)?;
         Ok(())
     }
 
@@ -852,7 +856,11 @@ impl Delegate {
         Ok(())
     }
 
-    fn sink_downstream_tidb(&mut self, entries: Vec<(EventRow, isize)>) -> Result<()> {
+    fn sink_downstream_tidb(
+        &mut self,
+        mut entries: Vec<RowInBuilding>,
+        mut read_old_value: impl FnMut(&mut EventRow, TimeStamp) -> Result<()>,
+    ) -> Result<()> {
         let mut downstreams = Vec::with_capacity(self.downstreams.len());
         for d in &mut self.downstreams {
             if d.kv_api == ChangeDataRequestKvApi::TiDb && d.state.load().ready_for_change_events()
@@ -866,14 +874,24 @@ impl Delegate {
 
         for downstream in downstreams {
             let mut filtered_entries = Vec::with_capacity(entries.len());
-            for (entry, lock_count_modify) in &entries {
-                if !downstream.observed_range.contains_raw_key(&entry.key) {
+            for RowInBuilding {
+                v,
+                lock_count_modify,
+                needs_old_value,
+                ..
+            } in &mut entries
+            {
+                if !downstream.observed_range.contains_raw_key(&v.key) {
                     continue;
+                }
+                if let Some(read_old_ts) = needs_old_value {
+                    read_old_value(v, *read_old_ts)?;
+                    *needs_old_value = None;
                 }
 
                 if *lock_count_modify != 0 && downstream.lock_heap.is_some() {
                     let lock_heap = downstream.lock_heap.as_mut().unwrap();
-                    match lock_heap.entry(entry.start_ts.into()) {
+                    match lock_heap.entry(v.start_ts.into()) {
                         BTreeMapEntry::Vacant(x) => {
                             x.insert(*lock_count_modify);
                         }
@@ -882,7 +900,7 @@ impl Delegate {
                             assert!(
                                 *x.get() >= 0,
                                 "lock_count_modify should never be negative, start_ts: {}",
-                                entry.start_ts
+                                v.start_ts
                             );
                             if *x.get() == 0 {
                                 x.remove();
@@ -891,14 +909,13 @@ impl Delegate {
                     }
                 }
 
-                if TxnSource::is_lossy_ddl_reorg_source_set(entry.txn_source)
-                    || downstream.filter_loop
-                        && TxnSource::is_cdc_write_source_set(entry.txn_source)
+                if TxnSource::is_lossy_ddl_reorg_source_set(v.txn_source)
+                    || downstream.filter_loop && TxnSource::is_cdc_write_source_set(v.txn_source)
                 {
                     continue;
                 }
 
-                filtered_entries.push(entry.clone());
+                filtered_entries.push(v.clone());
             }
             if filtered_entries.is_empty() {
                 continue;
@@ -917,17 +934,12 @@ impl Delegate {
         Ok(())
     }
 
-    async fn sink_put(
-        &mut self,
-        put: PutRequest,
-        rows_builder: &mut RowsBuilder,
-        old_value_cb: &OldValueCallback,
-    ) -> Result<()> {
+    async fn sink_put(&mut self, put: PutRequest, rows_builder: &mut RowsBuilder) -> Result<()> {
         let key_mode = ApiV2::parse_key_mode(put.get_key());
         if key_mode == KeyMode::Raw {
             self.sink_raw_put(put, rows_builder)
         } else {
-            self.sink_txn_put(put, old_value_cb, rows_builder).await
+            self.sink_txn_put(put, rows_builder).await
         }
     }
 
@@ -938,27 +950,11 @@ impl Delegate {
         Ok(())
     }
 
-    async fn sink_txn_put(
-        &mut self,
-        mut put: PutRequest,
-        old_value_cb: &OldValueCallback,
-        rows: &mut RowsBuilder,
-    ) -> Result<()> {
-        let read_old_value = |row: &mut EventRow,
-                              cache: &mut OldValueCache,
-                              ts: TimeStamp,
-                              stats: &mut Statistics|
-         -> Result<()> {
-            let key = Key::from_raw(&row.key).append_ts(row.start_ts.into());
-            let old_value = old_value_cb(key, ts, cache, stats)?;
-            row.old_value = old_value.unwrap_or_default();
-            Ok(())
-        };
-
+    async fn sink_txn_put(&mut self, mut put: PutRequest, rows: &mut RowsBuilder) -> Result<()> {
         match put.cf.as_str() {
             "write" => {
                 let key = Key::from_encoded_slice(&put.key).truncate_ts().unwrap();
-                let row = rows.txns_by_key.entry(key).or_default();
+                let row = rows.txns_by_key.entry(key.clone()).or_default();
                 if decode_write(
                     put.take_key(),
                     &put.value,
@@ -970,10 +966,14 @@ impl Delegate {
                 }
 
                 if rows.is_one_pc {
+                    assert_eq!(row.v.r_type, EventLogType::Commit);
                     set_event_row_type(&mut row.v, EventLogType::Committed);
-                    let old_ts = TimeStamp::from(row.v.commit_ts).prev();
-                    let mut cache = self.old_value_cache.lock().await;
-                    read_old_value(&mut row.v, &mut *cache, old_ts, &mut self.old_value_stats)?;
+                    let read_old_ts = TimeStamp::from(row.v.commit_ts).prev();
+                    row.needs_old_value = Some(read_old_ts);
+                } else {
+                    assert_eq!(row.lock_count_modify, 0);
+                    let start_ts = TimeStamp::from(row.v.start_ts);
+                    row.lock_count_modify = self.pop_lock(key, start_ts)?;
                 }
             }
             "lock" => {
@@ -991,37 +991,14 @@ impl Delegate {
                 assert_eq!(row.lock_count_modify, 0);
                 let mini_lock = MiniLock::new(row.v.start_ts, txn_source, generation);
                 row.lock_count_modify = self.push_lock(key, mini_lock)?;
-
-                let old_ts = std::cmp::max(for_update_ts, row.v.start_ts.into());
-                let mut cache = self.old_value_cache.lock().await;
-                read_old_value(&mut row.v, &mut *cache, old_ts, &mut self.old_value_stats)?;
+                let read_old_ts = std::cmp::max(for_update_ts, row.v.start_ts.into());
+                row.needs_old_value = Some(read_old_ts);
             }
             "" | "default" => {
                 let key = Key::from_encoded(put.take_key()).truncate_ts().unwrap();
                 let row = rows.txns_by_key.entry(key).or_default();
                 decode_default(put.take_value(), &mut row.v, &mut row.has_value);
             }
-            other => panic!("invalid cf {}", other),
-        }
-        Ok(())
-    }
-
-    fn sink_delete(&mut self, mut delete: DeleteRequest, rows: &mut RowsBuilder) -> Result<()> {
-        // RawKV (API v2, and only API v2 can use CDC) has no lock and will write to
-        // default cf only.
-        match delete.cf.as_str() {
-            "lock" => {
-                let key = Key::from_encoded(delete.take_key());
-                let lock_count_modify = self.pop_lock(key.clone())?;
-                if lock_count_modify != 0 {
-                    // If lock_count_modify isn't 0 it means the deletion must come from a commit
-                    // or rollback, instead of any `Unlock` operations.
-                    let row = rows.txns_by_key.get_mut(&key).unwrap();
-                    assert_eq!(row.lock_count_modify, 0);
-                    row.lock_count_modify = lock_count_modify;
-                }
-            }
-            "" | "default" | "write" => {}
             other => panic!("invalid cf {}", other),
         }
         Ok(())
@@ -1285,7 +1262,6 @@ impl Delegate {
 
 #[derive(Default)]
 struct RowsBuilder {
-    // map[Key]->(row, has_value, lock_count_modify)
     txns_by_key: HashMap<Key, RowInBuilding>,
 
     raws: Vec<EventRow>,
@@ -1298,25 +1274,23 @@ struct RowInBuilding {
     v: EventRow,
     has_value: bool,
     lock_count_modify: isize,
+    needs_old_value: Option<TimeStamp>,
 }
 
 impl RowsBuilder {
-    fn finish_build(self) -> (Vec<EventRow>, Vec<(EventRow, isize)>) {
+    fn finish_build(self) -> (Vec<EventRow>, Vec<RowInBuilding>) {
         let mut txns = Vec::with_capacity(self.txns_by_key.len());
-        for RowInBuilding {
-            v,
-            has_value,
-            lock_count_modify,
-        } in self.txns_by_key.into_values()
-        {
-            if v.r_type == EventLogType::Prewrite && v.op_type == EventRowOpType::Put && !has_value
+        for row in self.txns_by_key.into_values() {
+            if row.v.r_type == EventLogType::Prewrite
+                && row.v.op_type == EventRowOpType::Put
+                && !row.has_value
             {
                 // It's possible that a prewrite command only contains lock but without
                 // default. It's not documented by classic Percolator but introduced with
                 // Large-Transaction. Those prewrites are not complete, we must skip them.
                 continue;
             }
-            txns.push((v, lock_count_modify));
+            txns.push(row);
         }
         (self.raws, txns)
     }
@@ -1906,9 +1880,7 @@ mod tests {
                 false,
             )
             .to_bytes();
-            delegate
-                .sink_txn_put(put, |_, _| Ok(()), &mut rows_builder)
-                .unwrap();
+            delegate.sink_txn_put(put, &mut rows_builder).unwrap();
         }
         assert_eq!(rows_builder.txns_by_key.len(), 5);
 
@@ -1926,7 +1898,9 @@ mod tests {
         downstream.get_state().store(DownstreamState::Normal);
         delegate.add_downstream(downstream);
         let (_, entries) = rows_builder.finish_build();
-        delegate.sink_downstream_tidb(entries).unwrap();
+        delegate
+            .sink_downstream_tidb(entries, |_, _| Ok(()))
+            .unwrap();
 
         let (mut tx, mut rx) = futures::channel::mpsc::unbounded();
         let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -1973,9 +1947,7 @@ mod tests {
                 lock = lock.set_txn_source(txn_source.into());
             }
             put.value = lock.to_bytes();
-            delegate
-                .sink_txn_put(put, |_, _| Ok(()), &mut rows_builder)
-                .unwrap();
+            delegate.sink_txn_put(put, &mut rows_builder).unwrap();
         }
         assert_eq!(rows_builder.txns_by_key.len(), 5);
 
@@ -1993,7 +1965,9 @@ mod tests {
         downstream.get_state().store(DownstreamState::Normal);
         delegate.add_downstream(downstream);
         let (_, entries) = rows_builder.finish_build();
-        delegate.sink_downstream_tidb(entries).unwrap();
+        delegate
+            .sink_downstream_tidb(entries, |_, _| Ok(()))
+            .unwrap();
 
         let (mut tx, mut rx) = futures::channel::mpsc::unbounded();
         let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -2085,14 +2059,21 @@ mod tests {
         assert_eq!(delegate.push_lock(k1, MiniLock::from_ts(100)).unwrap(), 0);
         assert_eq!(quota.in_use(), 100);
 
-        delegate.pop_lock(Key::from_raw(b"key1")).unwrap();
+        delegate
+            .pop_lock(Key::from_raw(b"key1"), TimeStamp::from(99))
+            .unwrap();
         assert_eq!(quota.in_use(), 117);
+
+        delegate
+            .pop_lock(Key::from_raw(b"key1"), TimeStamp::from(100))
+            .unwrap();
+        assert_eq!(quota.in_use(), 134);
 
         let mut k2 = Vec::with_capacity(200);
         k2.extend_from_slice(Key::from_raw(b"key2").as_encoded());
         let k2 = Key::from_encoded(k2);
         assert_eq!(delegate.push_lock(k2, MiniLock::from_ts(100)).unwrap(), 0);
-        assert_eq!(quota.in_use(), 317);
+        assert_eq!(quota.in_use(), 334);
 
         let mut scaned_locks = BTreeMap::default();
         scaned_locks.insert(Key::from_raw(b"key1"), MiniLock::from_ts(100));
@@ -2103,8 +2084,12 @@ mod tests {
             .unwrap();
         assert_eq!(quota.in_use(), 34);
 
-        delegate.pop_lock(Key::from_raw(b"key2")).unwrap();
-        delegate.pop_lock(Key::from_raw(b"key3")).unwrap();
+        delegate
+            .pop_lock(Key::from_raw(b"key2"), TimeStamp::from(100))
+            .unwrap();
+        delegate
+            .pop_lock(Key::from_raw(b"key3"), TimeStamp::from(100))
+            .unwrap();
         assert_eq!(quota.in_use(), 0);
 
         let v = delegate
@@ -2126,7 +2111,9 @@ mod tests {
         assert!(delegate.init_lock_tracker());
         assert!(!delegate.init_lock_tracker());
 
-        delegate.pop_lock(Key::from_raw(b"key1")).unwrap();
+        delegate
+            .pop_lock(Key::from_raw(b"key1"), TimeStamp::zero())
+            .unwrap();
         let mut scaned_locks = BTreeMap::default();
         scaned_locks.insert(Key::from_raw(b"key2"), MiniLock::from_ts(100));
         delegate

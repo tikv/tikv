@@ -248,7 +248,6 @@ macro_rules! impl_from_future_send_error {
 impl_from_future_send_error! {
     FuturesSendError,
     TrySendError<ObservedEvent>,
-    TrySendError<ScanedEvent>,
 }
 
 impl From<MemoryQuotaExceeded> for SendError {
@@ -257,19 +256,10 @@ impl From<MemoryQuotaExceeded> for SendError {
     }
 }
 
-pub struct ObservedEvent {
+struct ObservedEvent {
     pub created: Instant,
     pub event: CdcEvent,
     pub size: usize,
-}
-
-pub struct ScanedEvent {
-    pub created: Instant,
-    pub event: CdcEvent,
-    pub size: usize,
-    // Incremental scan can be canceled by region errors. We must check it when draing
-    // an event instead of emit it to `Sink`.
-    pub truncated: Arc<AtomicBool>,
 }
 
 impl ObservedEvent {
@@ -282,17 +272,6 @@ impl ObservedEvent {
     }
 }
 
-impl ScanedEvent {
-    fn new(created: Instant, event: CdcEvent, size: usize, truncated: Arc<AtomicBool>) -> Self {
-        ScanedEvent {
-            created,
-            event,
-            size,
-            truncated,
-        }
-    }
-}
-
 #[derive(Clone)]
 pub struct Sink {
     tx: UnboundedSender<ObservedEvent>,
@@ -300,62 +279,37 @@ pub struct Sink {
 }
 
 impl Sink {
-    /// Only observed events can be sent by `unbounded_send`.
-    pub fn send(&self, observed_event: CdcEvent, force: bool) -> Result<(), SendError> {
-        let bytes = observed_event.size();
+    pub fn send(&self, event: CdcEvent, force: bool) -> Result<(), SendError> {
+        let bytes = event.size();
         if force {
             self.memory_quota.alloc_force(bytes);
         } else {
             self.memory_quota.alloc(bytes)?;
         }
 
-
-        // Try it's best to send error events.
-        let bytes = if !force {
-            observed_event.size() as usize
-        } else {
-            0
-        };
-        if bytes != 0 {
-        }
-        let ob_event = ObservedEvent::new(Instant::now_coarse(), observed_event, bytes);
-        match self.unbounded_sender.unbounded_send(ob_event) {
+        let event = ObservedEvent::new(Instant::now_coarse(), event, bytes);
+        match self.tx.unbounded_send(ob_event) {
             Ok(_) => Ok(()),
             Err(e) => {
-                // Free quota if send fails.
                 self.memory_quota.free(bytes);
                 Err(SendError::from(e))
             }
         }
     }
 
-    /// Only scaned events can be sent by `send_all`.
-    pub async fn send_all(
-        &mut self,
-        scaned_events: Vec<CdcEvent>,
-        truncated: Arc<AtomicBool>,
-    ) -> Result<(), SendError> {
-        // Allocate quota in advance.
-        let mut total_bytes = 0;
-        for event in &scaned_events {
-            let bytes = event.size();
-            total_bytes += bytes;
-        }
-        self.memory_quota.alloc(total_bytes as _)?;
-
+    pub async fn send_all(&mut self, events: Vec<CdcEvent>) -> Result<(), SendError> {
         let now = Instant::now_coarse();
+        let mut bytes = 0;
         for event in scaned_events {
-            let bytes = event.size() as usize;
-            let sc_event = ScanedEvent::new(now, event, bytes, truncated.clone());
-            if let Err(e) = self.bounded_sender.feed(sc_event).await {
-                // Free quota if send fails.
-                self.memory_quota.free(total_bytes as _);
+            bytes += event.size();
+            let event = ObservedEvent::new(now, event, bytes);
+            if let Err(e) = self.tx.feed(event).await {
+                self.memory_quota.free(bytes);
                 return Err(SendError::from(e));
             }
         }
-        if let Err(e) = self.bounded_sender.flush().await {
-            // Free quota if send fails.
-            self.memory_quota.free(total_bytes as _);
+        if let Err(e) = self.tx.flush().await {
+            self.memory_quota.free(bytes);
             return Err(SendError::from(e));
         }
         Ok(())
@@ -363,8 +317,7 @@ impl Sink {
 }
 
 pub struct Drain {
-    unbounded_receiver: UnboundedReceiver<ObservedEvent>,
-    bounded_receiver: Receiver<ScanedEvent>,
+    rx: UnboundedReceiver<ObservedEvent>,
     memory_quota: Arc<MemoryQuota>,
     conn_id: ConnId,
 }
@@ -379,6 +332,7 @@ impl<'a> Drain {
             }
             futures::future::ready(Some((x.created, x.event, x.size)))
         });
+        self.rx.
 
         stream::select(scaned, observed).map(|(start, mut event, size)| {
             CDC_EVENTS_PENDING_DURATION.observe(start.saturating_elapsed_secs() * 1000.0);
@@ -397,6 +351,8 @@ impl<'a> Drain {
     where
         S: futures::Sink<(ChangeDataEvent, WriteFlags), Error = E> + Unpin,
     {
+        sink.send_all
+
         let total_event_bytes = CDC_GRPC_ACCUMULATE_MESSAGE_BYTES.with_label_values(&["event"]);
         let total_resolved_ts_bytes =
             CDC_GRPC_ACCUMULATE_MESSAGE_BYTES.with_label_values(&["resolved_ts"]);
