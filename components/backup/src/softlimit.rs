@@ -14,8 +14,8 @@ use tokio::sync::{Semaphore, SemaphorePermit};
 
 use super::Result;
 
-/// SoftLimit is an simple "worker pool" just for
-/// restricting the number of workers can running concurrently.
+/// SoftLimit is a simple "worker pool" just for
+/// restricting the number of workers can run concurrently.
 /// It is simply a wrapper over [tokio::sync::Semaphore],
 /// with a counter recording the current permits already and would grant.
 struct SoftLimitInner {
