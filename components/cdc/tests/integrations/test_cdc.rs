@@ -1131,8 +1131,8 @@ fn test_old_value_multi_changefeeds_impl<F: KvFormat>() {
     let (mut req_tx_2, event_feed_wrap_2, receive_event_2) =
         new_event_feed(suite.get_region_cdc_client(1));
     block_on(req_tx_2.send((req, WriteFlags::default()))).unwrap();
-
     sleep_ms(1000);
+
     // Insert value
     let mut m1 = Mutation::default();
     let k1 = b"xk1".to_vec();
