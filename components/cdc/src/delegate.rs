@@ -38,7 +38,7 @@ use tikv_util::{
     warn,
 };
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteBatchFlags, WriteRef, WriteType};
-use txn_types::txn_source::TxnSource;
+
 use crate::{
     channel::{CdcEvent, SendError, Sink, CDC_EVENT_MAX_BYTES},
     endpoint::Advance,
@@ -46,6 +46,7 @@ use crate::{
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
     service::{Conn, ConnId, FeatureGate, RequestId},
+    txn_source::TxnSource,
     Error, Result,
 };
 
