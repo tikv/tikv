@@ -10,6 +10,7 @@ use std::{
 use health_controller::types::LatencyInspector;
 use tikv_util::{
     time::Instant,
+    warn,
     worker::{Builder as WorkerBuilder, Runnable, Worker},
 };
 
@@ -51,7 +52,7 @@ impl Runner {
     /// Generate a dummy Runner.
     pub fn dummy() -> Self {
         Self {
-            target: PathBuf::new(),
+            target: PathBuf::from("./").join(Self::DISK_IO_LATENCY_INSPECT_FILENAME),
         }
     }
 
@@ -94,8 +95,45 @@ impl Runnable for Runner {
                 if let Some(latency) = self.inspect() {
                     inspector.record_apply_process(latency);
                     inspector.finish();
+                } else {
+                    warn!("failed to inspect disk io latency");
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc::sync_channel;
+
+    use super::*;
+
+    #[test]
+    fn test_disk_check_runner() {
+        let mut runner = Runner::dummy();
+        let (tx, rx) = sync_channel(1);
+        let tx_1 = tx.clone();
+        let inspector = LatencyInspector::new(
+            1,
+            Box::new(move |_, duration| {
+                let dur = duration.sum();
+                tx_1.send(dur).unwrap();
+            }),
+        );
+        runner.run(Task::InspectLatency { inspector });
+        let latency = rx.recv().unwrap();
+        assert!(latency > Duration::from_secs(0));
+
+        runner.target = PathBuf::default(); // non-exist path
+        let inspector = LatencyInspector::new(
+            2,
+            Box::new(move |_, duration| {
+                let dur = duration.sum();
+                tx.send(dur).unwrap();
+            }),
+        );
+        runner.run(Task::InspectLatency { inspector });
+        rx.recv().unwrap_err(); // the inspector should not receive any latency
     }
 }
