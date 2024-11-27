@@ -45,7 +45,7 @@ impl DeamonRuntimeHandle {
         Fut: Future<Output = ()> + Send + 'static,
     {
         let runtime = match self.inner.upgrade() {
-            Some(runtime) => runtime, 
+            Some(runtime) => runtime,
             None => {
                 error!("Daemon runtime has been dropped. Task will be ignored.");
                 return;
@@ -54,7 +54,10 @@ impl DeamonRuntimeHandle {
 
         let (handle, tracker) = {
             let lock_guard = runtime.lock().unwrap();
-            let inner = lock_guard.inner.as_ref().expect("Runtime inner should exist");
+            let inner = lock_guard
+                .inner
+                .as_ref()
+                .expect("Runtime inner should exist");
             (inner.handle().clone(), lock_guard.tracker.clone())
         };
 
@@ -66,7 +69,7 @@ impl DeamonRuntimeHandle {
         Fut: Future<Output = ()> + Send + 'static,
     {
         let runtime = match self.inner.upgrade() {
-            Some(runtime) => runtime, 
+            Some(runtime) => runtime,
             None => {
                 error!("Daemon runtime has been dropped. Task will be ignored.");
                 return;
@@ -75,7 +78,10 @@ impl DeamonRuntimeHandle {
 
         let (handle, tracker) = {
             let lock_guard = runtime.lock().unwrap();
-            let inner = lock_guard.inner.as_ref().expect("Runtime inner should exist");
+            let inner = lock_guard
+                .inner
+                .as_ref()
+                .expect("Runtime inner should exist");
             (inner.handle().clone(), lock_guard.tracker.clone())
         };
 
