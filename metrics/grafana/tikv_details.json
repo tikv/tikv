@@ -9587,11 +9587,11 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "tikv_raftstore_slow_score{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}",
+              "expr": "tikv_raftstore_slow_score{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"} by (instance, type)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 2,
-              "legendFormat": "{{instance}}",
+              "legendFormat": "{{instance}}-{{type}}",
               "refId": "A",
               "step": 4
             }

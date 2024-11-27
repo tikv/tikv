@@ -13,7 +13,10 @@ use engine_traits::{
 use kvproto::{kvrpcpb::ApiVersion, metapb, raft_serverpb::RegionLocalState};
 use raftstore::{
     coprocessor::CoprocessorHost,
-    store::{bootstrap_store, fsm, fsm::store::StoreMeta, AutoSplitController, SnapManager},
+    store::{
+        bootstrap_store, fsm, fsm::store::StoreMeta, AutoSplitController, DiskCheckRunner,
+        SnapManager,
+    },
 };
 use raftstore_v2::router::PeerMsg;
 use resource_metering::CollectorRegHandle;
@@ -121,6 +124,7 @@ fn test_node_bootstrap_with_prepared_data() {
         ConcurrencyManager::new(1.into()),
         CollectorRegHandle::new_for_test(),
         None,
+        DiskCheckRunner::dummy(),
         GrpcServiceManager::dummy(),
         Arc::new(AtomicU64::new(0)),
     )
