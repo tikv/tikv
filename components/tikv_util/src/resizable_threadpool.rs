@@ -162,38 +162,43 @@ impl ResizableRuntime {
     // TODO: after tokio supports adjusting thread pool size(https://github.com/tokio-rs/tokio/issues/3329),
     //   adapt it.
     pub fn adjust_with(&mut self, new_size: usize) {
-        let mut runtime_guard = self.current_runtime.lock().unwrap();
-
         if self.size == new_size {
             return;
         }
 
-        self.count += 1;
-        let thread_name = format!("{}-v{}-{}", self.thread_name, self.count, new_size);
+        let old_runtime: DeamonRuntime;
+        {
+            let mut runtime_guard = self.current_runtime.lock().unwrap();
+            if self.size == new_size {
+                return;
+            }
 
-        let new_runtime = (self.replace_pool_rule)(new_size, &thread_name)
-            .unwrap_or_else(|_| panic!("failed to create tokio runtime {}", thread_name));
+            self.count += 1;
+            let thread_name = format!("{}-v{}-{}", self.thread_name, self.count, new_size);
 
-        let old_runtime = std::mem::replace(
-            &mut *runtime_guard,
-            DeamonRuntime {
-                inner: Some(new_runtime),
-                tracker: TaskTracker::new(),
-            },
-        );
+            let new_runtime = (self.replace_pool_rule)(new_size, &thread_name)
+                .unwrap_or_else(|_| panic!("failed to create tokio runtime {}", thread_name));
+
+            old_runtime = std::mem::replace(
+                &mut *runtime_guard,
+                DeamonRuntime {
+                    inner: Some(new_runtime),
+                    tracker: TaskTracker::new(),
+                },
+            );
+            info!(
+                "Resizing thread pool";
+                "thread_name" => &thread_name,
+                "new_size" => new_size
+            );
+            self.size = new_size;
+        }
+
         self.gc_runtime.spawn(async move {
             old_runtime.tracker.close();
             old_runtime.tracker.wait().await;
             drop(old_runtime);
         });
-
-        info!(
-            "Resizing thread pool";
-            "thread_name" => thread_name.as_str(),
-            "new_size" => new_size
-        );
-
-        self.size = new_size;
         (self.after_adjust)(new_size);
     }
 }
@@ -243,7 +248,7 @@ mod test {
         assert!(!threads.gc_runtime.tracker.is_empty());
         assert_eq!(COUNTER.load(Ordering::SeqCst), threads.size());
 
-        sleep(Duration::from_secs(11));
+        sleep(Duration::from_secs(1));
         assert!(threads.gc_runtime.tracker.is_empty());
 
         // New task should be scheduled to the new runtime
@@ -279,63 +284,62 @@ mod test {
         assert_eq!(COUNTER.load(Ordering::SeqCst), threads.size());
         assert!(!threads.gc_runtime.tracker.is_empty());
 
-        // The running runtime should not be cleaned after 10s
-        sleep(Duration::from_secs(11));
+        sleep(Duration::from_secs(1));
         assert!(!threads.gc_runtime.tracker.is_empty());
         assert_eq!(COUNTER.load(Ordering::SeqCst), 8);
     }
 
     #[test]
     fn test_drop() {
+        const LONG_ENOUGH_TIME : std::time::Duration= Duration::from_secs(100);
         let start = Instant::now();
         let threads =
             ResizableRuntime::new(4, "test", Box::new(replace_pool_rule), Box::new(|_| {}));
         let handle = threads.handle();
         let handle_clone = handle.clone();
         handle.spawn(async {
-            sleep(Duration::from_secs(10));
+            sleep(LONG_ENOUGH_TIME);
         });
         let thread = thread::spawn(move || {
             handle_clone.block_on(async {
-                sleep(Duration::from_secs(10));
+                sleep(LONG_ENOUGH_TIME);
             });
         });
         drop(threads);
         handle.spawn(async {
-            sleep(Duration::from_secs(10));
+            sleep(LONG_ENOUGH_TIME);
         });
         handle.block_on(async {
-            sleep(Duration::from_secs(10));
+            sleep(LONG_ENOUGH_TIME);
         });
         thread.join().unwrap();
-        assert!(Instant::now() - start < Duration::from_secs(10));
+
+        assert!(Instant::now() - start < Duration::from_secs(5));
     }
 
     #[test]
     fn test_multi_tasks() {
         let threads = Arc::new(ResizableRuntime::new(
-            32,
+            8,
             "test",
             Box::new(replace_pool_rule),
             Box::new(|_| {}),
         ));
         let handle = threads.handle();
 
-        let handles: Vec<_> = (0..32)
+        let handles: Vec<_> = (0..2000)
             .map(|i| {
                 let runtime_handle = handle.clone();
                 thread::spawn(move || {
                     if i % 2 == 0 {
                         runtime_handle.block_on(async move {
-                            println!("Thread {} sleeping", i);
-                            sleep(Duration::from_secs(10));
-                            println!("Thread {} finished sleeping", i);
+                            sleep(Duration::from_millis(500));
+                            println!("Thread {} finished", i);
                         });
                     } else {
                         runtime_handle.spawn(async move {
-                            println!("Thread {} sleeping", i);
-                            sleep(Duration::from_secs(10));
-                            println!("Thread {} finished sleeping", i);
+                            sleep(Duration::from_millis(500));
+                            println!("Thread {} finished", i);
                         })
                     }
                 })
