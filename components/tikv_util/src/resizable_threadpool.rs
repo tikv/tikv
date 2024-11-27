@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, Weak};
 use futures::Future;
 use tokio::{
     io::Result as TokioResult,
-    runtime::{Builder, Handle, Runtime},
+    runtime::{Builder, Runtime},
 };
 use tokio_util::task::task_tracker::TaskTracker;
 
@@ -45,16 +45,20 @@ impl DeamonRuntimeHandle {
         Fut: Future<Output = ()> + Send + 'static,
     {
         let runtime = match self.inner.upgrade() {
-            Some(runtime) => runtime,
-            None => return,
+            Some(runtime) => runtime, 
+            None => {
+                error!("Daemon runtime has been dropped. Task will be ignored.");
+                return;
+            }
         };
 
-        let lock_guard = runtime.lock().unwrap();
-        lock_guard
-            .inner
-            .as_ref()
-            .unwrap()
-            .spawn(lock_guard.tracker.track_future(fut));
+        let (handle, tracker) = {
+            let lock_guard = runtime.lock().unwrap();
+            let inner = lock_guard.inner.as_ref().expect("Runtime inner should exist");
+            (inner.handle().clone(), lock_guard.tracker.clone())
+        };
+
+        handle.spawn(tracker.track_future(fut));
     }
 
     pub fn block_on<Fut>(&self, fut: Fut)
@@ -62,17 +66,19 @@ impl DeamonRuntimeHandle {
         Fut: Future<Output = ()> + Send + 'static,
     {
         let runtime = match self.inner.upgrade() {
-            Some(runtime) => runtime,
-            None => return,
+            Some(runtime) => runtime, 
+            None => {
+                error!("Daemon runtime has been dropped. Task will be ignored.");
+                return;
+            }
         };
 
-        let handle: Handle;
-        let tracker: TaskTracker;
-        {
+        let (handle, tracker) = {
             let lock_guard = runtime.lock().unwrap();
-            handle = lock_guard.inner.as_ref().unwrap().handle().clone();
-            tracker = lock_guard.tracker.clone();
-        }
+            let inner = lock_guard.inner.as_ref().expect("Runtime inner should exist");
+            (inner.handle().clone(), lock_guard.tracker.clone())
+        };
+
         handle.block_on(tracker.track_future(fut));
     }
 }
@@ -149,11 +155,11 @@ impl ResizableRuntime {
 
     // TODO: after tokio supports adjusting thread pool size(https://github.com/tokio-rs/tokio/issues/3329),
     //   adapt it.
-    pub fn adjust_with(&mut self, new_size: usize) -> usize {
+    pub fn adjust_with(&mut self, new_size: usize) {
         let mut runtime_guard = self.current_runtime.lock().unwrap();
 
         if self.size == new_size {
-            return new_size;
+            return;
         }
 
         self.count += 1;
@@ -183,8 +189,6 @@ impl ResizableRuntime {
 
         self.size = new_size;
         (self.after_adjust)(new_size);
-
-        new_size
     }
 }
 
