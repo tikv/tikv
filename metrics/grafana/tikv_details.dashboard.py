@@ -6023,22 +6023,66 @@ def RocksDB() -> RowPanel:
                     ),
                     target(
                         expr=expr_operator(
-                            expr_sum_rate(
-                                "tikv_engine_bloom_efficiency",
-                                label_selectors=[
-                                    'db="$db"',
-                                    'type="bloom_prefix_useful"',
-                                ],
-                                by_labels=[],  # override default by instance.
+                            expr_operator(
+                                expr_sum_rate(
+                                    "tikv_engine_bloom_efficiency",
+                                    label_selectors=[
+                                        'db="$db"',
+                                        'type="last_level_seek_filtered"',
+                                    ],
+                                    by_labels=[],  # override default by instance.
+                                ),
+                                "+",
+                                expr_sum_rate(
+                                    "tikv_engine_bloom_efficiency",
+                                    label_selectors=[
+                                        'db="$db"',
+                                        'type="non_last_level_seek_filtered"',
+                                    ],
+                                    by_labels=[],  # override default by instance.
+                                ),
                             ),
                             "/",
-                            expr_sum_rate(
-                                "tikv_engine_bloom_efficiency",
-                                label_selectors=[
-                                    'db="$db"',
-                                    'type="bloom_prefix_checked"',
-                                ],
-                                by_labels=[],  # override default by instance.
+                            expr_operator(
+                                expr_operator(
+                                    expr_sum_rate(
+                                        "tikv_engine_bloom_efficiency",
+                                        label_selectors=[
+                                            'db="$db"',
+                                            'type="last_level_seek_filtered"',
+                                        ],
+                                        by_labels=[],  # override default by instance.
+                                    ),
+                                    "+",
+                                    expr_sum_rate(
+                                        "tikv_engine_bloom_efficiency",
+                                        label_selectors=[
+                                            'db="$db"',
+                                            'type="non_last_level_seek_filtered"',
+                                        ],
+                                        by_labels=[],  # override default by instance.
+                                    ),
+                                ),
+                                "+",
+                                expr_operator(
+                                    expr_sum_rate(
+                                        "tikv_engine_bloom_efficiency",
+                                        label_selectors=[
+                                            'db="$db"',
+                                            'type="last_level_seek_filter_match"',
+                                        ],
+                                        by_labels=[],  # override default by instance.
+                                    ),
+                                    "+",
+                                    expr_sum_rate(
+                                        "tikv_engine_bloom_efficiency",
+                                        label_selectors=[
+                                            'db="$db"',
+                                            'type="non_last_level_seek_filter_match"',
+                                        ],
+                                        by_labels=[],  # override default by instance.
+                                    ),
+                                ),
                             ),
                         ),
                         legend_format="bloom prefix",
