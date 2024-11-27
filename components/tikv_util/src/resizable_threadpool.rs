@@ -175,6 +175,11 @@ impl ResizableRuntime {
         {
             let mut runtime_guard = self.current_runtime.lock().unwrap();
             if self.size == new_size || self.version >= new_version {
+                warn!(
+                    "Resize task dropped";
+                    "thread_name" => &thread_name,
+                    "new_size" => new_size
+                );
                 return;
             }
 
