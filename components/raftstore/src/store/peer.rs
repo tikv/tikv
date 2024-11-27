@@ -85,7 +85,7 @@ use super::{
         ConfChangeKind, Lease, LeaseState, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER,
     },
     worker::BucketStatsInfo,
-    DestroyPeerJob, LocalReadContext,
+    DestroyPeerJob, LocalReadContext, SnapState,
 };
 use crate::{
     coprocessor::{
@@ -2730,23 +2730,30 @@ where
         // snapshot and subsequent conf changes.
         self.maybe_cancel_gen_snap_task(None);
 
+        debug!("handle_gen_snap_task");
+
         if self.get_store().has_gen_snap_task() {
-            // If the snapshot gen precheck feature is enabled, the leader needs
-            // to complete a precheck with the target follower before the
-            // snapshot generation.
-            // if ctx.feature_gate.can_enable(SNAP_GEN_PRECHECK_FEATURE) {
-            //     // Continuously send snap gen precheck requests to the follower
-            //     // until an approval is received.
-            //     if let Some(to_peer) = self.get_store().need_gen_snap_precheck() {
-            //         self.send_snap_gen_precheck_request(ctx, &to_peer);
-            //     }
-            // } else {
+            debug!("has gen snap task");
+            debug_assert!(self.get_store().has_gen_snap_task());
+            // Handle generating state: transition to snapshot generation
             let gen_task = self.mut_store().take_gen_snap_task().unwrap();
             self.pending_request_snapshot_count
                 .fetch_add(1, Ordering::SeqCst);
             ctx.apply_router
                 .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
-            // }
+        } else if self.get_store().is_prechecking_snapshot() {
+            debug_assert!(!self.get_store().has_gen_snap_task());
+            // Handle prechecking state: send precheck request
+            if let Some(to_peer) = self.mut_store().need_gen_snap_precheck() {
+                info!("send snap precheck request";   
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id());
+                self.send_snap_gen_precheck_request(ctx, &to_peer);
+            } else {
+                // skip
+            }
+        } else {
+            // do nothing
         }
     }
 
