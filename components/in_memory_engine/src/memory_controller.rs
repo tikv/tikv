@@ -91,6 +91,11 @@ impl MemoryController {
     }
 
     #[inline]
+    pub(crate) fn stop_load_threshold(&self) -> usize {
+        self.config.value().stop_load_threshold()
+    }
+
+    #[inline]
     pub(crate) fn evict_threshold(&self) -> usize {
         self.config.value().evict_threshold()
     }

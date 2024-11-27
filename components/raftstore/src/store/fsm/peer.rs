@@ -88,7 +88,7 @@ use crate::{
         local_metrics::{RaftMetrics, TimeTracker},
         memory::*,
         metrics::*,
-        msg::{Callback, ExtCallback, InspectedRaftMessage},
+        msg::{Callback, CampaignType, ExtCallback, InspectedRaftMessage},
         peer::{
             ConsistencyState, Peer, PersistSnapshotResult, StaleState,
             TRANSFER_LEADER_COMMAND_REPLY_CTX,
@@ -133,6 +133,10 @@ enum DelayReason {
 /// in most case.
 const MAX_REGIONS_IN_ERROR: usize = 10;
 const REGION_SPLIT_SKIP_MAX_COUNT: usize = 3;
+/// Limits the request size that can be batched in a single RaftCmdRequest.
+// todo: this fugure maybe changed to a more suitable value.
+#[allow(clippy::identity_op)]
+const MAX_BATCH_SIZE_LIMIT: u64 = 1 * 1024 * 1024;
 const UNSAFE_RECOVERY_STATE_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub const MAX_PROPOSAL_SIZE_RATIO: f64 = 0.4;
@@ -442,8 +446,13 @@ where
         // No batch request whose size exceed 20% of raft_entry_max_size,
         // so total size of request in batch_raft_request would not exceed
         // (40% + 20%) of raft_entry_max_size
+        // Also, to prevent the write batch size from becoming too large when
+        // raft_entry_max_size is set too high (all requests in a RaftCmdRequest will be
+        // written in one RocksDB write batch), we use MAX_APPLY_BATCH_SIZE to
+        // limit the number of requests batched within a single RaftCmdRequest.
         if req.get_requests().is_empty()
             || req_size as u64 > (cfg.raft_entry_max_size.0 as f64 * 0.2) as u64
+            || (self.batch_req_size + req_size as u64) > MAX_BATCH_SIZE_LIMIT
         {
             return false;
         }
@@ -638,6 +647,12 @@ where
         };
 
         for m in msgs.drain(..) {
+            // skip handling remain messages if fsm is destroyed. This can aviod handling
+            // arbitary messages(e.g. CasualMessage::ForceCompactRaftLogs) that may need
+            // to read raft logs which maybe lead to panic.
+            if self.fsm.stopped {
+                break;
+            }
             distribution[m.discriminant()] += 1;
             match m {
                 PeerMsg::RaftMessage(msg, sent_time) => {
@@ -1292,8 +1307,18 @@ where
                     self.maybe_destroy();
                 }
             }
-            CasualMessage::Campaign => {
-                let _ = self.fsm.peer.raft_group.campaign();
+            CasualMessage::Campaign(campaign_type) => {
+                match campaign_type {
+                    CampaignType::ForceLeader => {
+                        // Forcely campaign to be the leader of the region.
+                        let _ = self.fsm.peer.raft_group.campaign();
+                    }
+                    CampaignType::UnsafeSplitCampaign => {
+                        // If the message is sent by the parent, it means that the parent is already
+                        // the leader of the parent region.
+                        let _ = self.fsm.peer.maybe_campaign(true);
+                    }
+                }
                 self.fsm.has_ready = true;
             }
             CasualMessage::InMemoryEngineLoadRegion {
@@ -1890,7 +1915,9 @@ where
             // follower state
             let _ = self.ctx.router.send(
                 self.region_id(),
-                PeerMsg::CasualMessage(Box::new(CasualMessage::Campaign)),
+                PeerMsg::CasualMessage(Box::new(CasualMessage::Campaign(
+                    CampaignType::ForceLeader,
+                ))),
             );
         }
         self.fsm.has_ready = true;
@@ -2007,6 +2034,24 @@ where
                     self.on_enter_force_leader();
                 }
             }
+        }
+    }
+
+    #[inline]
+    /// Check whether the peer has any uncleared records in the
+    /// uncampaigned_new_regions list.
+    fn check_uncampaigned_regions(&mut self) {
+        fail_point!("on_skip_check_uncampaigned_regions", |_| {});
+        let has_uncompaigned_regions = !self
+            .fsm
+            .peer
+            .uncampaigned_new_regions
+            .as_ref()
+            .map_or(false, |r| r.is_empty());
+        // If the peer has any uncleared records in the uncampaigned_new_regions list,
+        // and there has valid leader in the region, it's safely to clear the records.
+        if has_uncompaigned_regions && self.fsm.peer.has_valid_leader() {
+            self.fsm.peer.uncampaigned_new_regions = None;
         }
     }
 
@@ -2844,6 +2889,8 @@ where
         }
 
         result?;
+
+        self.check_uncampaigned_regions();
 
         if self.fsm.peer.any_new_peer_catch_up(from_peer_id) {
             self.fsm.peer.heartbeat_pd(self.ctx);
@@ -3931,6 +3978,7 @@ where
             )
             .flush()
             .when_done(move || {
+                fail_point!("destroy_region_before_gc_flush");
                 if let Err(e) = mb.force_send(PeerMsg::SignificantMsg(Box::new(
                     SignificantMsg::RaftLogGcFlushed,
                 ))) {
@@ -3942,6 +3990,7 @@ where
                         region_id, peer_id, e
                     );
                 }
+                fail_point!("destroy_region_after_gc_flush");
             });
             if let Err(e) = self.ctx.raftlog_gc_scheduler.schedule(task) {
                 if tikv_util::thread_group::is_shutdown(!cfg!(test)) {
@@ -4446,7 +4495,7 @@ where
         );
         self.fsm.peer.post_split();
 
-        let is_leader = self.fsm.peer.is_leader();
+        let (is_leader, is_follower) = (self.fsm.peer.is_leader(), self.fsm.peer.is_follower());
         if is_leader {
             if share_source_region_size {
                 self.fsm.peer.set_approximate_size(share_size);
@@ -4612,6 +4661,18 @@ where
                 .unwrap();
 
             if !campaigned {
+                // The new peer has not campaigned yet, record it for later campaign.
+                if is_follower && self.fsm.peer.region().get_peers().len() > 1 {
+                    if self.fsm.peer.uncampaigned_new_regions.is_none() {
+                        self.fsm.peer.uncampaigned_new_regions = Some(vec![]);
+                    }
+                    self.fsm
+                        .peer
+                        .uncampaigned_new_regions
+                        .as_mut()
+                        .unwrap()
+                        .push(new_region_id);
+                }
                 if let Some(msg) = meta
                     .pending_msgs
                     .swap_remove_front(|m| m.get_to_peer() == &meta_peer)
@@ -5962,7 +6023,7 @@ where
         }
         fail_point!("on_raft_log_gc_tick_1", self.fsm.peer_id() == 1, |_| {});
         fail_point!("on_raft_gc_log_tick", |_| {});
-        debug_assert!(!self.fsm.stopped);
+        assert!(!self.fsm.stopped);
 
         // As leader, we would not keep caches for the peers that didn't response
         // heartbeat in the last few seconds. That happens probably because
@@ -7562,5 +7623,40 @@ mod tests {
         for flag in cbs_flags {
             assert!(flag.load(Ordering::Acquire));
         }
+    }
+
+    #[test]
+    fn test_batch_raft_cmd_request_builder_size_limit() {
+        let mut cfg = Config::default();
+        cfg.raft_entry_max_size = ReadableSize::gb(1);
+        let mut q = Request::default();
+        let mut builder = BatchRaftCmdRequestBuilder::<KvTestEngine>::new();
+
+        let mut req = RaftCmdRequest::default();
+        let mut put = PutRequest::default();
+        put.set_key(b"aaaa".to_vec());
+        let val = (0..200_000).map(|_| 0).collect_vec();
+        put.set_value(val);
+        q.set_cmd_type(CmdType::Put);
+        q.set_put(put);
+        req.mut_requests().push(q.clone());
+        let _ = q.take_put();
+        let req_size = req.compute_size();
+        assert!(builder.can_batch(&cfg, &req, req_size));
+        let cb = Callback::write_ext(Box::new(move |_| {}), None, None);
+        let cmd = RaftCommand::new(req.clone(), cb);
+        builder.add(cmd, req_size);
+
+        let mut req = RaftCmdRequest::default();
+        let mut put = PutRequest::default();
+        put.set_key(b"aaaa".to_vec());
+        let val = (0..900_000).map(|_| 0).collect_vec();
+        put.set_value(val);
+        q.set_cmd_type(CmdType::Put);
+        q.set_put(put);
+        req.mut_requests().push(q.clone());
+        let _ = q.take_put();
+        let req_size = req.compute_size();
+        assert!(!builder.can_batch(&cfg, &req, req_size));
     }
 }
