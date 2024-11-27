@@ -106,7 +106,7 @@ impl ResizableRuntime {
         replace_pool_rule: Box<dyn Fn(usize, &str) -> TokioResult<Runtime> + Send + Sync>,
         after_adjust: Box<dyn Fn(usize) + Send + Sync>,
     ) -> Self {
-        let init_name = format!("{}-v0-{}", thread_name, thread_size);
+        let init_name = format!("{}-v0", thread_name);
         let keeper = Builder::new_multi_thread()
             .worker_threads(1)
             .thread_name("rtkp")
@@ -166,19 +166,16 @@ impl ResizableRuntime {
             return;
         }
 
+        let thread_name = format!("{}-v{}", self.thread_name, self.count + 1);
+        let new_runtime = (self.replace_pool_rule)(new_size, &thread_name)
+            .unwrap_or_else(|_| panic!("failed to create tokio runtime {}", thread_name));
+
         let old_runtime: DeamonRuntime;
-        let thread_name: String;
         {
             let mut runtime_guard = self.current_runtime.lock().unwrap();
             if self.size == new_size {
                 return;
             }
-
-            self.count += 1;
-            thread_name = format!("{}-v{}-{}", self.thread_name, self.count, new_size);
-
-            let new_runtime = (self.replace_pool_rule)(new_size, &thread_name)
-                .unwrap_or_else(|_| panic!("failed to create tokio runtime {}", thread_name));
 
             old_runtime = std::mem::replace(
                 &mut *runtime_guard,
@@ -188,6 +185,7 @@ impl ResizableRuntime {
                 },
             );
             self.size = new_size;
+            self.count += 1;
         }
 
         info!(
@@ -207,6 +205,7 @@ impl ResizableRuntime {
 #[cfg(test)]
 mod test {
     use std::{
+        future,
         sync::atomic::{AtomicUsize, Ordering},
         thread::{self, sleep},
         time::Duration,
@@ -276,9 +275,7 @@ mod test {
         let handle = threads.handle();
         // infinite loop should not be cleaned
         handle.spawn(async {
-            loop {
-                sleep(Duration::from_secs(10));
-            }
+            future::pending::<()>().await;
         });
 
         threads.adjust_with(8);
@@ -289,26 +286,25 @@ mod test {
 
     #[test]
     fn test_drop() {
-        const LONG_ENOUGH_TIME: std::time::Duration = Duration::from_secs(100);
         let start = Instant::now();
         let threads =
             ResizableRuntime::new(4, "test", Box::new(replace_pool_rule), Box::new(|_| {}));
         let handle = threads.handle();
         let handle_clone = handle.clone();
         handle.spawn(async {
-            sleep(LONG_ENOUGH_TIME);
+            future::pending::<()>().await;
         });
         let thread = thread::spawn(move || {
             handle_clone.block_on(async {
-                sleep(LONG_ENOUGH_TIME);
+                future::pending::<()>().await;
             });
         });
         drop(threads);
         handle.spawn(async {
-            sleep(LONG_ENOUGH_TIME);
+            future::pending::<()>().await;
         });
         handle.block_on(async {
-            sleep(LONG_ENOUGH_TIME);
+            future::pending::<()>().await;
         });
         thread.join().unwrap();
 
