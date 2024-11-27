@@ -91,8 +91,8 @@ impl DeamonRuntimeHandle {
 
 pub struct ResizableRuntime {
     size: usize,
-    count: usize,
-    thread_name: String,
+    version: usize,
+    thread_prefix: String,
     gc_runtime: DeamonRuntime,
     current_runtime: Arc<Mutex<DeamonRuntime>>,
     replace_pool_rule: Box<dyn Fn(usize, &str) -> TokioResult<Runtime> + Send + Sync>,
@@ -102,11 +102,11 @@ pub struct ResizableRuntime {
 impl ResizableRuntime {
     pub fn new(
         thread_size: usize,
-        thread_name: &str,
+        thread_prefix: &str,
         replace_pool_rule: Box<dyn Fn(usize, &str) -> TokioResult<Runtime> + Send + Sync>,
         after_adjust: Box<dyn Fn(usize) + Send + Sync>,
     ) -> Self {
-        let init_name = format!("{}-v0", thread_name);
+        let init_name = format!("{}-v0", thread_prefix);
         let keeper = Builder::new_multi_thread()
             .worker_threads(1)
             .thread_name("rtkp")
@@ -114,12 +114,12 @@ impl ResizableRuntime {
             .build()
             .expect("Failed to create runtime-keeper");
         let new_runtime = (replace_pool_rule)(thread_size, &init_name)
-            .unwrap_or_else(|_| panic!("failed to create tokio runtime {}", thread_name));
+            .unwrap_or_else(|_| panic!("failed to create tokio runtime {}", thread_prefix));
 
         ResizableRuntime {
             size: thread_size,
-            count: 0,
-            thread_name: thread_name.to_owned(),
+            version: 0,
+            thread_prefix: thread_prefix.to_owned(),
             gc_runtime: DeamonRuntime {
                 inner: Some(keeper),
                 tracker: TaskTracker::new(),
@@ -166,14 +166,15 @@ impl ResizableRuntime {
             return;
         }
 
-        let thread_name = format!("{}-v{}", self.thread_name, self.count + 1);
+        let new_version = self.version + 1;
+        let thread_name = format!("{}-v{}", self.thread_prefix, new_version);
         let new_runtime = (self.replace_pool_rule)(new_size, &thread_name)
             .unwrap_or_else(|_| panic!("failed to create tokio runtime {}", thread_name));
 
         let old_runtime: DeamonRuntime;
         {
             let mut runtime_guard = self.current_runtime.lock().unwrap();
-            if self.size == new_size {
+            if self.size == new_size || self.version >= new_version {
                 return;
             }
 
@@ -185,7 +186,7 @@ impl ResizableRuntime {
                 },
             );
             self.size = new_size;
-            self.count += 1;
+            self.version += 1;
         }
 
         info!(
