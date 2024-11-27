@@ -11,7 +11,7 @@ use ordered_float::OrderedFloat;
 const UPDATE_INTERVALS: Duration = Duration::from_secs(10);
 /// Recovery intervals for the slow score.
 /// If the score has reached 100 and there is no timeout inspecting requests
-/// during this interval, the score will go back to 1 in at least 5min.
+/// during this interval, the score will go back to 1 after 5min.
 const RECOVERY_INTERVALS: Duration = Duration::from_secs(60 * 5);
 // Slow score is a value that represents the speed of a store and ranges in [1,
 // 100]. It is maintained in the AIMD way.
