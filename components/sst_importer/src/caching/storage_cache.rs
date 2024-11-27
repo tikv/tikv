@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use external_storage::ExternalStorage;
+use futures_util::{future::BoxFuture, FutureExt};
 use kvproto::brpb::StorageBackend;
 
 use super::cache_map::{MakeCache, ShareOwned};
@@ -20,18 +21,18 @@ impl MakeCache for StorageBackend {
     type Cached = StoragePool;
     type Error = Error;
 
-    fn make_cache(&self) -> Result<Self::Cached> {
-        StoragePool::create(self, 16)
+    fn make_cache(&self) -> BoxFuture<'static, Result<Self::Cached>> {
+        StoragePool::create(self.clone(), 16).boxed()
     }
 }
 
 pub struct StoragePool(Box<[Arc<dyn ExternalStorage>]>);
 
 impl StoragePool {
-    fn create(backend: &StorageBackend, size: usize) -> Result<Self> {
+    async fn create(backend: StorageBackend, size: usize) -> Result<Self> {
         let mut r = Vec::with_capacity(size);
         for _ in 0..size {
-            let s = external_storage::create_storage(backend, Default::default())?;
+            let s = external_storage::create_storage_async(&backend, Default::default()).await?;
             r.push(Arc::from(s));
         }
         Ok(Self(r.into_boxed_slice()))

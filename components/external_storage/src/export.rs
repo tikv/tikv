@@ -13,22 +13,33 @@ use gcp::GcsStorage;
 use kvproto::brpb::{
     AzureBlobStorage, Gcs, Noop, StorageBackend, StorageBackend_oneof_backend as Backend, S3,
 };
-use tikv_util::time::{Instant, Limiter};
+use tikv_util::{
+    stream::block_on_external_io,
+    time::{Instant, Limiter},
+};
 
 use crate::{
     compression_reader_dispatcher, encrypt_wrap_reader, read_external_storage_into_file,
     record_storage_create, wrap_with_checksum_reader_if_needed, BackendConfig, ExternalData,
     ExternalStorage, HdfsStorage, LocalStorage, NoopStorage, RestoreConfig, UnpinReader,
 };
-pub fn create_storage(
+
+pub async fn create_storage_async(
     storage_backend: &StorageBackend,
     config: BackendConfig,
 ) -> io::Result<Box<dyn ExternalStorage>> {
     if let Some(backend) = &storage_backend.backend {
-        create_backend(backend, config)
+        create_backend_async(backend, config).await
     } else {
         Err(bad_storage_backend(storage_backend))
     }
+}
+
+pub fn create_storage(
+    storage_backend: &StorageBackend,
+    config: BackendConfig,
+) -> io::Result<Box<dyn ExternalStorage>> {
+    block_on_external_io(create_storage_async(storage_backend, config))
 }
 
 fn bad_storage_backend(storage_backend: &StorageBackend) -> io::Error {
@@ -52,7 +63,7 @@ fn blob_store<Blob: BlobStorage + IterableStorage + DeletableStorage>(
     Box::new(Compat::new(store)) as Box<dyn ExternalStorage>
 }
 
-fn create_backend(
+async fn create_backend_async(
     backend: &Backend,
     backend_config: BackendConfig,
 ) -> io::Result<Box<dyn ExternalStorage>> {
@@ -67,7 +78,7 @@ fn create_backend(
         }
         Backend::Noop(_) => Box::<NoopStorage>::default() as Box<dyn ExternalStorage>,
         Backend::S3(config) => {
-            let mut s = S3Storage::from_input(config.clone())?;
+            let mut s = S3Storage::from_input_async(config.clone()).await?;
             s.set_multi_part_size(backend_config.s3_multi_part_size);
             blob_store(s)
         }
