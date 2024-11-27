@@ -146,7 +146,7 @@ pub struct Downstream {
     pub filter_loop: bool,
     pub observed_range: ObservedRange,
 
-    sink: Sink,
+    sink: DownstreamSink,
     state: Arc<AtomicCell<DownstreamState>>,
     pub(crate) scan_truncated: Arc<AtomicBool>,
 
@@ -193,7 +193,7 @@ impl Downstream {
             filter_loop,
             observed_range,
 
-            sink,
+            sink: DownstreamSink::new(req_id, sink),
             state: Arc::new(AtomicCell::new(DownstreamState::default())),
             scan_truncated: Arc::new(AtomicBool::new(false)),
 
@@ -205,38 +205,18 @@ impl Downstream {
     // NOTE: it's not allowed to sink `ErrorEvent` directly by this function,
     // because the sink can be also used by an incremental scan. We must ensure
     // no more events can be pushed to the sink after an `ErrorEvent` is sent.
-    pub fn sink_event(&self, mut event: Event, force: bool) -> Result<()> {
+    async fn sink_event(&self, mut event: Event, force: bool) -> Result<()> {
         event.set_request_id(self.req_id.0);
-        match self.sink.send(CdcEvent::Event(event), force) {
-            Ok(_) => Ok(()),
-            Err(SendError::Disconnected) => {
-                debug!("cdc send event failed, disconnected";
-                    "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => ?self.req_id);
-                Err(Error::Sink(SendError::Disconnected))
-            }
-            // TODO handle errors.
-            Err(e @ SendError::Full) | Err(e @ SendError::Congested) => {
-                info!("cdc send event failed, full";
-                    "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => ?self.req_id);
-                Err(Error::Sink(e))
-            }
-        }
+        self.sink.send(event, force).await
     }
 
     /// ErrorEvents must be sent by this function. And we must ensure no more
     /// events or ResolvedTs will be sent to the downstream after
     /// `sink_error_event` is called.
-    pub fn sink_error_event(&self, region_id: u64, err_event: ErrorEvent) -> Result<()> {
+    async fn sink_error_event(&self, region_id: u64, err_event: ErrorEvent) -> Result<()> {
         info!("cdc downstream meets region error";
             "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => ?self.req_id);
-
-        self.scan_truncated.store(true, Ordering::Release);
-        let mut change_data_event = Event::default();
-        change_data_event.event = Some(Event_oneof_event::Error(err_event));
-        change_data_event.region_id = region_id;
-        // Try it's best to send error events.
-        let force_send = true;
-        self.sink_event(change_data_event, force_send)
+        self.sink.cancel_by_error(region_id, err_event).await
     }
 
     pub fn get_state(&self) -> Arc<AtomicCell<DownstreamState>> {
@@ -558,25 +538,6 @@ impl Delegate {
         &mut self.downstreams
     }
 
-    /// Let downstream unsubscribe the delegate.
-    /// Return whether the delegate is empty or not.
-    pub fn unsubscribe(&mut self, id: DownstreamId, err: Option<Error>) -> bool {
-        let error_event = err.map(|err| err.into_error_event(self.region_id));
-        let region_id = self.region_id;
-        if let Some(d) = self.remove_downstream(id) {
-            if let Some(error_event) = error_event {
-                if let Err(err) = d.sink_error_event(region_id, error_event.clone()) {
-                    warn!("cdc send unsubscribe failed";
-                        "region_id" => region_id, "error" => ?err, "origin_error" => ?error_event,
-                        "downstream_id" => ?d.id, "downstream" => ?d.peer,
-                        "request_id" => ?d.req_id, "conn_id" => ?d.conn_id);
-                }
-            }
-            d.state.store(DownstreamState::Stopped);
-        }
-        self.downstreams().is_empty()
-    }
-
     /// `txn_extra_op` returns a shared flag which is accessed in TiKV's
     /// transaction layer to determine whether to capture modifications' old
     /// value or not. Unsubscribing all downstreams or calling
@@ -811,12 +772,12 @@ impl Delegate {
         }
 
         let (raws, txns) = rows_builder.finish_build();
-        self.sink_downstream_raw(raws, index)?;
-        self.sink_downstream_tidb(txns, read_old_value)?;
+        self.sink_downstream_raw(raws, index).await?;
+        self.sink_downstream_tidb(txns, read_old_value).await?;
         Ok(())
     }
 
-    fn sink_downstream_raw(&mut self, entries: Vec<EventRow>, index: u64) -> Result<()> {
+    async fn sink_downstream_raw(&mut self, entries: Vec<EventRow>, index: u64) -> Result<()> {
         let mut downstreams = Vec::with_capacity(self.downstreams.len());
         for d in &mut self.downstreams {
             if d.kv_api == ChangeDataRequestKvApi::RawKv && d.state.load().ready_for_change_events()
@@ -847,12 +808,12 @@ impl Delegate {
                 })),
                 ..Default::default()
             };
-            downstream.sink_event(event, false)?;
+            downstream.sink_event(event, false).await?;
         }
         Ok(())
     }
 
-    fn sink_downstream_tidb(
+    async fn sink_downstream_tidb(
         &mut self,
         mut entries: Vec<RowInBuilding>,
         mut read_old_value: impl FnMut(&mut EventRow, TimeStamp) -> Result<()>,
@@ -925,7 +886,7 @@ impl Delegate {
                 })),
                 ..Default::default()
             };
-            downstream.sink_event(event, false)?;
+            downstream.sink_event(event, false).await?;
         }
         Ok(())
     }
@@ -1028,19 +989,6 @@ impl Delegate {
         self.txn_extra_op.store(TxnExtraOp::ReadOldValue);
     }
 
-    fn remove_downstream(&mut self, id: DownstreamId) -> Option<Downstream> {
-        if let Some(index) = self.downstreams.iter().position(|x| x.id == id) {
-            let downstream = self.downstreams.swap_remove(index);
-            if self.downstreams.is_empty() {
-                // Stop observing when the last downstream is removed. Otherwise the observer
-                // will keep pushing events to the delegate.
-                self.stop_observing();
-            }
-            return Some(downstream);
-        }
-        None
-    }
-
     fn check_epoch_on_ready(downstream: &Downstream, region: &Region) -> Result<()> {
         if let Err(e) = compare_region_epoch(
             &downstream.region_epoch,
@@ -1083,21 +1031,21 @@ impl Delegate {
         while let Some(task) = self.tasks.next().await {
             match task {
                 DelegateTask::Subscribe { downstream } => {
-                    self.on_subscribe_downstream(downstream);
+                    self.on_subscribe_downstream(downstream).await;
                 }
                 DelegateTask::ObservedEvent { cmds, old_value_cb } => {
                     fail_point!("cdc_before_handle_multi_batch", |_| {});
                     self.memory_quota.free(cmds.size());
                     if let Err(e) = self.on_batch(cmds, old_value_cb).await {
-                        self.on_stop(Some(e));
+                        self.on_stop(Some(e)).await;
                     }
                     // flush_oldvalue_stats(&statistics, TAG_DELTA_CHANGE);
                 }
                 DelegateTask::Stop { err } => {
-                    self.on_stop(err);
+                    self.on_stop(err).await;
                 }
                 DelegateTask::StopDownstream { err, downstream_id } => {
-                    self.on_stop_downstream(err, downstream_id);
+                    self.on_stop_downstream(err, downstream_id).await;
                 }
                 DelegateTask::MinTs { min_ts, current_ts } => {
                     self.on_min_ts(min_ts, current_ts);
@@ -1106,7 +1054,7 @@ impl Delegate {
                     observe_id,
                     region,
                     locks,
-                } => self.on_finish_scan_locks(observe_id, region, locks),
+                } => self.on_finish_scan_locks(observe_id, region, locks).await,
                 // The result of ChangeCmd should be returned from CDC Endpoint to ensure
                 // the downstream switches to Normal after the previous commands was sunk.
                 DelegateTask::InitDownstream {
@@ -1122,22 +1070,22 @@ impl Delegate {
                         build_resolver,
                         incremental_scan_barrier,
                         cb,
-                    );
+                    ).await;
                 }
             }
         }
     }
 
-    fn on_subscribe_downstream(&mut self, downstream: Downstream) {
+    async fn on_subscribe_downstream(&mut self, downstream: Downstream) {
         if let Err((err, downstream)) = self.subscribe(downstream) {
             let err_event = Some(err.into_error_event(self.region_id));
-            self.deregister_downstream(err_event, downstream);
+            self.deregister_downstream(err_event, downstream).await;
         }
     }
 
-    fn deregister_downstream(&mut self, err_event: Option<ErrorEvent>, downstream: Downstream) {
+    async fn deregister_downstream_inner(&mut self, err_event: Option<ErrorEvent>, downstream: Downstream) -> bool {
         if let Some(err_event) = err_event {
-            if let Err(err) = downstream.sink_error_event(self.region_id, err_event) {
+            if let Err(err) = downstream.sink_error_event(self.region_id, err_event).await {
                 warn!("cdc send region error failed";
                     "region_id" => self.region_id, "error" => ?err,
                     "downstream_id" => ?downstream.id, "downstream" => ?downstream.peer,
@@ -1158,18 +1106,22 @@ impl Delegate {
                 region_id: self.region_id,
                 downstream_id: downstream.id,
             }));
-        if self.downstreams.is_empty() {
-            self.on_stop(None);
+        self.downstreams.is_empty()
+    }
+
+    async fn deregister_downstream(&mut self, err_event: Option<ErrorEvent>, downstream: Downstream) {
+        if self.deregister_downstream_inner(err_event, downstream).await {
+            self.on_stop(None).await;
         }
     }
 
-    fn on_stop(&mut self, err: Option<Error>) {
+    async fn on_stop(&mut self, err: Option<Error>) {
         info!("cdc stop delegate"; "region_id" => self.region_id, "error" => ?err);
         self.stop_observing();
         let err_event = err.map(|x| x.into_error_event(self.region_id));
         while !self.downstreams.is_empty() {
             let downstream = self.downstreams.swap_remove(0);
-            self.deregister_downstream(err_event.clone(), downstream);
+            self.deregister_downstream_inner(err_event.clone(), downstream).await;
         }
         let _ = self
             .feedbacks
@@ -1179,16 +1131,16 @@ impl Delegate {
             }));
     }
 
-    fn on_stop_downstream(&mut self, err: Option<Error>, downstream_id: DownstreamId) {
+    async fn on_stop_downstream(&mut self, err: Option<Error>, downstream_id: DownstreamId) {
         info!("cdc stop downstream"; "region_id" => self.region_id, "downstream_id" => ?downstream_id, "error" => ?err);
         if let Some(x) = self.downstreams.iter().position(|d| d.id == downstream_id) {
             let downstream = self.downstreams.swap_remove(x);
             let err_event = err.map(|x| x.into_error_event(self.region_id));
-            self.deregister_downstream(err_event, downstream);
+            self.deregister_downstream(err_event, downstream).await;
         }
     }
 
-    fn on_finish_scan_locks(
+    async fn on_finish_scan_locks(
         &mut self,
         observe_id: ObserveId,
         region: Region,
@@ -1205,14 +1157,14 @@ impl Delegate {
             Ok(fails) => {
                 for (downstream, err) in fails {
                     let err_event = Some(err.into_error_event(self.region_id));
-                    self.deregister_downstream(err_event, downstream);
+                    self.deregister_downstream(err_event, downstream).await;
                 }
             }
-            Err(err) => self.on_stop(Some(err)),
+            Err(err) => self.on_stop(Some(err)).await,
         }
     }
 
-    fn on_init_downstream(
+    async fn on_init_downstream(
         &mut self,
         observe_id: ObserveId,
         downstream_id: DownstreamId,
@@ -1231,7 +1183,7 @@ impl Delegate {
             build_resolver.store(true, Ordering::Release);
         }
         if let Some(d) = self.downstream(downstream_id) {
-            if let Err(e) = d.sink.send(incremental_scan_barrier, true) {
+            if let Err(e) = d.sink.send(incremental_scan_barrier, true).await {
                 error!("cdc failed to schedule barrier for delta before delta scan";
                     "region_id" => self.region_id,
                     "observe_id" => ?observe_id,
@@ -1558,6 +1510,59 @@ pub struct DelegateMeta {
     pub region_id: u64,
     pub handle: ObserveHandle,
     pub sched: UnboundedSender<DelegateTask>,
+}
+
+#[derive(Clone)]
+struct DownstreamSink {
+    req_id: RequestId,
+    canceled: Arc<Mutex<bool>>,
+    sink: Sink,
+}
+
+impl DownstreamSink {
+    fn new(req_id: RequestId, sink: Sink) -> Self {
+        DownstreamSink {
+            req_id,
+            canceled: Arc::new(Mutex::new(false)),
+            sink,
+        }
+    }
+
+    fn handle_error(&self, e: SendError) -> Error {
+        match e {
+            Err(SendError::Disconnected) => {
+                debug!("cdc send event failed, disconnected";
+                    "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => ?self.req_id);
+                Err(Error::Sink(SendError::Disconnected))
+            }
+            Err(e @ SendError::Full) | Err(e @ SendError::Congested) => {
+                info!("cdc send event failed, full";
+                    "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => ?self.req_id);
+                Err(Error::Sink(e))
+            }
+        }
+    }
+
+    async fn send(&self, event: Event, force: bool) -> Result<()> {
+        if !*self.canceled.lock().await {
+            if let Err(e) = self.sink.send(CdcEvent::Event(event), force) {
+                return Err(self.handle_error(e))
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn cancel_by_error(&self, region_id: u64, err_event: ErrorEvent) -> Result<()> {
+        let mut canceled = self.canceled.lock().await;
+        if !*canceled {
+            *canceled = true;
+            let mut change_data_event = Event::default();
+            change_data_event.event = Some(Event_oneof_event::Error(err_event));
+            change_data_event.region_id = region_id;
+            self.send(change_data_event, true).await?;
+        }
+        Ok(())
+    }
 }
 
 const WARN_LAG_THRESHOLD: Duration = Duration::from_secs(600);

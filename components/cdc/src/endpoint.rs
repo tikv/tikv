@@ -728,7 +728,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 err.set_request(request_cluster_id);
                 err_event.set_cluster_id_mismatch(err);
 
-                let _ = downstream.sink_error_event(region_id, err_event);
+                let _ = block_on(downstream.sink_error_event(region_id, err_event));
                 return;
             }
         }
