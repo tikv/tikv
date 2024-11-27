@@ -1151,3 +1151,53 @@ fn test_snapshot_receiver_busy() {
     fail::remove("receiving_snapshot_callback");
     fail::remove("snap_gen_precheck_failed");
 }
+
+// Test that the snapshot precheck mechanism works properly when one snapshot is
+// stalled due to a slow sink operation.
+#[test]
+fn test_snapshot_receiver_busy_when_sink_is_slow() {
+    let mut cluster = new_server_cluster(0, 2);
+    cluster.cfg.server.concurrent_recv_snap_limit = 1;
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    // Disable default max peer count check.
+    pd_client.disable_default_operator();
+
+    let r1 = cluster.run_conf_change();
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    // Do a split to create the second region.
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k2");
+
+    let r2 = cluster.get_region(b"k1").id;
+
+    // When a snapshot receiver is busy, we want the snapshot generation to
+    // pause and wait until the receiver becomes available. For the two regions
+    // in this test, there should only be two snapshot generations in total.
+    fail::cfg("before_region_gen_snap", "2*print()->panic()").unwrap();
+
+    // Simulate a slow sink operation that pauses the first snapshot reception.
+    // This, however, does not block snapshot apply.
+    fail::cfg("receiving_snapshot_sink_slow", "pause").unwrap();
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+    // Wait until the first snapshot is successfully applied.
+    must_get_equal(&cluster.get_engine(2), b"k3", b"v3");
+
+    pd_client.must_add_peer(r2, new_peer(2, 1002));
+    // The second snapshot generation should fail the precheck since the first
+    // snapshot is still stalled at the sink operation.
+    fail::cfg_callback("snap_gen_precheck_failed", || {
+        // Once the precheck failure is detected, unblock the first snapshot
+        // task to allow it to proceed and complete.
+        fail::remove("receiving_snapshot_sink_slow");
+    })
+    .unwrap();
+
+    // Ensure that the second snapshot is eventually applied.
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    fail::remove("before_region_gen_snap");
+    fail::remove("snap_gen_precheck_failed");
+}
