@@ -937,7 +937,7 @@ impl UnifiedSlowScore {
         self.factors
             .iter()
             .map(|factor| factor.get())
-            .fold(0.0, f64::max)
+            .fold(1.0, f64::max)
     }
 
     pub fn last_tick_finished(&self) -> bool {
