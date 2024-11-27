@@ -1099,45 +1099,45 @@ impl ServerConnection for AddrStream {
 //
 // For now, the check only verifies the role of the peer certificate.
 fn check_cert(security_config: Arc<SecurityConfig>, cert: Option<X509>) -> bool {
-    if !security_config.cert_allowed_cn.is_empty() {
-        if let Some(x509) = cert {
-            if let Some(name) = x509
-                .subject_name()
-                .entries_by_nid(openssl::nid::Nid::COMMONNAME)
-                .next()
-            {
-                let data = name.data().as_slice();
-                // Check common name in peer cert
-                return security::match_peer_names(
-                    &security_config.cert_allowed_cn,
-                    std::str::from_utf8(data).unwrap(),
-                );
-            }
-        }
-        return false
-    } 
-    if !security_config.cert_allowed_san.is_empty() {
-        if let Some(x509) = cert {
-            if let Some(sans) = x509.subject_alt_names() {
-                for san in sans.into_iter() {
-                    let mut is_peer_authorized = false;
-                    if let Some(dns_name) = san.dnsname() {
-                        is_peer_authorized =
-                            security::match_peer_names(&security_config.cert_allowed_san, dns_name);
-                    } else if let Some(uri) = san.uri() {
-                        is_peer_authorized =
-                            security::match_peer_names(&security_config.cert_allowed_san, uri);
-                    }
-                    if is_peer_authorized {
-                        return true;
-                    }
+    if let Some(x509) = cert {
+        let mut is_cn_authorized = true;
+        let mut is_san_authorized = true;
+        if !security_config.cert_allowed_cn.is_empty() {
+            is_cn_authorized = false;
+                if let Some(name) = x509
+                    .subject_name()
+                    .entries_by_nid(openssl::nid::Nid::COMMONNAME)
+                    .next()
+                {
+                    let data = name.data().as_slice();
+                    // Check common name in peer cert
+                    is_cn_authorized = security::match_peer_names(
+                        &security_config.cert_allowed_cn,
+                        std::str::from_utf8(data).unwrap(),
+                    );
                 }
             }
-        }
-        return false;
+        
+   
+            if !security_config.cert_allowed_san.is_empty() {
+                is_san_authorized = false;
+                    if let Some(sans) = x509.subject_alt_names() {
+                        is_san_authorized = sans.into_iter().any(|san| {
+                            if let Some(dns_name) = san.dnsname() {
+                                return security::match_peer_names(&security_config.cert_allowed_san, dns_name);
+                            } 
+                            if let Some(uri) = san.uri() {
+                                return security::match_peer_names(&security_config.cert_allowed_san, uri);
+                            } 
+                            return false;
+                        });
+                    }
+            }
+        // if `cert_allowed_cn` and `cert_allowed_san` is empty, skip check and return true
+        is_cn_authorized && is_san_authorized
+    } else {
+        false
     }
-     // if `cert_allowed_cn` and `cert_allowed_san` is empty, skip check and return true
-    true
 }
 
 fn tls_acceptor(security_config: &SecurityConfig) -> Result<SslAcceptor> {
