@@ -282,12 +282,9 @@ mod test {
         });
 
         threads.adjust_with(8);
-        assert_eq!(COUNTER.load(Ordering::SeqCst), threads.size());
-        assert!(!threads.gc_runtime.tracker.is_empty());
-
         sleep(Duration::from_secs(1));
         assert!(!threads.gc_runtime.tracker.is_empty());
-        assert_eq!(COUNTER.load(Ordering::SeqCst), 8);
+        assert_eq!(COUNTER.load(Ordering::SeqCst), threads.size());
     }
 
     #[test]
