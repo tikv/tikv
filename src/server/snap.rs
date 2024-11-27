@@ -384,6 +384,7 @@ fn recv_snap<R: RaftExtension + 'static>(
             .inc_by(total_size);
         snap_mgr.register(context.key.clone(), SnapEntry::Receiving);
         defer!(snap_mgr.deregister(&context_key, &SnapEntry::Receiving));
+        debug!("receiving snapshot =======================");
         while let Some(item) = stream.next().await {
             fail_point!("receiving_snapshot_callback");
             fail_point!("receiving_snapshot_net_error", |_| {

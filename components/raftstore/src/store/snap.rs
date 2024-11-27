@@ -2092,6 +2092,10 @@ impl SnapRecvConcurrencyLimiter {
         current_time: Instant,
     ) {
         timestamps.retain(|region_id, timestamp| {
+            debug!("start time -> cur time"; "region_id" => region_id,
+                "timestamp" => ?timestamp, 
+                "current time" => ?current_time, 
+                "duration" =>  ?current_time.duration_since(*timestamp));
             if current_time.duration_since(*timestamp) <= Duration::from_secs(self.ttl_secs) {
                 true
             } else {

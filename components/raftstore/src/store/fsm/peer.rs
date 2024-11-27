@@ -108,7 +108,7 @@ use crate::{
         },
         CasualMessage, Config, LocksStatus, MergeResultKind, PdTask, PeerMsg, PeerTick,
         ProposalContext, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult, ReadCallback,
-        ReadIndexContext, ReadTask, SignificantMsg, SnapKey, StoreMsg, WriteCallback,
+        ReadIndexContext, ReadTask, SignificantMsg, SnapKey, SnapState, StoreMsg, WriteCallback,
         RAFT_INIT_LOG_INDEX,
     },
     Error, Result,
@@ -3207,14 +3207,19 @@ where
                     "ignored" => !self.fsm.peer.get_store().has_gen_snap_task(),
                 );
                 if passed {
-                    if let Some(gen_task) = self.fsm.peer.mut_store().take_gen_snap_task() {
-                        self.fsm
-                            .peer
-                            .pending_request_snapshot_count
-                            .fetch_add(1, Ordering::SeqCst);
-                        self.ctx
-                            .apply_router
-                            .schedule_task(self.region_id(), ApplyTask::Snapshot(gen_task));
+                    if let Some(sender) = self
+                        .fsm
+                        .peer
+                        .mut_store()
+                        .precheck_sender
+                        .borrow_mut()
+                        .take()
+                    {
+                        if let Err(e) = sender.send(true) {
+                            warn!("failed to send precheck result: {:?}", e);
+                        }
+                    } else {
+                        warn!("precheck_sender is None, cannot send result");
                     }
                 }
             }
