@@ -167,6 +167,7 @@ impl ResizableRuntime {
         }
 
         let old_runtime: DeamonRuntime;
+        let thread_name: String;
         {
             let mut runtime_guard = self.current_runtime.lock().unwrap();
             if self.size == new_size {
@@ -174,7 +175,7 @@ impl ResizableRuntime {
             }
 
             self.count += 1;
-            let thread_name = format!("{}-v{}-{}", self.thread_name, self.count, new_size);
+            thread_name = format!("{}-v{}-{}", self.thread_name, self.count, new_size);
 
             let new_runtime = (self.replace_pool_rule)(new_size, &thread_name)
                 .unwrap_or_else(|_| panic!("failed to create tokio runtime {}", thread_name));
@@ -186,14 +187,14 @@ impl ResizableRuntime {
                     tracker: TaskTracker::new(),
                 },
             );
-            info!(
-                "Resizing thread pool";
-                "thread_name" => &thread_name,
-                "new_size" => new_size
-            );
             self.size = new_size;
         }
 
+        info!(
+            "Resizing thread pool";
+            "thread_name" => &thread_name,
+            "new_size" => new_size
+        );
         self.gc_runtime.spawn(async move {
             old_runtime.tracker.close();
             old_runtime.tracker.wait().await;
@@ -291,7 +292,7 @@ mod test {
 
     #[test]
     fn test_drop() {
-        const LONG_ENOUGH_TIME : std::time::Duration= Duration::from_secs(100);
+        const LONG_ENOUGH_TIME: std::time::Duration = Duration::from_secs(100);
         let start = Instant::now();
         let threads =
             ResizableRuntime::new(4, "test", Box::new(replace_pool_rule), Box::new(|_| {}));
