@@ -100,11 +100,11 @@ use crate::{
         util,
         util::{is_initial_msg, RegionReadProgressRegistry},
         worker::{
-            init_disk_check_worker, AutoSplitController, CleanupRunner, CleanupSstRunner,
-            CleanupSstTask, CleanupTask, CompactRunner, CompactTask, ConsistencyCheckRunner,
-            ConsistencyCheckTask, DiskCheckRunner, DiskCheckTask, GcSnapshotRunner, GcSnapshotTask,
-            PdRunner, RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RefreshConfigRunner,
-            RefreshConfigTask, RegionRunner, RegionTask, SplitCheckTask,
+            AutoSplitController, CleanupRunner, CleanupSstRunner, CleanupSstTask, CleanupTask,
+            CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
+            DiskCheckRunner, DiskCheckTask, GcSnapshotRunner, GcSnapshotTask, PdRunner,
+            RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RefreshConfigRunner, RefreshConfigTask,
+            RegionRunner, RegionTask, SplitCheckTask,
         },
         Callback, CasualMessage, CompactThreshold, GlobalReplicationState, InspectedRaftMessage,
         MergeResultKind, PdTask, PeerMsg, PeerTick, RaftCommand, SignificantMsg, SnapManager,
@@ -1584,9 +1584,6 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
     // background_workers. This is because the underlying compact_range call is a
     // blocking operation, which can take an extensive amount of time.
     cleanup_worker: Worker,
-    // The worker dedicated to health checking the KvEngine disk when it's using a
-    // separate disk from RaftEngine.
-    disk_check_worker: Worker,
     region_worker: Worker,
     // Used for calling `manual_purge` if the specific engine implementation requires it
     // (`need_manual_purge`).
@@ -1648,7 +1645,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         collector_reg_handle: CollectorRegHandle,
         health_service: Option<HealthService>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
-        disk_check_runner: DiskCheckRunner,
+        mut disk_check_runner: DiskCheckRunner,
         grpc_service_mgr: GrpcServiceManager,
         safe_point: Arc<AtomicU64>,
     ) -> Result<()> {
@@ -1692,7 +1689,6 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             raftlog_fetch_worker: Worker::new("raftlog-fetch-worker"),
             coprocessor_host: coprocessor_host.clone(),
             refresh_config_worker: LazyWorker::new("refreash-config-worker"),
-            disk_check_worker: init_disk_check_worker(),
         };
         mgr.init()?;
         let region_runner = RegionRunner::new(
@@ -1738,8 +1734,11 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let consistency_check_scheduler = workers
             .background_worker
             .start("consistency-check", consistency_check_runner);
+        // The scheduler dedicated to health checking the KvEngine disk when it's using
+        // a separate disk from RaftEngine.
+        disk_check_runner.bind_background_worker(workers.background_worker.clone());
         let disk_check_scheduler = workers
-            .disk_check_worker
+            .background_worker
             .start("disk-check-worker", disk_check_runner);
 
         self.store_writers.spawn(
