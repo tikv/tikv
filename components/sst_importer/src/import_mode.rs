@@ -11,8 +11,12 @@ use std::{
 use engine_traits::{CfOptions, DbOptions, KvEngine};
 use futures_util::compat::Future01CompatExt;
 use kvproto::import_sstpb::*;
+<<<<<<< HEAD
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tokio::runtime::Handle;
+=======
+use tikv_util::{resizable_threadpool::DeamonRuntimeHandle, timer::GLOBAL_TIMER_HANDLE};
+>>>>>>> b94584c08b (Refactor Resizable Runtime from blocking TiKV shutting down. (#17784))
 
 use super::{Config, Result};
 
@@ -88,7 +92,12 @@ impl ImportModeSwitcher {
         ImportModeSwitcher { inner, is_import }
     }
 
+<<<<<<< HEAD
     pub fn start<E: KvEngine>(&self, executor: &Handle, db: E) {
+=======
+    // start_resizable_threads only serves for resizable runtime
+    pub fn start_resizable_threads<E: KvEngine>(&self, executor: &DeamonRuntimeHandle, db: E) {
+>>>>>>> b94584c08b (Refactor Resizable Runtime from blocking TiKV shutting down. (#17784))
         // spawn a background future to put TiKV back into normal mode after timeout
         let inner = self.inner.clone();
         let switcher = Arc::downgrade(&inner);
@@ -249,6 +258,15 @@ mod tests {
 
     use super::*;
 
+<<<<<<< HEAD
+=======
+    fn create_tokio_runtime(_: usize, _: &str) -> TokioResult<Runtime> {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+    }
+
+>>>>>>> b94584c08b (Refactor Resizable Runtime from blocking TiKV shutting down. (#17784))
     fn check_import_options<E>(
         db: &E,
         expected_db_opts: &ImportModeDbOptions,
@@ -310,8 +328,19 @@ mod tests {
             .build()
             .unwrap();
 
+<<<<<<< HEAD
         let switcher = ImportModeSwitcher::new(&cfg);
         switcher.start(threads.handle(), db.clone());
+=======
+        let threads = ResizableRuntime::new(
+            cfg.num_threads,
+            "test",
+            Box::new(create_tokio_runtime),
+            Box::new(|_| {}),
+        );
+        let switcher = ImportModeSwitcher::new(&cfg);
+        switcher.start_resizable_threads(&threads.handle(), db.clone());
+>>>>>>> b94584c08b (Refactor Resizable Runtime from blocking TiKV shutting down. (#17784))
         check_import_options(&db, &normal_db_options, &normal_cf_options);
         assert!(switcher.enter_import_mode(&db, mf).unwrap());
         check_import_options(&db, &import_db_options, &import_cf_options);
@@ -343,10 +372,17 @@ mod tests {
             ..Config::default()
         };
 
+<<<<<<< HEAD
         let threads = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap();
+=======
+        let threads =
+            ResizableRuntime::new(4, "test", Box::new(create_tokio_runtime), Box::new(|_| {}));
+        let switcher = ImportModeSwitcher::new(&cfg);
+        let handle = threads.handle();
+>>>>>>> b94584c08b (Refactor Resizable Runtime from blocking TiKV shutting down. (#17784))
 
         let switcher = ImportModeSwitcher::new(&cfg);
         switcher.start(threads.handle(), db.clone());
