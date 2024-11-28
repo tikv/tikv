@@ -48,6 +48,7 @@ impl Runner {
     /// The content to write to the file to measure the latency.
     const DISK_IO_LATENCY_INSPECT_FLUSH_STR: &'static [u8] = b"inspect disk io latency";
 
+    #[inline]
     fn build(target: PathBuf) -> Self {
         // The disk check mechanism only cares about the latency of the most
         // recent request; older requests become stale and irrelevant. To avoid
