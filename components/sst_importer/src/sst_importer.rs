@@ -36,16 +36,13 @@ use tikv_util::{
     },
     future::RescheduleChecker,
     memory::{MemoryQuota, OwnedAllocated},
-<<<<<<< HEAD
-=======
     resizable_threadpool::DeamonRuntimeHandle,
->>>>>>> b94584c08b (Refactor Resizable Runtime from blocking TiKV shutting down. (#17784))
     sys::{thread::ThreadBuildWrapper, SysQuota},
     time::{Instant, Limiter},
     Either, HandyRwLock,
 };
 use tokio::{
-    runtime::{Handle, Runtime},
+    runtime::Runtime,
     sync::OnceCell,
 };
 use txn_types::{Key, TimeStamp, WriteRef};
@@ -267,14 +264,10 @@ impl<E: KvEngine> SstImporter<E> {
         }
     }
 
-<<<<<<< HEAD
-    pub fn start_switch_mode_check(&self, executor: &Handle, db: Option<E>) {
-=======
     pub fn start_switch_mode_check(&self, executor: &DeamonRuntimeHandle, db: Option<E>) {
->>>>>>> b94584c08b (Refactor Resizable Runtime from blocking TiKV shutting down. (#17784))
         match &self.switcher {
-            Either::Left(switcher) => switcher.start(executor, db.unwrap()),
-            Either::Right(switcher) => switcher.start(executor),
+            Either::Left(switcher) => switcher.start_resizable_threads(executor, db.unwrap()),
+            Either::Right(switcher) => switcher.start_resizable_threads(executor),
         }
     }
 
@@ -1463,13 +1456,10 @@ mod tests {
     use std::{
         io::{self, BufWriter, Write},
         ops::Sub,
-<<<<<<< HEAD
-=======
         sync::{
             atomic::{AtomicUsize, Ordering},
             Mutex,
         },
->>>>>>> b94584c08b (Refactor Resizable Runtime from blocking TiKV shutting down. (#17784))
         usize,
     };
 
@@ -1486,12 +1476,21 @@ mod tests {
     use tempfile::Builder;
     use test_sst_importer::*;
     use test_util::new_test_key_manager;
-    use tikv_util::{codec::stream_event::EventEncoder, stream::block_on_external_io};
+    use tikv_util::{codec::stream_event::EventEncoder, stream::block_on_external_io, resizable_threadpool::ResizableRuntime};
     use txn_types::{Value, WriteType};
     use uuid::Uuid;
 
     use super::*;
     use crate::{import_file::ImportPath, *};
+    type TokioResult<T> = std::io::Result<T>;
+
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    fn create_tokio_runtime(_: usize, _: &str) -> TokioResult<Runtime> {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+    }
 
     fn do_test_import_dir(key_manager: Option<Arc<DataKeyManager>>) {
         let temp_dir = Builder::new().prefix("test_import_dir").tempdir().unwrap();
@@ -2007,10 +2006,6 @@ mod tests {
         };
         let change = cfg.diff(&cfg_new);
 
-<<<<<<< HEAD
-        // create config manager and update config.
-        let mut cfg_mgr = ImportConfigManager::new(cfg);
-=======
         let threads = ResizableRuntime::new(
             cfg.num_threads,
             "test",
@@ -2022,7 +2017,6 @@ mod tests {
 
         // create config manager and update config.
         let mut cfg_mgr = ImportConfigManager::new(cfg, Arc::downgrade(&threads_clone));
->>>>>>> b94584c08b (Refactor Resizable Runtime from blocking TiKV shutting down. (#17784))
         cfg_mgr.dispatch(change).unwrap();
         importer.update_config_memory_use_ratio(&cfg_mgr);
 
@@ -2045,9 +2039,6 @@ mod tests {
             ..Default::default()
         };
         let change = cfg.diff(&cfg_new);
-<<<<<<< HEAD
-        let mut cfg_mgr = ImportConfigManager::new(cfg);
-=======
 
         let threads = ResizableRuntime::new(
             cfg.num_threads,
@@ -2059,15 +2050,11 @@ mod tests {
         let threads_clone = Arc::new(Mutex::new(threads));
 
         let mut cfg_mgr = ImportConfigManager::new(cfg, Arc::downgrade(&threads_clone));
->>>>>>> b94584c08b (Refactor Resizable Runtime from blocking TiKV shutting down. (#17784))
         let r = cfg_mgr.dispatch(change);
         assert!(r.is_err());
     }
 
     #[test]
-<<<<<<< HEAD
-    fn test_do_read_kv_file() {
-=======
     fn test_update_import_num_threads() {
         let cfg = Config::default();
         let threads = ResizableRuntime::new(
@@ -2098,7 +2085,6 @@ mod tests {
 
     #[test]
     fn test_download_kv_file_to_mem_cache() {
->>>>>>> b94584c08b (Refactor Resizable Runtime from blocking TiKV shutting down. (#17784))
         // create a sample kv file.
         let (_temp_dir, backend, kv_meta, buff) = create_sample_external_kv_file().unwrap();
 
