@@ -657,7 +657,7 @@ pub enum Cmd {
             default_value = "32",
             help("how many compactions can be executed concurrently.")
         )]
-        max_compaction_num: u64,
+        max_concurrent_compactions: u64,
         #[structopt(
             short = "s",
             long = "storage-base64",

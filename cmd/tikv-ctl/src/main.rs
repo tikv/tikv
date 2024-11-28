@@ -391,7 +391,7 @@ fn main() {
         Cmd::CompactLogBackup {
             from_ts,
             until_ts,
-            max_compaction_num,
+            max_concurrent_compactions: max_compaction_num,
             storage_base64,
             compression,
             compression_level,

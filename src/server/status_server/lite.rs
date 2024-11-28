@@ -113,6 +113,13 @@ impl Server {
     }
 }
 
+/// A light-weighted status server for batch tasks without full bootstraped
+/// TiKV in `tikv-ctl`.
+///
+/// This exports a subset of the status, including:
+/// - metrics
+/// - CPU / memory profiling
+/// - async tasks tracing
 #[derive(Copy, Clone)]
 pub struct LiteService;
 
