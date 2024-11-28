@@ -51,7 +51,7 @@ use tokio::sync::Semaphore;
 use txn_types::{Key, KvPair, LockType, OldValue, TimeStamp};
 
 use crate::{
-    channel::CdcEvent,
+    channel::{CdcEvent, DownstreamSink},
     delegate::{
         post_init_downstream, Delegate, DelegateTask, DownstreamId, DownstreamState, MiniLock,
         ObservedRange,
@@ -104,7 +104,7 @@ pub(crate) struct Initializer<E> {
 
     pub(crate) tablet: Option<E>,
     pub(crate) sched: UnboundedSender<DelegateTask>,
-    pub(crate) sink: crate::channel::Sink,
+    pub(crate) sink: DownstreamSink,
     pub(crate) concurrency_semaphore: Arc<Semaphore>,
 
     pub(crate) scan_speed_limiter: Limiter,
@@ -147,9 +147,8 @@ impl<E: KvEngine> Initializer<E> {
         let region_epoch = self.region_epoch.clone();
         let (cb, fut) = tikv_util::future::paired_future_callback();
         let build_resolver = self.build_resolver.clone();
-        let (incremental_scan_barrier_cb, incremental_scan_barrier_fut) =
+        let (incremental_scan_barrier, incremental_scan_barrier_fut) =
             tikv_util::future::paired_future_callback();
-        let barrier = CdcEvent::Barrier(Some(incremental_scan_barrier_cb));
         if let Err(e) = cdc_handle.capture_change(
             self.region_id,
             region_epoch,
@@ -162,7 +161,7 @@ impl<E: KvEngine> Initializer<E> {
                     observe_id,
                     downstream_id,
                     build_resolver,
-                    incremental_scan_barrier: barrier,
+                    incremental_scan_barrier,
                     cb: Box::new(move || cb(resp)),
                 }) {
                     error!("cdc schedule delegate task failed"; "error" => ?e);
@@ -499,7 +498,6 @@ impl<E: KvEngine> Initializer<E> {
     }
 
     async fn sink_scan_events(&mut self, entries: Vec<Option<KvEntry>>, done: bool) -> Result<()> {
-        let mut barrier = None;
         let mut events = Delegate::convert_to_grpc_events(
             self.region_id,
             self.request_id,
@@ -507,25 +505,19 @@ impl<E: KvEngine> Initializer<E> {
             self.filter_loop,
             &self.observed_range,
         )?;
-        if done {
-            let (cb, fut) = tikv_util::future::paired_future_callback();
-            events.push(CdcEvent::Barrier(Some(cb)));
-            barrier = Some(fut);
-        }
         if let Err(e) = self
             .sink
-            .send_all(events)
+            .send_scaned(events)
             .await
         {
             error!("cdc send scan event failed"; "req_id" => ?self.request_id);
-            return Err(Error::Sink(e));
+            return Err(e);
         }
 
-        if let Some(barrier) = barrier {
-            // CDC needs to make sure resolved ts events can only be sent after
-            // incremental scan is finished.
-            // Wait the barrier to ensure tikv sends out all scan events.
-            let _ = barrier.await;
+        if done {
+            let (cb, fut) = tikv_util::future::paired_future_callback();
+            self.sink.send_barrier(cb).await?;
+            let _ = fut.await;
         }
 
         Ok(())

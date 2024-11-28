@@ -21,7 +21,7 @@ use tikv_util::{error, info, memory::MemoryQuota, warn, worker::*};
 use tokio::runtime::{self, Runtime};
 
 use crate::{
-    channel::{channel, Sink, CDC_CHANNLE_CAPACITY},
+    channel::{channel, Sink, DownstreamSink, CDC_CHANNLE_CAPACITY},
     delegate::{Downstream, DownstreamId, ObservedRange},
     endpoint::{Deregister, Task},
 };
@@ -309,13 +309,17 @@ impl Service {
         conn_id: ConnId,
         sink: Sink,
     ) -> Result<(), String> {
+        let region_id = request.region_id;
+        let req_id = RequestId(request.request_id);
+        let downstream_id = DownstreamId::new();
+
         let observed_range = ObservedRange::new(request.start_key.clone(), request.end_key.clone())
             .unwrap_or_else(|e| {
                 warn!(
                     "cdc invalid observed start key or end key version";
                     "downstream" => ?peer,
-                    "region_id" => request.region_id,
-                    "request_id" => request.region_id,
+                    "region_id" => region_id,
+                    "request_id" => ?req_id,
                     "error" => ?e,
                     "start_key" => log_wrappers::Value::key(&request.start_key),
                     "end_key" => log_wrappers::Value::key(&request.end_key),
@@ -330,8 +334,10 @@ impl Service {
             request.kv_api,
             request.filter_loop,
             observed_range,
-            sink,
+            DownstreamSink::new(region_id, downstream_id, req_id, sink),
         );
+        info!("creates cdc downstream"; "conn_id" => ?conn_id, "region_id" => region_id, "request_id" => ?req_id);
+
         let task = Task::Register {
             request,
             downstream,

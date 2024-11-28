@@ -323,9 +323,8 @@ impl Advance {
             resolved_ts.request_id = req_id.0;
             *resolved_ts.mut_regions() = regions;
 
-            let res = conn
-                .sink
-                .send(CdcEvent::ResolvedTs(resolved_ts), false);
+            let event = CdcEvent::ResolvedTs(resolved_ts);
+            let res = conn.sink.send_resolved_ts(event);
             handle_send_result(conn, res);
         };
 
@@ -343,7 +342,7 @@ impl Advance {
                 event: Some(Event_oneof_event::ResolvedTs(ts)),
                 ..Default::default()
             };
-            let res = conn.sink.send(CdcEvent::Event(event), false);
+            let res = conn.sink.send_resolved_ts(CdcEvent::Event(event));
             handle_send_result(conn, res);
         };
 
@@ -700,6 +699,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         let conn_id = downstream.conn_id;
         let downstream_id = downstream.id;
         let downstream_state = downstream.get_state();
+        let downstream_sink = downstream.sink.clone();
         let observed_range = downstream.observed_range.clone();
         let scan_truncated = downstream.scan_truncated.clone();
 
@@ -727,8 +727,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 err.set_current(self.cluster_id);
                 err.set_request(request_cluster_id);
                 err_event.set_cluster_id_mismatch(err);
-
-                let _ = block_on(downstream.sink_error_event(region_id, err_event));
+                let _ = block_on(downstream_sink.cancel_by_error(err_event));
                 return;
             }
         }
@@ -739,8 +738,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             let mut err = ErrorCompatibility::default();
             err.set_required_version("6.2.0".to_string());
             err_event.set_compatibility(err);
-
-            let _ = downstream.sink_error_event(region_id, err_event);
+            let _ = block_on(downstream_sink.cancel_by_error(err_event));
             return;
         }
 
@@ -761,7 +759,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             // TiKV needs to reject and return error immediately.
             let mut err_event = EventError::default();
             err_event.mut_server_is_busy().reason = "too many pending incremental scans".to_owned();
-            let _ = downstream.sink_error_event(region_id, err_event);
+            let _ = block_on(downstream_sink.cancel_by_error(err_event));
             return;
         }
 
@@ -771,7 +769,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 error!("cdc register for a not found region"; "region_id" => region_id);
                 let mut err_event = EventError::default();
                 err_event.mut_region_not_found().region_id = region_id;
-                let _ = downstream.sink_error_event(region_id, err_event);
+                let _ = block_on(downstream_sink.cancel_by_error(err_event));
                 return;
             }
         };
@@ -781,7 +779,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             let mut err = ErrorDuplicateRequest::default();
             err.set_region_id(region_id);
             err_event.set_duplicate_request(err);
-            let _ = downstream.sink_error_event(region_id, err_event);
+            let _ = block_on(downstream_sink.cancel_by_error(err_event));
             error!("cdc duplicate register";
                 "region_id" => region_id,
                 "conn_id" => ?conn_id,
@@ -841,7 +839,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
 
             tablet: self.tablets.get(region_id).map(|t| t.into_owned()),
             sched: delegate.sched.clone(),
-            sink: conn.sink.clone(),
+            sink: downstream_sink.clone(),
             concurrency_semaphore: self.scan_concurrency_semaphore.clone(),
 
             scan_speed_limiter: self.scan_speed_limiter.clone(),

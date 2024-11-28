@@ -4,35 +4,39 @@ use std::pin::Pin;
 use std::{
     fmt,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
     },
     time::Duration,
 };
 use std::task::Context;
+use std::result::Result as StdResult;
 
 use futures::{
+    lock::Mutex,
     ready,
     channel::mpsc::{
-        channel as bounded, unbounded, Receiver, SendError as FuturesSendError, Sender,
+        unbounded, SendError as FuturesSendError,
         TrySendError, UnboundedReceiver, UnboundedSender,
     },
     executor::block_on,
     task::Poll,
-    stream, SinkExt, Stream, StreamExt,
+    SinkExt, Stream, StreamExt,
 };
-use grpcio::WriteFlags;
+use kvproto::cdcpb::{EventRow, Error as ErrorEvent, Event_oneof_event, EventEntries};
 use kvproto::cdcpb::{ChangeDataEvent, Event, ResolvedTs};
 use protobuf::Message;
 use tikv_util::{
     future::block_on_timeout,
-    impl_display_as_debug, info,
+    impl_display_as_debug, info, debug,
     memory::{MemoryQuota, MemoryQuotaExceeded},
     time::Instant,
     warn,
 };
 
+use crate::delegate::DownstreamId;
 use crate::{metrics::*, service::ConnId};
+use crate::service::RequestId;
+use crate::{Result, Error};
 
 /// The maximum bytes of events can be batched into one `CdcEvent::Event`, 32KB.
 pub const CDC_EVENT_MAX_BYTES: usize = 32 * 1024;
@@ -62,7 +66,7 @@ const CDC_RESP_MAX_BATCH_COUNT: usize = 2;
 pub enum CdcEvent {
     ResolvedTs(ResolvedTs),
     Event(Event),
-    Barrier(Option<Box<dyn FnOnce(()) + Send>>),
+    Barrier(Box<dyn FnOnce(()) + Send>),
 }
 
 impl CdcEvent {
@@ -218,7 +222,7 @@ pub struct Sink {
 }
 
 impl Sink {
-    pub fn send(&self, event: CdcEvent, force: bool) -> Result<(), SendError> {
+    fn send(&self, event: CdcEvent, force: bool) -> StdResult<(), SendError> {
         let bytes = event.size();
         if force {
             self.memory_quota.alloc_force(bytes);
@@ -236,7 +240,7 @@ impl Sink {
         }
     }
 
-    pub async fn send_all(&mut self, events: Vec<CdcEvent>) -> Result<(), SendError> {
+    async fn send_all(&mut self, events: Vec<CdcEvent>) -> StdResult<(), SendError> {
         let now = Instant::now_coarse();
         let mut bytes = 0;
         for event in events {
@@ -252,6 +256,10 @@ impl Sink {
             return Err(SendError::from(e));
         }
         Ok(())
+    }
+
+    pub fn send_resolved_ts(&self, ts_event: CdcEvent) -> StdResult<(), SendError> {
+        self.send(ts_event, false)
     }
 }
 
@@ -279,8 +287,7 @@ impl Stream for Drain {
                 this.memory_quota.free(item.size);
                 CDC_EVENTS_PENDING_DURATION.observe(item.created.saturating_elapsed_secs() * 1000.0);
                 match item.event {
-                    CdcEvent::Barrier(Some(barrier)) => barrier(()),
-                    CdcEvent::Barrier(None) => {},
+                    CdcEvent::Barrier(barrier) => barrier(()),
                     CdcEvent::ResolvedTs(x) => {
                         let mut ts_event = ChangeDataEvent::default();
                         ts_event.set_resolved_ts(x);
@@ -316,8 +323,132 @@ impl Drop for Drain {
     }
 }
 
+#[derive(Clone)]
+pub struct DownstreamSink {
+    region_id: u64,
+    downstream_id: DownstreamId,
+    req_id: RequestId,
+    canceled: Arc<Mutex<bool>>,
+    sink: Sink,
+}
+
+impl DownstreamSink {
+    pub fn new(region_id: u64, downstream_id: DownstreamId, req_id: RequestId, sink: Sink) -> Self {
+        DownstreamSink {
+            region_id,
+            downstream_id,
+            req_id,
+            canceled: Arc::new(Mutex::new(false)),
+            sink,
+        }
+    }
+
+    fn handle_error(&self, e: SendError) -> Error {
+        match e {
+            SendError::Disconnected => {
+                debug!("cdc send event failed, disconnected";
+                    "region_id" => self.region_id, "downstream_id" => ?self.downstream_id);
+                Error::Sink(SendError::Disconnected)
+            }
+            e @ SendError::Full | e @ SendError::Congested => {
+                info!("cdc send event failed, full";
+                    "region_id" => self.region_id, "downstream_id" => ?self.downstream_id);
+                Error::Sink(e)
+            }
+        }
+    }
+
+    fn send(&self, event: CdcEvent, force: bool) -> Result<()> {
+        if let Err(e) = self.sink.send(event, force) {
+            return Err(self.handle_error(e));
+        }
+        Ok(())
+    }
+
+    async fn send_all(&mut self, events: Vec<CdcEvent>) -> Result<()> {
+        if let Err(e) = self.sink.send_all(events).await {
+            return Err(self.handle_error(e));
+        }
+        Ok(())
+    }
+
+    pub async fn send_observed_raw(&self, index: u64, events: Vec<EventRow>) -> Result<()> {
+        let event = CdcEvent::Event(Event {
+            region_id: self.region_id,
+            index,
+            request_id: self.req_id.0,
+            event: Some(Event_oneof_event::Entries(EventEntries {
+                entries: events.into(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        });
+        if !*self.canceled.lock().await {
+            return self.send(event, false);
+        }
+        Ok(())
+    }
+
+    pub async fn send_observed_tidb(&self, events: Vec<EventRow>) -> Result<()> {
+        let event = CdcEvent::Event(Event {
+            region_id: self.region_id,
+            request_id: self.req_id.0,
+            event: Some(Event_oneof_event::Entries(EventEntries {
+                entries: events.into(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        });
+        if !*self.canceled.lock().await {
+            return self.send(event, false);
+        }
+        Ok(())
+    }
+
+    pub async fn send_scaned(&mut self, events: Vec<Vec<EventRow>>) -> Result<()> {
+        let mut rows = Vec::with_capacity(events.len());
+        for x in events.into_iter().filter(|x| !x.is_empty()) {
+            rows.push(CdcEvent::Event(Event {
+                region_id: self.region_id,
+                request_id: self.req_id.0,
+                event: Some(Event_oneof_event::Entries(EventEntries {
+                    entries: x.into(),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }));
+        }
+        if !*self.canceled.lock().await {
+            return self.send_all(rows).await;
+        }
+        Ok(())
+    }
+
+    pub async fn send_barrier(&self, barrier: Box<dyn FnOnce(()) + Send>) -> Result<()> {
+        if !*self.canceled.lock().await {
+            return self.send(CdcEvent::Barrier(barrier), true);
+        }
+        Ok(())
+    }
+
+    pub async fn cancel_by_error(&self, err_event: ErrorEvent) -> Result<()> {
+        let mut canceled = self.canceled.lock().await;
+        if !*canceled {
+            *canceled = true;
+            let event = Event {
+                region_id: self.region_id,
+                request_id: self.req_id.0,
+                event: Some(Event_oneof_event::Error(err_event)),
+                ..Default::default()
+            };
+            return self.send(CdcEvent::Event(event), true);
+        }
+        Ok(())
+    }
+}
+
 #[allow(clippy::result_unit_err)]
-pub fn recv_timeout<S, I>(s: &mut S, dur: std::time::Duration) -> Result<Option<I>, ()>
+pub fn recv_timeout<S, I>(s: &mut S, dur: std::time::Duration) -> StdResult<Option<I>, ()>
 where
     S: Stream<Item = I> + Unpin,
 {
