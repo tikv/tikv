@@ -28,7 +28,7 @@ pub use self::{
         Task as CompactTask,
     },
     consistency_check::{Runner as ConsistencyCheckRunner, Task as ConsistencyCheckTask},
-    disk_check::{init_disk_check_worker, Runner as DiskCheckRunner, Task as DiskCheckTask},
+    disk_check::{Runner as DiskCheckRunner, Task as DiskCheckTask},
     pd::{
         new_change_peer_v2_request, FlowStatistics, FlowStatsReporter, HeartbeatTask,
         Runner as PdRunner, StatsMonitor as PdStatsMonitor, StoreStatsReporter, Task as PdTask,
