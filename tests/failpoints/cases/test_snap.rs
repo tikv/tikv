@@ -1180,7 +1180,7 @@ fn test_snapshot_receiver_busy_when_sink_is_slow() {
     fail::cfg("before_region_gen_snap", "2*print()->panic()").unwrap();
 
     // Simulate a slow sink operation that pauses the first snapshot reception.
-    // This, however, does not block snapshot apply.
+    // However, this does not block snapshot apply.
     fail::cfg("receiving_snapshot_sink_slow", "pause").unwrap();
     pd_client.must_add_peer(r1, new_peer(2, 2));
     // Wait until the first snapshot is successfully applied.

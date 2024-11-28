@@ -430,9 +430,9 @@ fn recv_snap<R: RaftExtension + 'static>(
     }
 }
 
-// Cleans up resources after snapshot reception. Ensures that the receiving
-// count is decremented and the occupied slot within the snap precheck mechanism
-// is released.
+// Cleans up resources after snapshot reception. Ensures that the occupied
+// resource within the concurrency limiter (used in snapshot precheck) is
+// released.
 fn cleanup_after_recv(
     region_id: Arc<AtomicU64>,
     snap_mgr: SnapManager,
@@ -442,7 +442,9 @@ fn cleanup_after_recv(
     let id = region_id.load(Ordering::SeqCst);
     if id != 0 {
         // Notify the snapshot manager that a snapshot has been received,
-        // freeing up the associated resource in the concurrency limiter.
+        // freeing up the associated resource in the concurrency limiter. Note
+        // that this should happen after decrementing `recving_count` (see
+        // #17903).
         snap_mgr.recv_snap_complete(id);
     }
 }
