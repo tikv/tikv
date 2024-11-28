@@ -166,22 +166,14 @@ impl ResizableRuntime {
             return;
         }
 
-        let new_version = self.version + 1;
-        let thread_name = format!("{}-v{}", self.thread_prefix, new_version);
+        self.version += 1;
+        let thread_name = format!("{}-v{}", self.thread_prefix, self.version);
         let new_runtime = (self.replace_pool_rule)(new_size, &thread_name)
             .unwrap_or_else(|_| panic!("failed to create tokio runtime {}", thread_name));
 
         let old_runtime: DeamonRuntime;
         {
             let mut runtime_guard = self.current_runtime.lock().unwrap();
-            if self.size == new_size || self.version >= new_version {
-                warn!(
-                    "Resize task dropped";
-                    "thread_name" => &thread_name,
-                    "new_size" => new_size
-                );
-                return;
-            }
 
             old_runtime = std::mem::replace(
                 &mut *runtime_guard,
@@ -190,9 +182,9 @@ impl ResizableRuntime {
                     tracker: TaskTracker::new(),
                 },
             );
-            self.size = new_size;
-            self.version += 1;
         }
+
+        self.size = new_size;
 
         info!(
             "Resizing thread pool";
