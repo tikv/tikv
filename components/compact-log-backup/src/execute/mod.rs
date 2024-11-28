@@ -119,7 +119,10 @@ pub struct Execution<DB: SstExt = RocksEngine> {
     pub max_concurrent_subcompaction: u64,
     /// The external storage for input and output.
     pub external_storage: StorageBackend,
-    /// The RocksDB instance for generating SST.
+    /// The RocksDB instance for creating `SstWriter`.
+    /// By design little or no data will be written to the instance, for now
+    /// this is only used for loading the user collected properties
+    /// configuration.
     pub db: Option<DB>,
     /// The prefix of the artifices.
     pub out_prefix: String,
