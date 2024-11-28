@@ -204,8 +204,9 @@ where
 
         while entry_len > remained_quota {
             // It's possible to acquire more than necessary, but let it be.
-            io_limiter.blocking_consume(IO_LIMITER_CHUNK_SIZE);
-            remained_quota += IO_LIMITER_CHUNK_SIZE;
+            let send_limit_chunk_size = IO_LIMITER_CHUNK_SIZE * 10;
+            io_limiter.blocking_consume(send_limit_chunk_size);
+            remained_quota += send_limit_chunk_size;
         }
         remained_quota -= entry_len;
 
