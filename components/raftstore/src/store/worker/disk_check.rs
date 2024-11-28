@@ -171,7 +171,6 @@ mod tests {
                     }),
                 );
                 runner.run(Task::InspectLatency { inspector });
-                // rx.recv().unwrap_err(); // the inspector should not receive any latency
                 rx.recv_timeout(Duration::from_secs(1)).unwrap_err();
             }
         }
