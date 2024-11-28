@@ -37,10 +37,15 @@ use tikv_kv::{Engine, LocalTablets, Modify, WriteData};
 use tikv_util::{
     config::ReadableSize,
     future::{create_stream_with_buffer, paired_future_callback},
+<<<<<<< HEAD
     sys::{
         disk::{get_disk_status, DiskUsage},
         thread::ThreadBuildWrapper,
     },
+=======
+    resizable_threadpool::{DeamonRuntimeHandle, ResizableRuntime},
+    sys::disk::{get_disk_status, DiskUsage},
+>>>>>>> b94584c08b (Refactor Resizable Runtime from blocking TiKV shutting down. (#17784))
     time::{Instant, Limiter},
     HandyRwLock,
 };
@@ -119,7 +124,14 @@ pub struct ImportSstService<E: Engine> {
     cfg: ConfigManager,
     tablets: LocalTablets<E::Local>,
     engine: E,
+<<<<<<< HEAD
     threads: Arc<Runtime>,
+=======
+    threads: DeamonRuntimeHandle,
+    // threads_ref is for safely cleanning
+    #[allow(dead_code)]
+    threads_ref: Arc<Mutex<ResizableRuntime>>,
+>>>>>>> b94584c08b (Refactor Resizable Runtime from blocking TiKV shutting down. (#17784))
     importer: Arc<SstImporter<E::Local>>,
     limiter: Limiter,
     ingest_latch: Arc<IngestLatch>,
@@ -331,6 +343,7 @@ impl<E: Engine> ImportSstService<E> {
                 move || {
                     tikv_util::thread_group::set_properties(props.clone());
 
+<<<<<<< HEAD
                     set_io_type(IoType::Import);
                     tikv_kv::set_tls_engine(eng.lock().unwrap().clone());
                 },
@@ -341,12 +354,22 @@ impl<E: Engine> ImportSstService<E> {
             )
             .build()
             .unwrap();
+=======
+        let threads = ResizableRuntime::new(
+            4,
+            "impwkr",
+            Box::new(create_tokio_runtime),
+            Box::new(|_| ()),
+        );
+
+        let handle = threads.handle();
+        let threads_clone = Arc::new(Mutex::new(threads));
+>>>>>>> b94584c08b (Refactor Resizable Runtime from blocking TiKV shutting down. (#17784))
         if let LocalTablets::Singleton(tablet) = &tablets {
             importer.start_switch_mode_check(threads.handle(), Some(tablet.clone()));
         } else {
             importer.start_switch_mode_check(threads.handle(), None);
         }
-
         let writer = raft_writer::ThrottledTlsEngineWriter::default();
         let gc_handle = writer.clone();
         threads.spawn(async move {
@@ -354,14 +377,27 @@ impl<E: Engine> ImportSstService<E> {
                 tokio::time::sleep(WRITER_GC_INTERVAL).await;
             }
         });
+<<<<<<< HEAD
 
         let cfg_mgr = ConfigManager::new(cfg);
         threads.spawn(Self::tick(importer.clone(), cfg_mgr.clone()));
+=======
+        let num_threads = cfg.num_threads;
+        let cfg_mgr = ConfigManager::new(cfg, Arc::downgrade(&threads_clone));
+        handle.spawn(Self::tick(importer.clone(), cfg_mgr.clone()));
+        // Drop the initial pool to accept new tasks
+        threads_clone.lock().unwrap().adjust_with(num_threads);
+>>>>>>> b94584c08b (Refactor Resizable Runtime from blocking TiKV shutting down. (#17784))
 
         ImportSstService {
             cfg: cfg_mgr,
             tablets,
+<<<<<<< HEAD
             threads: Arc::new(threads),
+=======
+            threads: handle.clone(),
+            threads_ref: threads_clone,
+>>>>>>> b94584c08b (Refactor Resizable Runtime from blocking TiKV shutting down. (#17784))
             engine,
             importer,
             limiter: Limiter::new(f64::INFINITY),

@@ -8,8 +8,12 @@ use std::{
 use collections::{HashMap, HashSet};
 use futures_util::compat::Future01CompatExt;
 use kvproto::{import_sstpb::Range, metapb::Region};
+<<<<<<< HEAD
 use tikv_util::timer::GLOBAL_TIMER_HANDLE;
 use tokio::runtime::Handle;
+=======
+use tikv_util::{resizable_threadpool::DeamonRuntimeHandle, timer::GLOBAL_TIMER_HANDLE};
+>>>>>>> b94584c08b (Refactor Resizable Runtime from blocking TiKV shutting down. (#17784))
 
 use super::Config;
 
@@ -56,9 +60,13 @@ impl ImportModeSwitcherV2 {
         ImportModeSwitcherV2 { inner }
     }
 
+<<<<<<< HEAD
     // Periodically perform timeout check to change import mode of some regions back
     // to normal mode.
     pub fn start(&self, executor: &Handle) {
+=======
+    pub fn start_resizable_threads(&self, executor: &DeamonRuntimeHandle) {
+>>>>>>> b94584c08b (Refactor Resizable Runtime from blocking TiKV shutting down. (#17784))
         // spawn a background future to put regions back into normal mode after timeout
         let inner = self.inner.clone();
         let switcher = Arc::downgrade(&inner);
@@ -161,6 +169,17 @@ mod test {
 
     use super::*;
 
+<<<<<<< HEAD
+=======
+    type TokioResult<T> = std::io::Result<T>;
+
+    fn create_tokio_runtime(_: usize, _: &str) -> TokioResult<Runtime> {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+    }
+
+>>>>>>> b94584c08b (Refactor Resizable Runtime from blocking TiKV shutting down. (#17784))
     #[test]
     fn test_region_range_overlaps() {
         let verify_overlap = |ranges1: &[(&str, &str)], ranges2: &[(&str, &str)], overlap: bool| {
@@ -270,10 +289,16 @@ mod test {
             ..Config::default()
         };
 
+<<<<<<< HEAD
         let threads = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap();
+=======
+        let threads =
+            ResizableRuntime::new(4, "test", Box::new(create_tokio_runtime), Box::new(|_| {}));
+        let handle = threads.handle();
+>>>>>>> b94584c08b (Refactor Resizable Runtime from blocking TiKV shutting down. (#17784))
 
         let switcher = ImportModeSwitcherV2::new(&cfg);
         let mut region = Region::default();

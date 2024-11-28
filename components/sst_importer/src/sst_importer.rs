@@ -36,6 +36,10 @@ use tikv_util::{
     },
     future::RescheduleChecker,
     memory::{MemoryQuota, OwnedAllocated},
+<<<<<<< HEAD
+=======
+    resizable_threadpool::DeamonRuntimeHandle,
+>>>>>>> b94584c08b (Refactor Resizable Runtime from blocking TiKV shutting down. (#17784))
     sys::{thread::ThreadBuildWrapper, SysQuota},
     time::{Instant, Limiter},
     Either, HandyRwLock,
@@ -263,7 +267,11 @@ impl<E: KvEngine> SstImporter<E> {
         }
     }
 
+<<<<<<< HEAD
     pub fn start_switch_mode_check(&self, executor: &Handle, db: Option<E>) {
+=======
+    pub fn start_switch_mode_check(&self, executor: &DeamonRuntimeHandle, db: Option<E>) {
+>>>>>>> b94584c08b (Refactor Resizable Runtime from blocking TiKV shutting down. (#17784))
         match &self.switcher {
             Either::Left(switcher) => switcher.start(executor, db.unwrap()),
             Either::Right(switcher) => switcher.start(executor),
@@ -1455,6 +1463,13 @@ mod tests {
     use std::{
         io::{self, BufWriter, Write},
         ops::Sub,
+<<<<<<< HEAD
+=======
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Mutex,
+        },
+>>>>>>> b94584c08b (Refactor Resizable Runtime from blocking TiKV shutting down. (#17784))
         usize,
     };
 
@@ -1992,8 +2007,22 @@ mod tests {
         };
         let change = cfg.diff(&cfg_new);
 
+<<<<<<< HEAD
         // create config manager and update config.
         let mut cfg_mgr = ImportConfigManager::new(cfg);
+=======
+        let threads = ResizableRuntime::new(
+            cfg.num_threads,
+            "test",
+            Box::new(create_tokio_runtime),
+            Box::new(|_| {}),
+        );
+
+        let threads_clone = Arc::new(Mutex::new(threads));
+
+        // create config manager and update config.
+        let mut cfg_mgr = ImportConfigManager::new(cfg, Arc::downgrade(&threads_clone));
+>>>>>>> b94584c08b (Refactor Resizable Runtime from blocking TiKV shutting down. (#17784))
         cfg_mgr.dispatch(change).unwrap();
         importer.update_config_memory_use_ratio(&cfg_mgr);
 
@@ -2016,13 +2045,60 @@ mod tests {
             ..Default::default()
         };
         let change = cfg.diff(&cfg_new);
+<<<<<<< HEAD
         let mut cfg_mgr = ImportConfigManager::new(cfg);
+=======
+
+        let threads = ResizableRuntime::new(
+            cfg.num_threads,
+            "test",
+            Box::new(create_tokio_runtime),
+            Box::new(|_| {}),
+        );
+
+        let threads_clone = Arc::new(Mutex::new(threads));
+
+        let mut cfg_mgr = ImportConfigManager::new(cfg, Arc::downgrade(&threads_clone));
+>>>>>>> b94584c08b (Refactor Resizable Runtime from blocking TiKV shutting down. (#17784))
         let r = cfg_mgr.dispatch(change);
         assert!(r.is_err());
     }
 
     #[test]
+<<<<<<< HEAD
     fn test_do_read_kv_file() {
+=======
+    fn test_update_import_num_threads() {
+        let cfg = Config::default();
+        let threads = ResizableRuntime::new(
+            Config::default().num_threads,
+            "test",
+            Box::new(create_tokio_runtime),
+            Box::new(|new_size: usize| {
+                COUNTER.store(new_size, Ordering::SeqCst);
+            }),
+        );
+
+        let threads_clone = Arc::new(Mutex::new(threads));
+        let mut cfg_mgr = ImportConfigManager::new(cfg, Arc::downgrade(&threads_clone));
+
+        assert_eq!(cfg_mgr.rl().num_threads, Config::default().num_threads);
+
+        let cfg_new = Config {
+            num_threads: 10,
+            ..Default::default()
+        };
+        let change = Config::default().diff(&cfg_new);
+        let r = cfg_mgr.dispatch(change);
+
+        r.unwrap();
+        assert_eq!(cfg_mgr.rl().num_threads, cfg_new.num_threads);
+        assert_eq!(COUNTER.load(Ordering::SeqCst), cfg_mgr.rl().num_threads);
+    }
+
+    #[test]
+    fn test_download_kv_file_to_mem_cache() {
+>>>>>>> b94584c08b (Refactor Resizable Runtime from blocking TiKV shutting down. (#17784))
         // create a sample kv file.
         let (_temp_dir, backend, kv_meta, buff) = create_sample_external_kv_file().unwrap();
 
