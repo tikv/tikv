@@ -173,6 +173,13 @@ mod test {
 
     #[tokio::test]
     async fn test_lite_service_call_metrics() {
+        let test_series = prometheus::register_counter!(
+            "tikv_test_series",
+            "This is used for testing that the series was registered.",
+        )
+        .unwrap();
+        test_series.inc();
+
         let mut service = LiteService;
         let req = Request::builder()
             .method("GET")
@@ -185,7 +192,11 @@ mod test {
             security: Arc::new(SecurityConfig::default()),
         };
         let resp = service.call(ctx).await.unwrap();
+
         assert_eq!(resp.status(), StatusCode::OK);
+        let body = hyper::body::to_bytes(resp.into_body()).await.unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        assert!(body.contains("tikv_test_series 1"), "it is \n{}", body);
     }
 
     #[tokio::test]
@@ -193,7 +204,7 @@ mod test {
         let mut service = LiteService;
         let req = Request::builder()
             .method("GET")
-            .uri("/debug/pprof/profile")
+            .uri("/debug/pprof/profile?seconds=1")
             .body(Body::empty())
             .unwrap();
         let ctx = RequestCtx {
@@ -203,14 +214,20 @@ mod test {
         };
         let resp = service.call(ctx).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers()
+                .get("content-type")
+                .map(|h| h.to_str().unwrap()),
+            Some(mime::IMAGE_SVG.as_ref())
+        );
     }
 
     #[tokio::test]
-    async fn test_lite_service_call_forbidden() {
+    async fn test_lite_service_call_not_found() {
         let mut service = LiteService;
         let req = Request::builder()
             .method("GET")
-            .uri("/forbidden")
+            .uri("/not-found")
             .body(Body::empty())
             .unwrap();
         let ctx = RequestCtx {
