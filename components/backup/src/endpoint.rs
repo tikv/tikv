@@ -38,10 +38,11 @@ use tikv_util::{
     box_err, debug, error, error_unknown,
     future::RescheduleChecker,
     impl_display_as_debug, info,
+    resizable_threadpool::ResizableRuntime,
     store::find_peer,
     time::{Instant, Limiter},
     warn,
-    worker::Runnable, resizable_threadpool::ResizableRuntime,
+    worker::Runnable,
 };
 use tokio::runtime::{Handle, Runtime};
 use txn_types::{Key, Lock, TimeStamp};

@@ -41,10 +41,7 @@ use tikv_util::{
     time::{Instant, Limiter},
     Either, HandyRwLock,
 };
-use tokio::{
-    runtime::Runtime,
-    sync::OnceCell,
-};
+use tokio::{runtime::Runtime, sync::OnceCell};
 use txn_types::{Key, TimeStamp, WriteRef};
 
 use crate::{
@@ -1476,7 +1473,10 @@ mod tests {
     use tempfile::Builder;
     use test_sst_importer::*;
     use test_util::new_test_key_manager;
-    use tikv_util::{codec::stream_event::EventEncoder, stream::block_on_external_io, resizable_threadpool::ResizableRuntime};
+    use tikv_util::{
+        codec::stream_event::EventEncoder, resizable_threadpool::ResizableRuntime,
+        stream::block_on_external_io,
+    };
     use txn_types::{Value, WriteType};
     use uuid::Uuid;
 
