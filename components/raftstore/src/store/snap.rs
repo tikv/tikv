@@ -62,7 +62,7 @@ pub const SNAPSHOT_CFS_ENUM_PAIR: &[(CfNames, CfName)] = &[
 ];
 pub const SNAPSHOT_VERSION: u64 = 2;
 pub const TABLET_SNAPSHOT_VERSION: u64 = 3;
-pub const IO_LIMITER_CHUNK_SIZE: usize = 4 * 1024;
+pub const IO_LIMITER_CHUNK_SIZE: usize = 1 * 1024;
 
 /// Name prefix for the self-generated snapshot file.
 const SNAP_GEN_PREFIX: &str = "gen";
