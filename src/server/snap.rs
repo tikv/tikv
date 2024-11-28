@@ -5,7 +5,7 @@ use std::{
     io::{Error as IoError, ErrorKind, Read, Write},
     pin::Pin,
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc,
     },
     time::{Duration, Instant as StdInstant},
@@ -369,11 +369,17 @@ fn recv_snap<R: RaftExtension + 'static>(
     sink: ClientStreamingSink<Done>,
     snap_mgr: SnapManager,
     raft_router: R,
+    recving_count: Arc<AtomicUsize>,
 ) -> impl Future<Output = Result<()>> {
+    let region_id = Arc::new(AtomicU64::new(0));
+    let region_id_clone = region_id.clone();
+    let snap_mgr_clone = snap_mgr.clone();
     let recv_task = async move {
         let mut stream = stream.map_err(Error::from);
         let head = stream.next().await.transpose()?;
         let mut context = RecvSnapContext::new(head, &snap_mgr)?;
+        // Record the region_id for later cleanup.
+        region_id.store(context.raft_msg.region_id, Ordering::SeqCst);
         if context.file.is_none() {
             return context.finish(raft_router);
         }
@@ -404,19 +410,41 @@ fn recv_snap<R: RaftExtension + 'static>(
                 return Err(e);
             }
         }
-        // Notify the snapshot manager that a snapshot has been received,
-        // freeing up the associated resource in the concurrency limiter.
-        snap_mgr.recv_snap_complete(context.raft_msg.region_id);
         context.finish(raft_router)
     };
     async move {
+        defer!(cleanup_after_recv(
+            region_id_clone,
+            snap_mgr_clone,
+            recving_count
+        ));
         match recv_task.await {
-            Ok(()) => sink.success(Done::default()).await.map_err(Error::from),
+            Ok(()) => {
+                fail_point!("receiving_snapshot_sink_slow");
+                sink.success(Done::default()).await.map_err(Error::from)
+            }
             Err(e) => {
                 let status = RpcStatus::with_message(RpcStatusCode::UNKNOWN, format!("{:?}", e));
                 sink.fail(status).await.map_err(Error::from)
             }
         }
+    }
+}
+
+// Cleans up resources after snapshot reception. Ensures that the receiving
+// count is decremented and the occupied slot within the snap precheck mechanism
+// is released.
+fn cleanup_after_recv(
+    region_id: Arc<AtomicU64>,
+    snap_mgr: SnapManager,
+    recving_count: Arc<AtomicUsize>,
+) {
+    recving_count.fetch_sub(1, Ordering::SeqCst);
+    let id = region_id.load(Ordering::SeqCst);
+    if id != 0 {
+        // Notify the snapshot manager that a snapshot has been received,
+        // freeing up the associated resource in the concurrency limiter.
+        snap_mgr.recv_snap_complete(id);
     }
 }
 
@@ -529,8 +557,8 @@ impl<R: RaftExtension + 'static> Runnable for Runner<R> {
                 let recving_count = Arc::clone(&self.recving_count);
                 recving_count.fetch_add(1, Ordering::SeqCst);
                 let task = async move {
-                    let result = recv_snap(stream, sink, snap_mgr, raft_router).await;
-                    recving_count.fetch_sub(1, Ordering::SeqCst);
+                    let result =
+                        recv_snap(stream, sink, snap_mgr, raft_router, recving_count).await;
                     if let Err(e) = result {
                         error!("failed to recv snapshot"; "err" => %e);
                     }
