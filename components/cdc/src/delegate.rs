@@ -814,12 +814,10 @@ impl Delegate {
                     row_size = 0;
                 }
             }
-            if TxnSource::is_lossy_ddl_reorg_source_set(row.txn_source)
+            if TxnSource::is_lightning_physical_import(row.txn_source)
+                || TxnSource::is_lossy_ddl_reorg_source_set(row.txn_source)
                 || filter_loop && TxnSource::is_cdc_write_source_set(row.txn_source)
             {
-                continue;
-            }
-            if TxnSource::is_lightning_physical_import(row.txn_source) {
                 continue;
             }
             if current_rows_size + row_size >= CDC_EVENT_MAX_BYTES {
@@ -973,12 +971,10 @@ impl Delegate {
                     }
                 }
 
-                if TxnSource::is_lossy_ddl_reorg_source_set(v.txn_source)
+                if TxnSource::is_lightning_physical_import(v.txn_source)
+                    || TxnSource::is_lossy_ddl_reorg_source_set(v.txn_source)
                     || downstream.filter_loop && TxnSource::is_cdc_write_source_set(v.txn_source)
                 {
-                    continue;
-                }
-                if TxnSource::is_lightning_physical_import(v.txn_source) {
                     continue;
                 }
 
