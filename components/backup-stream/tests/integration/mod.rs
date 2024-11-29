@@ -425,14 +425,16 @@ mod all {
         let leader = suite.cluster.leader_of_region(1).unwrap();
         suite.must_shuffle_leader(1);
         let round2 = run_async_test(suite.write_records(256, 128, 1));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
         suite
             .endpoints
             .get(&leader.store_id)
             .unwrap()
             .scheduler()
-            .schedule(Task::ForceFlush("r".to_owned()))
+            .schedule(Task::ForceFlush(TaskSelector::All, tx))
             .unwrap();
-        suite.sync();
+        rx.blocking_recv().unwrap();
+
         std::thread::sleep(Duration::from_secs(2));
         suite.check_for_write_records(
             suite.flushed_files.path(),
