@@ -7,6 +7,12 @@ use std::{
 
 use ordered_float::OrderedFloat;
 
+/// Interval for updating the slow score.
+const UPDATE_INTERVALS: Duration = Duration::from_secs(10);
+/// Recovery intervals for the slow score.
+/// If the score has reached 100 and there is no timeout inspecting requests
+/// during this interval, the score will go back to 1 after 5min.
+const RECOVERY_INTERVALS: Duration = Duration::from_secs(60 * 5);
 // Slow score is a value that represents the speed of a store and ranges in [1,
 // 100]. It is maintained in the AIMD way.
 // If there are some inspecting requests timeout during a round, by default the
@@ -45,10 +51,33 @@ impl SlowScore {
 
             inspect_interval,
             ratio_thresh: OrderedFloat(0.1),
-            min_ttr: Duration::from_secs(5 * 60),
+            min_ttr: RECOVERY_INTERVALS,
             last_record_time: Instant::now(),
             last_update_time: Instant::now(),
             round_ticks: 30,
+            last_tick_id: 0,
+            last_tick_finished: true,
+        }
+    }
+
+    // Only for kvdb.
+    pub fn new_with_extra_config(inspect_interval: Duration, timeout_ratio: f64) -> SlowScore {
+        SlowScore {
+            value: OrderedFloat(1.0),
+
+            timeout_requests: 0,
+            total_requests: 0,
+
+            inspect_interval,
+            ratio_thresh: OrderedFloat(timeout_ratio),
+            min_ttr: RECOVERY_INTERVALS,
+            last_record_time: Instant::now(),
+            last_update_time: Instant::now(),
+            // The minimal round ticks is 1 for kvdb.
+            round_ticks: cmp::max(
+                UPDATE_INTERVALS.div_duration_f64(inspect_interval) as u64,
+                1_u64,
+            ),
             last_tick_id: 0,
             last_tick_finished: true,
         }
@@ -206,5 +235,53 @@ mod tests {
             OrderedFloat(1.0),
             slow_score.update_impl(Duration::from_secs(57))
         );
+    }
+
+    #[test]
+    fn test_slow_score_extra() {
+        let mut slow_score = SlowScore::new_with_extra_config(Duration::from_millis(1000), 0.6);
+        slow_score.timeout_requests = 1;
+        slow_score.total_requests = 10;
+        let score = slow_score.update_impl(Duration::from_secs(10));
+        assert!(score > OrderedFloat(1.16));
+        assert!(score < OrderedFloat(1.17));
+
+        slow_score.timeout_requests = 2;
+        slow_score.total_requests = 10;
+        let score = slow_score.update_impl(Duration::from_secs(10));
+        assert!(score > OrderedFloat(1.5));
+        assert!(score < OrderedFloat(1.6));
+
+        slow_score.timeout_requests = 0;
+        slow_score.total_requests = 100;
+        assert_eq!(
+            OrderedFloat(1.0),
+            slow_score.update_impl(Duration::from_secs(57))
+        );
+
+        slow_score.timeout_requests = 3;
+        slow_score.total_requests = 10;
+        assert_eq!(
+            OrderedFloat(1.5),
+            slow_score.update_impl(Duration::from_secs(10))
+        );
+
+        slow_score.timeout_requests = 6;
+        slow_score.total_requests = 10;
+        assert_eq!(
+            OrderedFloat(3.0),
+            slow_score.update_impl(Duration::from_secs(10))
+        );
+
+        slow_score.timeout_requests = 10;
+        slow_score.total_requests = 10;
+        assert_eq!(
+            OrderedFloat(6.0),
+            slow_score.update_impl(Duration::from_secs(10))
+        );
+
+        // Test too large inspect interval.
+        let slow_score = SlowScore::new_with_extra_config(Duration::from_secs(11), 0.1);
+        assert_eq!(slow_score.round_ticks, 1);
     }
 }
