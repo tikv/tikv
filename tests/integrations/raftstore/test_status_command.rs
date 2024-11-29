@@ -1,11 +1,11 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use health_controller::types::LatencyInspector;
+use health_controller::types::{InspectFactor, LatencyInspector};
 use raftstore::store::msg::StoreMsg as StoreMsgV1;
 use raftstore_v2::router::StoreMsg as StoreMsgV2;
 use test_raftstore::Simulator as S1;
 use test_raftstore_v2::Simulator as S2;
-use tikv_util::{time::Instant, HandyRwLock};
+use tikv_util::{config::ReadableDuration, time::Instant, HandyRwLock};
 
 #[test]
 fn test_region_detail() {
@@ -33,6 +33,7 @@ fn test_region_detail() {
 fn test_latency_inspect() {
     let mut cluster_v1 = test_raftstore::new_node_cluster(0, 1);
     cluster_v1.cfg.raft_store.store_io_pool_size = 2;
+    cluster_v1.cfg.raft_store.inspect_kvdb_interval = ReadableDuration::millis(500);
     cluster_v1.run();
     let mut cluster_v2 = test_raftstore_v2::new_node_cluster(0, 1);
     cluster_v2.run();
@@ -43,19 +44,24 @@ fn test_latency_inspect() {
     {
         // Test send LatencyInspect to V1.
         let (tx, rx) = std::sync::mpsc::sync_channel(10);
-        let inspector = LatencyInspector::new(
-            1,
-            Box::new(move |_, duration| {
-                let dur = duration.sum();
-                tx.send(dur).unwrap();
-            }),
-        );
-        let msg = StoreMsgV1::LatencyInspect {
-            send_time: Instant::now(),
-            inspector,
-        };
-        router_v1.send_control(msg).unwrap();
-        rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+        // Inspect different factors.
+        for factor in [InspectFactor::RaftDisk, InspectFactor::KvDisk].iter() {
+            let cloned_tx = tx.clone();
+            let inspector = LatencyInspector::new(
+                1,
+                Box::new(move |_, duration| {
+                    let dur = duration.sum();
+                    cloned_tx.send(dur).unwrap();
+                }),
+            );
+            let msg = StoreMsgV1::LatencyInspect {
+                factor: *factor,
+                send_time: Instant::now(),
+                inspector,
+            };
+            router_v1.send_control(msg).unwrap();
+            rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+        }
     }
     {
         // Test send LatencyInspect to V2.
@@ -83,17 +89,22 @@ fn test_sync_latency_inspect() {
     cluster.run();
     let router = cluster.sim.wl().get_router(1).unwrap();
     let (tx, rx) = std::sync::mpsc::sync_channel(10);
-    let inspector = LatencyInspector::new(
-        1,
-        Box::new(move |_, duration| {
-            let dur = duration.sum();
-            tx.send(dur).unwrap();
-        }),
-    );
-    let msg = StoreMsgV1::LatencyInspect {
-        send_time: Instant::now(),
-        inspector,
-    };
-    router.send_control(msg).unwrap();
-    rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+    // Inspect different factors.
+    for factor in [InspectFactor::RaftDisk, InspectFactor::KvDisk].iter() {
+        let cloned_tx = tx.clone();
+        let inspector = LatencyInspector::new(
+            1,
+            Box::new(move |_, duration| {
+                let dur = duration.sum();
+                cloned_tx.send(dur).unwrap();
+            }),
+        );
+        let msg = StoreMsgV1::LatencyInspect {
+            factor: *factor,
+            send_time: Instant::now(),
+            inspector,
+        };
+        router.send_control(msg).unwrap();
+        rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+    }
 }
