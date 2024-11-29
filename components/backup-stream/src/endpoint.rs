@@ -64,7 +64,7 @@ use crate::{
     metadata::{store::MetaStore, MetadataClient, MetadataEvent, StreamTask},
     metrics::{self, TaskStatus},
     observer::BackupStreamObserver,
-    router::{self, ApplyEvents, FlushContext, Router, TaskSelector},
+    router::{self, ApplyEvents, FlushContext, Router, TaskSelector, TaskSelectorRef},
     subscription_manager::{RegionSubscriptionManager, ResolvedRegions},
     subscription_track::{Ref, RefMut, ResolveResult, SubscriptionTracer},
     try_send,
@@ -857,20 +857,24 @@ where
         }
     }
 
-    pub fn on_force_flush(&self, task: String) {
+    pub fn on_force_flush(&self, task: TaskSelectorRef<'_>, cb: Box<dyn Fn(FlushResult) + Send>) {
         self.pool.block_on(async move {
-            let handler_res = self.range_router.get_task_handler(&task);
+            let handlers = self.range_router.select_task_handler(task);
             // This should only happen in testing, it would be to unwrap...
-            let _ = handler_res.unwrap().set_flushing_status_cas(false, true);
-            let mts = self.prepare_min_ts().await;
-            let sched = self.scheduler.clone();
-            self.region_op(ObserveOp::ResolveRegions {
-                callback: Box::new(move |res| {
-                    try_send!(sched, Task::ExecFlush(task, res));
-                }),
-                min_ts: mts,
-            })
-            .await;
+            for hnd in handlers {
+                let mts = self.prepare_min_ts().await;
+                let sched = self.scheduler.clone();
+                self.region_op(ObserveOp::ResolveRegions {
+                    callback: Box::new(move |res| {
+                        try_send!(
+                            sched,
+                            Task::ExecFlush(hnd.task.info.name.to_owned(), res, cb)
+                        );
+                    }),
+                    min_ts: mts,
+                })
+                .await;
+            }
         });
     }
 
@@ -881,7 +885,7 @@ where
             info!("min_ts prepared for flushing"; "min_ts" => %mts);
             self.region_op(ObserveOp::ResolveRegions {
                 callback: Box::new(move |res| {
-                    try_send!(sched, Task::ExecFlush(task, res));
+                    try_send!(sched, Task::ExecFlush(task, res, Box::new(|_| {})));
                 }),
                 min_ts: mts,
             })
@@ -1024,7 +1028,7 @@ where
             Task::BatchEvent(events) => self.do_backup(events),
             Task::Flush(task) => self.on_flush(task),
             Task::ModifyObserve(op) => self.on_modify_observe(op),
-            Task::ForceFlush(task) => self.on_force_flush(task),
+            Task::ForceFlush(sel, cb) => self.on_force_flush(sel.reference(), cb),
             Task::FatalError(task, err) => self.on_fatal_error(task, err),
             Task::ChangeConfig(cfg) => {
                 self.on_update_change_config(cfg);
@@ -1239,6 +1243,11 @@ impl fmt::Debug for RegionCheckpointOperation {
     }
 }
 
+struct FlushResult {
+    task: String,
+    error: Option<Error>,
+}
+
 pub enum Task {
     WatchTask(TaskOp),
     BatchEvent(Vec<CmdBatch>),
@@ -1246,7 +1255,7 @@ pub enum Task {
     /// Change the observe status of some region.
     ModifyObserve(ObserveOp),
     /// Convert status of some task into `flushing` and do flush then.
-    ForceFlush(String),
+    ForceFlush(TaskSelector, Box<dyn Fn(FlushResult) + Send>),
     /// FatalError pauses the task and set the error.
     FatalError(TaskSelector, Box<Error>),
     /// Run the callback when see this message. Only for test usage.
@@ -1271,7 +1280,7 @@ pub enum Task {
     Flush(String),
     /// Execute the flush with the calculated resolved result.
     /// This is an internal command only issued by the `Flush` task.
-    ExecFlush(String, ResolvedRegions),
+    ExecFlush(String, ResolvedRegions, Box<dyn FnOnce(FlushResult) + Send>),
     /// The command for getting region checkpoints.
     RegionCheckpointsOp(RegionCheckpointOperation),
     /// update global-checkpoint-ts to storage.
@@ -1377,7 +1386,7 @@ impl fmt::Debug for Task {
             Self::ChangeConfig(arg0) => f.debug_tuple("ChangeConfig").field(arg0).finish(),
             Self::Flush(arg0) => f.debug_tuple("Flush").field(arg0).finish(),
             Self::ModifyObserve(op) => f.debug_tuple("ModifyObserve").field(op).finish(),
-            Self::ForceFlush(arg0) => f.debug_tuple("ForceFlush").field(arg0).finish(),
+            Self::ForceFlush(sel, _) => f.debug_tuple("ForceFlush").field(sel).finish(),
             Self::FatalError(task, err) => {
                 f.debug_tuple("FatalError").field(task).field(err).finish()
             }
