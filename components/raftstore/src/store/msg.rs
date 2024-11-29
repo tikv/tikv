@@ -8,6 +8,10 @@ use std::{borrow::Cow, fmt};
 use collections::HashSet;
 use engine_traits::{CompactedEvent, KvEngine, Snapshot};
 use futures::channel::mpsc::UnboundedSender;
+<<<<<<< HEAD
+=======
+use health_controller::types::{InspectFactor, LatencyInspector};
+>>>>>>> 43e63b5614 (raftstore: calculate the slow score by considering individual disk performance factors (#17801))
 use kvproto::{
     brpb::CheckAdminResponse,
     kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp},
@@ -882,6 +886,7 @@ where
 
     /// Inspect the latency of raftstore.
     LatencyInspect {
+        factor: InspectFactor,
         send_time: Instant,
         inspector: LatencyInspector,
     },

@@ -9,6 +9,10 @@ use causal_ts::CausalTsProviderImpl;
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
+<<<<<<< HEAD
+=======
+use health_controller::types::{InspectFactor, LatencyInspector, RaftstoreDuration};
+>>>>>>> 43e63b5614 (raftstore: calculate the slow score by considering individual disk performance factors (#17801))
 use kvproto::{metapb, pdpb};
 use pd_client::{BucketStat, PdClient};
 use raftstore::store::{
@@ -257,6 +261,7 @@ where
             store_heartbeat_interval / NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
             cfg.value().report_min_resolved_ts_interval.0,
             cfg.value().inspect_interval.0,
+            std::time::Duration::default(),
             PdReporter::new(pd_scheduler, logger.clone()),
         );
         stats_monitor.start(
@@ -436,7 +441,7 @@ impl StoreStatsReporter for PdReporter {
         }
     }
 
-    fn update_latency_stats(&self, timer_tick: u64) {
+    fn update_latency_stats(&self, timer_tick: u64, _factor: InspectFactor) {
         // Tick slowness statistics.
         {
             if let Err(e) = self.scheduler.schedule(Task::TickSlownessStats) {

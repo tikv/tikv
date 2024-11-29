@@ -20,7 +20,15 @@ use concurrency_manager::ConcurrencyManager;
 use engine_traits::{KvEngine, RaftEngine};
 use fail::fail_point;
 use futures::{compat::Future01CompatExt, FutureExt};
+<<<<<<< HEAD
 use grpcio_health::{HealthService, ServingStatus};
+=======
+use health_controller::{
+    reporters::{RaftstoreReporter, RaftstoreReporterConfig},
+    types::{InspectFactor, LatencyInspector, RaftstoreDuration},
+    HealthController,
+};
+>>>>>>> 43e63b5614 (raftstore: calculate the slow score by considering individual disk performance factors (#17801))
 use kvproto::{
     kvrpcpb::DiskFullOpt,
     metapb, pdpb,
@@ -48,7 +56,7 @@ use tikv_util::{
     topn::TopN,
     trend::{RequestPerSecRecorder, Trend},
     warn,
-    worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler},
+    worker::{Runnable, ScheduleError, Scheduler},
 };
 use txn_types::TimeStamp;
 use yatp::Remote;
@@ -199,6 +207,7 @@ where
     },
     UpdateSlowScore {
         id: u64,
+        factor: InspectFactor,
         duration: RaftstoreDuration,
     },
     RegionCpuRecords(Arc<RawRecords>),
@@ -208,6 +217,9 @@ where
     },
     ReportBuckets(BucketStat),
     ControlGrpcServer(pdpb::ControlGrpcEvent),
+    InspectLatency {
+        factor: InspectFactor,
+    },
 }
 
 pub struct StoreStat {
@@ -445,8 +457,16 @@ where
             Task::QueryRegionLeader { region_id } => {
                 write!(f, "query the leader of region {}", region_id)
             }
-            Task::UpdateSlowScore { id, ref duration } => {
-                write!(f, "compute slow score: id {}, duration {:?}", id, duration)
+            Task::UpdateSlowScore {
+                id,
+                factor,
+                ref duration,
+            } => {
+                write!(
+                    f,
+                    "compute slow score: id {}, factor: {:?}, duration {:?}",
+                    id, factor, duration
+                )
             }
             Task::RegionCpuRecords(ref cpu_records) => {
                 write!(f, "get region cpu records: {:?}", cpu_records)
@@ -466,6 +486,9 @@ where
             }
             Task::ControlGrpcServer(ref event) => {
                 write!(f, "control grpc server: {:?}", event)
+            }
+            Task::InspectLatency { factor } => {
+                write!(f, "inspect raftstore latency: {:?}", factor)
             }
         }
     }
@@ -525,7 +548,7 @@ pub trait StoreStatsReporter: Send + Clone + Sync + 'static + Collector {
     );
     fn report_min_resolved_ts(&self, store_id: u64, min_resolved_ts: u64);
     fn auto_split(&self, split_infos: Vec<SplitInfo>);
-    fn update_latency_stats(&self, timer_tick: u64);
+    fn update_latency_stats(&self, timer_tick: u64, factor: InspectFactor);
 }
 
 impl<EK, ER> StoreStatsReporter for WrappedScheduler<EK, ER>
@@ -575,9 +598,16 @@ where
         }
     }
 
-    fn update_latency_stats(&self, timer_tick: u64) {
-        debug!("update latency statistics not implemented for raftstore-v1";
+    fn update_latency_stats(&self, timer_tick: u64, factor: InspectFactor) {
+        debug!("update latency statistics for raftstore-v1";
                 "tick" => timer_tick);
+        let task = Task::InspectLatency { factor };
+        if let Err(e) = self.0.schedule(task) {
+            error!(
+                "failed to send inspect raftstore latency task to pd worker";
+                "err" => ?e,
+            );
+        }
     }
 }
 
@@ -595,6 +625,7 @@ where
     collect_tick_interval: Duration,
     report_min_resolved_ts_interval: Duration,
     inspect_latency_interval: Duration,
+    inspect_kvdb_latency_interval: Duration,
 }
 
 impl<T> StatsMonitor<T>
@@ -603,8 +634,13 @@ where
 {
     pub fn new(
         interval: Duration,
+<<<<<<< HEAD
         report_min_resolved_ts_interval: Duration,
         inspect_latency_interval: Duration,
+=======
+        inspect_latency_interval: Duration,
+        inspect_kvdb_latency_interval: Duration,
+>>>>>>> 43e63b5614 (raftstore: calculate the slow score by considering individual disk performance factors (#17801))
         reporter: T,
     ) -> Self {
         StatsMonitor {
@@ -625,6 +661,7 @@ where
                 cmp::min(default_collect_tick_interval(), interval),
             ),
             inspect_latency_interval,
+            inspect_kvdb_latency_interval,
         }
     }
 
@@ -656,12 +693,21 @@ where
         let load_base_split_check_interval = self
             .load_base_split_check_interval
             .div_duration_f64(tick_interval) as u64;
+<<<<<<< HEAD
         let report_min_resolved_ts_interval = self
             .report_min_resolved_ts_interval
             .div_duration_f64(tick_interval) as u64;
         let update_latency_stats_interval = self
             .inspect_latency_interval
             .div_duration_f64(tick_interval) as u64;
+=======
+        let update_raftdisk_latency_stats_interval =
+            self.inspect_latency_interval
+                .div_duration_f64(tick_interval) as u64;
+        let update_kvdisk_latency_stats_interval =
+            self.inspect_kvdb_latency_interval
+                .div_duration_f64(tick_interval) as u64;
+>>>>>>> 43e63b5614 (raftstore: calculate the slow score by considering individual disk performance factors (#17801))
 
         let (timer_tx, timer_rx) = mpsc::channel();
         self.timer = Some(timer_tx);
@@ -722,6 +768,7 @@ where
                             &mut region_cpu_records_collector,
                         );
                     }
+<<<<<<< HEAD
                     if is_enable_tick(timer_cnt, report_min_resolved_ts_interval) {
                         reporter.report_min_resolved_ts(
                             store_id,
@@ -730,6 +777,13 @@ where
                     }
                     if is_enable_tick(timer_cnt, update_latency_stats_interval) {
                         reporter.update_latency_stats(timer_cnt);
+=======
+                    if is_enable_tick(timer_cnt, update_raftdisk_latency_stats_interval) {
+                        reporter.update_latency_stats(timer_cnt, InspectFactor::RaftDisk);
+                    }
+                    if is_enable_tick(timer_cnt, update_kvdisk_latency_stats_interval) {
+                        reporter.update_latency_stats(timer_cnt, InspectFactor::KvDisk);
+>>>>>>> 43e63b5614 (raftstore: calculate the slow score by considering individual disk performance factors (#17801))
                     }
                     timer_cnt += 1;
                 }
@@ -1027,6 +1081,7 @@ where
             interval,
             cfg.report_min_resolved_ts_interval.0,
             cfg.inspect_interval.0,
+            cfg.inspect_kvdb_interval.0,
             WrappedScheduler(scheduler.clone()),
         );
         if let Err(e) = stats_monitor.start(
@@ -1038,6 +1093,37 @@ where
             error!("failed to start stats collector, error = {:?}", e);
         }
 
+<<<<<<< HEAD
+=======
+        let health_reporter_config = RaftstoreReporterConfig {
+            inspect_interval: cfg.inspect_interval.0,
+            inspect_kvdb_interval: cfg.inspect_kvdb_interval.0,
+
+            unsensitive_cause: cfg.slow_trend_unsensitive_cause,
+            unsensitive_result: cfg.slow_trend_unsensitive_result,
+            net_io_factor: cfg.slow_trend_network_io_factor,
+
+            cause_spike_filter_value_gauge: STORE_SLOW_TREND_MISC_GAUGE_VEC
+                .with_label_values(&["spike_filter_value"]),
+            cause_spike_filter_count_gauge: STORE_SLOW_TREND_MISC_GAUGE_VEC
+                .with_label_values(&["spike_filter_count"]),
+            cause_l1_gap_gauges: STORE_SLOW_TREND_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC
+                .with_label_values(&["L1"]),
+            cause_l2_gap_gauges: STORE_SLOW_TREND_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC
+                .with_label_values(&["L2"]),
+            result_spike_filter_value_gauge: STORE_SLOW_TREND_RESULT_MISC_GAUGE_VEC
+                .with_label_values(&["spike_filter_value"]),
+            result_spike_filter_count_gauge: STORE_SLOW_TREND_RESULT_MISC_GAUGE_VEC
+                .with_label_values(&["spike_filter_count"]),
+            result_l1_gap_gauges: STORE_SLOW_TREND_RESULT_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC
+                .with_label_values(&["L1"]),
+            result_l2_gap_gauges: STORE_SLOW_TREND_RESULT_MARGIN_ERROR_WINDOW_GAP_GAUGE_VEC
+                .with_label_values(&["L2"]),
+        };
+
+        let health_reporter = RaftstoreReporter::new(&health_controller, health_reporter_config);
+
+>>>>>>> 43e63b5614 (raftstore: calculate the slow score by considering individual disk performance factors (#17801))
         Runner {
             store_id,
             pd_client,
@@ -2052,6 +2138,89 @@ where
             }
         }
     }
+
+    fn handle_inspect_latency(&mut self, factor: InspectFactor) {
+        let slow_score_tick_result = self
+            .health_reporter
+            .tick(self.store_stat.maybe_busy(), factor);
+        if let Some(score) = slow_score_tick_result.updated_score {
+            STORE_SLOW_SCORE_GAUGE
+                .with_label_values(&[factor.as_str()])
+                .set(score as i64);
+        }
+        let id = slow_score_tick_result.tick_id;
+        let scheduler = self.scheduler.clone();
+        let inspector = {
+            match factor {
+                InspectFactor::RaftDisk => {
+                    // If the last slow_score already reached abnormal state and was delayed for
+                    // reporting by `store-heartbeat` to PD, we should report it here manually as
+                    // a FAKE `store-heartbeat`.
+                    if slow_score_tick_result.should_force_report_slow_store
+                        && self.is_store_heartbeat_delayed()
+                    {
+                        self.handle_fake_store_heartbeat();
+                    }
+                    LatencyInspector::new(
+                        id,
+                        Box::new(move |id, duration| {
+                            STORE_INSPECT_DURATION_HISTOGRAM
+                                .with_label_values(&["store_wait"])
+                                .observe(tikv_util::time::duration_to_sec(
+                                    duration.store_wait_duration.unwrap_or_default(),
+                                ));
+                            STORE_INSPECT_DURATION_HISTOGRAM
+                                .with_label_values(&["store_commit"])
+                                .observe(tikv_util::time::duration_to_sec(
+                                    duration.store_commit_duration.unwrap_or_default(),
+                                ));
+
+                            STORE_INSPECT_DURATION_HISTOGRAM
+                                .with_label_values(&["all"])
+                                .observe(tikv_util::time::duration_to_sec(duration.sum()));
+                            if let Err(e) = scheduler.schedule(Task::UpdateSlowScore {
+                                id,
+                                factor,
+                                duration,
+                            }) {
+                                warn!("schedule pd task failed"; "err" => ?e);
+                            }
+                        }),
+                    )
+                }
+                InspectFactor::KvDisk => LatencyInspector::new(
+                    id,
+                    Box::new(move |id, duration| {
+                        STORE_INSPECT_DURATION_HISTOGRAM
+                            .with_label_values(&["apply_wait"])
+                            .observe(tikv_util::time::duration_to_sec(
+                                duration.apply_wait_duration.unwrap_or_default(),
+                            ));
+                        STORE_INSPECT_DURATION_HISTOGRAM
+                            .with_label_values(&["apply_process"])
+                            .observe(tikv_util::time::duration_to_sec(
+                                duration.apply_process_duration.unwrap_or_default(),
+                            ));
+                        if let Err(e) = scheduler.schedule(Task::UpdateSlowScore {
+                            id,
+                            factor,
+                            duration,
+                        }) {
+                            warn!("schedule pd task failed"; "err" => ?e);
+                        }
+                    }),
+                ),
+            }
+        };
+        let msg = StoreMsg::LatencyInspect {
+            factor,
+            send_time: TiInstant::now(),
+            inspector,
+        };
+        if let Err(e) = self.router.send_control(msg) {
+            warn!("pd worker send latency inspecter failed"; "err" => ?e);
+        }
+    }
 }
 
 fn calculate_region_cpu_records(
@@ -2295,11 +2464,23 @@ where
                 txn_ext,
             } => self.handle_update_max_timestamp(region_id, initial_status, txn_ext),
             Task::QueryRegionLeader { region_id } => self.handle_query_region_leader(region_id),
+<<<<<<< HEAD
             Task::UpdateSlowScore { id, duration } => {
                 // Fine-tuned, `SlowScore` only takes the I/O jitters on the disk into account.
                 self.slow_score.record(
                     id,
                     duration.delays_on_disk_io(false),
+=======
+            Task::UpdateSlowScore {
+                id,
+                factor,
+                duration,
+            } => {
+                self.health_reporter.record_raftstore_duration(
+                    id,
+                    factor,
+                    duration,
+>>>>>>> 43e63b5614 (raftstore: calculate the slow score by considering individual disk performance factors (#17801))
                     !self.store_stat.maybe_busy(),
                 );
             }
@@ -2314,6 +2495,9 @@ where
             Task::ControlGrpcServer(event) => {
                 self.handle_control_grpc_server(event);
             }
+            Task::InspectLatency { factor } => {
+                self.handle_inspect_latency(factor);
+            }
         };
     }
 
@@ -2322,6 +2506,7 @@ where
     }
 }
 
+<<<<<<< HEAD
 impl<EK, ER, T> RunnableWithTimer for Runner<EK, ER, T>
 where
     EK: KvEngine,
@@ -2409,6 +2594,8 @@ where
     }
 }
 
+=======
+>>>>>>> 43e63b5614 (raftstore: calculate the slow score by considering individual disk performance factors (#17801))
 fn new_change_peer_request(change_type: ConfChangeType, peer: metapb::Peer) -> AdminRequest {
     let mut req = AdminRequest::default();
     req.set_cmd_type(AdminCmdType::ChangePeer);
@@ -2700,6 +2887,7 @@ mod tests {
                     Duration::from_secs(interval),
                     Duration::from_secs(0),
                     Duration::from_secs(interval),
+                    Duration::default(),
                     WrappedScheduler(scheduler),
                 );
                 let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
@@ -3006,6 +3194,7 @@ mod tests {
             Duration::from_secs(interval),
             Duration::from_secs(0),
             Duration::from_secs(interval),
+            Duration::default(),
             WrappedScheduler(pd_worker.scheduler()),
         );
         let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));

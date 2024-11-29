@@ -341,19 +341,38 @@ pub struct Config {
     #[deprecated = "The configuration has been removed. The time to clean stale peer safely can be decided based on RocksDB snapshot sequence number."]
     pub clean_stale_peer_delay: ReadableDuration,
 
-    // Interval to inspect the latency of raftstore for slow store detection.
+    #[online_config(hidden)]
+    // Interval to inspect the latency of flushing raft logs for slow store detection.
     pub inspect_interval: ReadableDuration,
+    // Interval to inspect the latency of flushes on kvdb for slow store detection.
+    // If the kvdb uses the same mount path with raftdb, the default value will be
+    // optimized to `0` to avoid duplicated inspection.
+    #[doc(hidden)]
+    #[online_config(hidden)]
+    pub inspect_kvdb_interval: ReadableDuration,
     /// Threshold of CPU utilization to inspect for slow store detection.
     #[doc(hidden)]
+    #[online_config(hidden)]
     pub inspect_cpu_util_thd: f64,
 
+    #[doc(hidden)]
+    #[online_config(hidden)]
     // The unsensitive(increase it to reduce sensitiveness) of the cause-trend detection
     pub slow_trend_unsensitive_cause: f64,
+    #[doc(hidden)]
+    #[online_config(hidden)]
     // The unsensitive(increase it to reduce sensitiveness) of the result-trend detection
     pub slow_trend_unsensitive_result: f64,
+<<<<<<< HEAD
 
     // Interval to report min resolved ts, if it is zero, it means disabled.
     pub report_min_resolved_ts_interval: ReadableDuration,
+=======
+    #[doc(hidden)]
+    #[online_config(hidden)]
+    // The sensitiveness of slowness on network-io.
+    pub slow_trend_network_io_factor: f64,
+>>>>>>> 43e63b5614 (raftstore: calculate the slow score by considering individual disk performance factors (#17801))
 
     /// Interval to check whether to reactivate in-memory pessimistic lock after
     /// being disabled before transferring leader.
@@ -513,6 +532,7 @@ impl Default for Config {
             region_split_size: ReadableSize(0),
             clean_stale_peer_delay: ReadableDuration::minutes(0),
             inspect_interval: ReadableDuration::millis(100),
+            inspect_kvdb_interval: ReadableDuration::secs(2),
             // The default value of `inspect_cpu_util_thd` is 0.4, which means
             // when the cpu utilization is greater than 40%, the store might be
             // regarded as a slow node if there exists delayed inspected messages.
@@ -642,6 +662,29 @@ impl Config {
 
         if self.raft_log_gc_count_limit.is_none() && raft_kv_v2 {
             self.raft_log_gc_count_limit = Some(10000);
+        }
+    }
+
+    /// Optimize the interval of different inspectors according to the
+    /// configuration.
+    pub fn optimize_inspector(&mut self, separated_raft_mount_path: bool) {
+        // If the kvdb uses the same mount path with raftdb, the health status
+        // of kvdb will be inspected by raftstore automatically. So it's not necessary
+        // to inspect kvdb.
+        if !separated_raft_mount_path {
+            self.inspect_kvdb_interval = ReadableDuration::ZERO;
+        } else {
+            // If the inspect_kvdb_interval is less than inspect_interval, it should
+            // use `inspect_interval` * 10 as an empirical inspect interval for KvDB Disk
+            // I/O.
+            let inspect_kvdb_interval = if self.inspect_kvdb_interval < self.inspect_interval
+                && self.inspect_kvdb_interval != ReadableDuration::ZERO
+            {
+                self.inspect_interval * 10
+            } else {
+                self.inspect_kvdb_interval
+            };
+            self.inspect_kvdb_interval = inspect_kvdb_interval;
         }
     }
 
@@ -1561,5 +1604,35 @@ mod tests {
             cfg.raft_log_gc_count_limit(),
             split_size * 3 / 4 / ReadableSize::kb(1)
         );
+<<<<<<< HEAD
+=======
+
+        cfg = Config::new();
+        cfg.optimize_for(false);
+        cfg.raft_write_wait_duration = ReadableDuration::micros(1001);
+        cfg.validate(split_size, true, split_size / 20, false)
+            .unwrap_err();
+
+        cfg = Config::new();
+        cfg.optimize_inspector(false);
+        assert_eq!(cfg.inspect_kvdb_interval, ReadableDuration::ZERO);
+
+        cfg = Config::new();
+        cfg.inspect_kvdb_interval = ReadableDuration::secs(1);
+        cfg.optimize_inspector(false);
+        assert_eq!(cfg.inspect_kvdb_interval, ReadableDuration::ZERO);
+        cfg.optimize_inspector(true);
+        assert_eq!(cfg.inspect_kvdb_interval, ReadableDuration::ZERO);
+
+        cfg.inspect_kvdb_interval = ReadableDuration::secs(1);
+        cfg.optimize_inspector(true);
+        assert_eq!(cfg.inspect_kvdb_interval, ReadableDuration::secs(1));
+
+        cfg = Config::new();
+        cfg.inspect_kvdb_interval = ReadableDuration::millis(1);
+        cfg.inspect_interval = ReadableDuration::millis(100);
+        cfg.optimize_inspector(true);
+        assert_eq!(cfg.inspect_kvdb_interval, ReadableDuration::secs(1));
+>>>>>>> 43e63b5614 (raftstore: calculate the slow score by considering individual disk performance factors (#17801))
     }
 }
