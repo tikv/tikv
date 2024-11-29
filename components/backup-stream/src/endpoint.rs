@@ -857,23 +857,35 @@ where
         }
     }
 
-    pub fn on_force_flush(&self, task: TaskSelectorRef<'_>, cb: Box<dyn Fn(FlushResult) + Send>) {
+    pub fn on_force_flush(&self, task: TaskSelectorRef<'_>, sender: Sender<FlushResult>) {
         self.pool.block_on(async move {
             let handlers = self.range_router.select_task_handler(task);
             // This should only happen in testing, it would be to unwrap...
             for hnd in handlers {
                 let mts = self.prepare_min_ts().await;
                 let sched = self.scheduler.clone();
-                self.region_op(ObserveOp::ResolveRegions {
-                    callback: Box::new(move |res| {
-                        try_send!(
-                            sched,
-                            Task::ExecFlush(hnd.task.info.name.to_owned(), res, cb)
-                        );
-                    }),
-                    min_ts: mts,
-                })
-                .await;
+                let sender = sender.clone();
+                match hnd.set_flushing_status_cas(false, true) {
+                    Ok(_) => {
+                        self.region_op(ObserveOp::ResolveRegions {
+                            callback: Box::new(move |res| {
+                                try_send!(
+                                    sched,
+                                    Task::ExecFlush(hnd.task.info.name.to_owned(), res, sender)
+                                );
+                            }),
+                            min_ts: mts,
+                        })
+                        .await;
+                    }
+                    Err(_) => {
+                        let res = FlushResult {
+                            task: hnd.task.info.name.to_owned(),
+                            error: Some(Error::Other(box_err!("task is flushing"))),
+                        };
+                        let _ = sender.send(res).await;
+                    }
+                }
             }
         });
     }
@@ -883,9 +895,10 @@ where
             let mts = self.prepare_min_ts().await;
             let sched = self.scheduler.clone();
             info!("min_ts prepared for flushing"; "min_ts" => %mts);
+            let (tx, _) = tokio::sync::mpsc::channel(1);
             self.region_op(ObserveOp::ResolveRegions {
                 callback: Box::new(move |res| {
-                    try_send!(sched, Task::ExecFlush(task, res, Box::new(|_| {})));
+                    try_send!(sched, Task::ExecFlush(task, res, tx));
                 }),
                 min_ts: mts,
             })
@@ -893,14 +906,17 @@ where
         })
     }
 
-    fn on_exec_flush(&mut self, task: String, resolved: ResolvedRegions) {
+    fn on_exec_flush(&mut self, task: String, resolved: ResolvedRegions, cb: Sender<FlushResult>) {
         self.checkpoint_mgr.freeze();
-        self.pool
-            .spawn(root!("flush"; self.do_flush(task, resolved).map(|r| {
-                if let Err(err) = r {
-                    err.report("during updating flush status")
-                }
-            })));
+        let fut = self.do_flush(task.clone(), resolved);
+        self.pool.spawn(root!("flush"; async move {
+            let res = fut.await;
+            if let Err(ref err) = &res {
+                err.report("during updating flush status")
+            }
+            let flush_res = FlushResult { task, error: res.err() };
+            let _ = cb.send(flush_res).await;
+        }));
     }
 
     fn update_global_checkpoint(&self, task: String) -> future![()] {
@@ -1045,7 +1061,7 @@ where
                 }
             }
             Task::MarkFailover(t) => self.failover_time = Some(t),
-            Task::ExecFlush(task, min_ts) => self.on_exec_flush(task, min_ts),
+            Task::ExecFlush(task, min_ts, cb) => self.on_exec_flush(task, min_ts, cb),
             Task::RegionCheckpointsOp(s) => self.handle_region_checkpoints_op(s),
             Task::UpdateGlobalCheckpoint(task) => self.on_update_global_checkpoint(task),
         }
@@ -1243,9 +1259,9 @@ impl fmt::Debug for RegionCheckpointOperation {
     }
 }
 
-struct FlushResult {
-    task: String,
-    error: Option<Error>,
+pub struct FlushResult {
+    pub task: String,
+    pub error: Option<Error>,
 }
 
 pub enum Task {
@@ -1255,7 +1271,7 @@ pub enum Task {
     /// Change the observe status of some region.
     ModifyObserve(ObserveOp),
     /// Convert status of some task into `flushing` and do flush then.
-    ForceFlush(TaskSelector, Box<dyn Fn(FlushResult) + Send>),
+    ForceFlush(TaskSelector, Sender<FlushResult>),
     /// FatalError pauses the task and set the error.
     FatalError(TaskSelector, Box<Error>),
     /// Run the callback when see this message. Only for test usage.
@@ -1280,7 +1296,7 @@ pub enum Task {
     Flush(String),
     /// Execute the flush with the calculated resolved result.
     /// This is an internal command only issued by the `Flush` task.
-    ExecFlush(String, ResolvedRegions, Box<dyn FnOnce(FlushResult) + Send>),
+    ExecFlush(String, ResolvedRegions, Sender<FlushResult>),
     /// The command for getting region checkpoints.
     RegionCheckpointsOp(RegionCheckpointOperation),
     /// update global-checkpoint-ts to storage.
@@ -1395,7 +1411,7 @@ impl fmt::Debug for Task {
                 .debug_tuple("MarkFailover")
                 .field(&format_args!("{:?} ago", t.saturating_elapsed()))
                 .finish(),
-            Self::ExecFlush(arg0, arg1) => f
+            Self::ExecFlush(arg0, arg1, _) => f
                 .debug_tuple("ExecFlush")
                 .field(arg0)
                 .field(&arg1.global_checkpoint())

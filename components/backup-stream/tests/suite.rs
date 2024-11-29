@@ -596,9 +596,15 @@ impl Suite {
     }
 
     pub fn force_flush_files(&self, task: &str) {
-        // TODO: use the callback to make the test more stable.
-        self.run(|| Task::ForceFlush(task.to_owned()));
-        self.sync();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        self.run(|| Task::ForceFlush(TaskSelector::ByName(task.to_owned()), tx.clone()));
+        drop(tx);
+
+        let mut v = vec![];
+        assert_eq!(rx.blocking_recv_many(&mut v, 1), 1);
+        if let Some(ref err) = v[0].error {
+            panic!("failed to flush: {}", err)
+        }
     }
 
     pub fn run(&self, mut t: impl FnMut() -> Task) {
