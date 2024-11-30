@@ -1190,7 +1190,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         self.threads.spawn(handle_task);
     }
 
-    impl_write!(write, WriteRequest, WriteResponse, Chunk, new_txn_writer);
+    impl_write!(write, WriteRequest, WriteResponse, Chunk, new_file_writer);
 
     impl_write!(
         raw_write,

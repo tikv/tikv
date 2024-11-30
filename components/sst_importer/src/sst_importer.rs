@@ -53,7 +53,7 @@ use crate::{
     import_mode::{ImportModeSwitcher, RocksDbMetricsFn},
     import_mode2::{HashRange, ImportModeSwitcherV2},
     metrics::*,
-    sst_writer::{RawSstWriter, TxnSstWriter},
+    sst_writer::{RawSstWriter, SstFileWriter, TxnSstWriter},
     util, Config, ConfigManager as ImportConfigManager, Error, Result,
 };
 
@@ -1425,6 +1425,23 @@ impl<E: KvEngine> SstImporter<E> {
     /// last modified time. Other fields may be left blank.
     pub fn list_ssts(&self) -> Result<Vec<(SstMeta, i32, SystemTime)>> {
         self.dir.list_ssts()
+    }
+
+    pub fn new_file_writer(&self, _db: &E, meta: SstMeta) -> Result<SstFileWriter> {
+        let mut default_meta = meta.clone();
+        default_meta.set_cf_name(CF_DEFAULT.to_owned());
+        let default_path = self.dir.join_for_write(&default_meta)?;
+
+        let mut write_meta = meta;
+        write_meta.set_cf_name(CF_WRITE.to_owned());
+        let write_path = self.dir.join_for_write(&write_meta)?;
+
+        Ok(SstFileWriter::new(
+            default_path,
+            write_path,
+            default_meta,
+            write_meta,
+        ))
     }
 
     pub fn new_txn_writer(&self, db: &E, meta: SstMeta) -> Result<TxnSstWriter<E>> {
