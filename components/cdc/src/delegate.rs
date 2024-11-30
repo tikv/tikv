@@ -19,9 +19,7 @@ use kvproto::{
     },
     kvrpcpb::ExtraOp as TxnExtraOp,
     metapb::{Region, RegionEpoch},
-    raft_cmdpb::{
-        AdminCmdType, AdminRequest, AdminResponse, CmdType, DeleteRequest, PutRequest, Request,
-    },
+    raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CmdType, PutRequest, Request},
 };
 use raftstore::{
     coprocessor::{Cmd, CmdBatch, ObserveHandle},
@@ -227,6 +225,7 @@ impl Downstream {
     }
 }
 
+<<<<<<< HEAD
 struct Pending {
     downstreams: Vec<Downstream>,
     locks: Vec<PendingLock>,
@@ -300,12 +299,80 @@ impl Drop for Pending {
 enum PendingLock {
     Track { key: Vec<u8>, start_ts: TimeStamp },
     Untrack { key: Vec<u8> },
+=======
+// In `PendingLock`,  `key` is encoded.
+pub enum PendingLock {
+    Track { key: Key, start_ts: MiniLock },
+    Untrack { key: Key, start_ts: TimeStamp },
+>>>>>>> cf749a682b (cdc: skip loading old values for un-observed ranges (#17878))
 }
 
 impl HeapSize for PendingLock {
     fn heap_size(&self) -> usize {
         match self {
+<<<<<<< HEAD
             PendingLock::Track { key, .. } | PendingLock::Untrack { key } => key.heap_size(),
+=======
+            PendingLock::Track { key, .. } | PendingLock::Untrack { key, .. } => {
+                key.approximate_heap_size()
+            }
+        }
+    }
+}
+
+pub enum LockTracker {
+    Pending,
+    Preparing(Vec<PendingLock>),
+    Prepared {
+        region: Region,
+        locks: BTreeMap<Key, MiniLock>,
+    },
+}
+
+impl fmt::Debug for LockTracker {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LockTracker::Pending => write!(f, "LockTracker::Pending"),
+            LockTracker::Preparing(ref locks) => {
+                write!(f, "LockTracker::Preparing({})", locks.len())
+            }
+            LockTracker::Prepared { locks, .. } => {
+                write!(f, "LockTracker::Prepared({})", locks.len())
+            }
+        }
+    }
+}
+
+/// `MiniLock` is like `Lock`, but only contains fields that CDC cares about.
+#[derive(Eq, PartialEq, Debug)]
+pub struct MiniLock {
+    pub ts: TimeStamp,
+    pub txn_source: u64,
+    pub generation: u64,
+}
+
+impl MiniLock {
+    pub fn new<T>(ts: T, txn_source: u64, generation: u64) -> Self
+    where
+        TimeStamp: From<T>,
+    {
+        MiniLock {
+            ts: TimeStamp::from(ts),
+            txn_source,
+            generation,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn from_ts<T>(ts: T) -> Self
+    where
+        TimeStamp: From<T>,
+    {
+        MiniLock {
+            ts: TimeStamp::from(ts),
+            txn_source: 0,
+            generation: 0,
+>>>>>>> cf749a682b (cdc: skip loading old values for un-observed ranges (#17878))
         }
     }
 }
@@ -330,6 +397,144 @@ pub struct Delegate {
 }
 
 impl Delegate {
+<<<<<<< HEAD
+=======
+    fn push_lock(&mut self, key: Key, start_ts: MiniLock) -> Result<isize> {
+        let bytes = key.approximate_heap_size();
+        let mut lock_count_modify = 0;
+        match &mut self.lock_tracker {
+            LockTracker::Pending => unreachable!(),
+            LockTracker::Preparing(locks) => {
+                self.memory_quota.alloc(bytes)?;
+                CDC_PENDING_BYTES_GAUGE.add(bytes as _);
+                locks.push(PendingLock::Track { key, start_ts });
+            }
+            LockTracker::Prepared { locks, .. } => match locks.entry(key) {
+                BTreeMapEntry::Occupied(mut x) => {
+                    assert_eq!(x.get().ts, start_ts.ts);
+                    assert!(x.get().generation <= start_ts.generation);
+                    x.get_mut().generation = start_ts.generation;
+                }
+                BTreeMapEntry::Vacant(x) => {
+                    x.insert(start_ts);
+                    self.memory_quota.alloc(bytes)?;
+                    CDC_PENDING_BYTES_GAUGE.add(bytes as _);
+                    lock_count_modify = 1;
+                }
+            },
+        }
+        Ok(lock_count_modify)
+    }
+
+    fn pop_lock(&mut self, key: Key, start_ts: TimeStamp) -> Result<isize> {
+        let mut lock_count_modify = 0;
+        match &mut self.lock_tracker {
+            LockTracker::Pending => unreachable!(),
+            LockTracker::Preparing(locks) => {
+                let bytes = key.approximate_heap_size();
+                self.memory_quota.alloc(bytes)?;
+                CDC_PENDING_BYTES_GAUGE.add(bytes as _);
+                locks.push(PendingLock::Untrack { key, start_ts });
+            }
+            LockTracker::Prepared { locks, .. } => {
+                if let BTreeMapEntry::Occupied(x) = locks.entry(key) {
+                    if x.get().ts == start_ts {
+                        let (key, _) = x.remove_entry();
+                        let bytes = key.approximate_heap_size();
+                        self.memory_quota.free(bytes);
+                        CDC_PENDING_BYTES_GAUGE.sub(bytes as _);
+                        lock_count_modify = -1;
+                    }
+                }
+            }
+        }
+        Ok(lock_count_modify)
+    }
+
+    pub(crate) fn init_lock_tracker(&mut self) -> bool {
+        if matches!(self.lock_tracker, LockTracker::Pending) {
+            self.lock_tracker = LockTracker::Preparing(vec![]);
+            return true;
+        }
+        false
+    }
+
+    fn finish_prepare_lock_tracker(
+        &mut self,
+        region: Region,
+        mut locks: BTreeMap<Key, MiniLock>,
+    ) -> Result<()> {
+        let delta_locks = match std::mem::replace(&mut self.lock_tracker, LockTracker::Pending) {
+            LockTracker::Preparing(locks) => locks,
+            _ => unreachable!(),
+        };
+
+        let mut free_bytes = 0usize;
+        for delta_lock in delta_locks {
+            free_bytes += delta_lock.approximate_heap_size();
+            match delta_lock {
+                PendingLock::Track { key, start_ts } => match locks.entry(key) {
+                    BTreeMapEntry::Vacant(x) => {
+                        x.insert(start_ts);
+                    }
+                    BTreeMapEntry::Occupied(x) => {
+                        assert_eq!(x.get().ts, start_ts.ts);
+                        assert!(x.get().generation <= start_ts.generation);
+                    }
+                },
+                PendingLock::Untrack { key, start_ts } => {
+                    if let BTreeMapEntry::Occupied(x) = locks.entry(key) {
+                        if x.get().ts == start_ts {
+                            x.remove();
+                        }
+                    }
+                }
+            }
+        }
+        self.memory_quota.free(free_bytes);
+        CDC_PENDING_BYTES_GAUGE.sub(free_bytes as _);
+
+        let mut alloc_bytes = 0usize;
+        for key in locks.keys() {
+            alloc_bytes += key.approximate_heap_size();
+        }
+        self.memory_quota.alloc(alloc_bytes)?;
+        CDC_PENDING_BYTES_GAUGE.add(alloc_bytes as _);
+
+        self.lock_tracker = LockTracker::Prepared { region, locks };
+        Ok(())
+    }
+
+    pub(crate) fn finish_scan_locks(
+        &mut self,
+        region: Region,
+        locks: BTreeMap<Key, MiniLock>,
+    ) -> Result<Vec<(&Downstream, Error)>> {
+        fail::fail_point!("cdc_finish_scan_locks_memory_quota_exceed", |_| Err(
+            Error::MemoryQuotaExceeded(tikv_util::memory::MemoryQuotaExceeded)
+        ));
+
+        info!("cdc region is ready"; "region_id" => self.region_id);
+        self.finish_prepare_lock_tracker(region, locks)?;
+
+        let region = match &self.lock_tracker {
+            LockTracker::Prepared { region, .. } => region,
+            _ => unreachable!(),
+        };
+
+        // Check observed key range in region.
+        let mut failed_downstreams = Vec::new();
+        for downstream in &mut self.downstreams {
+            downstream.observed_range.update_region_key_range(region);
+            if let Err(e) = Self::check_epoch_on_ready(downstream, region) {
+                failed_downstreams.push((&*downstream, e));
+            }
+        }
+
+        Ok(failed_downstreams)
+    }
+
+>>>>>>> cf749a682b (cdc: skip loading old values for un-observed ranges (#17878))
     /// Create a Delegate the given region.
     pub fn new(
         region_id: u64,
@@ -663,7 +868,12 @@ impl Delegate {
         is_one_pc: bool,
     ) -> Result<()> {
         debug_assert_eq!(self.txn_extra_op.load(), TxnExtraOp::ReadOldValue);
+<<<<<<< HEAD
         let mut read_old_value = |row: &mut EventRow, read_old_ts| -> Result<()> {
+=======
+
+        let read_old_value = |row: &mut EventRow, read_old_ts| -> Result<()> {
+>>>>>>> cf749a682b (cdc: skip loading old values for un-observed ranges (#17878))
             let key = Key::from_raw(&row.key).append_ts(row.start_ts.into());
             let old_value = old_value_cb(key, read_old_ts, old_value_cache, statistics)?;
             row.old_value = old_value.unwrap_or_default();
@@ -674,6 +884,7 @@ impl Delegate {
         let mut txn_rows: HashMap<Vec<u8>, (EventRow, bool)> = HashMap::default();
         let mut raw_rows: Vec<EventRow> = Vec::new();
         for mut req in requests {
+<<<<<<< HEAD
             let res = match req.get_cmd_type() {
                 CmdType::Put => self.sink_put(
                     req.take_put(),
@@ -695,6 +906,28 @@ impl Delegate {
             if res.is_err() {
                 self.mark_failed();
                 return res;
+=======
+            match req.get_cmd_type() {
+                CmdType::Put => self.sink_put(req.take_put(), &mut rows_builder)?,
+                _ => debug!("cdc skip other command";
+                    "region_id" => self.region_id,
+                    "command" => ?req),
+            };
+        }
+
+        let (raws, txns) = rows_builder.finish_build();
+        self.sink_downstream_raw(raws, index)?;
+        self.sink_downstream_tidb(txns, read_old_value)?;
+        Ok(())
+    }
+
+    fn sink_downstream_raw(&mut self, entries: Vec<EventRow>, index: u64) -> Result<()> {
+        let mut downstreams = Vec::with_capacity(self.downstreams.len());
+        for d in &mut self.downstreams {
+            if d.kv_api == ChangeDataRequestKvApi::RawKv && d.state.load().ready_for_change_events()
+            {
+                downstreams.push(d);
+>>>>>>> cf749a682b (cdc: skip loading old values for un-observed ranges (#17878))
             }
         }
 
@@ -790,6 +1023,7 @@ impl Delegate {
                 ..Default::default()
             };
 
+<<<<<<< HEAD
             // Do not force send for real time change data events.
             let force_send = false;
             downstream.sink_event(event, force_send)
@@ -811,11 +1045,96 @@ impl Delegate {
         raw_rows: &mut Vec<EventRow>,
         read_old_value: impl FnMut(&mut EventRow, TimeStamp) -> Result<()>,
     ) -> Result<()> {
+=======
+    fn sink_downstream_tidb(
+        &mut self,
+        mut entries: Vec<RowInBuilding>,
+        mut read_old_value: impl FnMut(&mut EventRow, TimeStamp) -> Result<()>,
+    ) -> Result<()> {
+        let mut downstreams = Vec::with_capacity(self.downstreams.len());
+        for d in &mut self.downstreams {
+            if d.kv_api == ChangeDataRequestKvApi::TiDb && d.state.load().ready_for_change_events()
+            {
+                downstreams.push(d);
+            }
+        }
+        if downstreams.is_empty() {
+            return Ok(());
+        }
+
+        for downstream in downstreams {
+            let mut filtered_entries = Vec::with_capacity(entries.len());
+            for RowInBuilding {
+                v,
+                lock_count_modify,
+                needs_old_value,
+                ..
+            } in &mut entries
+            {
+                if !downstream.observed_range.contains_raw_key(&v.key) {
+                    continue;
+                }
+                if let Some(read_old_ts) = needs_old_value {
+                    read_old_value(v, *read_old_ts)?;
+                    *needs_old_value = None;
+                }
+
+                if *lock_count_modify != 0 && downstream.lock_heap.is_some() {
+                    let lock_heap = downstream.lock_heap.as_mut().unwrap();
+                    match lock_heap.entry(v.start_ts.into()) {
+                        BTreeMapEntry::Vacant(x) => {
+                            x.insert(*lock_count_modify);
+                        }
+                        BTreeMapEntry::Occupied(mut x) => {
+                            *x.get_mut() += *lock_count_modify;
+                            assert!(
+                                *x.get() >= 0,
+                                "lock_count_modify should never be negative, start_ts: {}",
+                                v.start_ts
+                            );
+                            if *x.get() == 0 {
+                                x.remove();
+                            }
+                        }
+                    }
+                }
+
+                if TxnSource::is_lossy_ddl_reorg_source_set(v.txn_source)
+                    || downstream.filter_loop && TxnSource::is_cdc_write_source_set(v.txn_source)
+                {
+                    continue;
+                }
+
+                filtered_entries.push(v.clone());
+            }
+            if filtered_entries.is_empty() {
+                continue;
+            }
+            let event = Event {
+                region_id: self.region_id,
+                request_id: downstream.req_id.0,
+                event: Some(Event_oneof_event::Entries(EventEntries {
+                    entries: filtered_entries.into(),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            };
+            downstream.sink_event(event, false)?;
+        }
+        Ok(())
+    }
+
+    fn sink_put(&mut self, put: PutRequest, rows_builder: &mut RowsBuilder) -> Result<()> {
+>>>>>>> cf749a682b (cdc: skip loading old values for un-observed ranges (#17878))
         let key_mode = ApiV2::parse_key_mode(put.get_key());
         if key_mode == KeyMode::Raw {
             self.sink_raw_put(put, raw_rows)
         } else {
+<<<<<<< HEAD
             self.sink_txn_put(put, is_one_pc, txn_rows, read_old_value)
+=======
+            self.sink_txn_put(put, rows_builder)
+>>>>>>> cf749a682b (cdc: skip loading old values for un-observed ranges (#17878))
         }
     }
 
@@ -826,6 +1145,7 @@ impl Delegate {
         Ok(())
     }
 
+<<<<<<< HEAD
     fn sink_txn_put(
         &mut self,
         mut put: PutRequest,
@@ -874,6 +1194,32 @@ impl Delegate {
                     HashMapEntry::Vacant(v) => {
                         v.insert((row, has_value));
                     }
+=======
+    fn sink_txn_put(&mut self, mut put: PutRequest, rows: &mut RowsBuilder) -> Result<()> {
+        match put.cf.as_str() {
+            "write" => {
+                let key = Key::from_encoded_slice(&put.key).truncate_ts().unwrap();
+                let row = rows.txns_by_key.entry(key.clone()).or_default();
+                if decode_write(
+                    put.take_key(),
+                    &put.value,
+                    &mut row.v,
+                    &mut row.has_value,
+                    true,
+                ) {
+                    return Ok(());
+                }
+
+                if rows.is_one_pc {
+                    assert_eq!(row.v.r_type, EventLogType::Commit);
+                    set_event_row_type(&mut row.v, EventLogType::Committed);
+                    let read_old_ts = TimeStamp::from(row.v.commit_ts).prev();
+                    row.needs_old_value = Some(read_old_ts);
+                } else {
+                    assert_eq!(row.lock_count_modify, 0);
+                    let start_ts = TimeStamp::from(row.v.start_ts);
+                    row.lock_count_modify = self.pop_lock(key, start_ts)?;
+>>>>>>> cf749a682b (cdc: skip loading old values for un-observed ranges (#17878))
                 }
             }
             "lock" => {
@@ -884,6 +1230,7 @@ impl Delegate {
                     return Ok(());
                 }
 
+<<<<<<< HEAD
                 let read_old_ts = std::cmp::max(for_update_ts, row.start_ts.into());
                 read_old_value(&mut row, read_old_ts)?;
 
@@ -909,6 +1256,13 @@ impl Delegate {
                     mem::swap(&mut occupied.0.value, &mut row.value);
                 }
                 *occupied = (row, has_value);
+=======
+                assert_eq!(row.lock_count_modify, 0);
+                let mini_lock = MiniLock::new(row.v.start_ts, txn_source, generation);
+                row.lock_count_modify = self.push_lock(key, mini_lock)?;
+                let read_old_ts = std::cmp::max(for_update_ts, row.v.start_ts.into());
+                row.needs_old_value = Some(read_old_ts);
+>>>>>>> cf749a682b (cdc: skip loading old values for un-observed ranges (#17878))
             }
             "" | "default" => {
                 let key = Key::from_encoded(put.take_key()).truncate_ts().unwrap();
@@ -920,6 +1274,7 @@ impl Delegate {
         Ok(())
     }
 
+<<<<<<< HEAD
     fn sink_delete(&mut self, mut delete: DeleteRequest) -> Result<()> {
         match delete.cf.as_str() {
             "lock" => {
@@ -941,6 +1296,8 @@ impl Delegate {
         Ok(())
     }
 
+=======
+>>>>>>> cf749a682b (cdc: skip loading old values for un-observed ranges (#17878))
     fn sink_admin(&mut self, request: AdminRequest, mut response: AdminResponse) -> Result<()> {
         let store_err = match request.get_cmd_type() {
             AdminCmdType::Split => RaftStoreError::EpochNotMatch(
@@ -1017,6 +1374,45 @@ impl Delegate {
     }
 }
 
+<<<<<<< HEAD
+=======
+#[derive(Default)]
+struct RowsBuilder {
+    txns_by_key: HashMap<Key, RowInBuilding>,
+
+    raws: Vec<EventRow>,
+
+    is_one_pc: bool,
+}
+
+#[derive(Default)]
+struct RowInBuilding {
+    v: EventRow,
+    has_value: bool,
+    lock_count_modify: isize,
+    needs_old_value: Option<TimeStamp>,
+}
+
+impl RowsBuilder {
+    fn finish_build(self) -> (Vec<EventRow>, Vec<RowInBuilding>) {
+        let mut txns = Vec::with_capacity(self.txns_by_key.len());
+        for row in self.txns_by_key.into_values() {
+            if row.v.r_type == EventLogType::Prewrite
+                && row.v.op_type == EventRowOpType::Put
+                && !row.has_value
+            {
+                // It's possible that a prewrite command only contains lock but without
+                // default. It's not documented by classic Percolator but introduced with
+                // Large-Transaction. Those prewrites are not complete, we must skip them.
+                continue;
+            }
+            txns.push(row);
+        }
+        (self.raws, txns)
+    }
+}
+
+>>>>>>> cf749a682b (cdc: skip loading old values for un-observed ranges (#17878))
 fn set_event_row_type(row: &mut EventRow, ty: EventLogType) {
     row.r_type = ty;
 }
@@ -1521,6 +1917,7 @@ mod tests {
                 TimeStamp::zero(),
             )
             .to_bytes();
+<<<<<<< HEAD
             delegate
                 .sink_txn_put(
                     put,
@@ -1529,6 +1926,9 @@ mod tests {
                     |_: &mut EventRow, _: TimeStamp| Ok(()),
                 )
                 .unwrap();
+=======
+            delegate.sink_txn_put(put, &mut rows_builder).unwrap();
+>>>>>>> cf749a682b (cdc: skip loading old values for un-observed ranges (#17878))
         }
         assert_eq!(map.len(), 5);
 
@@ -1546,9 +1946,15 @@ mod tests {
             observed_range,
         };
         delegate.add_downstream(downstream);
+<<<<<<< HEAD
         let entries = map.values().map(|(r, _)| r).cloned().collect();
         delegate
             .sink_downstream(entries, 1, ChangeDataRequestKvApi::TiDb)
+=======
+        let (_, entries) = rows_builder.finish_build();
+        delegate
+            .sink_downstream_tidb(entries, |_, _| Ok(()))
+>>>>>>> cf749a682b (cdc: skip loading old values for un-observed ranges (#17878))
             .unwrap();
 
         let (mut tx, mut rx) = futures::channel::mpsc::unbounded();
@@ -1594,6 +2000,7 @@ mod tests {
                 lock = lock.set_txn_source(txn_source.into());
             }
             put.value = lock.to_bytes();
+<<<<<<< HEAD
             delegate
                 .sink_txn_put(
                     put,
@@ -1602,6 +2009,9 @@ mod tests {
                     |_: &mut EventRow, _: TimeStamp| Ok(()),
                 )
                 .unwrap();
+=======
+            delegate.sink_txn_put(put, &mut rows_builder).unwrap();
+>>>>>>> cf749a682b (cdc: skip loading old values for un-observed ranges (#17878))
         }
         assert_eq!(map.len(), 5);
 
@@ -1619,9 +2029,15 @@ mod tests {
             observed_range,
         };
         delegate.add_downstream(downstream);
+<<<<<<< HEAD
         let entries = map.values().map(|(r, _)| r).cloned().collect();
         delegate
             .sink_downstream(entries, 1, ChangeDataRequestKvApi::TiDb)
+=======
+        let (_, entries) = rows_builder.finish_build();
+        delegate
+            .sink_downstream_tidb(entries, |_, _| Ok(()))
+>>>>>>> cf749a682b (cdc: skip loading old values for un-observed ranges (#17878))
             .unwrap();
 
         let (mut tx, mut rx) = futures::channel::mpsc::unbounded();
@@ -1700,4 +2116,82 @@ mod tests {
             }
         }
     }
+<<<<<<< HEAD
+=======
+
+    #[test]
+    fn test_lock_tracker() {
+        let quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let mut delegate = Delegate::new(1, quota.clone(), Default::default());
+        assert!(delegate.init_lock_tracker());
+        assert!(!delegate.init_lock_tracker());
+
+        let mut k1 = Vec::with_capacity(100);
+        k1.extend_from_slice(Key::from_raw(b"key1").as_encoded());
+        let k1 = Key::from_encoded(k1);
+        assert_eq!(delegate.push_lock(k1, MiniLock::from_ts(100)).unwrap(), 0);
+        assert_eq!(quota.in_use(), 100);
+
+        delegate
+            .pop_lock(Key::from_raw(b"key1"), TimeStamp::from(99))
+            .unwrap();
+        assert_eq!(quota.in_use(), 117);
+
+        delegate
+            .pop_lock(Key::from_raw(b"key1"), TimeStamp::from(100))
+            .unwrap();
+        assert_eq!(quota.in_use(), 134);
+
+        let mut k2 = Vec::with_capacity(200);
+        k2.extend_from_slice(Key::from_raw(b"key2").as_encoded());
+        let k2 = Key::from_encoded(k2);
+        assert_eq!(delegate.push_lock(k2, MiniLock::from_ts(100)).unwrap(), 0);
+        assert_eq!(quota.in_use(), 334);
+
+        let mut scaned_locks = BTreeMap::default();
+        scaned_locks.insert(Key::from_raw(b"key1"), MiniLock::from_ts(100));
+        scaned_locks.insert(Key::from_raw(b"key2"), MiniLock::from_ts(100));
+        scaned_locks.insert(Key::from_raw(b"key3"), MiniLock::from_ts(100));
+        delegate
+            .finish_prepare_lock_tracker(Default::default(), scaned_locks)
+            .unwrap();
+        assert_eq!(quota.in_use(), 34);
+
+        delegate
+            .pop_lock(Key::from_raw(b"key2"), TimeStamp::from(100))
+            .unwrap();
+        delegate
+            .pop_lock(Key::from_raw(b"key3"), TimeStamp::from(100))
+            .unwrap();
+        assert_eq!(quota.in_use(), 0);
+
+        let v = delegate
+            .push_lock(Key::from_raw(b"key1"), MiniLock::from_ts(300))
+            .unwrap();
+        assert_eq!(v, 1);
+        assert_eq!(quota.in_use(), 17);
+        let v = delegate
+            .push_lock(Key::from_raw(b"key1"), MiniLock::from_ts(300))
+            .unwrap();
+        assert_eq!(v, 0);
+        assert_eq!(quota.in_use(), 17);
+    }
+
+    #[test]
+    fn test_lock_tracker_untrack_vacant() {
+        let quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let mut delegate = Delegate::new(1, quota.clone(), Default::default());
+        assert!(delegate.init_lock_tracker());
+        assert!(!delegate.init_lock_tracker());
+
+        delegate
+            .pop_lock(Key::from_raw(b"key1"), TimeStamp::zero())
+            .unwrap();
+        let mut scaned_locks = BTreeMap::default();
+        scaned_locks.insert(Key::from_raw(b"key2"), MiniLock::from_ts(100));
+        delegate
+            .finish_prepare_lock_tracker(Default::default(), scaned_locks)
+            .unwrap();
+    }
+>>>>>>> cf749a682b (cdc: skip loading old values for un-observed ranges (#17878))
 }
