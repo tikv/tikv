@@ -9,8 +9,9 @@ use std::{
 };
 
 use kvproto::{
+    coprocessor as coppb,
     encryptionpb::EncryptionMeta,
-    kvrpcpb::LockInfo,
+    kvrpcpb::{self, LockInfo},
     metapb::{Peer, Region, RegionEpoch},
     raft_cmdpb::{self, RaftCmdRequest, ReadIndexRequest},
 };
@@ -31,6 +32,13 @@ pub unsafe fn vec_transmute<F, T>(from: Vec<F>) -> Vec<T> {
 pub trait HeapSize {
     fn heap_size(&self) -> usize {
         0
+    }
+
+    fn approximate_mem_size(&self) -> usize
+    where
+        Self: Sized,
+    {
+        mem::size_of::<Self>() + self.approximate_heap_size()
     }
 }
 
@@ -75,6 +83,27 @@ impl HeapSize for RaftCmdRequest {
             + self.requests.capacity() * mem::size_of::<raft_cmdpb::Request>()
             + mem::size_of_val(&self.admin_request)
             + mem::size_of_val(&self.status_request)
+    }
+}
+
+impl HeapSize for coppb::KeyRange {
+    fn approximate_heap_size(&self) -> usize {
+        self.start.capacity() + self.end.capacity()
+    }
+}
+
+impl HeapSize for kvrpcpb::Context {
+    fn approximate_heap_size(&self) -> usize {
+        self.resolved_locks.capacity() * mem::size_of::<u64>()
+            + self.committed_locks.capacity() * mem::size_of::<u64>()
+            + self.resource_group_tag.capacity()
+            + self.request_source.as_bytes().len()
+            + self
+                .get_resource_control_context()
+                .resource_group_name
+                .as_bytes()
+                .len()
+            + self.get_source_stmt().session_alias.as_bytes().len()
     }
 }
 
