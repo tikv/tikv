@@ -984,7 +984,85 @@ impl<ER: RaftEngine> Debugger for DebuggerImpl<ER> {
     }
 }
 
+<<<<<<< HEAD
 fn dump_default_cf_properties(
+=======
+async fn async_key_range_flashback_to_version<E: Engine, L: LockManager, F: KvFormat>(
+    storage: Storage<E, L, F>,
+    region: Region,
+    version: u64,
+    store_id: u64,
+    start_key: Vec<u8>,
+    end_key: Vec<u8>,
+    start_ts: u64,
+    commit_ts: u64,
+) -> Result<()> {
+    let is_in_flashback = region.get_is_in_flashback();
+    let in_prepare_state = TimeStamp::from(commit_ts).is_zero();
+    if in_prepare_state && is_in_flashback {
+        return Ok(());
+    } else if !in_prepare_state && !is_in_flashback {
+        return Err(Error::FlashbackFailed("not in flashback state".into()));
+    }
+
+    let mut ctx = Context::default();
+    ctx.set_region_id(region.get_id());
+    ctx.set_region_epoch(region.get_region_epoch().to_owned());
+    let peer = find_peer(&region, store_id).unwrap();
+    ctx.set_peer(peer.clone());
+
+    // Flashback will encode the key, so we need to use raw key.
+    let start_key = Key::from_encoded_slice(&start_key)
+        .to_raw()
+        .unwrap_or_default();
+    let end_key = Key::from_encoded_slice(&end_key)
+        .to_raw()
+        .unwrap_or_default();
+
+    // Means now is prepare flashback.
+    if in_prepare_state {
+        let mut req = kvrpcpb::PrepareFlashbackToVersionRequest::new();
+        req.set_version(version);
+        req.set_start_key(start_key.clone());
+        req.set_end_key(end_key.clone());
+        req.set_context(ctx.clone());
+        req.set_start_ts(start_ts);
+
+        let resp = future_prepare_flashback_to_version(storage, req)
+            .await
+            .unwrap();
+        if !resp.get_error().is_empty() || resp.has_region_error() {
+            error!("exec prepare flashback failed"; "err" => ?resp.get_error(), "region_err" => ?resp.get_region_error());
+            return Err(Error::FlashbackFailed(format!(
+                "exec prepare flashback failed: resp err is: {:?}, region err is: {:?}",
+                resp.get_error(),
+                resp.get_region_error()
+            )));
+        }
+    } else {
+        let mut req = kvrpcpb::FlashbackToVersionRequest::new();
+        req.set_version(version);
+        req.set_start_key(start_key.clone());
+        req.set_end_key(end_key.clone());
+        req.set_context(ctx.clone());
+        req.set_start_ts(start_ts);
+        req.set_commit_ts(commit_ts);
+
+        let resp = future_flashback_to_version(storage, req).await.unwrap();
+        if !resp.get_error().is_empty() || resp.has_region_error() {
+            error!("exec finish flashback failed"; "err" => ?resp.get_error(), "region_err" => ?resp.get_region_error());
+            return Err(Error::FlashbackFailed(format!(
+                "exec finish flashback failed: resp err is: {:?}, region err is: {:?}",
+                resp.get_error(),
+                resp.get_region_error()
+            )));
+        }
+    }
+    Ok(())
+}
+
+pub fn dump_default_cf_properties(
+>>>>>>> 3f7c63646e (ctl: backoff load key range in finish flashback when meet `notLeader` or `regionNotFound` (#16058))
     db: &RocksEngine,
     start: &[u8],
     end: &[u8],
