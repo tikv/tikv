@@ -8,8 +8,7 @@ use std::{
 use collections::{HashMap, HashSet};
 use futures_util::compat::Future01CompatExt;
 use kvproto::{import_sstpb::Range, metapb::Region};
-use tikv_util::timer::GLOBAL_TIMER_HANDLE;
-use tokio::runtime::Handle;
+use tikv_util::{resizable_threadpool::DeamonRuntimeHandle, timer::GLOBAL_TIMER_HANDLE};
 
 use super::Config;
 
@@ -56,9 +55,7 @@ impl ImportModeSwitcherV2 {
         ImportModeSwitcherV2 { inner }
     }
 
-    // Periodically perform timeout check to change import mode of some regions back
-    // to normal mode.
-    pub fn start(&self, executor: &Handle) {
+    pub fn start_resizable_threads(&self, executor: &DeamonRuntimeHandle) {
         // spawn a background future to put regions back into normal mode after timeout
         let inner = self.inner.clone();
         let switcher = Arc::downgrade(&inner);
@@ -157,9 +154,18 @@ pub fn range_overlaps(range1: &HashRange, range2: &Range) -> bool {
 mod test {
     use std::thread;
 
-    use tikv_util::config::ReadableDuration;
+    use tikv_util::{config::ReadableDuration, resizable_threadpool::ResizableRuntime};
+    use tokio::runtime::Runtime;
 
     use super::*;
+
+    type TokioResult<T> = std::io::Result<T>;
+
+    fn create_tokio_runtime(_: usize, _: &str) -> TokioResult<Runtime> {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+    }
 
     #[test]
     fn test_region_range_overlaps() {
@@ -270,10 +276,8 @@ mod test {
             ..Config::default()
         };
 
-        let threads = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
+        let threads =
+            ResizableRuntime::new(4, "test", Box::new(create_tokio_runtime), Box::new(|_| {}));
 
         let switcher = ImportModeSwitcherV2::new(&cfg);
         let mut region = Region::default();
@@ -300,7 +304,7 @@ mod test {
         assert!(switcher.region_in_import_mode(&region2));
         assert!(switcher.region_in_import_mode(&region3));
 
-        switcher.start(threads.handle());
+        switcher.start_resizable_threads(&threads.handle());
 
         thread::sleep(Duration::from_millis(400));
         // renew the timeout of key_range2
