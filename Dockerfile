@@ -18,7 +18,7 @@
 
 
 # The prepare image avoid ruining the cache of the builder
-FROM centos:7.6.1810 as prepare
+FROM quay.io/rockylinux/rockylinux:8.10.20240528-ubi as prepare
 WORKDIR /tikv
 
 # This step will always ruin the cache
@@ -32,7 +32,7 @@ RUN for component in $(find . -type f -name 'Cargo.toml' -exec dirname {} \; | s
   ; done
 
 
-FROM centos:7.6.1810 as builder
+FROM quay.io/rockylinux/rockylinux:8.10.20240528-ubi as builder
 
 RUN yum install -y epel-release && \
     yum clean all && \
