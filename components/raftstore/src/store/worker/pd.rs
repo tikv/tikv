@@ -1048,7 +1048,7 @@ where
             concurrency_manager,
             snap_mgr,
             remote,
-            slow_score: UnifiedSlowScore::new(&cfg),
+            slow_score: UnifiedSlowScore::new(cfg),
             slow_trend_cause: Trend::new(
                 // Disable SpikeFilter for now
                 Duration::from_secs(0),
