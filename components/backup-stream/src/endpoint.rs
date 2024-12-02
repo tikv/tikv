@@ -5,6 +5,7 @@ use std::{
     collections::HashSet,
     fmt,
     marker::PhantomData,
+    mem::ManuallyDrop,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -92,7 +93,7 @@ pub struct Endpoint<S, R, E: KvEngine, PDC> {
     // Note: some of the fields are public so test cases are able to access them.
     pub range_router: Router,
     observer: BackupStreamObserver,
-    pool: Runtime,
+    pool: ManuallyDrop<Runtime>,
     region_operator: Sender<ObserveOp>,
     failover_time: Option<Instant>,
     config: BackupStreamConfig,
@@ -104,6 +105,13 @@ pub struct Endpoint<S, R, E: KvEngine, PDC> {
     /// Each time we spawn a task, once time goes by, we abort that task.
     pub abort_last_storage_save: Option<AbortHandle>,
     pub initial_scan_semaphore: Arc<Semaphore>,
+}
+
+impl<S, R, E: KvEngine, PDC> Drop for Endpoint<S, R, E, PDC> {
+    fn drop(&mut self) {
+        // SAFETY: won't access thread pool after dropping.
+        unsafe { ManuallyDrop::take(&mut self.pool).shutdown_background() }
+    }
 }
 
 impl<S, R, E, PDC> Endpoint<S, R, E, PDC>
@@ -190,7 +198,7 @@ where
             range_router,
             scheduler,
             observer,
-            pool,
+            pool: ManuallyDrop::new(pool),
             store_id,
             regions: accessor,
             engine: PhantomData,
@@ -1259,6 +1267,7 @@ impl fmt::Debug for RegionCheckpointOperation {
     }
 }
 
+#[derive(Debug)]
 pub struct FlushResult {
     pub task: String,
     pub error: Option<Error>,
