@@ -829,8 +829,11 @@ lazy_static! {
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
 
-    pub static ref STORE_SLOW_SCORE_GAUGE: Gauge =
-    register_gauge!("tikv_raftstore_slow_score", "Slow score of the store.").unwrap();
+    pub static ref STORE_SLOW_SCORE_GAUGE: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_raftstore_slow_score",
+        "Slow score of the store.",
+        &["type"]
+    ).unwrap();
 
     pub static ref STORE_SLOW_TREND_GAUGE: Gauge =
     register_gauge!("tikv_raftstore_slow_trend", "Slow trend changing rate.").unwrap();
