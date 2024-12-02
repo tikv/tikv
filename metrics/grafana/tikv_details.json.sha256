@@ -1,5 +1,1 @@
-<<<<<<< HEAD
-857f7b413acdc5cafdcb68bf40ec6184d6c30ad0a4bc8a351431d8f25d552752  ./metrics/grafana/tikv_details.json
-=======
-e93faab944914bbca21c74daee0223604dd57ba37115c7239d8b707468d5d8db  ./metrics/grafana/tikv_details.json
->>>>>>> 43e63b5614 (raftstore: calculate the slow score by considering individual disk performance factors (#17801))
+cb8f293df9c6a35f210f292e493bcf95571c6dd7be22eaea258fb2edc42b5007  ./metrics/grafana/tikv_details.json
