@@ -6843,6 +6843,7 @@ dependencies = [
  "num_cpus",
  "online_config",
  "openssl",
+ "ordered-float",
  "page_size",
  "panic_hook",
  "parking_lot_core 0.9.1",
