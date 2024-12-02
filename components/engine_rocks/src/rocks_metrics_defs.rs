@@ -110,6 +110,10 @@ pub const ENGINE_TICKER_TYPES: &[TickerType] = &[
     TickerType::FlushWriteBytes,
     TickerType::ReadAmpEstimateUsefulBytes,
     TickerType::ReadAmpTotalReadBytes,
+    TickerType::LastLevelSeekFiltered,
+    TickerType::LastLevelSeekFilterMatch,
+    TickerType::NonLastLevelSeekFiltered,
+    TickerType::NonLastLevelSeekFilterMatch,
 ];
 
 pub const TITAN_ENGINE_TICKER_TYPES: &[TickerType] = &[
