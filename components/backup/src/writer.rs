@@ -11,7 +11,7 @@ use external_storage::{ExternalStorage, UnpinReader};
 use file_system::Sha256Reader;
 use futures_util::io::AllowStdIo;
 use kvproto::{
-    brpb::{CipherInfo, File},
+    brpb::{CipherInfo, File, TableMeta},
     metapb::Region,
 };
 use tikv::{coprocessor::checksum_crc64_xor, storage::txn::TxnEntry};
@@ -50,20 +50,24 @@ impl From<CfNameWrap> for CfName {
 
 struct Writer<W: SstWriter + 'static> {
     writer: W,
+    physical_id: i64,
     total_kvs: u64,
     total_bytes: u64,
     checksum: u64,
     digest: crc64fast::Digest,
+    table_metas: Vec<TableMeta>,
 }
 
 impl<W: SstWriter + 'static> Writer<W> {
     fn new(writer: W) -> Self {
         Writer {
             writer,
+            physical_id: 0,
             total_kvs: 0,
             total_bytes: 0,
             checksum: 0,
             digest: crc64fast::Digest::new(),
+            table_metas: Vec::new(),
         }
     }
 
@@ -74,6 +78,24 @@ impl<W: SstWriter + 'static> Writer<W> {
         let data_key_write = keys::data_key(key);
         self.writer.put(&data_key_write, value)?;
         Ok(())
+    }
+
+    fn try_archive_meta(&mut self, physical_id: i64) {
+        if physical_id == self.physical_id {
+            return;
+        }
+        if self.physical_id != 0 {
+            let mut table_meta = TableMeta::default();
+            table_meta.set_physical_id(self.physical_id);
+            table_meta.set_total_kvs(self.total_kvs);
+            table_meta.set_total_bytes(self.total_bytes);
+            table_meta.set_crc64xor(self.checksum);
+            self.table_metas.push(table_meta);
+        }
+        self.physical_id = physical_id;
+        self.total_kvs = 0;
+        self.total_bytes = 0;
+        self.checksum = 0;
     }
 
     fn update_with(&mut self, entry: TxnEntry, need_checksum: bool) -> Result<()> {
@@ -103,13 +125,14 @@ impl<W: SstWriter + 'static> Writer<W> {
     }
 
     async fn save_and_build_file(
-        self,
+        mut self,
         name: &str,
         cf: CfNameWrap,
         rate_limiter: Limiter,
         storage: &dyn ExternalStorage,
         cipher: &CipherInfo,
     ) -> Result<File> {
+        self.try_archive_meta(0);
         let (size, sst_reader) = Self::finish_read(self.writer)?;
         BACKUP_RANGE_SIZE_HISTOGRAM_VEC
             .with_label_values(&[cf.into()])
@@ -146,9 +169,7 @@ impl<W: SstWriter + 'static> Writer<W> {
         let mut file = File::default();
         file.set_name(file_name);
         file.set_sha256(sha256);
-        file.set_crc64xor(self.checksum);
-        file.set_total_kvs(self.total_kvs);
-        file.set_total_bytes(self.total_bytes);
+        file.set_table_metas(self.table_metas.into());
         file.set_cf(cf.0.to_owned());
         file.set_size(size);
         file.set_cipher_iv(iv.as_slice().to_vec());
@@ -256,11 +277,17 @@ impl<EK: KvEngine> BackupWriter<EK> {
         })
     }
 
+    fn try_archive_meta(&mut self, physical_id: i64) {
+        self.default.try_archive_meta(physical_id);
+        self.write.try_archive_meta(physical_id);
+    }
+
     /// Write entries to buffered SST files.
-    pub fn write<I>(&mut self, entries: I, need_checksum: bool) -> Result<()>
+    pub fn write<I>(&mut self, physical_id: i64, entries: I, need_checksum: bool) -> Result<()>
     where
         I: Iterator<Item = TxnEntry>,
     {
+        self.try_archive_meta(physical_id);
         for e in entries {
             let mut value_in_default = false;
             match &e {
@@ -430,7 +457,7 @@ mod tests {
     use tempfile::TempDir;
     use tikv::storage::TestEngineBuilder;
     use tikv_util::store::new_peer;
-    use txn_types::OldValue;
+    use txn_types::{OldValue, TimeStamp};
 
     use super::*;
 
@@ -506,7 +533,7 @@ mod tests {
             },
         )
         .unwrap();
-        writer.write(vec![].into_iter(), false).unwrap();
+        writer.write(0, vec![].into_iter(), false).unwrap();
         assert!(writer.save(&storage).await.unwrap().is_empty());
 
         // Test write only txn.
@@ -526,6 +553,7 @@ mod tests {
         .unwrap();
         writer
             .write(
+                0,
                 vec![TxnEntry::Commit {
                     default: (vec![], vec![]),
                     write: (vec![b'a'], vec![b'a']),
@@ -565,6 +593,7 @@ mod tests {
         .unwrap();
         writer
             .write(
+                0,
                 vec![
                     TxnEntry::Commit {
                         default: (vec![b'a'], vec![b'a']),
@@ -608,5 +637,145 @@ mod tests {
                 ),
             ],
         );
+    }
+
+    fn encoded_key_ts(key: &[u8]) -> Vec<u8> {
+        use txn_types::Key;
+        Key::from_raw(key)
+            .append_ts(TimeStamp::new(1))
+            .into_encoded()
+    }
+
+    fn assert_table_meta(meta: &TableMeta, id: i64, kvs: u64, bytes: u64) {
+        assert_eq!(meta.physical_id, id);
+        assert_eq!(meta.total_kvs, kvs);
+        assert_eq!(meta.total_bytes, bytes);
+    }
+
+    #[tokio::test]
+    async fn test_writer2() {
+        let temp = TempDir::new().unwrap();
+        let rocks = TestEngineBuilder::new()
+            .path(temp.path())
+            .cfs([
+                engine_traits::CF_DEFAULT,
+                engine_traits::CF_LOCK,
+                engine_traits::CF_WRITE,
+            ])
+            .build()
+            .unwrap();
+        let db = rocks.get_rocksdb();
+        let backend = external_storage::make_local_backend(temp.path());
+        let storage = external_storage::create_storage(&backend, Default::default()).unwrap();
+
+        // Test empty file.
+        let mut r = kvproto::metapb::Region::default();
+        r.set_id(1);
+        r.mut_peers().push(new_peer(1, 1));
+        let mut writer = BackupWriter::new(
+            db.clone(),
+            "foo",
+            None,
+            0,
+            Limiter::new(f64::INFINITY),
+            144 * 1024 * 1024,
+            {
+                let mut ci = CipherInfo::default();
+                ci.set_cipher_type(encryptionpb::EncryptionMethod::Plaintext);
+                ci
+            },
+        )
+        .unwrap();
+
+        writer
+            .write(
+                1,
+                vec![
+                    TxnEntry::Commit {
+                        default: (encoded_key_ts(b"aA"), b"val1_default".to_vec()),
+                        write: (encoded_key_ts(b"aA"), b"val1_default".to_vec()),
+                        old_value: OldValue::None,
+                    },
+                    TxnEntry::Commit {
+                        default: (encoded_key_ts(b"aB"), b"val1_write".to_vec()),
+                        write: (encoded_key_ts(b"aB"), b"val1_write".to_vec()),
+                        old_value: OldValue::None,
+                    },
+                ]
+                .into_iter(),
+                true,
+            )
+            .unwrap();
+        writer
+            .write(
+                2,
+                vec![
+                    TxnEntry::Commit {
+                        default: (encoded_key_ts(b"bA"), b"val22_default".to_vec()),
+                        write: (encoded_key_ts(b"bA"), b"val22_default".to_vec()),
+                        old_value: OldValue::None,
+                    },
+                    TxnEntry::Commit {
+                        default: (encoded_key_ts(b"bB"), b"val22_write".to_vec()),
+                        write: (encoded_key_ts(b"bB"), b"val22_write".to_vec()),
+                        old_value: OldValue::None,
+                    },
+                ]
+                .into_iter(),
+                true,
+            )
+            .unwrap();
+        writer
+            .write(
+                0,
+                vec![
+                    TxnEntry::Commit {
+                        default: (encoded_key_ts(b"cA"), b"val0".to_vec()),
+                        write: (encoded_key_ts(b"cA"), b"val0".to_vec()),
+                        old_value: OldValue::None,
+                    },
+                    TxnEntry::Commit {
+                        default: (encoded_key_ts(b"cB"), b"val0".to_vec()),
+                        write: (encoded_key_ts(b"cB"), b"val0".to_vec()),
+                        old_value: OldValue::None,
+                    },
+                ]
+                .into_iter(),
+                true,
+            )
+            .unwrap();
+        writer
+            .write(
+                3,
+                vec![
+                    TxnEntry::Commit {
+                        default: (encoded_key_ts(b"dA"), b"val333_default".to_vec()),
+                        write: (encoded_key_ts(b"dA"), b"val333_default".to_vec()),
+                        old_value: OldValue::None,
+                    },
+                    TxnEntry::Commit {
+                        default: (encoded_key_ts(b"dB"), b"val333_write".to_vec()),
+                        write: (encoded_key_ts(b"dB"), b"val333_write".to_vec()),
+                        old_value: OldValue::None,
+                    },
+                ]
+                .into_iter(),
+                true,
+            )
+            .unwrap();
+        let files = writer.save(&storage).await.unwrap();
+        assert!(files.len() == 2);
+        assert_eq!(files[0].name, "foo_default.sst");
+        assert_eq!(files[1].name, "foo_write.sst");
+        let table_metas = files[0].get_table_metas();
+        assert!(table_metas.len() == 3);
+        assert_table_meta(&table_metas[0], 1, 2, 26);
+        assert_table_meta(&table_metas[1], 2, 2, 28);
+        assert_table_meta(&table_metas[2], 3, 2, 30);
+        let table_metas = files[1].get_table_metas();
+        assert!(table_metas.len() == 3);
+        assert_table_meta(&table_metas[0], 1, 0, 0);
+        assert_table_meta(&table_metas[1], 2, 0, 0);
+        assert_table_meta(&table_metas[2], 3, 0, 0);
     }
 }

@@ -433,6 +433,10 @@ impl BackupRange {
                 begin_ts,
             )?;
             let mut first_scan = true;
+            let start_key_raw_vec = start_key
+                .as_ref()
+                .map_or_else(Vec::new, |k| k.to_raw().unwrap());
+            let physical_id = table_codec::decode_table_id(&start_key_raw_vec).unwrap_or_default();
             let start_scan = Instant::now();
             let mut reschedule_checker =
                 RescheduleChecker::new(tokio::task::yield_now, TASK_YIELD_DURATION);
@@ -450,9 +454,7 @@ impl BackupRange {
                 if writer.need_split_keys() {
                     let this_start_key = next_file_start_key;
                     let this_end_key = if first_scan {
-                        next_file_start_key = start_key
-                            .as_ref()
-                            .map_or_else(Vec::new, |k| k.to_raw().unwrap());
+                        next_file_start_key = start_key_raw_vec.clone();
                         // the last_key can not be empty.
                         last_key.as_ref().unwrap().to_raw().unwrap()
                     } else {
@@ -486,7 +488,7 @@ impl BackupRange {
                 }
 
                 // Build sst files.
-                if let Err(e) = writer.write(entries, true) {
+                if let Err(e) = writer.write(physical_id, entries, true) {
                     error_unknown!(?e; "backup build sst failed");
                     return Err(e);
                 }
@@ -2461,7 +2463,7 @@ pub mod tests {
         assert_eq!(resps.len(), expect.len());
     }
 
-    fn write_kv(engine: &RocksEngine, key: Vec<u8>) {
+    fn write_kv(engine: &RocksEngine, key: Vec<u8>) -> (u64, u64) {
         let ctx = Context::default();
         let encoded_key = Key::from_raw(&key).append_ts(TimeStamp::from(1));
         let write = Write::new(
@@ -2472,12 +2474,19 @@ pub mod tests {
         engine
             .put_cf(&ctx, CF_WRITE, encoded_key, write.as_ref().to_bytes())
             .unwrap();
+
+        // return (kvs, bytes)
+        (1, (key.len() + b"short_value".len()) as u64)
     }
 
-    fn write_rows(engine: &RocksEngine, table_id: i64, handle_offset: i64) {
+    fn write_rows(engine: &RocksEngine, table_id: i64, handle_offset: i64) -> (u64, u64) {
         let ctx = Context::default();
+        let mut kvs = 0;
+        let mut bytes = 0;
         for handle in handle_offset + 1..handle_offset + 2 * (BACKUP_BATCH_LIMIT as i64) {
             let raw_key = table::encode_row_key(table_id, handle);
+            kvs += 1;
+            bytes += (raw_key.len() + b"short_value".len()) as u64;
             let encoded_key = Key::from_raw(&raw_key).append_ts(TimeStamp::from(1));
             let write = Write::new(
                 WriteType::Put,
@@ -2488,10 +2497,12 @@ pub mod tests {
                 .put_cf(&ctx, CF_WRITE, encoded_key, write.as_ref().to_bytes())
                 .unwrap();
         }
+        (kvs, bytes)
     }
 
     #[test]
     fn test_seek_ranges_4() {
+        use std::collections::HashMap;
         let (_tmp, endpoint) = new_endpoint();
 
         // modify the sst_max_size to trigger writer split
@@ -2504,20 +2515,119 @@ pub mod tests {
         //
         // [t1_i1, t1_i2, t1_r], {[t1_r]}, [t1_r, t2_i1, t2_i2, t2_r, t3_i1, t3_r, t4_r,
         // t5_i1, t5_i2], [t5_r], [t5_r, \xFF\xFF], [+inf]
-        write_kv(&endpoint.engine, table::encode_index_seek_key(1, 1, b"11"));
-        write_kv(&endpoint.engine, table::encode_index_seek_key(1, 2, b"11"));
-        write_kv(&endpoint.engine, table::encode_row_key(1, 10));
-        write_kv(&endpoint.engine, table::encode_row_key(1, 400));
-        write_kv(&endpoint.engine, table::encode_index_seek_key(2, 1, b"11"));
-        write_kv(&endpoint.engine, table::encode_index_seek_key(2, 2, b"11"));
-        write_rows(&endpoint.engine, 2, 10);
-        write_kv(&endpoint.engine, table::encode_index_seek_key(3, 1, b"11"));
-        write_kv(&endpoint.engine, table::encode_row_key(3, 10));
-        write_kv(&endpoint.engine, table::encode_row_key(4, 10));
-        write_kv(&endpoint.engine, table::encode_index_seek_key(5, 1, b"11"));
-        write_kv(&endpoint.engine, table::encode_index_seek_key(5, 2, b"11"));
-        write_kv(&endpoint.engine, table::encode_row_key(5, 200));
-        write_kv(&endpoint.engine, table::encode_row_key(5, 600));
+        let mut expect_table_meta: HashMap<i64, (u64, u64)> = HashMap::new();
+        let (kvs, bytes) = write_kv(&endpoint.engine, table::encode_index_seek_key(1, 1, b"11"));
+        expect_table_meta
+            .entry(1)
+            .and_modify(|e| {
+                e.0 += kvs;
+                e.1 += bytes;
+            })
+            .or_insert((kvs, bytes));
+        let (kvs, bytes) = write_kv(&endpoint.engine, table::encode_index_seek_key(1, 2, b"11"));
+        expect_table_meta
+            .entry(1)
+            .and_modify(|e| {
+                e.0 += kvs;
+                e.1 += bytes;
+            })
+            .or_insert((kvs, bytes));
+        let (kvs, bytes) = write_kv(&endpoint.engine, table::encode_row_key(1, 10));
+        expect_table_meta
+            .entry(1)
+            .and_modify(|e| {
+                e.0 += kvs;
+                e.1 += bytes;
+            })
+            .or_insert((kvs, bytes));
+        let (kvs, bytes) = write_kv(&endpoint.engine, table::encode_row_key(1, 400));
+        expect_table_meta
+            .entry(1)
+            .and_modify(|e| {
+                e.0 += kvs;
+                e.1 += bytes;
+            })
+            .or_insert((kvs, bytes));
+        let (kvs, bytes) = write_kv(&endpoint.engine, table::encode_index_seek_key(2, 1, b"11"));
+        expect_table_meta
+            .entry(2)
+            .and_modify(|e| {
+                e.0 += kvs;
+                e.1 += bytes;
+            })
+            .or_insert((kvs, bytes));
+        let (kvs, bytes) = write_kv(&endpoint.engine, table::encode_index_seek_key(2, 2, b"11"));
+        expect_table_meta
+            .entry(2)
+            .and_modify(|e| {
+                e.0 += kvs;
+                e.1 += bytes;
+            })
+            .or_insert((kvs, bytes));
+        let (kvs, bytes) = write_rows(&endpoint.engine, 2, 10);
+        expect_table_meta
+            .entry(2)
+            .and_modify(|e| {
+                e.0 += kvs;
+                e.1 += bytes;
+            })
+            .or_insert((kvs, bytes));
+        let (kvs, bytes) = write_kv(&endpoint.engine, table::encode_index_seek_key(3, 1, b"11"));
+        expect_table_meta
+            .entry(3)
+            .and_modify(|e| {
+                e.0 += kvs;
+                e.1 += bytes;
+            })
+            .or_insert((kvs, bytes));
+        let (kvs, bytes) = write_kv(&endpoint.engine, table::encode_row_key(3, 10));
+        expect_table_meta
+            .entry(3)
+            .and_modify(|e| {
+                e.0 += kvs;
+                e.1 += bytes;
+            })
+            .or_insert((kvs, bytes));
+        let (kvs, bytes) = write_kv(&endpoint.engine, table::encode_row_key(4, 10));
+        expect_table_meta
+            .entry(4)
+            .and_modify(|e| {
+                e.0 += kvs;
+                e.1 += bytes;
+            })
+            .or_insert((kvs, bytes));
+        let (kvs, bytes) = write_kv(&endpoint.engine, table::encode_index_seek_key(5, 1, b"11"));
+        expect_table_meta
+            .entry(5)
+            .and_modify(|e| {
+                e.0 += kvs;
+                e.1 += bytes;
+            })
+            .or_insert((kvs, bytes));
+        let (kvs, bytes) = write_kv(&endpoint.engine, table::encode_index_seek_key(5, 2, b"11"));
+        expect_table_meta
+            .entry(5)
+            .and_modify(|e| {
+                e.0 += kvs;
+                e.1 += bytes;
+            })
+            .or_insert((kvs, bytes));
+        let (kvs, bytes) = write_kv(&endpoint.engine, table::encode_row_key(5, 200));
+        expect_table_meta
+            .entry(5)
+            .and_modify(|e| {
+                e.0 += kvs;
+                e.1 += bytes;
+            })
+            .or_insert((kvs, bytes));
+        let (kvs, bytes) = write_kv(&endpoint.engine, table::encode_row_key(5, 600));
+        expect_table_meta
+            .entry(5)
+            .and_modify(|e| {
+                e.0 += kvs;
+                e.1 += bytes;
+            })
+            .or_insert((kvs, bytes));
         write_kv(&endpoint.engine, vec![u8::MAX, 1]);
         write_kv(&endpoint.engine, vec![u8::MAX, u8::MAX, u8::MAX, 0]);
         endpoint.region_info.set_regions(vec![
@@ -2691,7 +2801,19 @@ pub mod tests {
         };
         endpoint.handle_backup_task(task);
         let resps: Vec<_> = block_on(rx.collect());
+        let mut actual_table_meta: HashMap<i64, (u64, u64)> = HashMap::new();
         for a in &resps {
+            for f in a.get_files() {
+                for meta in f.get_table_metas() {
+                    actual_table_meta
+                        .entry(meta.physical_id)
+                        .and_modify(|e| {
+                            e.0 += meta.total_kvs;
+                            e.1 += meta.total_bytes;
+                        })
+                        .or_insert((meta.total_kvs, meta.total_bytes));
+                }
+            }
             assert!(
                 expect
                     .iter()
@@ -2702,6 +2824,12 @@ pub mod tests {
             );
         }
         assert_eq!(resps.len(), expect.len());
+        assert_eq!(expect_table_meta.len(), actual_table_meta.len());
+        for (id, (kvs, bytes)) in expect_table_meta {
+            let (actual_kvs, actual_bytes) = *actual_table_meta.get(&id).unwrap();
+            assert_eq!(kvs, actual_kvs);
+            assert_eq!(bytes, actual_bytes);
+        }
     }
 
     #[test]

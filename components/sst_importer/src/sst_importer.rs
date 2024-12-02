@@ -1313,7 +1313,14 @@ impl<E: KvEngine> SstImporter<E> {
             }
 
             let (user_key, new_timestamp) =
-                prefix_replacer.try_update_rewrite_rule(old_key.as_ref())?;
+                match prefix_replacer.try_update_rewrite_rule(old_key.as_ref())? {
+                    Either::Left((user_key, new_timestamp)) => (user_key, new_timestamp),
+                    Either::Right(seek_key) => {
+                        // skip some kvs that may be filtered
+                        iter.seek(&keys::data_key(seek_key))?;
+                        continue;
+                    }
+                };
             data_key.truncate(data_key_prefix_len);
             if req_type == DownloadRequestType::Keyspace {
                 data_key.extend(encode_bytes(user_key));
@@ -3113,9 +3120,13 @@ mod tests {
         );
 
         match &result {
-            Err(Error::WrongKeyPrefix { key, prefix, .. }) => {
+            Err(Error::WrongKeyPrefix { what, key, prefix }) => {
+                assert_eq!(
+                    what.as_bytes(),
+                    b"Key in SST does not match any rewrite rule"
+                );
                 assert_eq!(key, b"t123_r01");
-                assert_eq!(prefix, b"xxx");
+                assert_eq!(prefix, b"");
             }
             _ => panic!("unexpected download result: {:?}", result),
         }
