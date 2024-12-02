@@ -596,14 +596,23 @@ impl Suite {
     }
 
     pub fn force_flush_files(&self, task: &str) {
+        let _ = self.force_flush_files_and_wait(task);
+    }
+
+    pub fn force_flush_files_and_wait(&self, task: &str) -> impl Future<Output = ()> + '_ {
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
         self.run(|| Task::ForceFlush(TaskSelector::ByName(task.to_owned()), tx.clone()));
         drop(tx);
 
-        let mut v = vec![];
-        assert_eq!(rx.blocking_recv_many(&mut v, 1), 1);
-        if let Some(ref err) = v[0].error {
-            panic!("failed to flush: {}", err)
+        async move {
+            while let Some(res) = tokio::time::timeout(Duration::from_secs(30), rx.recv())
+                .await
+                .expect("flush not finish after 30s")
+            {
+                if let Some(ref err) = res.error {
+                    panic!("failed to flush: {}", err)
+                }
+            }
         }
     }
 

@@ -190,12 +190,10 @@ mod all {
             suite.write_records(0, 128, 1).await;
             let ts = suite.just_async_commit_prewrite(256, 1);
             suite.write_records(258, 128, 1).await;
-            suite.force_flush_files("test_async_commit");
-            std::thread::sleep(Duration::from_secs(4));
+            suite.force_flush_files_and_wait("test_async_commit").await;
             assert_eq!(suite.global_checkpoint(), 256);
             suite.just_commit_a_key(make_record_key(1, 256), TimeStamp::new(256), ts);
-            suite.force_flush_files("test_async_commit");
-            suite.wait_for_flush();
+            suite.force_flush_files_and_wait("test_async_commit").await;
             let cp = suite.global_checkpoint();
             assert!(cp > 256, "it is {:?}", cp);
         });
@@ -433,16 +431,14 @@ mod all {
             .scheduler()
             .schedule(Task::ForceFlush(TaskSelector::All, tx))
             .unwrap();
-        rx.blocking_recv().unwrap();
+        while let Some(_) = rx.blocking_recv() {}
 
-        std::thread::sleep(Duration::from_secs(2));
         suite.check_for_write_records(
             suite.flushed_files.path(),
             round1.iter().map(|x| x.as_slice()),
         );
         assert!(suite.global_checkpoint() > 256);
-        suite.force_flush_files("r");
-        suite.wait_for_flush();
+        run_async_test(suite.force_flush_files_and_wait("r"));
         assert!(suite.global_checkpoint() > 512);
         suite.check_for_write_records(
             suite.flushed_files.path(),
@@ -503,6 +499,7 @@ mod all {
         let mut basic_config = BackupStreamConfig::default();
         basic_config.initial_scan_concurrency = 4;
         suite.run(|| Task::ChangeConfig(basic_config.clone()));
+        suite.sync();
         suite.wait_with(|e| {
             assert_eq!(e.initial_scan_semaphore.available_permits(), 4,);
             true
