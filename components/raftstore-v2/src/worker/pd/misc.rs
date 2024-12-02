@@ -62,7 +62,7 @@ where
 
                 match res {
                     Ok(ts) => {
-                        concurrency_manager.update_max_ts(ts);
+                        concurrency_manager.update_max_ts_from_pd(ts);
                         success = txn_ext
                             .max_ts_sync_status
                             .compare_exchange(

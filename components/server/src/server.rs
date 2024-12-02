@@ -113,7 +113,7 @@ use tikv::{
         config::EngineType,
         config_manager::StorageConfigManger,
         kv::LocalTablets,
-        mvcc::MvccConsistencyCheckObserver,
+        mvcc::{MvccConsistencyCheckObserver, TimeStamp},
         txn::{
             flow_controller::{EngineFlowController, FlowController},
             txn_status_cache::TxnStatusCache,
@@ -400,7 +400,8 @@ where
 
         // Initialize concurrency manager
         let latest_ts = block_on(pd_client.get_tso()).expect("failed to get timestamp from PD");
-        let concurrency_manager = ConcurrencyManager::new(latest_ts);
+        let concurrency_manager =
+            ConcurrencyManager::new_with_config(latest_ts, config.storage.panic_on_invalid_max_ts);
 
         // use different quota for front-end and back-end requests
         let quota_limiter = Arc::new(QuotaLimiter::new(
@@ -1149,6 +1150,26 @@ where
             backup_stream_scheduler,
             debugger,
         });
+
+        let cm = self.concurrency_manager.clone();
+        let pd_client = self.pd_client.clone();
+        let allowance_ms = self.core.config.storage.max_ts_allowance_secs * 1000;
+        let max_ts_sync_interval =
+            Duration::from_secs(self.core.config.storage.max_ts_sync_interval_secs);
+        self.core
+            .background_worker
+            .spawn_interval_async_task(max_ts_sync_interval, move || {
+                let cm = cm.clone();
+                let pd_client = pd_client.clone();
+                async move {
+                    let pd_tso = pd_client.get_tso().await;
+                    if let Ok(ts) = pd_tso {
+                        cm.set_max_ts_limit(TimeStamp::compose(ts.physical() + allowance_ms, 0));
+                    } else {
+                        warn!("failed to get tso from pd in background");
+                    }
+                }
+            });
 
         server_config
     }

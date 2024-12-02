@@ -105,6 +105,14 @@ pub struct Config {
     #[online_config(skip)]
     pub txn_status_cache_capacity: usize,
     pub memory_quota: ReadableSize,
+    /// Maximum max_ts deviation allowed from PD timestamp (in seconds)
+    #[online_config(skip)]
+    pub max_ts_allowance_secs: u64,
+    /// How often to refresh the max_ts limit from PD (in seconds)
+    #[online_config(skip)]
+    pub max_ts_sync_interval_secs: u64,
+    #[online_config(skip)]
+    pub panic_on_invalid_max_ts: bool,
     #[online_config(submodule)]
     pub flow_control: FlowControlConfig,
     #[online_config(submodule)]
@@ -140,6 +148,9 @@ impl Default for Config {
             io_rate_limit: IoRateLimitConfig::default(),
             background_error_recovery_window: ReadableDuration::hours(1),
             memory_quota: DEFAULT_TXN_MEMORY_QUOTA_CAPACITY,
+            max_ts_allowance_secs: 300,
+            max_ts_sync_interval_secs: 30,
+            panic_on_invalid_max_ts: true,
         }
     }
 }

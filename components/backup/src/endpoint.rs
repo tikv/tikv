@@ -350,7 +350,9 @@ impl BackupRange {
             snap_ctx.key_ranges = vec![key_range];
         } else {
             // Update max_ts and check the in-memory lock table before getting the snapshot
-            concurrency_manager.update_max_ts(backup_ts);
+            concurrency_manager
+                .update_max_ts(backup_ts)
+                .map_err(TxnError::from)?;
             concurrency_manager
                 .read_range_check(
                     self.start_key.as_ref(),

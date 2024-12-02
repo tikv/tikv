@@ -780,6 +780,9 @@ fn test_serde_custom_tikv_config() {
         background_error_recovery_window: ReadableDuration::hours(1),
         txn_status_cache_capacity: 1000,
         memory_quota: ReadableSize::kb(123),
+        max_ts_allowance_secs: 300,
+        max_ts_sync_interval_secs: 30,
+        panic_on_invalid_max_ts: true,
     };
     value.coprocessor = CopConfig {
         split_region_on_table: false,

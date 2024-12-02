@@ -1716,7 +1716,7 @@ where
 
                 match res {
                     Ok(ts) => {
-                        concurrency_manager.update_max_ts(ts);
+                        concurrency_manager.update_max_ts_from_pd(ts);
                         // Set the least significant bit to 1 to mark it as synced.
                         success = txn_ext
                             .max_ts_sync_status
