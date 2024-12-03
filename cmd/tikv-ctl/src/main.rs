@@ -1383,8 +1383,6 @@ fn print_region_sst_mapping(
         .split("--------------- Column family")
         .collect();
 
-    println!("ffffffffffffffffffffffffff");
-
     // Locate the "default" column family section
     let default_cf_section = cf_sections
     .iter()
@@ -1392,7 +1390,6 @@ fn print_region_sst_mapping(
     .map(|&section| section) // 解引用，获取 &str
     .expect("default column family not found");
 
-    println!("ggggggggggggggggggggggg");
     // If level is specified, split the default CF section by levels and locate the
     // desired level
     let level_section = if let Some(level) = level {
@@ -1483,13 +1480,10 @@ fn print_region_sst_mapping(
                 println!(
                     "region_id: {}, region.start_key: {:?}, region.end_Key{:?}, sst start: {:?} sst end: {:?}",
                     region_id,
-                    region.start_key,
-                    region.end_key,
-                    sst_start_key,
-                    sst_end_key /* hex::encode(&region.start_key).to_uppercase(),
-                                 * hex::encode(&region.end_key).to_uppercase(),
-                                 * hex::encode(&sst_start_key).to_uppercase(),
-                                 * hex::encode(&sst_end_key).to_uppercase() */
+                    hex::encode(&region.start_key).to_uppercase(),
+                    *hex::encode(&region.end_key).to_uppercase(),
+                    *hex::encode(&sst_start_key).to_uppercase(),
+                    *hex::encode(&sst_end_key).to_uppercase(),
                 );
                 region_sst_map
                     .entry((region_start_key_hex, region_end_key_hex, region_id))
