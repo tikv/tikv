@@ -4318,13 +4318,8 @@ dependencies = [
 
 [[package]]
 name = "raft-engine"
-<<<<<<< HEAD
-version = "0.4.1"
-source = "git+https://github.com/tikv/raft-engine.git#e505d631c8c6d63f7fc63d83ea6e8fb88cf970a5"
-=======
 version = "0.4.2"
 source = "git+https://github.com/tikv/raft-engine.git#de1ec937529e3a88e093db0cf0d403522565fe64"
->>>>>>> 0c1d2178bb (raft-engine: fix panics when reading entries on compacted raft logs (#17765))
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -4357,8 +4352,8 @@ dependencies = [
 
 [[package]]
 name = "raft-engine-ctl"
-version = "0.4.1"
-source = "git+https://github.com/tikv/raft-engine.git#e505d631c8c6d63f7fc63d83ea6e8fb88cf970a5"
+version = "0.4.2"
+source = "git+https://github.com/tikv/raft-engine.git#de1ec937529e3a88e093db0cf0d403522565fe64"
 dependencies = [
  "clap 3.1.6",
  "env_logger 0.10.0",
@@ -5261,15 +5256,9 @@ dependencies = [
 
 [[package]]
 name = "serde"
-<<<<<<< HEAD
-version = "1.0.147"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d193d69bae983fc11a79df82342761dfbf28a99fc8d203dca4c3c1b590948965"
-=======
 version = "1.0.194"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b114498256798c94a0689e1a15fec6005dee8ac1f41de56404b67afc2a4b773"
->>>>>>> 0c1d2178bb (raft-engine: fix panics when reading entries on compacted raft logs (#17765))
 dependencies = [
  "serde_derive",
 ]
@@ -5286,19 +5275,13 @@ dependencies = [
 
 [[package]]
 name = "serde_derive"
-<<<<<<< HEAD
-version = "1.0.147"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f1d362ca8fc9c3e3a7484440752472d68a6caa98f1ab81d99b5dfe517cec852"
-=======
 version = "1.0.194"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a3385e45322e8f9931410f01b3031ec534c3947d0e94c18049af4d9f9907d4e0"
->>>>>>> 0c1d2178bb (raft-engine: fix panics when reading entries on compacted raft logs (#17765))
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 1.0.103",
+ "syn 2.0.79",
 ]
 
 [[package]]
@@ -5816,7 +5799,6 @@ dependencies = [
 
 [[package]]
 name = "strum_macros"
-<<<<<<< HEAD
 version = "0.24.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e385be0d24f186b4ce2f9982191e7101bb737312ad61c1f2f984f34bcf85d59"
@@ -5830,10 +5812,7 @@ dependencies = [
 
 [[package]]
 name = "strum_macros"
-version = "0.25.0"
-=======
 version = "0.26.4"
->>>>>>> 0c1d2178bb (raft-engine: fix panics when reading entries on compacted raft logs (#17765))
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4c6bee85a5a24955dc440386795aa378cd9cf82acd5f764469152d2270e581be"
 dependencies = [
