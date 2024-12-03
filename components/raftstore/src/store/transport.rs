@@ -36,6 +36,14 @@ where
     fn send(&self, region_id: u64, msg: CasualMessage<EK>) -> Result<()>;
 }
 
+// An extension of `CasualRouter` that support boxed clone.
+pub trait ClonableCasualRouter<EK>: CasualRouter<EK>
+where
+    EK: KvEngine,
+{
+    fn box_clone(&self) -> Box<dyn ClonableCasualRouter<EK>>;
+}
+
 /// Routes message to target region.
 ///
 /// Messages aret guaranteed to be delivered by this trait.
@@ -93,6 +101,16 @@ impl<'a, EK: KvEngine, T: CasualRouter<EK>> CasualRouter<EK> for &'a Mutex<T> {
     #[inline]
     fn send(&self, region_id: u64, msg: CasualMessage<EK>) -> Result<()> {
         CasualRouter::send(&*Mutex::lock(self).unwrap(), region_id, msg)
+    }
+}
+
+impl<EK, ER> ClonableCasualRouter<EK> for RaftRouter<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    fn box_clone(&self) -> Box<dyn ClonableCasualRouter<EK>> {
+        Box::new(self.clone())
     }
 }
 

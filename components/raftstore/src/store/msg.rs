@@ -661,6 +661,14 @@ pub enum CasualMessage<EK: KvEngine> {
     // Trigger raft to campaign which is used after exiting force leader
     // or make new splitted peers campaign to get votes.
     Campaign(CampaignType),
+
+    // Check and add pending region for in_memory_engine,
+    // skip add this region if it is not leader or the epoch is not match
+    InMemoryEnginePendingRegion {
+        region_id: u64,
+        add_pending_cb: Box<dyn FnOnce(&Region, bool) + Send + 'static>,
+    },
+
     // Trigger loading pending region for in_memory_engine,
     InMemoryEngineLoadRegion {
         region_id: u64,
@@ -739,9 +747,14 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
             CasualMessage::Campaign(_) => {
                 write!(fmt, "Campaign")
             }
+            CasualMessage::InMemoryEnginePendingRegion { region_id, .. } => write!(
+                fmt,
+                "[region={}] try to add pending region to in memory cache",
+                region_id,
+            ),
             CasualMessage::InMemoryEngineLoadRegion { region_id, .. } => write!(
                 fmt,
-                "[region={}] try load in memory region cache",
+                "[region={}] try to load in memory region cache",
                 region_id
             ),
         }

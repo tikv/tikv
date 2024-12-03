@@ -1321,6 +1321,9 @@ where
                 }
                 self.fsm.has_ready = true;
             }
+            CasualMessage::InMemoryEnginePendingRegion { add_pending_cb, .. } => {
+                add_pending_cb(&self.fsm.peer.region(), self.fsm.peer.is_leader());
+            }
             CasualMessage::InMemoryEngineLoadRegion {
                 region_id,
                 trigger_load_cb,

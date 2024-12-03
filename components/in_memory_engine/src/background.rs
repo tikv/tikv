@@ -14,10 +14,11 @@ use engine_traits::{
 };
 use fail::fail_point;
 use keys::{origin_end_key, origin_key};
+use kvproto::metapb::Region;
 use pd_client::{PdClient, RpcClient};
 use raftstore::{
     coprocessor::RegionInfoProvider,
-    store::{CasualMessage, CasualRouter},
+    store::{CasualMessage, ClonableCasualRouter},
 };
 use slog_global::{error, info, warn};
 use strum::EnumCount;
@@ -242,7 +243,7 @@ impl BgWorkManager {
         config: Arc<VersionTrack<InMemoryEngineConfig>>,
         memory_controller: Arc<MemoryController>,
         region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
-        raft_casual_router: Option<Box<dyn CasualRouter<RocksEngine>>>,
+        raft_casual_router: Option<Box<dyn ClonableCasualRouter<RocksEngine>>>,
     ) -> Self {
         let worker = Worker::new("ime-bg");
         let (runner, delete_range_scheduler) = BackgroundRunner::new(
@@ -685,7 +686,11 @@ impl BackgroundRunnerCore {
     ///
     /// See: [`RegionStatsManager::collect_changes_regions`] for
     /// algorithm details.
-    async fn top_regions_load_evict(&self, delete_range_scheduler: &Scheduler<BackgroundTask>) {
+    async fn top_regions_load_evict(
+        &self,
+        delete_range_scheduler: &Scheduler<BackgroundTask>,
+        raft_casual_router: Option<Box<dyn ClonableCasualRouter<RocksEngine>>>,
+    ) {
         let region_stats_manager = match &self.region_stats_manager {
             Some(m) => m,
             None => {
@@ -762,11 +767,36 @@ impl BackgroundRunnerCore {
                 .saturating_sub(self.memory_controller.mem_usage())
                 / region_stats_manager.expected_region_size();
             let expected_new_count = usize::max(expected_new_count, 1);
-            let mut regions_map = self.engine.region_manager().regions_map.write();
-            for region in regions_to_load.into_iter().take(expected_new_count) {
-                let cache_region = CacheRegion::from_region(&region);
-                if let Err(e) = regions_map.load_region(cache_region) {
-                    warn!("ime error loading region"; "cache_region" => ?region, "err" => ?e);
+            if let Some(router) = raft_casual_router {
+                for region in regions_to_load.into_iter().take(expected_new_count) {
+                    let id = region.id;
+                    let ime_engine = self.engine.clone();
+                    let cache_region = CacheRegion::from_region(&region);
+                    if let Err(e) = router.send(id, CasualMessage::InMemoryEnginePendingRegion {
+                        region_id: id,
+                        add_pending_cb: Box::new(move |region: &Region, is_leader: bool| {
+                            if !is_leader || region.get_region_epoch().version != cache_region.epoch_version {
+                                info!("ime skip load region because peer is not leader or epoch not match"; "cache_region" => ?cache_region, "region" => ?region, "leader" => is_leader);
+                                return;
+                            }
+
+                            if let Err(e) = ime_engine.region_manager.load_region(cache_region.clone()) {
+                                warn!("ime error loading region"; "cache_region" => ?cache_region, "err" => ?e);
+                            }
+                        }),
+                    }) {
+                        warn!("ime schedule pending region casual message failed"; "region" => ?region, "err" => ?e);
+                    }
+                }
+            } else {
+                // if raft router is none, we still load these regions directly,
+                // we keep this branch for unit test convenience.
+                let mut regions_map = self.engine.region_manager().regions_map.write();
+                for region in regions_to_load.into_iter().take(expected_new_count) {
+                    let cache_region = CacheRegion::from_region(&region);
+                    if let Err(e) = regions_map.load_region(cache_region) {
+                        warn!("ime error loading region"; "cache_region" => ?region, "err" => ?e);
+                    }
                 }
             }
         }
@@ -813,7 +843,7 @@ pub struct BackgroundRunner {
     last_seqno: u64,
     // RocksEngine is used to get the oldest snapshot sequence number.
     rocks_engine: Option<RocksEngine>,
-    raft_casual_router: Option<Box<dyn CasualRouter<RocksEngine>>>,
+    raft_casual_router: Option<Box<dyn ClonableCasualRouter<RocksEngine>>>,
 }
 
 impl Drop for BackgroundRunner {
@@ -836,7 +866,7 @@ impl BackgroundRunner {
         region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
         config: Arc<VersionTrack<InMemoryEngineConfig>>,
         pd_client: Arc<dyn PdClient>,
-        raft_casual_router: Option<Box<dyn CasualRouter<RocksEngine>>>,
+        raft_casual_router: Option<Box<dyn ClonableCasualRouter<RocksEngine>>>,
     ) -> (Self, Scheduler<BackgroundTask>) {
         let region_load_worker = Builder::new("ime-load")
             // Range load now is implemented sequentially, so we must use exactly one thread to handle it.
@@ -1190,8 +1220,11 @@ impl Runnable for BackgroundRunner {
             BackgroundTask::TopRegionsLoadEvict => {
                 let delete_range_scheduler = self.delete_range_scheduler.clone();
                 let core = self.core.clone();
-                let task =
-                    async move { core.top_regions_load_evict(&delete_range_scheduler).await };
+                let raft_router = self.raft_casual_router.as_ref().map(|r| r.box_clone());
+                let task = async move {
+                    core.top_regions_load_evict(&delete_range_scheduler, raft_router)
+                        .await
+                };
                 self.load_evict_remote.spawn(task);
             }
             BackgroundTask::CleanLockTombstone(snapshot_seqno) => {

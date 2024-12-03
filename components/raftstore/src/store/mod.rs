@@ -76,7 +76,10 @@ pub use self::{
         SnapManagerBuilder, Snapshot, SnapshotStatistics, TabletSnapKey, TabletSnapManager,
     },
     snapshot_backup::SnapshotBrWaitApplySyncer,
-    transport::{CasualRouter, ProposalRouter, SignificantRouter, StoreRouter, Transport},
+    transport::{
+        CasualRouter, ClonableCasualRouter, ProposalRouter, SignificantRouter, StoreRouter,
+        Transport,
+    },
     txn_ext::{LocksStatus, PeerPessimisticLocks, PessimisticLockPair, TxnExt},
     unsafe_recovery::{
         demote_failed_voters_request, exit_joint_request, ForceLeaderState,

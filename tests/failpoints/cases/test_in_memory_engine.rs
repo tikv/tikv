@@ -18,6 +18,7 @@ use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};
 use kvproto::{
     import_sstpb::SstMeta,
     kvrpcpb::Context,
+    metapb::Region,
     raft_cmdpb::{AdminCmdType, CmdType, RaftCmdRequest, RaftRequestHeader, Request},
     raft_serverpb::RaftMessage,
 };
@@ -29,6 +30,7 @@ use raftstore::{
     store::{
         fsm::{apply::ChangeObserver, ApplyTask},
         msg::Callback,
+        CasualMessage, CasualRouter,
     },
 };
 use tempfile::tempdir;
@@ -1058,4 +1060,45 @@ fn test_eviction_when_destroy_uninitialized_peer() {
     let learner2 = new_learner_peer(2, 3);
     pd_client.must_add_peer(region.get_id(), learner2.clone());
     cluster.must_region_exist(region.get_id(), 2);
+}
+
+#[test]
+fn test_ime_add_pending_region() {
+    let mut cluster = new_server_cluster_with_hybrid_engine(0, 3);
+    cluster.run();
+
+    let r = cluster.get_region(b"");
+    let leader = cluster.leader_of_region(r.id).unwrap();
+
+    for peer in r.get_peers() {
+        let raft_router = cluster.get_router(peer.store_id).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let ime = cluster.sim.rl().get_region_cache_engine(peer.store_id);
+        let ime_clone = ime.clone();
+        let cache_region = CacheRegion::from_region(r);
+        CasualRouter::send(
+            &raft_router,
+            r.id,
+            CasualMessage::InMemoryEnginePendingRegion {
+                region_id: r.id,
+                add_pending_cb: Box::new(move |region: &Region, is_leader: bool| {
+                    if !is_leader {
+                        tx.send(()).unwrap();
+                    } else {
+                        ime_clone.load_region(cache_region).unwrap();
+                        tx.send(false).unwrap();
+                    }
+                }),
+            },
+        )
+        .unwrap();
+
+        if peer.id == leader.id {
+            rx.recv().unwrap();
+            assert!(ime.core().region_manager().contains_region(r.id));
+        } else {
+            rx.recv().unwrap_err();
+            assert!(!ime.core().region_manager().contains_region(r.id));
+        }
+    }
 }

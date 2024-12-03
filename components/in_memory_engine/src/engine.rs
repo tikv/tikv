@@ -20,7 +20,7 @@ use engine_traits::{
 use fail::fail_point;
 use kvproto::metapb::Region;
 use pd_client::PdClient;
-use raftstore::{coprocessor::RegionInfoProvider, store::CasualRouter};
+use raftstore::{coprocessor::RegionInfoProvider, store::ClonableCasualRouter};
 use slog_global::error;
 use tikv_util::{config::VersionTrack, info, warn, worker::Scheduler};
 
@@ -359,7 +359,7 @@ impl RegionCacheMemoryEngine {
     pub fn with_region_info_provider(
         in_memory_engine_context: InMemoryEngineContext,
         region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
-        raft_casual_router: Option<Box<dyn CasualRouter<RocksEngine>>>,
+        raft_casual_router: Option<Box<dyn ClonableCasualRouter<RocksEngine>>>,
     ) -> Self {
         let core = Arc::new(RegionCacheMemoryEngineCore::new());
         let skiplist_engine = core.engine().clone();
