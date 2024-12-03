@@ -1169,6 +1169,10 @@ fn read_fail_file(path: &str) -> Vec<(String, String)> {
     list
 }
 
+/// A temporary RocksDB instance.
+/// Its content will be saved at a temp dir, so don't put too many stuffs into
+/// it. The configurations are loaded to this instance, so it can be used for
+/// constructing / reading SST files.
 struct TemporaryRocks {
     rocks: RocksEngine,
     #[allow(dead_code)]
