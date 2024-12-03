@@ -3,7 +3,7 @@
 use std::{borrow::ToOwned, str, string::ToString, sync::LazyLock, u64};
 
 use clap::{crate_authors, AppSettings};
-use engine_traits::CF_DEFAULT;
+use engine_traits::{SstCompressionType, CF_DEFAULT};
 use structopt::StructOpt;
 
 const RAW_KEY_HINT: &str = "Raw key (generally starts with \"z\") in escaped form";
@@ -29,6 +29,9 @@ pub struct Opt {
     #[structopt(long, default_value = "warn")]
     /// Set the log level
     pub log_level: String,
+
+    #[structopt(long, default_value = "text")]
+    pub log_format: String,
 
     #[structopt(long)]
     /// Set the remote host
@@ -626,6 +629,62 @@ pub enum Cmd {
         #[structopt(long, default_value = "")]
         /// hex end key
         end: String,
+    },
+    CompactLogBackup {
+        #[structopt(
+            short,
+            long,
+            default_value = "compaction",
+            help(
+                "name of the compaction, register this will help you find the compaction easier."
+            )
+        )]
+        name: String,
+        #[structopt(long = "from", help("from when we need to compact."))]
+        from_ts: u64,
+        #[structopt(
+            long = "until",
+            help(
+                "until when we need to compact. \
+                Also note that records out of the [--from, --until) range may also be compacted \
+                if their neighbour in the same file needs to be compacted."
+            )
+        )]
+        until_ts: u64,
+        #[structopt(
+            short = "N",
+            long = "concurrency",
+            default_value = "32",
+            help("how many compactions can be executed concurrently.")
+        )]
+        max_concurrent_compactions: u64,
+        #[structopt(
+            short = "s",
+            long = "storage-base64",
+            help(
+                "the base-64 encoded protocol buffer message `StorageBackend`. \
+                `br` CLI should provide a subcommand that converts an URL to it."
+            )
+        )]
+        storage_base64: String,
+        #[structopt(
+            long,
+            default_value = "lz4",
+            help(
+                "the compression method will use when generating SSTs. (hint: zstd | lz4 | snappy)"
+            )
+        )]
+        compression: SstCompressionType,
+        #[structopt(
+            long,
+            help(
+                "the compression level. it definition and effect varies by the algorithm we choose."
+            )
+        )]
+        compression_level: Option<i32>,
+
+        #[structopt(long, help("Don't try to skip already finished compactions."))]
+        force_regenerate: bool,
     },
     /// Get the state of a region's RegionReadProgress.
     GetRegionReadProgress {
