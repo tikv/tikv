@@ -28,7 +28,7 @@ const LIGHTNING_PHYSICAL_IMPORT_SHIFT: u64 = 16;
 /// The first 8 bits are reserved for TiCDC.
 /// The second 8 bits are reserved for Lossy DDL reorg Backfill job.
 /// The 17th bit is reserved for the lightning physical import mode.
-/// The remaining 48 bits are reserved for extendability.
+/// The remaining 47 bits are reserved for extendability.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub(crate) struct TxnSource(u64);
 
