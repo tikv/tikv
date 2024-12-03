@@ -7114,9 +7114,11 @@ name = "tikv-ctl"
 version = "0.0.1"
 dependencies = [
  "api_version",
+ "base64 0.13.0",
  "cc",
  "clap 2.33.0",
  "collections",
+ "compact-log-backup",
  "crypto",
  "encryption_export",
  "engine_rocks",
@@ -7144,6 +7146,7 @@ dependencies = [
  "slog",
  "slog-global",
  "structopt",
+ "tempfile",
  "tikv",
  "tikv_util",
  "time 0.1.43",

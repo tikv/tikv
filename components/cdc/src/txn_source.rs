@@ -1,8 +1,8 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 // The bitmap:
-// |RESERVED|LOSSY_DDL_REORG_SOURCE_BITS|CDC_WRITE_SOURCE_BITS|
-// |  48    |             8             | 4(RESERVED) |  4    |
+// |RESERVED|LIGHTNING_PHYSICAL_IMPORT_BIT|LOSSY_DDL_REORG_SOURCE_BITS|CDC_WRITE_SOURCE_BITS|
+// |  47    |               1             |             8             | 4(RESERVED) |  4    |
 //
 // TiCDC uses 1 - 255 to indicate the source of TiDB.
 // For now, 1 - 15 are reserved for TiCDC to implement BDR synchronization.
@@ -20,11 +20,15 @@ const LOSSY_DDL_COLUMN_REORG_SOURCE: u64 = 1;
 const LOSSY_DDL_REORG_SOURCE_MAX: u64 = (1 << LOSSY_DDL_REORG_SOURCE_BITS) - 1;
 const LOSSY_DDL_REORG_SOURCE_SHIFT: u64 = CDC_WRITE_SOURCE_BITS;
 
+// The 17th bit is reserved for the lightning physical import mode.
+const LIGHTNING_PHYSICAL_IMPORT_SHIFT: u64 = 16;
+
 /// For kv.TxnSource
 /// We use an uint64 to represent the source of a transaction.
-/// The first 8 bits are reserved for TiCDC, and the next 8 bits are reserved
-/// for Lossy DDL reorg Backfill job. The remaining 48 bits are reserved for
-/// extendability.
+/// The first 8 bits are reserved for TiCDC.
+/// The second 8 bits are reserved for Lossy DDL reorg Backfill job.
+/// The 17th bit is reserved for the lightning physical import mode.
+/// The remaining 47 bits are reserved for extendability.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub(crate) struct TxnSource(u64);
 
@@ -61,6 +65,15 @@ impl TxnSource {
 
     pub(crate) fn is_lossy_ddl_reorg_source_set(txn_source: u64) -> bool {
         (txn_source >> LOSSY_DDL_REORG_SOURCE_SHIFT) != 0
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_lightning_physical_import(&mut self) {
+        self.0 |= 1 << LIGHTNING_PHYSICAL_IMPORT_SHIFT;
+    }
+
+    pub(crate) fn is_lightning_physical_import(txn_source: u64) -> bool {
+        (txn_source & (1 << LIGHTNING_PHYSICAL_IMPORT_SHIFT)) != 0
     }
 }
 
@@ -112,5 +125,15 @@ mod tests {
             TxnSource::is_lossy_ddl_reorg_source_set(txn_source.0),
             false
         );
+    }
+
+    #[test]
+    fn test_is_lightning_physical_import() {
+        let mut txn_source = TxnSource::default();
+
+        assert_eq!(TxnSource::is_lightning_physical_import(txn_source.0), false);
+
+        txn_source.set_lightning_physical_import();
+        assert_eq!(TxnSource::is_lightning_physical_import(txn_source.0), true);
     }
 }
