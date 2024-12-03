@@ -239,12 +239,12 @@ impl CompactionRunInfoBuilder {
     pub async fn write_migration(&self, s: &dyn ExternalStorage) -> Result<()> {
         let migration = self.migration_of(self.find_expiring_files(s).await?);
         let wrapped_storage = MigartionStorageWrapper::new(s);
-        wrapped_storage.write(migration).await?;
+        wrapped_storage.write(migration.into()).await?;
         Ok(())
     }
 
     pub fn migration_of(&self, metas: Vec<ExpiringFilesOfMeta>) -> brpb::Migration {
-        let mut migration = brpb::Migration::new();
+        let mut migration = brpb::Migration::default();
         for files in metas {
             let mut medit = brpb::MetaEdit::new();
             medit.set_path(files.meta_path.to_string());
