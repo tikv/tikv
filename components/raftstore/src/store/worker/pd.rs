@@ -22,7 +22,7 @@ use fail::fail_point;
 use futures::{compat::Future01CompatExt, FutureExt};
 use health_controller::{
     reporters::{RaftstoreReporter, RaftstoreReporterConfig},
-    types::{LatencyInspector, RaftstoreDuration},
+    types::{InspectFactor, LatencyInspector, RaftstoreDuration},
     HealthController,
 };
 use kvproto::{
@@ -50,7 +50,7 @@ use tikv_util::{
     timer::GLOBAL_TIMER_HANDLE,
     topn::TopN,
     warn,
-    worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler},
+    worker::{Runnable, ScheduleError, Scheduler},
 };
 use txn_types::TimeStamp;
 use yatp::Remote;
@@ -201,6 +201,7 @@ where
     },
     UpdateSlowScore {
         id: u64,
+        factor: InspectFactor,
         duration: RaftstoreDuration,
     },
     RegionCpuRecords(Arc<RawRecords>),
@@ -210,6 +211,9 @@ where
     },
     ReportBuckets(BucketStat),
     ControlGrpcServer(pdpb::ControlGrpcEvent),
+    InspectLatency {
+        factor: InspectFactor,
+    },
 }
 
 pub struct StoreStat {
@@ -449,8 +453,16 @@ where
             Task::QueryRegionLeader { region_id } => {
                 write!(f, "query the leader of region {}", region_id)
             }
-            Task::UpdateSlowScore { id, ref duration } => {
-                write!(f, "compute slow score: id {}, duration {:?}", id, duration)
+            Task::UpdateSlowScore {
+                id,
+                factor,
+                ref duration,
+            } => {
+                write!(
+                    f,
+                    "compute slow score: id {}, factor: {:?}, duration {:?}",
+                    id, factor, duration
+                )
             }
             Task::RegionCpuRecords(ref cpu_records) => {
                 write!(f, "get region cpu records: {:?}", cpu_records)
@@ -470,6 +482,9 @@ where
             }
             Task::ControlGrpcServer(ref event) => {
                 write!(f, "control grpc server: {:?}", event)
+            }
+            Task::InspectLatency { factor } => {
+                write!(f, "inspect raftstore latency: {:?}", factor)
             }
         }
     }
@@ -519,7 +534,7 @@ pub trait StoreStatsReporter: Send + Clone + Sync + 'static + Collector {
     );
     fn report_min_resolved_ts(&self, store_id: u64, min_resolved_ts: u64);
     fn auto_split(&self, split_infos: Vec<SplitInfo>);
-    fn update_latency_stats(&self, timer_tick: u64);
+    fn update_latency_stats(&self, timer_tick: u64, factor: InspectFactor);
 }
 
 impl<EK, ER> StoreStatsReporter for WrappedScheduler<EK, ER>
@@ -569,9 +584,16 @@ where
         }
     }
 
-    fn update_latency_stats(&self, timer_tick: u64) {
-        debug!("update latency statistics not implemented for raftstore-v1";
+    fn update_latency_stats(&self, timer_tick: u64, factor: InspectFactor) {
+        debug!("update latency statistics for raftstore-v1";
                 "tick" => timer_tick);
+        let task = Task::InspectLatency { factor };
+        if let Err(e) = self.0.schedule(task) {
+            error!(
+                "failed to send inspect raftstore latency task to pd worker";
+                "err" => ?e,
+            );
+        }
     }
 }
 
@@ -588,13 +610,19 @@ where
     load_base_split_check_interval: Duration,
     collect_tick_interval: Duration,
     inspect_latency_interval: Duration,
+    inspect_kvdb_latency_interval: Duration,
 }
 
 impl<T> StatsMonitor<T>
 where
     T: StoreStatsReporter,
 {
-    pub fn new(interval: Duration, inspect_latency_interval: Duration, reporter: T) -> Self {
+    pub fn new(
+        interval: Duration,
+        inspect_latency_interval: Duration,
+        inspect_kvdb_latency_interval: Duration,
+        reporter: T,
+    ) -> Self {
         StatsMonitor {
             reporter,
             handle: None,
@@ -612,6 +640,7 @@ where
                 cmp::min(default_collect_tick_interval(), interval),
             ),
             inspect_latency_interval,
+            inspect_kvdb_latency_interval,
         }
     }
 
@@ -641,9 +670,12 @@ where
         let load_base_split_check_interval = self
             .load_base_split_check_interval
             .div_duration_f64(tick_interval) as u64;
-        let update_latency_stats_interval = self
-            .inspect_latency_interval
-            .div_duration_f64(tick_interval) as u64;
+        let update_raftdisk_latency_stats_interval =
+            self.inspect_latency_interval
+                .div_duration_f64(tick_interval) as u64;
+        let update_kvdisk_latency_stats_interval =
+            self.inspect_kvdb_latency_interval
+                .div_duration_f64(tick_interval) as u64;
 
         let (timer_tx, timer_rx) = mpsc::channel();
         self.timer = Some(timer_tx);
@@ -704,8 +736,11 @@ where
                             &mut region_cpu_records_collector,
                         );
                     }
-                    if is_enable_tick(timer_cnt, update_latency_stats_interval) {
-                        reporter.update_latency_stats(timer_cnt);
+                    if is_enable_tick(timer_cnt, update_raftdisk_latency_stats_interval) {
+                        reporter.update_latency_stats(timer_cnt, InspectFactor::RaftDisk);
+                    }
+                    if is_enable_tick(timer_cnt, update_kvdisk_latency_stats_interval) {
+                        reporter.update_latency_stats(timer_cnt, InspectFactor::KvDisk);
                     }
                     timer_cnt += 1;
                 }
@@ -895,6 +930,7 @@ where
         let mut stats_monitor = StatsMonitor::new(
             interval,
             cfg.inspect_interval.0,
+            cfg.inspect_kvdb_interval.0,
             WrappedScheduler(scheduler.clone()),
         );
         if let Err(e) = stats_monitor.start(auto_split_controller, collector_reg_handle) {
@@ -903,6 +939,7 @@ where
 
         let health_reporter_config = RaftstoreReporterConfig {
             inspect_interval: cfg.inspect_interval.0,
+            inspect_kvdb_interval: cfg.inspect_kvdb_interval.0,
 
             unsensitive_cause: cfg.slow_trend_unsensitive_cause,
             unsensitive_result: cfg.slow_trend_unsensitive_result,
@@ -1890,6 +1927,89 @@ where
             }
         }
     }
+
+    fn handle_inspect_latency(&mut self, factor: InspectFactor) {
+        let slow_score_tick_result = self
+            .health_reporter
+            .tick(self.store_stat.maybe_busy(), factor);
+        if let Some(score) = slow_score_tick_result.updated_score {
+            STORE_SLOW_SCORE_GAUGE
+                .with_label_values(&[factor.as_str()])
+                .set(score as i64);
+        }
+        let id = slow_score_tick_result.tick_id;
+        let scheduler = self.scheduler.clone();
+        let inspector = {
+            match factor {
+                InspectFactor::RaftDisk => {
+                    // If the last slow_score already reached abnormal state and was delayed for
+                    // reporting by `store-heartbeat` to PD, we should report it here manually as
+                    // a FAKE `store-heartbeat`.
+                    if slow_score_tick_result.should_force_report_slow_store
+                        && self.is_store_heartbeat_delayed()
+                    {
+                        self.handle_fake_store_heartbeat();
+                    }
+                    LatencyInspector::new(
+                        id,
+                        Box::new(move |id, duration| {
+                            STORE_INSPECT_DURATION_HISTOGRAM
+                                .with_label_values(&["store_wait"])
+                                .observe(tikv_util::time::duration_to_sec(
+                                    duration.store_wait_duration.unwrap_or_default(),
+                                ));
+                            STORE_INSPECT_DURATION_HISTOGRAM
+                                .with_label_values(&["store_commit"])
+                                .observe(tikv_util::time::duration_to_sec(
+                                    duration.store_commit_duration.unwrap_or_default(),
+                                ));
+
+                            STORE_INSPECT_DURATION_HISTOGRAM
+                                .with_label_values(&["all"])
+                                .observe(tikv_util::time::duration_to_sec(duration.sum()));
+                            if let Err(e) = scheduler.schedule(Task::UpdateSlowScore {
+                                id,
+                                factor,
+                                duration,
+                            }) {
+                                warn!("schedule pd task failed"; "err" => ?e);
+                            }
+                        }),
+                    )
+                }
+                InspectFactor::KvDisk => LatencyInspector::new(
+                    id,
+                    Box::new(move |id, duration| {
+                        STORE_INSPECT_DURATION_HISTOGRAM
+                            .with_label_values(&["apply_wait"])
+                            .observe(tikv_util::time::duration_to_sec(
+                                duration.apply_wait_duration.unwrap_or_default(),
+                            ));
+                        STORE_INSPECT_DURATION_HISTOGRAM
+                            .with_label_values(&["apply_process"])
+                            .observe(tikv_util::time::duration_to_sec(
+                                duration.apply_process_duration.unwrap_or_default(),
+                            ));
+                        if let Err(e) = scheduler.schedule(Task::UpdateSlowScore {
+                            id,
+                            factor,
+                            duration,
+                        }) {
+                            warn!("schedule pd task failed"; "err" => ?e);
+                        }
+                    }),
+                ),
+            }
+        };
+        let msg = StoreMsg::LatencyInspect {
+            factor,
+            send_time: TiInstant::now(),
+            inspector,
+        };
+        if let Err(e) = self.router.send_control(msg) {
+            warn!("pd worker send latency inspecter failed"; "err" => ?e);
+        }
+    }
 }
 
 fn calculate_region_cpu_records(
@@ -2140,9 +2260,14 @@ where
                 txn_ext,
             } => self.handle_update_max_timestamp(region_id, initial_status, txn_ext),
             Task::QueryRegionLeader { region_id } => self.handle_query_region_leader(region_id),
-            Task::UpdateSlowScore { id, duration } => {
+            Task::UpdateSlowScore {
+                id,
+                factor,
+                duration,
+            } => {
                 self.health_reporter.record_raftstore_duration(
                     id,
+                    factor,
                     duration,
                     !self.store_stat.maybe_busy(),
                 );
@@ -2158,76 +2283,14 @@ where
             Task::ControlGrpcServer(event) => {
                 self.handle_control_grpc_server(event);
             }
+            Task::InspectLatency { factor } => {
+                self.handle_inspect_latency(factor);
+            }
         };
     }
 
     fn shutdown(&mut self) {
         self.stats_monitor.stop();
-    }
-}
-
-impl<EK, ER, T> RunnableWithTimer for Runner<EK, ER, T>
-where
-    EK: KvEngine,
-    ER: RaftEngine,
-    T: PdClient + 'static,
-{
-    fn on_timeout(&mut self) {
-        let slow_score_tick_result = self.health_reporter.tick(self.store_stat.maybe_busy());
-        if let Some(score) = slow_score_tick_result.updated_score {
-            STORE_SLOW_SCORE_GAUGE.set(score);
-        }
-
-        // If the last slow_score already reached abnormal state and was delayed for
-        // reporting by `store-heartbeat` to PD, we should report it here manually as
-        // a FAKE `store-heartbeat`.
-        if slow_score_tick_result.should_force_report_slow_store
-            && self.is_store_heartbeat_delayed()
-        {
-            self.handle_fake_store_heartbeat();
-        }
-
-        let id = slow_score_tick_result.tick_id;
-
-        let scheduler = self.scheduler.clone();
-        let inspector = LatencyInspector::new(
-            id,
-            Box::new(move |id, duration| {
-                STORE_INSPECT_DURATION_HISTOGRAM
-                    .with_label_values(&["store_process"])
-                    .observe(tikv_util::time::duration_to_sec(
-                        duration.store_process_duration.unwrap_or_default(),
-                    ));
-                STORE_INSPECT_DURATION_HISTOGRAM
-                    .with_label_values(&["store_wait"])
-                    .observe(tikv_util::time::duration_to_sec(
-                        duration.store_wait_duration.unwrap_or_default(),
-                    ));
-                STORE_INSPECT_DURATION_HISTOGRAM
-                    .with_label_values(&["store_commit"])
-                    .observe(tikv_util::time::duration_to_sec(
-                        duration.store_commit_duration.unwrap_or_default(),
-                    ));
-
-                STORE_INSPECT_DURATION_HISTOGRAM
-                    .with_label_values(&["all"])
-                    .observe(tikv_util::time::duration_to_sec(duration.sum()));
-                if let Err(e) = scheduler.schedule(Task::UpdateSlowScore { id, duration }) {
-                    warn!("schedule pd task failed"; "err" => ?e);
-                }
-            }),
-        );
-        let msg = StoreMsg::LatencyInspect {
-            send_time: TiInstant::now(),
-            inspector,
-        };
-        if let Err(e) = self.router.send_control(msg) {
-            warn!("pd worker send latency inspecter failed"; "err" => ?e);
-        }
-    }
-
-    fn get_interval(&self) -> Duration {
-        self.health_reporter.get_tick_interval()
     }
 }
 
@@ -2519,6 +2582,7 @@ mod tests {
                 let mut stats_monitor = StatsMonitor::new(
                     Duration::from_secs(interval),
                     Duration::from_secs(interval),
+                    Duration::default(),
                     WrappedScheduler(scheduler),
                 );
                 if let Err(e) = stats_monitor.start(
@@ -2767,6 +2831,7 @@ mod tests {
         let mut stats_monitor = StatsMonitor::new(
             Duration::from_secs(interval),
             Duration::from_secs(interval),
+            Duration::default(),
             WrappedScheduler(pd_worker.scheduler()),
         );
         stats_monitor
