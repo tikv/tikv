@@ -23,7 +23,7 @@ use crate::{
     errors::{OtherErrExt, Result, TraceResultExt},
     source::{Record, Source},
     statistic::{prom::*, LoadStatistic, SubcompactStatistic},
-    storage::COMPACTION_OUT_PREFIX,
+    storage::DEFAULT_COMPACTION_OUT_PREFIX,
     util::{self, Cooperate, ExecuteAllExt},
 };
 
@@ -80,7 +80,7 @@ impl<DB> From<SubcompactionExecArg<DB>> for SubcompactionExec<DB> {
             output: value.storage,
             out_prefix: value
                 .out_prefix
-                .unwrap_or_else(|| Path::new(COMPACTION_OUT_PREFIX).to_owned()),
+                .unwrap_or_else(|| Path::new(DEFAULT_COMPACTION_OUT_PREFIX).to_owned()),
             db: value.db,
 
             co: Default::default(),
