@@ -607,7 +607,7 @@ where
     type IMSnapshotRes = impl Future<Output = kv::Result<Self::IMSnap>> + Send;
     fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes {
         let replica_read = ctx.pb_ctx.get_replica_read();
-        async_snapshot(&mut self.router, ctx).map_ok(|region_snap| {
+        async_snapshot(&mut self.router, ctx).map_ok(move |region_snap| {
             // TODO: Remove replace_snapshot. Taking a snapshot and replacing it
             // with a new one is a bit confusing.
             // A better way to build an in-memory snapshot is to return
