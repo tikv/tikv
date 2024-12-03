@@ -910,6 +910,13 @@ mod tests {
     }
 
     #[test]
+    fn test_initializer_lightning_physical_import_filter() {
+        let mut txn_source = TxnSource::default();
+        txn_source.set_lightning_physical_import();
+        test_initializer_txn_source_filter(txn_source, false);
+    }
+
+    #[test]
     fn test_initializer_lossy_ddl_filter() {
         let mut txn_source = TxnSource::default();
         txn_source.set_lossy_ddl_reorg_source(1);
