@@ -138,7 +138,9 @@ pub fn new_debug_executor(
         Box::new(debugger) as Box<_>
     } else {
         let mut config = cfg.raft_engine.config();
-        config.dir = cfg.infer_raft_engine_path(Some(data_dir)).unwrap();
+        if config.dir.is_empty() {
+            config.dir = cfg.infer_raft_engine_path(Some(data_dir)).unwrap();
+        }
         if !RaftLogEngine::exists(&config.dir) {
             error!("raft engine not exists: {}", config.dir);
             tikv_util::logger::exit_process_gracefully(-1);
