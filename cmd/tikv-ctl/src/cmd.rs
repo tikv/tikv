@@ -551,6 +551,20 @@ pub enum Cmd {
         /// PD endpoints
         pd: String,
     },
+    ListRegionFiles {
+        #[structopt(long)]
+        /// specify manifest, if not set, it will look up manifest file in db
+        /// path
+        manifest: Option<String>,
+
+        #[structopt(long)]
+        // RocksDB level
+        level: Option<u32>,
+
+        #[structopt(long, value_delimiter = ",")]
+        /// PD endpoints
+        pd: String,
+    },
     /// Reset data in a TiKV to a certain version
     ResetToVersion {
         #[structopt(short = "v")]

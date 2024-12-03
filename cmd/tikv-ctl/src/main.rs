@@ -137,6 +137,17 @@ fn main() {
             let pd_client = get_pd_rpc_client(Some(pd), Arc::clone(&mgr));
             print_bad_ssts(data_dir, manifest.as_deref(), pd_client, &cfg);
         }
+        Cmd::ListRegionFiles {
+            manifest,
+            level,
+            pd,
+        } => {
+            let data_dir = opt.data_dir.as_deref();
+            assert!(data_dir.is_some(), "--data-dir must be specified");
+            let data_dir = data_dir.expect("--data-dir must be specified");
+            let pd_client = get_pd_rpc_client(Some(pd), Arc::clone(&mgr));
+            print_region_sst_mapping(data_dir, manifest.as_deref(), level, pd_client, &cfg);
+        }
         Cmd::DumpSnapMeta { file } => {
             let path = file.as_ref();
             dump_snap_meta_file(path);
@@ -1273,7 +1284,6 @@ fn print_bad_ssts(data_dir: &str, manifest: Option<&str>, pd_client: RpcClient, 
     println!("--------------------------------------------------------");
     println!("corruption analysis has completed");
 }
-
 fn print_overlap_region_and_suggestions(
     pd_client: &RpcClient,
     start: &[u8],
@@ -1315,6 +1325,199 @@ fn print_overlap_region_and_suggestions(
             "tikv-ctl --data-dir={} tombstone -r {} -p <endpoint>",
             data_dir, region.id
         );
+    }
+}
+
+fn print_region_sst_mapping(
+    data_dir: &str,
+    manifest: Option<&str>,
+    level: Option<u32>,
+    pd_client: RpcClient,
+    cfg: &TikvConfig,
+) {
+    let db = cfg.infer_kv_engine_path(Some(data_dir)).unwrap();
+
+    let mut args = vec![
+        "ldb".to_string(),
+        "--hex".to_string(),
+        "manifest_dump".to_string(),
+        format!("--db={}", db),
+    ];
+    if let Some(manifest_path) = manifest {
+        args.push(format!("--manifest={}", manifest_path));
+    }
+
+    // Prepare to capture output
+    let stderr = BufferRedirect::stderr().unwrap();
+    let stdout = BufferRedirect::stdout().unwrap();
+    let opts = build_rocks_opts(cfg);
+
+    // Run the manifest dump command
+    match run_and_wait_child_process(|| engine_rocks::raw::run_ldb_tool(&args, &opts)) {
+        Ok(code) if code == 0 => {}
+        Ok(code) => {
+            flush_std_buffer_to_log(
+                &format!("manifest dump command failed with exit code: {}", code),
+                stderr,
+                stdout,
+            );
+            tikv_util::logger::exit_process_gracefully(code);
+        }
+        Err(e) => {
+            flush_std_buffer_to_log(
+                &format!("failed to run manifest dump command: {}", e),
+                stderr,
+                stdout,
+            );
+            panic!();
+        }
+    }
+
+    // Read and parse the output
+    let mut stdout_buf = stdout.into_inner(); // Capture stdout
+    let mut manifest_output = String::new();
+    stdout_buf.read_to_string(&mut manifest_output).unwrap();
+
+    // Filter the specified level section
+    let cf_sections: Vec<&str> = manifest_output
+        .split("--------------- Column family")
+        .collect();
+
+    println!("ffffffffffffffffffffffffff");
+
+    // Locate the "default" column family section
+    let default_cf_section = cf_sections
+    .iter()
+    .find(|&&section| section.contains("\"default\""))
+    .map(|&section| section) // 解引用，获取 &str
+    .expect("default column family not found");
+
+    println!("ggggggggggggggggggggggg");
+    // If level is specified, split the default CF section by levels and locate the
+    // desired level
+    let level_section = if let Some(level) = level {
+        // 构造正则表达式，匹配目标 level 及其后内容
+        let regex_pattern = format!(r"(?m)^--- level {} ---.*\n([\s\S]*)", level);
+        let level_regex = Regex::new(&regex_pattern).expect("Failed to compile regex");
+
+        // 捕获目标 level 的内容
+        level_regex.captures(default_cf_section).and_then(|caps| {
+            let matched_section = caps.get(1).unwrap().as_str();
+
+            // 手动分割内容，找到下一个 `--- level` 前的部分
+            Some(matched_section.split("--- level").next().unwrap())
+        })
+    } else {
+        Some(default_cf_section) // 未指定 Level，处理整个列族
+    };
+    if level_section.is_none() {
+        println!("Specified level not found in the manifest output");
+        return;
+    }
+
+    let level_section = level_section.unwrap();
+    println!("Processing section: {}", level_section);
+
+    let mut region_sst_map: HashMap<(String, String, u64), Vec<String>> = HashMap::default();
+    let mut sst_usage_count: HashMap<String, usize> = HashMap::default();
+
+    // Regex to parse SST files and their key ranges
+    let sst_regex = Regex::new(
+        r"(?P<file_number>\d+):\d+\[\d+ .. \d+\]\['(?P<start_key>\w*)' seq:\d+, type:\d+ .. '(?P<end_key>\w*)' seq:\d+, type:\d+\]"
+    ).unwrap();
+
+    // print!("{}", buffer);
+    for capture in sst_regex.captures_iter(level_section) {
+        let sst_file_number = capture.name("file_number").unwrap().as_str();
+        let sst_file_name = format!("{}.sst", sst_file_number);
+        let mut sst_start_key = from_hex(capture.name("start_key").unwrap().as_str()).unwrap();
+        let mut sst_end_key = from_hex(capture.name("end_key").unwrap().as_str()).unwrap();
+        if sst_start_key.starts_with(&[keys::DATA_PREFIX]) {
+            println!(
+                "Handling DATA_PREFIX for SST File {}: start={:?}, end={:?}",
+                sst_file_name,
+                hex::encode(&sst_start_key).to_uppercase(),
+                hex::encode(&sst_end_key).to_uppercase()
+            );
+            sst_start_key = sst_start_key[1..].to_vec();
+            sst_end_key = sst_end_key[1..].to_vec();
+        } else if sst_start_key.starts_with(&[keys::LOCAL_PREFIX]) {
+            println!(
+                "Handling LOCAL_PREFIX for SST File {}: start={:?}, end={:?}",
+                sst_file_name,
+                hex::encode(&sst_start_key).to_uppercase(),
+                hex::encode(&sst_end_key).to_uppercase()
+            );
+
+            // Handle overlapping range with both local and data keys
+            // if sst_end_key.starts_with(&[keys::DATA_PREFIX]) {
+            //     sst_end_key = sst_end_key[1..].to_vec();
+            // }
+            continue;
+        } else {
+            panic!("fuckkkkkkkkkkk");
+        }
+
+        println!(
+            "Processing SST: {}, Start Key: {:?}, End Key: {:?}",
+            sst_file_name,
+            hex::encode(&sst_start_key).to_uppercase(),
+            hex::encode(&sst_end_key).to_uppercase()
+        );
+
+        let mut key = sst_start_key.clone();
+        while !key.is_empty() {
+            let region = match pd_client.get_region_info(&key) {
+                Err(e) => {
+                    println!("failed to get region info for key {:?}: {}", key, e);
+                    break;
+                }
+                Ok(r) => r,
+            };
+
+            // Check overlap and map SST to region
+            if region.end_key > sst_start_key && region.start_key < sst_end_key {
+                let region_id = region.get_id();
+                let region_start_key_hex = hex::encode(&region.start_key);
+                let region_end_key_hex = hex::encode(&region.end_key);
+                println!(
+                    "region_id: {}, region.start_key: {:?}, region.end_Key{:?}, sst start: {:?} sst end: {:?}",
+                    region_id,
+                    region.start_key,
+                    region.end_key,
+                    sst_start_key,
+                    sst_end_key /* hex::encode(&region.start_key).to_uppercase(),
+                                 * hex::encode(&region.end_key).to_uppercase(),
+                                 * hex::encode(&sst_start_key).to_uppercase(),
+                                 * hex::encode(&sst_end_key).to_uppercase() */
+                );
+                region_sst_map
+                    .entry((region_start_key_hex, region_end_key_hex, region_id))
+                    .or_insert_with(Vec::new)
+                    .push(sst_file_name.clone());
+                *sst_usage_count.entry(sst_file_name.clone()).or_insert(0) += 1;
+            }
+
+            if region.end_key.is_empty() || region.end_key > sst_end_key {
+                break;
+            }
+            key = region.end_key.clone();
+        }
+    }
+
+    // Print the region and their SST files with exclusivity information
+    for ((start_key, end_key, region_id), sst_files) in region_sst_map {
+        println!(
+            "Region ID: {}, Start Key: {}, End Key: {}",
+            region_id,
+            start_key.to_uppercase(),
+            end_key.to_uppercase()
+        );
+        for sst_file in &sst_files {
+            let is_exclusive = sst_usage_count.get(sst_file).unwrap_or(&0) == &1;
+            println!("  SST File: {}, Exclusive: {}", sst_file, is_exclusive);
+        }
+        println!("----------------------------------------");
     }
 }
 
