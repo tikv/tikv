@@ -289,7 +289,7 @@ impl ToInt for f64 {
     /// anymore.
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
         #![allow(clippy::float_cmp)]
-        let val = self.round();
+        let val = self.round_ties_even();
         let lower_bound = integer_signed_lower_bound(tp);
         if val < lower_bound as f64 {
             ctx.handle_overflow_err(overflow(val, tp))?;
@@ -1230,14 +1230,14 @@ mod tests {
             (-256.6, FieldTypeTp::Short, Some(-257)),
             (65535.5, FieldTypeTp::Short, None),
             (65536.1, FieldTypeTp::Int24, Some(65536)),
-            (65536.5, FieldTypeTp::Int24, Some(65537)),
+            (65536.5, FieldTypeTp::Int24, Some(65536)),
             (-65536.1, FieldTypeTp::Int24, Some(-65536)),
-            (-65536.5, FieldTypeTp::Int24, Some(-65537)),
+            (-65536.5, FieldTypeTp::Int24, Some(-65536)),
             (8388610.2, FieldTypeTp::Int24, None),
             (8388610.4, FieldTypeTp::Long, Some(8388610)),
-            (8388610.5, FieldTypeTp::Long, Some(8388611)),
+            (8388610.5, FieldTypeTp::Long, Some(8388610)),
             (-8388610.4, FieldTypeTp::Long, Some(-8388610)),
-            (-8388610.5, FieldTypeTp::Long, Some(-8388611)),
+            (-8388610.5, FieldTypeTp::Long, Some(-8388610)),
             (4294967296.8, FieldTypeTp::Long, None),
             (4294967296.8, FieldTypeTp::LongLong, Some(4294967297)),
             (4294967297.1, FieldTypeTp::LongLong, Some(4294967297)),
