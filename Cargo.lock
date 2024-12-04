@@ -189,9 +189,9 @@ dependencies = [
 
 [[package]]
 name = "async-speed-limit"
-version = "0.4.0"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "481ce9cb6a828f4679495f7376cb6779978d925dd9790b99b48d1bbde6d0f00b"
+checksum = "97c1688bb8e4eb3dcd68a8b0e5a81deae887c67362bb482a902b785e83ac2edc"
 dependencies = [
  "futures-core",
  "futures-io",
@@ -222,13 +222,13 @@ dependencies = [
 
 [[package]]
 name = "async-trait"
-version = "0.1.58"
+version = "0.1.76"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e805d94e6b5001b651426cf4cd446b1ab5f319d27bab5c644f61de0a804360c"
+checksum = "531b97fb4cd3dfdce92c35dedbfdc1f0b9d8091c8ca943d6dae340ef5012d514"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 1.0.103",
+ "syn 2.0.87",
 ]
 
 [[package]]
@@ -4034,9 +4034,9 @@ dependencies = [
 
 [[package]]
 name = "num-derive"
-version = "0.4.0"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e6a0fd4f737c707bd9086cc16c925f294943eb62eb71499e9fd4cf71f8b9f4e"
+checksum = "ed3955f1a9c7c0c15e092f9c887db08b1fc683305fdf6eb6684f22555355e202"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4851,7 +4851,7 @@ dependencies = [
  "lz4-sys",
  "memmap2",
  "nix 0.26.2",
- "num-derive 0.4.0",
+ "num-derive 0.4.2",
  "num-traits",
  "parking_lot 0.12.1",
  "prometheus",
@@ -5880,7 +5880,6 @@ dependencies = [
  "error_code",
  "fail",
  "file_system",
- "fs2",
  "futures 0.3.15",
  "grpcio",
  "grpcio-health",
@@ -6334,9 +6333,9 @@ dependencies = [
 
 [[package]]
 name = "subtle"
-version = "2.4.1"
+version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6bdef32e8150c2a081110b42772ffe7d7c9032b606bc226c8260fd97e0976601"
+checksum = "81cdd64d312baedb58e21336b31bc043b77e01cc99033ce76ef539f78e965ebc"
 
 [[package]]
 name = "symbolic-common"
@@ -7049,7 +7048,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "8.1.1"
+version = "8.1.2"
 dependencies = [
  "anyhow",
  "api_version",
@@ -7359,6 +7358,7 @@ dependencies = [
  "derive_more",
  "error_code",
  "fail",
+ "fs2",
  "futures 0.3.15",
  "futures-util",
  "gag",
