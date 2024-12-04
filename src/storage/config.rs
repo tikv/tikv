@@ -105,13 +105,11 @@ pub struct Config {
     #[online_config(skip)]
     pub txn_status_cache_capacity: usize,
     pub memory_quota: ReadableSize,
-    /// Maximum max_ts deviation allowed from PD timestamp (in seconds)
-    #[online_config(skip)]
+    /// Maximum max_ts deviation allowed from PD timestamp
     pub max_ts_allowance_secs: u64,
-    /// How often to refresh the max_ts limit from PD (in seconds)
+    /// How often to refresh the max_ts limit from PD
     #[online_config(skip)]
     pub max_ts_sync_interval_secs: u64,
-    #[online_config(skip)]
     pub panic_on_invalid_max_ts: bool,
     #[online_config(submodule)]
     pub flow_control: FlowControlConfig,

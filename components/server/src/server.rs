@@ -177,6 +177,7 @@ fn run_impl<CER, F>(
     tikv.init_metrics_flusher(fetcher, engines_info);
     tikv.init_cgroup_monitor();
     tikv.init_storage_stats_task(engines);
+    tikv.init_max_ts_updater();
     tikv.run_server(server_config);
     tikv.run_status_server(in_memory_engine);
     tikv.core.init_quota_tuning_task(tikv.quota_limiter.clone());
@@ -704,6 +705,7 @@ where
                 ttl_scheduler,
                 flow_controller,
                 storage.get_scheduler(),
+                storage.get_concurrency_manager(),
             )),
         );
 
@@ -1133,7 +1135,7 @@ where
         // Create Debugger.
         let mut debugger = DebuggerImpl::new(
             Engines::new(engines.engines.kv.clone(), engines.engines.raft.clone()),
-            self.cfg_controller.as_ref().unwrap().clone(),
+            cfg_controller.clone(),
             Some(storage),
         );
         debugger.set_kv_statistics(self.kv_statistics.clone());
@@ -1151,16 +1153,24 @@ where
             debugger,
         });
 
+        server_config
+    }
+
+    fn init_max_ts_updater(&self) {
         let cm = self.concurrency_manager.clone();
         let pd_client = self.pd_client.clone();
-        let allowance_ms = self.core.config.storage.max_ts_allowance_secs * 1000;
+
         let max_ts_sync_interval =
             Duration::from_secs(self.core.config.storage.max_ts_sync_interval_secs);
+        let cfg_controller = self.cfg_controller.as_ref().unwrap().clone();
         self.core
             .background_worker
             .spawn_interval_async_task(max_ts_sync_interval, move || {
                 let cm = cm.clone();
                 let pd_client = pd_client.clone();
+                let allowance_ms =
+                    cfg_controller.get_current().storage.max_ts_allowance_secs * 1000;
+
                 async move {
                     let pd_tso = pd_client.get_tso().await;
                     if let Ok(ts) = pd_tso {
@@ -1170,8 +1180,6 @@ where
                     }
                 }
             });
-
-        server_config
     }
 
     fn register_services(&mut self) {

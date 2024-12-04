@@ -18,7 +18,7 @@ mod lock_table;
 use std::{
     mem::MaybeUninit,
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     },
 };
@@ -52,7 +52,7 @@ pub struct ConcurrencyManager {
     max_ts_limit: Arc<AtomicU64>,
     lock_table: LockTable,
 
-    pub panic_on_invalid_max_ts: bool,
+    panic_on_invalid_max_ts: Arc<AtomicBool>,
 }
 
 impl ConcurrencyManager {
@@ -65,7 +65,7 @@ impl ConcurrencyManager {
             max_ts: Arc::new(AtomicU64::new(latest_ts.into_inner())),
             max_ts_limit: Arc::new(AtomicU64::new(0)),
             lock_table: LockTable::default(),
-            panic_on_invalid_max_ts,
+            panic_on_invalid_max_ts: Arc::new(AtomicBool::new(panic_on_invalid_max_ts)),
         }
     }
 
@@ -100,7 +100,7 @@ impl ConcurrencyManager {
                 "max_allowed" => limit,
                 "source" => &source
             );
-            if self.panic_on_invalid_max_ts {
+            if self.panic_on_invalid_max_ts.load(Ordering::SeqCst) {
                 panic!(
                     "invalid max_ts update: {} exceeds the limit {}, source={}",
                     new_ts, limit, source
@@ -215,6 +215,10 @@ impl ConcurrencyManager {
             }
         });
         min_lock
+    }
+
+    pub fn set_panic_on_invalid_max_ts(&self, panic: bool) {
+        self.panic_on_invalid_max_ts.store(panic, Ordering::SeqCst);
     }
 }
 
