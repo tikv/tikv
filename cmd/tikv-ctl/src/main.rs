@@ -1481,9 +1481,9 @@ fn print_region_sst_mapping(
                     "region_id: {}, region.start_key: {:?}, region.end_Key{:?}, sst start: {:?} sst end: {:?}",
                     region_id,
                     hex::encode(&region.start_key).to_uppercase(),
-                    *hex::encode(&region.end_key).to_uppercase(),
-                    *hex::encode(&sst_start_key).to_uppercase(),
-                    *hex::encode(&sst_end_key).to_uppercase(),
+                    hex::encode(&region.end_key).to_uppercase(),
+                    hex::encode(&sst_start_key).to_uppercase(),
+                    hex::encode(&sst_end_key).to_uppercase(),
                 );
                 region_sst_map
                     .entry((region_start_key_hex, region_end_key_hex, region_id))
