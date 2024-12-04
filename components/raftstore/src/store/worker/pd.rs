@@ -52,7 +52,6 @@ use tikv_util::{
     warn,
     worker::{Runnable, ScheduleError, Scheduler},
 };
-use txn_types::TimeStamp;
 use yatp::Remote;
 
 use super::split_controller::AutoSplitControllerContext;
@@ -1704,7 +1703,7 @@ where
                 // And it won't break correctness of transaction commands, as
                 // causal_ts_provider.flush() is implemented as pd_client.get_tso() + renew TSO
                 // cached.
-                let res: crate::Result<TimeStamp> =
+                let res: crate::Result<()> =
                     if let Some(causal_ts_provider) = &causal_ts_provider {
                         causal_ts_provider
                             .async_flush()
@@ -1712,11 +1711,15 @@ where
                             .map_err(|e| box_err!(e))
                     } else {
                         pd_client.get_tso().await.map_err(Into::into)
-                    };
+                    }
+                    .and_then(|ts| {
+                        concurrency_manager
+                            .update_max_ts(ts)
+                            .map_err(|e| crate::Error::Other(box_err!(e)))
+                    });
 
                 match res {
-                    Ok(ts) => {
-                        concurrency_manager.update_max_ts_from_pd(ts);
+                    Ok(()) => {
                         // Set the least significant bit to 1 to mark it as synced.
                         success = txn_ext
                             .max_ts_sync_status

@@ -72,19 +72,6 @@ impl ConcurrencyManager {
         TimeStamp::new(self.max_ts.load(Ordering::SeqCst))
     }
 
-    /// Updates max_ts with a timestamp from PD TSO, bypassing the limit check.
-    /// TS from PD must be a valid, thus it doesn't need to be checked.
-    /// It has no effect if max_ts >= new_ts or new_ts is TimeStamp::max().
-    ///
-    /// # Safety
-    /// This method should only be used with timestamps obtained from PD TSO.
-    pub fn update_max_ts_from_pd(&self, new_ts: TimeStamp) {
-        if new_ts != TimeStamp::max() {
-            let new_ts = new_ts.into_inner();
-            MAX_TS_GAUGE.set(self.max_ts.fetch_max(new_ts, Ordering::SeqCst).max(new_ts) as i64);
-        }
-    }
-
     /// Updates max_ts with the given new_ts. It has no effect if
     /// max_ts >= new_ts or new_ts is TimeStamp::max().
     ///
@@ -327,10 +314,6 @@ mod tests {
         // Increase limit to 300 - should work
         cm.set_max_ts_limit(TimeStamp::new(300));
         cm.update_max_ts(TimeStamp::new(250)).unwrap();
-
-        // Verify PD updates still bypass limit
-        cm.update_max_ts_from_pd(TimeStamp::new(400));
-        assert_eq!(cm.max_ts(), TimeStamp::new(400));
     }
 
     #[test]
