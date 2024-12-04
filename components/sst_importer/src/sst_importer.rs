@@ -508,7 +508,13 @@ impl<E: KvEngine> SstImporter<E> {
             })?;
         }
 
-        let ext_storage = self.external_storage_or_cache(backend, cache_key)?;
+        // The `DashMap` locks the entry to ensure that only one thread loads the
+        // credentials at a time. However, if the thread gets blocked during the
+        // loading process, it can lead to a deadlock. To avoid this, blocking
+        // operations must be performed outside of the `DashMap`.
+        let ext_storage = tokio::task::block_in_place(move || {
+            self.external_storage_or_cache(backend, cache_key)
+        })?;
         let ext_storage = self.wrap_kms(ext_storage, support_kms);
 
         let result = ext_storage
@@ -2177,13 +2183,15 @@ mod tests {
 
         // test do_download_kv_file().
         assert!(importer.import_support_download());
-        let output = block_on_external_io(importer.read_from_kv_file(
-            &kv_meta,
-            ext_storage,
-            &backend,
-            &Limiter::new(f64::INFINITY),
-        ))
-        .unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let output = runtime
+            .block_on(importer.read_from_kv_file(
+                &kv_meta,
+                ext_storage,
+                &backend,
+                &Limiter::new(f64::INFINITY),
+            ))
+            .unwrap();
         assert_eq!(*output, buff);
         check_file_exists(&path.save, None);
 
