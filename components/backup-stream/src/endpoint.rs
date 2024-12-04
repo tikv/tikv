@@ -818,7 +818,8 @@ where
                 .await
                 .map_err(|err| Error::from(err).report("failed to get tso from pd"))
                 .unwrap_or_default();
-            cm.update_max_ts(pd_tso).unwrap();
+            cm.update_max_ts(pd_tso, Some("backup-stream".to_owned()))
+                .unwrap();
             let min_ts = cm.global_min_lock_ts().unwrap_or(TimeStamp::max());
             Ord::min(pd_tso, min_ts)
         }

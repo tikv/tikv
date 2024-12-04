@@ -14,6 +14,8 @@ online_config = { workspace = true }
 parking_lot = "0.12"
 prometheus = "0.13"
 serde = { version = "1.0.194", features = ["derive"] }
+slog = { workspace = true }
+slog-global = { workspace = true }
 thiserror = "1.0"
 tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["macros", "sync", "time"] }

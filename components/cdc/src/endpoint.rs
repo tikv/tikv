@@ -1122,7 +1122,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             // optimizations like async commit is enabled.
             // Note: This step must be done before scheduling `Task::MinTs` task, and the
             // resolver must be checked in or after `Task::MinTs`' execution.
-            cm.update_max_ts(min_ts).unwrap();
+            cm.update_max_ts(min_ts, Some("cdc".to_owned())).unwrap();
             if let Some(min_mem_lock_ts) = cm.global_min_lock_ts() {
                 if min_mem_lock_ts < min_ts {
                     min_ts = min_mem_lock_ts;

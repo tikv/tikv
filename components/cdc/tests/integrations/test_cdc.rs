@@ -1238,7 +1238,7 @@ fn test_cdc_resolve_ts_checking_concurrency_manager_impl<F: KvFormat>() {
         guard
     };
 
-    let _ = cm.update_max_ts(20.into());
+    let _ = cm.update_max_ts(20.into(), None);
 
     let guard = lock_key(b"a", 80);
     suite.set_tso(99);

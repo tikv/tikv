@@ -117,7 +117,8 @@ impl AdvanceTsWorker {
             // optimizations like async commit is enabled.
             // Note: This step must be done before scheduling `Task::MinTs` task, and the
             // resolver must be checked in or after `Task::MinTs`' execution.
-            cm.update_max_ts(min_ts).unwrap();
+            cm.update_max_ts(min_ts, Some("resolved-ts".to_owned()))
+                .unwrap();
             if let Some((min_mem_lock_ts, lock)) = cm.global_min_lock() {
                 if min_mem_lock_ts < min_ts {
                     min_ts = min_mem_lock_ts;

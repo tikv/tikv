@@ -26,6 +26,7 @@ use std::{
 use lazy_static::lazy_static;
 use prometheus::{register_int_gauge, IntGauge};
 use thiserror::Error;
+use tikv_util::error;
 use txn_types::{Key, Lock, TimeStamp};
 
 pub use self::{
@@ -82,17 +83,27 @@ impl ConcurrencyManager {
     /// - Ok(()): If the update is successful or has no effect
     /// - Err(limit): If new_ts is greater than the max_ts_limit, returns the
     ///   current limit value
-    pub fn update_max_ts(&self, new_ts: TimeStamp) -> Result<(), InvalidMaxTsUpdate> {
+    pub fn update_max_ts(
+        &self,
+        new_ts: TimeStamp,
+        source: Option<String>,
+    ) -> Result<(), InvalidMaxTsUpdate> {
         if new_ts == TimeStamp::max() {
             return Ok(());
         }
         let new_ts = new_ts.into_inner();
         let limit = self.max_ts_limit.load(Ordering::SeqCst);
         if limit > 0 && new_ts > limit {
+            let source = source.unwrap_or_default();
+            error!("invalid max_ts update";
+                "attempted_ts" => new_ts,
+                "max_allowed" => limit,
+                "source" => &source
+            );
             if self.panic_on_invalid_max_ts {
                 panic!(
-                    "invalid max_ts update: {} exceeds the limit {}",
-                    new_ts, limit
+                    "invalid max_ts update: {} exceeds the limit {}, source={}",
+                    new_ts, limit, source
                 );
             }
             return Err(InvalidMaxTsUpdate {
@@ -237,13 +248,13 @@ mod tests {
     #[tokio::test]
     async fn test_update_max_ts() {
         let concurrency_manager = ConcurrencyManager::new(10.into());
-        let _ = concurrency_manager.update_max_ts(20.into());
+        let _ = concurrency_manager.update_max_ts(20.into(), None);
         assert_eq!(concurrency_manager.max_ts(), 20.into());
 
-        let _ = concurrency_manager.update_max_ts(5.into());
+        let _ = concurrency_manager.update_max_ts(5.into(), None);
         assert_eq!(concurrency_manager.max_ts(), 20.into());
 
-        let _ = concurrency_manager.update_max_ts(TimeStamp::max());
+        let _ = concurrency_manager.update_max_ts(TimeStamp::max(), None);
         assert_eq!(concurrency_manager.max_ts(), 20.into());
     }
 
@@ -301,19 +312,19 @@ mod tests {
         let cm = ConcurrencyManager::new_with_config(TimeStamp::new(100), false);
 
         // Initially limit should be 0
-        cm.update_max_ts(TimeStamp::new(150)).unwrap();
+        cm.update_max_ts(TimeStamp::new(150), None).unwrap();
 
         // Set initial limit to 200
         cm.set_max_ts_limit(TimeStamp::new(200));
 
         // Try to lower limit to 150 - should be ignored
         cm.set_max_ts_limit(TimeStamp::new(150));
-        cm.update_max_ts(TimeStamp::new(180)).unwrap(); // Should still work up to 200
-        assert!(cm.update_max_ts(TimeStamp::new(250)).is_err()); // Should fail above 200
+        cm.update_max_ts(TimeStamp::new(180), None).unwrap(); // Should still work up to 200
+        assert!(cm.update_max_ts(TimeStamp::new(250), None).is_err()); // Should fail above 200
 
         // Increase limit to 300 - should work
         cm.set_max_ts_limit(TimeStamp::new(300));
-        cm.update_max_ts(TimeStamp::new(250)).unwrap();
+        cm.update_max_ts(TimeStamp::new(250), None).unwrap();
     }
 
     #[test]
@@ -352,14 +363,14 @@ mod tests {
         cm.set_max_ts_limit(TimeStamp::new(200));
 
         // Update max_ts to 150
-        cm.update_max_ts(TimeStamp::new(150)).unwrap();
+        cm.update_max_ts(TimeStamp::new(150), None).unwrap();
         assert_eq!(cm.max_ts(), TimeStamp::new(150));
 
         // Try to lower limit to 180 - should be ignored
         cm.set_max_ts_limit(TimeStamp::new(180));
 
         // Should still fail for values above 200
-        let result = cm.update_max_ts(TimeStamp::new(250));
+        let result = cm.update_max_ts(TimeStamp::new(250), None);
         assert!(result.is_err());
         if let Err(e) = result {
             assert_eq!(e.attempted_ts, TimeStamp::new(250));

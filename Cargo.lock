@@ -1544,6 +1544,8 @@ dependencies = [
  "prometheus",
  "rand 0.8.5",
  "serde",
+ "slog",
+ "slog-global",
  "thiserror",
  "tikv_alloc",
  "tikv_util",
