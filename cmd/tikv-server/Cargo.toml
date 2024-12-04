@@ -6,7 +6,13 @@ edition = "2021"
 publish = false
 
 [features]
-default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "cloud-aws", "cloud-gcp", "cloud-azure"]
+default = [
+  "test-engine-kv-rocksdb",
+  "test-engine-raft-raft-engine",
+  "cloud-aws",
+  "cloud-gcp",
+  "cloud-azure",
+]
 trace-tablet-lifetime = ["tikv/trace-tablet-lifetime"]
 tcmalloc = ["server/tcmalloc"]
 jemalloc = ["server/jemalloc"]
@@ -18,12 +24,8 @@ failpoints = ["server/failpoints"]
 cloud-aws = ["server/cloud-aws"]
 cloud-gcp = ["server/cloud-gcp"]
 cloud-azure = ["server/cloud-azure"]
-test-engine-kv-rocksdb = [
-  "server/test-engine-kv-rocksdb"
-]
-test-engine-raft-raft-engine = [
-  "server/test-engine-raft-raft-engine"
-]
+test-engine-kv-rocksdb = ["server/test-engine-kv-rocksdb"]
+test-engine-raft-raft-engine = ["server/test-engine-raft-raft-engine"]
 test-engines-rocksdb = ["server/test-engines-rocksdb"]
 test-engines-panic = ["server/test-engines-panic"]
 
@@ -37,7 +39,7 @@ encryption_export = { workspace = true }
 engine_traits = { workspace = true }
 keys = { workspace = true }
 kvproto = { workspace = true }
-raft-engine = { git = "https://github.com/tikv/raft-engine.git" }
+raft-engine = { workspace = true }
 regex = "1"
 serde_json = { version = "1.0", features = ["preserve_order"] }
 server = { workspace = true }
