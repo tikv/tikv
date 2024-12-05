@@ -63,9 +63,10 @@ pub struct ConcurrencyManager {
 
     max_ts_limit: Arc<AtomicU64>,
     // The last time when the max_ts_limit is updated.
-    // When the limit is not updated for a long time(exceeding the threshold), we don't check the
-    // limit, to avoid blocking the max_ts update caused by temporary issues in fetching TSO,
-    // e.g. network partition between this TiKV and PD leader
+    // Defined as start_instant.elapsed().as_millis(), because we want atomic variable + monotonic
+    // clock. When the limit is not updated for a long time(exceeding the threshold), we don't
+    // check the limit, to avoid blocking the max_ts update caused by temporary issues in
+    // fetching TSO, e.g. network partition between this TiKV and PD leader
     last_update_limit_instant: Arc<AtomicU64>,
     start_instant: Instant,
     limit_valid_duration: Duration,
@@ -118,28 +119,28 @@ impl ConcurrencyManager {
         }
         let new_ts = new_ts.into_inner();
         let limit = self.max_ts_limit.load(Ordering::SeqCst);
-        let since_last_limit_update_ms = self.start_instant.saturating_elapsed().as_millis() as u64
-            - self.last_update_limit_instant.load(Ordering::SeqCst);
-        if limit > 0
-            && since_last_limit_update_ms < self.limit_valid_duration.as_millis() as u64
-            && new_ts > limit
-        {
-            let source = source.unwrap_or_default();
-            error!("invalid max_ts update";
-                "attempted_ts" => new_ts,
-                "max_allowed" => limit,
-                "source" => &source
-            );
-            if self.panic_on_invalid_max_ts.load(Ordering::SeqCst) {
-                panic!(
-                    "invalid max_ts update: {} exceeds the limit {}, source={}",
-                    new_ts, limit, source
+        if limit > 0 && new_ts > limit {
+            let since_last_limit_update_ms = self.start_instant.saturating_elapsed().as_millis()
+                as u64
+                - self.last_update_limit_instant.load(Ordering::SeqCst);
+            if since_last_limit_update_ms < self.limit_valid_duration.as_millis() as u64 {
+                let source = source.unwrap_or_default();
+                error!("invalid max_ts update";
+                    "attempted_ts" => new_ts,
+                    "max_allowed" => limit,
+                    "source" => &source
                 );
+                if self.panic_on_invalid_max_ts.load(Ordering::SeqCst) {
+                    panic!(
+                        "invalid max_ts update: {} exceeds the limit {}, source={}",
+                        new_ts, limit, source
+                    );
+                }
+                return Err(InvalidMaxTsUpdate {
+                    attempted_ts: TimeStamp::new(new_ts),
+                    max_allowed: TimeStamp::new(limit),
+                });
             }
-            return Err(InvalidMaxTsUpdate {
-                attempted_ts: TimeStamp::new(new_ts),
-                max_allowed: TimeStamp::new(limit),
-            });
         }
         MAX_TS_GAUGE.set(self.max_ts.fetch_max(new_ts, Ordering::SeqCst).max(new_ts) as i64);
         Ok(())
