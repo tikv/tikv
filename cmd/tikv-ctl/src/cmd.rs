@@ -551,7 +551,7 @@ pub enum Cmd {
         /// PD endpoints
         pd: String,
     },
-    /// List all regions and their overlapping files
+    /// List regions and their overlapping files
     RegionOverlapFiles {
         #[structopt(long)]
         /// specify manifest, if not set, it will look up manifest file in db
