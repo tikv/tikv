@@ -551,11 +551,16 @@ pub enum Cmd {
         /// PD endpoints
         pd: String,
     },
-    ListRegionFiles {
+    RegionOverlapFiles {
         #[structopt(long)]
         /// specify manifest, if not set, it will look up manifest file in db
         /// path
         manifest: Option<String>,
+
+        #[structopt(long)]
+        /// specify manifest, if not set, it will look up manifest file in db
+        /// path
+        cf: Option<String>,
 
         #[structopt(long)]
         // RocksDB level
