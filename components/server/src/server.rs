@@ -1181,7 +1181,7 @@ where
                     if let Ok(ts) = pd_tso {
                         cm.set_max_ts_limit(TimeStamp::compose(ts.physical() + allowance_ms, 0));
                     } else {
-                        warn!("failed to get tso from pd in background");
+                        warn!("failed to get tso from pd in background, the max_ts validity check could be skipped");
                     }
                 }
             });
