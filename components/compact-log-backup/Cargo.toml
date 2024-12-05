@@ -49,7 +49,7 @@ txn_types = { workspace = true }
 zstd = "0.11"
 
 [dev-dependencies]
-pprof = { version = "0.13", default-features = false, features = [
+pprof = { version = "0.14", default-features = false, features = [
   "flamegraph",
   "protobuf-codec",
 ] } 
