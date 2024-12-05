@@ -16,13 +16,19 @@ mod key_handle;
 mod lock_table;
 
 use std::{
+    fmt::Display,
     mem::MaybeUninit,
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     },
+    time::Duration,
 };
 
+use lazy_static::lazy_static;
+use prometheus::{register_int_gauge, IntGauge};
+use thiserror::Error;
+use tikv_util::{error, time::Instant};
 use txn_types::{Key, Lock, TimeStamp};
 
 pub use self::{
@@ -30,19 +36,65 @@ pub use self::{
     lock_table::LockTable,
 };
 
+lazy_static! {
+    static ref MAX_TS_LIMIT_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_concurrency_manager_max_ts_limit",
+        "Current value of max_ts_limit"
+    )
+    .unwrap();
+    static ref MAX_TS_GAUGE: IntGauge =
+        register_int_gauge!("tikv_concurrency_manager_max_ts", "Current value of max_ts").unwrap();
+}
+
+const DEFAULT_LIMIT_VALID_DURATION: Duration = Duration::from_secs(60);
+
+// It is suggested that limit_valid_duration = sync_interval *
+// LIMIT_VALID_TIME_MULTIPLIER, to balance between
+// 1. tolerate temporary issues in updating the limit.
+// 2. avoid long-term blocking of max_ts update caused by network partition
+//    between TiKV and PD.
+pub const LIMIT_VALID_TIME_MULTIPLIER: u64 = 3;
+
 // Pay attention that the async functions of ConcurrencyManager should not hold
 // the mutex.
 #[derive(Clone)]
 pub struct ConcurrencyManager {
     max_ts: Arc<AtomicU64>,
     lock_table: LockTable,
+
+    // max_ts_limit is an assertion: max_ts should not be updated to a value greater than this
+    // limit.
+    max_ts_limit: Arc<AtomicU64>,
+    // The last time when the max_ts_limit is updated.
+    // Defined as start_instant.elapsed().as_millis(), because we want atomic variable + monotonic
+    // clock. When the limit is not updated for a long time(exceeding the threshold), we don't
+    // check the limit, to avoid blocking the max_ts update caused by temporary issues in
+    // fetching TSO, e.g. network partition between this TiKV and PD leader
+    last_update_limit_instant: Arc<AtomicU64>,
+    start_instant: Instant,
+    limit_valid_duration: Duration,
+
+    panic_on_invalid_max_ts: Arc<AtomicBool>,
 }
 
 impl ConcurrencyManager {
     pub fn new(latest_ts: TimeStamp) -> Self {
+        Self::new_with_config(latest_ts, DEFAULT_LIMIT_VALID_DURATION, true)
+    }
+
+    pub fn new_with_config(
+        latest_ts: TimeStamp,
+        limit_valid_duration: Duration,
+        panic_on_invalid_max_ts: bool,
+    ) -> Self {
         ConcurrencyManager {
             max_ts: Arc::new(AtomicU64::new(latest_ts.into_inner())),
+            max_ts_limit: Arc::new(AtomicU64::new(0)),
             lock_table: LockTable::default(),
+            panic_on_invalid_max_ts: Arc::new(AtomicBool::new(panic_on_invalid_max_ts)),
+            last_update_limit_instant: Arc::new(AtomicU64::new(0)),
+            limit_valid_duration,
+            start_instant: Instant::now_coarse(),
         }
     }
 
@@ -52,9 +104,100 @@ impl ConcurrencyManager {
 
     /// Updates max_ts with the given new_ts. It has no effect if
     /// max_ts >= new_ts or new_ts is TimeStamp::max().
-    pub fn update_max_ts(&self, new_ts: TimeStamp) {
-        if new_ts != TimeStamp::max() {
-            self.max_ts.fetch_max(new_ts.into_inner(), Ordering::SeqCst);
+    ///
+    /// To avoid invalid ts breaking the invariants, the new_ts should be
+    /// less than or equal to the max_ts_limit.
+    ///
+    /// # Returns
+    /// - Ok(()): If the update is successful or has no effect
+    /// - Err(limit): If new_ts is greater than the max_ts_limit, returns the
+    ///   current limit value
+    pub fn update_max_ts(
+        &self,
+        new_ts: TimeStamp,
+        source: impl slog::Value + Display,
+    ) -> Result<(), InvalidMaxTsUpdate> {
+        if new_ts == TimeStamp::max() {
+            return Ok(());
+        }
+        let new_ts = new_ts.into_inner();
+        let limit = self.max_ts_limit.load(Ordering::SeqCst);
+
+        // check that new_ts is less than or equal to the limit
+        if limit > 0 && new_ts > limit {
+            let last_update = self.last_update_limit_instant.load(Ordering::SeqCst);
+            let now = self.start_instant.saturating_elapsed().as_millis() as u64;
+            assert!(now >= last_update);
+            let duration_to_last_limit_update_ms = now - last_update;
+
+            if duration_to_last_limit_update_ms < self.limit_valid_duration.as_millis() as u64 {
+                // limit is valid
+                self.report_error(new_ts, TimeStamp::new(limit), source, true)?;
+            } else {
+                // limit is stale
+                // use an approximate limit to avoid false alerts caused by failed limit updates
+
+                let limit = TimeStamp::new(limit);
+                let approximate_limit = TimeStamp::compose(
+                    limit.physical() + duration_to_last_limit_update_ms,
+                    limit.logical(),
+                );
+
+                if new_ts > approximate_limit.into_inner() {
+                    self.report_error(new_ts, approximate_limit, source, false)?;
+                }
+            }
+        }
+
+        MAX_TS_GAUGE.set(self.max_ts.fetch_max(new_ts, Ordering::SeqCst).max(new_ts) as i64);
+        Ok(())
+    }
+
+    fn report_error(
+        &self,
+        new_ts: u64,
+        limit: TimeStamp,
+        source: impl slog::Value + Display,
+        can_panic: bool,
+    ) -> Result<(), InvalidMaxTsUpdate> {
+        error!("invalid max_ts update";
+            "attempted_ts" => new_ts,
+            "max_allowed" => limit.into_inner(),
+            "source" => &source,
+        );
+        if can_panic && self.panic_on_invalid_max_ts.load(Ordering::SeqCst) {
+            panic!(
+                "invalid max_ts update: {} exceeds the limit {}, source={}",
+                new_ts,
+                limit.into_inner(),
+                source
+            );
+        }
+        Err(InvalidMaxTsUpdate {
+            attempted_ts: TimeStamp::new(new_ts),
+            max_allowed: limit,
+        })
+    }
+
+    /// Set the maximum allowed value for max_ts updates, except for the updates
+    /// from PD TSO. The limit must be updated regularly to prevent the
+    /// blocking of max_ts. It prevents max_ts from being updated to an
+    /// unreasonable value, which is usually caused by bugs or unsafe
+    /// usages.
+    ///
+    /// # Note
+    /// If the new limit is smaller than the current limit, this operation will
+    /// have no effect and return silently.
+    pub fn set_max_ts_limit(&self, limit: TimeStamp) {
+        let ts = limit.into_inner();
+        let current_limit = self.max_ts_limit.load(Ordering::SeqCst);
+        if ts > current_limit {
+            self.max_ts_limit.store(ts, Ordering::SeqCst);
+            self.last_update_limit_instant.store(
+                self.start_instant.saturating_elapsed().as_millis() as u64,
+                Ordering::SeqCst,
+            );
+            MAX_TS_LIMIT_GAUGE.set(ts as i64);
         }
     }
 
@@ -141,6 +284,17 @@ impl ConcurrencyManager {
         });
         min_lock
     }
+
+    pub fn set_panic_on_invalid_max_ts(&self, panic: bool) {
+        self.panic_on_invalid_max_ts.store(panic, Ordering::SeqCst);
+    }
+}
+
+#[derive(Debug, Error, Clone)]
+#[error("invalid max_ts update: {attempted_ts} exceeds the limit {max_allowed}")]
+pub struct InvalidMaxTsUpdate {
+    pub attempted_ts: TimeStamp,
+    pub max_allowed: TimeStamp,
 }
 
 #[cfg(test)]
@@ -166,13 +320,13 @@ mod tests {
     #[tokio::test]
     async fn test_update_max_ts() {
         let concurrency_manager = ConcurrencyManager::new(10.into());
-        concurrency_manager.update_max_ts(20.into());
+        let _ = concurrency_manager.update_max_ts(20.into(), "");
         assert_eq!(concurrency_manager.max_ts(), 20.into());
 
-        concurrency_manager.update_max_ts(5.into());
+        let _ = concurrency_manager.update_max_ts(5.into(), "");
         assert_eq!(concurrency_manager.max_ts(), 20.into());
 
-        concurrency_manager.update_max_ts(TimeStamp::max());
+        let _ = concurrency_manager.update_max_ts(TimeStamp::max(), "");
         assert_eq!(concurrency_manager.max_ts(), 20.into());
     }
 
@@ -222,6 +376,81 @@ mod tests {
                 guard.with_lock(|l| *l = Some(new_lock(ts, b"pk", LockType::Put)));
             }
             assert_eq!(concurrency_manager.global_min_lock_ts(), Some(20.into()));
+        }
+    }
+
+    #[test]
+    fn test_max_ts_limit() {
+        let cm = ConcurrencyManager::new_with_config(
+            TimeStamp::new(100),
+            DEFAULT_LIMIT_VALID_DURATION,
+            false,
+        );
+
+        // Initially limit should be 0
+        cm.update_max_ts(TimeStamp::new(150), "").unwrap();
+
+        // Set initial limit to 200
+        cm.set_max_ts_limit(TimeStamp::new(200));
+
+        // Try to lower limit to 150 - should be ignored
+        cm.set_max_ts_limit(TimeStamp::new(150));
+        cm.update_max_ts(TimeStamp::new(180), "").unwrap(); // Should still work up to 200
+        assert!(cm.update_max_ts(TimeStamp::new(250), "").is_err()); // Should fail above 200
+
+        // Increase limit to 300 - should work
+        cm.set_max_ts_limit(TimeStamp::new(300));
+        cm.update_max_ts(TimeStamp::new(250), "").unwrap();
+    }
+
+    #[test]
+    fn test_max_ts_limit_edge_cases() {
+        let cm = ConcurrencyManager::new(TimeStamp::new(100));
+
+        // Test transition from zero limit
+        assert_eq!(cm.max_ts_limit.load(Ordering::SeqCst), 0);
+        cm.set_max_ts_limit(TimeStamp::new(1000));
+        assert_eq!(cm.max_ts_limit.load(Ordering::SeqCst), 1000);
+
+        // Try to lower from 1000 to 500 - should be ignored
+        cm.set_max_ts_limit(TimeStamp::new(500));
+        assert_eq!(cm.max_ts_limit.load(Ordering::SeqCst), 1000);
+
+        // Test setting limit to max
+        cm.set_max_ts_limit(TimeStamp::max());
+        assert_eq!(
+            cm.max_ts_limit.load(Ordering::SeqCst),
+            TimeStamp::max().into_inner()
+        );
+
+        // Try to lower from max - should be ignored
+        cm.set_max_ts_limit(TimeStamp::new(2000));
+        assert_eq!(
+            cm.max_ts_limit.load(Ordering::SeqCst),
+            TimeStamp::max().into_inner()
+        );
+    }
+
+    #[test]
+    fn test_max_ts_updates_with_monotonic_limit() {
+        let cm = ConcurrencyManager::new(TimeStamp::new(100));
+
+        // Set limit to 200
+        cm.set_max_ts_limit(TimeStamp::new(200));
+
+        // Update max_ts to 150
+        cm.update_max_ts(TimeStamp::new(150), "").unwrap();
+        assert_eq!(cm.max_ts(), TimeStamp::new(150));
+
+        // Try to lower limit to 180 - should be ignored
+        cm.set_max_ts_limit(TimeStamp::new(180));
+
+        // Should still fail for values above 200
+        let result = cm.update_max_ts(TimeStamp::new(250), "");
+        assert!(result.is_err());
+        if let Err(e) = result {
+            assert_eq!(e.attempted_ts, TimeStamp::new(250));
+            assert_eq!(e.max_allowed, TimeStamp::new(200));
         }
     }
 }

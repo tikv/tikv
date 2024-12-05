@@ -31,6 +31,9 @@ pub enum Error {
     MemoryQuotaExceeded,
 
     #[error("{0}")]
+    InvalidMaxTsUpdate(#[from] concurrency_manager::InvalidMaxTsUpdate),
+
+    #[error("{0}")]
     Other(String),
 }
 
@@ -137,6 +140,7 @@ impl ErrorCodeExt for Error {
             Error::DeadlineExceeded => error_code::coprocessor::DEADLINE_EXCEEDED,
             Error::MaxPendingTasksExceeded => error_code::coprocessor::MAX_PENDING_TASKS_EXCEEDED,
             Error::MemoryQuotaExceeded => error_code::coprocessor::MEMORY_QUOTA_EXCEEDED,
+            Error::InvalidMaxTsUpdate(_) => error_code::coprocessor::INVALID_MAX_TS_UPDATE,
             Error::Other(_) => error_code::UNKNOWN,
         }
     }

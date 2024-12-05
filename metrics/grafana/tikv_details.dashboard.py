@@ -3157,6 +3157,25 @@ def Storage() -> RowPanel:
             ),
         ]
     )
+    layout.row(
+        [
+            graph_panel(
+                title="Concurrency manager max-ts",
+                description="The max_ts in the concurrency manager",
+                yaxes=yaxes(left_format=UNITS.NONE_FORMAT),
+                targets=[
+                    target(
+                        expr="tikv_concurrency_manager_max_ts_limit",
+                        legend_format="max_ts_limit",
+                    ),
+                    target(
+                        expr="tikv_concurrency_manager_max_ts",
+                        legend_format="max_ts",
+                    ),
+                ],
+            )
+        ]
+    )
     return layout.row_panel
 
 
