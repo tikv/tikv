@@ -823,7 +823,7 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
             let start_ts = request.get_start_ts().into();
             if let Err(e) = self
                 .concurrency_manager
-                .update_max_ts(start_ts, Some(format!("read_index-{}", start_ts)))
+                .update_max_ts(start_ts, format_args!("read_index-{}", start_ts))
             {
                 error!("failed to update max ts in concurrency manager"; "err" => ?e);
             }

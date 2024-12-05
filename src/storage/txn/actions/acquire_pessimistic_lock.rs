@@ -73,10 +73,7 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
     if should_not_exist || need_value || need_check_existence {
         txn.concurrency_manager.update_max_ts(
             for_update_ts,
-            Some(format!(
-                "pessimistic_lock-{}-{}",
-                reader.start_ts, for_update_ts
-            )),
+            format_args!("pessimistic_lock-{}-{}", reader.start_ts, for_update_ts),
         )?;
     }
 

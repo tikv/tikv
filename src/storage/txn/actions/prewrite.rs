@@ -72,7 +72,7 @@ pub fn prewrite_with_generation<S: Snapshot>(
     if mutation.should_not_exist {
         txn.concurrency_manager.update_max_ts(
             txn_props.start_ts,
-            Some(format!("prewrite-{}", txn_props.start_ts)),
+            format_args!("prewrite-{}", txn_props.start_ts),
         )?;
     }
 
@@ -154,7 +154,7 @@ pub fn prewrite_with_generation<S: Snapshot>(
         // max_ts.
         txn.concurrency_manager.update_max_ts(
             txn_props.start_ts,
-            Some(format!("prewrite-{}", txn_props.start_ts)),
+            format!("prewrite-{}", txn_props.start_ts),
         )?;
         let min_commit_ts = if mutation.need_min_commit_ts() {
             // Don't calculate the min_commit_ts according to the concurrency manager's
@@ -1066,7 +1066,7 @@ pub mod tests {
         .unwrap();
         assert_eq!(old_value, OldValue::None);
 
-        let _ = cm.update_max_ts(60.into(), None);
+        let _ = cm.update_max_ts(60.into(), "");
         // calculated commit_ts = 61 > 50, err
         let err = prewrite(
             &mut txn,
@@ -1251,7 +1251,7 @@ pub mod tests {
         .unwrap();
         assert_eq!(old_value, OldValue::None);
 
-        let _ = cm.update_max_ts(60.into(), None);
+        let _ = cm.update_max_ts(60.into(), "");
         // calculated commit_ts = 61 > 50, err
         let err = prewrite(
             &mut txn,
@@ -1353,7 +1353,7 @@ pub mod tests {
         // Pessimistic txn skips constraint check, does not read previous write.
         assert_eq!(old_value, OldValue::Unspecified);
 
-        let _ = cm.update_max_ts(60.into(), None);
+        let _ = cm.update_max_ts(60.into(), "");
         // calculated commit_ts = 61 > 50, ok
         prewrite(
             &mut txn,
@@ -1406,7 +1406,7 @@ pub mod tests {
         // Pessimistic txn skips constraint check, does not read previous write.
         assert_eq!(old_value, OldValue::Unspecified);
 
-        let _ = cm.update_max_ts(60.into(), None);
+        let _ = cm.update_max_ts(60.into(), "");
         // calculated commit_ts = 61 > 50, ok
         prewrite(
             &mut txn,

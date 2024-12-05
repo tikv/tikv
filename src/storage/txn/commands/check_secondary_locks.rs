@@ -147,7 +147,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
         let region_id = self.ctx.get_region_id();
         context.concurrency_manager.update_max_ts(
             self.start_ts,
-            Some(format!("check_secondary_locks-{}", self.start_ts)),
+            format_args!("check_secondary_locks-{}", self.start_ts),
         )?;
 
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);

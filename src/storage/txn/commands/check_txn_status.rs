@@ -92,10 +92,10 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
         }
         context.concurrency_manager.update_max_ts(
             new_max_ts,
-            Some(format!(
+            format_args!(
                 "check_txn_status-{}-{}-{}",
                 self.lock_ts, self.current_ts, self.caller_start_ts
-            )),
+            ),
         )?;
 
         let mut txn = MvccTxn::new(self.lock_ts, context.concurrency_manager);

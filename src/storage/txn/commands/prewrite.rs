@@ -1264,7 +1264,7 @@ mod tests {
         must_get(&mut engine, key, 12, value);
         must_get_commit_ts(&mut engine, key, 10, 11);
 
-        let _ = cm.update_max_ts(50.into(), None);
+        let _ = cm.update_max_ts(50.into(), "");
 
         let mutations = vec![Mutation::make_put(Key::from_raw(key), value.to_vec())];
 
@@ -1406,7 +1406,7 @@ mod tests {
         must_get_commit_ts(&mut engine, k1, 8, 13);
         must_get_commit_ts(&mut engine, k2, 8, 13);
 
-        let _ = cm.update_max_ts(50.into(), None);
+        let _ = cm.update_max_ts(50.into(), "");
         must_acquire_pessimistic_lock(&mut engine, k1, k1, 20, 20);
 
         let mutations = vec![(
@@ -1506,7 +1506,7 @@ mod tests {
         assert_eq!(res.one_pc_commit_ts, TimeStamp::zero());
         must_locked(&mut engine, key, 10);
 
-        let _ = cm.update_max_ts(50.into(), None);
+        let _ = cm.update_max_ts(50.into(), "");
 
         let (k1, v1) = (b"k1", b"v1");
         let (k2, v2) = (b"k2", b"v2");
@@ -1578,7 +1578,7 @@ mod tests {
         assert_eq!(res.one_pc_commit_ts, TimeStamp::zero());
         must_locked(&mut engine, key, 10);
 
-        let _ = cm.update_max_ts(50.into(), None);
+        let _ = cm.update_max_ts(50.into(), "");
 
         let (k1, v1) = (b"k1", b"v1");
         let (k2, v2) = (b"k2", b"v2");
@@ -2147,7 +2147,7 @@ mod tests {
         )
         .unwrap();
         let commit_ts = res.one_pc_commit_ts;
-        let _ = cm.update_max_ts(commit_ts.next(), None);
+        let _ = cm.update_max_ts(commit_ts.next(), "");
         // repeate the prewrite
         let res = pessimistic_prewrite_with_cm(
             &mut engine,
@@ -2657,7 +2657,7 @@ mod tests {
         must_commit(&mut engine, b"k2", 5, 18);
 
         // Update max_ts to be larger than the max_commit_ts.
-        let _ = cm.update_max_ts(50.into(), None);
+        let _ = cm.update_max_ts(50.into(), "");
 
         // Retry the prewrite on non-pessimistic key.
         // (is_retry_request flag is not set, here we don't rely on it.)

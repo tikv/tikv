@@ -60,7 +60,7 @@ where
                 }
                 .and_then(|ts| {
                     concurrency_manager
-                        .update_max_ts(ts, Some("raftstore-v2".to_owned()))
+                        .update_max_ts(ts, "raftstore-v2")
                         .map_err(|e| crate::Error::Other(box_err!(e)))
                 });
 

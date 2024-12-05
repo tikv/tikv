@@ -351,7 +351,7 @@ impl BackupRange {
         } else {
             // Update max_ts and check the in-memory lock table before getting the snapshot
             concurrency_manager
-                .update_max_ts(backup_ts, Some("backup_range".to_owned()))
+                .update_max_ts(backup_ts, "backup_range")
                 .map_err(TxnError::from)?;
             concurrency_manager
                 .read_range_check(

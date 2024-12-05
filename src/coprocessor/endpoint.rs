@@ -138,7 +138,7 @@ impl<E: Engine> Endpoint<E> {
         let start_ts = req_ctx.txn_start_ts;
         if !req_ctx.context.get_stale_read() {
             self.concurrency_manager
-                .update_max_ts(start_ts, Some(format!("coprocessor-{}", start_ts)))?;
+                .update_max_ts(start_ts, format_args!("coprocessor-{}", start_ts))?;
         }
         if need_check_locks(req_ctx.context.get_isolation_level()) {
             let begin_instant = Instant::now();

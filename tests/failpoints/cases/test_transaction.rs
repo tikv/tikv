@@ -344,7 +344,7 @@ fn test_max_commit_ts_error() {
     thread::sleep(Duration::from_millis(200));
     cm.read_key_check(&Key::from_raw(b"k1"), |_| Err(()))
         .unwrap_err();
-    let _ = cm.update_max_ts(200.into(), None);
+    let _ = cm.update_max_ts(200.into(), "");
 
     let res = prewrite_rx.recv().unwrap().unwrap();
     assert!(res.min_commit_ts.is_zero());
@@ -372,7 +372,7 @@ fn test_exceed_max_commit_ts_in_the_middle_of_prewrite() {
     // Pause between getting max ts and store the lock in memory
     fail::cfg("before-set-lock-in-memory", "pause").unwrap();
 
-    let _ = cm.update_max_ts(40.into(), None);
+    let _ = cm.update_max_ts(40.into(), "");
     let mutations = vec![
         Mutation::make_put(Key::from_raw(b"k1"), b"v".to_vec()),
         Mutation::make_put(Key::from_raw(b"k2"), b"v".to_vec()),
@@ -401,7 +401,7 @@ fn test_exceed_max_commit_ts_in_the_middle_of_prewrite() {
     // sleep a while so the first key gets max ts.
     thread::sleep(Duration::from_millis(200));
 
-    let _ = cm.update_max_ts(51.into(), None);
+    let _ = cm.update_max_ts(51.into(), "");
     fail::remove("before-set-lock-in-memory");
     let res = prewrite_rx.recv().unwrap().unwrap();
     assert!(res.min_commit_ts.is_zero());
