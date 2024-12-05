@@ -33,7 +33,7 @@ use backup_stream::{
 };
 use causal_ts::CausalTsProviderImpl;
 use cdc::CdcConfigManager;
-use concurrency_manager::ConcurrencyManager;
+use concurrency_manager::{ConcurrencyManager, LIMIT_VALID_TIME_MULTIPLIER};
 use engine_rocks::{from_rocks_compression_type, RocksEngine, RocksStatistics};
 use engine_traits::{Engines, KvEngine, MiscExt, RaftEngine, TabletRegistry, CF_DEFAULT, CF_WRITE};
 use file_system::{get_io_rate_limiter, BytesFetcher, MetricsManager as IoMetricsManager};
@@ -325,8 +325,13 @@ where
 
         // Initialize concurrency manager
         let latest_ts = block_on(pd_client.get_tso()).expect("failed to get timestamp from PD");
-        let concurrency_manager =
-            ConcurrencyManager::new_with_config(latest_ts, config.storage.panic_on_invalid_max_ts);
+        let concurrency_manager = ConcurrencyManager::new_with_config(
+            latest_ts,
+            Duration::from_secs(
+                config.storage.max_ts_sync_interval_secs * LIMIT_VALID_TIME_MULTIPLIER,
+            ),
+            config.storage.panic_on_invalid_max_ts,
+        );
 
         // use different quota for front-end and back-end requests
         let quota_limiter = Arc::new(QuotaLimiter::new(

@@ -146,8 +146,8 @@ impl Default for Config {
             io_rate_limit: IoRateLimitConfig::default(),
             background_error_recovery_window: ReadableDuration::hours(1),
             memory_quota: DEFAULT_TXN_MEMORY_QUOTA_CAPACITY,
-            max_ts_allowance_secs: 300,
-            max_ts_sync_interval_secs: 30,
+            max_ts_allowance_secs: 60,
+            max_ts_sync_interval_secs: 10,
             panic_on_invalid_max_ts: true,
         }
     }
@@ -226,6 +226,15 @@ impl Config {
                 self.memory_quota, self.scheduler_pending_write_threshold,
             );
             self.memory_quota = self.scheduler_pending_write_threshold;
+        }
+
+        if self.max_ts_allowance_secs < self.max_ts_sync_interval_secs {
+            warn!(
+                "storage.max-ts-allowance-secs is smaller than storage.max-ts-sync-interval-secs, \
+                increase to {}",
+                self.max_ts_sync_interval_secs,
+            );
+            self.max_ts_allowance_secs = self.max_ts_sync_interval_secs;
         }
 
         Ok(())

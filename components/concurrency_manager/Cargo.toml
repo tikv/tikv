@@ -22,7 +22,7 @@ tokio = { version = "1.5", features = ["macros", "sync", "time"] }
 txn_types = { workspace = true }
 
 [dev-dependencies]
-criterion = "0.3"
+criterion = "0.4"
 futures = "0.3"
 rand = "0.8.3"
 tikv_alloc = { workspace = true, features = ["jemalloc"] }
@@ -30,4 +30,9 @@ tikv_alloc = { workspace = true, features = ["jemalloc"] }
 [[bench]]
 name = "lock_table"
 path = "benches/lock_table.rs"
+harness = false
+
+[[bench]]
+name = "update_max_ts"
+path = "benches/update_max_ts.rs"
 harness = false

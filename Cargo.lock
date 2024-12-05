@@ -89,6 +89,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "anes"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4b46cbb362ab8752921c97e041f5e366ee6297bd428a31275b9fcf1e380f7299"
+
+[[package]]
 name = "ansi_term"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -936,7 +942,7 @@ dependencies = [
 name = "batch-system"
 version = "0.1.0"
 dependencies = [
- "criterion",
+ "criterion 0.3.5",
  "crossbeam",
  "dashmap",
  "derive_more",
@@ -1193,11 +1199,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "926013f2860c46252efceabb19f4a6b308197505082c609025aa6706c011d427"
 
 [[package]]
+name = "cast"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
+
+[[package]]
 name = "causal_ts"
 version = "0.0.1"
 dependencies = [
  "async-trait",
- "criterion",
+ "criterion 0.3.5",
  "enum_dispatch",
  "error_code",
  "futures 0.3.15",
@@ -1255,7 +1267,7 @@ dependencies = [
  "causal_ts",
  "collections",
  "concurrency_manager",
- "criterion",
+ "criterion 0.3.5",
  "crossbeam",
  "engine_rocks",
  "engine_traits",
@@ -1533,7 +1545,7 @@ dependencies = [
 name = "concurrency_manager"
 version = "0.0.1"
 dependencies = [
- "criterion",
+ "criterion 0.4.0",
  "crossbeam-skiplist 0.1.3",
  "fail",
  "futures 0.3.15",
@@ -1663,9 +1675,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1604dafd25fba2fe2d5895a9da139f8dc9b319a5fe5354ca137cbbce4e178d10"
 dependencies = [
  "atty",
- "cast",
+ "cast 0.2.2",
  "clap 2.33.0",
- "criterion-plot",
+ "criterion-plot 0.4.4",
  "csv",
  "itertools",
  "lazy_static",
@@ -1683,12 +1695,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "criterion"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e7c76e09c1aae2bc52b3d2f29e13c6572553b30c4aa1b8a49fd70de6412654cb"
+dependencies = [
+ "anes",
+ "atty",
+ "cast 0.3.0",
+ "ciborium",
+ "clap 3.1.6",
+ "criterion-plot 0.5.0",
+ "itertools",
+ "lazy_static",
+ "num-traits",
+ "oorandom",
+ "plotters",
+ "rayon",
+ "regex",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "tinytemplate",
+ "walkdir",
+]
+
+[[package]]
 name = "criterion-cpu-time"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63aaaf47e457badbcb376c65a49d0f182c317ebd97dc6d1ced94c8e1d09c0f3a"
 dependencies = [
- "criterion",
+ "criterion 0.3.5",
  "libc 0.2.151",
 ]
 
@@ -1698,7 +1736,7 @@ version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eba5111e09fabb08bfaedbe28c832876bb38d4f9519f715466332880d80b0eac"
 dependencies = [
- "criterion",
+ "criterion 0.3.5",
  "perfcnt",
 ]
 
@@ -1708,7 +1746,17 @@ version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d00996de9f2f7559f7f4dc286073197f83e92256a59ed395f9aac01fe717da57"
 dependencies = [
- "cast",
+ "cast 0.2.2",
+ "itertools",
+]
+
+[[package]]
+name = "criterion-plot"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b50826342786a51a89e2da3a28f1c32b06e387201bc2d19791f622c673706b1"
+dependencies = [
+ "cast 0.3.0",
  "itertools",
 ]
 
@@ -3152,7 +3200,7 @@ dependencies = [
  "httpdate",
  "itoa 1.0.1",
  "pin-project-lite",
- "socket2 0.4.7",
+ "socket2",
  "tokio",
  "tower-service",
  "tracing",
@@ -3241,7 +3289,7 @@ version = "0.0.1"
 dependencies = [
  "bytes",
  "collections",
- "criterion",
+ "criterion 0.3.5",
  "crossbeam",
  "crossbeam-skiplist 0.1.3",
  "dashmap",
@@ -6127,16 +6175,6 @@ dependencies = [
 
 [[package]]
 name = "socket2"
-version = "0.4.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02e2d2db9033d13a1567121ddd7a095ee144db4e1ca1b1bda3419bc0da294ebd"
-dependencies = [
- "libc 0.2.151",
- "winapi 0.3.9",
-]
-
-[[package]]
-name = "socket2"
 version = "0.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ce305eb0b4296696835b71df73eb912e0f1ffd2556a501fcede6e0c50349191c"
@@ -6719,7 +6757,7 @@ dependencies = [
  "collections",
  "concurrency_manager",
  "crc64fast",
- "criterion",
+ "criterion 0.3.5",
  "criterion-cpu-time",
  "criterion-perf-events",
  "crossbeam",
@@ -6897,7 +6935,7 @@ dependencies = [
  "codec",
  "collections",
  "crc32fast",
- "criterion",
+ "criterion 0.3.5",
  "encoding_rs 0.8.29",
  "error_code",
  "hex 0.4.3",
@@ -7420,7 +7458,7 @@ dependencies = [
  "parking_lot 0.12.1",
  "pin-project-lite",
  "signal-hook-registry",
- "socket2 0.5.7",
+ "socket2",
  "tokio-macros",
  "windows-sys 0.52.0",
 ]

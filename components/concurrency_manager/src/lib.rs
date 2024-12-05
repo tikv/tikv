@@ -21,12 +21,13 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     },
+    time::Duration,
 };
 
 use lazy_static::lazy_static;
 use prometheus::{register_int_gauge, IntGauge};
 use thiserror::Error;
-use tikv_util::error;
+use tikv_util::{error, time::Instant};
 use txn_types::{Key, Lock, TimeStamp};
 
 pub use self::{
@@ -44,28 +45,52 @@ lazy_static! {
         register_int_gauge!("tikv_concurrency_manager_max_ts", "Current value of max_ts").unwrap();
 }
 
+const DEFAULT_LIMIT_VALID_DURATION: Duration = Duration::from_secs(60);
+
+// It is suggested that limit_valid_duration = sync_interval *
+// LIMIT_VALID_TIME_MULTIPLIER, to balance between
+// 1. tolerate temporary issues in updating the limit.
+// 2. avoid long-term blocking of max_ts update caused by network partition
+//    between TiKV and PD.
+pub const LIMIT_VALID_TIME_MULTIPLIER: u64 = 3;
+
 // Pay attention that the async functions of ConcurrencyManager should not hold
 // the mutex.
 #[derive(Clone)]
 pub struct ConcurrencyManager {
     max_ts: Arc<AtomicU64>,
-    max_ts_limit: Arc<AtomicU64>,
     lock_table: LockTable,
+
+    max_ts_limit: Arc<AtomicU64>,
+    // The last time when the max_ts_limit is updated.
+    // When the limit is not updated for a long time(exceeding the threshold), we don't check the
+    // limit, to avoid blocking the max_ts update caused by temporary issues in fetching TSO,
+    // e.g. network partition between this TiKV and PD leader
+    last_update_limit_instant: Arc<AtomicU64>,
+    start_instant: Instant,
+    limit_valid_duration: Duration,
 
     panic_on_invalid_max_ts: Arc<AtomicBool>,
 }
 
 impl ConcurrencyManager {
     pub fn new(latest_ts: TimeStamp) -> Self {
-        Self::new_with_config(latest_ts, true)
+        Self::new_with_config(latest_ts, DEFAULT_LIMIT_VALID_DURATION, true)
     }
 
-    pub fn new_with_config(latest_ts: TimeStamp, panic_on_invalid_max_ts: bool) -> Self {
+    pub fn new_with_config(
+        latest_ts: TimeStamp,
+        limit_valid_duration: Duration,
+        panic_on_invalid_max_ts: bool,
+    ) -> Self {
         ConcurrencyManager {
             max_ts: Arc::new(AtomicU64::new(latest_ts.into_inner())),
             max_ts_limit: Arc::new(AtomicU64::new(0)),
             lock_table: LockTable::default(),
             panic_on_invalid_max_ts: Arc::new(AtomicBool::new(panic_on_invalid_max_ts)),
+            last_update_limit_instant: Arc::new(AtomicU64::new(0)),
+            limit_valid_duration,
+            start_instant: Instant::now_coarse(),
         }
     }
 
@@ -93,7 +118,12 @@ impl ConcurrencyManager {
         }
         let new_ts = new_ts.into_inner();
         let limit = self.max_ts_limit.load(Ordering::SeqCst);
-        if limit > 0 && new_ts > limit {
+        let since_last_limit_update_ms = self.start_instant.saturating_elapsed().as_millis() as u64
+            - self.last_update_limit_instant.load(Ordering::SeqCst);
+        if limit > 0
+            && since_last_limit_update_ms < self.limit_valid_duration.as_millis() as u64
+            && new_ts > limit
+        {
             let source = source.unwrap_or_default();
             error!("invalid max_ts update";
                 "attempted_ts" => new_ts,
@@ -129,6 +159,10 @@ impl ConcurrencyManager {
         let current_limit = self.max_ts_limit.load(Ordering::SeqCst);
         if ts > current_limit {
             self.max_ts_limit.store(ts, Ordering::SeqCst);
+            self.last_update_limit_instant.store(
+                self.start_instant.saturating_elapsed().as_millis() as u64,
+                Ordering::SeqCst,
+            );
             MAX_TS_LIMIT_GAUGE.set(ts as i64);
         }
     }
@@ -313,7 +347,11 @@ mod tests {
 
     #[test]
     fn test_max_ts_limit() {
-        let cm = ConcurrencyManager::new_with_config(TimeStamp::new(100), false);
+        let cm = ConcurrencyManager::new_with_config(
+            TimeStamp::new(100),
+            DEFAULT_LIMIT_VALID_DURATION,
+            false,
+        );
 
         // Initially limit should be 0
         cm.update_max_ts(TimeStamp::new(150), None).unwrap();
