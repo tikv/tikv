@@ -51,7 +51,7 @@ use tokio::sync::Semaphore;
 use txn_types::{Key, KvPair, LockType, OldValue, TimeStamp};
 
 use crate::{
-    channel::{CdcEvent, DownstreamSink},
+    channel::DownstreamSink,
     delegate::{
         post_init_downstream, Delegate, DelegateTask, DownstreamId, DownstreamState, MiniLock,
         ObservedRange,
@@ -100,7 +100,6 @@ pub(crate) struct Initializer<E> {
     pub(crate) observe_handle: ObserveHandle,
     pub(crate) downstream_id: DownstreamId,
     pub(crate) downstream_state: Arc<AtomicCell<DownstreamState>>,
-    pub(crate) scan_truncated: Arc<AtomicBool>,
 
     pub(crate) tablet: Option<E>,
     pub(crate) sched: UnboundedSender<DelegateTask>,
@@ -498,18 +497,9 @@ impl<E: KvEngine> Initializer<E> {
     }
 
     async fn sink_scan_events(&mut self, entries: Vec<Option<KvEntry>>, done: bool) -> Result<()> {
-        let mut events = Delegate::convert_to_grpc_events(
-            self.region_id,
-            self.request_id,
-            entries,
-            self.filter_loop,
-            &self.observed_range,
-        )?;
-        if let Err(e) = self
-            .sink
-            .send_scaned(events)
-            .await
-        {
+        let events =
+            Delegate::convert_to_grpc_events(entries, self.filter_loop, &self.observed_range)?;
+        if let Err(e) = self.sink.send_scaned(events).await {
             error!("cdc send scan event failed"; "req_id" => ?self.request_id);
             return Err(e);
         }
@@ -886,6 +876,13 @@ mod tests {
         let mut txn_source = TxnSource::default();
         txn_source.set_cdc_write_source(1);
         test_initializer_txn_source_filter(txn_source, true);
+    }
+
+    #[test]
+    fn test_initializer_lightning_physical_import_filter() {
+        let mut txn_source = TxnSource::default();
+        txn_source.set_lightning_physical_import();
+        test_initializer_txn_source_filter(txn_source, false);
     }
 
     #[test]

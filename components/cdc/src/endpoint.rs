@@ -701,7 +701,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         let downstream_state = downstream.get_state();
         let downstream_sink = downstream.sink.clone();
         let observed_range = downstream.observed_range.clone();
-        let scan_truncated = downstream.scan_truncated.clone();
 
         // The connection can be deregistered by some internal errors. Clients will
         // always be notified by closing the GRPC server stream, so it's OK to drop
@@ -835,7 +834,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             observe_handle: handle,
             downstream_id,
             downstream_state,
-            scan_truncated,
 
             tablet: self.tablets.get(region_id).map(|t| t.into_owned()),
             sched: delegate.sched.clone(),

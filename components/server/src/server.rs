@@ -74,8 +74,8 @@ use raftstore::{
         },
         memory::MEMTRACE_ROOT as MEMTRACE_RAFTSTORE,
         snapshot_backup::PrepareDiskSnapObserver,
-        AutoSplitController, CheckLeaderRunner, LocalReader, SnapManager, SnapManagerBuilder,
-        SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
+        AutoSplitController, CheckLeaderRunner, DiskCheckRunner, LocalReader, SnapManager,
+        SnapManagerBuilder, SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
     },
     RaftRouterCompactedEventSender,
 };
@@ -814,6 +814,13 @@ where
         self.core
             .config
             .raft_store
+            .optimize_inspector(path_in_diff_mount_point(
+                engines.engines.raft.get_engine_path().to_string().as_str(),
+                engines.engines.kv.path(),
+            ));
+        self.core
+            .config
+            .raft_store
             .validate(
                 self.core.config.coprocessor.region_split_size(),
                 self.core.config.coprocessor.enable_region_bucket(),
@@ -1024,6 +1031,8 @@ where
             .registry
             .register_consistency_check_observer(100, observer);
 
+        let disk_check_runner = DiskCheckRunner::new(self.core.store_path.clone());
+
         raft_server
             .start(
                 engines.engines.clone(),
@@ -1038,6 +1047,7 @@ where
                 self.concurrency_manager.clone(),
                 collector_reg_handle,
                 self.causal_ts_provider.clone(),
+                disk_check_runner,
                 self.grpc_service_mgr.clone(),
                 safe_point.clone(),
             )

@@ -94,6 +94,10 @@ make_auto_flush_static_metric! {
         failure,
         success,
         trigger_next,
+        last_level_seek_filtered,
+        last_level_seek_filter_match,
+        non_last_level_seek_filtered,
+        non_last_level_seek_filter_match,
     }
 
     pub struct EngineTickerMetrics : LocalIntCounter {
@@ -226,6 +230,30 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
             STORE_ENGINE_BLOOM_EFFICIENCY
                 .get(name_enum)
                 .bloom_useful
+                .inc_by(value);
+        }
+        TickerType::LastLevelSeekFiltered => {
+            STORE_ENGINE_BLOOM_EFFICIENCY
+                .get(name_enum)
+                .last_level_seek_filtered
+                .inc_by(value);
+        }
+        TickerType::LastLevelSeekFilterMatch => {
+            STORE_ENGINE_BLOOM_EFFICIENCY
+                .get(name_enum)
+                .last_level_seek_filter_match
+                .inc_by(value);
+        }
+        TickerType::NonLastLevelSeekFiltered => {
+            STORE_ENGINE_BLOOM_EFFICIENCY
+                .get(name_enum)
+                .non_last_level_seek_filtered
+                .inc_by(value);
+        }
+        TickerType::NonLastLevelSeekFilterMatch => {
+            STORE_ENGINE_BLOOM_EFFICIENCY
+                .get(name_enum)
+                .non_last_level_seek_filter_match
                 .inc_by(value);
         }
         TickerType::MemtableHit => {

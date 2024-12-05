@@ -6,8 +6,7 @@ use std::sync::{
 };
 
 use collections::{HashMap, HashMapEntry};
-use futures::stream::TryStreamExt;
-use futures::stream::StreamExt;
+use futures::stream::{StreamExt, TryStreamExt};
 use grpcio::{DuplexSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode, WriteFlags};
 use kvproto::{
     cdcpb::{
@@ -21,7 +20,7 @@ use tikv_util::{error, info, memory::MemoryQuota, warn, worker::*};
 use tokio::runtime::{self, Runtime};
 
 use crate::{
-    channel::{channel, Sink, DownstreamSink, CDC_CHANNLE_CAPACITY},
+    channel::{channel, DownstreamSink, Sink},
     delegate::{Downstream, DownstreamId, ObservedRange},
     endpoint::{Deregister, Task},
 };
@@ -391,7 +390,7 @@ impl Service {
         event_feed_v2: bool,
     ) {
         let conn_id = ConnId::new();
-        let (sink, mut drain) = channel(conn_id, CDC_CHANNLE_CAPACITY, self.memory_quota.clone());
+        let (sink, drain) = channel(conn_id, self.memory_quota.clone());
         let mut features = vec![];
 
         if event_feed_v2 {

@@ -1,67 +1,43 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::pin::Pin;
-use std::{
-    fmt,
-    sync::{
-        Arc,
-    },
-    time::Duration,
-};
-use std::task::Context;
-use std::result::Result as StdResult;
+use std::{fmt, pin::Pin, result::Result as StdResult, sync::Arc, task::Context, time::Duration};
 
 use futures::{
-    lock::Mutex,
-    ready,
     channel::mpsc::{
-        unbounded, SendError as FuturesSendError,
-        TrySendError, UnboundedReceiver, UnboundedSender,
+        unbounded, SendError as FuturesSendError, TrySendError, UnboundedReceiver, UnboundedSender,
     },
     executor::block_on,
+    lock::Mutex,
+    ready,
     task::Poll,
     SinkExt, Stream, StreamExt,
 };
-use kvproto::cdcpb::{EventRow, Error as ErrorEvent, Event_oneof_event, EventEntries};
-use kvproto::cdcpb::{ChangeDataEvent, Event, ResolvedTs};
+use kvproto::cdcpb::{
+    ChangeDataEvent, Error as ErrorEvent, Event, EventEntries, EventRow, Event_oneof_event,
+    ResolvedTs,
+};
 use protobuf::Message;
 use tikv_util::{
+    debug,
     future::block_on_timeout,
-    impl_display_as_debug, info, debug,
+    impl_display_as_debug, info,
     memory::{MemoryQuota, MemoryQuotaExceeded},
     time::Instant,
     warn,
 };
 
-use crate::delegate::DownstreamId;
-use crate::{metrics::*, service::ConnId};
-use crate::service::RequestId;
-use crate::{Result, Error};
+use crate::{
+    delegate::DownstreamId,
+    metrics::*,
+    service::{ConnId, RequestId},
+    Error, Result,
+};
 
 /// The maximum bytes of events can be batched into one `CdcEvent::Event`, 32KB.
 pub const CDC_EVENT_MAX_BYTES: usize = 32 * 1024;
 
-/// The maximum count of `CdcEvent::Event`s can be batched into
-/// one ChangeDataEvent, 64.
-const CDC_EVENT_MAX_COUNT: usize = 64;
-
-/// The default `channel` capacity for sending incremental scan events.
-///
-/// The maximum bytes of in-memory incremental scan events is about 6MB
-/// per-connection (EventFeed RPC).
-///
-/// 6MB = (CDC_CHANNLE_CAPACITY + CDC_EVENT_MAX_COUNT) * CDC_EVENT_MAX_BYTES.
-pub const CDC_CHANNLE_CAPACITY: usize = 128;
-
 /// The maximum bytes of ChangeDataEvent, 6MB.
 const CDC_RESP_MAX_BYTES: usize = 6 * 1024 * 1024;
-
-/// Assume the average size of batched `CdcEvent::Event`s is 32KB and
-/// the average count of batched `CdcEvent::Event`s is 64.
-/// ```text
-/// 2 = (CDC_EVENT_MAX_BYTES * CDC_EVENT_MAX_COUNT / CDC_MAX_RESP_SIZE).ceil() + 1 /* reserve for ResolvedTs */;
-/// ```
-const CDC_RESP_MAX_BATCH_COUNT: usize = 2;
 
 pub enum CdcEvent {
     ResolvedTs(ResolvedTs),
@@ -139,7 +115,7 @@ impl fmt::Debug for CdcEvent {
     }
 }
 
-pub fn channel(conn_id: ConnId, buffer: usize, memory_quota: Arc<MemoryQuota>) -> (Sink, Drain) {
+pub fn channel(conn_id: ConnId, memory_quota: Arc<MemoryQuota>) -> (Sink, Drain) {
     let (tx, rx) = unbounded();
     (
         Sink {
@@ -147,9 +123,9 @@ pub fn channel(conn_id: ConnId, buffer: usize, memory_quota: Arc<MemoryQuota>) -
             memory_quota: memory_quota.clone(),
         },
         Drain {
+            conn_id,
             rx,
             memory_quota,
-            conn_id,
             buffer: None,
         },
     )
@@ -264,9 +240,9 @@ impl Sink {
 }
 
 pub struct Drain {
+    conn_id: ConnId,
     rx: UnboundedReceiver<ObservedEvent>,
     memory_quota: Arc<MemoryQuota>,
-    conn_id: ConnId,
 
     buffer: Option<ChangeDataEvent>,
 }
@@ -283,9 +259,10 @@ impl Stream for Drain {
         let mut event = ChangeDataEvent::default();
         let mut size = 0;
         Poll::Ready(loop {
-            if let Some(item)= ready!(Pin::new(&mut this.rx).poll_next(cx)) {
+            if let Some(item) = ready!(Pin::new(&mut this.rx).poll_next(cx)) {
                 this.memory_quota.free(item.size);
-                CDC_EVENTS_PENDING_DURATION.observe(item.created.saturating_elapsed_secs() * 1000.0);
+                CDC_EVENTS_PENDING_DURATION
+                    .observe(item.created.saturating_elapsed_secs() * 1000.0);
                 match item.event {
                     CdcEvent::Barrier(barrier) => barrier(()),
                     CdcEvent::ResolvedTs(x) => {
@@ -313,12 +290,10 @@ impl Drop for Drain {
     fn drop(&mut self) {
         self.rx.close();
         let start = Instant::now();
-        block_on(async {
-            while self.next().await.is_some() {}
-        });
+        block_on(async { while self.next().await.is_some() {} });
         let takes = start.saturating_elapsed();
         if takes >= Duration::from_millis(200) {
-            warn!("drop Drain too slow"; "takes" => ?takes);
+            warn!("drop Drain too slow"; "conn_id" => ?self.conn_id, "takes" => ?takes);
         }
     }
 }

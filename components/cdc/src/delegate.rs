@@ -23,10 +23,7 @@ use futures::{
     StreamExt,
 };
 use kvproto::{
-    cdcpb::{
-        ChangeDataRequestKvApi, Error as ErrorEvent, Event, EventEntries, EventLogType, EventRow,
-        EventRowOpType, Event_oneof_event,
-    },
+    cdcpb::{ChangeDataRequestKvApi, Error as ErrorEvent, EventLogType, EventRow, EventRowOpType},
     kvrpcpb::ExtraOp as TxnExtraOp,
     metapb::{Region, RegionEpoch},
     raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CmdType, PutRequest, Request},
@@ -47,7 +44,7 @@ use tikv_util::{
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteBatchFlags, WriteRef, WriteType};
 
 use crate::{
-    channel::{CdcEvent, CDC_EVENT_MAX_BYTES, DownstreamSink},
+    channel::{DownstreamSink, CDC_EVENT_MAX_BYTES},
     endpoint::{Deregister, Task},
     initializer::KvEntry,
     metrics::*,
@@ -630,8 +627,6 @@ impl Delegate {
     }
 
     pub(crate) fn convert_to_grpc_events(
-        region_id: u64,
-        request_id: RequestId,
         entries: Vec<Option<KvEntry>>,
         filter_loop: bool,
         observed_range: &ObservedRange,
@@ -697,7 +692,8 @@ impl Delegate {
                     row_size = 0;
                 }
             }
-            if TxnSource::is_lossy_ddl_reorg_source_set(row.txn_source)
+            if TxnSource::is_lightning_physical_import(row.txn_source)
+                || TxnSource::is_lossy_ddl_reorg_source_set(row.txn_source)
                 || filter_loop && TxnSource::is_cdc_write_source_set(row.txn_source)
             {
                 continue;
@@ -722,11 +718,6 @@ impl Delegate {
     ) -> Result<()> {
         debug_assert_eq!(self.txn_extra_op.load(), TxnExtraOp::ReadOldValue);
 
-        let read_old_value = |_: &mut EventRow, _| -> Result<()> {
-            // TODO: fix it.
-            Ok(())
-        };
-
         let mut rows_builder = RowsBuilder::default();
         rows_builder.is_one_pc = flags.contains(WriteBatchFlags::ONE_PC);
         for mut req in requests {
@@ -740,7 +731,7 @@ impl Delegate {
 
         let (raws, txns) = rows_builder.finish_build();
         self.sink_downstream_raw(raws, index).await?;
-        self.sink_downstream_tidb(txns, read_old_value).await?;
+        self.sink_downstream_tidb(txns, old_value_cb).await?;
         Ok(())
     }
 
@@ -765,7 +756,10 @@ impl Delegate {
             if filtered_entries.is_empty() {
                 continue;
             }
-            downstream.sink.send_observed_raw(index, filtered_entries).await?;
+            downstream
+                .sink
+                .send_observed_raw(index, filtered_entries)
+                .await?;
         }
         Ok(())
     }
@@ -773,7 +767,7 @@ impl Delegate {
     async fn sink_downstream_tidb(
         &mut self,
         mut entries: Vec<RowInBuilding>,
-        mut read_old_value: impl FnMut(&mut EventRow, TimeStamp) -> Result<()>,
+        old_value_cb: &OldValueCallback,
     ) -> Result<()> {
         let mut downstreams = Vec::with_capacity(self.downstreams.len());
         for d in &mut self.downstreams {
@@ -781,9 +775,6 @@ impl Delegate {
             {
                 downstreams.push(d);
             }
-        }
-        if downstreams.is_empty() {
-            return Ok(());
         }
 
         for downstream in downstreams {
@@ -798,8 +789,11 @@ impl Delegate {
                 if !downstream.observed_range.contains_raw_key(&v.key) {
                     continue;
                 }
-                if let Some(read_old_ts) = needs_old_value {
-                    read_old_value(v, *read_old_ts)?;
+                if let Some(ts) = needs_old_value {
+                    let key = Key::from_raw(&v.key).append_ts(v.start_ts.into());
+                    let mut cache = self.old_value_cache.lock().await;
+                    let old_value = old_value_cb(key, *ts, &mut *cache, &mut self.old_value_stats)?;
+                    v.old_value = old_value.unwrap_or_default();
                     *needs_old_value = None;
                 }
 
@@ -823,7 +817,8 @@ impl Delegate {
                     }
                 }
 
-                if TxnSource::is_lossy_ddl_reorg_source_set(v.txn_source)
+                if TxnSource::is_lightning_physical_import(v.txn_source)
+                    || TxnSource::is_lossy_ddl_reorg_source_set(v.txn_source)
                     || downstream.filter_loop && TxnSource::is_cdc_write_source_set(v.txn_source)
                 {
                     continue;
@@ -1018,7 +1013,8 @@ impl Delegate {
                         build_resolver,
                         incremental_scan_barrier,
                         cb,
-                    ).await;
+                    )
+                    .await;
                 }
             }
         }
@@ -1031,7 +1027,11 @@ impl Delegate {
         }
     }
 
-    async fn deregister_downstream_inner(&mut self, err_event: Option<ErrorEvent>, downstream: Downstream) -> bool {
+    async fn deregister_downstream_inner(
+        &mut self,
+        err_event: Option<ErrorEvent>,
+        downstream: Downstream,
+    ) -> bool {
         if let Some(err_event) = err_event {
             if let Err(err) = downstream.sink.cancel_by_error(err_event).await {
                 warn!("cdc send region error failed";
@@ -1057,8 +1057,15 @@ impl Delegate {
         self.downstreams.is_empty()
     }
 
-    async fn deregister_downstream(&mut self, err_event: Option<ErrorEvent>, downstream: Downstream) {
-        if self.deregister_downstream_inner(err_event, downstream).await {
+    async fn deregister_downstream(
+        &mut self,
+        err_event: Option<ErrorEvent>,
+        downstream: Downstream,
+    ) {
+        if self
+            .deregister_downstream_inner(err_event, downstream)
+            .await
+        {
             self.on_stop(None).await;
         }
     }
@@ -1069,7 +1076,8 @@ impl Delegate {
         let err_event = err.map(|x| x.into_error_event(self.region_id));
         while !self.downstreams.is_empty() {
             let downstream = self.downstreams.swap_remove(0);
-            self.deregister_downstream_inner(err_event.clone(), downstream).await;
+            self.deregister_downstream_inner(err_event.clone(), downstream)
+                .await;
         }
         let _ = self
             .feedbacks
@@ -1882,6 +1890,13 @@ mod tests {
         txn_source.set_cdc_write_source(1);
 
         test_downstream_txn_source_filter(txn_source, true);
+    }
+
+    #[test]
+    fn test_downstream_filter_lightning_physical_import() {
+        let mut txn_source = TxnSource::default();
+        txn_source.set_lightning_physical_import();
+        test_downstream_txn_source_filter(txn_source, false);
     }
 
     #[test]

@@ -7114,9 +7114,11 @@ name = "tikv-ctl"
 version = "0.0.1"
 dependencies = [
  "api_version",
+ "base64 0.13.0",
  "cc",
  "clap 2.33.0",
  "collections",
+ "compact-log-backup",
  "crypto",
  "encryption_export",
  "engine_rocks",
@@ -7144,6 +7146,7 @@ dependencies = [
  "slog",
  "slog-global",
  "structopt",
+ "tempfile",
  "tikv",
  "tikv_util",
  "time 0.1.43",
@@ -7309,6 +7312,7 @@ dependencies = [
  "tokio",
  "tokio-executor",
  "tokio-timer",
+ "tokio-util",
  "toml",
  "tracker",
  "url",
@@ -7401,9 +7405,9 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "1.41.0"
+version = "1.41.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "145f3413504347a2be84393cc8a7d2fb4d863b375909ea59f2158261aa258bbb"
+checksum = "22cfb5bee7a6a52939ca9224d6ac897bb669134078daa8735560897f69de4d33"
 dependencies = [
  "backtrace",
  "bytes",
@@ -7483,17 +7487,18 @@ dependencies = [
 
 [[package]]
 name = "tokio-util"
-version = "0.7.2"
+version = "0.7.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f988a1a1adc2fb21f9c12aa96441da33a1728193ae0b95d2be22dbd17fcb4e5c"
+checksum = "61e7c3654c13bcd040d4a03abee2c75b1d14a37b423cf5a813ceae1cc903ec6a"
 dependencies = [
  "bytes",
  "futures-core",
  "futures-io",
  "futures-sink",
+ "futures-util",
+ "hashbrown 0.14.0",
  "pin-project-lite",
  "tokio",
- "tracing",
 ]
 
 [[package]]
