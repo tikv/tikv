@@ -1111,7 +1111,45 @@ impl DiskUsageChecker {
 
 #[cfg(test)]
 mod tests {
+    use tikv_util::sys::disk::get_disk_space_stats;
+
     use super::*;
+
+    #[test]
+    fn test_disk_stats() {
+        // Test timeout
+        {
+            // Set up a fail point that simulates a slow disk operation
+            fail::cfg("mock_disk_space_stats", "sleep(6000)").unwrap();
+
+            // The function should return a timeout error after 5 seconds
+            let result = get_disk_space_stats(PathBuf::default());
+
+            // Clean up the fail point
+            fail::remove("mock_disk_space_stats");
+
+            let _ = result.map_err(|e| {
+                assert_eq!(e.kind(), std::io::ErrorKind::TimedOut);
+                assert_eq!(e.to_string(), "disk space check timed out");
+            });
+        }
+        // Test success
+        {
+            // Configure fail point to return known values immediately
+            fail::cfg("mock_disk_space_stats", "return(1000,500)").unwrap();
+
+            // The function should return successfully with our mocked values
+            let result = get_disk_space_stats(PathBuf::default());
+
+            // Clean up the fail point
+            fail::remove("mock_disk_space_stats");
+
+            // Verify the success case
+            let (total, available) = result.unwrap();
+            assert_eq!(total, 1000);
+            assert_eq!(available, 500);
+        }
+    }
 
     #[test]
     fn test_disk_usage_checker() {

@@ -1,7 +1,12 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{
     path::Path,
-    sync::atomic::{AtomicI32, AtomicU64, Ordering},
+    sync::{
+        atomic::{AtomicI32, AtomicU64, Ordering},
+        mpsc,
+    },
+    thread,
+    time::Duration,
 };
 
 use fail::fail_point;
@@ -82,15 +87,40 @@ pub fn get_disk_status(_store_id: u64) -> DiskUsage {
     }
 }
 
+/// Returns tuple of (total_space, available_space) for given path.
+///
+/// Attention, this function runs disk check in separate thread with 1 second
+/// timeout to avoid blocking.
 pub fn get_disk_space_stats<P: AsRef<Path>>(path: P) -> std::io::Result<(u64, u64)> {
-    fail_point!("mock_disk_space_stats", |stats| {
-        let stats = stats.unwrap();
-        let values = stats.split(',').collect::<Vec<_>>();
-        Ok((
-            values[0].parse::<u64>().unwrap(),
-            values[1].parse::<u64>().unwrap(),
-        ))
+    // 5 seconds timeout for disk space check, which is enough for most cases.
+    const DISK_STATS_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
+
+    // Use a timeout channel to avoid blocking the thread when checking disk space.
+    let path = path.as_ref().to_owned();
+    let (tx, rx) = mpsc::channel();
+
+    // It's ok to use a separate thread to check disk space stats, because the
+    // access to disk is not frequent, and the disk check is not the hot path
+    // of tikv, so the overhead of allocating a thread is acceptable.
+    thread::spawn(move || {
+        fail_point!("mock_disk_space_stats", |stats| {
+            let stats = stats.unwrap();
+            let values = stats.split(',').collect::<Vec<_>>();
+            let _ = tx.send(Ok((
+                values[0].parse::<u64>().unwrap(),
+                values[1].parse::<u64>().unwrap(),
+            )));
+        });
+        let result = fs2::statvfs(&path)
+            .map(|disk_stats| (disk_stats.total_space(), disk_stats.available_space()));
+        let _ = tx.send(result);
     });
-    let disk_stats = fs2::statvfs(path)?;
-    Ok((disk_stats.total_space(), disk_stats.available_space()))
+
+    match rx.recv_timeout(DISK_STATS_CHECK_TIMEOUT) {
+        Ok(result) => result,
+        Err(_) => Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "disk space check timed out",
+        )),
+    }
 }
