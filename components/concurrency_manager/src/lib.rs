@@ -132,7 +132,7 @@ impl ConcurrencyManager {
 
             if duration_to_last_limit_update_ms < self.limit_valid_duration.as_millis() as u64 {
                 // limit is valid
-                self.report_error(new_ts, TimeStamp::new(limit), source)?;
+                self.report_error(new_ts, TimeStamp::new(limit), source, true)?;
             } else {
                 // limit is stale
                 // use an approximate limit to avoid false alerts caused by failed limit updates
@@ -144,7 +144,7 @@ impl ConcurrencyManager {
                 );
 
                 if new_ts > approximate_limit.into_inner() {
-                    self.report_error(new_ts, approximate_limit, source)?;
+                    self.report_error(new_ts, approximate_limit, source, false)?;
                 }
             }
         }
@@ -158,13 +158,14 @@ impl ConcurrencyManager {
         new_ts: u64,
         limit: TimeStamp,
         source: impl slog::Value + Display,
+        can_panic: bool,
     ) -> Result<(), InvalidMaxTsUpdate> {
         error!("invalid max_ts update";
             "attempted_ts" => new_ts,
             "max_allowed" => limit.into_inner(),
             "source" => &source,
         );
-        if self.panic_on_invalid_max_ts.load(Ordering::SeqCst) {
+        if can_panic && self.panic_on_invalid_max_ts.load(Ordering::SeqCst) {
             panic!(
                 "invalid max_ts update: {} exceeds the limit {}, source={}",
                 new_ts,
