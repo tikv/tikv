@@ -131,7 +131,7 @@ paste = "1.0"
 pd_client = { workspace = true }
 pin-project = "1.0"
 pnet_datalink = "0.23"
-pprof = { version = "0.13", default-features = false, features = [
+pprof = { version = "0.14", default-features = false, features = [
   "flamegraph",
   "protobuf-codec",
 ] }
@@ -245,6 +245,10 @@ members = [
   "components/cloud/gcp",
   "components/codec",
   "components/collections",
+<<<<<<< HEAD
+=======
+  "components/compact-log-backup",
+>>>>>>> 004490cba3 (*: upgrade pprof to 0.14 to fix https://github.com/rusticata/pcap-parser/issues/46 (#17942))
   "components/concurrency_manager",
   "components/coprocessor_plugin_api",
   "components/crossbeam-skiplist",

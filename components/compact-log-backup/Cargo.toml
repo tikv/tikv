@@ -1,0 +1,69 @@
+[package]
+name = "compact-log-backup"
+version = "0.1.0"
+edition = "2021"
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+failpoints = ["fail/failpoints"]
+
+[dependencies]
+async-compression = { version = "0.4.12", features = [
+  "tokio",
+  "futures-io",
+  "zstd",
+] }
+bytes = "1"
+chrono = { workspace = true }
+codec = { workspace = true }
+crc64fast = "0.1"
+dashmap = "5"
+derive_more = "0.99.3"
+encryption = { workspace = true }
+engine_rocks = { workspace = true }
+engine_traits = { workspace = true }
+external_storage = { workspace = true }
+fail = "0.5"
+file_system = { workspace = true }
+futures = "0.3"
+futures-io = "0.3"
+hex = "0.4"
+keys = { workspace = true }
+kvproto = { workspace = true }
+lazy_static = "1.4"
+pin-project = "1.0"
+prometheus = { version = "0.13", default-features = false, features = [
+  "nightly",
+] }
+protobuf = { version = "2.8", features = ["bytes"] }
+serde = "1.0"
+serde_json = "1.0"
+slog = { workspace = true }
+slog-global = { workspace = true }
+thiserror = "1"
+tidb_query_datatype = { workspace = true }
+tikv_alloc = { workspace = true }
+tikv_util = { workspace = true }
+tokio = { version = "1.5", features = [
+  "rt-multi-thread",
+  "macros",
+  "time",
+  "sync",
+  "signal",
+] }
+tokio-stream = "0.1"
+tokio-util = { version = "0.7", features = ["compat"] }
+tracing = { workspace = true }
+tracing-active-tree = { workspace = true }
+txn_types = { workspace = true }
+
+# Below are used by `test_utils` only.
+zstd = "0.11"
+
+[dev-dependencies]
+pprof = { version = "0.14", default-features = false, features = [
+  "flamegraph",
+  "protobuf-codec",
+] }
+tempdir = "0.3"
+test_util = { workspace = true }
