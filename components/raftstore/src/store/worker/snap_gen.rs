@@ -18,7 +18,7 @@ use kvproto::raft_serverpb::RaftApplyState;
 use pd_client::PdClient;
 use raft::eraftpb::Snapshot as RaftSnapshot;
 use tikv_util::{
-    box_try, error, info,
+    box_try, debug, error, info,
     time::{Instant, UnixSecs},
     worker::Runnable,
     yatp_pool::FuturePool,
@@ -92,7 +92,9 @@ where
         ));
         // Only enable the fail point when the region id is equal to 1, which is
         // the id of bootstrapped region in tests.
+        debug!("pause snap gen"; "region_id" => region_id);
         fail_point!("region_gen_snap", region_id == 1, |_| Ok(()));
+        debug!("stop pause snap gen"; "region_id" => region_id);
         if let Err(e) = notifier.try_send(snap) {
             info!(
                 "failed to notify snap result, leadership may have changed, ignore error";
@@ -215,6 +217,7 @@ where
                 for_balance,
                 to_store_id,
             } => {
+                debug!("snap gen task"; "region_id" => region_id);
                 let mut allow_multi_files_snapshot = false;
                 // if to_store_id is 0, it means the to_store_id cannot be found
                 if to_store_id != 0 {
