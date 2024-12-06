@@ -531,6 +531,8 @@ pub trait SnapshotExt {
         None
     }
 
+    fn get_applied_index(&self) -> u64;
+
     fn get_region_id(&self) -> Option<u64> {
         None
     }
@@ -556,7 +558,9 @@ pub trait SnapshotExt {
 
 pub struct DummySnapshotExt;
 
-impl SnapshotExt for DummySnapshotExt {}
+impl SnapshotExt for DummySnapshotExt {
+    fn get_applied_index(&self) -> u64 {0}
+}
 
 pub trait Iterator: Send + MetricsExt {
     fn next(&mut self) -> Result<bool>;

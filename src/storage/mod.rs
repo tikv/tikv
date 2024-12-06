@@ -3572,6 +3572,10 @@ impl<'a> SnapshotExt for TxnTestSnapshotExt<'a> {
     fn get_txn_ext(&self) -> Option<&Arc<TxnExt>> {
         Some(self.0)
     }
+
+    fn get_applied_index(&self) -> u64 {
+        0
+    }
 }
 
 #[derive(Clone)]

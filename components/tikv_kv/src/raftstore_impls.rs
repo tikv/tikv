@@ -45,6 +45,16 @@ impl<'a, S: Snapshot> SnapshotExt for RegionSnapshotExt<'a, S> {
         self.snapshot.term
     }
 
+    fn get_applied_index(&self) -> u64 {
+        match self.snapshot.get_apply_index() {
+            Ok(v) => v,
+            Err(e) => {
+                warn!("get snapshot applied index failed"; "err" => ?e, "region_id" => self.snapshot.get_region().id);
+                0
+            }
+        }
+    }
+
     #[inline]
     fn get_region_id(&self) -> Option<u64> {
         Some(self.snapshot.get_region().id)

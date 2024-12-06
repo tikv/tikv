@@ -1640,6 +1640,8 @@ mod tests {
             fn is_max_ts_synced(&self) -> bool {
                 false
             }
+
+            fn get_applied_index(&self) -> u64 {0}
         }
 
         impl Snapshot for MockSnapshot {

@@ -465,6 +465,7 @@ impl<E: Engine> Endpoint<E> {
             "jepsen cop handle_unary_request_impl snapshot got"; 
             "req_ctx" => ?tracker.req_ctx, 
             "in_memory_engine_hit" => snapshot.ext().in_memory_engine_hit(),
+            "applied_index" => snapshot.ext().get_applied_index(),
         );
         // When snapshot is retrieved, deadline may exceed.
         tracker.on_snapshot_finished();
