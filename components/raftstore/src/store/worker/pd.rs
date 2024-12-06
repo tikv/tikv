@@ -2502,17 +2502,17 @@ mod tests {
     fn test_collect_stats() {
         use std::{sync::Mutex, time::Instant};
 
-        use engine_test::{kv::KvTestEngine, raft::RaftTestEngine};
+        use engine_test::kv::KvTestEngine;
 
         struct RunnerTest {
             store_stat: Arc<Mutex<StoreStat>>,
-            stats_monitor: StatsMonitor<WrappedScheduler<KvTestEngine, RaftTestEngine>>,
+            stats_monitor: StatsMonitor<WrappedScheduler<KvTestEngine>>,
         }
 
         impl RunnerTest {
             fn new(
                 interval: u64,
-                scheduler: Scheduler<Task<KvTestEngine, RaftTestEngine>>,
+                scheduler: Scheduler<Task<KvTestEngine>>,
                 store_stat: Arc<Mutex<StoreStat>>,
             ) -> RunnerTest {
                 let mut stats_monitor = StatsMonitor::new(
@@ -2548,9 +2548,9 @@ mod tests {
         }
 
         impl Runnable for RunnerTest {
-            type Task = Task<KvTestEngine, RaftTestEngine>;
+            type Task = Task<KvTestEngine>;
 
-            fn run(&mut self, task: Task<KvTestEngine, RaftTestEngine>) {
+            fn run(&mut self, task: Task<KvTestEngine>) {
                 if let Task::StoreInfos {
                     cpu_usages,
                     read_io_rates,
