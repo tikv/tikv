@@ -7,15 +7,18 @@ use kvproto::{
     metapb::{Peer, Region},
     raft_cmdpb::AdminCmdType,
     raft_serverpb::{ExtraMessage, ExtraMessageType, RaftApplyState},
+    tikvpb::BatchRaftMessage,
 };
+use protobuf::Message;
 use raft::StateRole;
 use raftstore::coprocessor::{
-    dispatcher::{BoxDestroyPeerObserver, BoxExtraMessageObserver},
+    dispatcher::{BoxDestroyPeerObserver, BoxExtraMessageObserver, BoxTransferLeaderObserver},
     AdminObserver, ApplyCtxInfo, ApplySnapshotObserver, BoxAdminObserver, BoxApplySnapshotObserver,
     BoxQueryObserver, BoxRoleObserver, Cmd, Coprocessor, CoprocessorHost, DestroyPeerObserver,
     ExtraMessageObserver, ObserverContext, QueryObserver, RegionState, RoleObserver,
+    TransferLeaderObserver,
 };
-use tikv_util::{debug, warn};
+use tikv_util::{debug, info, warn};
 
 #[derive(Clone)]
 pub struct LoadEvictionObserver {
@@ -57,6 +60,10 @@ impl LoadEvictionObserver {
         coprocessor_host
             .registry
             .register_destroy_peer_observer(priority, BoxDestroyPeerObserver::new(self.clone()));
+        coprocessor_host.registry.register_transfer_leader_observer(
+            priority,
+            BoxTransferLeaderObserver::new(self.clone()),
+        );
     }
 
     fn post_exec_cmd(
@@ -212,12 +219,54 @@ impl AdminObserver for LoadEvictionObserver {
         ctx: &mut ObserverContext<'_>,
         _tr: &kvproto::raft_cmdpb::TransferLeaderRequest,
     ) -> raftstore::coprocessor::Result<Option<kvproto::raft_serverpb::ExtraMessage>> {
-        if !self.cache_engine.region_cached(ctx.region()) {
+        // Warm up transferee's cache when a region is in active or in loading.
+        let include_loading = true;
+        if !self
+            .cache_engine
+            .region_cached(ctx.region(), include_loading)
+        {
             return Ok(None);
         }
         let mut msg = ExtraMessage::new();
         msg.set_type(ExtraMessageType::MsgPreLoadRegionRequest);
         Ok(Some(msg))
+    }
+}
+
+impl TransferLeaderObserver for LoadEvictionObserver {
+    fn pre_ack_transfer_leader(
+        &self,
+        r: &mut ObserverContext<'_>,
+        msg: &raft::eraftpb::Message,
+    ) -> bool {
+        let region = r.region();
+        let context = msg.get_context();
+        if context.is_empty() {
+            // For compatibility, return ready if the context is empty.
+            info!("ime dbg pre_ack_transfer_leader empty context"; "region" => ?region);
+            return true;
+        }
+        let mut need_to_be_cached = false;
+        let mut batch_msgs = BatchRaftMessage::default();
+        batch_msgs.merge_from_bytes(context).unwrap();
+        for raft_message in batch_msgs.get_msgs() {
+            let extra_message = raft_message.get_extra_msg();
+            if extra_message.get_type() == ExtraMessageType::MsgPreLoadRegionRequest {
+                need_to_be_cached = true;
+                break;
+            }
+        }
+        if need_to_be_cached {
+            // Exclude loading states to make sure the region is cached and active.
+            let include_loading = false;
+            let has_cached = self.cache_engine.region_cached(r.region(), include_loading);
+            info!("ime dbg pre_ack_transfer_leader region"; "region" => ?region, "has_cached" => has_cached);
+            has_cached
+        } else {
+            info!("ime dbg pre_ack_transfer_leader region"; "region" => ?region, "need_to_be_cached" => need_to_be_cached);
+            // Ready to ack.
+            true
+        }
     }
 }
 
@@ -312,7 +361,7 @@ mod tests {
             self.region_events.lock().unwrap().push(event);
         }
 
-        fn region_cached(&self, _: &Region) -> bool {
+        fn region_cached(&self, _: &Region, _: bool) -> bool {
             unreachable!()
         }
 

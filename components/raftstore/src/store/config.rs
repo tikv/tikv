@@ -559,7 +559,7 @@ impl Default for Config {
             // the log commit duration is less than 1s. Feel free to adjust
             // this config :)
             long_uncommitted_base_threshold: ReadableDuration::secs(20),
-            max_entry_cache_warmup_duration: ReadableDuration::secs(1),
+            max_entry_cache_warmup_duration: ReadableDuration::secs(5),
 
             // They are preserved for compatibility check.
             region_max_size: ReadableSize(0),

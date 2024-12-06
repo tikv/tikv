@@ -838,6 +838,9 @@ where
                 self.ctx.raft_metrics.ready.propose_delay.inc();
             }
         }
+        if self.fsm.peer.maybe_ack_transfer_leader_msg(self.ctx) {
+            self.fsm.has_ready = true;
+        }
     }
 
     /// Flushes all pending raft commands for immediate execution.
@@ -2120,10 +2123,7 @@ where
             .entry_cache_warmup_state()
             .is_some()
         {
-            if self.fsm.peer.mut_store().maybe_warm_up_entry_cache(*res) {
-                self.fsm.peer.ack_transfer_leader_msg(false);
-                self.fsm.has_ready = true;
-            }
+            self.fsm.peer.mut_store().maybe_warm_up_entry_cache(*res);
             self.fsm.peer.mut_store().clean_async_fetch_res(low);
             return;
         } else {
@@ -3852,9 +3852,11 @@ where
             .fsm
             .peer
             .maybe_reject_transfer_leader_msg(self.ctx, msg, peer_disk_usage)
-            && self.fsm.peer.pre_ack_transfer_leader_msg(self.ctx, msg)
         {
-            self.fsm.peer.ack_transfer_leader_msg(false);
+            self.fsm.peer.pending_transfer_leader_msg(msg);
+            if self.fsm.peer.maybe_ack_transfer_leader_msg(self.ctx) {
+                self.fsm.has_ready = true;
+            }
         }
     }
 

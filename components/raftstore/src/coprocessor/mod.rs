@@ -615,6 +615,12 @@ pub trait DestroyPeerObserver: Coprocessor {
     fn on_destroy_peer(&self, _: &Region) {}
 }
 
+pub trait TransferLeaderObserver: Coprocessor {
+    fn pre_ack_transfer_leader(&self, _: &mut ObserverContext<'_>, _: &eraftpb::Message) -> bool {
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
