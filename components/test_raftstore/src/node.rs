@@ -3,7 +3,6 @@
 use std::{
     path::{Path, PathBuf},
     sync::{atomic::AtomicU64, Arc, Mutex, RwLock},
-    time::Duration,
 };
 
 use collections::{HashMap, HashSet};
@@ -338,7 +337,7 @@ impl Simulator for NodeCluster {
             let engines = engines.clone();
             let data_dir = PathBuf::from(engines.kv.path());
             let snap_mgr = snap_mgr.clone();
-            bg_worker.spawn_interval_task(Duration::from_millis(500), move || {
+            bg_worker.spawn_interval_task(cfg.raft_store.pd_heartbeat_tick_interval.0, move || {
                 let snap_size = snap_mgr.get_total_snap_size().unwrap();
                 let kv_size = engines
                     .kv
