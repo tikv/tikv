@@ -2,7 +2,7 @@
 
 use std::{
     ops::{Deref, DerefMut},
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -21,7 +21,7 @@ use engine_test::{
     kv::{KvTestEngine, KvTestSnapshot, TestTabletFactory},
     raft::RaftTestEngine,
 };
-use engine_traits::{TabletContext, TabletRegistry, DATA_CFS};
+use engine_traits::{MiscExt, TabletContext, TabletRegistry, DATA_CFS};
 use futures::executor::block_on;
 use kvproto::{
     kvrpcpb::ApiVersion,
@@ -54,6 +54,7 @@ use test_pd::mocker::Service;
 use tikv_util::{
     config::{ReadableDuration, ReadableSize, VersionTrack},
     store::new_peer,
+    sys::disk,
     worker::{LazyWorker, Worker},
 };
 use txn_types::WriteBatchFlags;
@@ -339,6 +340,28 @@ impl RunningState {
 
         let background = Worker::new("background");
         let pd_worker = LazyWorker::new("pd-worker");
+        // Spawn a task to update the disk status periodically.
+        {
+            let tablet_registry = registry.clone();
+            let data_dir = PathBuf::from(tablet_registry.tablet_root());
+            let snap_mgr = snap_mgr.clone();
+            background.spawn_interval_task(cfg.value().pd_heartbeat_tick_interval.0, move || {
+                let snap_size = snap_mgr.total_snap_size().unwrap();
+                let mut kv_size = 0;
+                tablet_registry.for_each_opened_tablet(|_, cached| {
+                    if let Some(tablet) = cached.latest() {
+                        kv_size += tablet.get_engine_used_size().unwrap_or(0);
+                    }
+                    true
+                });
+                let used_size = snap_size + kv_size;
+                let (capacity, available) = disk::get_disk_space_stats(&data_dir).unwrap();
+
+                disk::set_disk_capacity(capacity);
+                disk::set_disk_used_size(used_size);
+                disk::set_disk_available_size(std::cmp::min(available, capacity - used_size));
+            });
+        }
         system
             .start(
                 store_id,
