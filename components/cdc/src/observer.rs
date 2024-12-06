@@ -204,6 +204,7 @@ mod tests {
     use std::time::Duration;
 
     use engine_rocks::RocksEngine;
+    use futures::channel::mpsc;
     use kvproto::metapb::Region;
     use raftstore::coprocessor::RoleChange;
     use tikv::storage::kv::TestEngineBuilder;
@@ -215,18 +216,21 @@ mod tests {
 
     #[test]
     fn test_register_and_deregister() {
-        let (scheduler, mut rx) = tikv_util::worker::dummy_scheduler();
         let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
-        let observer = CdcObserver::new(scheduler, memory_quota.clone());
+        let observer = CdcObserver::new(memory_quota.clone());
         let observe_info = CmdObserveInfo::from_handle(
             ObserveHandle::new(),
             ObserveHandle::new(),
             ObserveHandle::new(),
         );
+        let oid = observe_info.cdc_id.id;
         let engine = TestEngineBuilder::new().build().unwrap().get_rocksdb();
 
-        let mut cb = CmdBatch::new(&observe_info, 0);
-        cb.push(&observe_info, 0, Cmd::default());
+        let (tx, mut rx) = mpsc::unbounded();
+        observer.subscribe_region(1, observe_info.cdc_id.id, tx);
+
+        let mut cb = CmdBatch::new(&observe_info, 1);
+        cb.push(&observe_info, 1, Cmd::default());
         let size = cb.size();
         <CdcObserver as CmdObserver<RocksEngine>>::on_flush_applied_cmd_batch(
             &observer,
@@ -235,10 +239,9 @@ mod tests {
             &engine,
         );
         assert_eq!(memory_quota.in_use(), size);
-        match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
-            Task::MultiBatch { multi, .. } => {
-                assert_eq!(multi.len(), 1);
-                assert_eq!(multi[0].len(), 1);
+        match rx.try_next().unwrap().unwrap() {
+            DelegateTask::ObservedEvent { cmds, .. } => {
+                assert_eq!(cmds.len(), 1);
             }
             _ => panic!("unexpected task"),
         };
@@ -246,34 +249,29 @@ mod tests {
         // Stop observing cmd
         observe_info.cdc_id.stop_observing();
         observe_info.pitr_id.stop_observing();
-        let mut cb = CmdBatch::new(&observe_info, 0);
-        cb.push(&observe_info, 0, Cmd::default());
+        let mut cb = CmdBatch::new(&observe_info, 1);
+        cb.push(&observe_info, 1, Cmd::default());
         <CdcObserver as CmdObserver<RocksEngine>>::on_flush_applied_cmd_batch(
             &observer,
             cb.level,
             &mut vec![cb],
             &engine,
         );
-        match rx.recv_timeout(Duration::from_millis(10)) {
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-            any => panic!("unexpected result: {:?}", any),
-        };
+        assert!(rx.try_next().unwrap().is_none());
 
         // Does not send unsubscribed region events.
         let mut region = Region::default();
-        region.set_id(1);
+        region.set_id(2);
         region.mut_peers().push(new_peer(2, 2));
         region.mut_peers().push(new_peer(3, 3));
 
         let mut ctx = ObserverContext::new(&region);
         observer.on_role_change(&mut ctx, &RoleChange::new_for_test(StateRole::Follower));
-        rx.recv_timeout(Duration::from_millis(10)).unwrap_err();
-
-        let oid = ObserveId::new();
-        observer.subscribe_region(1, oid);
-        let mut ctx = ObserverContext::new(&region);
+        assert!(rx.try_next().unwrap().is_none());
 
         // NotLeader error should contains the new leader.
+        region.set_id(1);
+        let mut ctx = ObserverContext::new(&region);
         observer.on_role_change(
             &mut ctx,
             &RoleChange {
@@ -285,17 +283,11 @@ mod tests {
                 peer_id: raft::INVALID_ID,
             },
         );
-        match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
-            Task::Deregister(Deregister::Delegate {
-                region_id,
-                observe_id,
-                err,
-            }) => {
-                assert_eq!(region_id, 1);
-                assert_eq!(observe_id, oid);
-                let store_err = RaftStoreError::NotLeader(region_id, Some(new_peer(2, 2)));
+        match rx.try_next().unwrap().unwrap() {
+            DelegateTask::Stop { err } => {
+                let store_err = RaftStoreError::NotLeader(1, Some(new_peer(2, 2)));
                 match err {
-                    CdcError::Request(err) => assert_eq!(*err, store_err.into()),
+                    Some(CdcError::Request(e)) => assert_eq!(e, store_err.into()),
                     _ => panic!("unexpected err"),
                 }
             }
@@ -314,60 +306,47 @@ mod tests {
                 peer_id: raft::INVALID_ID,
             },
         );
-        match rx.recv_timeout(Duration::from_millis(10)).unwrap().unwrap() {
-            Task::Deregister(Deregister::Delegate {
-                region_id,
-                observe_id,
-                err,
-            }) => {
-                assert_eq!(region_id, 1);
-                assert_eq!(observe_id, oid);
-                let store_err = RaftStoreError::NotLeader(region_id, Some(new_peer(3, 3)));
+        match rx.try_next().unwrap().unwrap() {
+            DelegateTask::Stop { err } => {
+                let store_err = RaftStoreError::NotLeader(1, Some(new_peer(3, 3)));
                 match err {
-                    CdcError::Request(err) => assert_eq!(*err, store_err.into()),
+                    Some(CdcError::Request(err)) => assert_eq!(*err, store_err.into()),
                     _ => panic!("unexpected err"),
                 }
             }
             _ => panic!("unexpected task"),
-        };
+        }
 
         // No event if it changes to leader.
         observer.on_role_change(&mut ctx, &RoleChange::new_for_test(StateRole::Leader));
-        rx.recv_timeout(Duration::from_millis(10)).unwrap_err();
+        assert!(rx.try_next().unwrap().is_none());
 
         // unsubscribed fail if observer id is different.
-        assert_eq!(observer.unsubscribe_region(1, ObserveId::new()), None);
+        assert!(observer.unsubscribe_region(1, ObserveId::new()).is_none());
 
         // No event if it is unsubscribed.
-        let oid_ = observer.unsubscribe_region(1, oid).unwrap();
-        assert_eq!(oid_, oid);
+        observer.unsubscribe_region(1, oid).unwrap();
         observer.on_role_change(&mut ctx, &RoleChange::new_for_test(StateRole::Follower));
-        rx.recv_timeout(Duration::from_millis(10)).unwrap_err();
-
-        // No event if it is unsubscribed.
-        region.set_id(999);
-        let mut ctx = ObserverContext::new(&region);
-        observer.on_role_change(&mut ctx, &RoleChange::new_for_test(StateRole::Follower));
-        rx.recv_timeout(Duration::from_millis(10)).unwrap_err();
+        assert!(rx.try_next().unwrap().is_none());
     }
 
     #[test]
     fn test_txn_extra_dropped_since_exceed_memory_quota() {
         let memory_quota = Arc::new(MemoryQuota::new(10));
-        let (task_sched, mut task_rx) = dummy_scheduler();
-        let observer = CdcObserver::new(task_sched.clone(), memory_quota.clone());
-        let txn_extra_scheduler =
-            CdcTxnExtraScheduler::new(task_sched.clone(), memory_quota.clone());
+        let observer = CdcObserver::new(memory_quota.clone());
+        let engine = TestEngineBuilder::new().build().unwrap().get_rocksdb();
 
         let observe_info = CmdObserveInfo::from_handle(
             ObserveHandle::new(),
             ObserveHandle::new(),
             ObserveHandle::new(),
         );
+        let oid = observe_info.cdc_id.id;
+        let (tx, rx) = mpsc::unbounded();
+        observer.subscribe_region(1, oid, tx);
+
         let mut cb = CmdBatch::new(&observe_info, 0);
         cb.push(&observe_info, 0, Cmd::default());
-
-        let engine = TestEngineBuilder::new().build().unwrap().get_rocksdb();
         <CdcObserver as CmdObserver<RocksEngine>>::on_flush_applied_cmd_batch(
             &observer,
             cb.level,
@@ -375,20 +354,18 @@ mod tests {
             &engine,
         );
 
+        let (task_sched, mut task_rx) = dummy_scheduler();
+        let txn_extra_scheduler = CdcTxnExtraScheduler::new(task_sched, memory_quota.clone());
+
         txn_extra_scheduler.schedule(TxnExtra {
             old_values: Default::default(),
             one_pc: false,
             allowed_in_flashback: false,
         });
 
-        match task_rx
-            .recv_timeout(Duration::from_millis(10))
-            .unwrap()
-            .unwrap()
-        {
-            Task::MultiBatch { multi, .. } => {
-                assert_eq!(multi.len(), 1);
-                assert_eq!(multi[0].len(), 1);
+        match rx.try_next().unwrap().unwrap() {
+            DelegateTask::ObservedEvent { cmds, .. } => {
+                assert_eq!(cmds.len(), 1);
             }
             _ => panic!("unexpected task"),
         };

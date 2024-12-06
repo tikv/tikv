@@ -45,12 +45,6 @@ impl ConnId {
     }
 }
 
-impl Default for ConnId {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 // FeatureGate checks whether a feature is enabled or not on client versions.
 //
 // NOTE: default features can't be disabled by clients. Clients can only enable

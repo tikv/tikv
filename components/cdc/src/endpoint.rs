@@ -302,8 +302,8 @@ impl Advance {
                 debug!("cdc send event failed, disconnected";
                         "conn_id" => ?conn.id, "downstream" => ?conn.peer);
             }
-            Err(SendError::Full) | Err(SendError::Congested) => {
-                info!("cdc send event failed, full";
+            Err(SendError::Congested) => {
+                info!("cdc send event failed, congested";
                         "conn_id" => ?conn.id, "downstream" => ?conn.peer);
             }
         };
@@ -691,13 +691,11 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
 
     pub fn on_register(&mut self, mut request: ChangeDataRequest, downstream: Downstream) {
         let kv_api = request.get_kv_api();
-        let api_version = self.api_version;
-        let filter_loop = downstream.filter_loop;
-
         let region_id = request.region_id;
         let request_id = RequestId(request.request_id);
         let conn_id = downstream.conn_id;
         let downstream_id = downstream.id;
+        let filter_loop = downstream.filter_loop;
         let downstream_state = downstream.get_state();
         let downstream_sink = downstream.sink.clone();
         let observed_range = downstream.observed_range.clone();
@@ -731,7 +729,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             }
         }
 
-        if !validate_kv_api(kv_api, api_version) {
+        if !validate_kv_api(kv_api, self.api_version) {
             error!("cdc RawKv is supported by api-version 2 only. TxnKv is not supported now.");
             let mut err_event = EventError::default();
             let mut err = ErrorCompatibility::default();
@@ -876,9 +874,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
 
         for region_id in regions {
             if let Some(d) = self.capture_regions.get(&region_id) {
-                let _ = d
-                    .sched
-                    .unbounded_send(DelegateTask::MinTs { min_ts, current_ts });
+                let task = DelegateTask::MinTs { min_ts, current_ts };
+                let _ = d.sched.unbounded_send(task);
             }
         }
 
@@ -1023,17 +1020,17 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
         debug!("cdc run task"; "task" => %task);
 
         match task {
-            Task::MinTs {
-                regions,
-                min_ts,
-                current_ts,
-            } => self.on_min_ts(regions, min_ts, current_ts),
+            Task::OpenConn { conn } => self.on_open_conn(conn),
             Task::Register {
                 request,
                 downstream,
             } => self.on_register(request, downstream),
             Task::Deregister(deregister) => self.on_deregister(deregister),
-            Task::OpenConn { conn } => self.on_open_conn(conn),
+            Task::MinTs {
+                regions,
+                min_ts,
+                current_ts,
+            } => self.on_min_ts(regions, min_ts, current_ts),
             Task::RegisterMinTsEvent {
                 leader_resolver,
                 event_time,
@@ -1046,16 +1043,22 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
                 }
                 drop(cache);
             }
+            Task::ChangeConfig(change) => self.on_change_cfg(change),
             Task::Validate(validate) => match validate {
-                Validate::Region(_region_id, _validate) => {
-                    // validate(self.capture_regions.get(&region_id));
+                Validate::Region(region_id, validate) => {
+                    match self.capture_regions.get(&region_id) {
+                        Some(d) => {
+                            let task = DelegateTask::Validate(validate);
+                            d.sched.unbounded_send(task).unwrap();
+                        }
+                        None => validate(None),
+                    }
                 }
                 Validate::OldValueCache(validate) => {
                     let cache = block_on(self.old_value_cache.lock());
                     validate(&*cache);
                 }
             },
-            Task::ChangeConfig(change) => self.on_change_cfg(change),
         }
     }
 }
@@ -1133,13 +1136,17 @@ impl TxnExtraScheduler for CdcTxnExtraScheduler {
 
 #[cfg(test)]
 mod tests {
-    use std::ops::{Deref, DerefMut};
+    use std::{
+        collections::btree_map::BTreeMap,
+        ops::{Deref, DerefMut},
+    };
 
     use engine_rocks::RocksEngine;
     use futures::executor::block_on;
     use kvproto::{
         cdcpb::{ChangeDataRequestKvApi, Header},
         errorpb::Error as ErrorHeader,
+        metapb::Region,
     };
     use raftstore::{
         errors::{DiscardReason, Error as RaftStoreError},
@@ -1156,11 +1163,14 @@ mod tests {
         config::{ReadableDuration, ReadableSize},
         worker::{dummy_scheduler, ReceiverWrapper},
     };
+    use txn_types::Key;
 
     use super::*;
     use crate::{
         channel,
-        delegate::{post_init_downstream, ObservedRange},
+        delegate::{
+            on_init_downstream, post_init_downstream, DownstreamState, MiniLock, ObservedRange,
+        },
         recv_timeout,
     };
 

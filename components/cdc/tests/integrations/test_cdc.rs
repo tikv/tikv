@@ -52,7 +52,7 @@ fn test_cdc_basic_impl<F: KvFormat>() {
             1,
             Box::new(|delegate| {
                 let d = delegate.unwrap();
-                assert_eq!(d.downstreams().len(), 1);
+                assert_eq!(d.downstream_count(), 1);
             }),
         )))
         .unwrap();
@@ -146,7 +146,7 @@ fn test_cdc_basic_impl<F: KvFormat>() {
             1,
             Box::new(|delegate| {
                 let d = delegate.unwrap();
-                assert_eq!(d.downstreams().len(), 1);
+                assert_eq!(d.downstream_count(), 1);
             }),
         )))
         .unwrap();
@@ -215,7 +215,7 @@ fn test_cdc_rawkv_basic() {
             1,
             Box::new(|delegate| {
                 let d = delegate.unwrap();
-                assert_eq!(d.downstreams().len(), 1);
+                assert_eq!(d.downstream_count(), 1);
             }),
         )))
         .unwrap();
@@ -290,7 +290,7 @@ fn test_cdc_not_leader_impl<F: KvFormat>() {
             1,
             Box::new(move |delegate| {
                 let d = delegate.unwrap();
-                assert_eq!(d.downstreams().len(), 1);
+                assert_eq!(d.downstream_count(), 1);
                 tx_.send(()).unwrap();
             }),
         )))
@@ -301,7 +301,7 @@ fn test_cdc_not_leader_impl<F: KvFormat>() {
             .obs
             .get(&leader.get_store_id())
             .unwrap()
-            .is_subscribed(1)
+            .get_subscribed(1)
             .is_some()
     );
 
@@ -328,7 +328,7 @@ fn test_cdc_not_leader_impl<F: KvFormat>() {
             .obs
             .get(&leader.get_store_id())
             .unwrap()
-            .is_subscribed(1)
+            .get_subscribed(1)
             .is_none()
     );
 
@@ -362,7 +362,7 @@ fn test_cdc_not_leader_impl<F: KvFormat>() {
             .obs
             .get(&leader.get_store_id())
             .unwrap()
-            .is_subscribed(1)
+            .get_subscribed(1)
             .is_none()
     );
 

@@ -35,7 +35,7 @@ use raftstore::{
 };
 use tikv::storage::{txn::TxnEntry, Statistics};
 use tikv_util::{
-    debug, error, info,
+    debug, info,
     memory::{HeapSize, MemoryQuota},
     time::Instant,
     warn,
@@ -145,7 +145,6 @@ pub struct Downstream {
 
     pub sink: DownstreamSink,
     state: Arc<AtomicCell<DownstreamState>>,
-    pub(crate) scan_truncated: Arc<AtomicBool>,
 
     // Fields to handle ResolvedTs advancing. If `lock_heap` is none it means
     // the downstream hasn't finished the incremental scanning.
@@ -192,7 +191,6 @@ impl Downstream {
 
             sink,
             state: Arc::new(AtomicCell::new(DownstreamState::default())),
-            scan_truncated: Arc::new(AtomicBool::new(false)),
 
             lock_heap: None,
             advanced_to: Arc::new(AtomicU64::new(0)),
@@ -324,6 +322,35 @@ impl Drop for Delegate {
 }
 
 impl Delegate {
+    /// Create a Delegate the given region.
+    pub fn new(
+        region_id: u64,
+        feedbacks: Scheduler<Task>,
+        memory_quota: Arc<MemoryQuota>,
+        old_value_cache: Arc<Mutex<OldValueCache>>,
+        txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
+    ) -> Delegate {
+        let (tx, rx) = mpsc::unbounded();
+        Delegate {
+            region_id,
+            handle: ObserveHandle::new(),
+            sched: tx,
+
+            tasks: rx,
+            feedbacks,
+            memory_quota,
+            old_value_cache,
+            txn_extra_op,
+
+            lock_tracker: LockTracker::Pending,
+            downstreams: Vec::new(),
+
+            old_value_stats: Statistics::default(),
+            created: Instant::now_coarse(),
+            last_lag_warn: Instant::now_coarse(),
+        }
+    }
+
     fn push_lock(&mut self, key: Key, start_ts: MiniLock) -> Result<isize> {
         let bytes = key.approximate_heap_size();
         let mut lock_count_modify = 0;
@@ -376,7 +403,7 @@ impl Delegate {
         Ok(lock_count_modify)
     }
 
-    pub(crate) fn init_lock_tracker(&mut self) -> bool {
+    fn init_lock_tracker(&mut self) -> bool {
         if matches!(self.lock_tracker, LockTracker::Pending) {
             self.lock_tracker = LockTracker::Preparing(vec![]);
             return true;
@@ -430,7 +457,7 @@ impl Delegate {
         Ok(())
     }
 
-    pub(crate) fn finish_scan_locks(
+    fn finish_scan_locks(
         &mut self,
         region: Region,
         locks: BTreeMap<Key, MiniLock>,
@@ -460,38 +487,7 @@ impl Delegate {
         Ok(failed_downstreams)
     }
 
-    /// Create a Delegate the given region.
-    pub fn new(
-        region_id: u64,
-        feedbacks: Scheduler<Task>,
-        memory_quota: Arc<MemoryQuota>,
-        old_value_cache: Arc<Mutex<OldValueCache>>,
-        txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
-    ) -> Delegate {
-        let (tx, rx) = mpsc::unbounded();
-        Delegate {
-            region_id,
-            handle: ObserveHandle::new(),
-            sched: tx,
-
-            tasks: rx,
-            feedbacks,
-            memory_quota,
-            old_value_cache,
-            txn_extra_op,
-
-            lock_tracker: LockTracker::Pending,
-            downstreams: Vec::new(),
-
-            old_value_stats: Statistics::default(),
-            created: Instant::now_coarse(),
-            last_lag_warn: Instant::now_coarse(),
-        }
-    }
-
-    /// Let downstream subscribe the delegate.
-    /// Return error if subscribe fails and the `Delegate` won't be changed.
-    pub fn subscribe(&mut self, downstream: Downstream) -> StdResult<(), (Error, Downstream)> {
+    fn subscribe(&mut self, downstream: Downstream) -> StdResult<(), (Error, Downstream)> {
         if let LockTracker::Prepared { ref region, .. } = &self.lock_tracker {
             // Check if the downstream is outdated.
             if let Err(e) = Self::check_epoch_on_ready(&downstream, region) {
@@ -502,34 +498,7 @@ impl Delegate {
         Ok(())
     }
 
-    pub fn downstream(&self, downstream_id: DownstreamId) -> Option<&Downstream> {
-        self.downstreams.iter().find(|d| d.id == downstream_id)
-    }
-
-    pub fn downstream_mut(&mut self, downstream_id: DownstreamId) -> Option<&mut Downstream> {
-        self.downstreams.iter_mut().find(|d| d.id == downstream_id)
-    }
-
-    pub fn downstreams(&self) -> &Vec<Downstream> {
-        &self.downstreams
-    }
-
-    pub fn downstreams_mut(&mut self) -> &mut Vec<Downstream> {
-        &mut self.downstreams
-    }
-
-    /// `txn_extra_op` returns a shared flag which is accessed in TiKV's
-    /// transaction layer to determine whether to capture modifications' old
-    /// value or not. Unsubscribing all downstreams or calling
-    /// `Delegate::stop` will store it with `TxnExtraOp::Noop`.
-    ///
-    /// NOTE: Dropping a `Delegate` won't update this flag.
-    pub fn txn_extra_op(&self) -> &AtomicCell<TxnExtraOp> {
-        self.txn_extra_op.as_ref()
-    }
-
-    /// Try advance and broadcast resolved ts.
-    pub(crate) fn on_min_ts(&mut self, min_ts: TimeStamp, current_ts: TimeStamp) {
+    fn on_min_ts(&mut self, min_ts: TimeStamp, current_ts: TimeStamp) {
         let locks = match &self.lock_tracker {
             LockTracker::Prepared { locks, .. } => locks,
             _ => {
@@ -600,7 +569,6 @@ impl Delegate {
     }
 
     async fn on_batch(&mut self, batch: CmdBatch, old_value_cb: OldValueCallback) -> Result<()> {
-        // Stale CmdBatch, drop it silently.
         if batch.cdc_id != self.handle.id {
             return Ok(());
         }
@@ -624,89 +592,6 @@ impl Delegate {
             }
         }
         Ok(())
-    }
-
-    pub(crate) fn convert_to_grpc_events(
-        entries: Vec<Option<KvEntry>>,
-        filter_loop: bool,
-        observed_range: &ObservedRange,
-    ) -> Result<Vec<Vec<EventRow>>> {
-        let entries_len = entries.len();
-        let mut rows = vec![Vec::with_capacity(entries_len)];
-        let mut current_rows_size: usize = 0;
-        for entry in entries {
-            let (mut row, mut _has_value) = (EventRow::default(), false);
-            let row_size: usize;
-            match entry {
-                Some(KvEntry::RawKvEntry(kv_pair)) => {
-                    decode_rawkv(kv_pair.0, kv_pair.1, &mut row)?;
-                    row_size = row.key.len() + row.value.len();
-                }
-                Some(KvEntry::TxnEntry(TxnEntry::Prewrite {
-                    default,
-                    lock,
-                    old_value,
-                })) => {
-                    if !observed_range.contains_encoded_key(&lock.0) {
-                        continue;
-                    }
-                    let l = Lock::parse(&lock.1).unwrap();
-                    if decode_lock(lock.0, l, &mut row, &mut _has_value) {
-                        continue;
-                    }
-                    decode_default(default.1, &mut row, &mut _has_value);
-                    row.old_value = old_value.finalized().unwrap_or_default();
-                    row_size = row.key.len() + row.value.len() + row.old_value.len();
-                }
-                Some(KvEntry::TxnEntry(TxnEntry::Commit {
-                    default,
-                    write,
-                    old_value,
-                })) => {
-                    if !observed_range.contains_encoded_key(&write.0) {
-                        continue;
-                    }
-                    if decode_write(write.0, &write.1, &mut row, &mut _has_value, false) {
-                        continue;
-                    }
-                    decode_default(default.1, &mut row, &mut _has_value);
-
-                    // This type means the row is self-contained, it has,
-                    //   1. start_ts
-                    //   2. commit_ts
-                    //   3. key
-                    //   4. value
-                    if row.get_type() == EventLogType::Rollback {
-                        // We dont need to send rollbacks to downstream,
-                        // because downstream does not needs rollback to clean
-                        // prewrite as it drops all previous stashed data.
-                        continue;
-                    }
-                    set_event_row_type(&mut row, EventLogType::Committed);
-                    row.old_value = old_value.finalized().unwrap_or_default();
-                    row_size = row.key.len() + row.value.len() + row.old_value.len();
-                }
-                None => {
-                    // This type means scan has finished.
-                    set_event_row_type(&mut row, EventLogType::Initialized);
-                    row_size = 0;
-                }
-            }
-            if TxnSource::is_lightning_physical_import(row.txn_source)
-                || TxnSource::is_lossy_ddl_reorg_source_set(row.txn_source)
-                || filter_loop && TxnSource::is_cdc_write_source_set(row.txn_source)
-            {
-                continue;
-            }
-            if current_rows_size + row_size >= CDC_EVENT_MAX_BYTES {
-                rows.push(Vec::with_capacity(entries_len));
-                current_rows_size = 0;
-            }
-            current_rows_size += row_size;
-            rows.last_mut().unwrap().push(row);
-        }
-
-        Ok(rows)
     }
 
     async fn sink_data(
@@ -928,7 +813,7 @@ impl Delegate {
     }
 
     fn add_downstream(&mut self, downstream: Downstream) {
-        self.downstreams_mut().push(downstream);
+        self.downstreams.push(downstream);
         self.txn_extra_op.store(TxnExtraOp::ReadOldValue);
     }
 
@@ -998,23 +883,17 @@ impl Delegate {
                     region,
                     locks,
                 } => self.on_finish_scan_locks(observe_id, region, locks).await,
-                // The result of ChangeCmd should be returned from CDC Endpoint to ensure
-                // the downstream switches to Normal after the previous commands was sunk.
                 DelegateTask::InitDownstream {
                     observe_id,
                     downstream_id,
                     build_resolver,
-                    incremental_scan_barrier,
                     cb,
                 } => {
-                    self.on_init_downstream(
-                        observe_id,
-                        downstream_id,
-                        build_resolver,
-                        incremental_scan_barrier,
-                        cb,
-                    )
-                    .await;
+                    self.on_init_downstream(observe_id, downstream_id, build_resolver, cb)
+                        .await;
+                }
+                DelegateTask::Validate(validate) => {
+                    validate(Some(&self));
                 }
             }
         }
@@ -1125,7 +1004,6 @@ impl Delegate {
         observe_id: ObserveId,
         downstream_id: DownstreamId,
         build_resolver: Arc<AtomicBool>,
-        incremental_scan_barrier: Box<dyn FnOnce(()) + Send>,
         cb: Box<dyn FnOnce() + Send>,
     ) {
         if self.handle.id != observe_id {
@@ -1138,15 +1016,7 @@ impl Delegate {
         if self.init_lock_tracker() {
             build_resolver.store(true, Ordering::Release);
         }
-        if let Some(d) = self.downstream(downstream_id) {
-            if let Err(e) = d.sink.send_barrier(incremental_scan_barrier).await {
-                error!("cdc failed to schedule barrier for delta before delta scan";
-                    "region_id" => self.region_id,
-                    "observe_id" => ?observe_id,
-                    "downstream_id" => ?downstream_id,
-                    "error" => ?e);
-                return;
-            }
+        if let Some(d) = self.downstreams.iter().find(|d| d.id == downstream_id) {
             let downstream_state = d.get_state();
             if on_init_downstream(&downstream_state) {
                 info!("cdc downstream starts to initialize";
@@ -1161,6 +1031,11 @@ impl Delegate {
             }
         }
         cb();
+    }
+
+    /// Only used in tests.
+    pub fn downstream_count(&self) -> usize {
+        self.downstreams.len()
     }
 }
 
@@ -1448,17 +1323,13 @@ pub enum DelegateTask {
         region: Region,
         locks: BTreeMap<Key, MiniLock>,
     },
-    // The result of ChangeCmd should be returned from CDC Endpoint to ensure
-    // the downstream switches to Normal after the previous commands was sunk.
     InitDownstream {
         observe_id: ObserveId,
         downstream_id: DownstreamId,
         build_resolver: Arc<AtomicBool>,
-        // `incremental_scan_barrier` will be sent into `sink` to ensure all delta changes
-        // are delivered to the downstream. And then incremental scan can start.
-        incremental_scan_barrier: Box<dyn FnOnce(()) + Send>,
         cb: Box<dyn FnOnce() + Send>,
     },
+    Validate(Box<dyn FnOnce(Option<&Delegate>) + Send>),
 }
 
 #[derive(Clone)]
@@ -1471,17 +1342,94 @@ pub struct DelegateMeta {
 const WARN_LAG_THRESHOLD: Duration = Duration::from_secs(600);
 const WARN_LAG_INTERVAL: Duration = Duration::from_secs(60);
 
+pub(crate) fn convert_to_grpc_events(
+    entries: Vec<Option<KvEntry>>,
+    filter_loop: bool,
+) -> Result<Vec<Vec<EventRow>>> {
+    let entries_len = entries.len();
+    let mut rows = vec![Vec::with_capacity(entries_len)];
+    let mut current_rows_size: usize = 0;
+    for entry in entries {
+        let (mut row, mut _has_value) = (EventRow::default(), false);
+        let row_size: usize;
+        match entry {
+            Some(KvEntry::RawKvEntry(kv_pair)) => {
+                decode_rawkv(kv_pair.0, kv_pair.1, &mut row)?;
+                row_size = row.key.len() + row.value.len();
+            }
+            Some(KvEntry::TxnEntry(TxnEntry::Prewrite {
+                default,
+                lock,
+                old_value,
+            })) => {
+                let l = Lock::parse(&lock.1).unwrap();
+                if decode_lock(lock.0, l, &mut row, &mut _has_value) {
+                    continue;
+                }
+                decode_default(default.1, &mut row, &mut _has_value);
+                row.old_value = old_value.finalized().unwrap_or_default();
+                row_size = row.key.len() + row.value.len() + row.old_value.len();
+            }
+            Some(KvEntry::TxnEntry(TxnEntry::Commit {
+                default,
+                write,
+                old_value,
+            })) => {
+                if decode_write(write.0, &write.1, &mut row, &mut _has_value, false) {
+                    continue;
+                }
+                decode_default(default.1, &mut row, &mut _has_value);
+
+                // This type means the row is self-contained, it has,
+                //   1. start_ts
+                //   2. commit_ts
+                //   3. key
+                //   4. value
+                if row.get_type() == EventLogType::Rollback {
+                    // We dont need to send rollbacks to downstream,
+                    // because downstream does not needs rollback to clean
+                    // prewrite as it drops all previous stashed data.
+                    continue;
+                }
+                set_event_row_type(&mut row, EventLogType::Committed);
+                row.old_value = old_value.finalized().unwrap_or_default();
+                row_size = row.key.len() + row.value.len() + row.old_value.len();
+            }
+            None => {
+                // This type means scan has finished.
+                set_event_row_type(&mut row, EventLogType::Initialized);
+                row_size = 0;
+            }
+        }
+        if TxnSource::is_lightning_physical_import(row.txn_source)
+            || TxnSource::is_lossy_ddl_reorg_source_set(row.txn_source)
+            || filter_loop && TxnSource::is_cdc_write_source_set(row.txn_source)
+        {
+            continue;
+        }
+
+        current_rows_size += row_size;
+        if current_rows_size >= CDC_EVENT_MAX_BYTES {
+            rows.push(Vec::with_capacity(entries_len));
+            current_rows_size = row_size;
+        }
+        rows.last_mut().unwrap().push(row);
+    }
+
+    Ok(rows)
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
 
     use api_version::RawValue;
     use futures::{executor::block_on, stream::StreamExt};
-    use kvproto::{errorpb::Error as ErrorHeader, metapb::Region};
+    use kvproto::{cdcpb::Event_oneof_event, errorpb::Error as ErrorHeader, metapb::Region};
     use tikv_util::memory::MemoryQuota;
 
     use super::*;
-    use crate::channel::{channel, recv_timeout};
+    use crate::channel::{channel, recv_timeout, CdcEvent, SendError};
 
     #[test]
     fn test_error() {
@@ -1494,7 +1442,7 @@ mod tests {
         let region_epoch = region.get_region_epoch().clone();
 
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
-        let (sink, mut drain) = channel(ConnId::default(), 1, quota.clone());
+        let (sink, mut drain) = channel(ConnId::new(), quota.clone());
         let rx = drain.drain();
         let request_id = RequestId(123);
         let mut downstream = Downstream::new(
@@ -1788,7 +1736,7 @@ mod tests {
         }
         assert_eq!(rows_builder.txns_by_key.len(), 5);
 
-        let (sink, mut drain) = channel(ConnId::default(), 1, Arc::new(MemoryQuota::new(1024)));
+        let (sink, mut drain) = channel(ConnId::new(), Arc::new(MemoryQuota::new(1024)));
         let mut downstream = Downstream::new(
             "peer".to_owned(),
             RegionEpoch::default(),
@@ -1855,7 +1803,7 @@ mod tests {
         }
         assert_eq!(rows_builder.txns_by_key.len(), 5);
 
-        let (sink, mut drain) = channel(ConnId::default(), 1, Arc::new(MemoryQuota::new(1024)));
+        let (sink, mut drain) = channel(ConnId::new(), Arc::new(MemoryQuota::new(1024)));
         let mut downstream = Downstream::new(
             "peer".to_owned(),
             RegionEpoch::default(),
