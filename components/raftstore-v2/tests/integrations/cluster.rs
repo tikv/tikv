@@ -345,7 +345,7 @@ impl RunningState {
             let tablet_registry = registry.clone();
             let data_dir = PathBuf::from(tablet_registry.tablet_root());
             let snap_mgr = snap_mgr.clone();
-            background.spawn_interval_task(cfg.value().pd_heartbeat_tick_interval.0, move || {
+            background.spawn_interval_task(std::time::Duration::from_millis(100), move || {
                 let snap_size = snap_mgr.total_snap_size().unwrap();
                 let mut kv_size = 0;
                 tablet_registry.for_each_opened_tablet(|_, cached| {
