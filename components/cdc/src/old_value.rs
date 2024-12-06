@@ -20,7 +20,9 @@ use txn_types::{Key, MutationType, OldValue, TimeStamp, Value, WriteRef, WriteTy
 use crate::{metrics::*, Result};
 
 pub(crate) type OldValueCallback = Box<
-    dyn Fn(Key, TimeStamp, &mut OldValueCache, &mut Statistics) -> Result<Option<Vec<u8>>> + Send,
+    dyn Fn(Key, TimeStamp, &mut OldValueCache, &mut Statistics) -> Result<Option<Vec<u8>>>
+        + Send
+        + Sync,
 >;
 
 #[derive(Default)]
