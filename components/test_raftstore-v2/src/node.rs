@@ -3,7 +3,6 @@
 use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex, RwLock},
-    time::Duration,
 };
 
 use collections::{HashMap, HashSet};
@@ -317,7 +316,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
             let tablet_registry = tablet_registry.clone();
             let data_dir = PathBuf::from(tablet_registry.tablet_root());
             let snap_mgr = snap_mgr.clone();
-            bg_worker.spawn_interval_task(Duration::from_millis(500), move || {
+            bg_worker.spawn_interval_task(cfg.raft_store.pd_heartbeat_tick_interval.0, move || {
                 let snap_size = snap_mgr.total_snap_size().unwrap();
                 let mut kv_size = 0;
                 tablet_registry.for_each_opened_tablet(|_, cached| {
