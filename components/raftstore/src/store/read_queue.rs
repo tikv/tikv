@@ -296,9 +296,11 @@ impl<C: ErrorCallback> ReadIndexQueue<C> {
         if min_changed_offset != usize::MAX {
             self.ready_cnt = cmp::max(self.ready_cnt, max_changed_offset + 1);
         }
-        if max_changed_offset > 0 {
-            self.fold(min_changed_offset, max_changed_offset);
-        }
+        // We should not try to fold these read_index request anymore, because it is
+        // not correct for follower read.
+        // if max_changed_offset > 0 {
+        //     self.fold(min_changed_offset, max_changed_offset);
+        // }
     }
 
     fn fold(&mut self, min_changed_offset: usize, max_changed_offset: usize) {
