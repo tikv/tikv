@@ -142,12 +142,6 @@ const STORE_CHECK_PENDING_APPLY_DURATION: Duration = Duration::from_secs(5 * 60)
 // the threshold, can the raftstore supply service.
 const STORE_CHECK_COMPLETE_APPLY_REGIONS_PERCENT: u64 = 99;
 
-pub struct StoreInfo<EK, ER> {
-    pub kv_engine: EK,
-    pub raft_engine: ER,
-    pub capacity: u64,
-}
-
 /// A trait that provide the meta information that can be accessed outside
 /// of raftstore.
 pub trait StoreRegionMeta: Send {
@@ -560,7 +554,7 @@ where
 {
     pub cfg: Config,
     pub store: metapb::Store,
-    pub pd_scheduler: Scheduler<PdTask<EK, ER>>,
+    pub pd_scheduler: Scheduler<PdTask<EK>>,
     pub consistency_check_scheduler: Scheduler<ConsistencyCheckTask<EK::Snapshot>>,
     pub split_check_scheduler: Scheduler<SplitCheckTask>,
     // handle Compact, CleanupSst task
@@ -1275,7 +1269,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
 pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     pub cfg: Arc<VersionTrack<Config>>,
     pub store: metapb::Store,
-    pd_scheduler: Scheduler<PdTask<EK, ER>>,
+    pd_scheduler: Scheduler<PdTask<EK>>,
     consistency_check_scheduler: Scheduler<ConsistencyCheckTask<EK::Snapshot>>,
     split_check_scheduler: Scheduler<SplitCheckTask>,
     cleanup_scheduler: Scheduler<CleanupTask>,
@@ -1619,8 +1613,8 @@ where
     }
 }
 
-struct Workers<EK: KvEngine, ER: RaftEngine> {
-    pd_worker: LazyWorker<PdTask<EK, ER>>,
+struct Workers<EK: KvEngine> {
+    pd_worker: LazyWorker<PdTask<EK>>,
     background_worker: Worker,
 
     // Both of cleanup tasks and region tasks get their own workers, instead of reusing
@@ -1646,7 +1640,7 @@ pub struct RaftBatchSystem<EK: KvEngine, ER: RaftEngine> {
     apply_router: ApplyRouter<EK>,
     apply_system: ApplyBatchSystem<EK>,
     router: RaftRouter<EK, ER>,
-    workers: Option<Workers<EK, ER>>,
+    workers: Option<Workers<EK>>,
     store_writers: StoreWriters<EK, ER>,
     node_start_time: Timespec, // monotonic_raw_now
 }
@@ -1678,7 +1672,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         trans: T,
         pd_client: Arc<C>,
         mgr: SnapManager,
-        pd_worker: LazyWorker<PdTask<EK, ER>>,
+        pd_worker: LazyWorker<PdTask<EK>>,
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<EK>,
         importer: Arc<SstImporter<EK>>,
@@ -1863,7 +1857,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
 
     fn start_system<T: Transport + 'static, C: PdClient + 'static>(
         &mut self,
-        mut workers: Workers<EK, ER>,
+        mut workers: Workers<EK>,
         region_peers: Vec<SenderFsmPair<EK, ER>>,
         builder: RaftPollerBuilder<EK, ER, T>,
         auto_split_controller: AutoSplitController,
@@ -2980,15 +2974,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         );
         stats.set_query_stats(query_stats);
 
-        let store_info = Some(StoreInfo {
-            kv_engine: self.ctx.engines.kv.clone(),
-            raft_engine: self.ctx.engines.raft.clone(),
-            capacity: self.ctx.cfg.capacity.0,
-        });
-
         let task = PdTask::StoreHeartbeat {
             stats,
-            store_info,
             report,
             dr_autosync_status: self
                 .ctx
