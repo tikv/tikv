@@ -371,7 +371,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let mut proposal_ctx = ProposalContext::empty();
         proposal_ctx.insert(ProposalContext::COMMIT_MERGE);
         let data = req.write_to_bytes().unwrap();
-        self.propose_with_ctx(store_ctx, data, proposal_ctx.to_vec())
+        self.propose_with_ctx(store_ctx, data, proposal_ctx)
     }
 }
 
