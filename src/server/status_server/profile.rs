@@ -22,7 +22,12 @@ use pprof::protos::Message;
 use regex::Regex;
 use tempfile::{NamedTempFile, TempDir};
 #[cfg(not(test))]
+<<<<<<< HEAD
 use tikv_alloc::{activate_prof, deactivate_prof, dump_prof};
+=======
+use tikv_alloc::dump_prof;
+use tikv_util::defer;
+>>>>>>> 2a05e51ce5 (profiling: Fix cpu profiling flag may not reset when meeting errors (#17235))
 
 #[cfg(test)]
 pub use self::test_utils::TEST_PROFILE_MUTEX;
@@ -206,6 +211,9 @@ where
     };
 
     let on_end = move |guard: pprof::ProfilerGuard<'static>| {
+        defer! {
+            *CPU_PROFILE_ACTIVE.lock().unwrap() = None
+        }
         let report = guard
             .report()
             .frames_post_processor(move |frames| {
@@ -228,7 +236,6 @@ where
                 .map_err(|e| format!("generate flamegraph from report fail: {}", e))?;
         }
         drop(guard);
-        *CPU_PROFILE_ACTIVE.lock().unwrap() = None;
 
         Ok(body)
     };
