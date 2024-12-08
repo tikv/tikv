@@ -58,6 +58,10 @@ use tikv_util::{
     box_err,
     codec::number::decode_u64,
     debug, error, info,
+<<<<<<< HEAD
+=======
+    store::{find_peer_by_id, is_learner},
+>>>>>>> 5182652c0f (raftstore: allow leader transfer if conf change applied on transferee (#17643))
     sys::disk::DiskUsage,
     time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant, InstantExt},
     warn,
@@ -3768,6 +3772,7 @@ where
         self.should_wake_up = true;
     }
 
+<<<<<<< HEAD
     fn pre_transfer_leader(&mut self, peer: &metapb::Peer) -> bool {
         // Checks if safe to transfer leader.
         if self.raft_group.raft.has_pending_conf() {
@@ -3780,6 +3785,14 @@ where
             return false;
         }
 
+=======
+    fn pre_transfer_leader<T: Transport>(
+        &mut self,
+        peer: &metapb::Peer,
+        extra_msgs: Vec<ExtraMessage>,
+        ctx: &mut PollContext<EK, ER, T>,
+    ) -> bool {
+>>>>>>> 5182652c0f (raftstore: allow leader transfer if conf change applied on transferee (#17643))
         // Broadcast heartbeat to make sure followers commit the entries immediately.
         // It's only necessary to ping the target peer, but ping all for simplicity.
         self.raft_group.ping();
@@ -3824,10 +3837,34 @@ where
             }
         }
 
-        if self.raft_group.raft.has_pending_conf()
-            || self.raft_group.raft.pending_conf_index > index
-        {
+        // It's safe to transfer leader to a target peer that has already applied the
+        // configuration change, even if the current leader has not yet applied
+        // it. For more details, refer to the issue at:
+        // https://github.com/tikv/tikv/issues/17363#issuecomment-2404227253.
+        if self.raft_group.raft.pending_conf_index > index {
+            info!(
+                "not ready to transfer leader, transferee has an unapplied conf change";
+                "region_id" => self.region_id,
+                "transferee_peer_id" => peer_id,
+                "pending_conf_index" => self.raft_group.raft.pending_conf_index,
+                "applied_index" => self.raft_group.raft.raft_log.applied,
+                "transferee_applied_index" => index
+            );
             return Some("pending conf change");
+        }
+
+        if self.raft_group.raft.has_pending_conf() {
+            info!(
+                "transfer leader with pending conf on current leader";
+                "region_id" => self.region_id,
+                "transferee_peer_id" => peer_id,
+                "transferee_applied_index" => index,
+                "pending_conf_index" => self.raft_group.raft.pending_conf_index,
+                "last_index" => self.get_store().last_index(),
+                "persist_index" => self.raft_group.raft.raft_log.persisted,
+                "committed_index" => self.raft_group.raft.raft_log.committed,
+                "applied_index" => self.raft_group.raft.raft_log.applied,
+            );
         }
 
         let last_index = self.get_store().last_index();
@@ -4522,7 +4559,7 @@ where
     ) -> bool {
         let pending_snapshot = self.is_handling_snapshot() || self.has_pending_snapshot();
         // shouldn't transfer leader to witness peer or non-witness waiting data
-        if self.is_witness() || self.wait_data
+        if self.is_witness() || is_learner(&self.peer) || self.wait_data
             || pending_snapshot
             || msg.get_from() != self.leader_id()
             // Transfer leader to node with disk full will lead to write availablity downback.
@@ -4539,6 +4576,7 @@ where
                 "pending_snapshot" => pending_snapshot,
                 "disk_usage" => ?ctx.self_disk_usage,
                 "is_witness" => self.is_witness(),
+                "is_learner" => is_learner(&self.peer),
                 "wait_data" => self.wait_data,
             );
             return true;
@@ -4607,6 +4645,18 @@ where
         &mut self,
         reply_cmd: bool, // whether it is a reply to a TransferLeader command
     ) {
+        info!(
+            "ack transfer leader";
+            "region_id" => self.region_id,
+            "from_peer" => self.peer_id(),
+            "to_peer" => self.leader_id(),
+            "reply_cmd" => reply_cmd,
+            "last_index" => self.get_store().last_index(),
+            "persist_index" => self.raft_group.raft.raft_log.persisted,
+            "committed_index" => self.raft_group.raft.raft_log.committed,
+            "applied_index" => self.raft_group.raft.raft_log.applied,
+        );
+
         let mut msg = eraftpb::Message::new();
         msg.set_from(self.peer_id());
         msg.set_to(self.leader_id());
