@@ -217,7 +217,10 @@ where
         // TODO(@hhwyt): write bytes should also be considered.
         let read_delta = cur_read_io_bytes - prev_read_io_bytes;
         let write_delta = sst_writer.borrow_mut().file_size() - prev_sst_file_size;
-        let total_delta = (read_delta + write_delta) as usize;
+        let total_delta = (
+            // read_delta  +
+            write_delta
+        ) as usize;
         // println!("read bytes: {}", cur_read_io_bytes);
         // println!("read delta: {}", read_delta);
         // println!("write bytes: {}", sst_writer.borrow_mut().file_size());
