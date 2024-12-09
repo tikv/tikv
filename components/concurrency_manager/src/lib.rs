@@ -20,7 +20,7 @@ use std::{
     mem::MaybeUninit,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc,
+        Arc, Mutex,
     },
     time::Duration,
 };
@@ -75,55 +75,8 @@ pub struct ConcurrencyManager {
     limit_valid_duration: Duration,
 
     panic_on_invalid_max_ts: Arc<AtomicBool>,
-}
 
-pub trait ValueDisplay: slog::Value + Display {}
-impl ValueDisplay for String {}
-impl ValueDisplay for &str {}
-
-mod sealed {
-    pub trait Sealed {}
-}
-
-pub trait IntoErrorSource: sealed::Sealed {
-    type Output: ValueDisplay;
-    fn into_error_source(self) -> Self::Output;
-}
-
-// &str impl
-impl<'a> sealed::Sealed for &'a str {}
-impl<'a> IntoErrorSource for &'a str {
-    type Output = &'a str;
-    fn into_error_source(self) -> Self::Output {
-        self
-    }
-}
-
-// String impl
-impl sealed::Sealed for String {}
-impl IntoErrorSource for String {
-    type Output = String;
-    fn into_error_source(self) -> Self::Output {
-        self
-    }
-}
-
-// Closure impl
-impl<F, T> sealed::Sealed for F
-where
-    F: FnOnce() -> T,
-    T: ValueDisplay,
-{
-}
-impl<F, T> IntoErrorSource for F
-where
-    F: FnOnce() -> T,
-    T: ValueDisplay,
-{
-    type Output = T;
-    fn into_error_source(self) -> T {
-        self()
-    }
+    time_provider: Arc<dyn TimeProvider>,
 }
 
 impl ConcurrencyManager {
@@ -144,6 +97,26 @@ impl ConcurrencyManager {
             last_update_limit_instant: Arc::new(AtomicU64::new(0)),
             limit_valid_duration,
             start_instant: Instant::now_coarse(),
+            time_provider: Arc::new(CoarseInstantTimeProvider),
+        }
+    }
+
+    #[cfg(test)]
+    fn new_with_time_provider(
+        latest_ts: TimeStamp,
+        limit_valid_duration: Duration,
+        panic_on_invalid_max_ts: bool,
+        time_provider: Arc<dyn TimeProvider>,
+    ) -> Self {
+        ConcurrencyManager {
+            max_ts: Arc::new(AtomicU64::new(latest_ts.into_inner())),
+            max_ts_limit: Arc::new(AtomicU64::new(0)),
+            lock_table: LockTable::default(),
+            panic_on_invalid_max_ts: Arc::new(AtomicBool::new(panic_on_invalid_max_ts)),
+            last_update_limit_instant: Arc::new(AtomicU64::new(0)),
+            limit_valid_duration,
+            start_instant: time_provider.now(),
+            time_provider,
         }
     }
 
@@ -182,7 +155,7 @@ impl ConcurrencyManager {
             // because the limit is just an assertion, and the inconsistency
             // is not harmful.
             let last_update = self.last_update_limit_instant.load(Ordering::SeqCst);
-            let now = self.start_instant.saturating_elapsed().as_millis() as u64;
+            let now = self.time_provider.elapsed(self.start_instant).as_millis() as u64;
             assert!(now >= last_update);
             let duration_to_last_limit_update_ms = now - last_update;
 
@@ -247,12 +220,16 @@ impl ConcurrencyManager {
     /// If the new limit is smaller than the current limit, this operation will
     /// have no effect and return silently.
     pub fn set_max_ts_limit(&self, limit: TimeStamp) {
+        if limit.is_max() {
+            error!("max_ts_limit cannot be set to u64::max");
+            return;
+        }
         let ts = limit.into_inner();
         let current_limit = self.max_ts_limit.load(Ordering::SeqCst);
         if ts > current_limit {
             self.max_ts_limit.store(ts, Ordering::SeqCst);
             self.last_update_limit_instant.store(
-                self.start_instant.saturating_elapsed().as_millis() as u64,
+                self.time_provider.elapsed(self.start_instant).as_millis() as u64,
                 Ordering::SeqCst,
             );
             MAX_TS_LIMIT_GAUGE.set(ts as i64);
@@ -353,6 +330,116 @@ impl ConcurrencyManager {
 pub struct InvalidMaxTsUpdate {
     pub attempted_ts: TimeStamp,
     pub max_allowed: TimeStamp,
+}
+
+pub trait ValueDisplay: slog::Value + Display {}
+impl ValueDisplay for String {}
+impl ValueDisplay for &str {}
+
+mod sealed {
+    pub trait Sealed {}
+}
+
+pub trait IntoErrorSource: sealed::Sealed {
+    type Output: ValueDisplay;
+    fn into_error_source(self) -> Self::Output;
+}
+
+// &str impl
+impl<'a> sealed::Sealed for &'a str {}
+impl<'a> IntoErrorSource for &'a str {
+    type Output = &'a str;
+    fn into_error_source(self) -> Self::Output {
+        self
+    }
+}
+
+// String impl
+impl sealed::Sealed for String {}
+impl IntoErrorSource for String {
+    type Output = String;
+    fn into_error_source(self) -> Self::Output {
+        self
+    }
+}
+
+// Closure impl
+impl<F, T> sealed::Sealed for F
+where
+    F: FnOnce() -> T,
+    T: ValueDisplay,
+{
+}
+impl<F, T> IntoErrorSource for F
+where
+    F: FnOnce() -> T,
+    T: ValueDisplay,
+{
+    type Output = T;
+    fn into_error_source(self) -> T {
+        self()
+    }
+}
+
+/// Trait to abstract time-related functionality, for a monotonic clock
+pub trait TimeProvider: Send + Sync {
+    /// Returns the current instant.
+    fn now(&self) -> Instant;
+
+    /// Returns the duration elapsed since the provided instant.
+    fn elapsed(&self, since: Instant) -> Duration;
+}
+
+pub struct CoarseInstantTimeProvider;
+
+impl TimeProvider for CoarseInstantTimeProvider {
+    fn now(&self) -> Instant {
+        Instant::now_coarse()
+    }
+
+    fn elapsed(&self, since: Instant) -> Duration {
+        self.now().saturating_duration_since(since)
+    }
+}
+
+#[derive(Clone)]
+pub struct MockTimeProvider {
+    current_time: Arc<Mutex<Instant>>,
+}
+
+impl MockTimeProvider {
+    /// Creates a new MockTimeProvider initialized with the given instant.
+    pub fn new(start_time: Instant) -> Self {
+        MockTimeProvider {
+            current_time: Arc::new(Mutex::new(start_time)),
+        }
+    }
+
+    /// Advances the current time by the specified duration.
+    pub fn advance(&self, duration: Duration) {
+        let mut time = self.current_time.lock().unwrap();
+        // Note: Instant doesn't support addition, so we mock behavior.
+        // This simplistic approach assumes no overflow.
+        *time += duration;
+    }
+
+    /// Sets the current time to the specified instant.
+    pub fn set_time(&self, new_time: Instant) {
+        let mut time = self.current_time.lock().unwrap();
+        *time = new_time;
+    }
+}
+
+impl TimeProvider for MockTimeProvider {
+    fn now(&self) -> Instant {
+        let time = self.current_time.lock().unwrap();
+        *time
+    }
+
+    fn elapsed(&self, since: Instant) -> Duration {
+        let now = self.now();
+        now.saturating_duration_since(since)
+    }
 }
 
 #[cfg(test)]
@@ -474,24 +561,18 @@ mod tests {
         cm.set_max_ts_limit(TimeStamp::new(500));
         assert_eq!(cm.max_ts_limit.load(Ordering::SeqCst), 1000);
 
-        // Test setting limit to max
+        // Test setting limit to max, should have no effect
         cm.set_max_ts_limit(TimeStamp::max());
-        assert_eq!(
-            cm.max_ts_limit.load(Ordering::SeqCst),
-            TimeStamp::max().into_inner()
-        );
-
-        // Try to lower from max - should be ignored
-        cm.set_max_ts_limit(TimeStamp::new(2000));
-        assert_eq!(
-            cm.max_ts_limit.load(Ordering::SeqCst),
-            TimeStamp::max().into_inner()
-        );
+        assert_eq!(cm.max_ts_limit.load(Ordering::SeqCst), 1000,);
     }
 
     #[test]
     fn test_max_ts_updates_with_monotonic_limit() {
-        let cm = ConcurrencyManager::new(TimeStamp::new(100));
+        let cm = ConcurrencyManager::new_with_config(
+            TimeStamp::new(100),
+            DEFAULT_LIMIT_VALID_DURATION,
+            false,
+        );
 
         // Set limit to 200
         cm.set_max_ts_limit(TimeStamp::new(200));
@@ -510,5 +591,72 @@ mod tests {
             assert_eq!(e.attempted_ts, TimeStamp::new(250));
             assert_eq!(e.max_allowed, TimeStamp::new(200));
         }
+    }
+
+    #[test]
+    fn test_limit_valid_duration_boundary() {
+        let start_time = Instant::now();
+        let mock_time = MockTimeProvider::new(start_time);
+        let time_provider = Arc::new(mock_time.clone());
+
+        let cm = ConcurrencyManager::new_with_time_provider(
+            TimeStamp::new(100),
+            Duration::from_secs(60),
+            false,
+            time_provider.clone(),
+        );
+
+        cm.set_max_ts_limit(TimeStamp::new(200));
+
+        time_provider.advance(Duration::from_secs(59));
+        assert!(cm.update_max_ts(TimeStamp::new(250), "").is_err());
+
+        time_provider.advance(Duration::from_secs(1));
+        cm.update_max_ts(TimeStamp::new(250), "").unwrap();
+        assert_eq!(cm.max_ts().into_inner(), 250);
+    }
+
+    #[test]
+    fn test_max_ts_limit_expired_allows_update() {
+        let start_time = Instant::now();
+        let mock_time = MockTimeProvider::new(start_time);
+        let time_provider = Arc::new(mock_time.clone());
+
+        let cm = ConcurrencyManager::new_with_time_provider(
+            TimeStamp::new(100),
+            Duration::from_secs(60),
+            false,
+            time_provider.clone(),
+        );
+
+        cm.set_max_ts_limit(TimeStamp::new(200));
+
+        mock_time.advance(Duration::from_secs(61));
+
+        // Updating to 250 should be allowed, since the limit should be invalidated
+        cm.update_max_ts(TimeStamp::new(250), "test_source".to_string())
+            .unwrap();
+        assert_eq!(cm.max_ts().into_inner(), 250);
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid max_ts update")]
+    fn test_panic_on_invalid_max_ts_enabled() {
+        let cm = ConcurrencyManager::new(TimeStamp::new(100));
+
+        cm.set_max_ts_limit(TimeStamp::new(200));
+
+        // should panic
+        cm.update_max_ts(TimeStamp::new(250), "test_source".to_string())
+            .unwrap();
+    }
+
+    #[test]
+    fn test_update_max_ts_without_limit() {
+        let cm = ConcurrencyManager::new(TimeStamp::new(100));
+
+        cm.update_max_ts(TimeStamp::new(500), "test_source".to_string())
+            .unwrap();
+        assert_eq!(cm.max_ts().into_inner(), 500);
     }
 }

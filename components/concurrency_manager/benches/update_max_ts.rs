@@ -11,7 +11,7 @@ fn benchmark_update_max_ts(c: &mut Criterion) {
     let limit_valid_time = Duration::from_secs(20);
     let cm = ConcurrencyManager::new_with_config(latest_ts, limit_valid_time, false);
 
-    cm.set_max_ts_limit(TimeStamp::new(2000));
+    cm.set_max_ts_limit(TimeStamp::new(4000));
 
     let new_ts = TimeStamp::new(3000);
 
