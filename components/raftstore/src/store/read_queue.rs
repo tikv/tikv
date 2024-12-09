@@ -289,28 +289,9 @@ impl<C: ErrorCallback> ReadIndexQueue<C> {
         if min_changed_offset != usize::MAX {
             self.ready_cnt = cmp::max(self.ready_cnt, max_changed_offset + 1);
         }
-        if max_changed_offset > 0 {
-            self.fold(min_changed_offset, max_changed_offset);
-        }
-    }
-
-    fn fold(&mut self, min_changed_offset: usize, max_changed_offset: usize) {
-        let mut r_idx = self.reads[max_changed_offset].read_index.unwrap();
-        let mut check_offset = max_changed_offset - 1;
-        loop {
-            let l_idx = self.reads[check_offset].read_index.unwrap_or(u64::MAX);
-            if l_idx > r_idx {
-                self.reads[check_offset].read_index = Some(r_idx);
-            } else if check_offset < min_changed_offset {
-                break;
-            } else {
-                r_idx = l_idx;
-            }
-            if check_offset == 0 {
-                break;
-            }
-            check_offset -= 1;
-        }
+        // NOTE: We should not try to fold these read index requests anymore,
+        // any earlier request can relay a higher committed index due to txn lock
+        // when 1pc/async-commit is used.
     }
 
     pub fn gc(&mut self) {
@@ -506,65 +487,6 @@ mod tests {
 
     use super::*;
     use crate::store::Callback;
-
-    #[test]
-    fn test_read_queue_fold() {
-        let mut queue = ReadIndexQueue::<Callback<KvTestSnapshot>> {
-            handled_cnt: 125,
-            ..Default::default()
-        };
-        for _ in 0..100 {
-            let id = Uuid::new_v4();
-            queue.reads.push_back(ReadIndexRequest::with_command(
-                id,
-                RaftCmdRequest::default(),
-                Callback::None,
-                Timespec::new(0, 0),
-            ));
-
-            let offset = queue.handled_cnt + queue.reads.len() - 1;
-            queue.contexts.insert(id, offset);
-        }
-
-        queue.advance_replica_reads(Vec::new());
-        assert_eq!(queue.ready_cnt, 0);
-
-        queue.advance_replica_reads(vec![(queue.reads[0].id, None, 100)]);
-        assert_eq!(queue.ready_cnt, 1);
-
-        queue.advance_replica_reads(vec![(queue.reads[1].id, None, 100)]);
-        assert_eq!(queue.ready_cnt, 2);
-
-        queue.advance_replica_reads(vec![
-            (queue.reads[80].id, None, 80),
-            (queue.reads[84].id, None, 100),
-            (queue.reads[82].id, None, 70),
-            (queue.reads[78].id, None, 120),
-            (queue.reads[77].id, None, 40),
-        ]);
-        assert_eq!(queue.ready_cnt, 85);
-
-        queue.advance_replica_reads(vec![
-            (queue.reads[20].id, None, 80),
-            (queue.reads[24].id, None, 100),
-            (queue.reads[22].id, None, 70),
-            (queue.reads[18].id, None, 120),
-            (queue.reads[17].id, None, 40),
-        ]);
-        assert_eq!(queue.ready_cnt, 85);
-
-        for i in 0..78 {
-            assert_eq!(queue.reads[i].read_index.unwrap(), 40, "#{} failed", i);
-        }
-        for i in 78..83 {
-            assert_eq!(queue.reads[i].read_index.unwrap(), 70, "#{} failed", i);
-        }
-        for i in 84..85 {
-            assert_eq!(queue.reads[i].read_index.unwrap(), 100, "#{} failed", i);
-        }
-
-        queue.clear_all(None);
-    }
 
     #[test]
     fn test_become_leader_then_become_follower() {
