@@ -1616,7 +1616,7 @@ fn test_split_region_with_no_valid_split_keys() {
     cluster.cfg.coprocessor.region_split_size = Some(ReadableSize::kb(1));
     // `region_split_check_diff` must be set as well after adjusting
     // `region_split_size`. Otherwise, split checks may be skipped and a split
-    // may not be triggered as expected. 
+    // may not be triggered as expected.
     cluster.cfg.raft_store.region_split_check_diff = Some(ReadableSize::kb(1));
     cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(500);
     cluster.run();
