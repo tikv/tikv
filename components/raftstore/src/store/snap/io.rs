@@ -13,7 +13,7 @@ use engine_traits::{
     SstCompressionType, SstReader, SstWriter, SstWriterBuilder, WriteBatch,
 };
 use fail::fail_point;
-use file_system::{File, OpenOptions};
+use file_system::{fetch_io_bytes, File, IoType, OpenOptions, WithIoType};
 use kvproto::encryptionpb::EncryptionMethod;
 use tikv_util::{
     box_try,
@@ -176,6 +176,8 @@ where
     };
 
     let instant = Instant::now();
+    let _io_type_guard = WithIoType::new(IoType::Export);
+    let mut prev_io_bytes = fetch_io_bytes()[IoType::Export as usize];
     box_try!(snap.scan(cf, start_key, end_key, false, |key, value| {
         let entry_len = key.len() + value.len();
         if file_length + entry_len > raw_size_per_file as usize {
@@ -202,12 +204,15 @@ where
             }
         }
 
-        while entry_len > remained_quota {
-            // It's possible to acquire more than necessary, but let it be.
+        let cur_io_bytes = fetch_io_bytes()[IoType::Export as usize];
+        // TODO(@hhwyt): write bytes should also be considered.
+        let read_io_bytes = (cur_io_bytes.read - prev_io_bytes.read) as usize;
+        while read_io_bytes > remained_quota {
             io_limiter.blocking_consume(IO_LIMITER_CHUNK_SIZE);
             remained_quota += IO_LIMITER_CHUNK_SIZE;
         }
-        remained_quota -= entry_len;
+        remained_quota -= read_io_bytes;
+        prev_io_bytes = cur_io_bytes;
 
         stats.key_count += 1;
         stats.total_size += entry_len;
