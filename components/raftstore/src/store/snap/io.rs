@@ -13,7 +13,9 @@ use engine_traits::{
     SstCompressionType, SstReader, SstWriter, SstWriterBuilder, WriteBatch,
 };
 use fail::fail_point;
-use file_system::{fetch_io_bytes, File, IoType, OpenOptions, WithIoType};
+#[cfg(not(test))]
+use file_system::get_thread_io_bytes_total;
+use file_system::{File, IoBytes, IoType, OpenOptions, WithIoType};
 use kvproto::encryptionpb::EncryptionMethod;
 use tikv_util::{
     box_try,
@@ -23,6 +25,8 @@ use tikv_util::{
 };
 
 use super::{CfFile, Error, IO_LIMITER_CHUNK_SIZE};
+
+const IO_LIMIT_CHECK_INTERVAL: usize = 8 * 1024;
 
 /// Used to check a procedure is stale or not.
 pub trait StaleDetector {
@@ -104,6 +108,23 @@ where
     Ok(stats)
 }
 
+#[cfg(not(test))]
+fn get_thread_io_bytes_stats() -> Result<file_system::IoBytes, String> {
+    file_system::get_thread_io_bytes_total()
+}
+
+#[cfg(test)]
+fn get_thread_io_bytes_stats() -> Result<file_system::IoBytes, String> {
+    use std::cell::Cell;
+    thread_local! {
+        static TOTAL_BYTES: Cell<IoBytes> = Cell::new(IoBytes::default());
+    }
+    let mut new_bytes = TOTAL_BYTES.get();
+    new_bytes.read += IO_LIMIT_CHECK_INTERVAL as u64 / 2;
+    TOTAL_BYTES.set(new_bytes);
+    Ok(new_bytes)
+}
+
 /// Build a snapshot file for the given column family in sst format.
 /// If there are no key-value pairs fetched, no files will be created at `path`,
 /// otherwise the file will be created and synchronized.
@@ -177,8 +198,21 @@ where
 
     let instant = Instant::now();
     let _io_type_guard = WithIoType::new(IoType::Export);
-    let mut prev_read_io_bytes = fetch_io_bytes()[IoType::Export as usize].read;
+    let mut prev_io_bytes = get_thread_io_bytes_stats().unwrap();
     let mut prev_sst_file_size = sst_writer.borrow_mut().file_size();
+    let mut next_io_check_size = stats.total_size + IO_LIMIT_CHECK_INTERVAL;
+    let handle_read_io_usage = |prev_io_bytes: &mut IoBytes, remained_quota: &mut usize| {
+        let cur_io_bytes = get_thread_io_bytes_stats().unwrap();
+        let read_io_bytes = (cur_io_bytes.read - prev_io_bytes.read) as usize;
+
+        while read_io_bytes > *remained_quota {
+            io_limiter.blocking_consume(IO_LIMITER_CHUNK_SIZE);
+            *remained_quota += IO_LIMITER_CHUNK_SIZE;
+        }
+        *remained_quota -= read_io_bytes;
+        *prev_io_bytes = cur_io_bytes;
+    };
+
     box_try!(snap.scan(cf, start_key, end_key, false, |key, value| {
         let entry_len = key.len() + value.len();
         if file_length + entry_len > raw_size_per_file as usize {
@@ -205,39 +239,30 @@ where
             }
         }
 
+        while entry_len > remained_quota {
+            // It's possible to acquire more than necessary, but let it be.
+            io_limiter.blocking_consume(IO_LIMITER_CHUNK_SIZE);
+            remained_quota += IO_LIMITER_CHUNK_SIZE;
+        }
+        remained_quota -= entry_len;
+
         stats.key_count += 1;
         stats.total_size += entry_len;
+
+        if stats.total_size >= next_io_check_size {
+            handle_read_io_usage(&mut prev_io_bytes, &mut remained_quota);
+            next_io_check_size = stats.total_size + IO_LIMIT_CHECK_INTERVAL;
+        }
+
         if let Err(e) = sst_writer.borrow_mut().put(key, value) {
             let io_error = io::Error::new(io::ErrorKind::Other, e);
             return Err(io_error.into());
         }
         file_length += entry_len;
-
-        let cur_read_io_bytes = fetch_io_bytes()[IoType::Export as usize].read;
-        // TODO(@hhwyt): write bytes should also be considered.
-        let read_delta = cur_read_io_bytes - prev_read_io_bytes;
-        let write_delta = sst_writer.borrow_mut().file_size() - prev_sst_file_size;
-        let total_delta = (
-            // read_delta  +
-            write_delta
-        ) as usize;
-        // println!("read bytes: {}", cur_read_io_bytes);
-        // println!("read delta: {}", read_delta);
-        // println!("write bytes: {}", sst_writer.borrow_mut().file_size());
-        // println!("write delta: {}", write_delta);
-        // println!("total delta: {}", total_delta);
-        while total_delta > remained_quota {
-            io_limiter.blocking_consume(IO_LIMITER_CHUNK_SIZE);
-            remained_quota += IO_LIMITER_CHUNK_SIZE;
-        }
-        remained_quota -= total_delta;
-        prev_read_io_bytes = cur_read_io_bytes;
-        prev_sst_file_size = sst_writer.borrow_mut().file_size();
-
         Ok(true)
     }));
-    // let cur_io_bytes = fetch_io_bytes()[IoType::Export as usize];
-    // println!("current bytes: {:?}", cur_io_bytes);
+    handle_read_io_usage(&mut prev_io_bytes, &mut remained_quota);
+
     if stats.key_count > 0 {
         box_try!(finish_sst_writer(sst_writer.into_inner(), path, key_mgr));
         cf_file.add_file(file_id);
@@ -454,7 +479,7 @@ pub fn get_decrypter_reader(
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, path::PathBuf, thread::sleep, time::Duration};
+    use std::{collections::HashMap, path::PathBuf};
 
     use engine_test::kv::KvTestEngine;
     use engine_traits::CF_DEFAULT;
@@ -626,14 +651,10 @@ mod tests {
     #[test]
     fn test_build_sst_with_io_limiter() {
         let dir = Builder::new().prefix("test-io-limiter").tempdir().unwrap();
-        // let mut db_opts = DbOptions::default();
-        // db_opts.set_use_direct_reads(true);
-        // db_opts.set_use_direct_io_for_flush_and_compaction(true);
-        // db_opts.set_info_log_level(rocksdb::LogLevel::Debug);    //
-        // db_opts.set_info_log_file("rocksdb_test.log"); // 指定日志文件
-        let db = open_test_db_with_100keys(dir.path(), None, None).unwrap();
+        let db = open_test_db_with_nkeys(dir.path(), None, None, 1000).unwrap();
+        let bytes_per_sec = 8000_f64; // 8000B/s  
+        let limiter = Limiter::new(bytes_per_sec);
         let snap_dir = Builder::new().prefix("snap-dir").tempdir().unwrap();
-
         let mut cf_file = CfFile {
             cf: CF_DEFAULT,
             path: PathBuf::from(snap_dir.path()),
@@ -642,8 +663,6 @@ mod tests {
             ..Default::default()
         };
 
-        let bytes_per_sec = 1024.0; // 1KB/s  
-        let limiter = Limiter::new(bytes_per_sec);
         let start = Instant::now();
         let stats = build_sst_cf_file_list::<KvTestEngine>(
             &mut cf_file,
@@ -656,11 +675,7 @@ mod tests {
             None,
         )
         .unwrap();
-
-        if stats.total_size > 1024 {
-            // assert!(start.elapsed().as_secs() >= 1);
-            println!("start.elapsed(): {:?}", stats.total_size);
-        }
-        sleep(Duration::from_secs(3600));
+        assert_eq!(stats.total_size, 11890);
+        assert!(start.saturating_elapsed_secs() > 1_f64);
     }
 }
