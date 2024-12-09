@@ -290,8 +290,9 @@ impl<C: ErrorCallback> ReadIndexQueue<C> {
             self.ready_cnt = cmp::max(self.ready_cnt, max_changed_offset + 1);
         }
         // NOTE: We should not try to fold these read index requests anymore,
-        // any earlier request can relay a higher committed index due to txn lock
-        // when 1pc/async-commit is used.
+        // an earlier request can rely a higher committed index due to txn
+        // lock when 1pc/async-commit is used.
+        // See https://github.com/tikv/tikv/issues/17018 for more details.
     }
 
     pub fn gc(&mut self) {
