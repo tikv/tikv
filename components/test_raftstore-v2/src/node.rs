@@ -1,7 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    path::{Path, PathBuf},
+    path::Path,
     sync::{Arc, Mutex, RwLock},
 };
 
@@ -49,7 +49,6 @@ use tikv_util::{
     box_err,
     config::VersionTrack,
     mpsc,
-    sys::disk,
     worker::{Builder as WorkerBuilder, LazyWorker},
 };
 
@@ -311,28 +310,6 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
 
         let (sender, _) = mpsc::unbounded();
         let bg_worker = WorkerBuilder::new("background").thread_count(2).create();
-        // Spawn a task to update the disk status periodically.
-        {
-            let tablet_registry = tablet_registry.clone();
-            let data_dir = PathBuf::from(tablet_registry.tablet_root());
-            let snap_mgr = snap_mgr.clone();
-            bg_worker.spawn_interval_task(std::time::Duration::from_millis(100), move || {
-                let snap_size = snap_mgr.total_snap_size().unwrap();
-                let mut kv_size = 0;
-                tablet_registry.for_each_opened_tablet(|_, cached| {
-                    if let Some(tablet) = cached.latest() {
-                        kv_size += tablet.get_engine_used_size().unwrap_or(0);
-                    }
-                    true
-                });
-                let used_size = snap_size + kv_size;
-                let (capacity, available) = disk::get_disk_space_stats(&data_dir).unwrap();
-
-                disk::set_disk_capacity(capacity);
-                disk::set_disk_used_size(used_size);
-                disk::set_disk_available_size(std::cmp::min(available, capacity - used_size));
-            });
-        }
         let state: Arc<Mutex<GlobalReplicationState>> = Arc::default();
         let store_config = Arc::new(VersionTrack::new(raft_store));
         node.start(

@@ -439,10 +439,24 @@ where
 
     /// Returns (capacity, used, available).
     fn collect_engine_size(&self) -> (u64, u64, u64) {
-        (
-            disk::get_disk_capacity(),
-            disk::get_disk_used_size(),
-            disk::get_disk_available_size(),
-        )
+        // For test purpose, we set the disk capacity, used size and available size
+        // manually.
+        #[cfg(any(test, feature = "testexport"))]
+        {
+            let (capacity, available) = disk::get_disk_space_stats(&format!("./")).unwrap();
+
+            disk::set_disk_capacity(capacity);
+            disk::set_disk_used_size(capacity - available);
+            disk::set_disk_available_size(available);
+            return (capacity, capacity - available, available);
+        }
+        #[cfg(not(any(test, feature = "testexport")))]
+        {
+            (
+                disk::get_disk_capacity(),
+                disk::get_disk_used_size(),
+                disk::get_disk_available_size(),
+            )
+        }
     }
 }
