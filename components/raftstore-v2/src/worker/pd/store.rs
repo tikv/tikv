@@ -448,15 +448,13 @@ where
             disk::set_disk_capacity(capacity);
             disk::set_disk_used_size(capacity - available);
             disk::set_disk_available_size(available);
-            (capacity, capacity - available, available)
+            return (capacity, capacity - available, available);
         }
-        #[cfg(not(any(test, feature = "testexport")))]
-        {
-            (
-                disk::get_disk_capacity(),
-                disk::get_disk_used_size(),
-                disk::get_disk_available_size(),
-            )
-        }
+        #[allow(unreachable_code)]
+        (
+            disk::get_disk_capacity(),
+            disk::get_disk_used_size(),
+            disk::get_disk_available_size(),
+        )
     }
 }
