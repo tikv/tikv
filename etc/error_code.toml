@@ -528,6 +528,11 @@ error = '''
 KV:SstImporter:WrongKeyPrefix
 '''
 
+["KV:SstImporter:WrongRewriteRules"]
+error = '''
+KV:SstImporter:WrongRewriteRules
+'''
+
 ["KV:SstImporter:BadFormat"]
 error = '''
 KV:SstImporter:BadFormat
