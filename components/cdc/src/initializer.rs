@@ -132,10 +132,6 @@ impl<E: KvEngine> Initializer<E> {
         // we need to acquire scan concurrency permit before taking snapshot.
         let sched = self.sched.clone();
         let region_epoch = self.region_epoch.clone();
-<<<<<<< HEAD
-        let downstream_id = self.downstream_id;
-=======
->>>>>>> c40977bb27 (cdc: cancel incremental scan tasks in time (#17670))
         let downstream_state = self.downstream_state.clone();
         let (cb, fut) = tikv_util::future::paired_future_callback();
         let sink = self.sink.clone();
