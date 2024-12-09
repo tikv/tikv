@@ -443,12 +443,12 @@ where
         // manually.
         #[cfg(any(test, feature = "testexport"))]
         {
-            let (capacity, available) = disk::get_disk_space_stats(&format!("./")).unwrap();
+            let (capacity, available) = disk::get_disk_space_stats("./".to_string()).unwrap();
 
             disk::set_disk_capacity(capacity);
             disk::set_disk_used_size(capacity - available);
             disk::set_disk_available_size(available);
-            return (capacity, capacity - available, available);
+            (capacity, capacity - available, available)
         }
         #[cfg(not(any(test, feature = "testexport")))]
         {
