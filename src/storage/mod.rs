@@ -3356,10 +3356,9 @@ fn prepare_snap_ctx<'a>(
     // Update max_ts and check the in-memory lock table before getting the snapshot
     if !pb_ctx.get_stale_read() {
         concurrency_manager
-            .update_max_ts(
-                start_ts,
-                format_args!("prepare_snap_ctx-{}-{}", cmd, start_ts),
-            )
+            .update_max_ts(start_ts, || {
+                format!("prepare_snap_ctx-{}-{}", cmd, start_ts)
+            })
             .map_err(txn::Error::from)?;
     }
     fail_point!("before-storage-check-memory-locks");

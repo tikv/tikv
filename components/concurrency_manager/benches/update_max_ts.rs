@@ -17,7 +17,7 @@ fn benchmark_update_max_ts(c: &mut Criterion) {
 
     c.bench_function("update_max_ts", |b| {
         b.iter(|| {
-            let _ = cm.update_max_ts(black_box(new_ts), "benchmark");
+            let _ = cm.update_max_ts(black_box(new_ts), || format!("benchmark-{}", new_ts));
         })
     });
 }

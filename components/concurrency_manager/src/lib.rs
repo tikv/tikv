@@ -77,6 +77,55 @@ pub struct ConcurrencyManager {
     panic_on_invalid_max_ts: Arc<AtomicBool>,
 }
 
+pub trait ValueDisplay: slog::Value + Display {}
+impl ValueDisplay for String {}
+impl ValueDisplay for &str {}
+
+mod sealed {
+    pub trait Sealed {}
+}
+
+pub trait IntoErrorSource: sealed::Sealed {
+    type Output: ValueDisplay;
+    fn into_error_source(self) -> Self::Output;
+}
+
+// &str impl
+impl<'a> sealed::Sealed for &'a str {}
+impl<'a> IntoErrorSource for &'a str {
+    type Output = &'a str;
+    fn into_error_source(self) -> Self::Output {
+        self
+    }
+}
+
+// String impl
+impl sealed::Sealed for String {}
+impl IntoErrorSource for String {
+    type Output = String;
+    fn into_error_source(self) -> Self::Output {
+        self
+    }
+}
+
+// Closure impl
+impl<F, T> sealed::Sealed for F
+where
+    F: FnOnce() -> T,
+    T: ValueDisplay,
+{
+}
+impl<F, T> IntoErrorSource for F
+where
+    F: FnOnce() -> T,
+    T: ValueDisplay,
+{
+    type Output = T;
+    fn into_error_source(self) -> T {
+        self()
+    }
+}
+
 impl ConcurrencyManager {
     pub fn new(latest_ts: TimeStamp) -> Self {
         Self::new_with_config(latest_ts, DEFAULT_LIMIT_VALID_DURATION, true)
@@ -112,10 +161,11 @@ impl ConcurrencyManager {
     /// - Ok(()): If the update is successful or has no effect
     /// - Err(limit): If new_ts is greater than the max_ts_limit, returns the
     ///   current limit value
+
     pub fn update_max_ts(
         &self,
         new_ts: TimeStamp,
-        source: impl slog::Value + Display,
+        source: impl IntoErrorSource,
     ) -> Result<(), InvalidMaxTsUpdate> {
         if new_ts == TimeStamp::max() {
             return Ok(());
@@ -132,6 +182,7 @@ impl ConcurrencyManager {
 
             if duration_to_last_limit_update_ms < self.limit_valid_duration.as_millis() as u64 {
                 // limit is valid
+                let source = source.into_error_source();
                 self.report_error(new_ts, TimeStamp::new(limit), source, true)?;
             } else {
                 // limit is stale
@@ -144,6 +195,7 @@ impl ConcurrencyManager {
                 );
 
                 if new_ts > approximate_limit.into_inner() {
+                    let source = source.into_error_source();
                     self.report_error(new_ts, approximate_limit, source, false)?;
                 }
             }

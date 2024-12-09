@@ -70,10 +70,10 @@ pub fn prewrite_with_generation<S: Snapshot>(
     // Update max_ts for Insert operation to guarantee linearizability and snapshot
     // isolation
     if mutation.should_not_exist {
-        txn.concurrency_manager.update_max_ts(
-            txn_props.start_ts,
-            format_args!("prewrite-{}", txn_props.start_ts),
-        )?;
+        txn.concurrency_manager
+            .update_max_ts(txn_props.start_ts, || {
+                format!("prewrite-{}", txn_props.start_ts)
+            })?;
     }
 
     fail_point!(
@@ -152,10 +152,10 @@ pub fn prewrite_with_generation<S: Snapshot>(
     if mutation.should_not_write {
         // `checkNotExists` is equivalent to a get operation, so it should update the
         // max_ts.
-        txn.concurrency_manager.update_max_ts(
-            txn_props.start_ts,
-            format!("prewrite-{}", txn_props.start_ts),
-        )?;
+        txn.concurrency_manager
+            .update_max_ts(txn_props.start_ts, || {
+                format!("prewrite-{}", txn_props.start_ts)
+            })?;
         let min_commit_ts = if mutation.need_min_commit_ts() {
             // Don't calculate the min_commit_ts according to the concurrency manager's
             // max_ts for a should_not_write mutation because it's not persisted and doesn't
