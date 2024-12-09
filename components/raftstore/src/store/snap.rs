@@ -1310,6 +1310,9 @@ impl Read for Snapshot {
         if buf.is_empty() {
             return Ok(0);
         }
+        let mut total_read_bytes = 0;
+        let mut remaining_buf = buf;
+
         while self.cf_index < self.cf_files.len() {
             let cf_file = &mut self.cf_files[self.cf_index];
             if self.cf_file_index >= cf_file.size.len() || cf_file.size[self.cf_file_index] == 0 {
@@ -1321,20 +1324,39 @@ impl Read for Snapshot {
                 .file_for_sending
                 .get_mut(self.cf_file_index)
                 .unwrap();
-            match reader.read(buf) {
+            let read_result = reader.read(remaining_buf);
+
+            match read_result {
                 Ok(0) => {
-                    // EOF. Switch to next file.
+                    // EOF: Switch to the next file.
                     self.cf_file_index += 1;
-                    if self.cf_file_index == cf_file.size.len() {
+                    if self.cf_file_index >= cf_file.size.len() {
                         self.cf_index += 1;
                         self.cf_file_index = 0;
                     }
                 }
-                Ok(n) => return Ok(n),
+                Ok(read_bytes) => {
+                    total_read_bytes += read_bytes;
+                    remaining_buf = &mut remaining_buf[read_bytes..];
+
+                    // Apply IO limiter to control the read rate.
+                    let mut start = 0;
+                    while start < read_bytes {
+                        let acquire = std::cmp::min(IO_LIMITER_CHUNK_SIZE, read_bytes - start);
+                        self.mgr.limiter.blocking_consume(acquire);
+                        start += acquire;
+                    }
+
+                    // Return early if the buffer is fully filled.
+                    if remaining_buf.is_empty() {
+                        return Ok(total_read_bytes);
+                    }
+                }
                 e => return e,
             }
         }
-        Ok(0)
+
+        Ok(total_read_bytes)
     }
 }
 
@@ -2602,7 +2624,7 @@ pub mod tests {
             let mut p = Peer::default();
             p.set_store_id(TEST_STORE_ID);
             p.set_id((i + 1) as u64);
-            for k in 0..100 {
+            for k in 0..4000 {
                 let key = keys::data_key(format!("akey{}", k).as_bytes());
                 db.put_msg_cf(cf, &key[..], &p)?;
             }
