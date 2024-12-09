@@ -167,7 +167,7 @@ impl ConcurrencyManager {
         new_ts: TimeStamp,
         source: impl IntoErrorSource,
     ) -> Result<(), InvalidMaxTsUpdate> {
-        if new_ts == TimeStamp::max() {
+        if new_ts.is_max() {
             return Ok(());
         }
         let new_ts = new_ts.into_inner();
@@ -175,6 +175,12 @@ impl ConcurrencyManager {
 
         // check that new_ts is less than or equal to the limit
         if limit > 0 && new_ts > limit {
+            // NOTE: `limit` and `last_update` are read non-atomically as a whole, so they
+            // can be inconsistent, i.e. they may not be from the same event of
+            // setting the limit. The consequence is that we may mistakenly
+            // treat an "invalid" limit as a "valid" one. This is acceptable
+            // because the limit is just an assertion, and the inconsistency
+            // is not harmful.
             let last_update = self.last_update_limit_instant.load(Ordering::SeqCst);
             let now = self.start_instant.saturating_elapsed().as_millis() as u64;
             assert!(now >= last_update);
