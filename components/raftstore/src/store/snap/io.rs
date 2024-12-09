@@ -13,7 +13,9 @@ use engine_traits::{
     SstCompressionType, SstReader, SstWriter, SstWriterBuilder, WriteBatch,
 };
 use fail::fail_point;
-use file_system::{File, OpenOptions};
+#[cfg(not(test))]
+use file_system::get_thread_io_bytes_total;
+use file_system::{File, IoBytes, IoType, OpenOptions, WithIoType};
 use kvproto::encryptionpb::EncryptionMethod;
 use tikv_util::{
     box_try,
@@ -23,6 +25,8 @@ use tikv_util::{
 };
 
 use super::{CfFile, Error, IO_LIMITER_CHUNK_SIZE};
+
+const IO_LIMIT_CHECK_INTERVAL: usize = 8 * 1024;
 
 /// Used to check a procedure is stale or not.
 pub trait StaleDetector {
@@ -104,6 +108,23 @@ where
     Ok(stats)
 }
 
+#[cfg(not(test))]
+fn get_thread_io_bytes_stats() -> Result<file_system::IoBytes, String> {
+    file_system::get_thread_io_bytes_total()
+}
+
+#[cfg(test)]
+fn get_thread_io_bytes_stats() -> Result<file_system::IoBytes, String> {
+    use std::cell::Cell;
+    thread_local! {
+        static TOTAL_BYTES: Cell<IoBytes> = Cell::new(IoBytes::default());
+    }
+    let mut new_bytes = TOTAL_BYTES.get();
+    new_bytes.read += IO_LIMIT_CHECK_INTERVAL as u64 / 2;
+    TOTAL_BYTES.set(new_bytes);
+    Ok(new_bytes)
+}
+
 /// Build a snapshot file for the given column family in sst format.
 /// If there are no key-value pairs fetched, no files will be created at `path`,
 /// otherwise the file will be created and synchronized.
@@ -176,6 +197,21 @@ where
     };
 
     let instant = Instant::now();
+    let _io_type_guard = WithIoType::new(IoType::Export);
+    let mut prev_io_bytes = get_thread_io_bytes_stats().unwrap();
+    let mut next_io_check_size = stats.total_size + IO_LIMIT_CHECK_INTERVAL;
+    let handle_read_io_usage = |prev_io_bytes: &mut IoBytes, remained_quota: &mut usize| {
+        let cur_io_bytes = get_thread_io_bytes_stats().unwrap();
+        let read_io_bytes = (cur_io_bytes.read - prev_io_bytes.read) as usize;
+
+        while read_io_bytes > *remained_quota {
+            io_limiter.blocking_consume(IO_LIMITER_CHUNK_SIZE);
+            *remained_quota += IO_LIMITER_CHUNK_SIZE;
+        }
+        *remained_quota -= read_io_bytes;
+        *prev_io_bytes = cur_io_bytes;
+    };
+
     box_try!(snap.scan(cf, start_key, end_key, false, |key, value| {
         let entry_len = key.len() + value.len();
         if file_length + entry_len > raw_size_per_file as usize {
@@ -202,15 +238,14 @@ where
             }
         }
 
-        while entry_len > remained_quota {
-            // It's possible to acquire more than necessary, but let it be.
-            io_limiter.blocking_consume(IO_LIMITER_CHUNK_SIZE);
-            remained_quota += IO_LIMITER_CHUNK_SIZE;
-        }
-        remained_quota -= entry_len;
-
         stats.key_count += 1;
         stats.total_size += entry_len;
+
+        if stats.total_size >= next_io_check_size {
+            handle_read_io_usage(&mut prev_io_bytes, &mut remained_quota);
+            next_io_check_size = stats.total_size + IO_LIMIT_CHECK_INTERVAL;
+        }
+
         if let Err(e) = sst_writer.borrow_mut().put(key, value) {
             let io_error = io::Error::new(io::ErrorKind::Other, e);
             return Err(io_error.into());
@@ -218,6 +253,8 @@ where
         file_length += entry_len;
         Ok(true)
     }));
+    handle_read_io_usage(&mut prev_io_bytes, &mut remained_quota);
+
     if stats.key_count > 0 {
         box_try!(finish_sst_writer(sst_writer.into_inner(), path, key_mgr));
         cf_file.add_file(file_id);
@@ -601,5 +638,36 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_build_sst_with_io_limiter() {
+        let dir = Builder::new().prefix("test-io-limiter").tempdir().unwrap();
+        let db = open_test_db_with_nkeys(dir.path(), None, None, 1000).unwrap();
+        let bytes_per_sec = 8000_f64; // 8000B/s  
+        let limiter = Limiter::new(bytes_per_sec);
+        let snap_dir = Builder::new().prefix("snap-dir").tempdir().unwrap();
+        let mut cf_file = CfFile {
+            cf: CF_DEFAULT,
+            path: PathBuf::from(snap_dir.path()),
+            file_prefix: "test_sst".to_string(),
+            file_suffix: SST_FILE_SUFFIX.to_string(),
+            ..Default::default()
+        };
+
+        let start = Instant::now();
+        let stats = build_sst_cf_file_list::<KvTestEngine>(
+            &mut cf_file,
+            &db,
+            &db.snapshot(),
+            &keys::data_key(b""),
+            &keys::data_key(b"z"),
+            u64::MAX,
+            &limiter,
+            None,
+        )
+        .unwrap();
+        assert_eq!(stats.total_size, 11890);
+        assert!(start.saturating_elapsed_secs() > 1_f64);
     }
 }
