@@ -96,6 +96,13 @@ impl<W: SstWriter + 'static> Writer<W> {
         self.total_kvs = 0;
         self.total_bytes = 0;
         self.checksum = 0;
+        if physical_id == 0 {
+            for table_meta in &self.table_metas {
+                self.total_kvs += table_meta.total_kvs;
+                self.total_bytes += table_meta.total_bytes;
+                self.checksum ^= table_meta.crc64xor;
+            }
+        }
     }
 
     fn update_with(&mut self, entry: TxnEntry, need_checksum: bool) -> Result<()> {
@@ -169,6 +176,9 @@ impl<W: SstWriter + 'static> Writer<W> {
         let mut file = File::default();
         file.set_name(file_name);
         file.set_sha256(sha256);
+        file.set_total_kvs(self.total_kvs);
+        file.set_total_bytes(self.total_bytes);
+        file.set_crc64xor(self.checksum);
         file.set_table_metas(self.table_metas.into());
         file.set_cf(cf.0.to_owned());
         file.set_size(size);
@@ -772,10 +782,16 @@ mod tests {
         assert_table_meta(&table_metas[0], 1, 2, 26);
         assert_table_meta(&table_metas[1], 2, 2, 28);
         assert_table_meta(&table_metas[2], 3, 2, 30);
+        assert_eq!(files[0].total_kvs, 6);
+        assert_eq!(files[0].total_bytes, 84);
+        assert_eq!(files[0].crc64xor, table_metas[0].crc64xor^table_metas[1].crc64xor^table_metas[2].crc64xor);
         let table_metas = files[1].get_table_metas();
         assert!(table_metas.len() == 3);
         assert_table_meta(&table_metas[0], 1, 0, 0);
         assert_table_meta(&table_metas[1], 2, 0, 0);
         assert_table_meta(&table_metas[2], 3, 0, 0);
+        assert_eq!(files[1].total_kvs, 0);
+        assert_eq!(files[1].total_bytes, 0);
+        assert_eq!(files[1].crc64xor, table_metas[0].crc64xor^table_metas[1].crc64xor^table_metas[2].crc64xor);
     }
 }

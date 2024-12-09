@@ -67,7 +67,7 @@ struct Request {
     start_key: Vec<u8>,
     end_key: Vec<u8>,
     sub_ranges: Vec<KeyRange>,
-    sub_ranges_groups: Vec<SubRanges>,
+    sub_ranges_groups: Vec<SortedSubRanges>,
     start_ts: TimeStamp,
     end_ts: TimeStamp,
     // cloning on Limiter will share the same underlying token bucket thus can be used as
@@ -138,7 +138,7 @@ impl Task {
                 start_key: req.get_start_key().to_owned(),
                 end_key: req.get_end_key().to_owned(),
                 sub_ranges: req.get_sub_ranges().to_owned(),
-                sub_ranges_groups: req.get_sub_ranges_groups().to_owned(),
+                sub_ranges_groups: req.get_sorted_sub_ranges_groups().to_owned(),
                 start_ts: req.get_start_version().into(),
                 end_ts: req.get_end_version().into(),
                 backend: req.get_storage_backend().clone(),
@@ -1317,7 +1317,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
             )))
         } else {
             let mut ranges_groups = Vec::with_capacity(request.sub_ranges_groups.len());
-            for groups in <[SubRanges]>::iter(&request.sub_ranges_groups).rev() {
+            for groups in <[SortedSubRanges]>::iter(&request.sub_ranges_groups).rev() {
                 let mut ranges = Vec::with_capacity(groups.sub_ranges.len());
                 for rg in &groups.sub_ranges {
                     let start_key = codec.encode_backup_key(rg.start_key.clone());
@@ -2416,7 +2416,7 @@ pub mod tests {
         let backend = make_local_backend(tmp.path());
         let (tx, rx) = unbounded();
 
-        let mut ranges = SubRanges::default();
+        let mut ranges = SortedSubRanges::default();
         let mut sub_ranges = Vec::with_capacity(request_ranges.len());
         for (start_key, end_key) in request_ranges {
             let mut key_range = KeyRange::default();
@@ -2765,7 +2765,7 @@ pub mod tests {
         let backend = make_local_backend(tmp.path());
         let (tx, rx) = unbounded();
 
-        let mut ranges = SubRanges::default();
+        let mut ranges = SortedSubRanges::default();
         let mut sub_ranges = Vec::with_capacity(request_ranges.len());
         for (start_key, end_key) in request_ranges {
             let mut key_range = KeyRange::default();
@@ -2804,7 +2804,13 @@ pub mod tests {
         let mut actual_table_meta: HashMap<i64, (u64, u64)> = HashMap::new();
         for a in &resps {
             for f in a.get_files() {
+                let mut total_table_meta_kvs = 0;
+                let mut total_table_meta_bytes = 0;
+                let mut table_meta_checksum = 0;
                 for meta in f.get_table_metas() {
+                    total_table_meta_kvs += meta.total_kvs;
+                    total_table_meta_bytes += meta.total_bytes;
+                    table_meta_checksum ^= meta.crc64xor;
                     actual_table_meta
                         .entry(meta.physical_id)
                         .and_modify(|e| {
@@ -2812,6 +2818,11 @@ pub mod tests {
                             e.1 += meta.total_bytes;
                         })
                         .or_insert((meta.total_kvs, meta.total_bytes));
+                }
+                if !f.get_table_metas().is_empty() {
+                    assert_eq!(f.total_kvs, total_table_meta_kvs);
+                    assert_eq!(f.total_bytes, total_table_meta_bytes);
+                    assert_eq!(f.crc64xor, table_meta_checksum);
                 }
             }
             assert!(
@@ -2830,6 +2841,139 @@ pub mod tests {
             assert_eq!(kvs, actual_kvs);
             assert_eq!(bytes, actual_bytes);
         }
+    }
+
+    #[test]
+    fn test_seek_ranges_5() {
+        use tidb_query_datatype::codec::table;
+        let (_tmp, endpoint) = new_endpoint();
+
+        // [t1_i1, t1_i1, t1_r] means that the table with id 1 has index with id 1 and 2
+        // and row data on the region. {[t1_r]} means that the table with id 1
+        // has row data on the region, but the region is not in this TiKV.
+        //
+        // [t1_r, t2_i1, t2_i2, t2_r, t3_i1, t3_r, t4_r, t5_i1, t5_i2]
+        endpoint.region_info.set_regions(vec![(
+            table::encode_row_key(1, 300),
+            table::encode_index_seek_key(5, 2, b"2"),
+            1,
+        )]);
+        let request_ranges_groups: Vec<Vec<(Vec<u8>, Vec<u8>)>> = vec![
+            vec![
+                (
+                    table::encode_row_key(1, 0),
+                    table::encode_row_key(1, i64::MAX),
+                ),
+                (
+                    table::encode_index_seek_key(2, 1, b""),
+                    table::encode_index_seek_key(2, 1, &[u8::MAX]),
+                ),
+                (
+                    table::encode_index_seek_key(2, 2, b""),
+                    table::encode_index_seek_key(2, 2, &[u8::MAX]),
+                ),
+            ],
+            vec![
+                (
+                    table::encode_row_key(2, 0),
+                    table::encode_row_key(2, i64::MAX),
+                ),
+                (
+                    table::encode_index_seek_key(3, 1, b""),
+                    table::encode_index_seek_key(3, 1, &[u8::MAX]),
+                ),
+                (
+                    table::encode_row_key(3, 0),
+                    table::encode_row_key(3, i64::MAX),
+                ),
+            ],
+            vec![
+                (
+                    table::encode_row_key(4, 0),
+                    table::encode_row_key(4, i64::MAX),
+                ),
+                (
+                    table::encode_index_seek_key(5, 1, b""),
+                    table::encode_index_seek_key(5, 1, &[u8::MAX]),
+                ),
+                (
+                    table::encode_index_seek_key(5, 2, b""),
+                    table::encode_index_seek_key(5, 2, &[u8::MAX]),
+                ),
+            ],
+        ];
+        let expect: Vec<(Vec<u8>, Vec<u8>)> = vec![
+            (
+                table::encode_row_key(1, 300),
+                table::encode_index_seek_key(2, 2, &[u8::MAX]),
+            ),
+            (
+                table::encode_row_key(2, 0),
+                table::encode_row_key(3, i64::MAX),
+            ),
+            (
+                table::encode_row_key(4, 0),
+                table::encode_row_key(4, i64::MAX),
+            ),
+            (
+                table::encode_index_seek_key(5, 1, b""),
+                table::encode_index_seek_key(5, 2, b"2"),
+            ),
+        ];
+
+        let tmp = TempDir::new().unwrap();
+        let backend = make_local_backend(tmp.path());
+        let (tx, rx) = unbounded();
+
+        let mut ranges_groups = Vec::new();
+        for request_ranges in request_ranges_groups {
+            let mut ranges = SortedSubRanges::default();
+            let mut sub_ranges = Vec::with_capacity(request_ranges.len());
+            for (start_key, end_key) in request_ranges {
+                let mut key_range = KeyRange::default();
+                key_range.set_start_key(start_key);
+                key_range.set_end_key(end_key);
+                sub_ranges.push(key_range);
+            }
+            ranges.set_sub_ranges(sub_ranges.into());
+            ranges_groups.push(ranges);
+        }
+        let task = Task {
+            request: Request {
+                start_key: Vec::new(),
+                end_key: Vec::new(),
+                sub_ranges: Vec::new(),
+                sub_ranges_groups: ranges_groups,
+                start_ts: 1.into(),
+                end_ts: 1.into(),
+                backend,
+                rate_limiter: Limiter::new(f64::INFINITY),
+                cancel: Arc::default(),
+                is_raw_kv: false,
+                dst_api_ver: ApiVersion::V1,
+                cf: engine_traits::CF_DEFAULT,
+                compression_type: CompressionType::Unknown,
+                compression_level: 0,
+                cipher: CipherInfo::default(),
+                replica_read: false,
+                resource_group_name: "".into(),
+                source_tag: "br".into(),
+            },
+            resp: tx,
+        };
+        endpoint.handle_backup_task(task);
+        let resps: Vec<_> = block_on(rx.collect());
+        for a in &resps {
+            assert!(
+                expect
+                    .iter()
+                    .any(|b| { a.get_start_key() == b.0 && a.get_end_key() == b.1 }),
+                "{:?} {:?}",
+                resps,
+                expect
+            );
+        }
+        assert_eq!(resps.len(), expect.len());
     }
 
     #[test]

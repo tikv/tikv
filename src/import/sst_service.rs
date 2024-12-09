@@ -919,7 +919,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 }
             };
 
-            let mut rewrite_rules = req.get_rewrite_rules();
+            let mut rewrite_rules = req.get_sorted_rewrite_rules();
             if rewrite_rules.is_empty() {
                 rewrite_rules = std::slice::from_ref(req.get_rewrite_rule());
             }
