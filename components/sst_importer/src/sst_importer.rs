@@ -1230,7 +1230,7 @@ impl<E: KvEngine> SstImporter<E> {
         let mut iter = sst_reader.iter(IterOptions::default())?;
         let direct_retval = (|| -> Result<Option<_>> {
             if rewrite_rule.old_key_prefix != rewrite_rule.new_key_prefix
-                || rewrite_rule.new_timestamp != 0
+                || rewrite_rule.new_timestamp != 0 || rewrite_rule.ignore_after_timestamp != 0
             {
                 // must iterate if we perform key rewrite
                 return Ok(None);
@@ -1356,6 +1356,14 @@ impl<E: KvEngine> SstImporter<E> {
             }
 
             let mut value = Cow::Borrowed(iter.value());
+
+            if rewrite_rule.ignore_after_timestamp != 0 {
+                let ts = Key::decode_ts_from(iter.key())?;
+                if ts > TimeStamp::new(rewrite_rule.ignore_after_timestamp) {
+                    iter.next()?;
+                    continue;
+                }
+            }
 
             if rewrite_rule.new_timestamp != 0 {
                 data_key = Key::from_encoded(data_key)
