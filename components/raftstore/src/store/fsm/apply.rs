@@ -4071,7 +4071,6 @@ where
         let mut entries_size = 0;
         for cached_entries in apply.entries {
             let (e, sz) = cached_entries.take_entries();
-            entries_size += sz;
             if e.is_empty() {
                 let rid = self.delegate.region_id();
                 let StdRange { start, end } = cached_entries.range;
@@ -4079,10 +4078,13 @@ where
                     .raft_engine
                     .fetch_entries_to(rid, start, end, None, &mut entries)
                     .unwrap();
-            } else if entries.is_empty() {
-                entries = e;
             } else {
-                entries.extend(e);
+                entries_size += sz;
+                if entries.is_empty() {
+                    entries = e;
+                } else {
+                    entries.extend(e);
+                }
             }
         }
         if entries_size > 0 {
