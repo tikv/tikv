@@ -177,7 +177,8 @@ where
 
     let instant = Instant::now();
     let _io_type_guard = WithIoType::new(IoType::Export);
-    let mut prev_io_bytes = fetch_io_bytes()[IoType::Export as usize];
+    let mut prev_read_io_bytes = fetch_io_bytes()[IoType::Export as usize].read;
+    let mut prev_sst_file_size = sst_writer.borrow_mut().file_size();
     box_try!(snap.scan(cf, start_key, end_key, false, |key, value| {
         let entry_len = key.len() + value.len();
         if file_length + entry_len > raw_size_per_file as usize {
@@ -204,16 +205,6 @@ where
             }
         }
 
-        let cur_io_bytes = fetch_io_bytes()[IoType::Export as usize];
-        // TODO(@hhwyt): write bytes should also be considered.
-        let read_io_bytes = (cur_io_bytes.read - prev_io_bytes.read) as usize;
-        while read_io_bytes > remained_quota {
-            io_limiter.blocking_consume(IO_LIMITER_CHUNK_SIZE);
-            remained_quota += IO_LIMITER_CHUNK_SIZE;
-        }
-        remained_quota -= read_io_bytes;
-        prev_io_bytes = cur_io_bytes;
-
         stats.key_count += 1;
         stats.total_size += entry_len;
         if let Err(e) = sst_writer.borrow_mut().put(key, value) {
@@ -221,8 +212,29 @@ where
             return Err(io_error.into());
         }
         file_length += entry_len;
+
+        let cur_read_io_bytes = fetch_io_bytes()[IoType::Export as usize].read;
+        // TODO(@hhwyt): write bytes should also be considered.
+        let read_delta = cur_read_io_bytes - prev_read_io_bytes;
+        let write_delta = sst_writer.borrow_mut().file_size() - prev_sst_file_size;
+        let total_delta = (read_delta + write_delta) as usize;
+        // println!("read bytes: {}", cur_read_io_bytes);
+        // println!("read delta: {}", read_delta);
+        // println!("write bytes: {}", sst_writer.borrow_mut().file_size());
+        // println!("write delta: {}", write_delta);
+        // println!("total delta: {}", total_delta);
+        while total_delta > remained_quota {
+            io_limiter.blocking_consume(IO_LIMITER_CHUNK_SIZE);
+            remained_quota += IO_LIMITER_CHUNK_SIZE;
+        }
+        remained_quota -= total_delta;
+        prev_read_io_bytes = cur_read_io_bytes;
+        prev_sst_file_size = sst_writer.borrow_mut().file_size();
+
         Ok(true)
     }));
+    // let cur_io_bytes = fetch_io_bytes()[IoType::Export as usize];
+    // println!("current bytes: {:?}", cur_io_bytes);
     if stats.key_count > 0 {
         box_try!(finish_sst_writer(sst_writer.into_inner(), path, key_mgr));
         cf_file.add_file(file_id);
@@ -439,7 +451,7 @@ pub fn get_decrypter_reader(
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, path::PathBuf};
+    use std::{collections::HashMap, path::PathBuf, thread::sleep, time::Duration};
 
     use engine_test::kv::KvTestEngine;
     use engine_traits::CF_DEFAULT;
@@ -606,5 +618,46 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_build_sst_with_io_limiter() {
+        let dir = Builder::new().prefix("test-io-limiter").tempdir().unwrap();
+        // let mut db_opts = DbOptions::default();
+        // db_opts.set_use_direct_reads(true);
+        // db_opts.set_use_direct_io_for_flush_and_compaction(true);
+        // db_opts.set_info_log_level(rocksdb::LogLevel::Debug);    //
+        // db_opts.set_info_log_file("rocksdb_test.log"); // 指定日志文件
+        let db = open_test_db_with_100keys(dir.path(), None, None).unwrap();
+        let snap_dir = Builder::new().prefix("snap-dir").tempdir().unwrap();
+
+        let mut cf_file = CfFile {
+            cf: CF_DEFAULT,
+            path: PathBuf::from(snap_dir.path()),
+            file_prefix: "test_sst".to_string(),
+            file_suffix: SST_FILE_SUFFIX.to_string(),
+            ..Default::default()
+        };
+
+        let bytes_per_sec = 1024.0; // 1KB/s  
+        let limiter = Limiter::new(bytes_per_sec);
+        let start = Instant::now();
+        let stats = build_sst_cf_file_list::<KvTestEngine>(
+            &mut cf_file,
+            &db,
+            &db.snapshot(),
+            &keys::data_key(b""),
+            &keys::data_key(b"z"),
+            u64::MAX,
+            &limiter,
+            None,
+        )
+        .unwrap();
+
+        if stats.total_size > 1024 {
+            // assert!(start.elapsed().as_secs() >= 1);
+            println!("start.elapsed(): {:?}", stats.total_size);
+        }
+        sleep(Duration::from_secs(3600));
     }
 }
