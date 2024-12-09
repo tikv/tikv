@@ -3124,10 +3124,10 @@ mod tests {
                 false,
                 false,
             ),
-            (Json::from_f64(10.5).unwrap(), 11, false, false),
+            (Json::from_f64(10.5).unwrap(), 10, false, false),
             (Json::from_f64(10.4).unwrap(), 10, false, false),
             (Json::from_f64(-10.4).unwrap(), -10, false, false),
-            (Json::from_f64(-10.5).unwrap(), -11, false, false),
+            (Json::from_f64(-10.5).unwrap(), -10, false, false),
             (
                 Json::from_string(String::from("10.0")).unwrap(),
                 10,
