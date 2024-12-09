@@ -324,7 +324,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
             let engines = engines.clone();
             let data_dir = PathBuf::from(engines.kv.path());
             let snap_mgr = snap_mgr.clone();
-            bg_worker.spawn_interval_task(std::time::Duration::from_millis(100), move || {
+            bg_worker.spawn_interval_task(std::time::Duration::from_millis(1000), move || {
                 let snap_size = snap_mgr.get_total_snap_size().unwrap();
                 let kv_size = engines
                     .kv
