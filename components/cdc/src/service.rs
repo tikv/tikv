@@ -304,7 +304,6 @@ impl Service {
     ) -> Result<(), String> {
         let region_id = request.region_id;
         let req_id = RequestId(request.request_id);
-        let downstream_id = DownstreamId::new();
 
         let observed_range = ObservedRange::new(request.start_key.clone(), request.end_key.clone())
             .unwrap_or_else(|e| {
@@ -327,7 +326,7 @@ impl Service {
             request.kv_api,
             request.filter_loop,
             observed_range,
-            DownstreamSink::new(region_id, downstream_id, req_id, sink),
+            DownstreamSink::new(region_id, req_id, sink),
         );
         info!("creates cdc downstream"; "conn_id" => ?conn_id, "region_id" => region_id, "request_id" => ?req_id);
 
@@ -439,8 +438,7 @@ impl Service {
         });
 
         let peer = ctx.peer();
-        let workers = self.workers.clone();
-        workers.spawn(async move {
+        self.workers.spawn(async move {
             #[cfg(feature = "failpoints")]
             sleep_before_drain_change_event().await;
 

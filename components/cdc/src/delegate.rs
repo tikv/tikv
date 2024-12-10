@@ -128,17 +128,14 @@ impl DownstreamState {
 }
 
 pub struct Downstream {
-    /// A unique identifier of the Downstream.
     pub id: DownstreamId,
+
     /// The request ID set by CDC to identify events corresponding different
     /// requests.
     pub req_id: RequestId,
     pub conn_id: ConnId,
-
-    /// The IP address of downstream.
     pub peer: String,
     pub region_epoch: RegionEpoch,
-
     pub kv_api: ChangeDataRequestKvApi,
     pub filter_loop: bool,
     pub observed_range: ObservedRange,
@@ -181,10 +178,8 @@ impl Downstream {
             id: DownstreamId::new(),
             req_id,
             conn_id,
-
             peer,
             region_epoch,
-
             kv_api,
             filter_loop,
             observed_range,
@@ -1427,6 +1422,8 @@ mod tests {
     use futures::{executor::block_on, stream::StreamExt};
     use kvproto::{cdcpb::Event_oneof_event, errorpb::Error as ErrorHeader, metapb::Region};
     use tikv_util::memory::MemoryQuota;
+    use tikv_util::worker::dummy_scheduler;
+    use tikv_util::config::ReadableSize;
 
     use super::*;
     use crate::channel::{channel, recv_timeout, CdcEvent, SendError};
@@ -1439,24 +1436,28 @@ mod tests {
         region.mut_peers().push(Default::default());
         region.mut_region_epoch().set_version(2);
         region.mut_region_epoch().set_conf_ver(2);
-        let region_epoch = region.get_region_epoch().clone();
 
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
-        let (sink, mut drain) = channel(ConnId::new(), quota.clone());
-        let rx = drain.drain();
+        let conn_id = ConnId::new();
+        let (sink, mut drain) = channel(conn_id, quota.clone());
         let request_id = RequestId(123);
         let mut downstream = Downstream::new(
-            String::new(),
-            region_epoch,
             request_id,
-            ConnId::new(),
+            conn_id,
+            String::new(),
+            region.get_region_epoch().clone(),
             ChangeDataRequestKvApi::TiDb,
             false,
             ObservedRange::default(),
+            DownstreamSink::new(region_id, request_id, sink),
         );
-        downstream.set_sink(sink);
 
-        let mut delegate = Delegate::new(region_id, quota, Default::default());
+        let (tx, feedbacks) = dummy_scheduler();
+        let mut delegate = Delegate::new(
+            region_id, tx, quota, 
+            Arc::new(Mutex::new(OldValueCache::new(ReadableSize(1024)))),
+            Default::default()
+        );
         delegate.subscribe(downstream).unwrap();
         assert!(delegate.handle.is_observing());
 
@@ -1467,25 +1468,18 @@ mod tests {
         assert!(fails.is_empty());
         assert!(delegate.downstreams[0].observed_range.all_key_covered);
 
-        let rx_wrap = Cell::new(Some(rx));
         let receive_error = || {
-            let (event, rx) = block_on(rx_wrap.replace(None).unwrap().into_future());
-            rx_wrap.set(Some(rx));
-            if let CdcEvent::Event(mut e) = event.unwrap().0 {
-                assert_eq!(e.get_request_id(), request_id.0);
-                let event = e.event.take().unwrap();
-                match event {
-                    Event_oneof_event::Error(err) => err,
-                    other => panic!("unknown event {:?}", other),
-                }
-            } else {
-                panic!("unknown event")
-            }
+            let mut e = block_on(drain.next()).unwrap();
+            let events: Vec<_> = e.take_events().into();
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0].request_id, request_id.0);
+            assert!(events[0].has_error());
+            events[0].get_error()
         };
 
         let mut err_header = ErrorHeader::default();
         err_header.set_not_leader(Default::default());
-        delegate.stop(Error::request(err_header));
+        delegate.on_stop(Some(Error::request(err_header)));
         let err = receive_error();
         assert!(err.has_not_leader());
         // Observing is disabled by any error.
@@ -1493,17 +1487,17 @@ mod tests {
 
         let mut err_header = ErrorHeader::default();
         err_header.set_region_not_found(Default::default());
-        delegate.stop(Error::request(err_header));
+        delegate.on_stop(Some(Error::request(err_header)));
         let err = receive_error();
         assert!(err.has_region_not_found());
 
-        delegate.stop(Error::Sink(SendError::Congested));
+        delegate.on_stop(Some(Error::Sink(SendError::Congested)));
         let err = receive_error();
         assert!(err.has_congested());
 
         let mut err_header = ErrorHeader::default();
         err_header.set_epoch_not_match(Default::default());
-        delegate.stop(Error::request(err_header));
+        delegate.on_stop(Some(Error::request(err_header)));
         let err = receive_error();
         assert!(err.has_epoch_not_match());
 
@@ -1515,7 +1509,7 @@ mod tests {
         let mut response = AdminResponse::default();
         response.mut_split().set_left(region.clone());
         let err = delegate.sink_admin(request, response).err().unwrap();
-        delegate.stop(err);
+        delegate.on_stop(Some(err));
         let mut err = receive_error();
         assert!(err.has_epoch_not_match());
         err.take_epoch_not_match()
@@ -1529,7 +1523,7 @@ mod tests {
         let mut response = AdminResponse::default();
         response.mut_splits().set_regions(vec![region].into());
         let err = delegate.sink_admin(request, response).err().unwrap();
-        delegate.stop(err);
+        delegate.on_stop(Some(err));
         let mut err = receive_error();
         assert!(err.has_epoch_not_match());
         err.take_epoch_not_match()
@@ -1543,7 +1537,7 @@ mod tests {
         request.set_cmd_type(AdminCmdType::PrepareMerge);
         let response = AdminResponse::default();
         let err = delegate.sink_admin(request, response).err().unwrap();
-        delegate.stop(err);
+        delegate.on_stop(Some(err));
         let mut err = receive_error();
         assert!(err.has_epoch_not_match());
         assert!(err.take_epoch_not_match().current_regions.is_empty());
@@ -1552,7 +1546,7 @@ mod tests {
         request.set_cmd_type(AdminCmdType::CommitMerge);
         let response = AdminResponse::default();
         let err = delegate.sink_admin(request, response).err().unwrap();
-        delegate.stop(err);
+        delegate.on_stop(Some(err));
         let mut err = receive_error();
         assert!(err.has_epoch_not_match());
         assert!(err.take_epoch_not_match().current_regions.is_empty());
@@ -1561,7 +1555,7 @@ mod tests {
         request.set_cmd_type(AdminCmdType::RollbackMerge);
         let response = AdminResponse::default();
         let err = delegate.sink_admin(request, response).err().unwrap();
-        delegate.stop(err);
+        delegate.on_stop(Some(err));
         let mut err = receive_error();
         assert!(err.has_epoch_not_match());
         assert!(err.take_epoch_not_match().current_regions.is_empty());
@@ -1569,46 +1563,55 @@ mod tests {
 
     #[test]
     fn test_delegate_subscribe_unsubscribe() {
-        let new_downstream = |id: RequestId, region_version: u64| {
-            let peer = format!("{:?}", id);
+        let conn_id = ConnId::new();
+        let quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let (sink, mut drain) = channel(conn_id, quota.clone());
+
+        let new_downstream = |req_id: RequestId, region_version: u64, sink| {
             let mut epoch = RegionEpoch::default();
             epoch.set_conf_ver(region_version);
             epoch.set_version(region_version);
             Downstream::new(
-                peer,
+                req_id,
+                conn_id,
+                format!("{:?}", req_id),
                 epoch,
-                id,
-                ConnId::new(),
                 ChangeDataRequestKvApi::TiDb,
                 false,
                 ObservedRange::default(),
+                DownstreamSink::new(1, req_id, sink),
             )
         };
 
         // Create a new delegate.
-        let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let (tx, feedbacks) = dummy_scheduler();
         let txn_extra_op = Arc::new(AtomicCell::new(TxnExtraOp::Noop));
-        let mut delegate = Delegate::new(1, memory_quota, txn_extra_op.clone());
+
+        let mut delegate = Delegate::new(
+            1, tx, quota.clone(),
+            Arc::new(Mutex::new(OldValueCache::new(ReadableSize(1024)))),
+            txn_extra_op.clone()
+        );
         assert_eq!(txn_extra_op.load(), TxnExtraOp::Noop);
         assert!(delegate.handle.is_observing());
 
         // Subscribe once.
-        let downstream1 = new_downstream(RequestId(1), 1);
+        let downstream1 = new_downstream(RequestId(1), 1, sink.clone());
         let downstream1_id = downstream1.id;
         delegate.subscribe(downstream1).unwrap();
         assert_eq!(txn_extra_op.load(), TxnExtraOp::ReadOldValue);
         assert!(delegate.handle.is_observing());
 
         // Subscribe twice and then unsubscribe the second downstream.
-        let downstream2 = new_downstream(RequestId(2), 1);
+        let downstream2 = new_downstream(RequestId(2), 1, sink.clone());
         let downstream2_id = downstream2.id;
         delegate.subscribe(downstream2).unwrap();
-        assert!(!delegate.unsubscribe(downstream2_id, None));
+        block_on(delegate.on_stop_downstream(None, downstream2_id));
         assert_eq!(txn_extra_op.load(), TxnExtraOp::ReadOldValue);
         assert!(delegate.handle.is_observing());
 
         // `on_region_ready` when the delegate isn't resolved.
-        delegate.subscribe(new_downstream(RequestId(1), 2)).unwrap();
+        delegate.subscribe(new_downstream(RequestId(1), 2, sink.clone())).unwrap();
         let mut region = Region::default();
         region.mut_region_epoch().set_conf_ver(1);
         region.mut_region_epoch().set_version(1);
@@ -1619,21 +1622,21 @@ mod tests {
                 .unwrap();
             assert_eq!(failures.len(), 1);
             let id = failures[0].0.id;
-            delegate.unsubscribe(id, None);
-            assert_eq!(delegate.downstreams().len(), 1);
+            block_on(delegate.on_stop_downstream(None, id));
+            assert_eq!(delegate.downstreams.len(), 1);
         }
         assert_eq!(txn_extra_op.load(), TxnExtraOp::ReadOldValue);
         assert!(delegate.handle.is_observing());
 
         // Subscribe with an invalid epoch.
         delegate
-            .subscribe(new_downstream(RequestId(1), 2))
+            .subscribe(new_downstream(RequestId(1), 2, sink.clone()))
             .unwrap_err();
-        assert_eq!(delegate.downstreams().len(), 1);
+        assert_eq!(delegate.downstreams.len(), 1);
 
         // Unsubscribe all downstreams.
-        assert!(delegate.unsubscribe(downstream1_id, None));
-        assert!(delegate.downstreams().is_empty());
+        block_on(delegate.on_stop_downstream(None, downstream1_id));
+        assert!(delegate.downstreams.is_empty());
         assert_eq!(txn_extra_op.load(), TxnExtraOp::Noop);
         assert!(!delegate.handle.is_observing());
     }
@@ -1703,15 +1706,24 @@ mod tests {
 
     #[test]
     fn test_downstream_filter_entires() {
+        let conn_id = ConnId::new();
+        let quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let (sink, mut drain) = channel(conn_id, quota.clone());
+        let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let txn_extra_op = Arc::new(AtomicCell::new(TxnExtraOp::Noop));
+        let (tx, feedbacks) = dummy_scheduler();
+
         // Create a new delegate that observes [b, d).
         let observed_range = ObservedRange::new(
             Key::from_raw(b"b").into_encoded(),
             Key::from_raw(b"d").into_encoded(),
         )
         .unwrap();
-        let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
-        let txn_extra_op = Arc::new(AtomicCell::new(TxnExtraOp::Noop));
-        let mut delegate = Delegate::new(1, memory_quota, txn_extra_op);
+        let mut delegate = Delegate::new(
+            1, tx, memory_quota, 
+            Arc::new(Mutex::new(OldValueCache::new(ReadableSize(1024)))),
+            txn_extra_op
+            );
         assert!(delegate.handle.is_observing());
         assert!(delegate.init_lock_tracker());
 
@@ -1732,49 +1744,47 @@ mod tests {
                 false,
             )
             .to_bytes();
-            delegate.sink_txn_put(put, &mut rows_builder).unwrap();
+            block_on(delegate.sink_txn_put(put, &mut rows_builder)).unwrap();
         }
         assert_eq!(rows_builder.txns_by_key.len(), 5);
 
-        let (sink, mut drain) = channel(ConnId::new(), Arc::new(MemoryQuota::new(1024)));
         let mut downstream = Downstream::new(
+            RequestId(1),
+            conn_id,
             "peer".to_owned(),
             RegionEpoch::default(),
-            RequestId(1),
-            ConnId::new(),
             ChangeDataRequestKvApi::TiDb,
             false,
             observed_range,
+            DownstreamSink::new(1, RequestId(1),sink),
         );
-        downstream.set_sink(sink);
         downstream.get_state().store(DownstreamState::Normal);
         delegate.add_downstream(downstream);
         let (_, entries) = rows_builder.finish_build();
-        delegate
-            .sink_downstream_tidb(entries, |_, _| Ok(()))
+        let cb: OldValueCallback = Box::new(|_, _, _, _| Ok(None));
+        block_on(delegate.sink_downstream_tidb(entries, &cb))
             .unwrap();
 
-        let (mut tx, mut rx) = futures::channel::mpsc::unbounded();
-        let runtime = tokio::runtime::Runtime::new().unwrap();
-        runtime.spawn(async move {
-            drain.forward(&mut tx).await.unwrap();
-        });
-        let (e, _) = recv_timeout(&mut rx, std::time::Duration::from_secs(5))
-            .unwrap()
-            .unwrap();
+        let e = block_on(drain.next()).unwrap();
         assert_eq!(e.events[0].get_entries().get_entries().len(), 2, "{:?}", e);
     }
 
     fn test_downstream_txn_source_filter(txn_source: TxnSource, filter_loop: bool) {
+        let conn_id = ConnId::new();
+        let quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let (sink, mut drain) = channel(conn_id, quota.clone());
+        let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let cache = Arc::new(Mutex::new(OldValueCache::new(ReadableSize(1024))));
+        let txn_extra_op = Arc::new(AtomicCell::new(TxnExtraOp::Noop));
+        let (tx, feedbacks) = dummy_scheduler();
+
         // Create a new delegate that observes [a, f).
         let observed_range = ObservedRange::new(
             Key::from_raw(b"a").into_encoded(),
             Key::from_raw(b"f").into_encoded(),
         )
         .unwrap();
-        let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
-        let txn_extra_op = Arc::new(AtomicCell::new(TxnExtraOp::Noop));
-        let mut delegate = Delegate::new(1, memory_quota, txn_extra_op);
+        let mut delegate = Delegate::new(1, tx, memory_quota, cache, txn_extra_op);
         assert!(delegate.handle.is_observing());
         assert!(delegate.init_lock_tracker());
 
@@ -1799,36 +1809,28 @@ mod tests {
                 lock = lock.set_txn_source(txn_source.into());
             }
             put.value = lock.to_bytes();
-            delegate.sink_txn_put(put, &mut rows_builder).unwrap();
+            block_on(delegate.sink_txn_put(put, &mut rows_builder)).unwrap();
         }
         assert_eq!(rows_builder.txns_by_key.len(), 5);
 
-        let (sink, mut drain) = channel(ConnId::new(), Arc::new(MemoryQuota::new(1024)));
         let mut downstream = Downstream::new(
+            RequestId(1),
+            conn_id,
             "peer".to_owned(),
             RegionEpoch::default(),
-            RequestId(1),
-            ConnId::new(),
             ChangeDataRequestKvApi::TiDb,
             filter_loop,
             observed_range,
+            DownstreamSink::new(1, RequestId(1), sink),
         );
-        downstream.set_sink(sink);
         downstream.get_state().store(DownstreamState::Normal);
         delegate.add_downstream(downstream);
         let (_, entries) = rows_builder.finish_build();
-        delegate
-            .sink_downstream_tidb(entries, |_, _| Ok(()))
+        let cb: OldValueCallback = Box::new(|_, _, _, _| Ok(None));
+        block_on(delegate.sink_downstream_tidb(entries, &cb))
             .unwrap();
 
-        let (mut tx, mut rx) = futures::channel::mpsc::unbounded();
-        let runtime = tokio::runtime::Runtime::new().unwrap();
-        runtime.spawn(async move {
-            drain.forward(&mut tx).await.unwrap();
-        });
-        let (e, _) = recv_timeout(&mut rx, std::time::Duration::from_secs(5))
-            .unwrap()
-            .unwrap();
+        let e = block_on(drain.next()).unwrap();
         assert_eq!(e.events[0].get_entries().get_entries().len(), 1, "{:?}", e);
     }
 
@@ -1907,8 +1909,11 @@ mod tests {
 
     #[test]
     fn test_lock_tracker() {
+        let (tx, feedbacks) = dummy_scheduler();
+        let cache = Arc::new(Mutex::new(OldValueCache::new(ReadableSize(1024))));
+
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
-        let mut delegate = Delegate::new(1, quota.clone(), Default::default());
+        let mut delegate = Delegate::new(1, tx, quota.clone(), cache, Default::default());
         assert!(delegate.init_lock_tracker());
         assert!(!delegate.init_lock_tracker());
 
@@ -1965,8 +1970,10 @@ mod tests {
 
     #[test]
     fn test_lock_tracker_untrack_vacant() {
+        let (tx, feedbacks) = dummy_scheduler();
+        let cache = Arc::new(Mutex::new(OldValueCache::new(ReadableSize(1024))));
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
-        let mut delegate = Delegate::new(1, quota.clone(), Default::default());
+        let mut delegate = Delegate::new(1, tx, quota.clone(), cache, Default::default());
         assert!(delegate.init_lock_tracker());
         assert!(!delegate.init_lock_tracker());
 

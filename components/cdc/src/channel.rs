@@ -27,7 +27,6 @@ use tikv_util::{
 };
 
 use crate::{
-    delegate::DownstreamId,
     metrics::*,
     service::{ConnId, RequestId},
     Error, Result,
@@ -275,17 +274,15 @@ impl Drop for Drain {
 #[derive(Clone)]
 pub struct DownstreamSink {
     region_id: u64,
-    downstream_id: DownstreamId,
     req_id: RequestId,
     canceled: Arc<Mutex<bool>>,
     sink: Sink,
 }
 
 impl DownstreamSink {
-    pub fn new(region_id: u64, downstream_id: DownstreamId, req_id: RequestId, sink: Sink) -> Self {
+    pub fn new(region_id: u64, req_id: RequestId, sink: Sink) -> Self {
         DownstreamSink {
             region_id,
-            downstream_id,
             req_id,
             canceled: Arc::new(Mutex::new(false)),
             sink,
@@ -296,11 +293,11 @@ impl DownstreamSink {
         match e {
             SendError::Disconnected => {
                 debug!("cdc send event failed, disconnected";
-                    "region_id" => self.region_id, "downstream_id" => ?self.downstream_id);
+                    "region_id" => self.region_id, "request_id" => self.req_id.0);
             }
             SendError::Congested => {
                 info!("cdc send event failed, congested";
-                    "region_id" => self.region_id, "downstream_id" => ?self.downstream_id);
+                    "region_id" => self.region_id, "request_id" => self.req_id.0);
             }
         }
         Error::Sink(e)
