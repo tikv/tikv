@@ -1204,10 +1204,13 @@ where
         let snap_mgr = self.snap_mgr.clone().unwrap();
         let reserve_space = disk::get_disk_reserved_space();
         let reserve_raft_space = disk::get_raft_disk_reserved_space();
+<<<<<<< HEAD
         let need_update_disk_status = reserve_space != 0 || reserve_raft_space != 0;
         if !need_update_disk_status {
             info!("ignore updating disk status as no reserve space is set");
         }
+=======
+>>>>>>> d00d04b0d7 (storage: fix the check if `reserve-space` == 0. (#17964))
         let raft_engine = self.engines.as_ref().unwrap().raft_engine.clone();
         let tablet_registry = self.tablet_registry.clone().unwrap();
         let raft_path = raft_engine.get_engine_path().to_string();
@@ -1289,7 +1292,13 @@ where
                     );
                 }
                 // Update disk status if disk space checker is enabled.
+<<<<<<< HEAD
                 if need_update_disk_status {
+=======
+                if reserve_space == 0 && reserve_raft_space == 0 {
+                    info!("ignore updating disk status as no reserve space is set");
+                } else {
+>>>>>>> d00d04b0d7 (storage: fix the check if `reserve-space` == 0. (#17964))
                     disk::set_disk_status(cur_disk_status);
                 }
                 // Update disk capacity, used size and available size.
