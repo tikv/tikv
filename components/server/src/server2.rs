@@ -1253,7 +1253,7 @@ where
                 }
                 // Update disk status if disk space checker is enabled.
                 if reserve_space == 0 && reserve_raft_space == 0 {
-                    info!("disk space checker not enabled");
+                    info!("ignore updating disk status as no reserve space is set");
                 } else {
                     disk::set_disk_status(cur_disk_status);
                 }
