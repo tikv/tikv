@@ -1998,6 +1998,7 @@ checksum = "97369cbbc041bc366949bc74d34658d6cda5621039731c6310521892a3a20ae0"
 dependencies = [
  "proc-macro2",
  "quote",
+<<<<<<< HEAD
  "syn 2.0.101",
 ]
 
@@ -2008,6 +2009,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1435fa1053d8b2fbbe9be7e97eca7f33d37b28409959813daefc1446a14247f1"
 
 [[package]]
+=======
+ "syn 2.0.79",
+]
+
+[[package]]
+>>>>>>> 6aa21c600f (*: upgrade url to 2.5.4 to fix RUSTSEC-2024-0421. (#17963))
 name = "dyn-clone"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3398,7 +3405,11 @@ checksum = "1ec89e9337638ecdc08744df490b221a7399bf8d164eb52a665454e60e075ad6"
 dependencies = [
  "proc-macro2",
  "quote",
+<<<<<<< HEAD
  "syn 2.0.101",
+=======
+ "syn 2.0.79",
+>>>>>>> 6aa21c600f (*: upgrade url to 2.5.4 to fix RUSTSEC-2024-0421. (#17963))
 ]
 
 [[package]]
@@ -6653,7 +6664,11 @@ checksum = "c8af7666ab7b6390ab78131fb5b0fce11d6b7a6951602017c35fa82800708971"
 dependencies = [
  "proc-macro2",
  "quote",
+<<<<<<< HEAD
  "syn 2.0.101",
+=======
+ "syn 2.0.79",
+>>>>>>> 6aa21c600f (*: upgrade url to 2.5.4 to fix RUSTSEC-2024-0421. (#17963))
 ]
 
 [[package]]
@@ -8685,7 +8700,11 @@ checksum = "2380878cad4ac9aac1e2435f3eb4020e8374b5f13c296cb75b4620ff8e229154"
 dependencies = [
  "proc-macro2",
  "quote",
+<<<<<<< HEAD
  "syn 2.0.101",
+=======
+ "syn 2.0.79",
+>>>>>>> 6aa21c600f (*: upgrade url to 2.5.4 to fix RUSTSEC-2024-0421. (#17963))
  "synstructure",
 ]
 
@@ -8731,6 +8750,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "zerofrom"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cff3ee08c995dee1859d998dea82f7374f2826091dd9cd47def953cae446cd2e"
+dependencies = [
+ "zerofrom-derive",
+]
+
+[[package]]
+name = "zerofrom-derive"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "595eed982f7d355beb85837f651fa22e90b3c044842dc7f2c2842c086f295808"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.79",
+ "synstructure",
+]
+
+[[package]]
 name = "zeroize"
 version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8755,7 +8795,11 @@ checksum = "6eafa6dfb17584ea3e2bd6e76e0cc15ad7af12b09abdd1ca55961bed9b1063c6"
 dependencies = [
  "proc-macro2",
  "quote",
+<<<<<<< HEAD
  "syn 2.0.101",
+=======
+ "syn 2.0.79",
+>>>>>>> 6aa21c600f (*: upgrade url to 2.5.4 to fix RUSTSEC-2024-0421. (#17963))
 ]
 
 [[package]]
