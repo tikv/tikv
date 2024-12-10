@@ -105,6 +105,12 @@ pub struct Config {
     #[online_config(skip)]
     pub txn_status_cache_capacity: usize,
     pub memory_quota: ReadableSize,
+    /// Maximum max_ts deviation allowed from PD timestamp
+    pub max_ts_allowance_secs: u64,
+    /// How often to refresh the max_ts limit from PD
+    #[online_config(skip)]
+    pub max_ts_sync_interval_secs: u64,
+    pub panic_on_invalid_max_ts: bool,
     #[online_config(submodule)]
     pub flow_control: FlowControlConfig,
     #[online_config(submodule)]
@@ -140,6 +146,9 @@ impl Default for Config {
             io_rate_limit: IoRateLimitConfig::default(),
             background_error_recovery_window: ReadableDuration::hours(1),
             memory_quota: DEFAULT_TXN_MEMORY_QUOTA_CAPACITY,
+            max_ts_allowance_secs: 60,
+            max_ts_sync_interval_secs: 10,
+            panic_on_invalid_max_ts: true,
         }
     }
 }
@@ -217,6 +226,15 @@ impl Config {
                 self.memory_quota, self.scheduler_pending_write_threshold,
             );
             self.memory_quota = self.scheduler_pending_write_threshold;
+        }
+
+        if self.max_ts_allowance_secs < self.max_ts_sync_interval_secs {
+            warn!(
+                "storage.max-ts-allowance-secs is smaller than storage.max-ts-sync-interval-secs, \
+                increase to {}",
+                self.max_ts_sync_interval_secs,
+            );
+            self.max_ts_allowance_secs = self.max_ts_sync_interval_secs;
         }
 
         Ok(())
