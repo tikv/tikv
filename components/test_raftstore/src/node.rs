@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    path::Path,
+    path::{Path, PathBuf},
     sync::{atomic::AtomicU64, Arc, Mutex, RwLock},
 };
 
@@ -43,6 +43,7 @@ use tikv::{
 };
 use tikv_util::{
     config::VersionTrack,
+    sys::disk,
     time::ThreadReadId,
     worker::{Builder as WorkerBuilder, LazyWorker},
 };
@@ -331,6 +332,25 @@ impl Simulator for NodeCluster {
             Module::Coprocessor,
             Box::new(SplitCheckConfigManager(split_scheduler.clone())),
         );
+        // Spawn a task to update the disk status periodically.
+        {
+            let engines = engines.clone();
+            let data_dir = PathBuf::from(engines.kv.path());
+            let snap_mgr = snap_mgr.clone();
+            bg_worker.spawn_interval_task(std::time::Duration::from_millis(1000), move || {
+                let snap_size = snap_mgr.get_total_snap_size().unwrap();
+                let kv_size = engines
+                    .kv
+                    .get_engine_used_size()
+                    .expect("get kv engine size");
+                let used_size = snap_size + kv_size;
+                let (capacity, available) = disk::get_disk_space_stats(&data_dir).unwrap();
+
+                disk::set_disk_capacity(capacity);
+                disk::set_disk_used_size(used_size);
+                disk::set_disk_available_size(std::cmp::min(available, capacity - used_size));
+            });
+        }
 
         node.try_bootstrap_store(engines.clone())?;
         node.start(
