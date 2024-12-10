@@ -168,6 +168,11 @@ impl S3Storage {
         Self::new(Config::from_input(input)?)
     }
 
+    pub async fn from_input_async(input: InputConfig) -> io::Result<Self> {
+        let client = util::new_http_client();
+        Self::new_with_client(Config::from_input(input)?, client).await
+    }
+
     pub fn set_multi_part_size(&mut self, mut size: usize) {
         if size < MINIMUM_PART_SIZE {
             // default multi_part_size is 5MB, S3 cannot allow a smaller size.
@@ -179,10 +184,10 @@ impl S3Storage {
     /// Create a new S3 storage for the given config.
     pub fn new(config: Config) -> io::Result<Self> {
         let client = util::new_http_client();
-        Self::new_with_client(config, client)
+        block_on(Self::new_with_client(config, client))
     }
 
-    fn new_with_client<Http>(config: Config, client: Http) -> io::Result<Self>
+    async fn new_with_client<Http>(config: Config, client: Http) -> io::Result<Self>
     where
         Http: HttpClient + Clone + 'static,
     {
@@ -196,14 +201,14 @@ impl S3Storage {
                     .as_deref()
                     .map(|s| s.to_owned()),
             );
-            Self::maybe_assume_role(config, client, creds)
+            Self::maybe_assume_role(config, client, creds).await
         } else {
             let creds = util::new_credentials_provider(client.clone());
-            Self::maybe_assume_role(config, client, creds)
+            Self::maybe_assume_role(config, client, creds).await
         }
     }
 
-    fn maybe_assume_role<Creds, Http>(
+    async fn maybe_assume_role<Creds, Http>(
         config: Config,
         client: Http,
         credentials_provider: Creds,
@@ -229,17 +234,18 @@ impl S3Storage {
                 builder = builder.region(Region::new(region.to_string()));
             }
 
-            let credentials_provider: io::Result<AssumeRoleProvider> = block_on(async {
+            let credentials_provider: io::Result<AssumeRoleProvider> = async {
                 let sdk_config =
                     Self::load_sdk_config(&config, util::new_http_client(), credentials_provider)
                         .await?;
                 builder = builder.configure(&sdk_config);
                 Ok(builder.build().await)
-            });
-            Self::new_with_creds_client(config, client, credentials_provider?)
+            }
+            .await;
+            Self::new_with_creds_client_async(config, client, credentials_provider?).await
         } else {
             // or just use original cred_provider to access s3.
-            Self::new_with_creds_client(config, client, credentials_provider)
+            Self::new_with_creds_client_async(config, client, credentials_provider).await
         }
     }
 
@@ -264,6 +270,7 @@ impl S3Storage {
         Ok(loader.load().await)
     }
 
+    #[cfg(test)]
     fn new_with_creds_client<Creds, Http>(
         config: Config,
         client: Http,
