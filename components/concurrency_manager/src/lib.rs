@@ -20,7 +20,7 @@ use std::{
     mem::MaybeUninit,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc, Mutex,
+        Arc,
     },
     time::Duration,
 };
@@ -395,71 +395,55 @@ where
 }
 
 /// Trait to abstract time-related functionality, for a monotonic clock
-pub trait TimeProvider: Send + Sync {
+trait TimeProvider: Send + Sync {
     /// Returns the current instant.
     fn now(&self) -> Instant;
-
-    /// Returns the duration elapsed since the provided instant.
-    fn elapsed(&self, since: Instant) -> Duration;
 }
 
-pub struct CoarseInstantTimeProvider;
+struct CoarseInstantTimeProvider;
 
 impl TimeProvider for CoarseInstantTimeProvider {
     fn now(&self) -> Instant {
         Instant::now_coarse()
     }
-
-    fn elapsed(&self, since: Instant) -> Duration {
-        self.now().saturating_duration_since(since)
-    }
-}
-
-#[derive(Clone)]
-pub struct MockTimeProvider {
-    current_time: Arc<Mutex<Instant>>,
-}
-
-impl MockTimeProvider {
-    /// Creates a new MockTimeProvider initialized with the given instant.
-    pub fn new(start_time: Instant) -> Self {
-        MockTimeProvider {
-            current_time: Arc::new(Mutex::new(start_time)),
-        }
-    }
-
-    /// Advances the current time by the specified duration.
-    pub fn advance(&self, duration: Duration) {
-        let mut time = self.current_time.lock().unwrap();
-        // Note: Instant doesn't support addition, so we mock behavior.
-        // This simplistic approach assumes no overflow.
-        *time += duration;
-    }
-
-    /// Sets the current time to the specified instant.
-    pub fn set_time(&self, new_time: Instant) {
-        let mut time = self.current_time.lock().unwrap();
-        *time = new_time;
-    }
-}
-
-impl TimeProvider for MockTimeProvider {
-    fn now(&self) -> Instant {
-        let time = self.current_time.lock().unwrap();
-        *time
-    }
-
-    fn elapsed(&self, since: Instant) -> Duration {
-        let now = self.now();
-        now.saturating_duration_since(since)
-    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use txn_types::LockType;
 
     use super::*;
+
+    #[derive(Clone)]
+    struct MockTimeProvider {
+        current_time: Arc<Mutex<Instant>>,
+    }
+
+    impl MockTimeProvider {
+        /// Creates a new MockTimeProvider initialized with the given instant.
+        fn new(start_time: Instant) -> Self {
+            MockTimeProvider {
+                current_time: Arc::new(Mutex::new(start_time)),
+            }
+        }
+
+        /// Advances the current time by the specified duration.
+        fn advance(&self, duration: Duration) {
+            let mut time = self.current_time.lock().unwrap();
+            // Note: Instant doesn't support addition, so we mock behavior.
+            // This simplistic approach assumes no overflow.
+            *time += duration;
+        }
+    }
+
+    impl TimeProvider for MockTimeProvider {
+        fn now(&self) -> Instant {
+            let time = self.current_time.lock().unwrap();
+            *time
+        }
+    }
 
     #[tokio::test]
     async fn test_lock_keys_order() {
