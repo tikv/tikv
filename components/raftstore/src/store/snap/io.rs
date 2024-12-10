@@ -198,18 +198,26 @@ where
 
     let instant = Instant::now();
     let _io_type_guard = WithIoType::new(IoType::Export);
-    let mut prev_io_bytes = get_thread_io_bytes_stats().unwrap();
-    let mut prev_sst_file_size = sst_writer.borrow_mut().file_size();
     let mut next_io_check_size = stats.total_size + IO_LIMIT_CHECK_INTERVAL;
-    let handle_read_io_usage = |prev_io_bytes: &mut IoBytes, remained_quota: &mut usize| {
-        let cur_io_bytes = get_thread_io_bytes_stats().unwrap();
-        let read_io_bytes = (cur_io_bytes.read - prev_io_bytes.read) as usize;
+    let mut prev_io_bytes = IoBytes {
+        read: get_thread_io_bytes_stats().unwrap().read,
+        write: sst_writer.borrow_mut().file_size(),
+    };
+    let apply_io_limiter = |prev_io_bytes: &mut IoBytes, remained_quota: &mut u64| {
+        let cur_io_bytes = IoBytes {
+            read: get_thread_io_bytes_stats().unwrap().read,
+            write: sst_writer.borrow_mut().file_size(),
+        };
 
-        while read_io_bytes > *remained_quota {
+        let read_delta = cur_io_bytes.read - prev_io_bytes.read;
+        let write_delta = cur_io_bytes.write - prev_io_bytes.write;
+        let total_delta = read_delta + write_delta;
+
+        while total_delta > *remained_quota {
             io_limiter.blocking_consume(IO_LIMITER_CHUNK_SIZE);
-            *remained_quota += IO_LIMITER_CHUNK_SIZE;
+            *remained_quota += IO_LIMITER_CHUNK_SIZE as u64;
         }
-        *remained_quota -= read_io_bytes;
+        *remained_quota -= total_delta;
         *prev_io_bytes = cur_io_bytes;
     };
 
@@ -239,18 +247,11 @@ where
             }
         }
 
-        while entry_len > remained_quota {
-            // It's possible to acquire more than necessary, but let it be.
-            io_limiter.blocking_consume(IO_LIMITER_CHUNK_SIZE);
-            remained_quota += IO_LIMITER_CHUNK_SIZE;
-        }
-        remained_quota -= entry_len;
-
         stats.key_count += 1;
         stats.total_size += entry_len;
 
         if stats.total_size >= next_io_check_size {
-            handle_read_io_usage(&mut prev_io_bytes, &mut remained_quota);
+            apply_io_limiter(&mut prev_io_bytes, &mut remained_quota);
             next_io_check_size = stats.total_size + IO_LIMIT_CHECK_INTERVAL;
         }
 
@@ -261,7 +262,7 @@ where
         file_length += entry_len;
         Ok(true)
     }));
-    handle_read_io_usage(&mut prev_io_bytes, &mut remained_quota);
+    apply_io_limiter(&mut prev_io_bytes, &mut remained_quota);
 
     if stats.key_count > 0 {
         box_try!(finish_sst_writer(sst_writer.into_inner(), path, key_mgr));
@@ -648,11 +649,14 @@ mod tests {
         }
     }
 
+    // Logical size: 11890
+    // Physical size:
+    // Io-bandwitdh alloc: 8192 read + (715+756) write = 9623kB
     #[test]
     fn test_build_sst_with_io_limiter() {
         let dir = Builder::new().prefix("test-io-limiter").tempdir().unwrap();
         let db = open_test_db_with_nkeys(dir.path(), None, None, 1000).unwrap();
-        let bytes_per_sec = 8000_f64; // 8000B/s  
+        let bytes_per_sec = 9622_f64; // 9622B/s  
         let limiter = Limiter::new(bytes_per_sec);
         let snap_dir = Builder::new().prefix("snap-dir").tempdir().unwrap();
         let mut cf_file = CfFile {
