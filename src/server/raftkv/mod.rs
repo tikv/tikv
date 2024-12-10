@@ -22,7 +22,7 @@ use std::{
 
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot};
+use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot, CF_LOCK};
 use futures::{future::BoxFuture, task::AtomicWaker, Future, Stream, StreamExt, TryFutureExt};
 use hybrid_engine::HybridEngineSnapshot;
 use in_memory_engine::RegionCacheMemoryEngine;
@@ -506,6 +506,21 @@ where
         }
 
         let reqs: Vec<Request> = batch.modifies.into_iter().map(Into::into).collect();
+        // Ref: https://github.com/tikv/tikv/issues/16818.
+        // Check for duplicate key entries before proposing commands.
+        // TODO: remove this check when the cause of issue 16818 is located.
+        let mut keys_set = std::collections::HashSet::new();
+        for req in &reqs {
+            if req.has_put() && req.get_put().get_cf() == CF_LOCK {
+                let key = req.get_put().get_key();
+                if !keys_set.insert(key.to_vec()) {
+                    panic!(
+                        "found duplicate key in Lock CF PUT request, key: {:?}, extra: {:?}, ctx: {:?}, reqs: {:?}, avoid_batch:{:?}",
+                        key, batch.extra, ctx, reqs, batch.avoid_batch
+                    );
+                }
+            }
+        }
         let txn_extra = batch.extra;
         let mut header = new_request_header(ctx);
         if batch.avoid_batch {
@@ -606,13 +621,19 @@ where
     type IMSnap = RegionSnapshot<HybridEngineSnapshot<E, RegionCacheMemoryEngine>>;
     type IMSnapshotRes = impl Future<Output = kv::Result<Self::IMSnap>> + Send;
     fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes {
-        async_snapshot(&mut self.router, ctx).map_ok(|region_snap| {
+        let replica_read = ctx.pb_ctx.get_replica_read();
+        async_snapshot(&mut self.router, ctx).map_ok(move |region_snap| {
             // TODO: Remove replace_snapshot. Taking a snapshot and replacing it
             // with a new one is a bit confusing.
             // A better way to build an in-memory snapshot is to return
             // `HybridEngineSnapshot<RegionSnapshot<E>, RegionCacheMemoryEngine>>;`
             // so the `replace_snapshot` can be removed.
-            region_snap.replace_snapshot(move |disk_snap, pinned| {
+            region_snap.replace_snapshot(move |disk_snap, mut pinned| {
+                // Disable in-memory-engine snapshot for now as there may be some bugs.
+                // TODO: we may remove this restriction once we fix the related bug.
+                if replica_read {
+                    pinned = None;
+                }
                 HybridEngineSnapshot::from_observed_snapshot(disk_snap, pinned)
             })
         })

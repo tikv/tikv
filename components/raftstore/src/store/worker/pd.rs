@@ -44,7 +44,7 @@ use tikv_util::{
     box_err, debug, error, info,
     metrics::ThreadInfoStatistics,
     store::QueryStats,
-    sys::{disk::get_disk_space_stats, thread::StdThreadBuildWrapper, SysQuota},
+    sys::{disk, thread::StdThreadBuildWrapper, SysQuota},
     thd_name,
     time::{Instant as TiInstant, UnixSecs},
     timer::GLOBAL_TIMER_HANDLE,
@@ -70,7 +70,7 @@ use crate::{
             AutoSplitController, ReadStats, SplitConfigChange, WriteStats,
         },
         Callback, CasualMessage, Config, PeerMsg, RaftCmdExtraOpts, RaftCommand, RaftRouter,
-        SnapManager, StoreInfo, StoreMsg, TxnExt,
+        SnapManager, StoreMsg, TxnExt,
     },
 };
 
@@ -103,10 +103,9 @@ pub trait FlowStatsReporter: Send + Clone + Sync + 'static {
     fn report_write_stats(&self, write_stats: WriteStats);
 }
 
-impl<EK, ER> FlowStatsReporter for Scheduler<Task<EK, ER>>
+impl<EK> FlowStatsReporter for Scheduler<Task<EK>>
 where
     EK: KvEngine,
-    ER: RaftEngine,
 {
     fn report_read_stats(&self, read_stats: ReadStats) {
         if let Err(e) = self.schedule(Task::ReadStats { read_stats }) {
@@ -136,10 +135,9 @@ pub struct HeartbeatTask {
 }
 
 /// Uses an asynchronous thread to tell PD something.
-pub enum Task<EK, ER>
+pub enum Task<EK>
 where
     EK: KvEngine,
-    ER: RaftEngine,
 {
     AskSplit {
         region: metapb::Region,
@@ -165,7 +163,6 @@ where
     Heartbeat(HeartbeatTask),
     StoreHeartbeat {
         stats: pdpb::StoreStats,
-        store_info: Option<StoreInfo<EK, ER>>,
         report: Option<pdpb::StoreReport>,
         dr_autosync_status: Option<StoreDrAutoSyncStatus>,
     },
@@ -381,10 +378,9 @@ impl PartialOrd for PeerCmpReadStat {
     }
 }
 
-impl<EK, ER> Display for Task<EK, ER>
+impl<EK> Display for Task<EK>
 where
     EK: KvEngine,
-    ER: RaftEngine,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
@@ -512,12 +508,11 @@ fn convert_record_pairs(m: HashMap<String, u64>) -> RecordPairVec {
 }
 
 #[derive(Clone)]
-pub struct WrappedScheduler<EK: KvEngine, ER: RaftEngine>(Scheduler<Task<EK, ER>>);
+pub struct WrappedScheduler<EK: KvEngine>(Scheduler<Task<EK>>);
 
-impl<EK, ER> Collector for WrappedScheduler<EK, ER>
+impl<EK> Collector for WrappedScheduler<EK>
 where
     EK: KvEngine,
-    ER: RaftEngine,
 {
     fn collect(&self, records: Arc<RawRecords>) {
         self.0.schedule(Task::RegionCpuRecords(records)).ok();
@@ -536,10 +531,9 @@ pub trait StoreStatsReporter: Send + Clone + Sync + 'static + Collector {
     fn update_latency_stats(&self, timer_tick: u64, factor: InspectFactor);
 }
 
-impl<EK, ER> StoreStatsReporter for WrappedScheduler<EK, ER>
+impl<EK> StoreStatsReporter for WrappedScheduler<EK>
 where
     EK: KvEngine,
-    ER: RaftEngine,
 {
     fn report_store_infos(
         &self,
@@ -879,8 +873,8 @@ where
     // use for Runner inner handle function to send Task to itself
     // actually it is the sender connected to Runner's Worker which
     // calls Runner's run() on Task received.
-    scheduler: Scheduler<Task<EK, ER>>,
-    stats_monitor: StatsMonitor<WrappedScheduler<EK, ER>>,
+    scheduler: Scheduler<Task<EK>>,
+    stats_monitor: StatsMonitor<WrappedScheduler<EK>>,
     store_heartbeat_interval: Duration,
 
     // region_id -> total_cpu_time_ms (since last region heartbeat)
@@ -911,7 +905,7 @@ where
         store_id: u64,
         pd_client: Arc<T>,
         router: RaftRouter<EK, ER>,
-        scheduler: Scheduler<Task<EK, ER>>,
+        scheduler: Scheduler<Task<EK>>,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
         snap_mgr: SnapManager,
@@ -1046,7 +1040,7 @@ where
     // be called in an asynchronous context.
     fn handle_ask_batch_split(
         router: RaftRouter<EK, ER>,
-        scheduler: Scheduler<Task<EK, ER>>,
+        scheduler: Scheduler<Task<EK>>,
         pd_client: Arc<T>,
         mut region: metapb::Region,
         mut split_keys: Vec<Vec<u8>>,
@@ -1183,7 +1177,7 @@ where
     fn handle_store_heartbeat(
         &mut self,
         mut stats: pdpb::StoreStats,
-        store_info: Option<StoreInfo<EK, ER>>,
+        is_fake_heartbeat: bool,
         store_report: Option<pdpb::StoreReport>,
         dr_autosync_status: Option<StoreDrAutoSyncStatus>,
     ) {
@@ -1214,35 +1208,17 @@ where
         }
 
         stats = collect_report_read_peer_stats(HOTSPOT_REPORT_CAPACITY, report_peers, stats);
-        let (capacity, used_size, available) = if store_info.is_some() {
-            match collect_engine_size(
-                &self.coprocessor_host,
-                store_info.as_ref(),
-                self.snap_mgr.get_total_snap_size().unwrap(),
-            ) {
-                Some((capacity, used_size, available)) => {
-                    // Update last reported infos on engine_size.
-                    self.store_stat.engine_last_capacity_size = capacity;
-                    self.store_stat.engine_last_used_size = used_size;
-                    self.store_stat.engine_last_available_size = available;
-                    (capacity, used_size, available)
-                }
-                None => return,
-            }
-        } else {
-            (
-                self.store_stat.engine_last_capacity_size,
-                self.store_stat.engine_last_used_size,
-                self.store_stat.engine_last_available_size,
-            )
-        };
-
-        stats.set_capacity(capacity);
-        stats.set_used_size(used_size);
-
+        // Fetch all size infos and update last reported infos on engine_size.
+        let (capacity, used_size, available) = collect_engine_size(&self.coprocessor_host);
         if available == 0 {
             warn!("no available space");
         }
+        self.store_stat.engine_last_capacity_size = capacity;
+        self.store_stat.engine_last_used_size = used_size;
+        self.store_stat.engine_last_available_size = available;
+
+        stats.set_capacity(capacity);
+        stats.set_used_size(used_size);
         stats.set_available(available);
         stats.set_bytes_read(
             self.store_stat.engine_total_bytes_read - self.store_stat.engine_last_total_bytes_read,
@@ -1273,22 +1249,18 @@ where
         self.store_stat
             .engine_last_query_num
             .fill_query_stats(&self.store_stat.engine_total_query_num);
-        self.store_stat.last_report_ts = if store_info.is_some() {
+        self.store_stat.last_report_ts = if !is_fake_heartbeat {
             UnixSecs::now()
         } else {
-            // If `store_info` is None, the given Task::StoreHeartbeat should be a fake
-            // heartbeat to PD, we won't update the last_report_ts to avoid incorrectly
-            // marking current TiKV node in normal state.
+            // If `is_fake_heartbeat == true`, the given Task::StoreHeartbeat should be a
+            // fake heartbeat to PD, we won't update the last_report_ts to avoid
+            // incorrectly marking current TiKV node in normal state.
             self.store_stat.last_report_ts
         };
         self.store_stat.region_bytes_written.flush();
         self.store_stat.region_keys_written.flush();
         self.store_stat.region_bytes_read.flush();
         self.store_stat.region_keys_read.flush();
-
-        STORE_SIZE_EVENT_INT_VEC.capacity.set(capacity as i64);
-        STORE_SIZE_EVENT_INT_VEC.available.set(available as i64);
-        STORE_SIZE_EVENT_INT_VEC.used.set(used_size as i64);
 
         let slow_score = self.health_reporter.get_slow_score();
         stats.set_slow_score(slow_score as u64);
@@ -1889,7 +1861,7 @@ where
         stats.set_is_busy(true);
 
         // We do not need to report store_info, so we just set `None` here.
-        self.handle_store_heartbeat(stats, None, None, None);
+        self.handle_store_heartbeat(stats, true, None, None);
         warn!("scheduling store_heartbeat timeout, force report store slow score to pd.";
             "store_id" => self.store_id,
         );
@@ -2036,9 +2008,9 @@ where
     ER: RaftEngine,
     T: PdClient,
 {
-    type Task = Task<EK, ER>;
+    type Task = Task<EK>;
 
-    fn run(&mut self, task: Task<EK, ER>) {
+    fn run(&mut self, task: Task<EK>) {
         debug!("executing task"; "task" => %task);
 
         if !self.is_hb_receiver_scheduled {
@@ -2243,10 +2215,9 @@ where
             }
             Task::StoreHeartbeat {
                 stats,
-                store_info,
                 report,
                 dr_autosync_status,
-            } => self.handle_store_heartbeat(stats, store_info, report, dr_autosync_status),
+            } => self.handle_store_heartbeat(stats, false, report, dr_autosync_status),
             Task::ReportBatchSplit { regions } => self.handle_report_batch_split(regions),
             Task::ValidatePeer { region, peer } => self.handle_validate_peer(region, peer),
             Task::ReadStats { read_stats } => self.handle_read_stats(read_stats),
@@ -2500,51 +2471,16 @@ fn collect_report_read_peer_stats(
     stats
 }
 
-fn collect_engine_size<EK: KvEngine, ER: RaftEngine>(
-    coprocessor_host: &CoprocessorHost<EK>,
-    store_info: Option<&StoreInfo<EK, ER>>,
-    snap_mgr_size: u64,
-) -> Option<(u64, u64, u64)> {
+fn collect_engine_size<EK: KvEngine>(coprocessor_host: &CoprocessorHost<EK>) -> (u64, u64, u64) {
     if let Some(engine_size) = coprocessor_host.on_compute_engine_size() {
-        return Some((engine_size.capacity, engine_size.used, engine_size.avail));
-    }
-    let store_info = store_info.unwrap();
-    let (disk_cap, disk_avail) = match get_disk_space_stats(store_info.kv_engine.path()) {
-        Err(e) => {
-            error!(
-                "get disk stat for rocksdb failed";
-                "engine_path" => store_info.kv_engine.path(),
-                "err" => ?e
-            );
-            return None;
-        }
-        Ok((total_size, available_size)) => (total_size, available_size),
-    };
-    let capacity = if store_info.capacity == 0 || disk_cap < store_info.capacity {
-        disk_cap
+        (engine_size.capacity, engine_size.used, engine_size.avail)
     } else {
-        store_info.capacity
-    };
-    let raft_size = store_info
-        .raft_engine
-        .get_engine_size()
-        .expect("raft engine used size");
-
-    let kv_size = store_info
-        .kv_engine
-        .get_engine_used_size()
-        .expect("kv engine used size");
-
-    STORE_SIZE_EVENT_INT_VEC.raft_size.set(raft_size as i64);
-    STORE_SIZE_EVENT_INT_VEC.snap_size.set(snap_mgr_size as i64);
-    STORE_SIZE_EVENT_INT_VEC.kv_size.set(kv_size as i64);
-
-    let used_size = snap_mgr_size + kv_size + raft_size;
-    let mut available = capacity.checked_sub(used_size).unwrap_or_default();
-    // We only care about rocksdb SST file size, so we should check disk available
-    // here.
-    available = cmp::min(available, disk_avail);
-    Some((capacity, used_size, available))
+        (
+            disk::get_disk_capacity(),
+            disk::get_disk_used_size(),
+            disk::get_disk_available_size(),
+        )
+    }
 }
 
 fn get_read_query_num(stat: &pdpb::QueryStats) -> u64 {
@@ -2569,17 +2505,17 @@ mod tests {
     fn test_collect_stats() {
         use std::{sync::Mutex, time::Instant};
 
-        use engine_test::{kv::KvTestEngine, raft::RaftTestEngine};
+        use engine_test::kv::KvTestEngine;
 
         struct RunnerTest {
             store_stat: Arc<Mutex<StoreStat>>,
-            stats_monitor: StatsMonitor<WrappedScheduler<KvTestEngine, RaftTestEngine>>,
+            stats_monitor: StatsMonitor<WrappedScheduler<KvTestEngine>>,
         }
 
         impl RunnerTest {
             fn new(
                 interval: u64,
-                scheduler: Scheduler<Task<KvTestEngine, RaftTestEngine>>,
+                scheduler: Scheduler<Task<KvTestEngine>>,
                 store_stat: Arc<Mutex<StoreStat>>,
             ) -> RunnerTest {
                 let mut stats_monitor = StatsMonitor::new(
@@ -2615,9 +2551,9 @@ mod tests {
         }
 
         impl Runnable for RunnerTest {
-            type Task = Task<KvTestEngine, RaftTestEngine>;
+            type Task = Task<KvTestEngine>;
 
-            fn run(&mut self, task: Task<KvTestEngine, RaftTestEngine>) {
+            fn run(&mut self, task: Task<KvTestEngine>) {
                 if let Task::StoreInfos {
                     cpu_usages,
                     read_io_rates,
@@ -2683,7 +2619,7 @@ mod tests {
         assert_eq!(store_stats.peer_stats.len(), 3)
     }
 
-    use engine_test::{kv::KvTestEngine, raft::RaftTestEngine};
+    use engine_test::kv::KvTestEngine;
     use metapb::Peer;
     use resource_metering::{RawRecord, TagInfos};
 
@@ -2814,12 +2750,7 @@ mod tests {
         let obs = PdObserver::default();
         host.registry
             .register_pd_task_observer(1, BoxPdTaskObserver::new(obs));
-        let store_size = collect_engine_size::<KvTestEngine, RaftTestEngine>(&host, None, 0);
-        let (cap, used, avail) = if let Some((cap, used, avail)) = store_size {
-            (cap, used, avail)
-        } else {
-            panic!("store_size should not be none");
-        };
+        let (cap, used, avail) = collect_engine_size::<KvTestEngine>(&host);
         assert_eq!(cap, 444);
         assert_eq!(used, 111);
         assert_eq!(avail, 333);
@@ -2827,7 +2758,7 @@ mod tests {
 
     #[test]
     fn test_pd_worker_send_stats_on_read_and_cpu() {
-        let mut pd_worker: LazyWorker<Task<KvTestEngine, RaftTestEngine>> =
+        let mut pd_worker: LazyWorker<Task<KvTestEngine>> =
             LazyWorker::new("test-pd-worker-collect-stats");
         // Set the interval long enough for mocking the channel full state.
         let interval = 600_u64;

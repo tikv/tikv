@@ -551,7 +551,7 @@ macro_rules! impl_write {
                         Ok(r) => r,
                         Err(e) => return (Err(e), Some(rx)),
                     };
-                    let (meta, resource_limiter) = match first_req {
+                    let (meta, resource_limiter, txn_source) = match first_req {
                         Some(r) => {
                             let limiter = resource_manager.as_ref().and_then(|m| {
                                 m.get_background_resource_limiter(
@@ -561,8 +561,9 @@ macro_rules! impl_write {
                                     r.get_context().get_request_source(),
                                 )
                             });
+                            let txn_source = r.get_context().get_txn_source();
                             match r.chunk {
-                                Some($chunk_ty::Meta(m)) => (m, limiter),
+                                Some($chunk_ty::Meta(m)) => (m, limiter, txn_source),
                                 _ => return (Err(Error::InvalidChunk), Some(rx)),
                             }
                         }
@@ -609,7 +610,7 @@ macro_rules! impl_write {
                         }
                     };
 
-                    let writer = match import.$writer_fn(&*tablet, meta) {
+                    let writer = match import.$writer_fn(&*tablet, meta, txn_source) {
                         Ok(w) => w,
                         Err(e) => {
                             error!("build writer failed {:?}", e);
