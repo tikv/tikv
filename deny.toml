@@ -73,12 +73,6 @@ ignore = [
     #
     # TODO: Upgrade clap to v4.x.
     "RUSTSEC-2021-0145",
-    # Ignore RUSTSEC-2024-0421 because the licenses of some dependencies in
-    # `url-2.5.4` are not permitted.
-    #
-    # See https://github.com/servo/rust-url/issues/992
-    # TODO: Upgrade idna to 1.0.3 and url to 2.5.4.
-    "RUSTSEC-2024-0421",
 ]
 
 # TiKV is licensed under Apache 2.0, according to ASF 3RD PARTY LICENSE POLICY,
