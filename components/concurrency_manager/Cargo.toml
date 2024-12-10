@@ -6,6 +6,7 @@ version = "0.0.1"
 license = "Apache-2.0"
 
 [dependencies]
+crossbeam = "0.8"
 crossbeam-skiplist = { workspace = true }
 fail = "0.5"
 kvproto = { workspace = true }

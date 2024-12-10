@@ -1555,6 +1555,7 @@ name = "concurrency_manager"
 version = "0.0.1"
 dependencies = [
  "criterion 0.4.0",
+ "crossbeam",
  "crossbeam-skiplist 0.1.3",
  "fail",
  "futures 0.3.15",
