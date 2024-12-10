@@ -35,9 +35,6 @@ max-tasks-per-worker-high = 1000
 max-tasks-per-worker-normal = 1500
 max-tasks-per-worker-low = 2500
 stack-size = "20MB"
-max-ts-allowance-secs = 300
-max-ts-sync-interval-sec = 30
-panic-on-invalid-max-ts = true
 
 [readpool.coprocessor]
 use-unified-pool = false
@@ -108,6 +105,9 @@ enable-ttl = true
 ttl-check-poll-interval = "0s"
 txn-status-cache-capacity = 1000
 memory-quota = "123KB"
+max-ts-allowance-secs = 333
+max-ts-sync-interval-secs = 44
+panic-on-invalid-max-ts = false
 
 [storage.block-cache]
 capacity = "40GB"
