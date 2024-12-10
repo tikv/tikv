@@ -47,6 +47,7 @@ fn test_simple_store_stats<T: Simulator>(cluster: &mut Cluster<T>) {
     let pd_client = Arc::clone(&cluster.pd_client);
 
     cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(20);
+    cluster.cfg.storage.reserve_space = ReadableSize(0);
     cluster.run();
 
     // wait store reports stats.
