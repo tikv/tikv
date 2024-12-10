@@ -5,14 +5,9 @@ use std::{
     time::Duration,
 };
 
-<<<<<<< HEAD
 use file_system::calc_crc32;
-use futures::{executor::block_on, stream, SinkExt};
+use futures::{executor::block_on, stream::StreamExt, SinkExt};
 use grpcio::{ChannelBuilder, Environment, Result, WriteFlags};
-=======
-use futures::{executor::block_on, stream::StreamExt};
-use grpcio::{ChannelBuilder, Environment};
->>>>>>> 4776689cbd (import: call sink.fail() when failed to send message by grpc (#17834))
 use kvproto::{disk_usage::DiskUsage, import_sstpb::*, tikvpb_grpc::TikvClient};
 use tempfile::{Builder, TempDir};
 use test_raftstore::{must_raw_put, Simulator};
