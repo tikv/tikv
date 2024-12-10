@@ -116,7 +116,7 @@ impl<E: KvEngine> Initializer<E> {
 
         let region_id = self.region_id;
         let downstream_id = self.downstream_id;
-        let observe_id = self.observe_handle.id;
+        let observe_id = self.observe_id;
         // when there are a lot of pending incremental scan tasks, they may be stopped,
         // check the state here to accelerate tasks cancel process.
         if self.downstream_state.load() == DownstreamState::Stopped {
