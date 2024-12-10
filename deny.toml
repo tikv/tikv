@@ -90,7 +90,7 @@ unlicensed = "deny"
 copyleft = "deny"
 private = { ignore = false }
 # Allow licenses in Category A
-allow = ["0BSD", "Apache-2.0", "BSD-3-Clause", "CC0-1.0", "ISC", "MIT", "Zlib"]
+allow = ["0BSD", "Apache-2.0", "BSD-3-Clause", "CC0-1.0", "ISC", "MIT", "Zlib", "Unicode-3.0"]
 exceptions = [
     # unicode-ident includes data generated from Unicode Character Database
     # which is licensed under Unicode-DFS-2016.
