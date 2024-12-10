@@ -39,7 +39,7 @@ use tikv_util::{
     },
     future::RescheduleChecker,
     memory::{MemoryQuota, OwnedAllocated},
-    resizable_threadpool::ResizableRuntimeHandle,
+    resizable_threadpool::DeamonRuntimeHandle,
     stream::block_on_external_io,
     sys::{thread::ThreadBuildWrapper, SysQuota},
     time::{Instant, Limiter},
@@ -266,7 +266,7 @@ impl<E: KvEngine> SstImporter<E> {
         }
     }
 
-    pub fn start_switch_mode_check(&self, executor: &ResizableRuntimeHandle, db: Option<E>) {
+    pub fn start_switch_mode_check(&self, executor: &DeamonRuntimeHandle, db: Option<E>) {
         match &self.switcher {
             Either::Left(switcher) => switcher.start_resizable_threads(executor, db.unwrap()),
             Either::Right(switcher) => switcher.start_resizable_threads(executor),
@@ -1443,7 +1443,12 @@ impl<E: KvEngine> SstImporter<E> {
         self.dir.list_ssts()
     }
 
-    pub fn new_txn_writer(&self, db: &E, meta: SstMeta) -> Result<TxnSstWriter<E>> {
+    pub fn new_txn_writer(
+        &self,
+        db: &E,
+        meta: SstMeta,
+        txn_source: u64,
+    ) -> Result<TxnSstWriter<E>> {
         let mut default_meta = meta.clone();
         default_meta.set_cf_name(CF_DEFAULT.to_owned());
         let default_path = self.dir.join_for_write(&default_meta)?;
@@ -1473,10 +1478,11 @@ impl<E: KvEngine> SstImporter<E> {
             write_meta,
             self.key_manager.clone(),
             self.api_version,
+            txn_source,
         ))
     }
 
-    pub fn new_raw_writer(&self, db: &E, mut meta: SstMeta) -> Result<RawSstWriter<E>> {
+    pub fn new_raw_writer(&self, db: &E, mut meta: SstMeta, _: u64) -> Result<RawSstWriter<E>> {
         meta.set_cf_name(CF_DEFAULT.to_owned());
         let default_path = self.dir.join_for_write(&meta)?;
         let default = E::SstWriterBuilder::new()
@@ -1632,7 +1638,10 @@ mod tests {
     use std::{
         io::{self, Cursor},
         ops::Sub,
-        sync::atomic::{AtomicUsize, Ordering},
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Mutex,
+        },
         usize,
     };
 
@@ -2315,12 +2324,17 @@ mod tests {
         };
         let change = cfg.diff(&cfg_new);
 
-        let threads =
-            ResizableRuntime::new("test", Box::new(create_tokio_runtime), Box::new(|_| {}));
-        let handle = ResizableRuntimeHandle::new(threads);
+        let threads = ResizableRuntime::new(
+            cfg.num_threads,
+            "test",
+            Box::new(create_tokio_runtime),
+            Box::new(|_| {}),
+        );
+
+        let threads_clone = Arc::new(Mutex::new(threads));
 
         // create config manager and update config.
-        let mut cfg_mgr = ImportConfigManager::new(cfg, handle);
+        let mut cfg_mgr = ImportConfigManager::new(cfg, Arc::downgrade(&threads_clone));
         cfg_mgr.dispatch(change).unwrap();
         importer.update_config_memory_use_ratio(&cfg_mgr);
 
@@ -2344,29 +2358,35 @@ mod tests {
         };
         let change = cfg.diff(&cfg_new);
 
-        let threads =
-            ResizableRuntime::new("test", Box::new(create_tokio_runtime), Box::new(|_| {}));
-        let handle = ResizableRuntimeHandle::new(threads);
+        let threads = ResizableRuntime::new(
+            cfg.num_threads,
+            "test",
+            Box::new(create_tokio_runtime),
+            Box::new(|_| {}),
+        );
 
-        let mut cfg_mgr = ImportConfigManager::new(cfg, handle);
+        let threads_clone = Arc::new(Mutex::new(threads));
+
+        let mut cfg_mgr = ImportConfigManager::new(cfg, Arc::downgrade(&threads_clone));
         let r = cfg_mgr.dispatch(change);
         assert!(r.is_err());
     }
 
     #[test]
     fn test_update_import_num_threads() {
-        let mut threads = ResizableRuntime::new(
+        let cfg = Config::default();
+        let threads = ResizableRuntime::new(
+            Config::default().num_threads,
             "test",
             Box::new(create_tokio_runtime),
             Box::new(|new_size: usize| {
                 COUNTER.store(new_size, Ordering::SeqCst);
             }),
         );
-        threads.adjust_with(Config::default().num_threads);
-        let handle = ResizableRuntimeHandle::new(threads);
-        let mut cfg_mgr = ImportConfigManager::new(Config::default(), handle);
 
-        assert_eq!(COUNTER.load(Ordering::SeqCst), cfg_mgr.rl().num_threads);
+        let threads_clone = Arc::new(Mutex::new(threads));
+        let mut cfg_mgr = ImportConfigManager::new(cfg, Arc::downgrade(&threads_clone));
+
         assert_eq!(cfg_mgr.rl().num_threads, Config::default().num_threads);
 
         let cfg_new = Config {
@@ -3395,7 +3415,7 @@ mod tests {
         let db_path = importer_dir.path().join("db");
         let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
 
-        let mut w = importer.new_txn_writer(&db, meta).unwrap();
+        let mut w = importer.new_txn_writer(&db, meta, 0).unwrap();
         let mut batch = WriteBatch::default();
         let mut pairs = vec![];
 

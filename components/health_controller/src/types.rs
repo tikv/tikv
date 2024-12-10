@@ -50,6 +50,22 @@ impl RaftstoreDuration {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum InspectFactor {
+    RaftDisk = 0,
+    KvDisk,
+    // TODO: Add more factors, like network io.
+}
+
+impl InspectFactor {
+    pub fn as_str(&self) -> &str {
+        match *self {
+            InspectFactor::RaftDisk => "raft",
+            InspectFactor::KvDisk => "kvdb",
+        }
+    }
+}
+
 /// Used to inspect the latency of all stages of raftstore.
 pub struct LatencyInspector {
     id: u64,
