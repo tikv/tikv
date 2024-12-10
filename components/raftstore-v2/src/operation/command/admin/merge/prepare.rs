@@ -214,7 +214,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 let mut proposal_ctx = ProposalContext::empty();
                 proposal_ctx.insert(ProposalContext::PREPARE_MERGE);
                 let data = req.write_to_bytes().unwrap();
-                self.propose_with_ctx(store_ctx, data, proposal_ctx.to_vec())
+                self.propose_with_ctx(store_ctx, data, proposal_ctx)
             });
         if r.is_ok() {
             self.proposal_control_mut().set_pending_prepare_merge(false);
