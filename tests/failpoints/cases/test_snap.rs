@@ -16,6 +16,7 @@ use kvproto::raft_serverpb::RaftMessage;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
+use test_util::init_log_for_test;
 use tikv_util::{config::*, time::Instant, HandyRwLock};
 
 #[test]
@@ -102,6 +103,7 @@ fn test_server_snapshot_on_resolve_failure() {
 
 #[test]
 fn test_generate_snapshot() {
+    init_log_for_test();
     let mut cluster = new_server_cluster(1, 5);
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(8);
@@ -1151,3 +1153,145 @@ fn test_snapshot_receiver_busy() {
     fail::remove("receiving_snapshot_callback");
     fail::remove("snap_gen_precheck_failed");
 }
+
+// #[test]
+// fn test_snapshot_receiver_busy_expired() {
+//     init_log_for_test();
+//     let mut cluster = new_server_cluster(0, 2);
+//     // Test that a snapshot generation is paused when the receiver is busy.
+// To     // trigger the scenario, two regions are set up to send snapshots to
+// the     // same store concurrently while configuring the receiving limit to
+// 1.     cluster.cfg.server.concurrent_recv_snap_limit = 1;
+//
+//     cluster.cfg.rocksdb.titan.enabled = Some(true);
+//     cluster.cfg.raft_store.raft_log_gc_tick_interval =
+// ReadableDuration::secs(60);
+//
+//     let pd_client = Arc::clone(&cluster.pd_client);
+//     // Disable default max peer count check.
+//     pd_client.disable_default_operator();
+//
+//     let r1 = cluster.run_conf_change();
+//     cluster.must_put(b"k1", b"v1");
+//     cluster.must_put(b"k3", b"v3");
+//
+//     // Do a split to create the second region.
+//     let region = cluster.get_region(b"k1");
+//     cluster.must_split(&region, b"k2");
+//
+//     let r2 = cluster.get_region(b"k1").id;
+//
+//     // When a snapshot receiver is busy, we want the snapshot generation to
+//     // pause and wait until the receiver becomes available. For the two
+// regions     // in this test, there should only be two snapshot generations in
+// total.     fail::cfg("before_region_gen_snap",
+// "2*print()->panic()").unwrap();     // pause gen
+//     fail::cfg("region_gen_snap", "pause").unwrap();
+//
+//     info!("add peer1");
+//     // Pause the failpoint to stall the first snapshot send task.
+//     // fail::cfg("receiving_snapshot_net_error", "pause").unwrap();
+//     pd_client.must_add_peer(r1, new_peer(2, 2));
+//
+//     // Wait for the first snapshot to be received and paused.
+//     // let (tx, rx) = mpsc::channel();
+//     // let tx = Mutex::new(tx);
+//     // fail::cfg_callback("receiving_snapshot_callback", move || {
+//     //     let _ = tx.lock().unwrap().send(());
+//     // })
+//     // .unwrap();
+//     // rx.recv_timeout(Duration::from_secs(2)).unwrap();
+//
+//     // Unblock the first snapshot task when the precheck fails on the second
+//     // snapshot task.
+//     fail::cfg_callback("snap_gen_precheck_failed", || {
+//         sleep_ms(6000);
+//     })
+//     .unwrap();
+//
+//     info!("add peer2");
+//     // Add the second region to store 2. The second region's snapshot
+// precheck     // will fail because the first snapshot task is still in
+// progress. The     // precheck failure will remove the
+// receiving_snapshot_net_error failpoint,     // unblocking the first snapshot
+// task and eventually the second one.     pd_client.must_add_peer(r2,
+// new_peer(2, 1002));
+//
+//     info!("wait peer2");
+//     // wait 2nd region success
+//     let (tx, rx) = mpsc::channel();
+//     let tx = Mutex::new(tx);
+//     fail::cfg_callback("receiving_snapshot_callback", move || {
+//         info!("receiving snapshot callback");
+//         let _ = tx.lock().unwrap().send(());
+//     })
+//     .unwrap();
+//     rx.recv_timeout(Duration::from_secs(7)).unwrap();
+//
+//     fail::remove("region_gen_snap");
+//     let (tx, rx) = mpsc::channel();
+//     let tx = Mutex::new(tx);
+//     fail::cfg_callback("receiving_snapshot_callback", move || {
+//         info!("receiving snapshot callback");
+//         let _ = tx.lock().unwrap().send(());
+//     })
+//     .unwrap();
+//     rx.recv_timeout(Duration::from_secs(7)).unwrap();
+//     // Ensure that both regions work.
+//     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+//     must_get_equal(&cluster.get_engine(2), b"k3", b"v3");
+//     //
+//     cluster.must_put(b"k11", b"v11");
+//     must_get_equal(&cluster.get_engine(2), b"k11", b"v11");
+//     //
+//     cluster.must_put(b"k4", b"v4");
+//     must_get_equal(&cluster.get_engine(2), b"k4", b"v4");
+//     //
+//     fail::remove("before_region_gen_snap");
+//     fail::remove("receiving_snapshot_callback");
+//     fail::remove("snap_gen_precheck_failed");
+// }
+//
+//
+// #[test]
+// fn test_generate_snapshot_bak() {
+//     let mut cluster = new_server_cluster(1, 5);
+//     cluster.cfg.raft_store.raft_log_gc_tick_interval =
+// ReadableDuration::millis(20);     cluster.cfg.raft_store.
+// raft_log_gc_count_limit = Some(8);     cluster.cfg.raft_store.
+// merge_max_log_gap = 3;     cluster.cfg.server.concurrent_recv_snap_limit = 0;
+//     let pd_client = Arc::clone(&cluster.pd_client);
+//     pd_client.disable_default_operator();
+//
+//     cluster.run();
+//     cluster.must_transfer_leader(1, new_peer(1, 1));
+//     cluster.stop_node(4);
+//     cluster.stop_node(5);
+//     (0..10).for_each(|_| cluster.must_put(b"k2", b"v2"));
+//     // Sleep for a while to ensure all logs are compacted.
+//     thread::sleep(Duration::from_millis(100));
+//
+//     // fail::cfg("snapshot_delete_after_send", "pause").unwrap();
+//
+//     // Let store 4 inform leader to generate a snapshot.
+//     cluster.run_node(4).unwrap();
+//     must_get_equal(&cluster.get_engine(4), b"k2", b"v2");
+//
+//     fail::cfg("snapshot_enter_do_build", "pause").unwrap();
+//     cluster.run_node(5).unwrap();
+//     thread::sleep(Duration::from_millis(100));
+//
+//     fail::cfg("snapshot_delete_after_send", "off").unwrap();
+//     must_empty_dir(cluster.get_snap_dir(1));
+//
+//     // The task is droped so that we can't get the snapshot on store 5.
+//     fail::cfg("snapshot_enter_do_build", "pause").unwrap();
+//     must_get_none(&cluster.get_engine(5), b"k2");
+//
+//     fail::cfg("snapshot_enter_do_build", "off").unwrap();
+//     must_get_equal(&cluster.get_engine(5), b"k2", b"v2");
+//
+//     fail::remove("snapshot_enter_do_build");
+//     fail::remove("snapshot_delete_after_send");
+// }
+//
