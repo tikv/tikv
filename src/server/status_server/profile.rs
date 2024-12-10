@@ -22,12 +22,8 @@ use pprof::protos::Message;
 use regex::Regex;
 use tempfile::{NamedTempFile, TempDir};
 #[cfg(not(test))]
-<<<<<<< HEAD
 use tikv_alloc::{activate_prof, deactivate_prof, dump_prof};
-=======
-use tikv_alloc::dump_prof;
 use tikv_util::defer;
->>>>>>> 2a05e51ce5 (profiling: Fix cpu profiling flag may not reset when meeting errors (#17235))
 
 #[cfg(test)]
 pub use self::test_utils::TEST_PROFILE_MUTEX;
