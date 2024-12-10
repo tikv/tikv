@@ -43,6 +43,7 @@ num-traits = "0.2"
 num_cpus = "1"
 online_config = { workspace = true }
 openssl = "0.10"
+ordered-float = "2.6"
 parking_lot_core = "0.9.1"
 pin-project = "1.0"
 prometheus = { version = "0.13", features = ["nightly"] }

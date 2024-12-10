@@ -3136,9 +3136,9 @@ dependencies = [
 
 [[package]]
 name = "lz4-sys"
-version = "1.9.4"
+version = "1.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57d27b317e207b10f69f5e75494119e391a96f48861ae870d1da6edac98ca900"
+checksum = "e9764018d143cc854c9f17f0b907de70f14393b1f502da6375dce70f00514eb3"
 dependencies = [
  "cc",
  "libc 0.2.146",
@@ -4362,7 +4362,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.4.1"
-source = "git+https://github.com/tikv/raft-engine.git#e505d631c8c6d63f7fc63d83ea6e8fb88cf970a5"
+source = "git+https://github.com/tikv/raft-engine.git?branch=tikv-7.5#8cb23f127f0caf48076a3d3d0e4e2a27a8c8b0ed"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -4396,7 +4396,7 @@ dependencies = [
 [[package]]
 name = "raft-engine-ctl"
 version = "0.4.1"
-source = "git+https://github.com/tikv/raft-engine.git#e505d631c8c6d63f7fc63d83ea6e8fb88cf970a5"
+source = "git+https://github.com/tikv/raft-engine.git?branch=tikv-7.5#8cb23f127f0caf48076a3d3d0e4e2a27a8c8b0ed"
 dependencies = [
  "clap 3.1.6",
  "env_logger 0.10.0",
@@ -5299,9 +5299,9 @@ dependencies = [
 
 [[package]]
 name = "serde"
-version = "1.0.147"
+version = "1.0.194"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d193d69bae983fc11a79df82342761dfbf28a99fc8d203dca4c3c1b590948965"
+checksum = "0b114498256798c94a0689e1a15fec6005dee8ac1f41de56404b67afc2a4b773"
 dependencies = [
  "serde_derive",
 ]
@@ -5318,13 +5318,13 @@ dependencies = [
 
 [[package]]
 name = "serde_derive"
-version = "1.0.147"
+version = "1.0.194"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f1d362ca8fc9c3e3a7484440752472d68a6caa98f1ab81d99b5dfe517cec852"
+checksum = "a3385e45322e8f9931410f01b3031ec534c3947d0e94c18049af4d9f9907d4e0"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 1.0.103",
+ "syn 2.0.79",
 ]
 
 [[package]]
@@ -5825,7 +5825,7 @@ version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "290d54ea6f91c969195bdbcd7442c8c2a2ba87da8bf60a7ee86a235d4bc1e125"
 dependencies = [
- "strum_macros 0.25.0",
+ "strum_macros 0.25.3",
 ]
 
 [[package]]
@@ -5855,9 +5855,9 @@ dependencies = [
 
 [[package]]
 name = "strum_macros"
-version = "0.25.0"
+version = "0.25.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe9f3bd7d2e45dcc5e265fbb88d6513e4747d8ef9444cf01a533119bce28a157"
+checksum = "23dc1fa9ac9c169a78ba62f0b841814b7abae11bdd047b9c58f893439e309ea0"
 dependencies = [
  "heck 0.4.1",
  "proc-macro2",
@@ -6892,6 +6892,7 @@ dependencies = [
  "num_cpus",
  "online_config",
  "openssl",
+ "ordered-float",
  "page_size",
  "panic_hook",
  "parking_lot_core 0.9.1",
