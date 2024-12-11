@@ -8,8 +8,10 @@ use std::{
     time::Duration,
 };
 
-use dashmap::{mapref::entry::Entry, DashMap};
+use collections::{HashMap, HashMapEntry as Entry};
 use futures::Future;
+use futures_util::future::BoxFuture;
+use tokio::sync::Mutex;
 
 use crate::metrics::EXT_STORAGE_CACHE_COUNT;
 
@@ -41,12 +43,12 @@ pub trait MakeCache: 'static {
     type Cached: std::fmt::Debug + ShareOwned + Send + Sync + 'static;
     type Error;
 
-    fn make_cache(&self) -> std::result::Result<Self::Cached, Self::Error>;
+    fn make_cache(&self) -> BoxFuture<'static, std::result::Result<Self::Cached, Self::Error>>;
 }
 
 #[derive(Debug)]
 pub struct CacheMapInner<C: MakeCache> {
-    cached: DashMap<String, Cached<C::Cached>>,
+    cached: Mutex<HashMap<String, Cached<C::Cached>>>,
     now: AtomicUsize,
 
     gc_threshold: usize,
@@ -55,7 +57,7 @@ pub struct CacheMapInner<C: MakeCache> {
 impl<C: MakeCache> Default for CacheMapInner<C> {
     fn default() -> Self {
         Self {
-            cached: DashMap::default(),
+            cached: Default::default(),
             now: Default::default(),
             gc_threshold: 20,
         }
@@ -97,9 +99,9 @@ impl<M: MakeCache> CacheMapInner<M> {
         self.now.load(Ordering::SeqCst)
     }
 
-    fn tick(&self) {
+    async fn tick(&self) {
         let now = self.now.fetch_add(1usize, Ordering::SeqCst);
-        self.cached.retain(|name, cache| {
+        self.cached.lock().await.retain(|name, cache| {
             let need_hold = now.saturating_sub(cache.last_used) < self.gc_threshold;
             if !need_hold {
                 info!("Removing cache due to expired."; "name" => %name, "entry" => ?cache);
@@ -116,27 +118,38 @@ impl<M: MakeCache> CacheMap<M> {
             loop {
                 tokio::time::sleep(Duration::from_secs(30)).await;
                 match this.upgrade() {
-                    Some(inner) => inner.tick(),
+                    Some(inner) => inner.tick().await,
                     None => return,
                 }
             }
         }
     }
 
+    #[cfg(test)]
     pub fn cached_or_create(
         &self,
         cache_key: &str,
         backend: &M,
     ) -> std::result::Result<<M::Cached as ShareOwned>::Shared, M::Error> {
-        let s = self.0.cached.get_mut(cache_key);
+        use tikv_util::stream::block_on_external_io;
+
+        block_on_external_io(self.cached_or_create_async(cache_key, backend))
+    }
+
+    pub async fn cached_or_create_async(
+        &self,
+        cache_key: &str,
+        backend: &M,
+    ) -> std::result::Result<<M::Cached as ShareOwned>::Shared, M::Error> {
+        let mut cached = self.0.cached.lock().await;
+        let s = cached.get_mut(cache_key);
         match s {
-            Some(mut s) => {
+            Some(s) => {
                 EXT_STORAGE_CACHE_COUNT.with_label_values(&["hit"]).inc();
-                Ok(s.value_mut().resource_owned(self.0.now()))
+                Ok(s.resource_owned(self.0.now()))
             }
             None => {
-                drop(s);
-                let e = self.0.cached.entry(cache_key.to_owned());
+                let e = cached.entry(cache_key.to_owned());
                 match e {
                     Entry::Occupied(mut v) => {
                         EXT_STORAGE_CACHE_COUNT.with_label_values(&["hit"]).inc();
@@ -144,7 +157,7 @@ impl<M: MakeCache> CacheMap<M> {
                     }
                     Entry::Vacant(v) => {
                         EXT_STORAGE_CACHE_COUNT.with_label_values(&["miss"]).inc();
-                        let pool = backend.make_cache()?;
+                        let pool = backend.make_cache().await?;
                         info!("Insert storage cache."; "name" => %cache_key, "cached" => ?pool);
                         let shared = pool.share_owned();
                         v.insert(Cached::new(pool));
@@ -163,6 +176,9 @@ mod tests {
         sync::atomic::{AtomicBool, Ordering},
     };
 
+    use futures::executor::block_on;
+    use futures_util::{future::BoxFuture, FutureExt};
+
     use super::{CacheMap, CacheMapInner, MakeCache};
 
     #[derive(Default)]
@@ -172,9 +188,9 @@ mod tests {
         type Cached = ();
         type Error = Infallible;
 
-        fn make_cache(&self) -> std::result::Result<Self::Cached, Self::Error> {
+        fn make_cache(&self) -> BoxFuture<'static, std::result::Result<Self::Cached, Self::Error>> {
             self.0.store(true, Ordering::SeqCst);
-            Ok(())
+            futures::future::ok(()).boxed()
         }
     }
 
@@ -199,13 +215,13 @@ mod tests {
         check_cache("hello", false);
         check_cache("world", true);
 
-        cached.0.tick();
+        block_on(cached.0.tick());
         check_cache("hello", false);
 
-        cached.0.tick();
+        block_on(cached.0.tick());
         check_cache("world", true);
 
-        cached.0.tick();
+        block_on(cached.0.tick());
         check_cache("hello", true);
     }
 }
