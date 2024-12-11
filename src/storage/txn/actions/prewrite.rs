@@ -1066,7 +1066,7 @@ pub mod tests {
         .unwrap();
         assert_eq!(old_value, OldValue::None);
 
-        let _ = cm.update_max_ts(60.into(), "");
+        cm.update_max_ts(60.into(), "").unwrap();
         // calculated commit_ts = 61 > 50, err
         let err = prewrite(
             &mut txn,
@@ -1251,7 +1251,7 @@ pub mod tests {
         .unwrap();
         assert_eq!(old_value, OldValue::None);
 
-        let _ = cm.update_max_ts(60.into(), "");
+        cm.update_max_ts(60.into(), "").unwrap();
         // calculated commit_ts = 61 > 50, err
         let err = prewrite(
             &mut txn,
@@ -1353,7 +1353,7 @@ pub mod tests {
         // Pessimistic txn skips constraint check, does not read previous write.
         assert_eq!(old_value, OldValue::Unspecified);
 
-        let _ = cm.update_max_ts(60.into(), "");
+        cm.update_max_ts(60.into(), "").unwrap();
         // calculated commit_ts = 61 > 50, ok
         prewrite(
             &mut txn,
@@ -1406,7 +1406,7 @@ pub mod tests {
         // Pessimistic txn skips constraint check, does not read previous write.
         assert_eq!(old_value, OldValue::Unspecified);
 
-        let _ = cm.update_max_ts(60.into(), "");
+        cm.update_max_ts(60.into(), "").unwrap();
         // calculated commit_ts = 61 > 50, ok
         prewrite(
             &mut txn,

@@ -74,10 +74,8 @@ pub struct ConcurrencyManager {
     // max_ts_limit is an assertion: max_ts should not be updated to a value greater than this
     // limit.
     //
-    // The update time is defined as start_instant.elapsed().as_millis(), because we want atomic
-    // variable + monotonic clock. When the limit is not updated for a long time(exceeding the
-    // threshold), we don't check the limit, to avoid blocking the max_ts update caused by
-    // temporary issues in fetching TSO, e.g. network partition between this TiKV and PD leader
+    // When the limit is not updated for a long time(exceeding the threshold), we use an
+    // approximate limit.
     max_ts_limit: Arc<AtomicCell<MaxTsLimit>>,
     limit_valid_duration: Duration,
     panic_on_invalid_max_ts: Arc<AtomicBool>,

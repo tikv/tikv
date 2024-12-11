@@ -10274,7 +10274,7 @@ mod tests {
             .build()
             .unwrap();
         let cm = storage.concurrency_manager.clone();
-        let _ = cm.update_max_ts(10.into(), "");
+        cm.update_max_ts(10.into(), "").unwrap();
 
         // Optimistic prewrite
         let (tx, rx) = channel();
@@ -10322,7 +10322,7 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
 
-        let _ = cm.update_max_ts(1000.into(), "");
+        cm.update_max_ts(1000.into(), "").unwrap();
 
         let (tx, rx) = channel();
         storage
@@ -11429,7 +11429,7 @@ mod tests {
         // commit enabled, and max_ts changes when the second request arrives.
 
         // A retrying prewrite request arrives.
-        let _ = cm.update_max_ts(20.into(), "");
+        cm.update_max_ts(20.into(), "").unwrap();
         let mut ctx = Context::default();
         ctx.set_is_retry_request(true);
         let (tx, rx) = channel();
@@ -11613,7 +11613,7 @@ mod tests {
 
         // 1PC update
         let (tx, rx) = channel();
-        let _ = cm.update_max_ts(59.into(), "");
+        cm.update_max_ts(59.into(), "").unwrap();
         storage
             .sched_txn_command(
                 Prewrite::new(
