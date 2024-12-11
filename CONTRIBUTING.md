@@ -2,7 +2,7 @@
 
 Thanks for your interest in contributing to TiKV! This document outlines some of the conventions on building, running, and testing TiKV, the development workflow, commit message formatting, contact points and other resources.
 
-TiKV has many dependent repositories. If you need any help or mentoring getting started, understanding the codebase, or making a PR (or anything else really), please ask on [Slack](https://tikv.org/chat). If you don't know where to start, please click on the contributor icon below to get you on the right contributing path.
+TiKV has many dependent repositories. If you need any help or mentoring getting started, understanding the codebase, or making a PR (or anything else really), please ask on [Slack](https://slack.tidb.io/invite?team=tikv-wg&channel=general). If you don't know where to start, please click on the contributor icon below to get you on the right contributing path.
 
 [<img src="images/contribution-map.png" alt="contribution-map" width="180">](https://github.com/pingcap/tidb-map/blob/master/maps/contribution-map.md#tikv-distributed-transactional-key-value-database)
 
