@@ -917,12 +917,17 @@ where
     fn on_exec_flush(&mut self, task: String, resolved: ResolvedRegions, cb: Sender<FlushResult>) {
         self.checkpoint_mgr.freeze();
         let fut = self.do_flush(task.clone(), resolved);
+        let syncer = self.checkpoint_mgr.make_syncer();
         self.pool.spawn(root!("flush"; async move {
             let res = fut.await;
             if let Err(ref err) = &res {
                 err.report("during updating flush status")
             }
             let flush_res = FlushResult { task, error: res.err() };
+            if !syncer.await {
+                warn!("force_flush: syncing checkpoint manager failed. The progress may not be advanced.";
+                    "task" => %flush_res.task);
+            }
             let _ = cb.send(flush_res).await;
         }));
     }
