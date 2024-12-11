@@ -2147,33 +2147,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "engine_tirocks"
-version = "0.1.0"
-dependencies = [
- "api_version",
- "codec",
- "collections",
- "derive_more",
- "engine_traits",
- "keys",
- "kvproto",
- "lazy_static",
- "log_wrappers",
- "prometheus",
- "prometheus-static-metric",
- "rand 0.8.5",
- "slog",
- "slog-global",
- "slog_derive",
- "tempfile",
- "tikv_alloc",
- "tikv_util",
- "tirocks",
- "tracker",
- "txn_types",
-]
-
-[[package]]
 name = "engine_traits"
 version = "0.0.1"
 dependencies = [
@@ -7627,31 +7600,6 @@ dependencies = [
  "codec",
  "tidb_query_datatype",
  "tipb",
-]
-
-[[package]]
-name = "tirocks"
-version = "0.1.0"
-source = "git+https://github.com/busyjay/tirocks.git?branch=dev#6cddeaeea1349bab891e2c0913e0ebb1a755e697"
-dependencies = [
- "libc 0.2.151",
- "paste",
- "tirocks-sys",
-]
-
-[[package]]
-name = "tirocks-sys"
-version = "0.1.0"
-source = "git+https://github.com/busyjay/tirocks.git?branch=dev#6cddeaeea1349bab891e2c0913e0ebb1a755e697"
-dependencies = [
- "bzip2-sys",
- "cc",
- "cmake",
- "libc 0.2.151",
- "libz-sys",
- "lz4-sys",
- "snappy-sys",
- "zstd-sys",
 ]
 
 [[package]]
