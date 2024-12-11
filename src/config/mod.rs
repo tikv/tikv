@@ -3623,6 +3623,24 @@ impl TikvConfig {
                     .exists()
             }
         };
+
+        if !self.raft_engine.config.dir.is_empty() {
+            let raft_engine_dir = Path::new(&self.raft_engine.config.dir);
+            if raft_engine_dir.exists() {
+                info!(
+                    "[DANGER!] CLEAN UP RAFT ENGINE DIR!!!!!",
+                );
+                fs::remove_dir_all(raft_engine_dir)?;
+                fs::create_dir_all(raft_engine_dir)?;
+
+                // clean data as well
+                let kv_db_path = self.infer_kv_engine_path(None)?;
+                let kv_db_dir = Path::new(&kv_db_path);
+                fs::remove_dir_all(kv_db_dir)?;
+                fs::create_dir_all(kv_db_dir)?;
+            }
+        }
+
         RaftDataStateMachine::new(
             &self.storage.data_dir,
             &self.raft_store.raftdb_path,
