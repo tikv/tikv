@@ -88,25 +88,14 @@ pub use self::{
     worker::{
         metrics as worker_metrics, need_compact, AutoSplitController, BatchComponent, Bucket,
         BucketRange, BucketStatsInfo, CachedReadDelegate, CheckLeaderRunner, CheckLeaderTask,
-<<<<<<< HEAD
-        CompactThreshold, FlowStatistics, FlowStatsReporter, FullCompactController, KeyEntry,
-        LocalReadContext, LocalReader, LocalReaderCore, PdStatsMonitor, PdTask, ReadDelegate,
-        ReadExecutor, ReadExecutorProvider, ReadProgress, ReadStats, RefreshConfigTask, RegionTask,
-        SplitCheckRunner, SplitCheckTask, SplitConfig, SplitConfigManager, SplitInfo,
-        StoreMetaDelegate, StoreStatsReporter, TrackVer, WriteStats, WriterContoller,
-        BIG_REGION_CPU_OVERLOAD_THRESHOLD_RATIO, DEFAULT_BIG_REGION_BYTE_THRESHOLD,
-        DEFAULT_BIG_REGION_QPS_THRESHOLD, DEFAULT_BYTE_THRESHOLD, DEFAULT_QPS_THRESHOLD,
-        NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT, REGION_CPU_OVERLOAD_THRESHOLD_RATIO,
-=======
         CompactThreshold, DiskCheckRunner, FlowStatistics, FlowStatsReporter,
         FullCompactController, KeyEntry, LocalReadContext, LocalReader, LocalReaderCore,
         PdStatsMonitor, PdTask, ReadDelegate, ReadExecutor, ReadExecutorProvider, ReadProgress,
-        ReadStats, RefreshConfigTask, RegionTask, SnapGenTask, SplitCheckRunner, SplitCheckTask,
-        SplitConfig, SplitConfigManager, SplitInfo, StoreMetaDelegate, StoreStatsReporter,
-        TrackVer, WriteStats, WriterContoller, BIG_REGION_CPU_OVERLOAD_THRESHOLD_RATIO,
+        ReadStats, RefreshConfigTask, RegionTask, SplitCheckRunner, SplitCheckTask, SplitConfig,
+        SplitConfigManager, SplitInfo, StoreMetaDelegate, StoreStatsReporter, TrackVer, WriteStats,
+        WriterContoller, BIG_REGION_CPU_OVERLOAD_THRESHOLD_RATIO,
         DEFAULT_BIG_REGION_BYTE_THRESHOLD, DEFAULT_BIG_REGION_QPS_THRESHOLD,
         DEFAULT_BYTE_THRESHOLD, DEFAULT_QPS_THRESHOLD, NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
         REGION_CPU_OVERLOAD_THRESHOLD_RATIO,
->>>>>>> 43e63b5614 (raftstore: calculate the slow score by considering individual disk performance factors (#17801))
     },
 };

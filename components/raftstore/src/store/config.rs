@@ -1633,14 +1633,6 @@ mod tests {
             cfg.raft_log_gc_count_limit(),
             split_size * 3 / 4 / ReadableSize::kb(1)
         );
-<<<<<<< HEAD
-=======
-
-        cfg = Config::new();
-        cfg.optimize_for(false);
-        cfg.raft_write_wait_duration = ReadableDuration::micros(1001);
-        cfg.validate(split_size, true, split_size / 20, false)
-            .unwrap_err();
 
         cfg = Config::new();
         cfg.optimize_inspector(false);
@@ -1662,6 +1654,5 @@ mod tests {
         cfg.inspect_interval = ReadableDuration::millis(100);
         cfg.optimize_inspector(true);
         assert_eq!(cfg.inspect_kvdb_interval, ReadableDuration::secs(1));
->>>>>>> 43e63b5614 (raftstore: calculate the slow score by considering individual disk performance factors (#17801))
     }
 }

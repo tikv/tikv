@@ -1026,7 +1026,8 @@ where
             .registry
             .register_consistency_check_observer(100, observer);
 
-<<<<<<< HEAD
+        let disk_check_runner = DiskCheckRunner::new(self.core.store_path.clone());
+
         node.start(
             engines.engines.clone(),
             server.transport(),
@@ -1040,33 +1041,11 @@ where
             self.concurrency_manager.clone(),
             collector_reg_handle,
             self.causal_ts_provider.clone(),
+            disk_check_runner,
             self.grpc_service_mgr.clone(),
             safe_point.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
-=======
-        let disk_check_runner = DiskCheckRunner::new(self.core.store_path.clone());
-
-        raft_server
-            .start(
-                engines.engines.clone(),
-                server.transport(),
-                snap_mgr,
-                pd_worker,
-                engines.store_meta.clone(),
-                self.coprocessor_host.clone().unwrap(),
-                importer.clone(),
-                split_check_scheduler,
-                auto_split_controller,
-                self.concurrency_manager.clone(),
-                collector_reg_handle,
-                self.causal_ts_provider.clone(),
-                disk_check_runner,
-                self.grpc_service_mgr.clone(),
-                safe_point.clone(),
-            )
-            .unwrap_or_else(|e| fatal!("failed to start raft_server: {}", e));
->>>>>>> 43e63b5614 (raftstore: calculate the slow score by considering individual disk performance factors (#17801))
 
         // Start auto gc. Must after `Node::start` because `node_id` is initialized
         // there.
