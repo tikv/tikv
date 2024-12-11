@@ -353,6 +353,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
             cm,
             CollectorRegHandle::new_for_test(),
             None,
+            DiskCheckRunner::dummy(),
             GrpcServiceManager::dummy(),
             Arc::new(AtomicU64::new(0)),
         )?;

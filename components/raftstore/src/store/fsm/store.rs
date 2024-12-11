@@ -33,7 +33,10 @@ use engine_traits::{
 use fail::fail_point;
 use file_system::{IoType, WithIoType};
 use futures::{compat::Future01CompatExt, FutureExt};
-use health_controller::{types::LatencyInspector, HealthController};
+use health_controller::{
+    types::{InspectFactor, LatencyInspector},
+    HealthController,
+};
 use itertools::Itertools;
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use kvproto::{
@@ -105,9 +108,9 @@ use crate::{
         worker::{
             AutoSplitController, CleanupRunner, CleanupSstRunner, CleanupSstTask, CleanupTask,
             CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
-            GcSnapshotRunner, GcSnapshotTask, PdRunner, RaftlogGcRunner, RaftlogGcTask,
-            ReadDelegate, RefreshConfigRunner, RefreshConfigTask, RegionRunner, RegionTask,
-            SplitCheckTask,
+            DiskCheckRunner, DiskCheckTask, GcSnapshotRunner, GcSnapshotTask, PdRunner,
+            RaftlogGcRunner, RaftlogGcTask, ReadDelegate, RefreshConfigRunner, RefreshConfigTask,
+            RegionRunner, RegionTask, SplitCheckTask,
         },
         worker_metrics::PROCESS_STAT_CPU_USAGE,
         Callback, CasualMessage, CompactThreshold, FullCompactController, GlobalReplicationState,
@@ -557,6 +560,7 @@ where
     pub raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
     pub raftlog_fetch_scheduler: Scheduler<ReadTask<EK>>,
     pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+    pub disk_check_scheduler: Scheduler<DiskCheckTask>,
     pub apply_router: ApplyRouter<EK>,
     pub router: RaftRouter<EK, ER>,
     pub importer: Arc<SstImporter<EK>>,
@@ -870,19 +874,38 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                 #[cfg(any(test, feature = "testexport"))]
                 StoreMsg::Validate(f) => f(&self.ctx.cfg),
                 StoreMsg::LatencyInspect {
+                    factor,
                     send_time,
                     mut inspector,
                 } => {
-                    inspector.record_store_wait(send_time.saturating_elapsed());
-                    inspector.record_store_commit(
-                        self.ctx
-                            .raft_metrics
-                            .health_stats
-                            .avg(InspectIoType::Network),
-                    );
-                    // Reset the health_stats and wait it to be refreshed in the next tick.
-                    self.ctx.raft_metrics.health_stats.reset();
-                    self.ctx.pending_latency_inspect.push(inspector);
+                    match factor {
+                        InspectFactor::RaftDisk => {
+                            inspector.record_store_wait(send_time.saturating_elapsed());
+                            inspector.record_store_commit(
+                                self.ctx
+                                    .raft_metrics
+                                    .health_stats
+                                    .avg(InspectIoType::Network),
+                            );
+                            // Reset the health_stats and wait it to be refreshed in the next tick.
+                            self.ctx.raft_metrics.health_stats.reset();
+                            self.ctx.pending_latency_inspect.push(inspector);
+                        }
+                        InspectFactor::KvDisk => {
+                            // Send LatencyInspector to disk_check_scheduler to inspect latency.
+                            if let Err(e) = self
+                                .ctx
+                                .disk_check_scheduler
+                                .schedule(DiskCheckTask::InspectLatency { inspector })
+                            {
+                                warn!(
+                                    "Failed to schedule disk check task";
+                                    "error" => ?e,
+                                    "store_id" => self.fsm.store.id
+                                );
+                            }
+                        }
+                    }
                 }
                 StoreMsg::UnsafeRecoveryReport(report) => self.store_heartbeat_pd(Some(report)),
                 StoreMsg::UnsafeRecoveryCreatePeer { syncer, create } => {
@@ -1246,6 +1269,7 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
     raftlog_fetch_scheduler: Scheduler<ReadTask<EK>>,
     pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+    disk_check_scheduler: Scheduler<DiskCheckTask>,
     apply_router: ApplyRouter<EK>,
     pub router: RaftRouter<EK, ER>,
     pub importer: Arc<SstImporter<EK>>,
@@ -1480,6 +1504,7 @@ where
             store: self.store.clone(),
             pd_scheduler: self.pd_scheduler.clone(),
             consistency_check_scheduler: self.consistency_check_scheduler.clone(),
+            disk_check_scheduler: self.disk_check_scheduler.clone(),
             split_check_scheduler: self.split_check_scheduler.clone(),
             region_scheduler: self.region_scheduler.clone(),
             apply_router: self.apply_router.clone(),
@@ -1558,6 +1583,7 @@ where
             cleanup_scheduler: self.cleanup_scheduler.clone(),
             raftlog_gc_scheduler: self.raftlog_gc_scheduler.clone(),
             raftlog_fetch_scheduler: self.raftlog_fetch_scheduler.clone(),
+            disk_check_scheduler: self.disk_check_scheduler.clone(),
             region_scheduler: self.region_scheduler.clone(),
             apply_router: self.apply_router.clone(),
             router: self.router.clone(),
@@ -1647,6 +1673,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         collector_reg_handle: CollectorRegHandle,
         health_controller: HealthController,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+        mut disk_check_runner: DiskCheckRunner,
         grpc_service_mgr: GrpcServiceManager,
         safe_point: Arc<AtomicU64>,
     ) -> Result<()> {
@@ -1738,6 +1765,12 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         let consistency_check_scheduler = workers
             .background_worker
             .start("consistency-check", consistency_check_runner);
+        // The scheduler dedicated to health checking the KvEngine disk when it's using
+        // a separate disk from RaftEngine.
+        disk_check_runner.bind_background_worker(workers.background_worker.clone());
+        let disk_check_scheduler = workers
+            .background_worker
+            .start("disk-check-worker", disk_check_runner);
 
         self.store_writers.spawn(
             meta.get_id(),
@@ -1755,6 +1788,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             router: self.router.clone(),
             split_check_scheduler,
             region_scheduler,
+            disk_check_scheduler,
             pd_scheduler: workers.pd_worker.scheduler(),
             consistency_check_scheduler,
             cleanup_scheduler,
@@ -1898,7 +1932,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             causal_ts_provider,
             grpc_service_mgr,
         );
-        assert!(workers.pd_worker.start_with_timer(pd_runner));
+        assert!(workers.pd_worker.start(pd_runner));
 
         if let Err(e) = sys_util::thread::set_priority(sys_util::HIGH_PRI) {
             warn!("set thread priority for raftstore failed"; "error" => ?e);
