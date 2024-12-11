@@ -245,6 +245,7 @@ bitflags! {
         const SPLIT          = 0b0000_0010;
         const PREPARE_MERGE  = 0b0000_0100;
         const COMMIT_MERGE   = 0b0000_1000;
+        const ROLLBACK_MERGE = 0b0001_0000;
     }
 }
 
