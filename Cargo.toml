@@ -266,10 +266,6 @@ members = [
   "components/cloud/gcp",
   "components/codec",
   "components/collections",
-<<<<<<< HEAD
-=======
-  "components/compact-log-backup",
->>>>>>> 004490cba3 (*: upgrade pprof to 0.14 to fix https://github.com/rusticata/pcap-parser/issues/46 (#17942))
   "components/concurrency_manager",
   "components/coprocessor_plugin_api",
   "components/crypto",
