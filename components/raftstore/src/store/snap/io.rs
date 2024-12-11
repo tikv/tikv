@@ -110,7 +110,7 @@ where
 
 #[cfg(not(test))]
 fn get_thread_io_bytes_stats() -> Result<file_system::IoBytes, String> {
-    file_system::get_thread_io_bytes_total()
+    get_thread_io_bytes_total()
 }
 
 #[cfg(test)]
