@@ -9,8 +9,8 @@ use std::{
 
 use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter, Iv};
 use engine_traits::{
-    CfName, Error as EngineError, IterOptions, Iterable, Iterator, KvEngine, Mutable, RefIterable,
-    SstCompressionType, SstReader, SstWriter, SstWriterBuilder, WriteBatch,
+    CfName, Error as EngineError, ExternalSstFileInfo, IterOptions, Iterable, Iterator, KvEngine,
+    Mutable, RefIterable, SstCompressionType, SstReader, SstWriter, SstWriterBuilder, WriteBatch,
 };
 use fail::fail_point;
 #[cfg(not(test))]
@@ -153,12 +153,14 @@ where
         .to_string();
     let sst_writer = RefCell::new(create_sst_file_writer::<E>(engine, cf, &path)?);
     let mut file_length: usize = 0;
+    let mut actual_file_length: u64 = 0;
 
     let finish_sst_writer = |sst_writer: E::SstWriter,
                              path: String,
                              key_mgr: Option<Arc<DataKeyManager>>|
-     -> Result<(), Error> {
-        sst_writer.finish()?;
+     -> Result<u64, Error> {
+        let f = sst_writer.finish()?;
+        let file_size = f.file_size();
         (|| {
             fail_point!("inject_sst_file_corruption", |_| {
                 static CALLED: std::sync::atomic::AtomicBool =
@@ -193,7 +195,7 @@ where
             return Err(io::Error::new(io::ErrorKind::InvalidData, e).into());
         }
         File::open(&path).and_then(|f| f.sync_all())?;
-        Ok(())
+        Ok(file_size)
     };
 
     let instant = Instant::now();
@@ -238,7 +240,9 @@ where
             match result {
                 Ok(new_sst_writer) => {
                     let old_writer = sst_writer.replace(new_sst_writer);
-                    box_try!(finish_sst_writer(old_writer, prev_path, key_mgr.clone()));
+                    let file_size =
+                        box_try!(finish_sst_writer(old_writer, prev_path, key_mgr.clone()));
+                    actual_file_length += file_size;
                 }
                 Err(e) => {
                     let io_error = io::Error::new(io::ErrorKind::Other, e);
@@ -265,14 +269,16 @@ where
     apply_io_limiter(&mut prev_io_bytes, &mut remained_quota);
 
     if stats.key_count > 0 {
-        box_try!(finish_sst_writer(sst_writer.into_inner(), path, key_mgr));
+        let file_size = box_try!(finish_sst_writer(sst_writer.into_inner(), path, key_mgr));
+        actual_file_length += file_size;
         cf_file.add_file(file_id);
         info!(
-            "build_sst_cf_file_list builds {} files in cf {}. Total keys {}, total size {}. raw_size_per_file {}, total takes {:?}",
+            "build_sst_cf_file_list builds {} files in cf {}. Total keys {}, total size {}, actual file size {}. raw_size_per_file {}, total takes {:?}",
             file_id + 1,
             cf,
             stats.key_count,
             stats.total_size,
+            actual_file_length,
             raw_size_per_file,
             instant.saturating_elapsed(),
         );
