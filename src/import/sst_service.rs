@@ -16,7 +16,8 @@ use engine_traits::{CompactExt, MiscExt, CF_DEFAULT, CF_WRITE};
 use file_system::{set_io_type, IoType};
 use futures::{sink::SinkExt, stream::TryStreamExt, FutureExt, TryFutureExt};
 use grpcio::{
-    ClientStreamingSink, RequestStream, RpcContext, ServerStreamingSink, UnarySink, WriteFlags,
+    ClientStreamingSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink,
+    UnarySink, WriteFlags,
 };
 use kvproto::{
     encryptionpb::EncryptionMethod,
@@ -418,6 +419,11 @@ impl<E: Engine> ImportSstService<E> {
             ..Default::default()
         });
         async move {
+            fail::fail_point!("failed_to_async_snapshot", |_| {
+                let mut e = errorpb::Error::default();
+                e.set_message("faild to get snapshot".to_string());
+                Err(e)
+            });
             res.await.map_err(|e| {
                 let err: storage::Error = e.into();
                 if let Some(e) = extract_region_error_from_error(&err) {
@@ -1368,15 +1374,18 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                             IMPORT_RPC_DURATION
                                 .with_label_values(&[label, "ok"])
                                 .observe(timer.saturating_elapsed_secs());
+                            let _ = sink.close().await;
                         }
                         Err(e) => {
                             warn!(
                                 "connection send message fail";
                                 "err" => %e
                             );
+                            let status =
+                                RpcStatus::with_message(RpcStatusCode::UNKNOWN, format!("{:?}", e));
+                            let _ = sink.fail(status).await;
                         }
                     }
-                    let _ = sink.close().await;
                     return;
                 }
             };
@@ -1392,7 +1401,10 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                         "connection send message fail";
                         "err" => %e
                     );
-                    break;
+                    let status =
+                        RpcStatus::with_message(RpcStatusCode::UNKNOWN, format!("{:?}", e));
+                    let _ = sink.fail(status).await;
+                    return;
                 }
             }
             let _ = sink.close().await;
