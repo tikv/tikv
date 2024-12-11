@@ -63,5 +63,6 @@ features = ["encryption"]
 branch = "tikv-7.5"
 
 [dev-dependencies]
+proptest = "1.0.0"
 rand = "0.8"
 toml = "0.5"

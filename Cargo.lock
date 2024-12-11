@@ -1717,6 +1717,7 @@ dependencies = [
 name = "engine_traits_tests"
 version = "0.0.1"
 dependencies = [
+<<<<<<< HEAD
  "encryption",
  "encryption_export",
  "engine_test",
@@ -1726,6 +1727,14 @@ dependencies = [
  "tempfile",
  "test_util",
  "tikv_alloc",
+=======
+ "encryption_export",
+ "engine_test",
+ "engine_traits",
+ "panic_hook",
+ "tempfile",
+ "test_util",
+>>>>>>> 261458672a (*: Fix missing workspace members (#17979))
 ]
 
 [[package]]
