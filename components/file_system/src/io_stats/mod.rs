@@ -1,5 +1,12 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+#[cfg(all(target_os = "linux", feature = "bcc-iosnoop"))]
+pub use biosnoop::*;
+#[cfg(all(target_os = "linux", not(feature = "bcc-iosnoop")))]
+pub use proc::*;
+#[cfg(not(any(target_os = "linux", feature = "bcc-iosnoop")))]
+pub use stub::*;
+
 #[cfg(not(any(target_os = "linux", feature = "bcc-iosnoop")))]
 mod stub {
     use std::cell::Cell;
@@ -31,21 +38,14 @@ mod stub {
     }
 
     pub fn get_thread_io_bytes_total() -> Result<IoBytes, String> {
-        Err("unimplemented".into())
+        Ok(IoBytes::default())
     }
 }
-#[cfg(not(any(target_os = "linux", feature = "bcc-iosnoop")))]
-pub use stub::*;
 
 #[cfg(all(target_os = "linux", feature = "bcc-iosnoop"))]
 mod biosnoop;
-#[cfg(all(target_os = "linux", feature = "bcc-iosnoop"))]
-pub use biosnoop::*;
-
 #[cfg(all(target_os = "linux", not(feature = "bcc-iosnoop")))]
 mod proc;
-#[cfg(all(target_os = "linux", not(feature = "bcc-iosnoop")))]
-pub use proc::*;
 
 // A struct assists testing IO stats.
 //
@@ -60,7 +60,6 @@ pub(crate) struct A512<const SZ: usize>(pub [u8; SZ]);
 mod tests {
     use tikv_util::sys::thread::StdThreadBuildWrapper;
 
-    use super::*;
     use crate::IoType;
 
     #[bench]
