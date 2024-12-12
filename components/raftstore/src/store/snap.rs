@@ -899,6 +899,7 @@ impl Snapshot {
                         .get_actual_max_per_file_size(allow_multi_files_snapshot),
                     &self.mgr.limiter,
                     self.mgr.encryption_key_manager.clone(),
+                    for_balance,
                 )?
             };
             SNAPSHOT_LIMIT_GENERATE_BYTES.inc_by(cf_stat.total_size as u64);

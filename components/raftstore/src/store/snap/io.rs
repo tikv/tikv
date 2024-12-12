@@ -137,6 +137,7 @@ pub fn build_sst_cf_file_list<E>(
     raw_size_per_file: u64,
     io_limiter: &Limiter,
     key_mgr: Option<Arc<DataKeyManager>>,
+    for_balance: bool,
 ) -> Result<BuildStatistics, Error>
 where
     E: KvEngine,
@@ -197,7 +198,11 @@ where
     };
 
     let instant = Instant::now();
-    let _io_type_guard = WithIoType::new(IoType::Export);
+    let _io_type_guard = WithIoType::new(if for_balance {
+        IoType::LoadBalance
+    } else {
+        IoType::Replication
+    });
     let mut prev_io_bytes = get_thread_io_bytes_stats().unwrap();
     let mut next_io_check_size = stats.total_size + IO_LIMIT_CHECK_INTERVAL;
     let handle_read_io_usage = |prev_io_bytes: &mut IoBytes, remained_quota: &mut usize| {
@@ -603,6 +608,7 @@ mod tests {
                         *max_file_size,
                         &limiter,
                         db_opt.as_ref().and_then(|opt| opt.get_key_manager()),
+                        true,
                     )
                     .unwrap();
                     if stats.key_count == 0 {
@@ -665,6 +671,7 @@ mod tests {
             u64::MAX,
             &limiter,
             None,
+            true,
         )
         .unwrap();
         assert_eq!(stats.total_size, 11890);
