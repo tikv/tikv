@@ -1633,12 +1633,24 @@ pub struct RaftstoreDuration {
 }
 
 impl RaftstoreDuration {
+    #[inline]
     pub fn sum(&self) -> std::time::Duration {
-        self.store_wait_duration.unwrap_or_default()
-            + self.store_process_duration.unwrap_or_default()
+        self.delays_on_disk_io(true)
+    }
+
+    #[inline]
+    /// Returns the delayed duration on Disk I/O.
+    pub fn delays_on_disk_io(&self, include_wait_duration: bool) -> std::time::Duration {
+        let duration = self.store_process_duration.unwrap_or_default()
             + self.store_write_duration.unwrap_or_default()
-            + self.apply_wait_duration.unwrap_or_default()
-            + self.apply_process_duration.unwrap_or_default()
+            + self.apply_process_duration.unwrap_or_default();
+        if include_wait_duration {
+            duration
+                + self.store_wait_duration.unwrap_or_default()
+                + self.apply_wait_duration.unwrap_or_default()
+        } else {
+            duration
+        }
     }
 }
 
