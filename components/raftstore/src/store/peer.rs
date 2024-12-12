@@ -2325,9 +2325,9 @@ where
                         for new_region in new_regions {
                             let _ = ctx.router.send(
                                 new_region,
-                                PeerMsg::CasualMessage(Box::new(CasualMessage::Campaign(
+                                PeerMsg::CasualMessage(CasualMessage::Campaign(
                                     CampaignType::UnsafeSplitCampaign,
-                                ))),
+                                )),
                             );
                         }
                     }

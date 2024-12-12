@@ -1873,13 +1873,7 @@ where
             // follower state
             let _ = self.ctx.router.send(
                 self.region_id(),
-<<<<<<< HEAD
-                PeerMsg::CasualMessage(CasualMessage::Campaign),
-=======
-                PeerMsg::CasualMessage(Box::new(CasualMessage::Campaign(
-                    CampaignType::ForceLeader,
-                ))),
->>>>>>> 361a8ebfc6 (raftstore: `campaign` newly created regions in time after `Split` (#17625))
+                PeerMsg::CasualMessage(CasualMessage::Campaign(CampaignType::ForceLeader)),
             );
         }
         self.fsm.has_ready = true;
