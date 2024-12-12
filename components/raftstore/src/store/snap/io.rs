@@ -202,13 +202,13 @@ where
     let mut next_io_check_size = stats.total_size + IO_LIMIT_CHECK_INTERVAL;
     let handle_read_io_usage = |prev_io_bytes: &mut IoBytes, remained_quota: &mut usize| {
         let cur_io_bytes = get_thread_io_bytes_stats().unwrap();
-        let read_io_bytes = (cur_io_bytes.read - prev_io_bytes.read) as usize;
+        let read_delta = (cur_io_bytes.read - prev_io_bytes.read) as usize;
 
-        while read_io_bytes > *remained_quota {
+        while read_delta > *remained_quota {
             io_limiter.blocking_consume(IO_LIMITER_CHUNK_SIZE);
             *remained_quota += IO_LIMITER_CHUNK_SIZE;
         }
-        *remained_quota -= read_io_bytes;
+        *remained_quota -= read_delta;
         *prev_io_bytes = cur_io_bytes;
     };
 
