@@ -110,9 +110,11 @@ impl<EK: Engine, K: ConfigurableDb, L: LockManager> ConfigManager
                 }
             }
         }
-        if let Some(v) = change.remove("panic_on_invalid_max_ts") {
-            let panic: bool = v.into();
-            self.concurrency_manager.set_panic_on_invalid_max_ts(panic)
+        if let Some(v) = change.remove("action_on_invalid_max_ts") {
+            let str_v: String = v.into();
+            let action: concurrency_manager::ActionOnInvalidMaxTs = str_v.try_into()?;
+            self.concurrency_manager
+                .set_action_on_invalid_max_ts(action);
         }
         Ok(())
     }

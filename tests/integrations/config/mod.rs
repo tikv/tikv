@@ -782,7 +782,7 @@ fn test_serde_custom_tikv_config() {
         memory_quota: ReadableSize::kb(123),
         max_ts_allowance_secs: 333,
         max_ts_sync_interval_secs: 44,
-        panic_on_invalid_max_ts: false,
+        action_on_invalid_max_ts: "error".to_owned(),
     };
     value.coprocessor = CopConfig {
         split_region_on_table: false,

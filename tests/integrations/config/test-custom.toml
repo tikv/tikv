@@ -107,7 +107,7 @@ txn-status-cache-capacity = 1000
 memory-quota = "123KB"
 max-ts-allowance-secs = 333
 max-ts-sync-interval-secs = 44
-panic-on-invalid-max-ts = false
+action-on-invalid-max-ts = "error"
 
 [storage.block-cache]
 capacity = "40GB"

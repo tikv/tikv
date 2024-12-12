@@ -16,10 +16,12 @@ mod key_handle;
 mod lock_table;
 
 use std::{
+    error::Error,
+    fmt,
     fmt::Display,
     mem::MaybeUninit,
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc,
     },
     time::Duration,
@@ -78,20 +80,24 @@ pub struct ConcurrencyManager {
     // approximate limit.
     max_ts_limit: Arc<AtomicCell<MaxTsLimit>>,
     limit_valid_duration: Duration,
-    panic_on_invalid_max_ts: Arc<AtomicBool>,
+    action_on_invalid_max_ts: Arc<AtomicActionOnInvalidMaxTs>,
 
     time_provider: Arc<dyn TimeProvider>,
 }
 
 impl ConcurrencyManager {
     pub fn new(latest_ts: TimeStamp) -> Self {
-        Self::new_with_config(latest_ts, DEFAULT_LIMIT_VALID_DURATION, true)
+        Self::new_with_config(
+            latest_ts,
+            DEFAULT_LIMIT_VALID_DURATION,
+            ActionOnInvalidMaxTs::Panic,
+        )
     }
 
     pub fn new_with_config(
         latest_ts: TimeStamp,
         limit_valid_duration: Duration,
-        panic_on_invalid_max_ts: bool,
+        action_on_invalid_max_ts: ActionOnInvalidMaxTs,
     ) -> Self {
         let initial_limit = MaxTsLimit {
             limit: TimeStamp::new(0),
@@ -102,7 +108,9 @@ impl ConcurrencyManager {
             max_ts: Arc::new(AtomicU64::new(latest_ts.into_inner())),
             max_ts_limit: Arc::new(AtomicCell::new(initial_limit)),
             lock_table: LockTable::default(),
-            panic_on_invalid_max_ts: Arc::new(AtomicBool::new(panic_on_invalid_max_ts)),
+            action_on_invalid_max_ts: Arc::new(AtomicActionOnInvalidMaxTs::new(
+                action_on_invalid_max_ts,
+            )),
             limit_valid_duration,
             time_provider: Arc::new(CoarseInstantTimeProvider),
         }
@@ -112,7 +120,7 @@ impl ConcurrencyManager {
     fn new_with_time_provider(
         latest_ts: TimeStamp,
         limit_valid_duration: Duration,
-        panic_on_invalid_max_ts: bool,
+        action_on_invalid_max_ts: ActionOnInvalidMaxTs,
         time_provider: Arc<dyn TimeProvider>,
     ) -> Self {
         let initial_limit = MaxTsLimit {
@@ -123,7 +131,9 @@ impl ConcurrencyManager {
             max_ts: Arc::new(AtomicU64::new(latest_ts.into_inner())),
             max_ts_limit: Arc::new(AtomicCell::new(initial_limit)),
             lock_table: LockTable::default(),
-            panic_on_invalid_max_ts: Arc::new(AtomicBool::new(panic_on_invalid_max_ts)),
+            action_on_invalid_max_ts: Arc::new(AtomicActionOnInvalidMaxTs::new(
+                action_on_invalid_max_ts,
+            )),
             limit_valid_duration,
             time_provider,
         }
@@ -207,18 +217,22 @@ impl ConcurrencyManager {
             "max_allowed" => limit.into_inner(),
             "source" => &source,
         );
-        if can_panic && self.panic_on_invalid_max_ts.load(Ordering::SeqCst) {
-            panic!(
-                "invalid max_ts update: {} exceeds the limit {}, source={}",
-                new_ts,
-                limit.into_inner(),
-                source
-            );
+        match self.action_on_invalid_max_ts.load() {
+            ActionOnInvalidMaxTs::Panic if can_panic => {
+                panic!(
+                    "invalid max_ts update: {} exceeds the limit {}, source={}",
+                    new_ts,
+                    limit.into_inner(),
+                    source
+                );
+            }
+            ActionOnInvalidMaxTs::Error => Err(InvalidMaxTsUpdate {
+                attempted_ts: new_ts,
+                max_allowed: limit,
+            }),
+            ActionOnInvalidMaxTs::Log => Ok(()),
+            ActionOnInvalidMaxTs::Panic => Ok(()),
         }
-        Err(InvalidMaxTsUpdate {
-            attempted_ts: new_ts,
-            max_allowed: limit,
-        })
     }
 
     /// Set the maximum allowed value for max_ts updates, except for the updates
@@ -331,8 +345,83 @@ impl ConcurrencyManager {
         min_lock
     }
 
-    pub fn set_panic_on_invalid_max_ts(&self, panic: bool) {
-        self.panic_on_invalid_max_ts.store(panic, Ordering::SeqCst);
+    pub fn set_action_on_invalid_max_ts(&self, action: ActionOnInvalidMaxTs) {
+        self.action_on_invalid_max_ts.store(action);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ActionOnInvalidMaxTs {
+    Panic,
+    Error,
+    Log,
+}
+
+#[derive(Debug)]
+pub struct ParseActionError(String);
+
+impl fmt::Display for ParseActionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl Error for ParseActionError {}
+
+impl TryFrom<&str> for ActionOnInvalidMaxTs {
+    type Error = ParseActionError;
+
+    fn try_from(value: &str) -> Result<Self, ParseActionError> {
+        match value.to_lowercase().as_str() {
+            "panic" => Ok(Self::Panic),
+            "error" => Ok(Self::Error),
+            "log" => Ok(Self::Log),
+            _ => Err(ParseActionError(format!("invalid action value: {}", value))),
+        }
+    }
+}
+
+impl TryFrom<String> for ActionOnInvalidMaxTs {
+    type Error = ParseActionError;
+
+    fn try_from(value: String) -> Result<Self, ParseActionError> {
+        Self::try_from(value.as_str())
+    }
+}
+
+pub struct AtomicActionOnInvalidMaxTs {
+    inner: AtomicUsize,
+}
+
+impl AtomicActionOnInvalidMaxTs {
+    pub fn new(initial: ActionOnInvalidMaxTs) -> Self {
+        Self {
+            inner: AtomicUsize::new(match initial {
+                ActionOnInvalidMaxTs::Panic => 0,
+                ActionOnInvalidMaxTs::Error => 1,
+                ActionOnInvalidMaxTs::Log => 2,
+            }),
+        }
+    }
+
+    pub fn store(&self, value: ActionOnInvalidMaxTs) {
+        self.inner.store(
+            match value {
+                ActionOnInvalidMaxTs::Panic => 0,
+                ActionOnInvalidMaxTs::Error => 1,
+                ActionOnInvalidMaxTs::Log => 2,
+            },
+            Ordering::SeqCst,
+        );
+    }
+
+    pub fn load(&self) -> ActionOnInvalidMaxTs {
+        match self.inner.load(Ordering::SeqCst) {
+            0 => ActionOnInvalidMaxTs::Panic,
+            1 => ActionOnInvalidMaxTs::Error,
+            2 => ActionOnInvalidMaxTs::Log,
+            _ => unreachable!("Invalid atomic state"),
+        }
     }
 }
 
@@ -524,7 +613,7 @@ mod tests {
         let cm = ConcurrencyManager::new_with_config(
             TimeStamp::new(100),
             DEFAULT_LIMIT_VALID_DURATION,
-            false,
+            ActionOnInvalidMaxTs::Error,
         );
 
         // Initially limit should be 0
@@ -566,7 +655,7 @@ mod tests {
         let cm = ConcurrencyManager::new_with_config(
             TimeStamp::new(100),
             DEFAULT_LIMIT_VALID_DURATION,
-            false,
+            ActionOnInvalidMaxTs::Error,
         );
 
         // Set limit to 200
@@ -597,7 +686,7 @@ mod tests {
         let cm = ConcurrencyManager::new_with_time_provider(
             TimeStamp::new(100),
             Duration::from_secs(60),
-            false,
+            ActionOnInvalidMaxTs::Error,
             time_provider.clone(),
         );
 
@@ -620,7 +709,7 @@ mod tests {
         let cm = ConcurrencyManager::new_with_time_provider(
             TimeStamp::new(100),
             Duration::from_secs(60),
-            false,
+            ActionOnInvalidMaxTs::Error,
             time_provider.clone(),
         );
 

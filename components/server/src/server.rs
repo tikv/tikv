@@ -407,7 +407,12 @@ where
             Duration::from_secs(
                 config.storage.max_ts_sync_interval_secs * LIMIT_VALID_TIME_MULTIPLIER,
             ),
-            config.storage.panic_on_invalid_max_ts,
+            config
+                .storage
+                .action_on_invalid_max_ts
+                .as_str()
+                .try_into()
+                .unwrap(),
         );
 
         // use different quota for front-end and back-end requests

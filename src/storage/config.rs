@@ -2,7 +2,7 @@
 
 //! Storage configuration.
 
-use std::{cmp::max, error::Error, path::Path};
+use std::{borrow::ToOwned, cmp::max, error::Error, path::Path};
 
 use engine_rocks::raw::{Cache, LRUCacheOptions, MemoryAllocator};
 use file_system::{IoPriority, IoRateLimitMode, IoRateLimiter, IoType};
@@ -61,6 +61,8 @@ const DEFAULT_TXN_STATUS_CACHE_CAPACITY: usize = 40_000 * 128;
 // occur in tests.
 const FALLBACK_BLOCK_CACHE_CAPACITY: ReadableSize = ReadableSize::mb(128);
 
+const DEFAULT_ACTION_ON_INVALID_MAX_TS: &str = "panic";
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum EngineType {
@@ -110,7 +112,7 @@ pub struct Config {
     /// How often to refresh the max_ts limit from PD
     #[online_config(skip)]
     pub max_ts_sync_interval_secs: u64,
-    pub panic_on_invalid_max_ts: bool,
+    pub action_on_invalid_max_ts: String,
     #[online_config(submodule)]
     pub flow_control: FlowControlConfig,
     #[online_config(submodule)]
@@ -148,7 +150,7 @@ impl Default for Config {
             memory_quota: DEFAULT_TXN_MEMORY_QUOTA_CAPACITY,
             max_ts_allowance_secs: 60,
             max_ts_sync_interval_secs: 10,
-            panic_on_invalid_max_ts: true,
+            action_on_invalid_max_ts: DEFAULT_ACTION_ON_INVALID_MAX_TS.into(),
         }
     }
 }
@@ -235,6 +237,17 @@ impl Config {
                 self.max_ts_sync_interval_secs,
             );
             self.max_ts_allowance_secs = self.max_ts_sync_interval_secs;
+        }
+
+        if let Err(e) = concurrency_manager::ActionOnInvalidMaxTs::try_from(
+            self.action_on_invalid_max_ts.as_str(),
+        ) {
+            error!(
+                "storage.action-on-invalid-max-ts is set to an invalid value {}, \
+                change to action panic",
+                self.action_on_invalid_max_ts,
+            );
+            return Err(e.into());
         }
 
         Ok(())
