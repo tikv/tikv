@@ -73,7 +73,10 @@ use super::{
     cmd_resp,
     local_metrics::{IoType, RaftMetrics},
     metrics::*,
-    peer_storage::{write_peer_state, CheckApplyingSnapStatus, HandleReadyResult, PeerStorage},
+    peer_storage::{
+        write_peer_state, CheckApplyingSnapStatus, HandleReadyResult, PeerStorage,
+        RAFT_INIT_LOG_TERM,
+    },
     read_queue::{ReadIndexQueue, ReadIndexRequest},
     transport::Transport,
     util::{
@@ -99,7 +102,7 @@ use crate::{
         },
         hibernate_state::GroupState,
         memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES},
-        msg::{CasualMessage, ErrorCallback, RaftCommand},
+        msg::{CampaignType, CasualMessage, ErrorCallback, RaftCommand},
         peer_storage::HandleSnapshotResult,
         snapshot_backup::{AbortReason, SnapshotBrState},
         txn_ext::LocksStatus,
@@ -109,7 +112,7 @@ use crate::{
             CleanupTask, CompactTask, HeartbeatTask, RaftlogGcTask, ReadDelegate, ReadExecutor,
             ReadProgress, RegionTask, SplitCheckTask,
         },
-        Callback, Config, GlobalReplicationState, PdTask, ReadCallback, ReadIndexContext,
+        Callback, Config, GlobalReplicationState, PdTask, PeerMsg, ReadCallback, ReadIndexContext,
         ReadResponse, TxnExt, WriteCallback, RAFT_INIT_LOG_INDEX,
     },
     Error, Result,
@@ -921,6 +924,12 @@ where
     /// this peer has raft log gaps and whether should be marked busy on
     /// apply.
     pub last_leader_committed_idx: Option<u64>,
+
+    /// Used to record uncampaigned regions, which are the new regions
+    /// created when a follower applies a split. If the follower becomes a
+    /// leader, a campaign is triggered for those regions.
+    /// Once the parent region has valid leader, this list will be cleared.
+    pub uncampaigned_new_regions: Option<Vec<u64>>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -1072,6 +1081,7 @@ where
             snapshot_recovery_state: None,
             busy_on_apply: Some(false),
             last_leader_committed_idx: None,
+            uncampaigned_new_regions: None,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -1677,6 +1687,11 @@ where
     }
 
     #[inline]
+    pub fn is_follower(&self) -> bool {
+        self.raft_group.raft.state == StateRole::Follower && self.peer.role != PeerRole::Learner
+    }
+
+    #[inline]
     pub fn is_witness(&self) -> bool {
         self.peer.is_witness
     }
@@ -1694,6 +1709,26 @@ where
     #[inline]
     pub fn mut_store(&mut self) -> &mut PeerStorage<EK, ER> {
         self.raft_group.mut_store()
+    }
+
+    #[inline]
+    pub fn approximate_size(&self) -> Option<u64> {
+        self.split_check_trigger.approximate_size
+    }
+
+    #[inline]
+    pub fn approximate_keys(&self) -> Option<u64> {
+        self.split_check_trigger.approximate_keys
+    }
+
+    #[inline]
+    pub fn set_approximate_size(&mut self, approximate_size: Option<u64>) {
+        self.split_check_trigger.approximate_size = approximate_size;
+    }
+
+    #[inline]
+    pub fn set_approximate_keys(&mut self, approximate_keys: Option<u64>) {
+        self.split_check_trigger.approximate_keys = approximate_keys;
     }
 
     /// Whether the snapshot is handling.
@@ -2300,6 +2335,22 @@ where
                             "region_id" => self.region_id,
                         );
                     }
+                    // After the leadership changed, send `CasualMessage::Campaign
+                    // {notify_by_parent: true}` to the target peer to campaign
+                    // leader if there exists uncampaigned regions. It's used to
+                    // ensure that a leader is elected promptly for the newly
+                    // created Raft group, minimizing availability impact (e.g.
+                    // #12410 and #17602.).
+                    if let Some(new_regions) = self.uncampaigned_new_regions.take() {
+                        for new_region in new_regions {
+                            let _ = ctx.router.send(
+                                new_region,
+                                PeerMsg::CasualMessage(CasualMessage::Campaign(
+                                    CampaignType::UnsafeSplitCampaign,
+                                )),
+                            );
+                        }
+                    }
                 }
                 StateRole::Follower => {
                     self.leader_lease.expire();
@@ -2310,6 +2361,8 @@ where
                         let _ = self.get_store().clear_data();
                         self.delay_clean_data = false;
                     }
+                    // Clear the uncampaigned list.
+                    self.uncampaigned_new_regions = None;
                 }
                 _ => {}
             }
@@ -3690,6 +3743,12 @@ where
         }
 
         if !parent_is_leader {
+            return false;
+        }
+
+        // And only if the split region does not enter election state, will it be
+        // safe to campaign.
+        if self.term() > RAFT_INIT_LOG_TERM {
             return false;
         }
 
@@ -5520,8 +5579,8 @@ where
             pending_peers: self.collect_pending_peers(ctx),
             written_bytes: self.peer_stat.written_bytes,
             written_keys: self.peer_stat.written_keys,
-            approximate_size: self.split_check_trigger.approximate_size,
-            approximate_keys: self.split_check_trigger.approximate_keys,
+            approximate_size: self.approximate_size(),
+            approximate_keys: self.approximate_keys(),
             replication_status: self.region_replication_status(ctx),
             wait_data_peers: self.wait_data_peers.clone(),
         });
@@ -5707,7 +5766,7 @@ where
         self.send_extra_message(extra_msg, &mut ctx.trans, &to_peer);
     }
 
-    pub fn require_updating_max_ts(&self, pd_scheduler: &Scheduler<PdTask<EK, ER>>) {
+    pub fn require_updating_max_ts(&self, pd_scheduler: &Scheduler<PdTask<EK>>) {
         let epoch = self.region().get_region_epoch();
         let term_low_bits = self.term() & ((1 << 32) - 1); // 32 bits
         let version_lot_bits = epoch.get_version() & ((1 << 31) - 1); // 31 bits

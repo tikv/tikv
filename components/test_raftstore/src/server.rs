@@ -37,8 +37,9 @@ use raftstore::{
     store::{
         fsm::{store::StoreMeta, ApplyRouter, RaftBatchSystem, RaftRouter},
         msg::RaftCmdExtraOpts,
-        AutoSplitController, Callback, CheckLeaderRunner, LocalReader, RegionSnapshot, SnapManager,
-        SnapManagerBuilder, SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
+        AutoSplitController, Callback, CheckLeaderRunner, DiskCheckRunner, LocalReader,
+        RegionSnapshot, SnapManager, SnapManagerBuilder, SplitCheckRunner, SplitConfigManager,
+        StoreMetaDelegate,
     },
     Result,
 };
@@ -475,6 +476,7 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
             .max_per_file_size(cfg.raft_store.max_snapshot_file_raw_size.0)
             .enable_multi_snapshot_files(true)
             .enable_receive_tablet_snapshot(cfg.raft_store.enable_v2_compatible_learner)
+            .min_ingest_snapshot_limit(cfg.server.snap_min_ingest_size)
             .build(tmp_str);
         self.snap_mgrs.insert(node_id, snap_mgr.clone());
         let server_cfg = Arc::new(VersionTrack::new(cfg.server.clone()));
@@ -625,6 +627,7 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
             concurrency_manager.clone(),
             collector_reg_handle,
             causal_ts_provider,
+            DiskCheckRunner::dummy(),
             GrpcServiceManager::dummy(),
             Arc::new(AtomicU64::new(0)),
         )?;
