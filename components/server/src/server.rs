@@ -50,6 +50,7 @@ use kvproto::{
 };
 use pd_client::{
     meta_storage::{Checked, Sourced},
+    metrics::STORE_SIZE_EVENT_INT_VEC,
     PdClient, RpcClient,
 };
 use raft_log_engine::RaftLogEngine;
@@ -67,8 +68,8 @@ use raftstore::{
         },
         memory::MEMTRACE_ROOT as MEMTRACE_RAFTSTORE,
         snapshot_backup::PrepareDiskSnapObserver,
-        AutoSplitController, CheckLeaderRunner, LocalReader, SnapManager, SnapManagerBuilder,
-        SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
+        AutoSplitController, CheckLeaderRunner, DiskCheckRunner, LocalReader, SnapManager,
+        SnapManagerBuilder, SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
     },
     RaftRouterCompactedEventSender,
 };
@@ -753,6 +754,7 @@ where
             .enable_receive_tablet_snapshot(
                 self.core.config.raft_store.enable_v2_compatible_learner,
             )
+            .min_ingest_snapshot_limit(self.core.config.server.snap_min_ingest_size)
             .build(snap_path);
 
         // Create coprocessor endpoint.
@@ -821,6 +823,13 @@ where
         let server_config = Arc::new(VersionTrack::new(self.core.config.server.clone()));
 
         self.core.config.raft_store.optimize_for(false);
+        self.core
+            .config
+            .raft_store
+            .optimize_inspector(path_in_diff_mount_point(
+                engines.engines.raft.get_engine_path().to_string().as_str(),
+                engines.engines.kv.path(),
+            ));
         self.core
             .config
             .raft_store
@@ -1019,6 +1028,8 @@ where
             .registry
             .register_consistency_check_observer(100, observer);
 
+        let disk_check_runner = DiskCheckRunner::new(self.core.store_path.clone());
+
         node.start(
             engines.engines.clone(),
             server.transport(),
@@ -1032,6 +1043,7 @@ where
             self.concurrency_manager.clone(),
             collector_reg_handle,
             self.causal_ts_provider.clone(),
+            disk_check_runner,
             self.grpc_service_mgr.clone(),
             safe_point.clone(),
         )
@@ -1369,10 +1381,6 @@ where
         let snap_mgr = self.snap_mgr.clone().unwrap();
         let reserve_space = disk::get_disk_reserved_space();
         let reserve_raft_space = disk::get_raft_disk_reserved_space();
-        if reserve_space == 0 && reserve_raft_space == 0 {
-            info!("disk space checker not enabled");
-            return;
-        }
         let raft_path = engines.raft.get_engine_path().to_string();
         let separated_raft_mount_path =
             path_in_diff_mount_point(raft_path.as_str(), engines.kv.path());
@@ -1449,7 +1457,25 @@ where
                         capacity
                     );
                 }
-                disk::set_disk_status(cur_disk_status);
+                // Update disk status if disk space checker is enabled.
+                if reserve_space == 0 && reserve_raft_space == 0 {
+                    info!("ignore updating disk status as no reserve space is set");
+                } else {
+                    disk::set_disk_status(cur_disk_status);
+                }
+                // Update disk capacity, used size and available size.
+                disk::set_disk_capacity(capacity);
+                disk::set_disk_used_size(used_size);
+                disk::set_disk_available_size(available);
+
+                // Update metrics.
+                STORE_SIZE_EVENT_INT_VEC.raft_size.set(raft_size as i64);
+                STORE_SIZE_EVENT_INT_VEC.snap_size.set(snap_size as i64);
+                STORE_SIZE_EVENT_INT_VEC.kv_size.set(kv_size as i64);
+
+                STORE_SIZE_EVENT_INT_VEC.capacity.set(capacity as i64);
+                STORE_SIZE_EVENT_INT_VEC.available.set(available as i64);
+                STORE_SIZE_EVENT_INT_VEC.used.set(used_size as i64);
             })
     }
 
