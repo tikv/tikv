@@ -5,6 +5,7 @@
 #![feature(box_patterns)]
 #![feature(vec_into_raw_parts)]
 #![feature(let_chains)]
+#![feature(div_duration)]
 
 #[cfg(test)]
 extern crate test;
@@ -54,6 +55,7 @@ pub mod memory;
 pub mod metrics;
 pub mod mpsc;
 pub mod quota_limiter;
+pub mod slow_score;
 pub mod store;
 pub mod stream;
 pub mod sys;
@@ -609,6 +611,22 @@ pub fn set_vec_capacity<T>(v: &mut Vec<T>, cap: usize) {
         cmp::Ordering::Less => v.shrink_to(cap),
         cmp::Ordering::Greater => v.reserve_exact(cap - v.len()),
         cmp::Ordering::Equal => {}
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum InspectFactor {
+    RaftDisk = 0,
+    KvDisk,
+    // TODO: Add more factors, like network io.
+}
+
+impl InspectFactor {
+    pub fn as_str(&self) -> &str {
+        match *self {
+            InspectFactor::RaftDisk => "raft",
+            InspectFactor::KvDisk => "kvdb",
+        }
     }
 }
 
