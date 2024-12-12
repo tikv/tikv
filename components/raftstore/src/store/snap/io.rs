@@ -123,6 +123,8 @@ fn get_thread_io_bytes_stats() -> Result<file_system::IoBytes, String> {
         static TOTAL_BYTES: Cell<IoBytes> = Cell::new(IoBytes::default());
     }
     let mut new_bytes = TOTAL_BYTES.get();
+    // We use 2 as the factor because the compression ratio of SST files with the
+    // zstd algorithm is empirically around 2x.
     new_bytes.read += SCAN_BYTES_PER_IO_LIMIT_CHECK as u64 / 2;
     TOTAL_BYTES.set(new_bytes);
     Ok(new_bytes)
