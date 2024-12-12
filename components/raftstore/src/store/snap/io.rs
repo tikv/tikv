@@ -26,7 +26,10 @@ use tikv_util::{
 
 use super::{CfFile, Error, IO_LIMITER_CHUNK_SIZE};
 
-const IO_LIMIT_CHECK_INTERVAL: usize = 8 * 1024;
+// This defines the number of bytes scanned before trigger an I/O limiter check.
+// It is used instead of checking the I/O limiter for each scan to reduce cpu
+// overhead.
+const SCAN_BYTES_PER_IO_LIMIT_CHECK: usize = 8 * 1024;
 
 /// Used to check a procedure is stale or not.
 pub trait StaleDetector {
@@ -120,7 +123,7 @@ fn get_thread_io_bytes_stats() -> Result<file_system::IoBytes, String> {
         static TOTAL_BYTES: Cell<IoBytes> = Cell::new(IoBytes::default());
     }
     let mut new_bytes = TOTAL_BYTES.get();
-    new_bytes.read += IO_LIMIT_CHECK_INTERVAL as u64 / 2;
+    new_bytes.read += SCAN_BYTES_PER_IO_LIMIT_CHECK as u64 / 2;
     TOTAL_BYTES.set(new_bytes);
     Ok(new_bytes)
 }
@@ -204,7 +207,9 @@ where
         IoType::Replication
     });
     let mut prev_io_bytes = get_thread_io_bytes_stats().unwrap();
-    let mut next_io_check_size = stats.total_size + IO_LIMIT_CHECK_INTERVAL;
+    let mut next_io_check_size = stats.total_size + SCAN_BYTES_PER_IO_LIMIT_CHECK;
+    // TODO(@hhwyt): Consider incorporating snapshot file write I/O into the
+    // limiting mechanism.
     let handle_read_io_usage = |prev_io_bytes: &mut IoBytes, remained_quota: &mut usize| {
         let cur_io_bytes = get_thread_io_bytes_stats().unwrap();
         let read_delta = (cur_io_bytes.read - prev_io_bytes.read) as usize;
@@ -248,7 +253,7 @@ where
 
         if stats.total_size >= next_io_check_size {
             handle_read_io_usage(&mut prev_io_bytes, &mut remained_quota);
-            next_io_check_size = stats.total_size + IO_LIMIT_CHECK_INTERVAL;
+            next_io_check_size = stats.total_size + SCAN_BYTES_PER_IO_LIMIT_CHECK;
         }
 
         if let Err(e) = sst_writer.borrow_mut().put(key, value) {
@@ -646,11 +651,23 @@ mod tests {
         }
     }
 
+    // This test verifies that building SST files is effectively limited by the I/O
+    // limiter based on actual I/O usage. It achieve this by adding an I/O limiter
+    // and asserting that the elapsed time for building SST files exceeds the
+    // lower bound enforced by the I/O limiter.
+    //
+    // In this test, the I/O limiter is configured with a throughput limit 8000
+    // bytes/sec. A dataset of 1000 keys (totaling 11, 890 bytes) is generated  to
+    // trigger two I/O limiter checks, as the default SCAN_BYTES_PER_IO_LIMIT_CHECK
+    // is 8192 bytes. During each check, the mocked `get_thread_io_bytes_stats`
+    // function returns 4096 bytes of I/O usage, resulting in total of 8192 bytes.
+    // With the 8000 bytes/sec limitation, we assert that the elapsed time must
+    // exceed 1 second.
     #[test]
     fn test_build_sst_with_io_limiter() {
         let dir = Builder::new().prefix("test-io-limiter").tempdir().unwrap();
         let db = open_test_db_with_nkeys(dir.path(), None, None, 1000).unwrap();
-        let bytes_per_sec = 8000_f64; // 8000B/s  
+        let bytes_per_sec = 8000_f64;
         let limiter = Limiter::new(bytes_per_sec);
         let snap_dir = Builder::new().prefix("snap-dir").tempdir().unwrap();
         let mut cf_file = CfFile {
