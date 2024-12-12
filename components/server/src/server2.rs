@@ -49,6 +49,7 @@ use kvproto::{
 };
 use pd_client::{
     meta_storage::{Checked, Sourced},
+    metrics::STORE_SIZE_EVENT_INT_VEC,
     PdClient, RpcClient,
 };
 use raft_log_engine::RaftLogEngine;
@@ -1170,10 +1171,6 @@ where
         let snap_mgr = self.snap_mgr.clone().unwrap();
         let reserve_space = disk::get_disk_reserved_space();
         let reserve_raft_space = disk::get_raft_disk_reserved_space();
-        if reserve_space == 0 && reserve_raft_space == 0 {
-            info!("disk space checker not enabled");
-            return;
-        }
         let raft_engine = self.engines.as_ref().unwrap().raft_engine.clone();
         let tablet_registry = self.tablet_registry.clone().unwrap();
         let raft_path = raft_engine.get_engine_path().to_string();
@@ -1254,7 +1251,25 @@ where
                         capacity
                     );
                 }
-                disk::set_disk_status(cur_disk_status);
+                // Update disk status if disk space checker is enabled.
+                if reserve_space == 0 && reserve_raft_space == 0 {
+                    info!("ignore updating disk status as no reserve space is set");
+                } else {
+                    disk::set_disk_status(cur_disk_status);
+                }
+                // Update disk capacity, used size and available size.
+                disk::set_disk_capacity(capacity);
+                disk::set_disk_used_size(used_size);
+                disk::set_disk_available_size(available);
+
+                // Update metrics.
+                STORE_SIZE_EVENT_INT_VEC.raft_size.set(raft_size as i64);
+                STORE_SIZE_EVENT_INT_VEC.snap_size.set(snap_size as i64);
+                STORE_SIZE_EVENT_INT_VEC.kv_size.set(kv_size as i64);
+
+                STORE_SIZE_EVENT_INT_VEC.capacity.set(capacity as i64);
+                STORE_SIZE_EVENT_INT_VEC.available.set(available as i64);
+                STORE_SIZE_EVENT_INT_VEC.used.set(used_size as i64);
             })
     }
 
