@@ -10,6 +10,7 @@ approvers:
   - cfzjywxk
   - Connor1996
   - coocood
+  - crazycs520
   - disksing
   - ekexium
   - gengliqi
@@ -40,6 +41,7 @@ approvers:
   - tabokie
   - TennyZhuang
   - tonyxuqqi
+  - v01dstar
   - yiwu-arbug
   - you06
   - youjiali1995
@@ -47,7 +49,9 @@ approvers:
   - zhangjinpeng87
   - zhongzc
   - zhouqiang-cl
+  - zyguan
 reviewers:
+  - 3AceShowHand
   - 3pointer
   - CalvinNeo
   - ethercflow
@@ -55,7 +59,7 @@ reviewers:
   - Fullstop000
   - gozssky
   - haojinming
-  - hi-rustin
+  - hbisheng
   - HuSharp
   - jayzhan211
   - Jibbow
@@ -68,9 +72,8 @@ reviewers:
   - MrCroxx
   - nolouch
   - rleungx
+  - Rustin170506
   - tier-cap
-  - v01dstar
   - wjhuang2016
   - wshwsh12
   - Xuanwo
-  - zyguan

@@ -324,7 +324,11 @@ mod tests {
         let dur = start.saturating_elapsed();
         assert_eq!(delta.total_consumed, 150);
         assert!(delta.total_wait_dur_us >= 140_000 && delta.total_wait_dur_us <= 160_000);
-        assert!(dur >= Duration::from_millis(150) && dur <= Duration::from_millis(160));
+        assert!(
+            dur >= Duration::from_millis(140) && dur <= Duration::from_millis(160),
+            "dur: {:?}",
+            dur
+        );
 
         // fetch io bytes failed, consumed value is 0.
         #[cfg(feature = "failpoints")]

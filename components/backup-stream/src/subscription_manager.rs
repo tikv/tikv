@@ -938,17 +938,15 @@ mod test {
         fail::cfg("execute_scan_command_sleep_100", "return").unwrap();
         for _ in 0..100 {
             let wg = wg.clone();
-            assert!(
-                block_on(pool.request(ScanCmd {
-                    region: Default::default(),
-                    handle: Default::default(),
-                    last_checkpoint: Default::default(),
-                    feedback_channel: tx.clone(),
-                    // Note: Maybe make here a Box<dyn FnOnce()> or some other trait?
-                    _work: wg.work(),
-                }))
-                .is_ok()
-            )
+            block_on(pool.request(ScanCmd {
+                region: Default::default(),
+                handle: Default::default(),
+                last_checkpoint: Default::default(),
+                feedback_channel: tx.clone(),
+                // Note: Maybe make here a Box<dyn FnOnce()> or some other trait?
+                _work: wg.work(),
+            }))
+            .unwrap();
         }
 
         should_finish_in(move || drop(pool), Duration::from_secs(5));

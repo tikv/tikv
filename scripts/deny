@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-cargo install cargo-deny@0.14.3 2> /dev/null || echo "Install cargo-deny failed"
+cargo install --locked cargo-deny@0.14.3 2> /dev/null || echo "Install cargo-deny failed"
 cargo deny -V
 cargo deny fetch all
 cargo deny check --show-stats

@@ -10,7 +10,8 @@ failpoints = ["fail/failpoints"]
 test-cgroup = []
 
 [dependencies]
-async-speed-limit = "0.4.0"
+# TODO: use `async-speed-limit` in crates.io after new version(v0.4.2) is released.
+async-speed-limit = "0.4.2"
 backtrace = "0.3.9"
 byteorder = "1.2"
 bytes = "1.0"
@@ -61,9 +62,10 @@ sysinfo = "0.26"
 thiserror = "1.0"
 tikv_alloc = { workspace = true }
 time = { workspace = true }
-tokio = { version = "1.5", features = ["rt-multi-thread"] }
+tokio = { version = "1.5", features = ["rt-multi-thread","time", "rt", "macros", "sync", "full"] }
 tokio-executor = { workspace = true }
 tokio-timer = { workspace = true }
+tokio-util = { version = "0.7", features = ["rt"] }
 tracker = { workspace = true }
 url = "2"
 yatp = { workspace = true }
