@@ -4106,13 +4106,14 @@ def Snapshot() -> RowPanel:
                         expr=expr_sum_rate(
                             "tikv_snapshot_limit_transport_bytes",
                             by_labels=["instance", "type"],
-                        ),
+                        )
                     ),
                     target(
                         expr=expr_sum_rate(
                             "tikv_snapshot_limit_generate_bytes",
+                            by_labels=["instance", "type"],
                         ),
-                        legend_format="{{instance}}-generate",
+                        legend_format="{{instance}}-generate-{{type}}",
                     ),
                 ],
             ),
