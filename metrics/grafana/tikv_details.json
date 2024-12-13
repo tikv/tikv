@@ -15384,7 +15384,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "sum(rate(tikv_raftstore_raft_sent_message_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (type)",
+              "expr": "sum(rate(tikv_raftstore_raft_sent_message_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", status=\"accept\"}[1m])) by (type)",
               "format": "time_series",
               "intervalFactor": 2,
               "legendFormat": "{{type}}",
@@ -15603,6 +15603,14 @@
               "intervalFactor": 2,
               "legendFormat": "{{type}}",
               "refId": "A",
+              "step": 4
+            },
+            {
+              "expr": "sum(rate(tikv_raftstore_raft_sent_message_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", status=\"drop\"}[1m])) by (type)",
+              "format": "time_series",
+              "intervalFactor": 2,
+              "legendFormat": "{{type}}",
+              "refId": "B",
               "step": 4
             }
           ],
