@@ -462,9 +462,9 @@ impl Delegate {
         self.txn_extra_op.as_ref()
     }
 
-    fn broadcast<F>(&self, send: F) -> Result<()>
+    fn broadcast<F>(&self, mut send: F) -> Result<()>
     where
-        F: Fn(&Downstream) -> Result<()>,
+        F: FnMut(&Downstream) -> Result<()>,
     {
         let downstreams = self.downstreams();
         assert!(
@@ -677,25 +677,22 @@ impl Delegate {
         is_one_pc: bool,
     ) -> Result<()> {
         debug_assert_eq!(self.txn_extra_op.load(), TxnExtraOp::ReadOldValue);
-        let mut read_old_value = |row: &mut EventRow, read_old_ts| -> Result<()> {
+        let read_old_value = |row: &mut EventRow, read_old_ts| -> Result<()> {
             let key = Key::from_raw(&row.key).append_ts(row.start_ts.into());
             let old_value = old_value_cb(key, read_old_ts, old_value_cache, statistics)?;
             row.old_value = old_value.unwrap_or_default();
             Ok(())
         };
 
-        // map[key] -> (event, has_value).
-        let mut txn_rows: HashMap<Vec<u8>, (EventRow, bool)> = HashMap::default();
+        // map[key] -> (event, has_value, old_value_ts).
+        let mut txn_rows: HashMap<Vec<u8>, (EventRow, bool, Option<TimeStamp>)> =
+            HashMap::default();
         let mut raw_rows: Vec<EventRow> = Vec::new();
         for mut req in requests {
             let res = match req.get_cmd_type() {
-                CmdType::Put => self.sink_put(
-                    req.take_put(),
-                    is_one_pc,
-                    &mut txn_rows,
-                    &mut raw_rows,
-                    &mut read_old_value,
-                ),
+                CmdType::Put => {
+                    self.sink_put(req.take_put(), is_one_pc, &mut txn_rows, &mut raw_rows)
+                }
                 CmdType::Delete => self.sink_delete(req.take_delete()),
                 _ => {
                     debug!(
@@ -712,27 +709,85 @@ impl Delegate {
             }
         }
 
-        let mut rows = Vec::with_capacity(txn_rows.len());
-        for (_, (v, has_value)) in txn_rows {
-            if v.r_type == EventLogType::Prewrite && v.op_type == EventRowOpType::Put && !has_value
-            {
-                // It's possible that a prewrite command only contains lock but without
-                // default. It's not documented by classic Percolator but introduced with
-                // Large-Transaction. Those prewrites are not complete, we must skip them.
-                continue;
-            }
-            rows.push(v);
-        }
-        self.sink_downstream(rows, index, ChangeDataRequestKvApi::TiDb)?;
-        self.sink_downstream(raw_rows, index, ChangeDataRequestKvApi::RawKv)
+        self.sink_downstream_tidb(txn_rows.into_values(), read_old_value)?;
+        self.sink_downstream_raw(raw_rows, index)?;
+        Ok(())
     }
 
-    fn sink_downstream(
+    fn sink_downstream_tidb(
         &mut self,
-        entries: Vec<EventRow>,
-        index: u64,
-        kv_api: ChangeDataRequestKvApi,
+        entries: impl Iterator<Item = (EventRow, bool, Option<TimeStamp>)>,
+        mut read_old_value: impl FnMut(&mut EventRow, TimeStamp) -> Result<()>,
     ) -> Result<()> {
+        let mut entries = entries
+            .filter(|x| !TxnSource::is_lossy_ddl_reorg_source_set(x.0.txn_source))
+            // It's possible that a prewrite command only contains lock but without
+            // default. It's not documented by classic Percolator but introduced with
+            // Large-Transaction. Those prewrites are not complete, we must skip them.
+            .filter(|x| !(x.0.r_type == EventLogType::Prewrite && x.0.op_type == EventRowOpType::Put && !x.1))
+            .map(|x| (x.0, x.2))
+            .collect::<Vec<_>>();
+
+        let downstreams = self.downstreams();
+        assert!(
+            !downstreams.is_empty(),
+            "region {} miss downstream",
+            self.region_id
+        );
+
+        let region_id = self.region_id;
+        let send = move |downstream: &Downstream| {
+            // No ready downstream or a downstream that does not match the kv_api type, will
+            // be ignored. There will be one region that contains both Txn & Raw entries.
+            // The judgement here is for sending entries to downstreams with correct kv_api.
+            if !downstream.state.load().ready_for_change_events()
+                || downstream.kv_api != ChangeDataRequestKvApi::TiDb
+            {
+                return Ok(());
+            }
+
+            let mut d_entries = Vec::with_capacity(entries.len());
+            for (r, old_value_ts) in &mut entries {
+                if !downstream.observed_range.contains_raw_key(&r.key)
+                    || downstream.filter_loop && TxnSource::is_cdc_write_source_set(r.txn_source)
+                {
+                    continue;
+                }
+                if let Some(ts) = old_value_ts {
+                    read_old_value(r, *ts)?;
+                    *old_value_ts = None;
+                }
+                d_entries.push(r.clone());
+            }
+
+            if d_entries.is_empty() {
+                return Ok(());
+            }
+
+            let event = Event {
+                region_id,
+                request_id: downstream.get_req_id(),
+                event: Some(Event_oneof_event::Entries(EventEntries {
+                    entries: d_entries.into(),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            };
+
+            // Do not force send for real time change data events.
+            let force_send = false;
+            downstream.sink_event(event, force_send)
+        };
+        match self.broadcast(send) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                self.mark_failed();
+                Err(e)
+            }
+        }
+    }
+
+    fn sink_downstream_raw(&mut self, entries: Vec<EventRow>, index: u64) -> Result<()> {
         if entries.is_empty() {
             return Ok(());
         }
@@ -775,7 +830,9 @@ impl Delegate {
             // No ready downstream or a downstream that does not match the kv_api type, will
             // be ignored. There will be one region that contains both Txn & Raw entries.
             // The judgement here is for sending entries to downstreams with correct kv_api.
-            if !downstream.state.load().ready_for_change_events() || downstream.kv_api != kv_api {
+            if !downstream.state.load().ready_for_change_events()
+                || downstream.kv_api != ChangeDataRequestKvApi::RawKv
+            {
                 return Ok(());
             }
             if downstream.filter_loop && filtered_entries.is_none() {
@@ -822,15 +879,14 @@ impl Delegate {
         &mut self,
         put: PutRequest,
         is_one_pc: bool,
-        txn_rows: &mut HashMap<Vec<u8>, (EventRow, bool)>,
+        txn_rows: &mut HashMap<Vec<u8>, (EventRow, bool, Option<TimeStamp>)>,
         raw_rows: &mut Vec<EventRow>,
-        read_old_value: impl FnMut(&mut EventRow, TimeStamp) -> Result<()>,
     ) -> Result<()> {
         let key_mode = ApiV2::parse_key_mode(put.get_key());
         if key_mode == KeyMode::Raw {
             self.sink_raw_put(put, raw_rows)
         } else {
-            self.sink_txn_put(put, is_one_pc, txn_rows, read_old_value)
+            self.sink_txn_put(put, is_one_pc, txn_rows)
         }
     }
 
@@ -845,21 +901,19 @@ impl Delegate {
         &mut self,
         mut put: PutRequest,
         is_one_pc: bool,
-        rows: &mut HashMap<Vec<u8>, (EventRow, bool)>,
-        mut read_old_value: impl FnMut(&mut EventRow, TimeStamp) -> Result<()>,
+        rows: &mut HashMap<Vec<u8>, (EventRow, bool, Option<TimeStamp>)>,
     ) -> Result<()> {
         match put.cf.as_str() {
             "write" => {
-                let (mut row, mut has_value) = (EventRow::default(), false);
+                let (mut row, mut has_value, mut old_value_ts) = (EventRow::default(), false, None);
                 if decode_write(put.take_key(), &put.value, &mut row, &mut has_value, true) {
                     return Ok(());
                 }
 
                 let commit_ts = if is_one_pc {
                     set_event_row_type(&mut row, EventLogType::Committed);
-                    let commit_ts = TimeStamp::from(row.commit_ts);
-                    read_old_value(&mut row, commit_ts.prev())?;
-                    Some(commit_ts)
+                    old_value_ts = Some(TimeStamp::from(row.commit_ts));
+                    Some(TimeStamp::from(row.commit_ts))
                 } else {
                     // 2PC
                     if row.commit_ts == 0 {
@@ -885,9 +939,12 @@ impl Delegate {
                         let o = o.into_mut();
                         mem::swap(&mut o.0.value, &mut row.value);
                         o.0 = row;
+                        if old_value_ts.is_some() {
+                            o.2 = old_value_ts;
+                        }
                     }
                     HashMapEntry::Vacant(v) => {
-                        v.insert((row, has_value));
+                        v.insert((row, has_value, old_value_ts));
                     }
                 }
             }
@@ -899,8 +956,7 @@ impl Delegate {
                     return Ok(());
                 }
 
-                let read_old_ts = std::cmp::max(for_update_ts, row.start_ts.into());
-                read_old_value(&mut row, read_old_ts)?;
+                let old_value_ts = Some(std::cmp::max(for_update_ts, row.start_ts.into()));
 
                 // In order to compute resolved ts, we must track inflight txns.
                 match self.resolver {
@@ -922,8 +978,9 @@ impl Delegate {
                     assert!(!has_value);
                     has_value = true;
                     mem::swap(&mut occupied.0.value, &mut row.value);
+                    occupied.2 = old_value_ts;
                 }
-                *occupied = (row, has_value);
+                *occupied = (row, has_value, old_value_ts);
             }
             "" | "default" => {
                 let key = Key::from_encoded(put.take_key()).truncate_ts().unwrap();
@@ -1220,6 +1277,10 @@ impl ObservedRange {
         // Entry's key is in raw key format.
         entries.retain(|e| self.is_key_in_range(&self.start_key_raw, &self.end_key_raw, &e.key));
         entries
+    }
+
+    fn contains_raw_key(&self, key: &[u8]) -> bool {
+        self.is_key_in_range(&self.start_key_raw, &self.end_key_raw, key)
     }
 }
 
@@ -1530,21 +1591,14 @@ mod tests {
                 put.key.clone(),
                 1.into(),
                 10,
-                None,
+                Some(b"value".to_vec()),
                 TimeStamp::zero(),
                 0,
                 TimeStamp::zero(),
                 false,
             )
             .to_bytes();
-            delegate
-                .sink_txn_put(
-                    put,
-                    false,
-                    &mut map,
-                    |_: &mut EventRow, _: TimeStamp| Ok(()),
-                )
-                .unwrap();
+            delegate.sink_txn_put(put, false, &mut map).unwrap();
         }
         assert_eq!(map.len(), 5);
 
@@ -1564,9 +1618,8 @@ mod tests {
             observed_range,
         };
         delegate.add_downstream(downstream);
-        let entries = map.values().map(|(r, _)| r).cloned().collect();
         delegate
-            .sink_downstream(entries, 1, ChangeDataRequestKvApi::TiDb)
+            .sink_downstream_tidb(map.into_values(), |_, _| Ok(()))
             .unwrap();
 
         let (mut tx, mut rx) = futures::channel::mpsc::unbounded();
@@ -1602,7 +1655,7 @@ mod tests {
                 put.key.clone(),
                 1.into(),
                 10,
-                None,
+                Some(b"value".to_vec()),
                 TimeStamp::zero(),
                 0,
                 TimeStamp::zero(),
@@ -1613,14 +1666,7 @@ mod tests {
                 lock = lock.set_txn_source(txn_source.into());
             }
             put.value = lock.to_bytes();
-            delegate
-                .sink_txn_put(
-                    put,
-                    false,
-                    &mut map,
-                    |_: &mut EventRow, _: TimeStamp| Ok(()),
-                )
-                .unwrap();
+            delegate.sink_txn_put(put, false, &mut map).unwrap();
         }
         assert_eq!(map.len(), 5);
 
@@ -1640,9 +1686,8 @@ mod tests {
             observed_range,
         };
         delegate.add_downstream(downstream);
-        let entries = map.values().map(|(r, _)| r).cloned().collect();
         delegate
-            .sink_downstream(entries, 1, ChangeDataRequestKvApi::TiDb)
+            .sink_downstream_tidb(map.into_values(), |_, _| Ok(()))
             .unwrap();
 
         let (mut tx, mut rx) = futures::channel::mpsc::unbounded();

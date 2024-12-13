@@ -18,7 +18,7 @@ num_cpus = "1"
 online_config = { workspace = true }
 protobuf = "2"
 raft = { workspace = true }
-raft-engine = { git = "https://github.com/tikv/raft-engine.git", features = ["swap"] }
+raft-engine = { workspace = true }
 serde = "1.0"
 serde_derive = "1.0"
 slog = { workspace = true }
