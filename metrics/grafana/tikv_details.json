@@ -59372,6 +59372,21 @@
               "refId": "",
               "step": 10,
               "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(delta(\n    tikv_server_snapshot_task_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [1m]\n)) by (type, $additional_groupby) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{type}} {{$additional_groupby}}",
+              "metric": "",
+              "query": "sum(delta(\n    tikv_server_snapshot_task_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [1m]\n)) by (type, $additional_groupby) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
             }
           ],
           "thresholds": [],

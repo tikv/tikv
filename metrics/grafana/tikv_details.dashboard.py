@@ -4095,6 +4095,15 @@ def Snapshot() -> RowPanel:
                         legend_format="clean-region-by-{{type}}",
                         additional_groupby=True,
                     ),
+                    target(
+                        expr=expr_sum_delta(
+                            "tikv_server_snapshot_task_total",
+                            range_selector="1m",
+                            by_labels=["type"],
+                        ),
+                        legend_format="{{type}}",
+                        additional_groupby=True,
+                    ),
                 ],
             ),
             graph_panel(
