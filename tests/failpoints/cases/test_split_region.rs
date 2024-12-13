@@ -1720,70 +1720,6 @@ fn test_split_by_split_check_on_keys() {
     // waiting the split,
     cluster.wait_region_split(&region);
 }
-<<<<<<< HEAD
-=======
-
-fn change(name: &str, value: &str) -> std::collections::HashMap<String, String> {
-    let mut m = std::collections::HashMap::new();
-    m.insert(name.to_owned(), value.to_owned());
-    m
-}
-
-#[test]
-fn test_turn_off_manual_compaction_caused_by_no_valid_split_key() {
-    let mut cluster = new_node_cluster(0, 1);
-    cluster.run();
-    let r = cluster.get_region(b"");
-    cluster.must_split(&r, b"k1");
-    let r = cluster.get_region(b"k1");
-    cluster.must_split(&r, b"k2");
-    cluster.must_put(b"k1", b"val");
-
-    let (tx, rx) = sync_channel(5);
-    fail::cfg_callback("on_compact_range_cf", move || {
-        tx.send(true).unwrap();
-    })
-    .unwrap();
-
-    let safe_point_inject = "safe_point_inject";
-    fail::cfg(safe_point_inject, "return(100)").unwrap();
-
-    {
-        let sim = cluster.sim.rl();
-        let cfg_controller = sim.get_cfg_controller(1).unwrap();
-        cfg_controller
-            .update(change(
-                "raftstore.skip-manual-compaction-in-clean_up-worker",
-                "true",
-            ))
-            .unwrap();
-    }
-
-    let r = cluster.get_region(b"k1");
-    cluster
-        .pd_client
-        .split_region(r.clone(), pdpb::CheckPolicy::Usekey, vec![b"k1".to_vec()]);
-    rx.recv_timeout(Duration::from_secs(1)).unwrap_err();
-
-    {
-        let sim = cluster.sim.rl();
-        let cfg_controller = sim.get_cfg_controller(1).unwrap();
-        cfg_controller
-            .update(change(
-                "raftstore.skip-manual-compaction-in-clean_up-worker",
-                "false",
-            ))
-            .unwrap();
-    }
-
-    cluster
-        .pd_client
-        .split_region(r, pdpb::CheckPolicy::Usekey, vec![b"k1".to_vec()]);
-    fail::cfg(safe_point_inject, "return(200)").unwrap();
-    rx.recv_timeout(Duration::from_secs(1)).unwrap();
-    rx.recv_timeout(Duration::from_secs(1)).unwrap();
-    rx.try_recv().unwrap_err();
-}
 
 /// Test that if the original leader of the parent region is tranfered to
 /// another peer, the new leader of the parent region will notify the new split
@@ -1920,4 +1856,3 @@ fn test_region_split_after_new_leader_elected() {
     );
     fail::remove(skip_clear_uncampaign);
 }
->>>>>>> 361a8ebfc6 (raftstore: `campaign` newly created regions in time after `Split` (#17625))

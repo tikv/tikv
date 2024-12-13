@@ -640,17 +640,8 @@ pub enum CasualMessage<EK: KvEngine> {
     },
 
     // Trigger raft to campaign which is used after exiting force leader
-<<<<<<< HEAD
-    Campaign,
-=======
     // or make new splitted peers campaign to get votes.
     Campaign(CampaignType),
-    // Trigger loading pending region for in_memory_engine,
-    InMemoryEngineLoadRegion {
-        region_id: u64,
-        trigger_load_cb: Box<dyn FnOnce(&Region) + Send + 'static>,
-    },
->>>>>>> 361a8ebfc6 (raftstore: `campaign` newly created regions in time after `Split` (#17625))
 }
 
 impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
@@ -721,18 +712,9 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
                 "SnapshotApplied, peer_id={}, tombstone={}",
                 peer_id, tombstone
             ),
-<<<<<<< HEAD
-            CasualMessage::Campaign => write!(fmt, "Campaign"),
-=======
             CasualMessage::Campaign(_) => {
                 write!(fmt, "Campaign")
             }
-            CasualMessage::InMemoryEngineLoadRegion { region_id, .. } => write!(
-                fmt,
-                "[region={}] try load in memory region cache",
-                region_id
-            ),
->>>>>>> 361a8ebfc6 (raftstore: `campaign` newly created regions in time after `Split` (#17625))
         }
     }
 }
