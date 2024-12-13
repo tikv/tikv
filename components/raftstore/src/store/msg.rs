@@ -24,7 +24,7 @@ use raft::SnapshotStatus;
 use resource_control::ResourceMetered;
 use smallvec::{smallvec, SmallVec};
 use strum::{EnumCount, EnumVariantNames};
-use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
+use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant, InspectFactor};
 use tracker::{get_tls_tracker_token, TrackerToken};
 
 use super::{
@@ -882,6 +882,7 @@ where
 
     /// Inspect the latency of raftstore.
     LatencyInspect {
+        factor: InspectFactor,
         send_time: Instant,
         inspector: LatencyInspector,
     },

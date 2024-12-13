@@ -392,6 +392,10 @@ txn_types = { path = "components/txn_types" }
 raft = { version = "0.7.0", default-features = false, features = [
   "protobuf-codec",
 ] }
+raft-engine = { git = "https://github.com/tikv/raft-engine.git", branch = "tikv-7.5", features = [
+  "swap",
+] }
+raft-engine-ctl = { git = "https://github.com/tikv/raft-engine.git", branch = "tikv-7.5" }
 grpcio = { version = "0.10.4", default-features = false, features = [
   "openssl-vendored",
   "protobuf-codec",

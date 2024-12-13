@@ -25,6 +25,7 @@ use tikv_util::{
     config::VersionTrack,
     time::{Instant as TiInstant, UnixSecs},
     worker::{Runnable, Scheduler},
+    InspectFactor,
 };
 use yatp::{task::future::TaskCell, Remote};
 
@@ -257,6 +258,7 @@ where
             store_heartbeat_interval / NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT,
             cfg.value().report_min_resolved_ts_interval.0,
             cfg.value().inspect_interval.0,
+            std::time::Duration::default(),
             PdReporter::new(pd_scheduler, logger.clone()),
         );
         stats_monitor.start(
@@ -436,7 +438,7 @@ impl StoreStatsReporter for PdReporter {
         }
     }
 
-    fn update_latency_stats(&self, timer_tick: u64) {
+    fn update_latency_stats(&self, timer_tick: u64, _factor: InspectFactor) {
         // Tick slowness statistics.
         {
             if let Err(e) = self.scheduler.schedule(Task::TickSlownessStats) {
