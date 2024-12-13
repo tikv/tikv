@@ -23,8 +23,8 @@ fn main() {
     let matches = App::new("TiKV")
         .about("A distributed transactional key-value database powered by Rust and Raft")
         .author(crate_authors!())
-        .version(version_info.as_ref())
-        .long_version(version_info.as_ref())
+        .version::<&str>(version_info.as_ref())
+        .long_version::<&str>(version_info.as_ref())
         .arg(
             Arg::with_name("config")
                 .short("C")
