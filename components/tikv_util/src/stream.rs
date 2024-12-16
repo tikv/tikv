@@ -69,7 +69,8 @@ pub fn error_stream(e: io::Error) -> impl Stream<Item = io::Result<Bytes>> + Unp
 /// This function must never be nested. The future invoked by
 /// `block_on_external_io` must never call `block_on_external_io` again itself,
 /// otherwise the executor's states may be disrupted. (For now, this result in a
-/// panic.)
+/// panic if the first call to `block_on_external_io` wasn't in a tokio
+/// context.)
 ///
 /// This means the future must only use async functions.
 // FIXME: get rid of this function, so that futures_executor::block_on is

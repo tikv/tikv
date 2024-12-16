@@ -35,6 +35,9 @@ pub async fn create_storage_async(
     }
 }
 
+/// The block version of [`create_storage_async`].
+/// Prefer using [`create_storage_async`] in asynchronous context.
+/// This is mainly used for testing.
 pub fn create_storage(
     storage_backend: &StorageBackend,
     config: BackendConfig,
