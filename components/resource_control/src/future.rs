@@ -244,6 +244,9 @@ mod tests {
 
     #[test]
     fn test_limited_future() {
+        #[cfg(not(feature = "failpoints"))]
+        return;
+
         let pool = YatpPoolBuilder::new(DefaultTicker::default())
             .thread_count(1, 1, 1)
             .name_prefix("test")
@@ -298,15 +301,12 @@ mod tests {
         );
 
         // fetch io bytes failed, consumed value is 0.
-        #[cfg(feature = "failpoints")]
-        {
-            fail::cfg("failed_to_get_thread_io_bytes_stats", "1*return").unwrap();
-            spawn_and_wait(&pool, empty(), resource_limiter.clone());
-            assert_eq!(
-                resource_limiter.get_limit_statistics(Io).total_consumed,
-                new_stats.total_consumed
-            );
-            fail::remove("failed_to_get_thread_io_bytes_stats");
-        }
+        fail::cfg("failed_to_get_thread_io_bytes_stats", "1*return").unwrap();
+        spawn_and_wait(&pool, empty(), resource_limiter.clone());
+        assert_eq!(
+            resource_limiter.get_limit_statistics(Io).total_consumed,
+            new_stats.total_consumed
+        );
+        fail::remove("failed_to_get_thread_io_bytes_stats");
     }
 }
