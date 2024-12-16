@@ -32418,6 +32418,7 @@
               "expr": "sum(rate(raft_engine_read_entry_duration_seconds_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m]))",
               "hide": false,
               "interval": "",
+<<<<<<< HEAD
               "legendFormat": "read_entry",
               "refId": "B"
             },
@@ -32428,6 +32429,30 @@
               "interval": "",
               "legendFormat": "read_message",
               "refId": "C"
+=======
+              "intervalFactor": 1,
+              "legendFormat": "clean-region-by-{{type}} {{$additional_groupby}}",
+              "metric": "",
+              "query": "sum(delta(\n    tikv_raftstore_clean_region_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [1m]\n)) by (type, status, $additional_groupby) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(delta(\n    tikv_server_snapshot_task_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [1m]\n)) by (type, $additional_groupby) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{type}} {{$additional_groupby}}",
+              "metric": "",
+              "query": "sum(delta(\n    tikv_server_snapshot_task_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [1m]\n)) by (type, $additional_groupby) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+>>>>>>> 911ad9897c (raftstore: enhance raft snapshot metrics (#17997))
             }
           ],
           "thresholds": [],
@@ -32530,10 +32555,17 @@
               "refId": "A"
             },
             {
+<<<<<<< HEAD
               "exemplar": true,
               "expr": "histogram_quantile(0.95, sum(rate(raft_engine_write_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (le))",
+=======
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(rate(\n    tikv_snapshot_limit_generate_bytes\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance, type) ",
+              "format": "time_series",
+>>>>>>> 911ad9897c (raftstore: enhance raft snapshot metrics (#17997))
               "hide": false,
               "interval": "",
+<<<<<<< HEAD
               "legendFormat": "95%",
               "refId": "B"
             },
@@ -32552,6 +32584,15 @@
               "interval": "",
               "legendFormat": "999%",
               "refId": "D"
+=======
+              "intervalFactor": 1,
+              "legendFormat": "{{instance}}-generate-{{type}}",
+              "metric": "",
+              "query": "sum(rate(\n    tikv_snapshot_limit_generate_bytes\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance, type) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+>>>>>>> 911ad9897c (raftstore: enhance raft snapshot metrics (#17997))
             }
           ],
           "thresholds": [],
