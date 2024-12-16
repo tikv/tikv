@@ -17,9 +17,7 @@ use dashmap::DashMap;
 use encryption::{BackupEncryptionManager, EncrypterReader, Iv, MultiMasterKeyBackend};
 use encryption_export::create_async_backend;
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use external_storage::{
-    create_storage, create_storage_async, BackendConfig, ExternalStorage, UnpinReader,
-};
+use external_storage::{create_storage_async, BackendConfig, ExternalStorage, UnpinReader};
 use file_system::Sha256Reader;
 use futures::io::Cursor;
 use kvproto::{
