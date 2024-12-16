@@ -4095,6 +4095,15 @@ def Snapshot() -> RowPanel:
                         legend_format="clean-region-by-{{type}}",
                         additional_groupby=True,
                     ),
+                    target(
+                        expr=expr_sum_delta(
+                            "tikv_server_snapshot_task_total",
+                            range_selector="1m",
+                            by_labels=["type"],
+                        ),
+                        legend_format="{{type}}",
+                        additional_groupby=True,
+                    ),
                 ],
             ),
             graph_panel(
@@ -4106,13 +4115,14 @@ def Snapshot() -> RowPanel:
                         expr=expr_sum_rate(
                             "tikv_snapshot_limit_transport_bytes",
                             by_labels=["instance", "type"],
-                        ),
+                        )
                     ),
                     target(
                         expr=expr_sum_rate(
                             "tikv_snapshot_limit_generate_bytes",
+                            by_labels=["instance", "type"],
                         ),
-                        legend_format="{{instance}}-generate",
+                        legend_format="{{instance}}-generate-{{type}}",
                     ),
                 ],
             ),

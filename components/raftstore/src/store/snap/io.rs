@@ -9,8 +9,8 @@ use std::{
 
 use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter, Iv};
 use engine_traits::{
-    CfName, Error as EngineError, IterOptions, Iterable, Iterator, KvEngine, Mutable, RefIterable,
-    SstCompressionType, SstReader, SstWriter, SstWriterBuilder, WriteBatch,
+    CfName, Error as EngineError, ExternalSstFileInfo, IterOptions, Iterable, Iterator, KvEngine,
+    Mutable, RefIterable, SstCompressionType, SstReader, SstWriter, SstWriterBuilder, WriteBatch,
 };
 use fail::fail_point;
 #[cfg(not(test))]
@@ -36,10 +36,24 @@ pub trait StaleDetector {
     fn is_stale(&self) -> bool;
 }
 
+/// Statistics for tracking the process of building SST files.
 #[derive(Clone, Copy, Default)]
 pub struct BuildStatistics {
+    /// The total number of keys processed during the build.
     pub key_count: usize,
-    pub total_size: usize,
+
+    /// The total size (in bytes) of key-value pairs processed.
+    /// This represents the combined size of keys and values before any
+    /// compression.
+    pub total_kv_size: usize,
+
+    /// The total size (in bytes) of the generated SST files after compression.
+    /// This reflects the on-disk size of the output files.
+    pub total_sst_size: usize,
+
+    /// The total size (in bytes) of the raw data in plain text format.
+    /// This represents the uncompressed size of the CF_LOCK data.
+    pub total_plain_size: usize,
 }
 
 /// Build a snapshot file for the given column family in plain format.
@@ -88,7 +102,7 @@ where
     let mut stats = BuildStatistics::default();
     box_try!(snap.scan(cf, start_key, end_key, false, |key, value| {
         stats.key_count += 1;
-        stats.total_size += key.len() + value.len();
+        stats.total_kv_size += key.len() + value.len();
         box_try!(BytesEncoder::encode_compact_bytes(&mut writer, key));
         box_try!(BytesEncoder::encode_compact_bytes(&mut writer, value));
         Ok(true)
@@ -103,6 +117,8 @@ where
             encrypted_file.unwrap().finalize().unwrap()
         };
         box_try!(file.sync_all());
+        let metadata = box_try!(file.metadata());
+        stats.total_plain_size += metadata.len() as usize;
     } else {
         drop(file);
         box_try!(fs::remove_file(path));
@@ -163,8 +179,8 @@ where
     let finish_sst_writer = |sst_writer: E::SstWriter,
                              path: String,
                              key_mgr: Option<Arc<DataKeyManager>>|
-     -> Result<(), Error> {
-        sst_writer.finish()?;
+     -> Result<u64, Error> {
+        let info = sst_writer.finish()?;
         (|| {
             fail_point!("inject_sst_file_corruption", |_| {
                 static CALLED: std::sync::atomic::AtomicBool =
@@ -199,7 +215,7 @@ where
             return Err(io::Error::new(io::ErrorKind::InvalidData, e).into());
         }
         File::open(&path).and_then(|f| f.sync_all())?;
-        Ok(())
+        Ok(info.file_size())
     };
 
     let instant = Instant::now();
@@ -209,7 +225,7 @@ where
         IoType::Replication
     });
     let mut prev_io_bytes = get_thread_io_bytes_stats().unwrap();
-    let mut next_io_check_size = stats.total_size + SCAN_BYTES_PER_IO_LIMIT_CHECK;
+    let mut next_io_check_size = stats.total_kv_size + SCAN_BYTES_PER_IO_LIMIT_CHECK;
     let handle_read_io_usage = |prev_io_bytes: &mut IoBytes, remained_quota: &mut usize| {
         let cur_io_bytes = get_thread_io_bytes_stats().unwrap();
         let read_delta = (cur_io_bytes.read - prev_io_bytes.read) as usize;
@@ -239,7 +255,9 @@ where
             match result {
                 Ok(new_sst_writer) => {
                     let old_writer = sst_writer.replace(new_sst_writer);
-                    box_try!(finish_sst_writer(old_writer, prev_path, key_mgr.clone()));
+                    stats.total_sst_size +=
+                        box_try!(finish_sst_writer(old_writer, prev_path, key_mgr.clone()))
+                            as usize;
                 }
                 Err(e) => {
                     let io_error = io::Error::new(io::ErrorKind::Other, e);
@@ -249,13 +267,13 @@ where
         }
 
         stats.key_count += 1;
-        stats.total_size += entry_len;
+        stats.total_kv_size += entry_len;
 
-        if stats.total_size >= next_io_check_size {
+        if stats.total_kv_size >= next_io_check_size {
             // TODO(@hhwyt): Consider incorporating snapshot file write I/O into the
             // limiting mechanism.
             handle_read_io_usage(&mut prev_io_bytes, &mut remained_quota);
-            next_io_check_size = stats.total_size + SCAN_BYTES_PER_IO_LIMIT_CHECK;
+            next_io_check_size = stats.total_kv_size + SCAN_BYTES_PER_IO_LIMIT_CHECK;
         }
 
         if let Err(e) = sst_writer.borrow_mut().put(key, value) {
@@ -270,14 +288,16 @@ where
     handle_read_io_usage(&mut prev_io_bytes, &mut remained_quota);
 
     if stats.key_count > 0 {
-        box_try!(finish_sst_writer(sst_writer.into_inner(), path, key_mgr));
+        stats.total_sst_size +=
+            box_try!(finish_sst_writer(sst_writer.into_inner(), path, key_mgr)) as usize;
         cf_file.add_file(file_id);
         info!(
-            "build_sst_cf_file_list builds {} files in cf {}. Total keys {}, total size {}. raw_size_per_file {}, total takes {:?}",
+            "build_sst_cf_file_list builds {} files in cf {}. Total keys {}, total kv size {}, total sst size {}. raw_size_per_file {}, total takes {:?}",
             file_id + 1,
             cf,
             stats.key_count,
-            stats.total_size,
+            stats.total_kv_size,
+            stats.total_sst_size,
             raw_size_per_file,
             instant.saturating_elapsed(),
         );
@@ -695,7 +715,7 @@ mod tests {
             true,
         )
         .unwrap();
-        assert_eq!(stats.total_size, 11890);
+        assert_eq!(stats.total_kv_size, 11890);
         assert!(start.saturating_elapsed_secs() > 1_f64);
     }
 }
