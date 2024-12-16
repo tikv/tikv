@@ -486,11 +486,9 @@ impl<E: KvEngine> SstImporter<E> {
         backend: &StorageBackend,
         cache_id: &str,
     ) -> Result<Arc<dyn ExternalStorage>> {
-        // prepare to download the file from the external_storage
-        // TODO: pass a config to support hdfs
         let ext_storage = if cache_id.is_empty() {
             EXT_STORAGE_CACHE_COUNT.with_label_values(&["skip"]).inc();
-            let s = external_storage::create_storage(backend, Default::default())?;
+            let s = external_storage::create_storage_async(backend, Default::default()).await?;
             Arc::from(s)
         } else {
             self.cached_storage
