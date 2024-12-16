@@ -36,11 +36,23 @@ pub trait StaleDetector {
     fn is_stale(&self) -> bool;
 }
 
+/// Statistics for tracking the process of building SST files.
 #[derive(Clone, Copy, Default)]
 pub struct BuildStatistics {
+    /// The total number of keys processed during the build.
     pub key_count: usize,
+
+    /// The total size (in bytes) of key-value pairs processed.
+    /// This represents the combined size of keys and values before any
+    /// compression.
     pub total_kv_size: usize,
+
+    /// The total size (in bytes) of the generated SST files after compression.
+    /// This reflects the on-disk size of the output files.
     pub total_sst_size: usize,
+
+    /// The total size (in bytes) of the raw data in plain text format.
+    /// This represents the uncompressed size of the CF_LOCK data.
     pub total_plain_size: usize,
 }
 
