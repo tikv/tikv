@@ -418,10 +418,7 @@ fn recv_snap<R: RaftExtension + 'static>(
             recving_count
         ));
         match recv_task.await {
-            Ok(()) => {
-                fail_point!("receiving_snapshot_sink_slow");
-                sink.success(Done::default()).await.map_err(Error::from)
-            }
+            Ok(()) => sink.success(Done::default()).await.map_err(Error::from),
             Err(e) => {
                 let status = RpcStatus::with_message(RpcStatusCode::UNKNOWN, format!("{:?}", e));
                 sink.fail(status).await.map_err(Error::from)
