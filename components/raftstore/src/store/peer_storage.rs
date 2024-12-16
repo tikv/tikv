@@ -7,7 +7,7 @@ use std::{
     ops::{Deref, DerefMut},
     sync::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
-        mpsc::{self, Receiver, TryRecvError},
+        mpsc::{self, Receiver, SyncSender, TryRecvError},
         Arc,
     },
     u64,
@@ -23,7 +23,7 @@ use kvproto::{
         MergeState, PeerState, RaftApplyState, RaftLocalState, RaftSnapshotData, RegionLocalState,
     },
 };
-use protobuf::Message;
+use protobuf::{Clear, Message};
 use raft::{
     self,
     eraftpb::{self, ConfState, Entry, HardState, Snapshot},
@@ -90,6 +90,9 @@ pub enum SnapState {
         canceled: Arc<AtomicBool>,
         index: Arc<AtomicU64>,
         receiver: Receiver<Snapshot>,
+    },
+    PreChecking {
+        receiver: Receiver<bool>,
     },
     Applying(Arc<AtomicUsize>),
     ApplyAborted,
@@ -233,7 +236,11 @@ where
     region: metapb::Region,
 
     snap_state: RefCell<SnapState>,
+    snap: RefCell<Option<Snapshot>>,
+    pub precheck_sender: RefCell<Option<SyncSender<bool>>>,
     gen_snap_task: RefCell<Option<GenSnapTask>>,
+    pub to_peer: RefCell<Option<metapb::Peer>>,
+    pub precheck_remaining_ticks: RefCell<u64>,
     region_scheduler: Scheduler<RegionTask>,
     snap_tried_cnt: RefCell<usize>,
 
@@ -333,7 +340,11 @@ where
             peer: find_peer_by_id(region, peer_id).cloned(),
             region: region.clone(),
             snap_state: RefCell::new(SnapState::Relax),
+            snap: RefCell::new(None),
+            precheck_sender: RefCell::new(None),
             gen_snap_task: RefCell::new(None),
+            precheck_remaining_ticks: RefCell::new(0),
+            to_peer: RefCell::new(None),
             region_scheduler,
             snap_tried_cnt: RefCell::new(0),
             tag,
@@ -496,6 +507,54 @@ where
 
         let mut tried = false;
         let mut last_canceled = false;
+        if let SnapState::PreChecking { receiver } = &*snap_state {
+            match receiver.try_recv() {
+                Ok(passed) => {
+                    if !passed {
+                        return Err(raft::Error::Store(
+                            raft::StorageError::SnapshotTemporarilyUnavailable,
+                        ));
+                    }
+
+                    *snap_state = SnapState::Relax;
+                    self.precheck_sender.borrow_mut().take();
+                    self.to_peer.borrow_mut().take();
+                    info!(
+                        "precheck passed, snapshot now available";
+                        "region_id" => self.region.get_id(),
+                        "peer_id" => self.peer_id,
+                        "request_peer" => to,
+                    );
+                    if let Some(snap) = self.snap.borrow_mut().take() {
+                        if self.validate_snap(&snap, request_index) {
+                            info!(
+                                "start sending snapshot";
+                                "region_id" => self.region.get_id(),
+                                "peer_id" => self.peer_id,
+                                "request_peer" => to,
+                            );
+                            return Ok(snap);
+                        }
+                    } else {
+                        panic!("snap cannot be null");
+                    }
+                }
+                Err(TryRecvError::Empty) => {
+                    return Err(raft::Error::Store(
+                        raft::StorageError::SnapshotTemporarilyUnavailable,
+                    ));
+                }
+                Err(TryRecvError::Disconnected) => {
+                    error!(
+                        "precheck receiver disconnected, resetting state";
+                        "region_id" => self.region.get_id(),
+                        "peer_id" => self.peer_id,
+                    );
+                    *snap_state = SnapState::Relax;
+                }
+            }
+        }
+
         if let SnapState::Generating {
             canceled, receiver, ..
         } = &*snap_state
@@ -509,13 +568,17 @@ where
                     ));
                 }
                 Ok(s) if !last_canceled => {
-                    *snap_state = SnapState::Relax;
+                    info!("start prechecking";   
+                        "region_id" => self.region.get_id(),
+                        "peer_id" => self.peer_id);
                     *tried_cnt = 0;
-                    if self.validate_snap(&s, request_index) {
-                        info!("start sending snapshot"; "region_id" => self.region.get_id(),
-                            "peer_id" => self.peer_id, "request_peer" => to,);
-                        return Ok(s);
-                    }
+                    let (sender, receiver) = mpsc::sync_channel(1);
+                    self.precheck_sender.borrow_mut().replace(sender);
+                    *snap_state = SnapState::PreChecking { receiver };
+                    self.snap.borrow_mut().replace(s);
+                    return Err(raft::Error::Store(
+                        raft::StorageError::SnapshotTemporarilyUnavailable,
+                    ));
                 }
                 Err(TryRecvError::Disconnected) | Ok(_) => {
                     *snap_state = SnapState::Relax;
@@ -570,6 +633,7 @@ where
                     receiver,
                 };
 
+                self.to_peer.borrow_mut().replace(to_peer.clone());
                 let task = GenSnapTask::new(
                     self.region.get_id(),
                     index,
@@ -595,15 +659,13 @@ where
     }
 
     pub fn need_gen_snap_precheck(&self) -> Option<metapb::Peer> {
-        let mut gen_task = self.gen_snap_task.borrow_mut();
-        let task = gen_task.as_mut()?;
-        if task.precheck_remaining_ticks == 0 {
+        let mut ticks = self.precheck_remaining_ticks.borrow_mut();
+        if *ticks == 0 {
             // Use random tick counts to space out the requests.
-            task.precheck_remaining_ticks =
-                rand::thread_rng().gen_range(1..=SNAP_GEN_PRECHECK_MAX_TICK_INTERVAL);
-            Some(task.to_peer.clone())
+            *ticks = rand::thread_rng().gen_range(1..=SNAP_GEN_PRECHECK_MAX_TICK_INTERVAL) as u64;
+            self.to_peer.borrow().clone()
         } else {
-            task.precheck_remaining_ticks -= 1;
+            *ticks -= 1;
             None
         }
     }
@@ -821,6 +883,15 @@ where
     pub fn is_generating_snapshot(&self) -> bool {
         fail_point!("is_generating_snapshot", |_| { true });
         matches!(*self.snap_state.borrow(), SnapState::Generating { .. })
+    }
+
+    pub fn is_prechecking_snapshot(&self) -> bool {
+        fail_point!("is_prechecking_snapshot", |_| { true });
+        debug!("is_prechecking_snapshot"; 
+            "region_id" => self.region.get_id(), 
+            "peer_id" => self.peer_id, 
+            "snap_state" => ?self.snap_state);
+        matches!(*self.snap_state.borrow(), SnapState::PreChecking { .. })
     }
 
     /// Check if the storage is applying a snapshot.
