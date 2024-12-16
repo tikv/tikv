@@ -199,6 +199,19 @@ impl EntryCache {
                     // Only committed entries can be traced, and only uncommitted entries
                     // can be truncated. So there won't be any overlaps.
                     let cached_last = cached.range.end - 1;
+                    if cached_last >= trunc_to_idx {
+                        info!(
+                            "entry cache truncation invalid!";
+                            "region_id" => region_id,
+                            "peer_id" => peer_id,
+                            "cached_last" => cached_last,
+                            "trunc_to_idx" => trunc_to_idx,
+                            "first_index" => first_index,
+                            "cache_last_index" => cache_last_index,
+                            "cache_len" => cache_len,
+                            "truncate_to" => truncate_to,
+                        );
+                    }
                     assert!(cached_last < trunc_to_idx);
                 }
             } else if cache_last_index + 1 < first_index {
