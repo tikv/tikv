@@ -271,7 +271,7 @@ make_static_metric! {
         finished,
     }
 
-    pub label_enum SnapshotGeneraterBytesType {
+    pub label_enum SnapshotGenerateBytesType {
         kv,
         sst,
         plain,
@@ -347,7 +347,7 @@ make_static_metric! {
     }
 
     pub struct SnapshotGenerateBytesTypeVec: IntCounter {
-        "type" => SnapshotGeneraterBytesType,
+        "type" => SnapshotGenerateBytesType,
     }
 }
 
