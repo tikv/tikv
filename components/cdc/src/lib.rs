@@ -15,7 +15,7 @@ mod old_value;
 mod service;
 mod txn_source;
 
-pub use channel::{recv_timeout, CdcEvent};
+pub use channel::{CdcEvent};
 pub use config::CdcConfigManager;
 pub use delegate::Delegate;
 pub use endpoint::{CdcTxnExtraScheduler, Endpoint, Task, Validate};
@@ -23,3 +23,4 @@ pub use errors::{Error, Result};
 pub use observer::CdcObserver;
 pub use old_value::OldValueCache;
 pub use service::{FeatureGate, Service};
+pub use channel::recv_timeout;

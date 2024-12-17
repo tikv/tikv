@@ -52,7 +52,7 @@ fn test_cdc_basic_impl<F: KvFormat>() {
             1,
             Box::new(|delegate| {
                 let d = delegate.unwrap();
-                assert_eq!(d.downstream_count(), 1);
+                assert_eq!(d.downstreams_count(), 1);
             }),
         )))
         .unwrap();
@@ -146,7 +146,7 @@ fn test_cdc_basic_impl<F: KvFormat>() {
             1,
             Box::new(|delegate| {
                 let d = delegate.unwrap();
-                assert_eq!(d.downstream_count(), 1);
+                assert_eq!(d.downstreams_count(), 1);
             }),
         )))
         .unwrap();
@@ -215,7 +215,7 @@ fn test_cdc_rawkv_basic() {
             1,
             Box::new(|delegate| {
                 let d = delegate.unwrap();
-                assert_eq!(d.downstream_count(), 1);
+                assert_eq!(d.downstreams_count(), 1);
             }),
         )))
         .unwrap();
@@ -290,7 +290,7 @@ fn test_cdc_not_leader_impl<F: KvFormat>() {
             1,
             Box::new(move |delegate| {
                 let d = delegate.unwrap();
-                assert_eq!(d.downstream_count(), 1);
+                assert_eq!(d.downstreams_count(), 1);
                 tx_.send(()).unwrap();
             }),
         )))

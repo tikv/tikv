@@ -500,12 +500,12 @@ mod tests {
     use tikv_util::future::block_on_timeout;
 
     use super::*;
-    use crate::channel::{recv_timeout, CdcEvent};
+    use crate::channel::{recv_timeout, CdcEvent, tests::TestSink};
 
     fn new_rpc_suite(capacity: usize) -> (Server, ChangeDataClient, ReceiverWrapper<Task>) {
         let memory_quota = Arc::new(MemoryQuota::new(capacity));
         let (scheduler, rx) = dummy_scheduler();
-        let cdc_service = Service::new(scheduler, memory_quota);
+        let cdc_service = Service::new(scheduler, memory_quota, 1);
         let env = Arc::new(EnvBuilder::new().build());
         let builder =
             ServerBuilder::new(env.clone()).register_service(create_change_data(cdc_service));
@@ -537,7 +537,7 @@ mod tests {
         } else {
             panic!("expect to be Task::OpenConn");
         };
-        let sink = conn.get_sink().clone();
+        let sink = conn.sink.clone();
         // Approximate 1 KB.
         let mut rts = ResolvedTs::default();
         rts.set_regions(vec![u64::MAX; 128]);
@@ -546,10 +546,10 @@ mod tests {
             let rts_ = rts.clone();
             let mut sink_ = sink.clone();
             Box::pin(async move {
-                sink_
+                let mut sink = TestSink(sink_.clone());
+                sink
                     .send_all(
                         vec![CdcEvent::ResolvedTs(rts_)],
-                        Arc::new(Default::default()),
                     )
                     .await
             })

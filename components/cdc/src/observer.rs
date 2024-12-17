@@ -287,7 +287,7 @@ mod tests {
             DelegateTask::Stop { err } => {
                 let store_err = RaftStoreError::NotLeader(1, Some(new_peer(2, 2)));
                 match err {
-                    Some(CdcError::Request(e)) => assert_eq!(e, store_err.into()),
+                    Some(CdcError::Request(e)) => assert_eq!(*e, store_err.into()),
                     _ => panic!("unexpected err"),
                 }
             }
@@ -342,7 +342,7 @@ mod tests {
             ObserveHandle::new(),
         );
         let oid = observe_info.cdc_id.id;
-        let (tx, rx) = mpsc::unbounded();
+        let (tx, mut rx) = mpsc::unbounded();
         observer.subscribe_region(1, oid, tx);
 
         let mut cb = CmdBatch::new(&observe_info, 0);

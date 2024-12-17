@@ -19,7 +19,6 @@ use kvproto::cdcpb::{
 use protobuf::Message;
 use tikv_util::{
     debug,
-    future::block_on_timeout,
     impl_display_as_debug, info,
     memory::{MemoryQuota, MemoryQuotaExceeded},
     time::Instant,
@@ -390,17 +389,24 @@ pub fn recv_timeout<S, I>(s: &mut S, dur: std::time::Duration) -> StdResult<Opti
 where
     S: Stream<Item = I> + Unpin,
 {
-    block_on_timeout(s.next(), dur)
+    tikv_util::future::block_on_timeout(s.next(), dur)
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use std::sync::Arc;
 
     use futures::executor::block_on;
     use kvproto::cdcpb::{Event, ResolvedTs};
 
     use super::*;
+
+    pub struct TestSink(pub Sink);
+    impl TestSink {
+        pub async fn send_all(&mut self, events: Vec<CdcEvent>) -> StdResult<(), SendError>  {
+            self.0.send_all(events).await
+        }
+    }
 
     #[test]
     fn test_send_all() {}

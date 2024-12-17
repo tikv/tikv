@@ -1029,7 +1029,7 @@ impl Delegate {
     }
 
     /// Only used in tests.
-    pub fn downstream_count(&self) -> usize {
+    pub fn downstreams_count(&self) -> usize {
         self.downstreams.len()
     }
 }
@@ -1441,7 +1441,7 @@ mod tests {
         let conn_id = ConnId::new();
         let (sink, mut drain) = channel(conn_id, quota.clone());
         let request_id = RequestId(123);
-        let mut downstream = Downstream::new(
+        let downstream = Downstream::new(
             request_id,
             conn_id,
             String::new(),
@@ -1468,13 +1468,13 @@ mod tests {
         assert!(fails.is_empty());
         assert!(delegate.downstreams[0].observed_range.all_key_covered);
 
-        let receive_error = || {
+        let mut receive_error = || {
             let mut e = block_on(drain.next()).unwrap();
-            let events: Vec<_> = e.take_events().into();
+            let mut events: Vec<_> = e.take_events().into();
             assert_eq!(events.len(), 1);
             assert_eq!(events[0].request_id, request_id.0);
             assert!(events[0].has_error());
-            events[0].get_error()
+            events[0].take_error()
         };
 
         let mut err_header = ErrorHeader::default();

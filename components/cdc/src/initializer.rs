@@ -645,7 +645,7 @@ mod tests {
     ) {
         let (tx, rx) = mpsc::unbounded();
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
-        let (sink, drain) = crate::channel::channel(ConnId::default(), quota);
+        let (sink, drain) = crate::channel::channel(ConnId::new(), quota);
 
         let pool = Builder::new_multi_thread()
             .thread_name("test-initializer-worker")
@@ -666,7 +666,6 @@ mod tests {
             observe_handle: ObserveHandle::new(),
             downstream_id: DownstreamId::new(),
             downstream_state,
-            scan_truncated: Arc::new(Default::default()),
 
             tablet: engine.or_else(|| {
                 TestEngineBuilder::new()
@@ -675,7 +674,7 @@ mod tests {
                     .kv_engine()
             }),
             sched: tx,
-            sink,
+            sink: DownstreamSink::new(1, RequestId(0), sink),
             concurrency_semaphore: Arc::new(Semaphore::new(1)),
 
             scan_speed_limiter: Limiter::new(scan_limit as _),
@@ -718,7 +717,7 @@ mod tests {
 
         let region = Region::default();
         let snap = engine.snapshot(Default::default()).unwrap();
-        let (pool, mut initializer, rx, mut drain) = mock_initializer(
+        let (pool, mut initializer, mut rx, mut drain) = mock_initializer(
             usize::MAX,
             usize::MAX,
             engine.kv_engine(),
@@ -731,21 +730,22 @@ mod tests {
             .downstream_state
             .store(DownstreamState::Initializing);
 
-        let check_result = || {
-            let task = rx.recv().unwrap();
+        let mut check_result = || {
+            let task = block_on(rx.next()).unwrap();
             match task {
                 DelegateTask::FinishScanLocks { locks, .. } => assert_eq!(locks, expected_locks),
-                t => panic!("unexpected task {} received", t),
+                _ => panic!("unexpected task received"),
             }
         };
 
         pool.spawn(async move {
-            let mut d = drain.drain();
-            while let Some(x) = d.next().await {
-                for e in x.get_events().get_entries().get_entries() {
-                    if e.r_type == EventLogType::Prewrite {
-                        let key = Key::from_raw(&e.key).into_encoded();
-                        assert!(observed_range.contains_encoded_key(&key));
+            while let Some(x) = drain.next().await {
+                for e in x.get_events() {
+                    for e in e.get_entries().get_entries() {
+                        if e.r_type == EventLogType::Prewrite {
+                            let key = Key::from_raw(&e.key).into_encoded();
+                            assert!(observed_range.contains_encoded_key(&key));
+                        }
                     }
                 }
             }
@@ -759,11 +759,7 @@ mod tests {
             .downstream_state
             .store(DownstreamState::Initializing);
         block_on(initializer.async_incremental_scan(snap.clone(), region.clone())).unwrap();
-        match rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(t) => panic!("unexpected task {} received", t),
-            Err(RecvTimeoutError::Timeout) => (),
-            Err(e) => panic!("unexpected err {:?}", e),
-        }
+        assert!(block_on(rx.next()).is_none());
 
         // Test cancellation.
         initializer.downstream_state.store(DownstreamState::Stopped);
@@ -894,7 +890,7 @@ mod tests {
                         .unwrap();
                 });
 
-                while let Some((event, _)) = block_on(drain.next()) {
+                while let Some(event) = block_on(drain.next()) {
                     // TODO: fixme.
                     // let event = match event {
                     //     CdcEvent::Event(x) if x.event.is_some() =>
@@ -940,7 +936,7 @@ mod tests {
     #[test]
     fn test_initializer_deregister_downstream() {
         let total_bytes = 1;
-        let (_pool, initializer, rx, _drain) = mock_initializer(
+        let (_pool, initializer, mut rx, _drain) = mock_initializer(
             total_bytes,
             total_bytes,
             None,
@@ -951,31 +947,19 @@ mod tests {
         // Errors reported by region should deregister region.
         initializer.build_resolver.store(false, Ordering::Release);
         initializer.deregister_downstream(Error::request(ErrorHeader::default()));
-        let task = rx.recv_timeout(Duration::from_millis(100));
-        match task {
-            Ok(DelegateTask::Stop { .. }) => {}
-            Ok(other) => panic!("unexpected task {:?}", other),
-            Err(e) => panic!("unexpected err {:?}", e),
-        }
+        let task = block_on(rx.next()).unwrap();
+        assert!(matches!(task, DelegateTask::Stop { .. }));
 
         initializer.build_resolver.store(false, Ordering::Release);
         initializer.deregister_downstream(Error::Other(box_err!("test")));
-        let task = rx.recv_timeout(Duration::from_millis(100));
-        match task {
-            Ok(DelegateTask::StopDownstream { .. }) => {}
-            Ok(other) => panic!("unexpected task {:?}", other),
-            Err(e) => panic!("unexpected err {:?}", e),
-        }
+        let task = block_on(rx.next()).unwrap();
+        assert!(matches!(task, DelegateTask::StopDownstream { .. }));
 
         // Test deregister region when resolver fails to build.
         initializer.build_resolver.store(true, Ordering::Release);
         initializer.deregister_downstream(Error::Other(box_err!("test")));
-        let task = rx.recv_timeout(Duration::from_millis(100));
-        match task {
-            Ok(DelegateTask::Stop { .. }) => {}
-            Ok(other) => panic!("unexpected task {:?}", other),
-            Err(e) => panic!("unexpected err {:?}", e),
-        }
+        let task = block_on(rx.next()).unwrap();
+        assert!(matches!(task, DelegateTask::Stop{ .. }));
     }
 
     #[test]
@@ -1058,7 +1042,7 @@ mod tests {
         });
 
         let mut total_entries = 0;
-        while let Some((event, _)) = block_on(drain.next()) {
+        while let Some(event) = block_on(drain.next()) {
             // TODO: fixme.
             // if let CdcEvent::Event(e) = event {
             //     total_entries += e.get_entries().get_entries().len();
@@ -1126,7 +1110,7 @@ mod tests {
             let block_gets = scan_stat.perf_delta.block_cache_hit_count;
             assert_eq!(block_reads + block_gets, 1);
         });
-        while block_on(drain.drain().next()).is_some() {}
+        while block_on(drain.next()).is_some() {}
         block_on(th).unwrap();
     }
 }
