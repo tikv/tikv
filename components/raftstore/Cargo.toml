@@ -47,8 +47,12 @@ engine_test = { workspace = true }
 engine_traits = { workspace = true }
 error_code = { workspace = true }
 fail = "0.5"
+<<<<<<< HEAD
 file_system = { workspace = true }
 fs2 = "0.4"
+=======
+file_system = { workspace = true, features = ["testexport"] }
+>>>>>>> 58264c108e (raftstore: add an error-tolerant IoBytesTracker to calculate delta I/O consumption (#18006))
 futures = "0.3"
 futures-util = { version = "0.3.1", default-features = false, features = ["io"] }
 getset = "0.1"

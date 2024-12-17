@@ -6,11 +6,18 @@ publish = false
 
 [features]
 bcc-iosnoop = ["bcc"]
+failpoints = ["fail/failpoints"]
+testexport = []
 
 [dependencies]
 collections = { workspace = true }
 crc32fast = "1.2"
+<<<<<<< HEAD
 crossbeam-utils = "0.8.0"
+=======
+crossbeam-utils = { workspace = true }
+fail = "0.5"
+>>>>>>> 58264c108e (raftstore: add an error-tolerant IoBytesTracker to calculate delta I/O consumption (#18006))
 fs2 = "0.4"
 lazy_static = "1.3"
 libc = "0.2"

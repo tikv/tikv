@@ -44,6 +44,11 @@ testexport = [
   "engine_traits/testexport",
   "engine_rocks/testexport",
   "engine_panic/testexport",
+<<<<<<< HEAD
+=======
+  "encryption/testexport",
+  "file_system/testexport"
+>>>>>>> 58264c108e (raftstore: add an error-tolerant IoBytesTracker to calculate delta I/O consumption (#18006))
 ]
 test-engine-kv-rocksdb = ["engine_test/test-engine-kv-rocksdb"]
 test-engine-raft-raft-engine = ["engine_test/test-engine-raft-raft-engine"]
