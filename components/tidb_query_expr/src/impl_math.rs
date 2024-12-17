@@ -554,7 +554,7 @@ pub fn round_with_frac_real(arg0: &Real, arg1: &Int) -> Result<Option<Real>> {
     let power = 10.0_f64.powi(*digits as i32);
     let frac = *number * power;
     if frac.is_infinite() {
-        return Ok(Some(*number))
+        return Ok(Some(*number));
     }
     Ok(Some(Real::new(frac.round_ties_even() / power).unwrap()))
 }
