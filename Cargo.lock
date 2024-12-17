@@ -2399,6 +2399,7 @@ dependencies = [
  "collections",
  "crc32fast",
  "crossbeam-utils",
+ "fail",
  "fs2",
  "lazy_static",
  "libc 0.2.151",
