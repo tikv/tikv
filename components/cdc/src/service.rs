@@ -75,7 +75,6 @@ impl FeatureGate {
 
 pub struct Conn {
     pub id: ConnId,
-    pub peer: String,
     pub sink: Sink,
     pub version: Version,
     pub features: FeatureGate,
@@ -98,14 +97,12 @@ struct DownstreamValue {
 impl Conn {
     pub fn new(
         conn_id: ConnId,
-        peer: String,
         sink: Sink,
         version: Version,
         features: Vec<&'static str>,
     ) -> Conn {
         let mut conn = Conn {
             id: conn_id,
-            peer,
             sink,
             version,
             features: FeatureGate::empty(),
@@ -412,7 +409,7 @@ impl Service {
             if let Some(request) = stream.try_next().await? {
                 // Get version from the first request in the stream.
                 let version = Self::parse_version_from_request_header(&request, &peer);
-                let conn = Conn::new(conn_id, peer.clone(), sink.clone(), version, features);
+                let conn = Conn::new(conn_id, sink.clone(), version, features);
                 scheduler
                     .schedule(Task::OpenConn { conn })
                     .map_err(|e| format!("cdc failed to schedule OpenConn {:?}", e))?;

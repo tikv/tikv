@@ -297,12 +297,10 @@ impl Advance {
         let handle_send_result = |conn: &Conn, res: Result<(), SendError>| match res {
             Ok(_) => {}
             Err(SendError::Disconnected) => {
-                debug!("cdc send event failed, disconnected";
-                        "conn_id" => ?conn.id, "downstream" => ?conn.peer);
+                debug!("cdc send event failed, disconnected"; "conn_id" => ?conn.id);
             }
             Err(SendError::Congested) => {
-                info!("cdc send event failed, congested";
-                        "conn_id" => ?conn.id, "downstream" => ?conn.peer);
+                info!("cdc send event failed, congested"; "conn_id" => ?conn.id);
             }
         };
 
@@ -1309,7 +1307,7 @@ mod tests {
         let conn_id = ConnId::new();
         let (tx, mut rx) = channel::channel(conn_id, quota);
 
-        let conn = Conn::new(conn_id, "peer".to_owned(), tx.clone(), FeatureGate::batch_resolved_ts(), vec![]);
+        let conn = Conn::new(conn_id, tx.clone(), FeatureGate::batch_resolved_ts(), vec![]);
         suite.run(Task::OpenConn { conn });
 
         let mut req_header = Header::default();
@@ -1562,7 +1560,7 @@ mod tests {
         suite.add_region(1 /* region id */, 1 /* cap */);
         suite.fill_raft_rx(1);
 
-        let conn = Conn::new(conn_id, "".to_owned(), tx.clone(), Version::new(0, 0, 0), vec![]);
+        let conn = Conn::new(conn_id,  tx.clone(), Version::new(0, 0, 0), vec![]);
         let conn_id = conn.id;
         suite.run(Task::OpenConn { conn });
 
@@ -1585,7 +1583,7 @@ mod tests {
             request: req,
             downstream,
         });
-        assert_eq!(suite.endpoint.capture_regions.len(), 1);
+        assert_eq!(suite.capture_regions.len(), 1);
 
         // FIXME: test the error.
         // for _ in 0..5 {
@@ -1611,7 +1609,7 @@ mod tests {
         let conn_id = ConnId::new();
         let (tx, mut rx) = channel::channel(conn_id, quota);
 
-        let conn = Conn::new(conn_id, "".to_owned(), tx.clone(), Version::new(4, 0, 8), vec![]);
+        let conn = Conn::new(conn_id,  tx.clone(), Version::new(4, 0, 8), vec![]);
         suite.run(Task::OpenConn { conn });
 
         let mut req_header = Header::default();
@@ -1634,7 +1632,7 @@ mod tests {
             request: req.clone(),
             downstream,
         });
-        assert_eq!(suite.endpoint.capture_regions.len(), 1);
+        assert_eq!(suite.capture_regions.len(), 1);
         suite
             .task_rx
             .recv_timeout(Duration::from_millis(100))
@@ -1664,7 +1662,7 @@ mod tests {
         assert!(events[0].has_error());
         assert!(events[0].get_error().has_duplicate_request());
 
-        assert_eq!(suite.endpoint.capture_regions.len(), 1);
+        assert_eq!(suite.capture_regions.len(), 1);
         suite
             .task_rx
             .recv_timeout(Duration::from_millis(100))
@@ -1695,7 +1693,7 @@ mod tests {
             downstream,
         });
         // Region 100 is inserted into capture_regions.
-        assert_eq!(suite.endpoint.capture_regions.len(), 2);
+        assert_eq!(suite.capture_regions.len(), 2);
         let task = suite
             .task_rx
             .recv_timeout(Duration::from_millis(100))
@@ -1729,7 +1727,7 @@ mod tests {
         // Drop CaptureChange message, it should cause scan task failure.
         let timeout = Duration::from_millis(100);
         let _ = suite.raft_rx(101).recv_timeout(timeout).unwrap();
-        assert_eq!(suite.endpoint.capture_regions.len(), 3);
+        assert_eq!(suite.capture_regions.len(), 3);
         let task = suite.task_rx.recv_timeout(timeout).unwrap();
         // match task.unwrap() {
         //     Task::Deregister(Deregister::Downstream { region_id, err, .. }) => {
@@ -1751,12 +1749,12 @@ mod tests {
         let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
 
         // Pause scan task runtime.
-        suite.endpoint.scan_workers = Builder::new_multi_thread()
+        suite.scan_workers = Builder::new_multi_thread()
             .worker_threads(1)
             .build()
             .unwrap();
         let (pause_tx, pause_rx) = std::sync::mpsc::channel::<()>();
-        suite.endpoint.scan_workers.spawn(async move {
+        suite.scan_workers.spawn(async move {
             let _ = pause_rx.recv();
         });
 
@@ -1766,7 +1764,7 @@ mod tests {
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
         let (tx, mut rx) = channel::channel(ConnId::new(), quota);
 
-        let conn = Conn::new(conn_id, "".to_owned(), tx.clone(), Version::new(4, 0, 8), vec![]);
+        let conn = Conn::new(conn_id,  tx.clone(), Version::new(4, 0, 8), vec![]);
         suite.run(Task::OpenConn { conn });
 
         let mut req_header = Header::default();
@@ -1789,7 +1787,7 @@ mod tests {
             request: req.clone(),
             downstream,
         });
-        assert_eq!(suite.endpoint.capture_regions.len(), 1);
+        assert_eq!(suite.capture_regions.len(), 1);
 
         // Test too many scan tasks error.
         req.set_request_id(2);
@@ -1857,7 +1855,7 @@ mod tests {
         let conn_id = ConnId::new();
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
         let (tx, mut rx) = channel::channel(conn_id, quota);
-        let conn = Conn::new(conn_id, "".to_owned(), tx.clone(), Version::new(4, 0, 8), vec![]);
+        let conn = Conn::new(conn_id,  tx.clone(), Version::new(4, 0, 8), vec![]);
         suite.run(Task::OpenConn { conn });
 
         let mut region = Region::default();
@@ -1883,7 +1881,7 @@ mod tests {
             request: req.clone(),
             downstream,
         });
-        let observe_id = suite.endpoint.capture_regions[&1].handle.id;
+        let observe_id = suite.capture_regions[&1].handle.id;
         suite.capture_regions[&1].sched.unbounded_send(DelegateTask::InitDownstream {
             observe_id,
             downstream_id,
@@ -1926,7 +1924,7 @@ mod tests {
             downstream,
         });
         region.set_id(2);
-        let observe_id = suite.endpoint.capture_regions[&2].handle.id;
+        let observe_id = suite.capture_regions[&2].handle.id;
         suite.capture_regions[&2].sched.unbounded_send(DelegateTask::InitDownstream {
             observe_id,
             downstream_id,
@@ -1954,7 +1952,7 @@ mod tests {
         let conn_id = ConnId::new();
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
         let (tx, mut rx2) = channel::channel(conn_id, quota);
-        let conn = Conn::new(conn_id, "".to_owned(),  tx.clone(), Version::new(0,0,0), vec![]);
+        let conn = Conn::new(conn_id,   tx.clone(), Version::new(0,0,0), vec![]);
         suite.run(Task::OpenConn { conn });
 
         let mut region = Region::default();
@@ -1979,7 +1977,7 @@ mod tests {
             downstream,
         });
         region.set_id(3);
-        let observe_id = suite.endpoint.capture_regions[&3].handle.id;
+        let observe_id = suite.capture_regions[&3].handle.id;
         suite.capture_regions[&3].sched.unbounded_send(DelegateTask::InitDownstream {
             observe_id,
             downstream_id,
@@ -2020,7 +2018,7 @@ mod tests {
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
         let (tx, mut rx) = channel::channel(conn_id, quota);
 
-        let conn = Conn::new(conn_id, "".to_owned(), tx.clone(), Version::new(0, 0, 0), vec![]);
+        let conn = Conn::new(conn_id,  tx.clone(), Version::new(0, 0, 0), vec![]);
         suite.run(Task::OpenConn { conn });
 
         let mut req_header = Header::default();
@@ -2043,7 +2041,7 @@ mod tests {
             request: req.clone(),
             downstream,
         });
-        assert_eq!(suite.endpoint.capture_regions.len(), 1);
+        assert_eq!(suite.capture_regions.len(), 1);
 
         let mut err_header = ErrorHeader::default();
         err_header.set_not_leader(Default::default());
@@ -2058,7 +2056,7 @@ mod tests {
         assert!(events[0].get_error().has_not_leader());
 
         // FIXME: suite receive a task, and handle it.
-        assert_eq!(suite.endpoint.capture_regions.len(), 0);
+        assert_eq!(suite.capture_regions.len(), 0);
 
         let downstream = Downstream::new(
             RequestId(0),
@@ -2075,7 +2073,7 @@ mod tests {
             request: req.clone(),
             downstream,
         });
-        assert_eq!(suite.endpoint.capture_regions.len(), 1);
+        assert_eq!(suite.capture_regions.len(), 1);
 
         suite.capture_regions[&1].sched.unbounded_send(DelegateTask::StopDownstream {
             err: Some(Error::request(err_header.clone())),
@@ -2095,7 +2093,7 @@ mod tests {
         assert!(events[0].get_error().has_not_leader());
 
         // Fixme: suite receive a task.
-        assert_eq!(suite.endpoint.capture_regions.len(), 0);
+        assert_eq!(suite.capture_regions.len(), 0);
     }
 
     #[test]
@@ -2114,7 +2112,7 @@ mod tests {
             let conn_id = ConnId::new();
             let (tx, rx) = channel::channel(conn_id, quota.clone());
             conn_rxs.push(rx);
-            let conn = Conn::new(conn_id, "".to_owned(), tx.clone(), Version::new(4, 0, 8), vec![]);
+            let conn = Conn::new(conn_id,  tx.clone(), Version::new(4, 0, 8), vec![]);
             suite.run(Task::OpenConn { conn });
 
             for region_id in region_ids {
@@ -2139,7 +2137,7 @@ mod tests {
                     request: req,
                     downstream,
                 });
-                let observe_id = suite.endpoint.capture_regions[&region_id].handle.id;
+                let observe_id = suite.capture_regions[&region_id].handle.id;
                 suite.capture_regions[&region_id].sched.unbounded_send(DelegateTask::InitDownstream {
                     observe_id,
                     downstream_id,
@@ -2217,13 +2215,13 @@ mod tests {
         // Open conn a
         let conn_id_a = ConnId::new();
         let (tx1, _rx1) = channel::channel(conn_id_a, quota.clone());
-        let conn_a = Conn::new(conn_id_a, "".to_owned(), tx1.clone(), Version::new(0, 0, 0), vec![]);
+        let conn_a = Conn::new(conn_id_a,  tx1.clone(), Version::new(0, 0, 0), vec![]);
         suite.run(Task::OpenConn { conn: conn_a });
 
         // Open conn b
         let conn_id_b = ConnId::new();
         let (tx2, mut rx2) = channel::channel(conn_id_b, quota);
-        let conn_b = Conn::new(conn_id_b, "".to_owned(), tx2.clone(), Version::new(0, 0, 0), vec![]);
+        let conn_b = Conn::new(conn_id_b,  tx2.clone(), Version::new(0, 0, 0), vec![]);
         suite.run(Task::OpenConn { conn: conn_b });
 
         // Register region 1 (epoch 2) at conn a.
@@ -2247,8 +2245,8 @@ mod tests {
             request: req.clone(),
             downstream,
         });
-        assert_eq!(suite.endpoint.capture_regions.len(), 1);
-        let observe_id = suite.endpoint.capture_regions[&1].handle.id;
+        assert_eq!(suite.capture_regions.len(), 1);
+        let observe_id = suite.capture_regions[&1].handle.id;
 
         // Register region 1 (epoch 1) at conn b.
         let mut req_header = Header::default();
@@ -2272,11 +2270,11 @@ mod tests {
             request: req.clone(),
             downstream,
         });
-        assert_eq!(suite.endpoint.capture_regions.len(), 1);
+        assert_eq!(suite.capture_regions.len(), 1);
 
         // Deregister conn a.
         suite.run(Task::Deregister(Deregister::Conn(conn_id_a)));
-        assert_eq!(suite.endpoint.capture_regions.len(), 1);
+        assert_eq!(suite.capture_regions.len(), 1);
 
         // Schedule resolver ready (resolver is built by conn a).
         let mut region = Region::default();
@@ -2305,7 +2303,7 @@ mod tests {
         //     observe_id,
         //     err: Error::request(epoch_not_match),
         // }));
-        // assert_eq!(suite.endpoint.capture_regions.len(), 0);
+        // assert_eq!(suite.capture_regions.len(), 0);
 
         // let event = recv_timeout(&mut rx2, Duration::from_millis(100))
         //     .unwrap()
@@ -2371,7 +2369,7 @@ mod tests {
         let conn_id = ConnId::new();
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
         let (tx, mut rx) = channel::channel(conn_id, quota);
-        let conn = Conn::new(conn_id, "".to_owned(), tx.clone(), Version::new(4,0,8), vec![]);
+        let conn = Conn::new(conn_id,  tx.clone(), Version::new(4,0,8), vec![]);
         suite.run(Task::OpenConn { conn });
 
         let mut req_header = Header::default();
@@ -2401,7 +2399,7 @@ mod tests {
                 downstream,
             });
 
-            let observe_id = suite.endpoint.capture_regions[&id].handle.id;
+            let observe_id = suite.capture_regions[&id].handle.id;
             suite.capture_regions[&id].sched.unbounded_send(DelegateTask::InitDownstream {
                 observe_id,
                 downstream_id,
@@ -2468,7 +2466,7 @@ mod tests {
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
         let (tx, mut rx) = channel::channel(conn_id, quota);
 
-        let conn = Conn::new(conn_id, "".to_owned(), tx.clone(), Version::new(4, 0, 8), vec![]);
+        let conn = Conn::new(conn_id,  tx.clone(), Version::new(4, 0, 8), vec![]);
         suite.run(Task::OpenConn { conn });
 
         let mut req_header = Header::default();
@@ -2718,7 +2716,7 @@ mod tests {
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
         let (tx, _rx) = channel::channel(conn_id, quota);
 
-        let conn = Conn::new(conn_id, "".to_owned(), tx, Version::new(0, 0, 0), vec![]);
+        let conn = Conn::new(conn_id,  tx, Version::new(0, 0, 0), vec![]);
         suite.run(Task::OpenConn { conn });
 
         // suite.run(Task::Deregister(Deregister::Conn(conn_id)));
