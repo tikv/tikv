@@ -8,7 +8,6 @@ use futures::{
     },
     executor::block_on,
     lock::Mutex,
-    ready,
     task::Poll,
     SinkExt, Stream, StreamExt,
 };
@@ -104,6 +103,7 @@ pub fn channel(conn_id: ConnId, memory_quota: Arc<MemoryQuota>) -> (Sink, Drain)
             rx,
             memory_quota,
             buffer: None,
+            drained: false,
         },
     )
 }
@@ -217,6 +217,7 @@ pub struct Drain {
     memory_quota: Arc<MemoryQuota>,
 
     buffer: Option<ChangeDataEvent>,
+    drained: bool,
 }
 
 impl Stream for Drain {
@@ -227,33 +228,54 @@ impl Stream for Drain {
         if let Some(event) = this.buffer.take() {
             return Poll::Ready(Some(event));
         }
+        if this.drained {
+            return Poll::Ready(None);
+        }
 
-        let mut event = ChangeDataEvent::default();
+        let mut event: Option<ChangeDataEvent> = None;
         let mut size = 0;
-        Poll::Ready(loop {
-            if let Some(item) = ready!(Pin::new(&mut this.rx).poll_next(cx)) {
-                this.memory_quota.free(item.size);
-                CDC_EVENTS_PENDING_DURATION
-                    .observe(item.created.saturating_elapsed_secs() * 1000.0);
-                match item.event {
-                    CdcEvent::ResolvedTs(x) => {
-                        let mut ts_event = ChangeDataEvent::default();
-                        ts_event.set_resolved_ts(x);
-                        self.buffer = Some(ts_event);
-                        break Some(event);
-                    }
-                    CdcEvent::Event(x) => {
-                        event.mut_events().push(x);
-                        size += item.size;
-                        if size >= CDC_RESP_MAX_BYTES {
-                            break Some(event);
+        loop {
+            match Pin::new(&mut this.rx).poll_next(cx) {
+                Poll::Ready(Some(item)) => {
+                    size += item.size;
+                    this.memory_quota.free(item.size);
+                    CDC_EVENTS_PENDING_DURATION
+                        .observe(item.created.saturating_elapsed_secs() * 1000.0);
+                    match item.event {
+                        CdcEvent::ResolvedTs(x) => {
+                            let mut ts_event = ChangeDataEvent::default();
+                            ts_event.set_resolved_ts(x);
+                            if event.is_some() {
+                                this.buffer = Some(ts_event);
+                            } else {
+                                event = Some(ts_event);
+                            }
+                            break;
+                        }
+                        CdcEvent::Event(x) => {
+                            let e = event.get_or_insert_with(Default::default);
+                            e.mut_events().push(x);
+                            if size >= CDC_RESP_MAX_BYTES {
+                                break;
+                            }
                         }
                     }
                 }
-            } else {
-                break None;
+                Poll::Ready(None) => {
+                    this.drained = true;
+                    break;
+                }
+                Poll::Pending => break,
             }
-        })
+        }
+
+        if let Some(event) = event {
+            Poll::Ready(Some(event))
+        } else if this.drained {
+            Poll::Ready(None)
+        } else {
+            Poll::Pending
+        }
     }
 }
 

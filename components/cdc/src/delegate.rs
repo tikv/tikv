@@ -1429,79 +1429,74 @@ mod tests {
     #[test]
     fn test_error() {
         let region_id = 1;
-        let mut region = Region::default();
-        region.set_id(region_id);
-        region.mut_peers().push(Default::default());
-        region.mut_region_epoch().set_version(2);
-        region.mut_region_epoch().set_conf_ver(2);
 
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
-        let conn_id = ConnId::new();
-        let (sink, mut drain) = channel(conn_id, quota.clone());
-        let request_id = RequestId(123);
-        let downstream = Downstream::new(
-            request_id,
-            conn_id,
-            String::new(),
-            region.get_region_epoch().clone(),
-            ChangeDataRequestKvApi::TiDb,
-            false,
-            ObservedRange::default(),
-            DownstreamSink::new(region_id, request_id, sink),
-        );
-
-        let (tx, feedbacks) = dummy_scheduler();
+        let (fbtx, _feedbacks) = dummy_scheduler();
         let mut delegate = Delegate::new(
             region_id,
-            tx,
-            quota,
+            fbtx,
+            quota.clone(),
             Arc::new(Mutex::new(OldValueCache::new(ReadableSize(1024)))),
             Default::default(),
         );
-        delegate.subscribe(downstream).unwrap();
-        assert!(delegate.handle.is_observing());
 
-        assert!(delegate.init_lock_tracker());
-        let fails = delegate
-            .finish_scan_locks(region, Default::default())
-            .unwrap();
-        assert!(fails.is_empty());
-        assert!(delegate.downstreams[0].observed_range.all_key_covered);
+        let conn_id = ConnId::new();
+        let (sink, mut drain) = channel(conn_id, quota);
+        let request_id = RequestId(123);
+        let new_downstream = || {
+            Downstream::new(
+                request_id,
+                conn_id,
+                String::new(),
+                Default::default(),
+                ChangeDataRequestKvApi::TiDb,
+                false,
+                ObservedRange::default(),
+                DownstreamSink::new(region_id, request_id, sink.clone()),
+            )
+        };
 
         let mut receive_error = || {
-            let mut e = block_on(drain.next()).unwrap();
+            let mut e = recv_timeout(&mut drain, Duration::from_millis(100))
+                .unwrap()
+                .unwrap();
             let mut events: Vec<_> = e.take_events().into();
             assert_eq!(events.len(), 1);
+            assert_eq!(events[0].region_id, region_id);
             assert_eq!(events[0].request_id, request_id.0);
             assert!(events[0].has_error());
             events[0].take_error()
         };
 
+        delegate.subscribe(new_downstream()).unwrap();
         let mut err_header = ErrorHeader::default();
         err_header.set_not_leader(Default::default());
-        delegate.on_stop(Some(Error::request(err_header)));
+        block_on(delegate.on_stop(Some(Error::request(err_header))));
         let err = receive_error();
         assert!(err.has_not_leader());
         // Observing is disabled by any error.
         assert!(!delegate.handle.is_observing());
 
+        delegate.subscribe(new_downstream()).unwrap();
         let mut err_header = ErrorHeader::default();
         err_header.set_region_not_found(Default::default());
-        delegate.on_stop(Some(Error::request(err_header)));
+        block_on(delegate.on_stop(Some(Error::request(err_header))));
         let err = receive_error();
         assert!(err.has_region_not_found());
 
-        delegate.on_stop(Some(Error::Sink(SendError::Congested)));
+        delegate.subscribe(new_downstream()).unwrap();
+        block_on(delegate.on_stop(Some(Error::Sink(SendError::Congested))));
         let err = receive_error();
         assert!(err.has_congested());
 
+        delegate.subscribe(new_downstream()).unwrap();
         let mut err_header = ErrorHeader::default();
         err_header.set_epoch_not_match(Default::default());
-        delegate.on_stop(Some(Error::request(err_header)));
+        block_on(delegate.on_stop(Some(Error::request(err_header))));
         let err = receive_error();
         assert!(err.has_epoch_not_match());
 
-        // Split
+        delegate.subscribe(new_downstream()).unwrap();
         let mut region = Region::default();
         region.set_id(1);
         let mut request = AdminRequest::default();
@@ -1509,7 +1504,7 @@ mod tests {
         let mut response = AdminResponse::default();
         response.mut_split().set_left(region.clone());
         let err = delegate.sink_admin(request, response).err().unwrap();
-        delegate.on_stop(Some(err));
+        block_on(delegate.on_stop(Some(err)));
         let mut err = receive_error();
         assert!(err.has_epoch_not_match());
         err.take_epoch_not_match()
@@ -1518,12 +1513,13 @@ mod tests {
             .find(|r| r.get_id() == 1)
             .unwrap();
 
+        delegate.subscribe(new_downstream()).unwrap();
         let mut request = AdminRequest::default();
         request.set_cmd_type(AdminCmdType::BatchSplit);
         let mut response = AdminResponse::default();
         response.mut_splits().set_regions(vec![region].into());
         let err = delegate.sink_admin(request, response).err().unwrap();
-        delegate.on_stop(Some(err));
+        block_on(delegate.on_stop(Some(err)));
         let mut err = receive_error();
         assert!(err.has_epoch_not_match());
         err.take_epoch_not_match()
@@ -1532,30 +1528,32 @@ mod tests {
             .find(|r| r.get_id() == 1)
             .unwrap();
 
-        // Merge
+        delegate.subscribe(new_downstream()).unwrap();
         let mut request = AdminRequest::default();
         request.set_cmd_type(AdminCmdType::PrepareMerge);
         let response = AdminResponse::default();
         let err = delegate.sink_admin(request, response).err().unwrap();
-        delegate.on_stop(Some(err));
+        block_on(delegate.on_stop(Some(err)));
         let mut err = receive_error();
         assert!(err.has_epoch_not_match());
         assert!(err.take_epoch_not_match().current_regions.is_empty());
 
+        delegate.subscribe(new_downstream()).unwrap();
         let mut request = AdminRequest::default();
         request.set_cmd_type(AdminCmdType::CommitMerge);
         let response = AdminResponse::default();
         let err = delegate.sink_admin(request, response).err().unwrap();
-        delegate.on_stop(Some(err));
+        block_on(delegate.on_stop(Some(err)));
         let mut err = receive_error();
         assert!(err.has_epoch_not_match());
         assert!(err.take_epoch_not_match().current_regions.is_empty());
 
+        delegate.subscribe(new_downstream()).unwrap();
         let mut request = AdminRequest::default();
         request.set_cmd_type(AdminCmdType::RollbackMerge);
         let response = AdminResponse::default();
         let err = delegate.sink_admin(request, response).err().unwrap();
-        delegate.on_stop(Some(err));
+        block_on(delegate.on_stop(Some(err)));
         let mut err = receive_error();
         assert!(err.has_epoch_not_match());
         assert!(err.take_epoch_not_match().current_regions.is_empty());
@@ -1584,13 +1582,13 @@ mod tests {
         };
 
         // Create a new delegate.
-        let (tx, feedbacks) = dummy_scheduler();
+        let (fbtx, _feedbacks) = dummy_scheduler();
         let txn_extra_op = Arc::new(AtomicCell::new(TxnExtraOp::Noop));
 
         let mut delegate = Delegate::new(
             1,
-            tx,
-            quota.clone(),
+            fbtx,
+            quota,
             Arc::new(Mutex::new(OldValueCache::new(ReadableSize(1024)))),
             txn_extra_op.clone(),
         );
@@ -1612,15 +1610,16 @@ mod tests {
         assert_eq!(txn_extra_op.load(), TxnExtraOp::ReadOldValue);
         assert!(delegate.handle.is_observing());
 
+        let downstream3 = new_downstream(RequestId(3), 2, sink.clone());
+        delegate.subscribe(downstream3).unwrap();
+
         // `on_region_ready` when the delegate isn't resolved.
-        delegate
-            .subscribe(new_downstream(RequestId(1), 2, sink.clone()))
-            .unwrap();
-        let mut region = Region::default();
-        region.mut_region_epoch().set_conf_ver(1);
-        region.mut_region_epoch().set_version(1);
         {
             assert!(delegate.init_lock_tracker());
+
+            let mut region = Region::default();
+            region.mut_region_epoch().set_conf_ver(1);
+            region.mut_region_epoch().set_version(1);
             let failures = delegate
                 .finish_scan_locks(region, Default::default())
                 .unwrap();
@@ -1633,9 +1632,8 @@ mod tests {
         assert!(delegate.handle.is_observing());
 
         // Subscribe with an invalid epoch.
-        delegate
-            .subscribe(new_downstream(RequestId(1), 2, sink.clone()))
-            .unwrap_err();
+        let downstream4 = new_downstream(RequestId(4), 2, sink.clone());
+        delegate.subscribe(downstream4).unwrap_err();
         assert_eq!(delegate.downstreams.len(), 1);
 
         // Unsubscribe all downstreams.
@@ -1715,7 +1713,7 @@ mod tests {
         let (sink, mut drain) = channel(conn_id, quota.clone());
         let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
         let txn_extra_op = Arc::new(AtomicCell::new(TxnExtraOp::Noop));
-        let (tx, feedbacks) = dummy_scheduler();
+        let (fbtx, _feedbacks) = dummy_scheduler();
 
         // Create a new delegate that observes [b, d).
         let observed_range = ObservedRange::new(
@@ -1725,7 +1723,7 @@ mod tests {
         .unwrap();
         let mut delegate = Delegate::new(
             1,
-            tx,
+            fbtx,
             memory_quota,
             Arc::new(Mutex::new(OldValueCache::new(ReadableSize(1024)))),
             txn_extra_op,
@@ -1770,7 +1768,9 @@ mod tests {
         let cb: OldValueCallback = Box::new(|_, _, _, _| Ok(None));
         block_on(delegate.sink_downstream_tidb(entries, &cb)).unwrap();
 
-        let e = block_on(drain.next()).unwrap();
+        let e = recv_timeout(&mut drain, Duration::from_millis(100))
+            .unwrap()
+            .unwrap();
         assert_eq!(e.events[0].get_entries().get_entries().len(), 2, "{:?}", e);
     }
 
@@ -1781,7 +1781,7 @@ mod tests {
         let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
         let cache = Arc::new(Mutex::new(OldValueCache::new(ReadableSize(1024))));
         let txn_extra_op = Arc::new(AtomicCell::new(TxnExtraOp::Noop));
-        let (tx, feedbacks) = dummy_scheduler();
+        let (fbtx, feedbacks) = dummy_scheduler();
 
         // Create a new delegate that observes [a, f).
         let observed_range = ObservedRange::new(
@@ -1789,7 +1789,7 @@ mod tests {
             Key::from_raw(b"f").into_encoded(),
         )
         .unwrap();
-        let mut delegate = Delegate::new(1, tx, memory_quota, cache, txn_extra_op);
+        let mut delegate = Delegate::new(1, fbtx, memory_quota, cache, txn_extra_op);
         assert!(delegate.handle.is_observing());
         assert!(delegate.init_lock_tracker());
 
@@ -1834,7 +1834,9 @@ mod tests {
         let cb: OldValueCallback = Box::new(|_, _, _, _| Ok(None));
         block_on(delegate.sink_downstream_tidb(entries, &cb)).unwrap();
 
-        let e = block_on(drain.next()).unwrap();
+        let e = recv_timeout(&mut drain, Duration::from_millis(100))
+            .unwrap()
+            .unwrap();
         assert_eq!(e.events[0].get_entries().get_entries().len(), 1, "{:?}", e);
     }
 
@@ -1913,11 +1915,11 @@ mod tests {
 
     #[test]
     fn test_lock_tracker() {
-        let (tx, feedbacks) = dummy_scheduler();
+        let (fbtx, _feedbacks) = dummy_scheduler();
         let cache = Arc::new(Mutex::new(OldValueCache::new(ReadableSize(1024))));
 
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
-        let mut delegate = Delegate::new(1, tx, quota.clone(), cache, Default::default());
+        let mut delegate = Delegate::new(1, fbtx, quota.clone(), cache, Default::default());
         assert!(delegate.init_lock_tracker());
         assert!(!delegate.init_lock_tracker());
 
@@ -1974,10 +1976,10 @@ mod tests {
 
     #[test]
     fn test_lock_tracker_untrack_vacant() {
-        let (tx, feedbacks) = dummy_scheduler();
+        let (fbtx, _feedbacks) = dummy_scheduler();
         let cache = Arc::new(Mutex::new(OldValueCache::new(ReadableSize(1024))));
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
-        let mut delegate = Delegate::new(1, tx, quota.clone(), cache, Default::default());
+        let mut delegate = Delegate::new(1, fbtx, quota.clone(), cache, Default::default());
         assert!(delegate.init_lock_tracker());
         assert!(!delegate.init_lock_tracker());
 
