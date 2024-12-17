@@ -660,10 +660,15 @@ impl<ER: RaftEngine, F: KvFormat> TiKvServer<ER, F> {
 
         // NOTE: Compat disagg arch upgraded from * to 8.0.
         {
-            let raft_engine_path = config.raft_engine.config().dir + "/ps_engine";
+            let engine_dir = config.raft_engine.config().dir.clone();
+            let infered_dir = config
+                .infer_raft_engine_path(None)
+                .unwrap_or(engine_dir.clone());
+            info!("raft_engine_dir"; "origin" => engine_dir, "infered" => infered_dir.clone());
+            let raft_engine_path = infered_dir.clone() + "/ps_engine";
             let path = Path::new(&raft_engine_path);
             if path.exists() {
-                let new_raft_engine_path = config.raft_engine.config().dir + "/ps_engine.raftlog";
+                let new_raft_engine_path = infered_dir + "/ps_engine.raftlog";
                 let new_path = Path::new(&new_raft_engine_path);
                 if !new_path.exists() {
                     info!("creating ps_engine.raftlog for upgraded cluster");

@@ -132,6 +132,22 @@ where
     ProfileGuard::new(on_start, on_end, end.boxed())?.await
 }
 
+/// Trigger a heap profie and return the content.
+#[allow(dead_code)]
+pub fn dump_one_heap_profile(use_jeprof: bool, output_format: String) -> Result<Vec<u8>, String> {
+    info!("dump_one_heap_profile"; "use_jeprof" => use_jeprof, "output_format" => &output_format);
+    let f = NamedTempFile::new().map_err(|e| format!("create tmp file fail: {}", e))?;
+    let path = f.path().to_str().unwrap();
+    dump_prof(path).map_err(|e| format!("dump_prof: {}", e))?;
+    if use_jeprof {
+        // Use jeprof to transform heap file into svg/raw/collapsed...
+        jeprof_heap_profile(path, output_format)
+    } else {
+        // Juse return the heap file.
+        read_file(path)
+    }
+}
+
 pub fn set_prof_active(val: bool) -> Result<(), String> {
     let activate = has_activate_prof();
     if activate == val {
