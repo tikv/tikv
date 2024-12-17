@@ -13,7 +13,7 @@ collections = { workspace = true }
 crossbeam = { workspace = true }
 dashmap = "5.1"
 fail = "0.5"
-file_system = { workspace = true }
+file_system = { workspace = true, features = ["testexport"] }
 futures = { version = "0.3", features = ["compat"] }
 kvproto = { workspace = true }
 lazy_static = "1.0"
