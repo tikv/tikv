@@ -95,12 +95,7 @@ struct DownstreamValue {
 }
 
 impl Conn {
-    pub fn new(
-        conn_id: ConnId,
-        sink: Sink,
-        version: Version,
-        features: Vec<&'static str>,
-    ) -> Conn {
+    pub fn new(conn_id: ConnId, sink: Sink, version: Version, features: Vec<&'static str>) -> Conn {
         let mut conn = Conn {
             id: conn_id,
             sink,
@@ -497,7 +492,7 @@ mod tests {
     use tikv_util::future::block_on_timeout;
 
     use super::*;
-    use crate::channel::{recv_timeout, CdcEvent, tests::TestSink};
+    use crate::channel::{recv_timeout, tests::TestSink, CdcEvent};
 
     fn new_rpc_suite(capacity: usize) -> (Server, ChangeDataClient, ReceiverWrapper<Task>) {
         let memory_quota = Arc::new(MemoryQuota::new(capacity));
@@ -544,11 +539,7 @@ mod tests {
             let mut sink_ = sink.clone();
             Box::pin(async move {
                 let mut sink = TestSink(sink_.clone());
-                sink
-                    .send_all(
-                        vec![CdcEvent::ResolvedTs(rts_)],
-                    )
-                    .await
+                sink.send_all(vec![CdcEvent::ResolvedTs(rts_)]).await
             })
         };
         let must_fill_window = || {

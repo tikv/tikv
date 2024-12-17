@@ -1138,8 +1138,7 @@ mod tests {
     };
 
     use engine_rocks::RocksEngine;
-    use futures::executor::block_on;
-    use futures::StreamExt;
+    use futures::{executor::block_on, StreamExt};
     use kvproto::{
         cdcpb::{ChangeDataRequestKvApi, Header},
         errorpb::Error as ErrorHeader,
@@ -1150,6 +1149,7 @@ mod tests {
         router::{CdcRaftRouter, RaftStoreRouter},
         store::{fsm::StoreMeta, msg::CasualMessage, PeerMsg, ReadDelegate},
     };
+    use semver::Version;
     use test_pd_client::TestPdClient;
     use test_raftstore::MockRaftStoreRouter;
     use tikv::{
@@ -1160,7 +1160,6 @@ mod tests {
         config::{ReadableDuration, ReadableSize},
         worker::{dummy_scheduler, ReceiverWrapper},
     };
-    use semver::Version;
     use txn_types::Key;
 
     use super::*;
@@ -1307,7 +1306,12 @@ mod tests {
         let conn_id = ConnId::new();
         let (tx, mut rx) = channel::channel(conn_id, quota);
 
-        let conn = Conn::new(conn_id, tx.clone(), FeatureGate::batch_resolved_ts(), vec![]);
+        let conn = Conn::new(
+            conn_id,
+            tx.clone(),
+            FeatureGate::batch_resolved_ts(),
+            vec![],
+        );
         suite.run(Task::OpenConn { conn });
 
         let mut req_header = Header::default();
@@ -1379,7 +1383,7 @@ mod tests {
             ChangeDataRequestKvApi::TxnKv,
             false,
             ObservedRange::default(),
-            DownstreamSink::new(1, RequestId(3), tx.clone())
+            DownstreamSink::new(1, RequestId(3), tx.clone()),
         );
         req.set_kv_api(ChangeDataRequestKvApi::TxnKv);
         suite.run(Task::Register {
@@ -1560,7 +1564,7 @@ mod tests {
         suite.add_region(1 /* region id */, 1 /* cap */);
         suite.fill_raft_rx(1);
 
-        let conn = Conn::new(conn_id,  tx.clone(), Version::new(0, 0, 0), vec![]);
+        let conn = Conn::new(conn_id, tx.clone(), Version::new(0, 0, 0), vec![]);
         let conn_id = conn.id;
         suite.run(Task::OpenConn { conn });
 
@@ -1609,7 +1613,7 @@ mod tests {
         let conn_id = ConnId::new();
         let (tx, mut rx) = channel::channel(conn_id, quota);
 
-        let conn = Conn::new(conn_id,  tx.clone(), Version::new(4, 0, 8), vec![]);
+        let conn = Conn::new(conn_id, tx.clone(), Version::new(4, 0, 8), vec![]);
         suite.run(Task::OpenConn { conn });
 
         let mut req_header = Header::default();
@@ -1648,7 +1652,7 @@ mod tests {
             ChangeDataRequestKvApi::TiDb,
             false,
             ObservedRange::default(),
-            DownstreamSink::new(1, RequestId(1), tx.clone())
+            DownstreamSink::new(1, RequestId(1), tx.clone()),
         );
         suite.run(Task::Register {
             request: req.clone(),
@@ -1730,8 +1734,8 @@ mod tests {
         assert_eq!(suite.capture_regions.len(), 3);
         let task = suite.task_rx.recv_timeout(timeout).unwrap();
         // match task.unwrap() {
-        //     Task::Deregister(Deregister::Downstream { region_id, err, .. }) => {
-        //         assert_eq!(region_id, 101);
+        //     Task::Deregister(Deregister::Downstream { region_id, err, .. })
+        // => {         assert_eq!(region_id, 101);
         //         assert!(matches!(err, Some(Error::Other(_))), "{:?}", err);
         //     }
         //     other => panic!("unexpected task {:?}", other),
@@ -1764,7 +1768,7 @@ mod tests {
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
         let (tx, mut rx) = channel::channel(ConnId::new(), quota);
 
-        let conn = Conn::new(conn_id,  tx.clone(), Version::new(4, 0, 8), vec![]);
+        let conn = Conn::new(conn_id, tx.clone(), Version::new(4, 0, 8), vec![]);
         suite.run(Task::OpenConn { conn });
 
         let mut req_header = Header::default();
@@ -1805,7 +1809,6 @@ mod tests {
             request: req.clone(),
             downstream,
         });
-
 
         let events: Vec<_> = block_on(rx.next()).unwrap().take_events().into();
         assert_eq!(events.len(), 1);
@@ -1855,7 +1858,7 @@ mod tests {
         let conn_id = ConnId::new();
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
         let (tx, mut rx) = channel::channel(conn_id, quota);
-        let conn = Conn::new(conn_id,  tx.clone(), Version::new(4, 0, 8), vec![]);
+        let conn = Conn::new(conn_id, tx.clone(), Version::new(4, 0, 8), vec![]);
         suite.run(Task::OpenConn { conn });
 
         let mut region = Region::default();
@@ -1882,18 +1885,22 @@ mod tests {
             downstream,
         });
         let observe_id = suite.capture_regions[&1].handle.id;
-        suite.capture_regions[&1].sched.unbounded_send(DelegateTask::InitDownstream {
-            observe_id,
-            downstream_id,
-            build_resolver: Default::default(),
-            cb: Box::new(|| {}),
-        });
+        suite.capture_regions[&1]
+            .sched
+            .unbounded_send(DelegateTask::InitDownstream {
+                observe_id,
+                downstream_id,
+                build_resolver: Default::default(),
+                cb: Box::new(|| {}),
+            });
 
-        suite.capture_regions[&1].sched.unbounded_send(DelegateTask::FinishScanLocks {
-            observe_id,
-            region: region.clone(),
-            locks: Default::default(),
-        });
+        suite.capture_regions[&1]
+            .sched
+            .unbounded_send(DelegateTask::FinishScanLocks {
+                observe_id,
+                region: region.clone(),
+                locks: Default::default(),
+            });
         suite.run(Task::MinTs {
             regions: vec![1],
             min_ts: TimeStamp::from(1),
@@ -1925,23 +1932,26 @@ mod tests {
         });
         region.set_id(2);
         let observe_id = suite.capture_regions[&2].handle.id;
-        suite.capture_regions[&2].sched.unbounded_send(DelegateTask::InitDownstream {
-            observe_id,
-            downstream_id,
-            build_resolver: Default::default(),
-            cb: Box::new(|| {}),
-        });
-        suite.capture_regions[&2].sched.unbounded_send(DelegateTask::FinishScanLocks {
-            observe_id,
-            region,
-            locks: Default::default(),
-        });
+        suite.capture_regions[&2]
+            .sched
+            .unbounded_send(DelegateTask::InitDownstream {
+                observe_id,
+                downstream_id,
+                build_resolver: Default::default(),
+                cb: Box::new(|| {}),
+            });
+        suite.capture_regions[&2]
+            .sched
+            .unbounded_send(DelegateTask::FinishScanLocks {
+                observe_id,
+                region,
+                locks: Default::default(),
+            });
         suite.run(Task::MinTs {
             regions: vec![1, 2],
             min_ts: TimeStamp::from(2),
             current_ts: TimeStamp::zero(),
         });
-
 
         let mut r = block_on(rx.next()).unwrap().take_resolved_ts();
         r.regions.as_mut_slice().sort_unstable();
@@ -1952,7 +1962,7 @@ mod tests {
         let conn_id = ConnId::new();
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
         let (tx, mut rx2) = channel::channel(conn_id, quota);
-        let conn = Conn::new(conn_id,   tx.clone(), Version::new(0,0,0), vec![]);
+        let conn = Conn::new(conn_id, tx.clone(), Version::new(0, 0, 0), vec![]);
         suite.run(Task::OpenConn { conn });
 
         let mut region = Region::default();
@@ -1978,23 +1988,26 @@ mod tests {
         });
         region.set_id(3);
         let observe_id = suite.capture_regions[&3].handle.id;
-        suite.capture_regions[&3].sched.unbounded_send(DelegateTask::InitDownstream {
-            observe_id,
-            downstream_id,
-            build_resolver: Default::default(),
-            cb: Box::new(|| {}),
-        });
-        suite.capture_regions[&3].sched.unbounded_send(DelegateTask::FinishScanLocks {
-            observe_id,
-            region,
-            locks: Default::default(),
-        });
+        suite.capture_regions[&3]
+            .sched
+            .unbounded_send(DelegateTask::InitDownstream {
+                observe_id,
+                downstream_id,
+                build_resolver: Default::default(),
+                cb: Box::new(|| {}),
+            });
+        suite.capture_regions[&3]
+            .sched
+            .unbounded_send(DelegateTask::FinishScanLocks {
+                observe_id,
+                region,
+                locks: Default::default(),
+            });
         suite.run(Task::MinTs {
             regions: vec![1, 2, 3],
             min_ts: TimeStamp::from(3),
             current_ts: TimeStamp::zero(),
         });
-
 
         let mut r = block_on(rx.next()).unwrap().take_resolved_ts();
         r.regions.as_mut_slice().sort_unstable();
@@ -2018,7 +2031,7 @@ mod tests {
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
         let (tx, mut rx) = channel::channel(conn_id, quota);
 
-        let conn = Conn::new(conn_id,  tx.clone(), Version::new(0, 0, 0), vec![]);
+        let conn = Conn::new(conn_id, tx.clone(), Version::new(0, 0, 0), vec![]);
         suite.run(Task::OpenConn { conn });
 
         let mut req_header = Header::default();
@@ -2045,10 +2058,12 @@ mod tests {
 
         let mut err_header = ErrorHeader::default();
         err_header.set_not_leader(Default::default());
-        suite.capture_regions[&1].sched.unbounded_send(DelegateTask::StopDownstream {
-            err: Some(Error::request(err_header.clone())),
-            downstream_id,
-        });
+        suite.capture_regions[&1]
+            .sched
+            .unbounded_send(DelegateTask::StopDownstream {
+                err: Some(Error::request(err_header.clone())),
+                downstream_id,
+            });
 
         let events: Vec<_> = block_on(rx.next()).unwrap().take_events().into();
         assert_eq!(events.len(), 1);
@@ -2075,17 +2090,21 @@ mod tests {
         });
         assert_eq!(suite.capture_regions.len(), 1);
 
-        suite.capture_regions[&1].sched.unbounded_send(DelegateTask::StopDownstream {
-            err: Some(Error::request(err_header.clone())),
-            downstream_id,
-        });
+        suite.capture_regions[&1]
+            .sched
+            .unbounded_send(DelegateTask::StopDownstream {
+                err: Some(Error::request(err_header.clone())),
+                downstream_id,
+            });
         assert!(block_on(rx.next()).is_none());
         assert_eq!(suite.capture_regions.len(), 1);
 
-        suite.capture_regions[&1].sched.unbounded_send(DelegateTask::StopDownstream {
-            err: Some(Error::request(err_header.clone())),
-            downstream_id:new_downstream_id,
-        });
+        suite.capture_regions[&1]
+            .sched
+            .unbounded_send(DelegateTask::StopDownstream {
+                err: Some(Error::request(err_header.clone())),
+                downstream_id: new_downstream_id,
+            });
 
         let events: Vec<_> = block_on(rx.next()).unwrap().take_events().into();
         assert_eq!(events.len(), 1);
@@ -2112,7 +2131,7 @@ mod tests {
             let conn_id = ConnId::new();
             let (tx, rx) = channel::channel(conn_id, quota.clone());
             conn_rxs.push(rx);
-            let conn = Conn::new(conn_id,  tx.clone(), Version::new(4, 0, 8), vec![]);
+            let conn = Conn::new(conn_id, tx.clone(), Version::new(4, 0, 8), vec![]);
             suite.run(Task::OpenConn { conn });
 
             for region_id in region_ids {
@@ -2130,7 +2149,7 @@ mod tests {
                     ChangeDataRequestKvApi::TiDb,
                     false,
                     ObservedRange::default(),
-                    DownstreamSink::new(region_id, RequestId(0), tx.clone())
+                    DownstreamSink::new(region_id, RequestId(0), tx.clone()),
                 );
                 let downstream_id = downstream.id;
                 suite.run(Task::Register {
@@ -2138,17 +2157,21 @@ mod tests {
                     downstream,
                 });
                 let observe_id = suite.capture_regions[&region_id].handle.id;
-                suite.capture_regions[&region_id].sched.unbounded_send(DelegateTask::InitDownstream {
-                    observe_id,
-                    downstream_id,
-                    build_resolver: Default::default(),
-                    cb: Box::new(||return),
-                });
-                suite.capture_regions[&region_id].sched.unbounded_send(DelegateTask::FinishScanLocks {
-                    observe_id,
-                    region: Default::default(),
-                    locks: Default::default(),
-                });
+                suite.capture_regions[&region_id].sched.unbounded_send(
+                    DelegateTask::InitDownstream {
+                        observe_id,
+                        downstream_id,
+                        build_resolver: Default::default(),
+                        cb: Box::new(|| return),
+                    },
+                );
+                suite.capture_regions[&region_id].sched.unbounded_send(
+                    DelegateTask::FinishScanLocks {
+                        observe_id,
+                        region: Default::default(),
+                        locks: Default::default(),
+                    },
+                );
             }
         }
 
@@ -2215,13 +2238,13 @@ mod tests {
         // Open conn a
         let conn_id_a = ConnId::new();
         let (tx1, _rx1) = channel::channel(conn_id_a, quota.clone());
-        let conn_a = Conn::new(conn_id_a,  tx1.clone(), Version::new(0, 0, 0), vec![]);
+        let conn_a = Conn::new(conn_id_a, tx1.clone(), Version::new(0, 0, 0), vec![]);
         suite.run(Task::OpenConn { conn: conn_a });
 
         // Open conn b
         let conn_id_b = ConnId::new();
         let (tx2, mut rx2) = channel::channel(conn_id_b, quota);
-        let conn_b = Conn::new(conn_id_b,  tx2.clone(), Version::new(0, 0, 0), vec![]);
+        let conn_b = Conn::new(conn_id_b, tx2.clone(), Version::new(0, 0, 0), vec![]);
         suite.run(Task::OpenConn { conn: conn_b });
 
         // Register region 1 (epoch 2) at conn a.
@@ -2280,17 +2303,21 @@ mod tests {
         let mut region = Region::default();
         region.id = 1;
         region.set_region_epoch(region_epoch_2);
-        suite.capture_regions[&1].sched.unbounded_send(DelegateTask::InitDownstream {
-            observe_id,
-            downstream_id,
-            build_resolver: Default::default(),
-            cb: Box::new(||return),
-        });
-        suite.capture_regions[&1].sched.unbounded_send(DelegateTask::FinishScanLocks {
-            observe_id,
-            region: region.clone(),
-            locks: Default::default(),
-        });
+        suite.capture_regions[&1]
+            .sched
+            .unbounded_send(DelegateTask::InitDownstream {
+                observe_id,
+                downstream_id,
+                build_resolver: Default::default(),
+                cb: Box::new(|| return),
+            });
+        suite.capture_regions[&1]
+            .sched
+            .unbounded_send(DelegateTask::FinishScanLocks {
+                observe_id,
+                region: region.clone(),
+                locks: Default::default(),
+            });
 
         // Deregister deletgate due to epoch not match for conn b.
         // let mut epoch_not_match = ErrorHeader::default();
@@ -2369,7 +2396,7 @@ mod tests {
         let conn_id = ConnId::new();
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
         let (tx, mut rx) = channel::channel(conn_id, quota);
-        let conn = Conn::new(conn_id,  tx.clone(), Version::new(4,0,8), vec![]);
+        let conn = Conn::new(conn_id, tx.clone(), Version::new(4, 0, 8), vec![]);
         suite.run(Task::OpenConn { conn });
 
         let mut req_header = Header::default();
@@ -2400,12 +2427,14 @@ mod tests {
             });
 
             let observe_id = suite.capture_regions[&id].handle.id;
-            suite.capture_regions[&id].sched.unbounded_send(DelegateTask::InitDownstream {
-                observe_id,
-                downstream_id,
-                build_resolver: Default::default(),
-                cb: Box::new(||return),
-            });
+            suite.capture_regions[&id]
+                .sched
+                .unbounded_send(DelegateTask::InitDownstream {
+                    observe_id,
+                    downstream_id,
+                    build_resolver: Default::default(),
+                    cb: Box::new(|| return),
+                });
 
             let mut region = Region::default();
             region.id = id;
@@ -2415,11 +2444,13 @@ mod tests {
                 Key::from_encoded(vec![]),
                 MiniLock::from_ts(TimeStamp::compose(0, id)),
             );
-            suite.capture_regions[&id].sched.unbounded_send(DelegateTask::FinishScanLocks {
-                observe_id,
-                region,
-                locks,
-            });
+            suite.capture_regions[&id]
+                .sched
+                .unbounded_send(DelegateTask::FinishScanLocks {
+                    observe_id,
+                    region,
+                    locks,
+                });
         }
         suite
             .task_rx
@@ -2442,8 +2473,8 @@ mod tests {
         //         .unwrap()
         //         .unwrap()
         //         .0;
-        //     assert!(last_resolved_ts < event.resolved_ts().ts, "{:?}", event);
-        //     assert!(
+        //     assert!(last_resolved_ts < event.resolved_ts().ts, "{:?}",
+        // event);     assert!(
         //         last_batch_count < event.resolved_ts().regions.len(),
         //         "{:?}",
         //         event
@@ -2466,7 +2497,7 @@ mod tests {
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
         let (tx, mut rx) = channel::channel(conn_id, quota);
 
-        let conn = Conn::new(conn_id,  tx.clone(), Version::new(4, 0, 8), vec![]);
+        let conn = Conn::new(conn_id, tx.clone(), Version::new(4, 0, 8), vec![]);
         suite.run(Task::OpenConn { conn });
 
         let mut req_header = Header::default();
@@ -2534,46 +2565,46 @@ mod tests {
         assert!(events[0].get_error().has_duplicate_request());
 
         // Deregister an unexist downstream.
-        //suite.run(Task::Deregister(Deregister::Downstream {
+        // suite.run(Task::Deregister(Deregister::Downstream {
         //    conn_id,
         //    request_id: RequestId(1),
         //    region_id: 1,
         //    downstream_id: DownstreamId::new(),
         //    err: None,
         //}));
-        //assert_eq!(suite.connections[&conn_id].downstreams_count(), 2);
+        // assert_eq!(suite.connections[&conn_id].downstreams_count(), 2);
 
         //// Deregister an unexist delegate.
-        //suite.run(Task::Deregister(Deregister::Delegate {
+        // suite.run(Task::Deregister(Deregister::Delegate {
         //    region_id: 1,
         //    observe_id: ObserveId::new(),
         //    err: Error::Rocks("test error".to_owned()),
         //}));
-        //assert_eq!(suite.connections[&conn_id].downstreams_count(), 2);
+        // assert_eq!(suite.connections[&conn_id].downstreams_count(), 2);
 
         //// Deregister an exist downstream.
-        //let downstream_id = suite.capture_regions[&1].downstreams()[0].id;
-        //suite.run(Task::Deregister(Deregister::Downstream {
+        // let downstream_id = suite.capture_regions[&1].downstreams()[0].id;
+        // suite.run(Task::Deregister(Deregister::Downstream {
         //    conn_id,
         //    request_id: RequestId(1),
         //    region_id: 1,
         //    downstream_id,
         //    err: Some(Error::Rocks("test error".to_owned())),
         //}));
-        //assert_eq!(suite.connections[&conn_id].downstreams_count(), 1);
-        //let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
-        //    .unwrap()
+        // assert_eq!(suite.connections[&conn_id].downstreams_count(), 1);
+        // let cdc_event = channel::recv_timeout(&mut rx,
+        // Duration::from_millis(500))    .unwrap()
         //    .unwrap();
-        //let check = matches!(cdc_event.0, CdcEvent::Event(e) if {
+        // let check = matches!(cdc_event.0, CdcEvent::Event(e) if {
         //    matches!(e.event, Some(Event_oneof_event::Error(ref err)) if {
         //        err.has_region_not_found()
         //    })
         //});
-        //assert!(check);
+        // assert!(check);
 
         //// Subscribe one region with a different request_id is allowed.
-        //req.set_request_id(1);
-        //let downstream = Downstream::new(
+        // req.set_request_id(1);
+        // let downstream = Downstream::new(
         //    "".to_string(),
         //    region_epoch.clone(),
         //    RequestId(1),
@@ -2582,24 +2613,24 @@ mod tests {
         //    false,
         //    ObservedRange::default(),
         //);
-        //suite.run(Task::Register {
+        // suite.run(Task::Register {
         //    request: req.clone(),
         //    downstream,
         //});
-        //assert_eq!(suite.connections[&conn_id].downstreams_count(), 2);
+        // assert_eq!(suite.connections[&conn_id].downstreams_count(), 2);
 
         //// Deregister an exist delegate.
-        //let observe_id = suite.capture_regions[&1].handle.id;
-        //suite.run(Task::Deregister(Deregister::Delegate {
+        // let observe_id = suite.capture_regions[&1].handle.id;
+        // suite.run(Task::Deregister(Deregister::Delegate {
         //    region_id: 1,
         //    observe_id,
         //    err: Error::Rocks("test error".to_owned()),
         //}));
-        //assert_eq!(suite.connections[&conn_id].downstreams_count(), 0);
-        //assert_eq!(suite.capture_regions.len(), 0);
-        //for _ in 0..2 {
-        //    let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
-        //        .unwrap()
+        // assert_eq!(suite.connections[&conn_id].downstreams_count(), 0);
+        // assert_eq!(suite.capture_regions.len(), 0);
+        // for _ in 0..2 {
+        //    let cdc_event = channel::recv_timeout(&mut rx,
+        // Duration::from_millis(500))        .unwrap()
         //        .unwrap();
         //    let check = matches!(cdc_event.0, CdcEvent::Event(e) if {
         //        matches!(e.event, Some(Event_oneof_event::Error(ref err)) if {
@@ -2610,7 +2641,7 @@ mod tests {
         //}
 
         //// Resubscribe the region.
-        //for i in 1..=2 {
+        // for i in 1..=2 {
         //    req.set_request_id(i as _);
         //    let downstream = Downstream::new(
         //        "".to_string(),
@@ -2625,24 +2656,25 @@ mod tests {
         //        request: req.clone(),
         //        downstream,
         //    });
-        //    assert_eq!(suite.connections[&conn_id].downstreams_count(), i as usize);
+        //    assert_eq!(suite.connections[&conn_id].downstreams_count(), i as
+        // usize);
         //}
 
         //// Deregister the request.
-        //suite.run(Task::Deregister(Deregister::Request {
+        // suite.run(Task::Deregister(Deregister::Request {
         //    conn_id,
         //    request_id: RequestId(1),
         //}));
-        //assert_eq!(suite.connections[&conn_id].downstreams_count(), 1);
-        //suite.run(Task::Deregister(Deregister::Request {
+        // assert_eq!(suite.connections[&conn_id].downstreams_count(), 1);
+        // suite.run(Task::Deregister(Deregister::Request {
         //    conn_id,
         //    request_id: RequestId(2),
         //}));
-        //assert_eq!(suite.connections[&conn_id].downstreams_count(), 0);
-        //assert_eq!(suite.capture_regions.len(), 0);
-        //for _ in 0..2 {
-        //    let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
-        //        .unwrap()
+        // assert_eq!(suite.connections[&conn_id].downstreams_count(), 0);
+        // assert_eq!(suite.capture_regions.len(), 0);
+        // for _ in 0..2 {
+        //    let cdc_event = channel::recv_timeout(&mut rx,
+        // Duration::from_millis(500))        .unwrap()
         //        .unwrap();
         //    let check = matches!(cdc_event.0, CdcEvent::Event(e) if {
         //        matches!(e.event, Some(Event_oneof_event::Error(ref err)) if {
@@ -2653,8 +2685,8 @@ mod tests {
         //}
 
         //// Resubscribe the region.
-        //suite.add_region(2, 100);
-        //for i in 1..=2 {
+        // suite.add_region(2, 100);
+        // for i in 1..=2 {
         //    req.set_request_id(1);
         //    req.set_region_id(i);
         //    let downstream = Downstream::new(
@@ -2670,29 +2702,30 @@ mod tests {
         //        request: req.clone(),
         //        downstream,
         //    });
-        //    assert_eq!(suite.connections[&conn_id].downstreams_count(), i as usize);
+        //    assert_eq!(suite.connections[&conn_id].downstreams_count(), i as
+        // usize);
         //}
 
         //// Deregister regions one by one in the request.
-        //suite.run(Task::Deregister(Deregister::Region {
+        // suite.run(Task::Deregister(Deregister::Region {
         //    conn_id,
         //    request_id: RequestId(1),
         //    region_id: 1,
         //}));
-        //assert_eq!(suite.connections[&conn_id].downstreams_count(), 1);
-        //assert_eq!(suite.capture_regions.len(), 1);
+        // assert_eq!(suite.connections[&conn_id].downstreams_count(), 1);
+        // assert_eq!(suite.capture_regions.len(), 1);
 
-        //suite.run(Task::Deregister(Deregister::Region {
+        // suite.run(Task::Deregister(Deregister::Region {
         //    conn_id,
         //    request_id: RequestId(1),
         //    region_id: 2,
         //}));
-        //assert_eq!(suite.connections[&conn_id].downstreams_count(), 0);
-        //assert_eq!(suite.capture_regions.len(), 0);
+        // assert_eq!(suite.connections[&conn_id].downstreams_count(), 0);
+        // assert_eq!(suite.capture_regions.len(), 0);
 
-        //for _ in 0..2 {
-        //    let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
-        //        .unwrap()
+        // for _ in 0..2 {
+        //    let cdc_event = channel::recv_timeout(&mut rx,
+        // Duration::from_millis(500))        .unwrap()
         //        .unwrap();
         //    let check = matches!(cdc_event.0, CdcEvent::Event(e) if {
         //        matches!(e.event, Some(Event_oneof_event::Error(ref err)) if {
@@ -2716,7 +2749,7 @@ mod tests {
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
         let (tx, _rx) = channel::channel(conn_id, quota);
 
-        let conn = Conn::new(conn_id,  tx, Version::new(0, 0, 0), vec![]);
+        let conn = Conn::new(conn_id, tx, Version::new(0, 0, 0), vec![]);
         suite.run(Task::OpenConn { conn });
 
         // suite.run(Task::Deregister(Deregister::Conn(conn_id)));

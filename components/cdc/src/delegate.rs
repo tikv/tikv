@@ -1421,9 +1421,7 @@ mod tests {
     use api_version::RawValue;
     use futures::{executor::block_on, stream::StreamExt};
     use kvproto::{cdcpb::Event_oneof_event, errorpb::Error as ErrorHeader, metapb::Region};
-    use tikv_util::memory::MemoryQuota;
-    use tikv_util::worker::dummy_scheduler;
-    use tikv_util::config::ReadableSize;
+    use tikv_util::{config::ReadableSize, memory::MemoryQuota, worker::dummy_scheduler};
 
     use super::*;
     use crate::channel::{channel, recv_timeout, CdcEvent, SendError};
@@ -1454,9 +1452,11 @@ mod tests {
 
         let (tx, feedbacks) = dummy_scheduler();
         let mut delegate = Delegate::new(
-            region_id, tx, quota, 
+            region_id,
+            tx,
+            quota,
             Arc::new(Mutex::new(OldValueCache::new(ReadableSize(1024)))),
-            Default::default()
+            Default::default(),
         );
         delegate.subscribe(downstream).unwrap();
         assert!(delegate.handle.is_observing());
@@ -1588,9 +1588,11 @@ mod tests {
         let txn_extra_op = Arc::new(AtomicCell::new(TxnExtraOp::Noop));
 
         let mut delegate = Delegate::new(
-            1, tx, quota.clone(),
+            1,
+            tx,
+            quota.clone(),
             Arc::new(Mutex::new(OldValueCache::new(ReadableSize(1024)))),
-            txn_extra_op.clone()
+            txn_extra_op.clone(),
         );
         assert_eq!(txn_extra_op.load(), TxnExtraOp::Noop);
         assert!(delegate.handle.is_observing());
@@ -1611,7 +1613,9 @@ mod tests {
         assert!(delegate.handle.is_observing());
 
         // `on_region_ready` when the delegate isn't resolved.
-        delegate.subscribe(new_downstream(RequestId(1), 2, sink.clone())).unwrap();
+        delegate
+            .subscribe(new_downstream(RequestId(1), 2, sink.clone()))
+            .unwrap();
         let mut region = Region::default();
         region.mut_region_epoch().set_conf_ver(1);
         region.mut_region_epoch().set_version(1);
@@ -1720,10 +1724,12 @@ mod tests {
         )
         .unwrap();
         let mut delegate = Delegate::new(
-            1, tx, memory_quota, 
+            1,
+            tx,
+            memory_quota,
             Arc::new(Mutex::new(OldValueCache::new(ReadableSize(1024)))),
-            txn_extra_op
-            );
+            txn_extra_op,
+        );
         assert!(delegate.handle.is_observing());
         assert!(delegate.init_lock_tracker());
 
@@ -1756,14 +1762,13 @@ mod tests {
             ChangeDataRequestKvApi::TiDb,
             false,
             observed_range,
-            DownstreamSink::new(1, RequestId(1),sink),
+            DownstreamSink::new(1, RequestId(1), sink),
         );
         downstream.get_state().store(DownstreamState::Normal);
         delegate.add_downstream(downstream);
         let (_, entries) = rows_builder.finish_build();
         let cb: OldValueCallback = Box::new(|_, _, _, _| Ok(None));
-        block_on(delegate.sink_downstream_tidb(entries, &cb))
-            .unwrap();
+        block_on(delegate.sink_downstream_tidb(entries, &cb)).unwrap();
 
         let e = block_on(drain.next()).unwrap();
         assert_eq!(e.events[0].get_entries().get_entries().len(), 2, "{:?}", e);
@@ -1827,8 +1832,7 @@ mod tests {
         delegate.add_downstream(downstream);
         let (_, entries) = rows_builder.finish_build();
         let cb: OldValueCallback = Box::new(|_, _, _, _| Ok(None));
-        block_on(delegate.sink_downstream_tidb(entries, &cb))
-            .unwrap();
+        block_on(delegate.sink_downstream_tidb(entries, &cb)).unwrap();
 
         let e = block_on(drain.next()).unwrap();
         assert_eq!(e.events[0].get_entries().get_entries().len(), 1, "{:?}", e);

@@ -959,7 +959,7 @@ mod tests {
         initializer.build_resolver.store(true, Ordering::Release);
         initializer.deregister_downstream(Error::Other(box_err!("test")));
         let task = block_on(rx.next()).unwrap();
-        assert!(matches!(task, DelegateTask::Stop{ .. }));
+        assert!(matches!(task, DelegateTask::Stop { .. }));
     }
 
     #[test]

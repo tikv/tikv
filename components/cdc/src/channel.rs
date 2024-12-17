@@ -18,8 +18,7 @@ use kvproto::cdcpb::{
 };
 use protobuf::Message;
 use tikv_util::{
-    debug,
-    impl_display_as_debug, info,
+    debug, impl_display_as_debug, info,
     memory::{MemoryQuota, MemoryQuotaExceeded},
     time::Instant,
     warn,
@@ -403,7 +402,7 @@ pub mod tests {
 
     pub struct TestSink(pub Sink);
     impl TestSink {
-        pub async fn send_all(&mut self, events: Vec<CdcEvent>) -> StdResult<(), SendError>  {
+        pub async fn send_all(&mut self, events: Vec<CdcEvent>) -> StdResult<(), SendError> {
             self.0.send_all(events).await
         }
     }
