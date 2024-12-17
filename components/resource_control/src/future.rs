@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use file_system::IoBytes;
+use file_system::{IoBytes, IoBytesTracker};
 use futures::compat::{Compat01As03, Future01CompatExt};
 use pin_project::pin_project;
 use tikv_util::{time::Instant, timer::GLOBAL_TIMER_HANDLE, warn};
@@ -52,29 +52,6 @@ impl<F: Future> Future for ControlledFuture<F> {
         );
         res
     }
-}
-
-#[cfg(not(test))]
-fn get_thread_io_bytes_stats() -> Result<IoBytes, String> {
-    file_system::get_thread_io_bytes_total()
-}
-
-#[cfg(test)]
-fn get_thread_io_bytes_stats() -> Result<IoBytes, String> {
-    use std::cell::Cell;
-
-    fail::fail_point!("failed_to_get_thread_io_bytes_stats", |_| {
-        Err("get_thread_io_bytes_total failed".into())
-    });
-    thread_local! {
-        static TOTAL_BYTES: Cell<IoBytes> = Cell::new(IoBytes::default());
-    }
-
-    let mut new_bytes = TOTAL_BYTES.get();
-    new_bytes.read += 100;
-    new_bytes.write += 50;
-    TOTAL_BYTES.set(new_bytes);
-    Ok(new_bytes)
 }
 
 // `LimitedFuture` wraps a Future with ResourceLimiter, it will automically
@@ -142,36 +119,23 @@ impl<F: Future> Future for LimitedFuture<F> {
         }
         // get io stats is very expensive, so we only do so if only io control is
         // enabled.
-        let mut last_io_bytes = None;
-        if this
+        let mut io_tracker = if this
             .resource_limiter
             .get_limiter(ResourceType::Io)
             .get_rate_limit()
             .is_finite()
         {
-            match get_thread_io_bytes_stats() {
-                Ok(b) => {
-                    last_io_bytes = Some(b);
-                }
-                Err(e) => {
-                    warn!("load thread io bytes failed"; "err" => e);
-                }
-            }
-        }
+            Some(IoBytesTracker::new())
+        } else {
+            None
+        };
         let start = Instant::now();
         let res = this.f.poll(cx);
         let dur = start.saturating_elapsed();
-        let io_bytes = if let Some(last_io_bytes) = last_io_bytes {
-            match get_thread_io_bytes_stats() {
-                Ok(io_bytes) => io_bytes - last_io_bytes,
-                Err(e) => {
-                    warn!("load thread io bytes failed"; "err" => e);
-                    IoBytes::default()
-                }
-            }
-        } else {
-            IoBytes::default()
-        };
+        let io_bytes = io_tracker
+            .as_mut()
+            .and_then(|tracker| tracker.update())
+            .unwrap_or_else(IoBytes::default);
         let mut wait_dur = this
             .resource_limiter
             .consume(dur, io_bytes, res.is_pending());
@@ -280,6 +244,9 @@ mod tests {
 
     #[test]
     fn test_limited_future() {
+        #[cfg(not(feature = "failpoints"))]
+        return;
+
         let pool = YatpPoolBuilder::new(DefaultTicker::default())
             .thread_count(1, 1, 1)
             .name_prefix("test")
@@ -303,6 +270,9 @@ mod tests {
             pool.spawn(fut).unwrap();
             receiver.recv().unwrap();
         }
+
+        fail::cfg("delta_read_io_bytes", "return(100)").unwrap();
+        fail::cfg("delta_write_io_bytes", "return(50)").unwrap();
 
         let mut i = 0;
         let mut stats: GroupStatistics;
@@ -331,15 +301,12 @@ mod tests {
         );
 
         // fetch io bytes failed, consumed value is 0.
-        #[cfg(feature = "failpoints")]
-        {
-            fail::cfg("failed_to_get_thread_io_bytes_stats", "1*return").unwrap();
-            spawn_and_wait(&pool, empty(), resource_limiter.clone());
-            assert_eq!(
-                resource_limiter.get_limit_statistics(Io).total_consumed,
-                new_stats.total_consumed
-            );
-            fail::remove("failed_to_get_thread_io_bytes_stats");
-        }
+        fail::cfg("failed_to_get_thread_io_bytes_stats", "1*return").unwrap();
+        spawn_and_wait(&pool, empty(), resource_limiter.clone());
+        assert_eq!(
+            resource_limiter.get_limit_statistics(Io).total_consumed,
+            new_stats.total_consumed
+        );
+        fail::remove("failed_to_get_thread_io_bytes_stats");
     }
 }
