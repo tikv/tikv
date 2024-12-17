@@ -78,7 +78,9 @@ impl LoadEvictionObserver {
             || (state.modified_region.is_some()
                 && matches!(
                     cmd.request.get_admin_request().get_cmd_type(),
-                    AdminCmdType::PrepareMerge | AdminCmdType::CommitMerge
+                    AdminCmdType::PrepareMerge
+                        | AdminCmdType::CommitMerge
+                        | AdminCmdType::RollbackMerge
                 ))
         {
             let cache_region = CacheRegion::from_region(ctx.region());
