@@ -253,6 +253,12 @@ impl IoBytesTracker {
     }
 }
 
+impl Default for IoBytesTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[repr(u32)]
 #[derive(Debug, Clone, PartialEq, Copy, EnumCount)]
 pub enum IoPriority {
