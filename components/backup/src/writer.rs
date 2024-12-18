@@ -784,7 +784,10 @@ mod tests {
         assert_table_meta(&table_metas[2], 3, 2, 30);
         assert_eq!(files[0].total_kvs, 6);
         assert_eq!(files[0].total_bytes, 84);
-        assert_eq!(files[0].crc64xor, table_metas[0].crc64xor^table_metas[1].crc64xor^table_metas[2].crc64xor);
+        assert_eq!(
+            files[0].crc64xor,
+            table_metas[0].crc64xor ^ table_metas[1].crc64xor ^ table_metas[2].crc64xor
+        );
         let table_metas = files[1].get_table_metas();
         assert!(table_metas.len() == 3);
         assert_table_meta(&table_metas[0], 1, 0, 0);
@@ -792,6 +795,9 @@ mod tests {
         assert_table_meta(&table_metas[2], 3, 0, 0);
         assert_eq!(files[1].total_kvs, 0);
         assert_eq!(files[1].total_bytes, 0);
-        assert_eq!(files[1].crc64xor, table_metas[0].crc64xor^table_metas[1].crc64xor^table_metas[2].crc64xor);
+        assert_eq!(
+            files[1].crc64xor,
+            table_metas[0].crc64xor ^ table_metas[1].crc64xor ^ table_metas[2].crc64xor
+        );
     }
 }
