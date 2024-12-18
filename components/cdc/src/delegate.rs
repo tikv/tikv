@@ -919,8 +919,9 @@ impl Delegate {
 
                 let commit_ts = if is_one_pc {
                     set_event_row_type(&mut row, EventLogType::Committed);
-                    old_value_ts = Some(TimeStamp::from(row.commit_ts));
-                    Some(TimeStamp::from(row.commit_ts))
+                    let commit_ts = TimeStamp::from(row.commit_ts);
+                    old_value_ts = Some(commit_ts.prev());
+                    Some(commit_ts)
                 } else {
                     // 2PC
                     if row.commit_ts == 0 {
