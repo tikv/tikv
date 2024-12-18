@@ -1342,6 +1342,23 @@ pub enum DelegateTask {
     Validate(Box<dyn FnOnce(Option<&Delegate>) + Send>),
 }
 
+impl fmt::Debug for DelegateTask {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut de = f.debug_struct("DelegateTask");
+        let de = match self {
+            DelegateTask::Subscribe { .. } => de.field("type", &"Subscribe"),
+            DelegateTask::ObservedEvent { .. } => de.field("type", &"ObservedEvent"),
+            DelegateTask::Stop { .. } => de.field("type", &"Stop"),
+            DelegateTask::StopDownstream { .. } => de.field("type", &"StopDownstream"),
+            DelegateTask::MinTs { .. } => de.field("type", &"MinTs"),
+            DelegateTask::FinishScanLocks { .. } => de.field("type", &"FinishScanLocks"),
+            DelegateTask::InitDownstream { .. } => de.field("type", &"InitDownstream"),
+            DelegateTask::Validate(..) => de.field("type", &"Validate"),
+        };
+        de.finish()
+    }
+}
+
 #[derive(Clone)]
 pub struct DelegateMeta {
     pub region_id: u64,

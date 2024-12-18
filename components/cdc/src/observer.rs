@@ -227,7 +227,7 @@ mod tests {
         let engine = TestEngineBuilder::new().build().unwrap().get_rocksdb();
 
         let (tx, mut rx) = mpsc::unbounded();
-        observer.subscribe_region(1, observe_info.cdc_id.id, tx);
+        observer.subscribe_region(1, observe_info.cdc_id.id, tx.clone());
 
         let mut cb = CmdBatch::new(&observe_info, 1);
         cb.push(&observe_info, 1, Cmd::default());
@@ -257,7 +257,7 @@ mod tests {
             &mut vec![cb],
             &engine,
         );
-        assert!(rx.try_next().unwrap().is_none());
+        assert!(rx.try_next().is_err());
 
         // Does not send unsubscribed region events.
         let mut region = Region::default();
@@ -267,7 +267,7 @@ mod tests {
 
         let mut ctx = ObserverContext::new(&region);
         observer.on_role_change(&mut ctx, &RoleChange::new_for_test(StateRole::Follower));
-        assert!(rx.try_next().unwrap().is_none());
+        assert!(rx.try_next().is_err());
 
         // NotLeader error should contains the new leader.
         region.set_id(1);
@@ -319,7 +319,7 @@ mod tests {
 
         // No event if it changes to leader.
         observer.on_role_change(&mut ctx, &RoleChange::new_for_test(StateRole::Leader));
-        assert!(rx.try_next().unwrap().is_none());
+        assert!(rx.try_next().is_err());
 
         // unsubscribed fail if observer id is different.
         assert!(observer.unsubscribe_region(1, ObserveId::new()).is_none());
@@ -327,7 +327,9 @@ mod tests {
         // No event if it is unsubscribed.
         observer.unsubscribe_region(1, oid).unwrap();
         observer.on_role_change(&mut ctx, &RoleChange::new_for_test(StateRole::Follower));
-        assert!(rx.try_next().unwrap().is_none());
+        assert!(rx.try_next().is_err());
+
+        drop(tx);
     }
 
     #[test]
@@ -345,8 +347,8 @@ mod tests {
         let (tx, mut rx) = mpsc::unbounded();
         observer.subscribe_region(1, oid, tx);
 
-        let mut cb = CmdBatch::new(&observe_info, 0);
-        cb.push(&observe_info, 0, Cmd::default());
+        let mut cb = CmdBatch::new(&observe_info, 1);
+        cb.push(&observe_info, 1, Cmd::default());
         <CdcObserver as CmdObserver<RocksEngine>>::on_flush_applied_cmd_batch(
             &observer,
             cb.level,
