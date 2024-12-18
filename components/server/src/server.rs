@@ -1385,7 +1385,8 @@ where
         let snap_mgr = self.snap_mgr.clone().unwrap();
         let reserve_space = disk::get_disk_reserved_space();
         let reserve_raft_space = disk::get_raft_disk_reserved_space();
-        if reserve_space == 0 && reserve_raft_space == 0 {
+        let should_update_disk_status = reserve_space != 0 || reserve_raft_space != 0;
+        if !should_update_disk_status {
             info!("ignore updating disk status as no reserve space is set");
         }
         let raft_path = engines.raft.get_engine_path().to_string();
@@ -1465,7 +1466,7 @@ where
                     );
                 }
                 // Update disk status if disk space checker is enabled.
-                if reserve_space != 0 || reserve_raft_space != 0 {
+                if should_update_disk_status {
                     disk::set_disk_status(cur_disk_status);
                 }
                 // Update disk capacity, used size and available size.
