@@ -2227,6 +2227,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "engine_traits_tests"
+version = "0.0.1"
+dependencies = [
+ "encryption_export",
+ "engine_test",
+ "engine_traits",
+ "panic_hook",
+ "tempfile",
+ "test_util",
+]
+
+[[package]]
 name = "enum_dispatch"
 version = "0.3.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2443,6 +2455,7 @@ dependencies = [
  "collections",
  "crc32fast",
  "crossbeam-utils",
+ "fail",
  "fs2",
  "lazy_static",
  "libc 0.2.151",
