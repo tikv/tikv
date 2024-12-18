@@ -116,6 +116,8 @@ where
                 // after 30 days of deletion. PD returns
                 // "invalid store ID %d, not found" for such store id.
                 // See https://github.com/tikv/pd/blob/v7.3.0/server/grpc_service.go#L777-L780
+                // And to avoid repeatedly logging the same errors, it
+                // can directly return the `StoreTombstone` err.
                 if format!("{:?}", e).contains("not found") {
                     RESOLVE_STORE_COUNTER_STATIC.not_found.inc();
                     info!("resolve store not found"; "store_id" => store_id);
