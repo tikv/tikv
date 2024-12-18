@@ -1927,7 +1927,11 @@ impl SnapManager {
     /// recv_snap_complete is part of the snapshot recv precheck process, and
     /// should be called when a follower finishes receiving a snapshot.
     pub fn recv_snap_complete(&self, region_id: u64) {
-        self.core.recv_concurrency_limiter.finish_recv(region_id)
+        self.core.recv_concurrency_limiter.finish_recv(region_id);
+        // In tests, the first failpoint can be used to trigger a callback while
+        // the second failpoint can be used to pause the thread.
+        fail_point!("post_recv_snap_complete1", region_id == 1, |_| {});
+        fail_point!("post_recv_snap_complete2", region_id == 1, |_| {});
     }
 
     /// Adjusts the capacity of the snapshot receive concurrency limiter to
