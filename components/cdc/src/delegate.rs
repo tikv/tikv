@@ -24,6 +24,7 @@ use futures::{
 };
 use kvproto::{
     cdcpb::{ChangeDataRequestKvApi, Error as ErrorEvent, EventLogType, EventRow, EventRowOpType},
+    errorpb::Error as RequestError,
     kvrpcpb::ExtraOp as TxnExtraOp,
     metapb::{Region, RegionEpoch},
     raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CmdType, PutRequest, Request},
@@ -286,6 +287,7 @@ pub struct Delegate {
 
     lock_tracker: LockTracker,
     downstreams: Vec<Downstream>,
+    stopped: bool,
 
     old_value_stats: Statistics,
     created: Instant,
@@ -339,6 +341,7 @@ impl Delegate {
 
             lock_tracker: LockTracker::Pending,
             downstreams: Vec::new(),
+            stopped: false,
 
             old_value_stats: Statistics::default(),
             created: Instant::now_coarse(),
@@ -483,6 +486,11 @@ impl Delegate {
     }
 
     fn subscribe(&mut self, downstream: Downstream) -> StdResult<(), (Error, Downstream)> {
+        if self.stopped {
+            let mut e = RequestError::default();
+            e.mut_region_not_found().region_id = self.region_id;
+            return Err((Error::Request(Box::new(e)), downstream));
+        }
         if let LockTracker::Prepared { ref region, .. } = &self.lock_tracker {
             // Check if the downstream is outdated.
             if let Err(e) = Self::check_epoch_on_ready(&downstream, region) {
@@ -835,7 +843,9 @@ impl Delegate {
         Ok(())
     }
 
-    fn stop_observing(&self) {
+    fn stop_observing(&mut self) {
+        self.stopped = true;
+        self.tasks.close();
         // Stop observe further events.
         self.handle.stop_observing();
         // To inform transaction layer no more old values are required for the region.
@@ -853,8 +863,10 @@ impl Delegate {
     pub async fn handle_tasks(&mut self) {
         while let Some(task) = self.tasks.next().await {
             match task {
-                DelegateTask::Subscribe { downstream } => {
-                    self.on_subscribe_downstream(downstream).await;
+                DelegateTask::Subscribe { downstream, cb } => {
+                    if self.on_subscribe_downstream(downstream).await {
+                        cb(());
+                    }
                 }
                 DelegateTask::ObservedEvent { cmds, old_value_cb } => {
                     fail_point!("cdc_before_handle_multi_batch", |_| {});
@@ -894,11 +906,13 @@ impl Delegate {
         }
     }
 
-    async fn on_subscribe_downstream(&mut self, downstream: Downstream) {
+    async fn on_subscribe_downstream(&mut self, downstream: Downstream) -> bool {
         if let Err((err, downstream)) = self.subscribe(downstream) {
             let err_event = Some(err.into_error_event(self.region_id));
             self.deregister_downstream(err_event, downstream).await;
+            return false;
         }
+        true
     }
 
     async fn deregister_downstream_inner(
@@ -946,13 +960,13 @@ impl Delegate {
 
     async fn on_stop(&mut self, err: Option<Error>) {
         info!("cdc stop delegate"; "region_id" => self.region_id, "error" => ?err);
-        self.stop_observing();
         let err_event = err.map(|x| x.into_error_event(self.region_id));
         while !self.downstreams.is_empty() {
             let downstream = self.downstreams.swap_remove(0);
             self.deregister_downstream_inner(err_event.clone(), downstream)
                 .await;
         }
+        self.stop_observing();
         let _ = self
             .feedbacks
             .schedule_force(Task::Deregister(Deregister::Delegate {
@@ -1297,6 +1311,7 @@ impl ObservedRange {
 pub enum DelegateTask {
     Subscribe {
         downstream: Downstream,
+        cb: Box<dyn FnOnce(()) + Send>,
     },
     ObservedEvent {
         cmds: CmdBatch,
@@ -1432,16 +1447,18 @@ mod tests {
 
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
         let (fbtx, _feedbacks) = dummy_scheduler();
-        let mut delegate = Delegate::new(
-            region_id,
-            fbtx,
-            quota.clone(),
-            Arc::new(Mutex::new(OldValueCache::new(ReadableSize(1024)))),
-            Default::default(),
-        );
+        let new_delegate = || {
+            Delegate::new(
+                region_id,
+                fbtx.clone(),
+                quota.clone(),
+                Arc::new(Mutex::new(OldValueCache::new(ReadableSize(1024)))),
+                Default::default(),
+            )
+        };
 
         let conn_id = ConnId::new();
-        let (sink, mut drain) = channel(conn_id, quota);
+        let (sink, mut drain) = channel(conn_id, quota.clone());
         let request_id = RequestId(123);
         let new_downstream = || {
             Downstream::new(
@@ -1468,34 +1485,41 @@ mod tests {
             events[0].take_error()
         };
 
+        let mut delegate = new_delegate();
         delegate.subscribe(new_downstream()).unwrap();
         let mut err_header = ErrorHeader::default();
         err_header.set_not_leader(Default::default());
         block_on(delegate.on_stop(Some(Error::request(err_header))));
         let err = receive_error();
         assert!(err.has_not_leader());
-        // Observing is disabled by any error.
         assert!(!delegate.handle.is_observing());
 
+        let mut delegate = new_delegate();
         delegate.subscribe(new_downstream()).unwrap();
         let mut err_header = ErrorHeader::default();
         err_header.set_region_not_found(Default::default());
         block_on(delegate.on_stop(Some(Error::request(err_header))));
         let err = receive_error();
         assert!(err.has_region_not_found());
+        assert!(!delegate.handle.is_observing());
 
+        let mut delegate = new_delegate();
         delegate.subscribe(new_downstream()).unwrap();
         block_on(delegate.on_stop(Some(Error::Sink(SendError::Congested))));
         let err = receive_error();
         assert!(err.has_congested());
+        assert!(!delegate.handle.is_observing());
 
+        let mut delegate = new_delegate();
         delegate.subscribe(new_downstream()).unwrap();
         let mut err_header = ErrorHeader::default();
         err_header.set_epoch_not_match(Default::default());
         block_on(delegate.on_stop(Some(Error::request(err_header))));
         let err = receive_error();
         assert!(err.has_epoch_not_match());
+        assert!(!delegate.handle.is_observing());
 
+        let mut delegate = new_delegate();
         delegate.subscribe(new_downstream()).unwrap();
         let mut region = Region::default();
         region.set_id(1);
@@ -1512,7 +1536,9 @@ mod tests {
             .into_iter()
             .find(|r| r.get_id() == 1)
             .unwrap();
+        assert!(!delegate.handle.is_observing());
 
+        let mut delegate = new_delegate();
         delegate.subscribe(new_downstream()).unwrap();
         let mut request = AdminRequest::default();
         request.set_cmd_type(AdminCmdType::BatchSplit);
@@ -1527,7 +1553,9 @@ mod tests {
             .into_iter()
             .find(|r| r.get_id() == 1)
             .unwrap();
+        assert!(!delegate.handle.is_observing());
 
+        let mut delegate = new_delegate();
         delegate.subscribe(new_downstream()).unwrap();
         let mut request = AdminRequest::default();
         request.set_cmd_type(AdminCmdType::PrepareMerge);
@@ -1537,7 +1565,9 @@ mod tests {
         let mut err = receive_error();
         assert!(err.has_epoch_not_match());
         assert!(err.take_epoch_not_match().current_regions.is_empty());
+        assert!(!delegate.handle.is_observing());
 
+        let mut delegate = new_delegate();
         delegate.subscribe(new_downstream()).unwrap();
         let mut request = AdminRequest::default();
         request.set_cmd_type(AdminCmdType::CommitMerge);
@@ -1547,7 +1577,9 @@ mod tests {
         let mut err = receive_error();
         assert!(err.has_epoch_not_match());
         assert!(err.take_epoch_not_match().current_regions.is_empty());
+        assert!(!delegate.handle.is_observing());
 
+        let mut delegate = new_delegate();
         delegate.subscribe(new_downstream()).unwrap();
         let mut request = AdminRequest::default();
         request.set_cmd_type(AdminCmdType::RollbackMerge);
@@ -1557,6 +1589,7 @@ mod tests {
         let mut err = receive_error();
         assert!(err.has_epoch_not_match());
         assert!(err.take_epoch_not_match().current_regions.is_empty());
+        assert!(!delegate.handle.is_observing());
     }
 
     #[test]

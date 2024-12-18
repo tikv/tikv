@@ -793,9 +793,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 );
                 let delegate = d.meta();
                 e.insert(delegate.clone());
-                d.sched
-                    .unbounded_send(DelegateTask::Subscribe { downstream })
-                    .unwrap();
                 self.workers.spawn(async move { drop(d.handle_tasks()) });
 
                 let old_ob = self.observer.subscribe_region(
@@ -807,6 +804,12 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 delegate
             }
         };
+
+        let (cb, fut) = tikv_util::future::paired_future_callback();
+        delegate
+            .sched
+            .unbounded_send(DelegateTask::Subscribe { downstream, cb })
+            .unwrap();
 
         let handle = delegate.handle.clone();
         info!("cdc register region";
@@ -846,6 +849,12 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
 
         let cdc_handle = self.cdc_handle.clone();
         self.scan_workers.spawn(async move {
+            if fut.await.is_err() {
+                info!("cdc initialize is canceled before start"; "region_id" => region_id,
+                    "conn_id" => ?init.conn_id, "request_id" => ?init.request_id);
+                drop(release_scan_task_counter);
+                return;
+            }
             CDC_SCAN_TASKS.with_label_values(&["total"]).inc();
             match init.initialize(cdc_handle).await {
                 Ok(()) => {
