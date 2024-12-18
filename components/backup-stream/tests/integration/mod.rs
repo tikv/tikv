@@ -431,7 +431,7 @@ mod all {
             .scheduler()
             .schedule(Task::ForceFlush(TaskSelector::All, tx))
             .unwrap();
-        while let Some(_) = rx.blocking_recv() {}
+        while rx.blocking_recv().is_some() {}
 
         suite.check_for_write_records(
             suite.flushed_files.path(),
@@ -493,9 +493,7 @@ mod all {
 
     #[test]
     fn update_config() {
-        let suite = SuiteBuilder::new_named("network_partition")
-            .nodes(1)
-            .build();
+        let suite = SuiteBuilder::new_named("update_config").nodes(1).build();
         let mut basic_config = BackupStreamConfig::default();
         basic_config.initial_scan_concurrency = 4;
         suite.run(|| Task::ChangeConfig(basic_config.clone()));
@@ -511,5 +509,20 @@ mod all {
             assert_eq!(e.initial_scan_semaphore.available_permits(), 16,);
             true
         });
+    }
+
+    #[test]
+    fn force_flush() {
+        let mut suite = SuiteBuilder::new_named("force_flush").nodes(1).build();
+        suite.must_register_task(1, "force_flush");
+        let recs = run_async_test(suite.write_records(0, 128, 1));
+        suite.for_each_log_backup_cli(|_id, c| {
+            c.flush_now(Default::default()).unwrap();
+        });
+
+        suite.check_for_write_records(
+            suite.flushed_files.path(),
+            recs.iter().map(|v| v.as_slice()),
+        )
     }
 }

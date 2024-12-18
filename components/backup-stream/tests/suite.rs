@@ -595,7 +595,15 @@ impl Suite {
         ts
     }
 
+    pub fn for_each_log_backup_cli(&self, mut cb: impl FnMut(u64, &LogBackupClient)) {
+        for (k, v) in self.log_backup_cli.iter() {
+            cb(*k, v)
+        }
+    }
+
     pub fn force_flush_files(&self, task: &str) {
+        // Force flush but not wait...
+        // Then the case may use `wait_flush`...
         let _ = self.force_flush_files_and_wait(task);
     }
 
