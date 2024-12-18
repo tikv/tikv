@@ -2734,6 +2734,7 @@ pub mod tests {
                 RECV_SNAP_CONCURRENCY_LIMITER_TTL_SECS,
             )),
             read_limiter: Limiter::new(f64::INFINITY),
+            write_limiter: Limiter::new(f64::INFINITY),
             temp_sst_id: Arc::new(AtomicU64::new(0)),
             encryption_key_manager: None,
             max_per_file_size: Arc::new(AtomicU64::new(max_per_file_size)),
