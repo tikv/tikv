@@ -2338,3 +2338,51 @@ fn test_raft_log_gc_after_merge() {
     let resp = rx.recv().unwrap();
     assert!(resp.response.get_header().has_error());
 }
+
+#[test]
+fn test_node_merge_split_race() {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster.cfg);
+    cluster.cfg.raft_store.store_batch_system.max_batch_size = Some(1);
+    cluster.cfg.raft_store.store_batch_system.pool_size = 1;
+    cluster.cfg.raft_store.dev_assert = false;
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+
+    // Peer 2 won't be able to split.
+    fail::cfg("apply_before_split_1_2", "pause").unwrap();
+    fail::cfg_callback("on_snap_msg_1000_2", move || {
+        fail::remove("apply_before_split_1_2");
+    });
+
+    fail::cfg("before_check_snapshot_1000_2", "pause").unwrap();
+    fail::cfg_callback("apply_after_split_1_2", move || {
+        fail::remove("before_check_snapshot_1000_2");
+    });
+
+    let region = pd_client.get_region(b"k1").unwrap();
+    let peer_1 = find_peer(&region, 1).unwrap().to_owned();
+    // region 1, leader is peer 1.
+    cluster.must_transfer_leader(region.get_id(), peer_1);
+
+    let k = b"k1_for_apply_to_current_term";
+    cluster.must_put(k, b"value");
+    must_get_equal(&cluster.get_engine(1), k, b"value");
+
+    cluster.must_split(&region, b"k2");
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k2").unwrap();
+
+    cluster.must_try_merge(right.get_id(), left.get_id());
+
+    pd_client.check_merged_timeout(right.get_id(), Duration::from_secs(5));
+
+    cluster.must_put(b"k4", b"v4");
+    must_get_equal(&cluster.get_engine(2), b"k4", b"v4");
+}
