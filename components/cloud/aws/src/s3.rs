@@ -164,10 +164,6 @@ pub struct S3Storage {
 }
 
 impl S3Storage {
-    pub fn from_input(input: InputConfig) -> io::Result<Self> {
-        Self::new(Config::from_input(input)?)
-    }
-
     pub async fn from_input_async(input: InputConfig) -> io::Result<Self> {
         let client = util::new_http_client();
         Self::new_with_client(Config::from_input(input)?, client).await
@@ -182,9 +178,9 @@ impl S3Storage {
     }
 
     /// Create a new S3 storage for the given config.
-    pub fn new(config: Config) -> io::Result<Self> {
+    pub async fn new(config: Config) -> io::Result<Self> {
         let client = util::new_http_client();
-        block_on(Self::new_with_client(config, client))
+        Self::new_with_client(config, client).await
     }
 
     async fn new_with_client<Http>(config: Config, client: Http) -> io::Result<Self>
@@ -271,7 +267,7 @@ impl S3Storage {
     }
 
     #[cfg(test)]
-    fn new_with_creds_client<Creds, Http>(
+    async fn new_with_creds_client<Creds, Http>(
         config: Config,
         client: Http,
         credentials_provider: Creds,
@@ -280,11 +276,7 @@ impl S3Storage {
         Http: HttpClient + 'static,
         Creds: ProvideCredentials + 'static,
     {
-        block_on(Self::new_with_creds_client_async(
-            config,
-            client,
-            credentials_provider,
-        ))
+        Self::new_with_creds_client_async(config, client, credentials_provider).await
     }
 
     async fn new_with_creds_client_async<Creds, Http>(
@@ -858,8 +850,8 @@ mod tests {
         assert!(actual.is_none())
     }
 
-    #[test]
-    fn test_s3_config() {
+    #[tokio::test]
+    async fn test_s3_config() {
         let bucket_name = StringNonEmpty::required("mybucket".to_string()).unwrap();
         let mut bucket = BucketConf::default(bucket_name);
         bucket.region = StringNonEmpty::opt("ap-southeast-2".to_string());
@@ -870,7 +862,7 @@ mod tests {
             secret_access_key: StringNonEmpty::required("xyz".to_string()).unwrap(),
             session_token: Some(StringNonEmpty::required("token".to_string()).unwrap()),
         });
-        let mut s = S3Storage::new(config.clone()).unwrap();
+        let mut s = S3Storage::new(config.clone()).await.unwrap();
         // set a less than 5M value not work
         s.set_multi_part_size(1024);
         assert_eq!(s.config.multi_part_size, 5 * 1024 * 1024);
@@ -885,7 +877,7 @@ mod tests {
         assert_eq!(s.config.multi_part_size, 5 * 1024 * 1024);
 
         config.bucket.region = StringNonEmpty::opt("foo".to_string());
-        assert!(S3Storage::new(config).is_err());
+        assert!(S3Storage::new(config).await.is_err());
     }
 
     #[tokio::test]
@@ -976,7 +968,9 @@ mod tests {
 
         let creds = Credentials::from_keys("abc".to_string(), "xyz".to_string(), None);
 
-        let s = S3Storage::new_with_creds_client(config.clone(), client.clone(), creds).unwrap();
+        let s = S3Storage::new_with_creds_client(config.clone(), client.clone(), creds)
+            .await
+            .unwrap();
         s.put(
             "mykey",
             PutResource(Box::new(magic_contents.as_bytes())),
@@ -1052,7 +1046,9 @@ mod tests {
 
         let creds = Credentials::from_keys("abc".to_string(), "xyz".to_string(), None);
 
-        let s = S3Storage::new_with_creds_client(config.clone(), client.clone(), creds).unwrap();
+        let s = S3Storage::new_with_creds_client(config.clone(), client.clone(), creds)
+            .await
+            .unwrap();
         s.put(
             "mykey",
             PutResource(Box::new(magic_contents.as_bytes())),
@@ -1139,7 +1135,9 @@ mod tests {
 
         let creds = Credentials::from_keys("abc".to_string(), "xyz".to_string(), None);
 
-        let s = S3Storage::new_with_creds_client(config.clone(), client.clone(), creds).unwrap();
+        let s = S3Storage::new_with_creds_client(config.clone(), client.clone(), creds)
+            .await
+            .unwrap();
         s.put(
             "key2",
             PutResource(Box::new(magic_contents.as_bytes())),
@@ -1181,7 +1179,7 @@ mod tests {
 
         let limiter = Limiter::new(f64::INFINITY);
 
-        let storage = S3Storage::new(s3).unwrap();
+        let storage = S3Storage::new(s3).await.unwrap();
         const LEN: usize = 1024 * 1024 * 4;
         static CONTENT: [u8; LEN] = [50_u8; LEN];
         storage
