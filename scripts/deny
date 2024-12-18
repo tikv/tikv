@@ -2,7 +2,8 @@
 
 set -euo pipefail
 
-cargo install cargo-deny@0.14.3 2> /dev/null || echo "Install cargo-deny failed"
+# Update cargo-deny to the 0.15.1 version to fix the issue reported by https://github.com/tikv/tikv/pull/17987.
+cargo install --locked cargo-deny@0.15.1 2> /dev/null || echo "Install cargo-deny failed"
 cargo deny -V
 cargo deny fetch all
 cargo deny check --show-stats

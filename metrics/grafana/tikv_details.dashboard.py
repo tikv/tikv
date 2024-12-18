@@ -4095,6 +4095,15 @@ def Snapshot() -> RowPanel:
                         legend_format="clean-region-by-{{type}}",
                         additional_groupby=True,
                     ),
+                    target(
+                        expr=expr_sum_delta(
+                            "tikv_server_snapshot_task_total",
+                            range_selector="1m",
+                            by_labels=["type"],
+                        ),
+                        legend_format="{{type}}",
+                        additional_groupby=True,
+                    ),
                 ],
             ),
             graph_panel(
@@ -4106,13 +4115,14 @@ def Snapshot() -> RowPanel:
                         expr=expr_sum_rate(
                             "tikv_snapshot_limit_transport_bytes",
                             by_labels=["instance", "type"],
-                        ),
+                        )
                     ),
                     target(
                         expr=expr_sum_rate(
                             "tikv_snapshot_limit_generate_bytes",
+                            by_labels=["instance", "type"],
                         ),
-                        legend_format="{{instance}}-generate",
+                        legend_format="{{instance}}-generate-{{type}}",
                     ),
                 ],
             ),
@@ -6023,22 +6033,66 @@ def RocksDB() -> RowPanel:
                     ),
                     target(
                         expr=expr_operator(
-                            expr_sum_rate(
-                                "tikv_engine_bloom_efficiency",
-                                label_selectors=[
-                                    'db="$db"',
-                                    'type="bloom_prefix_useful"',
-                                ],
-                                by_labels=[],  # override default by instance.
+                            expr_operator(
+                                expr_sum_rate(
+                                    "tikv_engine_bloom_efficiency",
+                                    label_selectors=[
+                                        'db="$db"',
+                                        'type="last_level_seek_filtered"',
+                                    ],
+                                    by_labels=[],  # override default by instance.
+                                ),
+                                "+",
+                                expr_sum_rate(
+                                    "tikv_engine_bloom_efficiency",
+                                    label_selectors=[
+                                        'db="$db"',
+                                        'type="non_last_level_seek_filtered"',
+                                    ],
+                                    by_labels=[],  # override default by instance.
+                                ),
                             ),
                             "/",
-                            expr_sum_rate(
-                                "tikv_engine_bloom_efficiency",
-                                label_selectors=[
-                                    'db="$db"',
-                                    'type="bloom_prefix_checked"',
-                                ],
-                                by_labels=[],  # override default by instance.
+                            expr_operator(
+                                expr_operator(
+                                    expr_sum_rate(
+                                        "tikv_engine_bloom_efficiency",
+                                        label_selectors=[
+                                            'db="$db"',
+                                            'type="last_level_seek_filtered"',
+                                        ],
+                                        by_labels=[],  # override default by instance.
+                                    ),
+                                    "+",
+                                    expr_sum_rate(
+                                        "tikv_engine_bloom_efficiency",
+                                        label_selectors=[
+                                            'db="$db"',
+                                            'type="non_last_level_seek_filtered"',
+                                        ],
+                                        by_labels=[],  # override default by instance.
+                                    ),
+                                ),
+                                "+",
+                                expr_operator(
+                                    expr_sum_rate(
+                                        "tikv_engine_bloom_efficiency",
+                                        label_selectors=[
+                                            'db="$db"',
+                                            'type="last_level_seek_filter_match"',
+                                        ],
+                                        by_labels=[],  # override default by instance.
+                                    ),
+                                    "+",
+                                    expr_sum_rate(
+                                        "tikv_engine_bloom_efficiency",
+                                        label_selectors=[
+                                            'db="$db"',
+                                            'type="non_last_level_seek_filter_match"',
+                                        ],
+                                        by_labels=[],  # override default by instance.
+                                    ),
+                                ),
                             ),
                         ),
                         legend_format="bloom prefix",
@@ -9821,6 +9875,7 @@ def SlowTrendStatistics() -> RowPanel:
                     target(
                         expr=expr_sum(
                             "tikv_raftstore_slow_score",
+                            by_labels=["instance", "type"],
                         ),
                     ),
                 ],
