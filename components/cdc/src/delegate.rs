@@ -814,7 +814,8 @@ impl Delegate {
                     row_size = 0;
                 }
             }
-            if TxnSource::is_lossy_ddl_reorg_source_set(row.txn_source)
+            if TxnSource::is_lightning_physical_import(row.txn_source)
+                || TxnSource::is_lossy_ddl_reorg_source_set(row.txn_source)
                 || filter_loop && TxnSource::is_cdc_write_source_set(row.txn_source)
             {
                 continue;
@@ -970,7 +971,8 @@ impl Delegate {
                     }
                 }
 
-                if TxnSource::is_lossy_ddl_reorg_source_set(v.txn_source)
+                if TxnSource::is_lightning_physical_import(v.txn_source)
+                    || TxnSource::is_lossy_ddl_reorg_source_set(v.txn_source)
                     || downstream.filter_loop && TxnSource::is_cdc_write_source_set(v.txn_source)
                 {
                     continue;
@@ -1820,6 +1822,13 @@ mod tests {
         txn_source.set_cdc_write_source(1);
 
         test_downstream_txn_source_filter(txn_source, true);
+    }
+
+    #[test]
+    fn test_downstream_filter_lightning_physical_import() {
+        let mut txn_source = TxnSource::default();
+        txn_source.set_lightning_physical_import();
+        test_downstream_txn_source_filter(txn_source, false);
     }
 
     #[test]

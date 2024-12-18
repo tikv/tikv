@@ -1,161 +1,346 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, Weak};
 
 use futures::Future;
-use tokio::{io::Result as TokioResult, runtime::Runtime};
+use tokio::{
+    io::Result as TokioResult,
+    runtime::{Builder, Runtime},
+};
+use tokio_util::task::task_tracker::TaskTracker;
 
-/// DaemonRuntime is a "background" runtime, which contains "daemon" tasks:
-/// any task spawn into it would run until finish even the runtime isn't
-/// referenced.
-pub struct DaemonRuntime(Option<Runtime>);
+struct DeamonRuntime {
+    inner: Option<Runtime>,
+    tracker: TaskTracker,
+}
 
-impl DaemonRuntime {
-    /// spawn a daemon task to the runtime.
-    pub fn spawn(self: &Arc<Self>, f: impl Future<Output = ()> + Send + 'static) {
-        let wkr = self.clone();
-        self.0.as_ref().unwrap().spawn(async move {
-            f.await;
-            drop(wkr)
-        });
-    }
-
-    /// create a daemon runtime from some runtime.
-    pub fn from_runtime(rt: Runtime) -> Arc<Self> {
-        Arc::new(Self(Some(rt)))
+impl DeamonRuntime {
+    pub fn spawn<Fut>(&self, fut: Fut)
+    where
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        self.inner
+            .as_ref()
+            .unwrap()
+            .spawn(self.tracker.track_future(fut));
     }
 }
 
-impl Drop for DaemonRuntime {
+impl Drop for DeamonRuntime {
     fn drop(&mut self) {
-        if let Some(runtime) = self.0.take() {
+        if let Some(runtime) = self.inner.take() {
             runtime.shutdown_background();
         }
     }
 }
 
+#[derive(Clone)]
+pub struct DeamonRuntimeHandle {
+    inner: Weak<Mutex<DeamonRuntime>>,
+}
+
+impl DeamonRuntimeHandle {
+    pub fn spawn<Fut>(&self, fut: Fut)
+    where
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        let runtime = match self.inner.upgrade() {
+            Some(runtime) => runtime,
+            None => {
+                error!("Daemon runtime has been dropped. Task will be ignored.");
+                return;
+            }
+        };
+
+        let (handle, tracker) = {
+            let lock_guard = runtime.lock().unwrap();
+            let inner = lock_guard
+                .inner
+                .as_ref()
+                .expect("Runtime inner should exist");
+            (inner.handle().clone(), lock_guard.tracker.clone())
+        };
+
+        handle.spawn(tracker.track_future(fut));
+    }
+
+    pub fn block_on<Fut>(&self, fut: Fut)
+    where
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        let runtime = match self.inner.upgrade() {
+            Some(runtime) => runtime,
+            None => {
+                error!("Daemon runtime has been dropped. Task will be ignored.");
+                return;
+            }
+        };
+
+        let (handle, tracker) = {
+            let lock_guard = runtime.lock().unwrap();
+            let inner = lock_guard
+                .inner
+                .as_ref()
+                .expect("Runtime inner should exist");
+            (inner.handle().clone(), lock_guard.tracker.clone())
+        };
+
+        handle.block_on(tracker.track_future(fut));
+    }
+}
+
 pub struct ResizableRuntime {
-    pub size: usize,
-    thread_name: String,
-    pool: Option<Arc<DaemonRuntime>>,
+    size: usize,
+    version: usize,
+    thread_prefix: String,
+    gc_runtime: DeamonRuntime,
+    current_runtime: Arc<Mutex<DeamonRuntime>>,
     replace_pool_rule: Box<dyn Fn(usize, &str) -> TokioResult<Runtime> + Send + Sync>,
     after_adjust: Box<dyn Fn(usize) + Send + Sync>,
 }
 
 impl ResizableRuntime {
     pub fn new(
-        thread_name: &str,
+        thread_size: usize,
+        thread_prefix: &str,
         replace_pool_rule: Box<dyn Fn(usize, &str) -> TokioResult<Runtime> + Send + Sync>,
         after_adjust: Box<dyn Fn(usize) + Send + Sync>,
     ) -> Self {
+        let init_name = format!("{}-v0", thread_prefix);
+        let keeper = Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_name("rtkp")
+            .enable_all()
+            .build()
+            .expect("Failed to create runtime-keeper");
+        let new_runtime = (replace_pool_rule)(thread_size, &init_name)
+            .unwrap_or_else(|_| panic!("failed to create tokio runtime {}", thread_prefix));
+
         ResizableRuntime {
-            size: 0,
-            thread_name: thread_name.to_owned(),
-            pool: None,
+            size: thread_size,
+            version: 0,
+            thread_prefix: thread_prefix.to_owned(),
+            gc_runtime: DeamonRuntime {
+                inner: Some(keeper),
+                tracker: TaskTracker::new(),
+            },
+            current_runtime: Arc::new(Mutex::new(DeamonRuntime {
+                inner: Some(new_runtime),
+                tracker: TaskTracker::new(),
+            })),
             replace_pool_rule,
             after_adjust,
         }
     }
 
+    pub fn size(&self) -> usize {
+        self.size
+    }
+
     pub fn spawn<Fut>(&self, fut: Fut)
     where
         Fut: Future<Output = ()> + Send + 'static,
     {
-        self.pool
-            .as_ref()
-            .expect("ResizableRuntime: please call adjust_with() before spawn()")
-            .spawn(fut);
+        let handle = self.handle();
+        handle.spawn(fut);
     }
 
-    /// Lazily adjust the thread pool's size
+    pub fn block_on<Fut>(&self, fut: Fut)
+    where
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        let handle = self.handle();
+        handle.block_on(fut);
+    }
+
+    pub fn handle(&self) -> DeamonRuntimeHandle {
+        DeamonRuntimeHandle {
+            inner: Arc::downgrade(&self.current_runtime),
+        }
+    }
+
+    // TODO: after tokio supports adjusting thread pool size(https://github.com/tokio-rs/tokio/issues/3329),
+    //   adapt it.
     pub fn adjust_with(&mut self, new_size: usize) {
         if self.size == new_size {
             return;
         }
-        // TODO: after tokio supports adjusting thread pool size(https://github.com/tokio-rs/tokio/issues/3329),
-        //   adapt it.
-        let pool = (self.replace_pool_rule)(new_size, &self.thread_name)
-            .expect("failed to create tokio runtime for backup worker.");
-        self.pool = Some(DaemonRuntime::from_runtime(pool));
-        self.size = new_size;
-        (self.after_adjust)(new_size);
-    }
 
-    pub fn block_on<F>(&self, f: F) -> F::Output
-    where
-        F: Future,
-    {
-        self.pool
-            .as_ref()
-            .expect("ResizableRuntime: please call adjust_with() before block_on()")
-            .0
-            .as_ref()
-            .unwrap()
-            .block_on(f)
-    }
-}
+        self.version += 1;
+        let thread_name = format!("{}-v{}", self.thread_prefix, self.version);
+        let new_runtime = (self.replace_pool_rule)(new_size, &thread_name)
+            .unwrap_or_else(|_| panic!("failed to create tokio runtime {}", thread_name));
 
-#[derive(Clone)]
-pub struct ResizableRuntimeHandle {
-    inner: Arc<RwLock<ResizableRuntime>>,
-}
+        let old_runtime: DeamonRuntime;
+        {
+            let mut runtime_guard = self.current_runtime.lock().unwrap();
 
-impl ResizableRuntimeHandle {
-    pub fn new(runtime: ResizableRuntime) -> Self {
-        ResizableRuntimeHandle {
-            inner: Arc::new(RwLock::new(runtime)),
+            old_runtime = std::mem::replace(
+                &mut *runtime_guard,
+                DeamonRuntime {
+                    inner: Some(new_runtime),
+                    tracker: TaskTracker::new(),
+                },
+            );
         }
-    }
 
-    pub fn spawn<Fut>(&self, fut: Fut)
-    where
-        Fut: Future<Output = ()> + Send + 'static,
-    {
-        let inner = self.inner.read().unwrap();
-        inner.spawn(fut);
-    }
+        self.size = new_size;
 
-    pub fn adjust_with(&self, new_size: usize) {
-        let mut inner = self.inner.write().unwrap();
-        inner.adjust_with(new_size);
-    }
-
-    pub fn block_on<F>(&self, f: F) -> F::Output
-    where
-        F: Future,
-    {
-        let inner = self.inner.read().unwrap();
-        inner.block_on(f)
+        info!(
+            "Resizing thread pool";
+            "thread_name" => &thread_name,
+            "new_size" => new_size
+        );
+        self.gc_runtime.spawn(async move {
+            old_runtime.tracker.close();
+            old_runtime.tracker.wait().await;
+            drop(old_runtime);
+        });
+        (self.after_adjust)(new_size);
     }
 }
 
 #[cfg(test)]
 mod test {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::{
+        future,
+        sync::atomic::{AtomicUsize, Ordering},
+        thread::{self, sleep},
+        time::Duration,
+    };
 
     use super::*;
+    use crate::time::Instant;
 
-    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+    fn replace_pool_rule(thread_count: usize, thread_name: &str) -> TokioResult<Runtime> {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(thread_count)
+            .thread_name(thread_name)
+            .enable_all()
+            .build()
+            .unwrap();
+        Ok(rt)
+    }
 
     #[test]
     fn test_adjust_thread_num() {
-        let replace_pool_rule = |thread_count: usize, thread_name: &str| {
-            let rt = tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(thread_count)
-                .thread_name(thread_name)
-                .enable_all()
-                .build()
-                .unwrap();
-            Ok(rt)
-        };
+        static COUNTER: AtomicUsize = AtomicUsize::new(4);
         let after_adjust = |new_size: usize| {
             COUNTER.store(new_size, Ordering::SeqCst);
         };
-        let mut threads =
-            ResizableRuntime::new("test", Box::new(replace_pool_rule), Box::new(after_adjust));
-        threads.adjust_with(4);
-        assert_eq!(COUNTER.load(Ordering::SeqCst), 4);
+        let mut threads = ResizableRuntime::new(
+            COUNTER.load(Ordering::SeqCst),
+            "test",
+            Box::new(replace_pool_rule),
+            Box::new(after_adjust),
+        );
+        assert_eq!(COUNTER.load(Ordering::SeqCst), threads.size());
+
+        let handle = threads.handle();
+        handle.block_on(async {
+            COUNTER.fetch_add(1, Ordering::SeqCst);
+        });
+        assert_eq!(COUNTER.load(Ordering::SeqCst), threads.size() + 1);
+
         threads.adjust_with(8);
-        assert_eq!(COUNTER.load(Ordering::SeqCst), 8);
+        assert!(!threads.gc_runtime.tracker.is_empty());
+        assert_eq!(COUNTER.load(Ordering::SeqCst), threads.size());
+
+        sleep(Duration::from_secs(1));
+        assert!(threads.gc_runtime.tracker.is_empty());
+
+        // New task should be scheduled to the new runtime
+        handle.block_on(async {
+            COUNTER.fetch_add(1, Ordering::SeqCst);
+        });
+        assert_eq!(COUNTER.load(Ordering::SeqCst), threads.size() + 1);
+    }
+
+    #[test]
+    fn test_infinite_loop() {
+        static COUNTER: AtomicUsize = AtomicUsize::new(4);
+        let after_adjust = |new_size: usize| {
+            COUNTER.store(new_size, Ordering::SeqCst);
+        };
+        let mut threads = ResizableRuntime::new(
+            COUNTER.load(Ordering::SeqCst),
+            "test",
+            Box::new(replace_pool_rule),
+            Box::new(after_adjust),
+        );
+        assert_eq!(COUNTER.load(Ordering::SeqCst), threads.size());
+
+        let handle = threads.handle();
+        // infinite loop should not be cleaned
+        handle.spawn(async {
+            future::pending::<()>().await;
+        });
+
+        threads.adjust_with(8);
+        sleep(Duration::from_secs(1));
+        assert!(!threads.gc_runtime.tracker.is_empty());
+        assert_eq!(COUNTER.load(Ordering::SeqCst), threads.size());
+    }
+
+    #[test]
+    fn test_drop() {
+        let start = Instant::now();
+        let threads =
+            ResizableRuntime::new(4, "test", Box::new(replace_pool_rule), Box::new(|_| {}));
+        let handle = threads.handle();
+        let handle_clone = handle.clone();
+        handle.spawn(async {
+            future::pending::<()>().await;
+        });
+        let thread = thread::spawn(move || {
+            handle_clone.block_on(async {
+                future::pending::<()>().await;
+            });
+        });
+        drop(threads);
+        handle.spawn(async {
+            future::pending::<()>().await;
+        });
+        handle.block_on(async {
+            future::pending::<()>().await;
+        });
+        thread.join().unwrap();
+
+        assert!(Instant::now() - start < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn test_multi_tasks() {
+        let threads = Arc::new(ResizableRuntime::new(
+            8,
+            "test",
+            Box::new(replace_pool_rule),
+            Box::new(|_| {}),
+        ));
+        let handle = threads.handle();
+
+        let handles: Vec<_> = (0..2000)
+            .map(|i| {
+                let runtime_handle = handle.clone();
+                thread::spawn(move || {
+                    if i % 2 == 0 {
+                        runtime_handle.block_on(async move {
+                            sleep(Duration::from_millis(500));
+                            println!("Thread {} finished", i);
+                        });
+                    } else {
+                        runtime_handle.spawn(async move {
+                            sleep(Duration::from_millis(500));
+                            println!("Thread {} finished", i);
+                        })
+                    }
+                })
+            })
+            .collect();
+
+        // Wait for all threads to complete
+        for handle in handles {
+            handle.join().expect("Thread panicked");
+        }
     }
 }

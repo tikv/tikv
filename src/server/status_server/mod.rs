@@ -4,6 +4,8 @@ mod metrics;
 /// Provides profilers for TiKV.
 mod profile;
 
+pub mod lite;
+
 use std::{
     env::args,
     error::Error as StdError,
@@ -457,13 +459,8 @@ where
     pub fn listening_addr(&self) -> SocketAddr {
         self.addr.unwrap()
     }
-}
 
-impl<R> StatusServer<R>
-where
-    R: 'static + Send + RaftExtension + Clone,
-{
-    fn dump_async_trace() -> hyper::Result<Response<Body>> {
+    pub fn dump_async_trace() -> hyper::Result<Response<Body>> {
         Ok(make_response(
             StatusCode::OK,
             tracing_active_tree::layer::global().fmt_bytes_with(|t, buf| {
@@ -474,6 +471,32 @@ where
         ))
     }
 
+    fn metrics_to_resp(req: Request<Body>, should_simplify: bool) -> hyper::Result<Response<Body>> {
+        let gz_encoding = client_accept_gzip(&req);
+        let metrics = if gz_encoding {
+            // gzip can reduce the body size to less than 1/10.
+            let mut encoder = GzEncoder::new(vec![], Compression::default());
+            dump_to(&mut encoder, should_simplify);
+            encoder.finish().unwrap()
+        } else {
+            dump(should_simplify).into_bytes()
+        };
+        let mut resp = Response::new(metrics.into());
+        resp.headers_mut()
+            .insert(CONTENT_TYPE, HeaderValue::from_static(TEXT_FORMAT));
+        if gz_encoding {
+            resp.headers_mut()
+                .insert(CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+        }
+
+        Ok(resp)
+    }
+}
+
+impl<R> StatusServer<R>
+where
+    R: 'static + Send + RaftExtension + Clone,
+{
     fn handle_pause_grpc(
         mut grpc_service_mgr: GrpcServiceManager,
     ) -> hyper::Result<Response<Body>> {
@@ -585,24 +608,7 @@ where
         mgr: &ConfigController,
     ) -> hyper::Result<Response<Body>> {
         let should_simplify = mgr.get_current().server.simplify_metrics;
-        let gz_encoding = client_accept_gzip(&req);
-        let metrics = if gz_encoding {
-            // gzip can reduce the body size to less than 1/10.
-            let mut encoder = GzEncoder::new(vec![], Compression::default());
-            dump_to(&mut encoder, should_simplify);
-            encoder.finish().unwrap()
-        } else {
-            dump(should_simplify).into_bytes()
-        };
-        let mut resp = Response::new(metrics.into());
-        resp.headers_mut()
-            .insert(CONTENT_TYPE, HeaderValue::from_static(TEXT_FORMAT));
-        if gz_encoding {
-            resp.headers_mut()
-                .insert(CONTENT_ENCODING, HeaderValue::from_static("gzip"));
-        }
-
-        Ok(resp)
+        Self::metrics_to_resp(req, should_simplify)
     }
 
     fn start_serve<I, C>(&mut self, builder: HyperBuilder<I>)
