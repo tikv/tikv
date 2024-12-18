@@ -189,18 +189,30 @@ impl Sink {
     }
 
     async fn send_all(&mut self, events: Vec<CdcEvent>) -> StdResult<(), SendError> {
-        let now = Instant::now_coarse();
         let mut bytes = 0;
+        let res = self.send_all_impl(&mut bytes, events).await;
+        if res.is_err() {
+            self.memory_quota.free(bytes);
+        }
+        res
+    }
+
+    async fn send_all_impl(
+        &mut self,
+        bytes: &mut usize,
+        events: Vec<CdcEvent>,
+    ) -> StdResult<(), SendError> {
+        let now = Instant::now_coarse();
         for event in events {
-            bytes += event.size();
-            let event = ObservedEvent::new(now, event, bytes);
+            let size = event.size();
+            self.memory_quota.alloc(size)?;
+            *bytes += size;
+            let event = ObservedEvent::new(now, event, size);
             if let Err(e) = self.tx.feed(event).await {
-                self.memory_quota.free(bytes);
                 return Err(SendError::from(e));
             }
         }
         if let Err(e) = self.tx.flush().await {
-            self.memory_quota.free(bytes);
             return Err(SendError::from(e));
         }
         Ok(())
@@ -422,6 +434,7 @@ pub mod tests {
 
     use super::*;
 
+    /// TestSink is just like `Sink`, but only for tests.
     pub struct TestSink(pub Sink);
     impl TestSink {
         pub async fn send_all(&mut self, events: Vec<CdcEvent>) -> StdResult<(), SendError> {
