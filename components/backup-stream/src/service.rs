@@ -44,7 +44,7 @@ impl From<RegionIdWithVersion> for RegionIdentity {
 impl LogBackup for BackupStreamGrpcService {
     fn flush_now(
         &mut self,
-        ctx: grpcio::RpcContext,
+        ctx: grpcio::RpcContext<'_>,
         _req: FlushNowRequest,
         sink: grpcio::UnarySink<FlushNowResponse>,
     ) {
