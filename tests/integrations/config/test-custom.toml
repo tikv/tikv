@@ -105,8 +105,8 @@ enable-ttl = true
 ttl-check-poll-interval = "0s"
 txn-status-cache-capacity = 1000
 memory-quota = "123KB"
-max-ts-allowance-secs = 333
-max-ts-sync-interval-secs = 44
+max-ts-drift-allowance = "333s"
+max-ts-sync-interval = "44s"
 action-on-invalid-max-ts = "error"
 
 [storage.block-cache]

@@ -108,10 +108,10 @@ pub struct Config {
     pub txn_status_cache_capacity: usize,
     pub memory_quota: ReadableSize,
     /// Maximum max_ts deviation allowed from PD timestamp
-    pub max_ts_allowance_secs: u64,
+    pub max_ts_drift_allowance: ReadableDuration,
     /// How often to refresh the max_ts limit from PD
     #[online_config(skip)]
-    pub max_ts_sync_interval_secs: u64,
+    pub max_ts_sync_interval: ReadableDuration,
     pub action_on_invalid_max_ts: String,
     #[online_config(submodule)]
     pub flow_control: FlowControlConfig,
@@ -148,8 +148,8 @@ impl Default for Config {
             io_rate_limit: IoRateLimitConfig::default(),
             background_error_recovery_window: ReadableDuration::hours(1),
             memory_quota: DEFAULT_TXN_MEMORY_QUOTA_CAPACITY,
-            max_ts_allowance_secs: 60,
-            max_ts_sync_interval_secs: 10,
+            max_ts_drift_allowance: ReadableDuration::secs(60),
+            max_ts_sync_interval: ReadableDuration::secs(15),
             action_on_invalid_max_ts: DEFAULT_ACTION_ON_INVALID_MAX_TS.into(),
         }
     }
@@ -230,13 +230,13 @@ impl Config {
             self.memory_quota = self.scheduler_pending_write_threshold;
         }
 
-        if self.max_ts_allowance_secs < self.max_ts_sync_interval_secs {
-            warn!(
-                "storage.max-ts-allowance-secs is smaller than storage.max-ts-sync-interval-secs, \
-                increase to {}",
-                self.max_ts_sync_interval_secs,
+        if self.max_ts_drift_allowance <= self.max_ts_sync_interval {
+            let msg = format!(
+                "storage.max-ts-drift-allowance {:?} is smaller than or equal to storage.max-ts-sync-interval {:?}",
+                self.max_ts_drift_allowance, self.max_ts_sync_interval,
             );
-            self.max_ts_allowance_secs = self.max_ts_sync_interval_secs;
+            error!("{}", msg);
+            return Err(msg.into());
         }
 
         if let Err(e) = concurrency_manager::ActionOnInvalidMaxTs::try_from(

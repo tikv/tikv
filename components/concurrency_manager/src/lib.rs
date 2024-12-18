@@ -56,7 +56,7 @@ const DEFAULT_LIMIT_VALID_DURATION: Duration = Duration::from_secs(60);
 // 1. tolerate temporary issues in updating the limit.
 // 2. avoid long-term blocking of max_ts update caused by network partition
 //    between TiKV and PD.
-pub const LIMIT_VALID_TIME_MULTIPLIER: u64 = 3;
+pub const LIMIT_VALID_TIME_MULTIPLIER: u32 = 3;
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 struct MaxTsLimit {

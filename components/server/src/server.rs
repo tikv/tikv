@@ -404,9 +404,7 @@ where
         let latest_ts = block_on(pd_client.get_tso()).expect("failed to get timestamp from PD");
         let concurrency_manager = ConcurrencyManager::new_with_config(
             latest_ts,
-            Duration::from_secs(
-                config.storage.max_ts_sync_interval_secs * LIMIT_VALID_TIME_MULTIPLIER,
-            ),
+            (config.storage.max_ts_sync_interval * LIMIT_VALID_TIME_MULTIPLIER).into(),
             config
                 .storage
                 .action_on_invalid_max_ts
@@ -1171,8 +1169,7 @@ where
         let cm = self.concurrency_manager.clone();
         let pd_client = self.pd_client.clone();
 
-        let max_ts_sync_interval =
-            Duration::from_secs(self.core.config.storage.max_ts_sync_interval_secs);
+        let max_ts_sync_interval = self.core.config.storage.max_ts_sync_interval.into();
         let cfg_controller = self.cfg_controller.as_ref().unwrap().clone();
         self.core
             .background_worker
@@ -1180,7 +1177,7 @@ where
                 let cm = cm.clone();
                 let pd_client = pd_client.clone();
                 let allowance_ms =
-                    cfg_controller.get_current().storage.max_ts_allowance_secs * 1000;
+                    cfg_controller.get_current().storage.max_ts_drift_allowance.as_millis();
 
                 async move {
                     let pd_tso = pd_client.get_tso().await;
