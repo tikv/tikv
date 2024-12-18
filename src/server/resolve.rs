@@ -120,6 +120,7 @@ where
                     RESOLVE_STORE_COUNTER_STATIC.not_found.inc();
                     info!("resolve store not found"; "store_id" => store_id);
                     self.router.report_store_maybe_tombstone(store_id);
+                    return Err(Error::StoreTombstone(store_id));
                 }
                 return Err(box_err!(e));
             }
@@ -230,6 +231,7 @@ mod tests {
     use std::{net::SocketAddr, ops::Sub, str::FromStr, sync::Arc, thread, time::Duration};
 
     use collections::HashMap;
+    use grpcio::{Error as GrpcError, RpcStatus, RpcStatusCode};
     use kvproto::metapb;
     use pd_client::{PdClient, Result};
     use tikv_kv::FakeExtension;
@@ -244,7 +246,15 @@ mod tests {
     }
 
     impl PdClient for MockPdClient {
-        fn get_store(&self, _: u64) -> Result<metapb::Store> {
+        fn get_store(&self, store_id: u64) -> Result<metapb::Store> {
+            if store_id == u64::MAX {
+                return Err(pd_client::Error::Grpc(GrpcError::RpcFailure(
+                    RpcStatus::with_message(
+                        RpcStatusCode::UNAVAILABLE,
+                        format!("invalid store ID {}, not found", store_id,),
+                    ),
+                )));
+            }
             if self.store.get_state() == metapb::StoreState::Tombstone {
                 // Simulate the behavior of `get_store` in pd client.
                 return Err(pd_client::Error::StoreTombstone(format!(
@@ -303,6 +313,18 @@ mod tests {
         let store = new_store(STORE_ADDR, metapb::StoreState::Tombstone);
         let runner = new_runner(store);
         runner.get_address(0).unwrap_err();
+    }
+
+    #[test]
+    fn test_resolve_store_with_not_found_err() {
+        let mut store = new_store(STORE_ADDR, metapb::StoreState::default());
+        store.set_id(u64::MAX);
+        let store_id = store.get_id();
+        let runner = new_runner(store);
+        let result = runner.get_address(store_id).unwrap_err();
+        if let Error::StoreTombstone(id) = result {
+            assert_eq!(store_id, id);
+        }
     }
 
     #[test]
