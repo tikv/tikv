@@ -58,7 +58,7 @@ const DEFAULT_LIMIT_VALID_DURATION: Duration = Duration::from_secs(60);
 //    between TiKV and PD.
 pub const LIMIT_VALID_TIME_MULTIPLIER: u64 = 3;
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 struct MaxTsLimit {
     limit: TimeStamp,
     update_time: Instant,
@@ -250,14 +250,27 @@ impl ConcurrencyManager {
             return;
         }
 
-        let current = self.max_ts_limit.load();
-        if limit.into_inner() > current.limit.into_inner() {
+        loop {
+            let current = self.max_ts_limit.load();
+
+            if limit.into_inner() <= current.limit.into_inner() {
+                break;
+            }
+
             let new_state = MaxTsLimit {
                 limit,
                 update_time: self.time_provider.now(),
             };
-            self.max_ts_limit.store(new_state);
-            MAX_TS_LIMIT_GAUGE.set(limit.into_inner() as i64);
+
+            match self.max_ts_limit.compare_exchange(current, new_state) {
+                Ok(_) => {
+                    MAX_TS_LIMIT_GAUGE.set(limit.into_inner() as i64);
+                    break;
+                }
+                Err(_) => {
+                    continue;
+                }
+            }
         }
     }
 
