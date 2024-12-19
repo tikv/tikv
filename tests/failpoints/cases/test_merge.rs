@@ -14,6 +14,7 @@ use engine_traits::{Peekable, CF_RAFT};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
     kvrpcpb::{PrewriteRequestPessimisticAction::*, *},
+    raft_cmdpb::{self, RaftCmdRequest},
     raft_serverpb::{PeerState, RaftMessage, RegionLocalState},
     tikvpb::TikvClient,
 };
@@ -2305,6 +2306,25 @@ fn test_raft_log_gc_after_merge() {
     rx.recv_timeout(Duration::from_secs(1)).unwrap();
 
     let raft_router = cluster.get_router(1).unwrap();
+
+    // send a raft cmd to test when peer fsm is closed, this cmd will still be
+    // handled.
+    let cmd = {
+        let mut cmd = RaftCmdRequest::default();
+        let mut req = raft_cmdpb::Request::default();
+        req.set_read_index(raft_cmdpb::ReadIndexRequest::default());
+        cmd.mut_requests().push(req);
+        cmd.mut_header().region_id = 1;
+        cmd
+    };
+    let (tx, rx) = std::sync::mpsc::channel();
+    let callback = Callback::read(Box::new(move |req| {
+        tx.send(req).unwrap();
+    }));
+    let cmd_req = RaftCommand::new(cmd, callback);
+    raft_router.send_raft_command(cmd_req).unwrap();
+
+    // send a casual msg that can trigger panic after peer fms closed.
     raft_router
         .send_casual_msg(1, CasualMessage::ForceCompactRaftLogs)
         .unwrap();
@@ -2314,4 +2334,7 @@ fn test_raft_log_gc_after_merge() {
     // wait some time for merge finish.
     std::thread::sleep(Duration::from_secs(1));
     must_get_equal(&cluster.get_engine(1), b"k3", b"v3");
+
+    let resp = rx.recv().unwrap();
+    assert!(resp.response.get_header().has_error());
 }

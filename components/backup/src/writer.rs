@@ -106,7 +106,7 @@ impl<W: SstWriter + 'static> Writer<W> {
         self,
         name: &str,
         cf: CfNameWrap,
-        limiter: Limiter,
+        rate_limiter: Limiter,
         storage: &dyn ExternalStorage,
         cipher: &CipherInfo,
     ) -> Result<File> {
@@ -132,7 +132,7 @@ impl<W: SstWriter + 'static> Writer<W> {
             .write(
                 &file_name,
                 // AllowStdIo here only introduces the Sha256 reader and an in-memory sst reader.
-                UnpinReader(Box::new(limiter.limit(AllowStdIo::new(reader)))),
+                UnpinReader(Box::new(rate_limiter.limit(AllowStdIo::new(reader)))),
                 size,
             )
             .await?;
@@ -162,7 +162,7 @@ impl<W: SstWriter + 'static> Writer<W> {
 
 pub struct BackupWriterBuilder<EK: KvEngine> {
     store_id: u64,
-    limiter: Limiter,
+    rate_limiter: Limiter,
     region: Region,
     db: EK,
     compression_type: Option<SstCompressionType>,
@@ -174,7 +174,7 @@ pub struct BackupWriterBuilder<EK: KvEngine> {
 impl<EK: KvEngine> BackupWriterBuilder<EK> {
     pub fn new(
         store_id: u64,
-        limiter: Limiter,
+        rate_limiter: Limiter,
         region: Region,
         db: EK,
         compression_type: Option<SstCompressionType>,
@@ -184,7 +184,7 @@ impl<EK: KvEngine> BackupWriterBuilder<EK> {
     ) -> BackupWriterBuilder<EK> {
         Self {
             store_id,
-            limiter,
+            rate_limiter,
             region,
             db,
             compression_type,
@@ -203,7 +203,7 @@ impl<EK: KvEngine> BackupWriterBuilder<EK> {
             &name,
             self.compression_type,
             self.compression_level,
-            self.limiter.clone(),
+            self.rate_limiter.clone(),
             self.sst_max_size,
             self.cipher.clone(),
         )
@@ -215,7 +215,7 @@ pub struct BackupWriter<EK: KvEngine> {
     name: String,
     default: Writer<<EK as SstExt>::SstWriter>,
     write: Writer<<EK as SstExt>::SstWriter>,
-    limiter: Limiter,
+    rate_limiter: Limiter,
     sst_max_size: u64,
     cipher: CipherInfo,
 }
@@ -227,7 +227,7 @@ impl<EK: KvEngine> BackupWriter<EK> {
         name: &str,
         compression_type: Option<SstCompressionType>,
         compression_level: i32,
-        limiter: Limiter,
+        rate_limiter: Limiter,
         sst_max_size: u64,
         cipher: CipherInfo,
     ) -> Result<BackupWriter<EK>> {
@@ -250,7 +250,7 @@ impl<EK: KvEngine> BackupWriter<EK> {
             name,
             default: Writer::new(default),
             write: Writer::new(write),
-            limiter,
+            rate_limiter,
             sst_max_size,
             cipher,
         })
@@ -298,7 +298,7 @@ impl<EK: KvEngine> BackupWriter<EK> {
                 .save_and_build_file(
                     &self.name,
                     CF_DEFAULT.into(),
-                    self.limiter.clone(),
+                    self.rate_limiter.clone(),
                     storage,
                     &self.cipher,
                 )
@@ -312,7 +312,7 @@ impl<EK: KvEngine> BackupWriter<EK> {
                 .save_and_build_file(
                     &self.name,
                     CF_WRITE.into(),
-                    self.limiter.clone(),
+                    self.rate_limiter.clone(),
                     storage,
                     &self.cipher,
                 )

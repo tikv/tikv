@@ -38,7 +38,7 @@ use tikv_kv::{Engine, LocalTablets, Modify, WriteData};
 use tikv_util::{
     config::ReadableSize,
     future::{create_stream_with_buffer, paired_future_callback},
-    resizable_threadpool::{ResizableRuntime, ResizableRuntimeHandle},
+    resizable_threadpool::{DeamonRuntimeHandle, ResizableRuntime},
     sys::disk::{get_disk_status, DiskUsage},
     time::{Instant, Limiter},
     HandyRwLock,
@@ -119,8 +119,10 @@ pub struct ImportSstService<E: Engine> {
     cfg: ConfigManager,
     tablets: LocalTablets<E::Local>,
     engine: E,
-    // TODO: (Ris) change to ResizableRuntime
-    threads: ResizableRuntimeHandle,
+    threads: DeamonRuntimeHandle,
+    // threads_ref is for safely cleanning
+    #[allow(dead_code)]
+    threads_ref: Arc<Mutex<ResizableRuntime>>,
     importer: Arc<SstImporter<E::Local>>,
     limiter: Limiter,
     ingest_latch: Arc<IngestLatch>,
@@ -344,17 +346,20 @@ impl<E: Engine> ImportSstService<E> {
                 .build()
         };
 
-        let mut threads =
-            ResizableRuntime::new("import", Box::new(create_tokio_runtime), Box::new(|_| ()));
-        // There would be 4 initial threads running forever.
-        threads.adjust_with(4);
-        let handle = ResizableRuntimeHandle::new(threads);
+        let threads = ResizableRuntime::new(
+            4,
+            "impwkr",
+            Box::new(create_tokio_runtime),
+            Box::new(|_| ()),
+        );
+
+        let handle = threads.handle();
+        let threads_clone = Arc::new(Mutex::new(threads));
         if let LocalTablets::Singleton(tablet) = &tablets {
             importer.start_switch_mode_check(&handle.clone(), Some(tablet.clone()));
         } else {
             importer.start_switch_mode_check(&handle.clone(), None);
         }
-
         let writer = raft_writer::ThrottledTlsEngineWriter::default();
         let gc_handle = writer.clone();
         handle.spawn(async move {
@@ -362,16 +367,17 @@ impl<E: Engine> ImportSstService<E> {
                 tokio::time::sleep(WRITER_GC_INTERVAL).await;
             }
         });
-
-        let cfg_mgr = ConfigManager::new(cfg, handle.clone());
+        let num_threads = cfg.num_threads;
+        let cfg_mgr = ConfigManager::new(cfg, Arc::downgrade(&threads_clone));
         handle.spawn(Self::tick(importer.clone(), cfg_mgr.clone()));
         // Drop the initial pool to accept new tasks
-        handle.adjust_with(cfg_mgr.rl().num_threads);
+        threads_clone.lock().unwrap().adjust_with(num_threads);
 
         ImportSstService {
             cfg: cfg_mgr,
             tablets,
             threads: handle.clone(),
+            threads_ref: threads_clone,
             engine,
             importer,
             limiter: Limiter::new(f64::INFINITY),
@@ -545,7 +551,7 @@ macro_rules! impl_write {
                         Ok(r) => r,
                         Err(e) => return (Err(e), Some(rx)),
                     };
-                    let (meta, resource_limiter) = match first_req {
+                    let (meta, resource_limiter, txn_source) = match first_req {
                         Some(r) => {
                             let limiter = resource_manager.as_ref().and_then(|m| {
                                 m.get_background_resource_limiter(
@@ -555,8 +561,9 @@ macro_rules! impl_write {
                                     r.get_context().get_request_source(),
                                 )
                             });
+                            let txn_source = r.get_context().get_txn_source();
                             match r.chunk {
-                                Some($chunk_ty::Meta(m)) => (m, limiter),
+                                Some($chunk_ty::Meta(m)) => (m, limiter, txn_source),
                                 _ => return (Err(Error::InvalidChunk), Some(rx)),
                             }
                         }
@@ -603,7 +610,7 @@ macro_rules! impl_write {
                         }
                     };
 
-                    let writer = match import.$writer_fn(&*tablet, meta) {
+                    let writer = match import.$writer_fn(&*tablet, meta, txn_source) {
                         Ok(w) => w,
                         Err(e) => {
                             error!("build writer failed {:?}", e);

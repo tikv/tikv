@@ -14,6 +14,7 @@
 #![feature(specialization)]
 #![feature(test)]
 #![feature(const_mut_refs)]
+#![feature(round_ties_even)]
 
 #[macro_use(box_err, box_try, try_opt)]
 extern crate tikv_util;

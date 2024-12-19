@@ -554,7 +554,9 @@ impl WaiterManager {
                 continue;
             }
 
-            if let Some((previous_wait_info, diag_ctx)) = previous_wait_info {
+            if let Some((previous_wait_info, diag_ctx)) = previous_wait_info
+                && previous_wait_info.allow_lock_with_conflict
+            {
                 self.detector_scheduler
                     .clean_up_wait_for(event.start_ts, previous_wait_info);
                 self.detector_scheduler
@@ -678,6 +680,7 @@ pub mod tests {
                 key: Key::from_raw(b""),
                 lock_digest: LockDigest { ts: lock_ts, hash },
                 lock_info: Default::default(),
+                allow_lock_with_conflict: false,
             },
             cancel_callback: Box::new(|_| ()),
             diag_ctx: DiagnosticContext::default(),
@@ -798,6 +801,7 @@ pub mod tests {
                 key: Key::from_raw(&raw_key),
                 lock_digest: lock,
                 lock_info: info.clone(),
+                allow_lock_with_conflict: false,
             },
             cb,
             Instant::now() + Duration::from_millis(3000),
@@ -1202,6 +1206,7 @@ pub mod tests {
                     key: key.to_raw().unwrap(),
                     ..Default::default()
                 },
+                allow_lock_with_conflict: false,
             },
         };
         scheduler.update_wait_for(vec![event]);

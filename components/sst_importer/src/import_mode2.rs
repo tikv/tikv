@@ -8,7 +8,7 @@ use std::{
 use collections::{HashMap, HashSet};
 use futures_util::compat::Future01CompatExt;
 use kvproto::{import_sstpb::Range, metapb::Region};
-use tikv_util::{resizable_threadpool::ResizableRuntimeHandle, timer::GLOBAL_TIMER_HANDLE};
+use tikv_util::{resizable_threadpool::DeamonRuntimeHandle, timer::GLOBAL_TIMER_HANDLE};
 
 use super::Config;
 
@@ -55,7 +55,7 @@ impl ImportModeSwitcherV2 {
         ImportModeSwitcherV2 { inner }
     }
 
-    pub fn start_resizable_threads(&self, executor: &ResizableRuntimeHandle) {
+    pub fn start_resizable_threads(&self, executor: &DeamonRuntimeHandle) {
         // spawn a background future to put regions back into normal mode after timeout
         let inner = self.inner.clone();
         let switcher = Arc::downgrade(&inner);
@@ -162,7 +162,7 @@ mod test {
     type TokioResult<T> = std::io::Result<T>;
 
     fn create_tokio_runtime(_: usize, _: &str) -> TokioResult<Runtime> {
-        tokio::runtime::Builder::new_current_thread()
+        tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
     }
@@ -276,10 +276,9 @@ mod test {
             ..Config::default()
         };
 
-        let mut threads =
-            ResizableRuntime::new("test", Box::new(create_tokio_runtime), Box::new(|_| {}));
-        threads.adjust_with(4);
-        let handle = ResizableRuntimeHandle::new(threads);
+        let threads =
+            ResizableRuntime::new(4, "test", Box::new(create_tokio_runtime), Box::new(|_| {}));
+        let handle = threads.handle();
 
         let switcher = ImportModeSwitcherV2::new(&cfg);
         let mut region = Region::default();

@@ -254,7 +254,7 @@ impl OpenOptionsExt for OpenOptions {
 mod tests {
     use tempfile::Builder;
 
-    use super::{super::*, *};
+    use super::super::*;
 
     #[test]
     fn test_instrumented_file() {

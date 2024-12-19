@@ -20,17 +20,19 @@ use std::{
 };
 
 use collections::HashMap;
+use compact_log_backup::{exec_hooks as compact_log_hooks, execute as compact_log, TraceResultExt};
 use crypto::fips;
 use encryption_export::{
     create_backend, data_key_manager_from_config, DataKeyManager, DecrypterReader, Iv,
 };
-use engine_rocks::get_env;
+use engine_rocks::{get_env, util::new_engine_opt, RocksEngine};
 use engine_traits::Peekable;
 use file_system::calc_crc32;
 use futures::{executor::block_on, future::try_join_all};
 use gag::BufferRedirect;
 use grpcio::{CallOption, ChannelBuilder, Environment};
 use kvproto::{
+    brpb,
     debugpb::{Db as DbType, *},
     encryptionpb::EncryptionMethod,
     kvrpcpb::SplitRegionRequest,
@@ -45,6 +47,7 @@ use raftstore::store::util::build_key_range;
 use regex::Regex;
 use security::{SecurityConfig, SecurityManager};
 use structopt::{clap::ErrorKind, StructOpt};
+use tempfile::TempDir;
 use tikv::{
     config::TikvConfig,
     server::{debug::BottommostLevelCompaction, KvEngineFactoryBuilder},
@@ -67,7 +70,7 @@ fn main() {
     let opt = Opt::from_args();
 
     // Initialize logger.
-    init_ctl_logger(&opt.log_level);
+    init_ctl_logger(&opt.log_level, &opt.log_format);
 
     // Print OpenSSL FIPS mode status.
     fips::log_status();
@@ -384,6 +387,92 @@ fn main() {
                 start_key,
                 end_key,
             );
+        }
+        Cmd::CompactLogBackup {
+            from_ts,
+            until_ts,
+            max_concurrent_compactions: max_compaction_num,
+            storage_base64,
+            compression,
+            compression_level,
+            name,
+            force_regenerate,
+        } => {
+            let tmp_engine =
+                TemporaryRocks::new(&cfg).expect("failed to create temp engine for writing SSTs.");
+            let maybe_external_storage = base64::decode(storage_base64)
+                .map_err(|err| format!("cannot parse base64: {}", err))
+                .and_then(|storage_bytes| {
+                    let mut ext_storage = brpb::StorageBackend::new();
+                    ext_storage
+                        .merge_from_bytes(&storage_bytes)
+                        .map_err(|err| format!("cannot parse bytes as StorageBackend: {}", err))?;
+                    Result::Ok(ext_storage)
+                });
+            let external_storage = match maybe_external_storage {
+                Ok(s) => s,
+                Err(err) => {
+                    clap::Error {
+                        message: format!("(-s, --storage-base64) is invalid: {:?}", err),
+                        kind: ErrorKind::InvalidValue,
+                        info: None,
+                    }
+                    .exit();
+                }
+            };
+            let ccfg = compact_log::ExecutionConfig {
+                from_ts,
+                until_ts,
+                compression,
+                compression_level,
+            };
+            let exec = compact_log::Execution {
+                out_prefix: ccfg.recommended_prefix(&name),
+                cfg: ccfg,
+                max_concurrent_subcompaction: max_compaction_num,
+                external_storage,
+                db: Some(tmp_engine.rocks),
+            };
+
+            use tikv::server::status_server::lite::Server as StatusServerLite;
+            struct ExportTiKVInfo {
+                cfg: TikvConfig,
+            }
+            impl compact_log::hooking::ExecHooks for ExportTiKVInfo {
+                async fn before_execution_started(
+                    &mut self,
+                    cx: compact_log::hooking::BeforeStartCtx<'_>,
+                ) -> compact_log_backup::Result<()> {
+                    use compact_log_backup::OtherErrExt;
+                    tikv_util::info!("Welcome to TiKV control: compact log backup.");
+                    tikv_util::info!("TiKV version info."; "info_string" => tikv::tikv_version_info(None));
+
+                    let srv = StatusServerLite::new(Arc::new(self.cfg.security.clone()));
+                    let _enter = cx.async_rt.enter();
+                    let hnd = srv
+                        .start(&self.cfg.server.status_addr)
+                        .adapt_err()
+                        .annotate("failed to start status server lite")?;
+                    tikv_util::info!("Started status server lite."; "at" => %hnd.address());
+                    Ok(())
+                }
+            }
+
+            let log_to_term = compact_log_hooks::observability::Observability::default();
+            let save_meta = compact_log_hooks::save_meta::SaveMeta::default();
+            let with_lock = compact_log_hooks::consistency::StorageConsistencyGuard::default();
+            let with_status_server = ExportTiKVInfo { cfg: cfg.clone() };
+            let checkpoint = if force_regenerate {
+                None
+            } else {
+                Some(compact_log_hooks::checkpoint::Checkpoint::default())
+            };
+            let hooks = (
+                ((log_to_term, checkpoint), with_status_server),
+                (save_meta, with_lock),
+            );
+            exec.run(hooks)
+                .expect("failed to execute compact-log-backup")
         }
         // Commands below requires either the data dir or the host.
         cmd => {
@@ -1078,6 +1167,43 @@ fn read_fail_file(path: &str) -> Vec<(String, String)> {
         ))
     }
     list
+}
+
+/// A temporary RocksDB instance.
+/// Its content will be saved at a temp dir, so don't put too many stuffs into
+/// it. The configurations are loaded to this instance, so it can be used for
+/// constructing / reading SST files.
+struct TemporaryRocks {
+    rocks: RocksEngine,
+    #[allow(dead_code)]
+    tmp: TempDir,
+}
+
+impl TemporaryRocks {
+    fn new(cfg: &TikvConfig) -> Result<Self, String> {
+        let tmp = TempDir::new().map_err(|v| format!("failed to create tmp dir: {}", v))?;
+        let opt = build_rocks_opts(cfg);
+        let cf_opts = cfg.rocksdb.build_cf_opts(
+            &cfg.rocksdb
+                .build_cf_resources(cfg.storage.block_cache.build_shared_cache()),
+            None,
+            cfg.storage.api_version(),
+            None,
+            cfg.storage.engine,
+        );
+        let rocks = new_engine_opt(
+            tmp.path().to_str().ok_or_else(|| {
+                format!(
+                    "temp path isn't valid utf-8 string: {}",
+                    tmp.path().display()
+                )
+            })?,
+            opt,
+            cf_opts,
+        )
+        .map_err(|v| format!("failed to build engine: {}", v))?;
+        Ok(Self { rocks, tmp })
+    }
 }
 
 fn build_rocks_opts(cfg: &TikvConfig) -> engine_rocks::RocksDbOptions {

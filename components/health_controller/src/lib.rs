@@ -30,6 +30,8 @@
 //!   that are specific to different modules, increasing the complexity and
 //!   possibility to misuse of `HealthController`.
 
+#![feature(div_duration)]
+
 pub mod reporters;
 pub mod slow_score;
 pub mod trend;
