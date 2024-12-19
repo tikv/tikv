@@ -5598,6 +5598,39 @@ def RocksDB() -> RowPanel:
                     ),
                 ],
             ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Compactions running jobs",
+                description="The count of running compaction and flush jobs",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_engine_num_running_compactions",
+                            label_selectors=[
+                                'db="$db"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="compactions",
+                        additional_groupby=True,
+                    ),
+                    target(
+                        expr=expr_sum(
+                            "tikv_engine_num_running_flushes",
+                            label_selectors=[
+                                'db="$db"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="flushes",
+                        additional_groupby=True,
+                    ),
+                ],
+            ),
             graph_panel(
                 title="Compaction Job Size(files)",
                 description="How many sst files are compacted in a compaction job",
