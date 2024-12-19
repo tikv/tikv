@@ -517,7 +517,10 @@ mod all {
         suite.must_register_task(1, "force_flush");
         let recs = run_async_test(suite.write_records(0, 128, 1));
         suite.for_each_log_backup_cli(|_id, c| {
-            c.flush_now(Default::default()).unwrap();
+            let res = c.flush_now(Default::default()).unwrap();
+            assert_eq!(res.results.len(), 1);
+            assert!(res.results[0].error_message.is_empty(), "{:?}", res);
+            assert!(res.results[0].success, "{:?}", res);
         });
 
         suite.check_for_write_records(
