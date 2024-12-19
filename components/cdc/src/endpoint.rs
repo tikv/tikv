@@ -440,20 +440,20 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
     ) -> Endpoint<T, E, S> {
         let workers = Builder::new_multi_thread()
-            .thread_name("cdcob")
+            .thread_name("cdc-main-workers")
             .worker_threads(2)
             .with_sys_hooks()
             .build()
             .unwrap();
 
         let scan_workers = Builder::new_multi_thread()
-            .thread_name("cdcwkr")
+            .thread_name("cdc-scan-workers")
             .worker_threads(config.incremental_scan_threads)
             .with_sys_hooks()
             .build()
             .unwrap();
         let tso_worker = Builder::new_multi_thread()
-            .thread_name("tso")
+            .thread_name("cdc-tso")
             .worker_threads(config.tso_worker_threads)
             .enable_time()
             .with_sys_hooks()
@@ -695,6 +695,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         let downstream_state = downstream.get_state();
         let downstream_sink = downstream.sink.clone();
         let observed_range = downstream.observed_range.clone();
+        println!("on register is called.......................");
 
         // The connection can be deregistered by some internal errors. Clients will
         // always be notified by closing the GRPC server stream, so it's OK to drop
@@ -710,6 +711,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 return;
             }
         };
+        println!("on register is called, gets a conn.......................");
 
         // Check if the cluster id matches if supported.
         if conn.features.contains(FeatureGate::VALIDATE_CLUSTER_ID) {
@@ -724,6 +726,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 return;
             }
         }
+        println!("on register is called, pass cluster valid.......................");
 
         if !validate_kv_api(kv_api, self.api_version) {
             error!("cdc RawKv is supported by api-version 2 only. TxnKv is not supported now.");
@@ -734,6 +737,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             let _ = block_on(downstream_sink.cancel_by_error(err_event));
             return;
         }
+        println!("on register is called, pass valid api.......................");
 
         let scan_task_counter = self.scan_task_counter.clone();
         let scan_task_count = scan_task_counter.fetch_add(1, Ordering::Relaxed);
@@ -755,10 +759,12 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             let _ = block_on(downstream_sink.cancel_by_error(err_event));
             return;
         }
+        println!("on register is called, pass scan.......................");
 
         let txn_extra_op = match self.store_meta.lock().unwrap().reader(region_id) {
             Some(reader) => reader.txn_extra_op.clone(),
             None => {
+                println!("region not found...........................");
                 error!("cdc register for a not found region"; "region_id" => region_id);
                 let mut err_event = EventError::default();
                 err_event.mut_region_not_found().region_id = region_id;
@@ -778,12 +784,14 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 "conn_id" => ?conn_id,
                 "req_id" => ?request_id,
                 "downstream_id" => ?downstream_id);
+            println!("duplicate register");
             return;
         }
 
         let delegate = match self.capture_regions.entry(region_id) {
             HashMapEntry::Occupied(e) => e.get().clone(),
             HashMapEntry::Vacant(e) => {
+                println!("create a delegate");
                 let mut d = Delegate::new(
                     region_id,
                     self.scheduler.clone(),
@@ -793,7 +801,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 );
                 let delegate = d.meta();
                 e.insert(delegate.clone());
-                self.workers.spawn(async move { drop(d.handle_tasks()) });
+                self.workers.spawn(async move { d.handle_tasks().await });
 
                 let old_ob = self.observer.subscribe_region(
                     region_id,
@@ -849,12 +857,14 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
 
         let cdc_handle = self.cdc_handle.clone();
         self.scan_workers.spawn(async move {
+            println!("wait for subscribe is handled");
             if fut.await.is_err() {
                 info!("cdc initialize is canceled before start"; "region_id" => region_id,
                     "conn_id" => ?init.conn_id, "request_id" => ?init.request_id);
                 drop(release_scan_task_counter);
                 return;
             }
+            println!("starts to initialize");
             CDC_SCAN_TASKS.with_label_values(&["total"]).inc();
             match init.initialize(cdc_handle).await {
                 Ok(()) => {
@@ -1178,7 +1188,7 @@ mod tests {
         delegate::{
             on_init_downstream, post_init_downstream, DownstreamState, MiniLock, ObservedRange,
         },
-        recv_timeout,
+        recv_timeout, recv_events_timely, recv_resolved_ts_timely,
     };
 
     struct TestEndpointSuite {
@@ -1220,6 +1230,38 @@ mod tests {
 
         fn raft_rx(&self, region_id: u64) -> &tikv_util::mpsc::Receiver<PeerMsg<RocksEngine>> {
             self.raft_rxs.get(&region_id).unwrap()
+        }
+
+        fn recv_task_timely(&mut self) -> Task {
+            self.task_rx.recv_timeout(Duration::from_millis(500))
+                .unwrap()
+                .unwrap()
+        }
+
+        fn recv_no_task_timely(&mut self) {
+            let _ = self.task_rx.recv_timeout(Duration::from_millis(100))
+                .unwrap_err();
+        }
+
+        fn init_downstream(&self, region_id: u64, downstream_id: DownstreamId) {
+            let delegate = self.capture_regions.get(&region_id).unwrap();
+            let observe_id = delegate.handle.id;
+            let _ = delegate.sched.unbounded_send(DelegateTask::InitDownstream {
+                    observe_id,
+                    downstream_id,
+                    build_resolver: Default::default(),
+                    cb: Box::new(|| return),
+                });
+        }
+
+        fn finish_scan_locks(&self, region_id: u64, locks: BTreeMap<Key, MiniLock>) {
+            let delegate = self.capture_regions.get(&region_id).unwrap();
+            let observe_id = delegate.handle.id;
+            let _ = delegate.sched.unbounded_send(DelegateTask::FinishScanLocks {
+                    observe_id,
+                    region: Default::default(),
+                    locks,
+                });
         }
     }
 
@@ -1346,15 +1388,11 @@ mod tests {
             request: req.clone(),
             downstream,
         });
-        let events: Vec<_> = block_on(rx.next()).unwrap().take_events().into();
+        let events = recv_events_timely(&mut rx);
         assert_eq!(events.len(), 1);
         assert!(events[0].has_error());
         assert!(events[0].get_error().has_compatibility());
-
-        suite
-            .task_rx
-            .recv_timeout(Duration::from_millis(100))
-            .unwrap_err();
+        suite.recv_no_task_timely();
 
         // Compatibility error.
         let downstream = Downstream::new(
@@ -1372,15 +1410,11 @@ mod tests {
             request: req.clone(),
             downstream,
         });
-        let mut e = block_on(rx.next()).unwrap();
-        let events: Vec<_> = e.take_events().into();
+        let events = recv_events_timely(&mut rx);
         assert_eq!(events.len(), 1);
         assert!(events[0].has_error());
         assert!(events[0].get_error().has_compatibility());
-        suite
-            .task_rx
-            .recv_timeout(Duration::from_millis(100))
-            .unwrap_err();
+        suite.recv_no_task_timely();
 
         suite.api_version = ApiVersion::V2;
         // Compatibility error.
@@ -1399,15 +1433,11 @@ mod tests {
             request: req,
             downstream,
         });
-        let mut e = block_on(rx.next()).unwrap();
-        let events: Vec<_> = e.take_events().into();
+        let events = recv_events_timely(&mut rx);
         assert_eq!(events.len(), 1);
         assert!(events[0].has_error());
         assert!(events[0].get_error().has_compatibility());
-        suite
-            .task_rx
-            .recv_timeout(Duration::from_millis(100))
-            .unwrap_err();
+        suite.recv_no_task_timely();
     }
 
     #[test]
@@ -1590,28 +1620,20 @@ mod tests {
             ChangeDataRequestKvApi::TiDb,
             false,
             ObservedRange::default(),
-            DownstreamSink::new(1, RequestId(0), tx),
+            DownstreamSink::new(1, RequestId(0), tx.clone()),
         );
         suite.run(Task::Register {
             request: req,
             downstream,
         });
         assert_eq!(suite.capture_regions.len(), 1);
-
-        // FIXME: test the error.
-        // for _ in 0..5 {
-        //     if let Ok(Some(Task::Deregister(Deregister::Downstream {
-        //         err: Some(Error::Request(err)),
-        //         ..
-        //     }))) = suite.task_rx.recv_timeout(Duration::from_secs(1))
-        //     {
-        //         assert!(!err.has_server_is_busy());
-        //     }
-        // }
+        for _ in 0..5 {
+            suite.recv_no_task_timely();
+        }
     }
 
     #[test]
-    fn test_register() {
+    fn test_registerx() {
         let cfg = CdcConfig {
             min_ts_interval: ReadableDuration(Duration::from_secs(60)),
             ..Default::default()
@@ -1646,10 +1668,6 @@ mod tests {
             downstream,
         });
         assert_eq!(suite.capture_regions.len(), 1);
-        suite
-            .task_rx
-            .recv_timeout(Duration::from_millis(100))
-            .unwrap_err();
 
         // duplicate request error.
         req.set_request_id(1);
@@ -1667,19 +1685,14 @@ mod tests {
             request: req.clone(),
             downstream,
         });
+        assert_eq!(suite.capture_regions.len(), 1);
 
-        let events: Vec<_> = block_on(rx.next()).unwrap().take_events().into();
+        let events: Vec<_> = recv_events_timely(&mut rx);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].region_id, 1);
         assert_eq!(events[0].request_id, 1);
         assert!(events[0].has_error());
         assert!(events[0].get_error().has_duplicate_request());
-
-        assert_eq!(suite.capture_regions.len(), 1);
-        suite
-            .task_rx
-            .recv_timeout(Duration::from_millis(100))
-            .unwrap_err();
 
         // The first scan task of a region is initiated in register, and when it
         // fails, it should send a deregister region task, otherwise the region
@@ -1707,17 +1720,20 @@ mod tests {
         });
         // Region 100 is inserted into capture_regions.
         assert_eq!(suite.capture_regions.len(), 2);
-        let task = suite
-            .task_rx
-            .recv_timeout(Duration::from_millis(100))
-            .unwrap();
-        // match task.unwrap() {
-        //     Task::Deregister(Deregister::Delegate { region_id, err, .. }) => {
-        //         assert_eq!(region_id, 100);
-        //         assert!(matches!(err, Error::Request(_)), "{:?}", err);
-        //     }
-        //     other => panic!("unexpected task {:?}", other),
-        // }
+        match suite.recv_task_timely() {
+            Task::Deregister(Deregister::Downstream { request_id, region_id, .. }) => {
+                assert_eq!(request_id.0, 1);
+                assert_eq!(region_id, 100);
+            }
+            other => panic!("unexpected task {:?}", other),
+        }
+        match suite.recv_task_timely() {
+            Task::Deregister(Deregister::Delegate { region_id, .. }) => {
+                assert_eq!(region_id, 100);
+            }
+            other => panic!("unexpected task {:?}", other),
+        }
+        println!("okkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk");
 
         // Test errors on CaptureChange message.
         req.set_region_id(101);
@@ -1741,20 +1757,25 @@ mod tests {
         let timeout = Duration::from_millis(100);
         let _ = suite.raft_rx(101).recv_timeout(timeout).unwrap();
         assert_eq!(suite.capture_regions.len(), 3);
-        let task = suite.task_rx.recv_timeout(timeout).unwrap();
-        // match task.unwrap() {
-        //     Task::Deregister(Deregister::Downstream { region_id, err, .. })
-        // => {         assert_eq!(region_id, 101);
-        //         assert!(matches!(err, Some(Error::Other(_))), "{:?}", err);
-        //     }
-        //     other => panic!("unexpected task {:?}", other),
-        // }
+        match suite.recv_task_timely() {
+            Task::Deregister(Deregister::Downstream { region_id, .. }) => {
+                assert_eq!(region_id, 101);
+            }
+            other => panic!("unexpected task {:?}", other),
+        }
+        match suite.recv_task_timely() {
+            Task::Deregister(Deregister::Delegate { region_id, .. }) => {
+                assert_eq!(region_id, 101);
+            }
+            other => panic!("unexpected task {:?}", other),
+        }
     }
 
     #[test]
     fn test_too_many_scan_tasks() {
         let cfg = CdcConfig {
             min_ts_interval: ReadableDuration(Duration::from_secs(60)),
+            incremental_scan_threads: 1,
             incremental_scan_concurrency: 1,
             incremental_scan_concurrency_limit: 1,
             ..Default::default()
@@ -1762,10 +1783,6 @@ mod tests {
         let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
 
         // Pause scan task runtime.
-        suite.scan_workers = Builder::new_multi_thread()
-            .worker_threads(1)
-            .build()
-            .unwrap();
         let (pause_tx, pause_rx) = std::sync::mpsc::channel::<()>();
         suite.scan_workers.spawn(async move {
             let _ = pause_rx.recv();
@@ -1819,7 +1836,7 @@ mod tests {
             downstream,
         });
 
-        let events: Vec<_> = block_on(rx.next()).unwrap().take_events().into();
+        let events = recv_events_timely(&mut rx);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].region_id, 1);
         assert_eq!(events[0].request_id, 2);
@@ -1831,9 +1848,8 @@ mod tests {
 
     #[test]
     fn test_raw_causal_min_ts() {
-        let sleep_interval = Duration::from_secs(1);
         let cfg = CdcConfig {
-            min_ts_interval: ReadableDuration(sleep_interval),
+            min_ts_interval: ReadableDuration(Duration::from_millis(100)),
             ..Default::default()
         };
         let ts_provider: Arc<CausalTsProviderImpl> =
@@ -1846,11 +1862,7 @@ mod tests {
             leader_resolver,
             event_time: Instant::now(),
         });
-        suite
-            .task_rx
-            .recv_timeout(Duration::from_millis(1500))
-            .unwrap()
-            .unwrap();
+        suite.recv_task_timely();
         let end_ts = block_on(ts_provider.async_get_ts()).unwrap();
         assert!(end_ts.into_inner() > start_ts.next().into_inner()); // may trigger more than once.
     }
@@ -1888,37 +1900,22 @@ mod tests {
             DownstreamSink::new(1, RequestId(0), tx.clone()),
         );
         let downstream_id = downstream.id;
-        downstream.get_state().store(DownstreamState::Normal);
         suite.run(Task::Register {
             request: req.clone(),
             downstream,
         });
-        let observe_id = suite.capture_regions[&1].handle.id;
-        suite.capture_regions[&1]
-            .sched
-            .unbounded_send(DelegateTask::InitDownstream {
-                observe_id,
-                downstream_id,
-                build_resolver: Default::default(),
-                cb: Box::new(|| {}),
-            });
-
-        suite.capture_regions[&1]
-            .sched
-            .unbounded_send(DelegateTask::FinishScanLocks {
-                observe_id,
-                region: region.clone(),
-                locks: Default::default(),
-            });
+        suite.init_downstream(1, downstream_id);
+        suite.finish_scan_locks(1, Default::default());
         suite.run(Task::MinTs {
             regions: vec![1],
             min_ts: TimeStamp::from(1),
             current_ts: TimeStamp::zero(),
         });
 
-        let mut r = block_on(rx.next()).unwrap().take_resolved_ts();
+        let r = recv_resolved_ts_timely(&mut rx);
         assert_eq!(r.regions, &[1]);
         assert_eq!(r.ts, 1);
+        println!("1 ok........................................................................................");
 
         // Register region 2 to the conn.
         req.set_region_id(2);
@@ -1933,36 +1930,21 @@ mod tests {
             DownstreamSink::new(1, RequestId(0), tx.clone()),
         );
         let downstream_id = downstream.id;
-        downstream.get_state().store(DownstreamState::Normal);
         suite.add_region(2, 100);
         suite.run(Task::Register {
             request: req.clone(),
             downstream,
         });
-        region.set_id(2);
-        let observe_id = suite.capture_regions[&2].handle.id;
-        suite.capture_regions[&2]
-            .sched
-            .unbounded_send(DelegateTask::InitDownstream {
-                observe_id,
-                downstream_id,
-                build_resolver: Default::default(),
-                cb: Box::new(|| {}),
-            });
-        suite.capture_regions[&2]
-            .sched
-            .unbounded_send(DelegateTask::FinishScanLocks {
-                observe_id,
-                region,
-                locks: Default::default(),
-            });
+        suite.init_downstream(2, downstream_id);
+        suite.finish_scan_locks(2, Default::default());
         suite.run(Task::MinTs {
             regions: vec![1, 2],
             min_ts: TimeStamp::from(2),
             current_ts: TimeStamp::zero(),
         });
+        println!("2 ok........................................................................................");
 
-        let mut r = block_on(rx.next()).unwrap().take_resolved_ts();
+        let mut r = recv_resolved_ts_timely(&mut rx);
         r.regions.as_mut_slice().sort_unstable();
         assert_eq!(r.regions, &[1, 2]);
         assert_eq!(r.ts, 2);
@@ -1989,46 +1971,32 @@ mod tests {
             DownstreamSink::new(3, RequestId(3), tx.clone()),
         );
         let downstream_id = downstream.id;
-        downstream.get_state().store(DownstreamState::Normal);
         suite.add_region(3, 100);
         suite.run(Task::Register {
             request: req,
             downstream,
         });
-        region.set_id(3);
-        let observe_id = suite.capture_regions[&3].handle.id;
-        suite.capture_regions[&3]
-            .sched
-            .unbounded_send(DelegateTask::InitDownstream {
-                observe_id,
-                downstream_id,
-                build_resolver: Default::default(),
-                cb: Box::new(|| {}),
-            });
-        suite.capture_regions[&3]
-            .sched
-            .unbounded_send(DelegateTask::FinishScanLocks {
-                observe_id,
-                region,
-                locks: Default::default(),
-            });
+        suite.init_downstream(3, downstream_id);
+        suite.finish_scan_locks(3, Default::default());
         suite.run(Task::MinTs {
             regions: vec![1, 2, 3],
             min_ts: TimeStamp::from(3),
             current_ts: TimeStamp::zero(),
         });
 
-        let mut r = block_on(rx.next()).unwrap().take_resolved_ts();
+        let mut r = recv_resolved_ts_timely(&mut rx);
         r.regions.as_mut_slice().sort_unstable();
         assert_eq!(r.regions, &[1, 2]);
         assert_eq!(r.ts, 3);
+        println!("3 ok........................................................................................");
 
-        let events: Vec<_> = block_on(rx.next()).unwrap().take_events().into();
+        let events = recv_events_timely(&mut rx);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].region_id, 3);
         assert_eq!(events[0].request_id, 3);
         assert!(events[0].has_resolved_ts());
         assert_eq!(events[0].get_resolved_ts(), 3);
+        println!("4 ok........................................................................................");
     }
 
     #[test]

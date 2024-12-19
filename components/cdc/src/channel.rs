@@ -425,6 +425,16 @@ where
     tikv_util::future::block_on_timeout(s.next(), dur)
 }
 
+pub fn recv_events_timely(s: &mut Drain) -> Vec<Event> {
+    let mut e = recv_timeout(s, Duration::from_millis(100)).unwrap().unwrap();
+    e.take_events().into()
+}
+
+pub fn recv_resolved_ts_timely(s: &mut Drain) -> ResolvedTs {
+    let mut e = recv_timeout(s, Duration::from_millis(100)).unwrap().unwrap();
+    e.take_resolved_ts()
+}
+
 #[cfg(test)]
 pub mod tests {
     use std::sync::Arc;

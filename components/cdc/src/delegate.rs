@@ -862,11 +862,15 @@ impl Delegate {
 
     pub async fn handle_tasks(&mut self) {
         while let Some(task) = self.tasks.next().await {
+            println!("get a delegate task {:?}", task);
             match task {
                 DelegateTask::Subscribe { downstream, cb } => {
+                    println!("on_subscribe_downstream");
                     if self.on_subscribe_downstream(downstream).await {
+                        println!("will call cb");
                         cb(());
                     }
+                    println!("drop cb");
                 }
                 DelegateTask::ObservedEvent { cmds, old_value_cb } => {
                     fail_point!("cdc_before_handle_multi_batch", |_| {});
@@ -959,6 +963,7 @@ impl Delegate {
     }
 
     async fn on_stop(&mut self, err: Option<Error>) {
+        println!("delegate.on_stop is called");
         info!("cdc stop delegate"; "region_id" => self.region_id, "error" => ?err);
         let err_event = err.map(|x| x.into_error_event(self.region_id));
         while !self.downstreams.is_empty() {
@@ -999,6 +1004,7 @@ impl Delegate {
         }
         match self.finish_scan_locks(region, locks) {
             Ok(fails) => {
+                println!("finish scan locks fails {}", fails.len());
                 for (downstream, err) in fails {
                     let err_event = Some(err.into_error_event(self.region_id));
                     self.deregister_downstream(err_event, downstream).await;
@@ -1020,12 +1026,14 @@ impl Delegate {
                 "region_id" => self.region_id,
                 "observe_id" => ?observe_id,
                 "current_id" => ?self.handle.id);
+            println!("bad observe id");
             return;
         }
         if self.init_lock_tracker() {
             build_resolver.store(true, Ordering::Release);
         }
         if let Some(d) = self.downstreams.iter().find(|d| d.id == downstream_id) {
+            println!("goold downstream");
             let downstream_state = d.get_state();
             if on_init_downstream(&downstream_state) {
                 info!("cdc downstream starts to initialize";

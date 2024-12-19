@@ -122,6 +122,7 @@ impl<E: KvEngine> Initializer<E> {
     where
         T: 'static + CdcHandle<E>,
     {
+        println!("initialize is called...............");
         fail_point!("cdc_before_initialize");
         let concurrency_semaphore = self.concurrency_semaphore.clone();
         let _permit = concurrency_semaphore.acquire().await;
@@ -520,6 +521,7 @@ impl<E: KvEngine> Initializer<E> {
 
     // Deregister downstream when the Initializer fails to initialize.
     pub(crate) fn deregister_downstream(&self, err: Error) {
+        println!("deregister_downstream...............");
         let build_resolver = self.build_resolver.load(Ordering::Acquire);
         let stop_task = if build_resolver || err.has_region_error() {
             // Deregister delegate on the conditions,
