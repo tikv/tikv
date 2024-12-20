@@ -40,6 +40,7 @@ pub struct ConnId(usize);
 pub struct RequestId(pub u64);
 
 impl ConnId {
+    #[allow(clippy::new_without_default)]
     pub fn new() -> ConnId {
         ConnId(CONNECTION_ID_ALLOC.fetch_add(1, Ordering::SeqCst))
     }

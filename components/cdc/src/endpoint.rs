@@ -1086,7 +1086,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
                 }
                 Validate::OldValueCache(validate) => {
                     let cache = block_on(self.old_value_cache.lock());
-                    validate(&*cache);
+                    validate(&cache);
                 }
             },
         }

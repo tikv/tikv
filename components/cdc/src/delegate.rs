@@ -686,7 +686,7 @@ impl Delegate {
                 if let Some(ts) = needs_old_value {
                     let key = Key::from_raw(&v.key).append_ts(v.start_ts.into());
                     let mut cache = self.old_value_cache.lock().await;
-                    let old_value = old_value_cb(key, *ts, &mut *cache, &mut self.old_value_stats)?;
+                    let old_value = old_value_cb(key, *ts, &mut cache, &mut self.old_value_stats)?;
                     v.old_value = old_value.unwrap_or_default();
                     *needs_old_value = None;
                 }
@@ -744,7 +744,7 @@ impl Delegate {
         Ok(())
     }
 
-    async fn sink_txn_put(&mut self, mut put: PutRequest, rows: &mut RowsBuilder) -> Result<()> {
+    fn sink_txn_put(&mut self, mut put: PutRequest, rows: &mut RowsBuilder) -> Result<()> {
         match put.cf.as_str() {
             "write" => {
                 let key = Key::from_encoded_slice(&put.key).truncate_ts().unwrap();
@@ -926,7 +926,7 @@ impl Delegate {
                         .await;
                 }
                 DelegateTask::Validate(validate) => {
-                    validate(Some(&self));
+                    validate(Some(self));
                 }
             }
         }
@@ -997,7 +997,7 @@ impl Delegate {
             .feedbacks
             .schedule_force(Task::Deregister(Deregister::Delegate {
                 region_id: self.region_id,
-                observe_id: self.handle.id.clone(),
+                observe_id: self.handle.id,
             }));
     }
 
@@ -1022,7 +1022,7 @@ impl Delegate {
         }
     }
 
-    async fn on_init_downstream(
+    fn on_init_downstream(
         &mut self,
         observe_id: ObserveId,
         downstream_id: DownstreamId,
