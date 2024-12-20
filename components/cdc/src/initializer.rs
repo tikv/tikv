@@ -529,7 +529,7 @@ impl<E: KvEngine> Initializer<E> {
             //   resolved ts.
             // * A region error. It usually mean a peer is not leader or a leader meets an
             //   error and can not serve.
-            DelegateTask::Stop { err: Some(err) }
+            DelegateTask::Stop { observe_id : self.observe_handle.id, err: Some(err) }
         } else {
             DelegateTask::StopDownstream {
                 err: Some(err),

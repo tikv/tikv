@@ -171,17 +171,20 @@ pub struct Sink {
 
 impl Sink {
     fn send(&self, event: CdcEvent, force: bool) -> StdResult<(), SendError> {
+        println!("send {:?}", event);
         let bytes = event.size();
         if force {
             self.memory_quota.alloc_force(bytes);
         } else {
             self.memory_quota.alloc(bytes)?;
         }
+        println!("send ok");
 
         let event = ObservedEvent::new(Instant::now_coarse(), event, bytes);
         match self.tx.unbounded_send(event) {
             Ok(_) => Ok(()),
             Err(e) => {
+                println!("send fail!!!!!!!!!!!!!!!!!!!!!!");
                 self.memory_quota.free(bytes);
                 Err(SendError::from(e))
             }
@@ -236,14 +239,18 @@ impl Stream for Drain {
     type Item = ChangeDataEvent;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        println!("poll_next is called");
         let mut this = self.as_mut();
         if let Some(event) = this.buffer.take() {
+        println!("poll_next returns event in buffer");
             return Poll::Ready(Some(event));
         }
         if this.drained {
+        println!("poll_next returns none before loop");
             return Poll::Ready(None);
         }
 
+        println!("poll_next starts loop");
         let mut event: Option<ChangeDataEvent> = None;
         let mut size = 0;
         loop {
@@ -255,6 +262,7 @@ impl Stream for Drain {
                         .observe(item.created.saturating_elapsed_secs() * 1000.0);
                     match item.event {
                         CdcEvent::ResolvedTs(x) => {
+                            println!("get a ts........................");
                             let mut ts_event = ChangeDataEvent::default();
                             ts_event.set_resolved_ts(x);
                             if event.is_some() {
@@ -265,6 +273,7 @@ impl Stream for Drain {
                             break;
                         }
                         CdcEvent::Event(x) => {
+                            println!("get a event.....................");
                             let e = event.get_or_insert_with(Default::default);
                             e.mut_events().push(x);
                             if size >= CDC_RESP_MAX_BYTES {
@@ -280,12 +289,16 @@ impl Stream for Drain {
                 Poll::Pending => break,
             }
         }
+        println!("after poll loop");
 
         if let Some(event) = event {
+            println!("some event");
             Poll::Ready(Some(event))
         } else if this.drained {
+            println!("none event");
             Poll::Ready(None)
         } else {
+            println!("pending");
             Poll::Pending
         }
     }
@@ -443,14 +456,6 @@ pub mod tests {
     use kvproto::cdcpb::{Event, ResolvedTs};
 
     use super::*;
-
-    /// TestSink is just like `Sink`, but only for tests.
-    pub struct TestSink(pub Sink);
-    impl TestSink {
-        pub async fn send_all(&mut self, events: Vec<CdcEvent>) -> StdResult<(), SendError> {
-            self.0.send_all(events).await
-        }
-    }
 
     #[test]
     fn test_send_all() {}

@@ -164,10 +164,11 @@ impl RoleObserver for CdcObserver {
                     .cloned();
 
                 let regions = self.observe_regions.read().unwrap();
-                if let Some((_, tx)) = regions.get(&region_id) {
+                if let Some((id, tx)) = regions.get(&region_id) {
+                    let observe_id = *id;
                     let store_err = RaftStoreError::NotLeader(region_id, leader);
                     let err = Some(CdcError::request(store_err.into()));
-                    let _ = tx.unbounded_send(DelegateTask::Stop { err });
+                    let _ = tx.unbounded_send(DelegateTask::Stop { observe_id, err });
                 }
             }
         }
@@ -188,10 +189,11 @@ impl RegionChangeObserver for CdcObserver {
             ) => {
                 let region_id = ctx.region().get_id();
                 let regions = self.observe_regions.read().unwrap();
-                if let Some((_, tx)) = regions.get(&region_id) {
+                if let Some((id, tx)) = regions.get(&region_id) {
+                    let observe_id = *id;
                     let store_err = RaftStoreError::RegionNotFound(region_id);
                     let err = Some(CdcError::request(store_err.into()));
-                    let _ = tx.unbounded_send(DelegateTask::Stop { err });
+                    let _ = tx.unbounded_send(DelegateTask::Stop { observe_id, err });
                 }
             }
             _ => {}
@@ -284,7 +286,7 @@ mod tests {
             },
         );
         match rx.try_next().unwrap().unwrap() {
-            DelegateTask::Stop { err } => {
+            DelegateTask::Stop { err, .. } => {
                 let store_err = RaftStoreError::NotLeader(1, Some(new_peer(2, 2)));
                 match err {
                     Some(CdcError::Request(e)) => assert_eq!(*e, store_err.into()),
@@ -307,7 +309,7 @@ mod tests {
             },
         );
         match rx.try_next().unwrap().unwrap() {
-            DelegateTask::Stop { err } => {
+            DelegateTask::Stop { err, .. } => {
                 let store_err = RaftStoreError::NotLeader(1, Some(new_peer(3, 3)));
                 match err {
                     Some(CdcError::Request(err)) => assert_eq!(*err, store_err.into()),

@@ -94,7 +94,7 @@ impl Default for DownstreamState {
 
 /// Should only be called when it's uninitialized or stopped. Return false if
 /// it's stopped.
-pub(crate) fn on_init_downstream(s: &AtomicCell<DownstreamState>) -> bool {
+fn on_init_downstream(s: &AtomicCell<DownstreamState>) -> bool {
     s.compare_exchange(
         DownstreamState::Uninitialized,
         DownstreamState::Initializing,
@@ -501,7 +501,9 @@ impl Delegate {
         Ok(())
     }
 
-    fn on_min_ts(&mut self, min_ts: TimeStamp, current_ts: TimeStamp) {
+    fn on_min_ts(&mut self, min_ts: TimeStamp, current_ts: TimeStamp,
+        cb: Box<dyn FnOnce(()) + Send>,
+    ) {
         let locks = match &self.lock_tracker {
             LockTracker::Prepared { locks, .. } => locks,
             _ => {
@@ -518,12 +520,15 @@ impl Delegate {
                     );
                     self.last_lag_warn = now;
                 }
+                println!("lock tracker is not prepared");
                 return;
             }
         };
+                println!("lock tracker is prepared");
 
         let handle_downstream = |downstream: &mut Downstream| {
             if !downstream.state.load().ready_for_advancing_ts() {
+                println!("not ready for advancing ts");
                 return;
             }
 
@@ -557,6 +562,7 @@ impl Delegate {
                 }
             }
         }
+        cb(());
 
         if !slow_downstreams.is_empty() {
             let now = Instant::now_coarse();
@@ -880,20 +886,36 @@ impl Delegate {
                     }
                     // flush_oldvalue_stats(&statistics, TAG_DELTA_CHANGE);
                 }
-                DelegateTask::Stop { err } => {
+                DelegateTask::Stop { observe_id, err } => {
+                    if self.handle.id != observe_id {
+                        debug!("cdc stale stop delegate";
+                            "region_id" => self.region_id,
+                            "observe_id" => ?observe_id,
+                            "current_id" => ?self.handle.id);
+                        return;
+                    }
                     self.on_stop(err).await;
                 }
-                DelegateTask::StopDownstream { err, downstream_id } => {
+                DelegateTask::StopDownstream { downstream_id, err } => {
                     self.on_stop_downstream(err, downstream_id).await;
                 }
-                DelegateTask::MinTs { min_ts, current_ts } => {
-                    self.on_min_ts(min_ts, current_ts);
+                DelegateTask::MinTs { min_ts, current_ts, cb } => {
+                    self.on_min_ts(min_ts, current_ts, cb);
                 }
                 DelegateTask::FinishScanLocks {
                     observe_id,
                     region,
                     locks,
-                } => self.on_finish_scan_locks(observe_id, region, locks).await,
+                } => {
+                    if self.handle.id != observe_id {
+                        debug!("cdc stale region finish scan locks";
+                            "region_id" => self.region_id,
+                            "observe_id" => ?observe_id,
+                            "current_id" => ?self.handle.id);
+                        return;
+                    }
+                    self.on_finish_scan_locks(region, locks).await;
+                },
                 DelegateTask::InitDownstream {
                     observe_id,
                     downstream_id,
@@ -991,17 +1013,9 @@ impl Delegate {
 
     async fn on_finish_scan_locks(
         &mut self,
-        observe_id: ObserveId,
         region: Region,
         locks: BTreeMap<Key, MiniLock>,
     ) {
-        if self.handle.id != observe_id {
-            debug!("cdc stale region finish scan locks";
-                "region_id" => region.get_id(),
-                "observe_id" => ?observe_id,
-                "current_id" => ?self.handle.id);
-            return;
-        }
         match self.finish_scan_locks(region, locks) {
             Ok(fails) => {
                 println!("finish scan locks fails {}", fails.len());
@@ -1326,15 +1340,17 @@ pub enum DelegateTask {
         old_value_cb: OldValueCallback,
     },
     Stop {
+        observe_id: ObserveId,
         err: Option<Error>,
     },
     StopDownstream {
-        err: Option<Error>,
         downstream_id: DownstreamId,
+        err: Option<Error>,
     },
     MinTs {
         min_ts: TimeStamp,
         current_ts: TimeStamp,
+        cb: Box<dyn FnOnce(()) + Send>,
     },
     FinishScanLocks {
         observe_id: ObserveId,
