@@ -501,7 +501,10 @@ impl Delegate {
         Ok(())
     }
 
-    fn on_min_ts(&mut self, min_ts: TimeStamp, current_ts: TimeStamp,
+    fn on_min_ts(
+        &mut self,
+        min_ts: TimeStamp,
+        current_ts: TimeStamp,
         cb: Box<dyn FnOnce(()) + Send>,
     ) {
         let locks = match &self.lock_tracker {
@@ -520,15 +523,12 @@ impl Delegate {
                     );
                     self.last_lag_warn = now;
                 }
-                println!("lock tracker is not prepared");
                 return;
             }
         };
-                println!("lock tracker is prepared");
 
         let handle_downstream = |downstream: &mut Downstream| {
             if !downstream.state.load().ready_for_advancing_ts() {
-                println!("not ready for advancing ts");
                 return;
             }
 
@@ -868,15 +868,11 @@ impl Delegate {
 
     pub async fn handle_tasks(&mut self) {
         while let Some(task) = self.tasks.next().await {
-            println!("get a delegate task {:?}", task);
             match task {
                 DelegateTask::Subscribe { downstream, cb } => {
-                    println!("on_subscribe_downstream");
                     if self.on_subscribe_downstream(downstream).await {
-                        println!("will call cb");
                         cb(());
                     }
-                    println!("drop cb");
                 }
                 DelegateTask::ObservedEvent { cmds, old_value_cb } => {
                     fail_point!("cdc_before_handle_multi_batch", |_| {});
@@ -899,7 +895,11 @@ impl Delegate {
                 DelegateTask::StopDownstream { downstream_id, err } => {
                     self.on_stop_downstream(err, downstream_id).await;
                 }
-                DelegateTask::MinTs { min_ts, current_ts, cb } => {
+                DelegateTask::MinTs {
+                    min_ts,
+                    current_ts,
+                    cb,
+                } => {
                     self.on_min_ts(min_ts, current_ts, cb);
                 }
                 DelegateTask::FinishScanLocks {
@@ -915,7 +915,7 @@ impl Delegate {
                         return;
                     }
                     self.on_finish_scan_locks(region, locks).await;
-                },
+                }
                 DelegateTask::InitDownstream {
                     observe_id,
                     downstream_id,
@@ -985,7 +985,6 @@ impl Delegate {
     }
 
     async fn on_stop(&mut self, err: Option<Error>) {
-        println!("delegate.on_stop is called");
         info!("cdc stop delegate"; "region_id" => self.region_id, "error" => ?err);
         let err_event = err.map(|x| x.into_error_event(self.region_id));
         while !self.downstreams.is_empty() {
@@ -1011,14 +1010,9 @@ impl Delegate {
         }
     }
 
-    async fn on_finish_scan_locks(
-        &mut self,
-        region: Region,
-        locks: BTreeMap<Key, MiniLock>,
-    ) {
+    async fn on_finish_scan_locks(&mut self, region: Region, locks: BTreeMap<Key, MiniLock>) {
         match self.finish_scan_locks(region, locks) {
             Ok(fails) => {
-                println!("finish scan locks fails {}", fails.len());
                 for (downstream, err) in fails {
                     let err_event = Some(err.into_error_event(self.region_id));
                     self.deregister_downstream(err_event, downstream).await;
@@ -1040,14 +1034,12 @@ impl Delegate {
                 "region_id" => self.region_id,
                 "observe_id" => ?observe_id,
                 "current_id" => ?self.handle.id);
-            println!("bad observe id");
             return;
         }
         if self.init_lock_tracker() {
             build_resolver.store(true, Ordering::Release);
         }
         if let Some(d) = self.downstreams.iter().find(|d| d.id == downstream_id) {
-            println!("goold downstream");
             let downstream_state = d.get_state();
             if on_init_downstream(&downstream_state) {
                 info!("cdc downstream starts to initialize";
@@ -1472,15 +1464,13 @@ pub(crate) fn convert_to_grpc_events(
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
-
     use api_version::RawValue;
-    use futures::{executor::block_on, stream::StreamExt};
-    use kvproto::{cdcpb::Event_oneof_event, errorpb::Error as ErrorHeader, metapb::Region};
+    use futures::executor::block_on;
+    use kvproto::{errorpb::Error as ErrorHeader, metapb::Region};
     use tikv_util::{config::ReadableSize, memory::MemoryQuota, worker::dummy_scheduler};
 
     use super::*;
-    use crate::channel::{channel, recv_timeout, CdcEvent, SendError};
+    use crate::channel::{channel, recv_timeout, SendError};
 
     #[test]
     fn test_error() {
@@ -1637,7 +1627,7 @@ mod tests {
     fn test_delegate_subscribe_unsubscribe() {
         let conn_id = ConnId::new();
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
-        let (sink, mut drain) = channel(conn_id, quota.clone());
+        let (sink, _drain) = channel(conn_id, quota.clone());
 
         let new_downstream = |req_id: RequestId, region_version: u64, sink| {
             let mut epoch = RegionEpoch::default();
@@ -1826,7 +1816,7 @@ mod tests {
         }
         assert_eq!(rows_builder.txns_by_key.len(), 5);
 
-        let mut downstream = Downstream::new(
+        let downstream = Downstream::new(
             RequestId(1),
             conn_id,
             "peer".to_owned(),
@@ -1855,7 +1845,7 @@ mod tests {
         let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
         let cache = Arc::new(Mutex::new(OldValueCache::new(ReadableSize(1024))));
         let txn_extra_op = Arc::new(AtomicCell::new(TxnExtraOp::Noop));
-        let (fbtx, feedbacks) = dummy_scheduler();
+        let (fbtx, _feedbacks) = dummy_scheduler();
 
         // Create a new delegate that observes [a, f).
         let observed_range = ObservedRange::new(
@@ -1892,7 +1882,7 @@ mod tests {
         }
         assert_eq!(rows_builder.txns_by_key.len(), 5);
 
-        let mut downstream = Downstream::new(
+        let downstream = Downstream::new(
             RequestId(1),
             conn_id,
             "peer".to_owned(),

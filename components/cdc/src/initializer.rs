@@ -122,7 +122,6 @@ impl<E: KvEngine> Initializer<E> {
     where
         T: 'static + CdcHandle<E>,
     {
-        println!("initialize is called...............");
         fail_point!("cdc_before_initialize");
         let concurrency_semaphore = self.concurrency_semaphore.clone();
         let _permit = concurrency_semaphore.acquire().await;
@@ -521,7 +520,6 @@ impl<E: KvEngine> Initializer<E> {
 
     // Deregister downstream when the Initializer fails to initialize.
     pub(crate) fn deregister_downstream(&self, err: Error) {
-        println!("deregister_downstream...............");
         let build_resolver = self.build_resolver.load(Ordering::Acquire);
         let stop_task = if build_resolver || err.has_region_error() {
             // Deregister delegate on the conditions,
@@ -529,7 +527,10 @@ impl<E: KvEngine> Initializer<E> {
             //   resolved ts.
             // * A region error. It usually mean a peer is not leader or a leader meets an
             //   error and can not serve.
-            DelegateTask::Stop { observe_id : self.observe_handle.id, err: Some(err) }
+            DelegateTask::Stop {
+                observe_id: self.observe_handle.id,
+                err: Some(err),
+            }
         } else {
             DelegateTask::StopDownstream {
                 err: Some(err),
@@ -598,11 +599,7 @@ impl<E: KvEngine> Initializer<E> {
 mod tests {
     use std::{
         collections::BTreeMap,
-        sync::{
-            atomic::AtomicBool,
-            mpsc::{sync_channel, RecvTimeoutError},
-            Arc,
-        },
+        sync::{atomic::AtomicBool, mpsc::sync_channel, Arc},
         time::Duration,
     };
 
@@ -631,7 +628,7 @@ mod tests {
     use tokio::runtime::{Builder, Runtime};
 
     use super::*;
-    use crate::txn_source::TxnSource;
+    use crate::{recv_timeout, txn_source::TxnSource};
 
     fn mock_initializer(
         scan_limit: usize,
@@ -733,7 +730,9 @@ mod tests {
             .store(DownstreamState::Initializing);
 
         let mut check_result = || {
-            let task = block_on(rx.next()).unwrap();
+            let task = recv_timeout(&mut rx, Duration::from_millis(100))
+                .unwrap()
+                .unwrap();
             match task {
                 DelegateTask::FinishScanLocks { locks, .. } => assert_eq!(locks, expected_locks),
                 _ => panic!("unexpected task received"),
@@ -761,7 +760,7 @@ mod tests {
             .downstream_state
             .store(DownstreamState::Initializing);
         block_on(initializer.async_incremental_scan(snap.clone(), region.clone())).unwrap();
-        assert!(block_on(rx.next()).is_none());
+        recv_timeout(&mut rx, Duration::from_millis(100)).unwrap_err();
 
         // Test cancellation.
         initializer.downstream_state.store(DownstreamState::Stopped);
@@ -801,18 +800,14 @@ mod tests {
                 .await
                 .unwrap();
         });
-        while let Some(x) = block_on(drain.next()) {
-            // TODO: fixme.
-            // let event = match event {
-            //     CdcEvent::Event(x) if x.event.is_some() => x.event.unwrap(),
-            //     _ => continue,
-            // };
-            // let entries = match event {
-            //     Event_oneof_event::Entries(mut x) =>
-            // x.take_entries().into_vec(),     _ => continue,
-            // };
-            // assert_eq!(entries.len(), 1);
-            // assert_eq!(entries[0].get_type(), EventLogType::Initialized);
+        while let Ok(Some(mut x)) = recv_timeout(&mut drain, Duration::from_millis(100)) {
+            for mut event in x.take_events().into_iter() {
+                if event.has_entries() {
+                    let entries = event.take_entries().take_entries().into_vec();
+                    assert_eq!(entries.len(), 1);
+                    assert_eq!(entries[0].get_type(), EventLogType::Initialized);
+                }
+            }
         }
         block_on(th).unwrap();
     }
@@ -892,22 +887,18 @@ mod tests {
                         .unwrap();
                 });
 
-                while let Some(event) = block_on(drain.next()) {
-                    // TODO: fixme.
-                    // let event = match event {
-                    //     CdcEvent::Event(x) if x.event.is_some() =>
-                    // x.event.unwrap(),     _ => continue,
-                    // };
-                    // let entries = match event {
-                    //     Event_oneof_event::Entries(mut x) =>
-                    // x.take_entries().into_vec(),     _ =>
-                    // continue, };
-                    // for entry in entries.into_iter().filter(|x| x.start_ts ==
-                    // 200) {     // Check old value is
-                    // expected in all cases.     assert_eq!
-                    // (entry.get_old_value(), &v_suffix(100));
-                    // }
+                while let Ok(Some(mut x)) = recv_timeout(&mut drain, Duration::from_millis(100)) {
+                    for mut event in x.take_events().into_iter() {
+                        if event.has_entries() {
+                            let entries = event.take_entries().take_entries().into_vec();
+                            for entry in entries.into_iter().filter(|x| x.start_ts == 200) {
+                                // Check old value is expected in all cases.
+                                assert_eq!(entry.get_old_value(), &v_suffix(100));
+                            }
+                        }
+                    }
                 }
+
                 block_on(th).unwrap();
             }
         }
@@ -949,18 +940,24 @@ mod tests {
         // Errors reported by region should deregister region.
         initializer.build_resolver.store(false, Ordering::Release);
         initializer.deregister_downstream(Error::request(ErrorHeader::default()));
-        let task = block_on(rx.next()).unwrap();
+        let task = recv_timeout(&mut rx, Duration::from_millis(100))
+            .unwrap()
+            .unwrap();
         assert!(matches!(task, DelegateTask::Stop { .. }));
 
         initializer.build_resolver.store(false, Ordering::Release);
         initializer.deregister_downstream(Error::Other(box_err!("test")));
-        let task = block_on(rx.next()).unwrap();
+        let task = recv_timeout(&mut rx, Duration::from_millis(100))
+            .unwrap()
+            .unwrap();
         assert!(matches!(task, DelegateTask::StopDownstream { .. }));
 
         // Test deregister region when resolver fails to build.
         initializer.build_resolver.store(true, Ordering::Release);
         initializer.deregister_downstream(Error::Other(box_err!("test")));
-        let task = block_on(rx.next()).unwrap();
+        let task = recv_timeout(&mut rx, Duration::from_millis(100))
+            .unwrap()
+            .unwrap();
         assert!(matches!(task, DelegateTask::Stop { .. }));
     }
 
@@ -1044,11 +1041,12 @@ mod tests {
         });
 
         let mut total_entries = 0;
-        while let Some(event) = block_on(drain.next()) {
-            // TODO: fixme.
-            // if let CdcEvent::Event(e) = event {
-            //     total_entries += e.get_entries().get_entries().len();
-            // }
+        while let Ok(Some(mut x)) = recv_timeout(&mut drain, Duration::from_millis(100)) {
+            for event in x.take_events().into_iter() {
+                if event.has_entries() {
+                    total_entries += event.get_entries().get_entries().len();
+                }
+            }
         }
         assert_eq!(total_entries, 2);
         block_on(th).unwrap();
