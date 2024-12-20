@@ -50,6 +50,11 @@ impl From<CfNameWrap> for CfName {
 
 struct Writer<W: SstWriter + 'static> {
     writer: W,
+    // archive size/kvs records the size/count of kvs written into the SST.
+    archive_size: u64,
+    archive_kvs: u64,
+    // total bytes/kvs records the size/count of kvs of current physical id written into the SST.
+    // when physical id is 0, total bytes/kvs records the sum of bytes/kvs from table_metas.
     physical_id: i64,
     total_kvs: u64,
     total_bytes: u64,
@@ -62,6 +67,8 @@ impl<W: SstWriter + 'static> Writer<W> {
     fn new(writer: W) -> Self {
         Writer {
             writer,
+            archive_size: 0,
+            archive_kvs: 0,
             physical_id: 0,
             total_kvs: 0,
             total_bytes: 0,
@@ -107,11 +114,14 @@ impl<W: SstWriter + 'static> Writer<W> {
 
     fn update_with(&mut self, entry: TxnEntry, need_checksum: bool) -> Result<()> {
         self.total_kvs += 1;
+        self.archive_kvs += 1;
         if need_checksum {
             let (k, v) = entry
                 .into_kvpair()
                 .map_err(|err| Error::Other(box_err!("Decode error: {:?}", err)))?;
-            self.total_bytes += (k.len() + v.len()) as u64;
+            let incremental_bytes = (k.len() + v.len()) as u64;
+            self.total_bytes += incremental_bytes;
+            self.archive_size += incremental_bytes;
             self.checksum = checksum_crc64_xor(self.checksum, self.digest.clone(), &k, &v);
         }
         Ok(())
@@ -119,7 +129,10 @@ impl<W: SstWriter + 'static> Writer<W> {
 
     fn update_raw_with(&mut self, key: &[u8], value: &[u8], need_checksum: bool) -> Result<()> {
         self.total_kvs += 1;
-        self.total_bytes += (key.len() + value.len()) as u64;
+        self.archive_kvs += 1;
+        let incremental_bytes = (key.len() + value.len()) as u64;
+        self.total_bytes += incremental_bytes;
+        self.archive_size += incremental_bytes;
         if need_checksum {
             self.checksum = checksum_crc64_xor(self.checksum, self.digest.clone(), key, value);
         }
@@ -187,7 +200,7 @@ impl<W: SstWriter + 'static> Writer<W> {
     }
 
     fn is_empty(&self) -> bool {
-        self.total_kvs == 0
+        self.archive_kvs == 0
     }
 }
 
@@ -287,7 +300,7 @@ impl<EK: KvEngine> BackupWriter<EK> {
         })
     }
 
-    fn try_archive_meta(&mut self, physical_id: i64) {
+    pub fn try_archive_meta(&mut self, physical_id: i64) {
         self.default.try_archive_meta(physical_id);
         self.write.try_archive_meta(physical_id);
     }
@@ -363,11 +376,11 @@ impl<EK: KvEngine> BackupWriter<EK> {
     }
 
     pub fn need_split_keys(&self) -> bool {
-        self.default.total_bytes + self.write.total_bytes >= self.sst_max_size
+        self.default.archive_size + self.write.archive_size >= self.sst_max_size
     }
 
     pub fn need_flush_keys(&self) -> bool {
-        self.default.total_bytes + self.write.total_bytes > 0
+        self.default.archive_size + self.write.archive_size > 0
     }
 }
 
@@ -573,6 +586,10 @@ mod tests {
                 false,
             )
             .unwrap();
+        assert_eq!(0, writer.default.archive_kvs);
+        assert_eq!(0, writer.default.archive_size);
+        assert_eq!(1, writer.write.archive_kvs);
+        assert_eq!(0, writer.write.archive_size);
         let files = writer.save(&storage).await.unwrap();
         assert_eq!(files.len(), 1);
         check_sst(
@@ -735,6 +752,9 @@ mod tests {
                 true,
             )
             .unwrap();
+        assert_eq!(54, writer.default.archive_size);
+        assert_eq!(4, writer.default.archive_kvs);
+        assert_eq!(0, writer.write.archive_kvs);
         writer
             .write(
                 0,

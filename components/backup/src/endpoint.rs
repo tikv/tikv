@@ -407,14 +407,13 @@ impl BackupRange {
     ) -> Result<Statistics> {
         assert!(!self.codec.is_raw_kv);
 
-        let brange_end_key = <[_]>::last(&self.ranges).and_then(|(_, end_key)| end_key.clone());
         let mut next_file_start_key = <[_]>::first(&self.ranges)
             .and_then(|(start_key, _)| start_key.clone())
             .map_or_else(Vec::new, |k| k.into_raw().unwrap());
         // Notice that make sure the last key of each SST and the end key of the range
         // from the same table, so that sst importer can rewrite the range end
         // key correctly.
-        let mut last_key: &Option<Key> = &None;
+        let mut last_brange_end_key: &Option<Key> = &None;
         let mut writer = writer_builder
             .build(next_file_start_key.clone(), storage_name)
             .map_err(|e| {
@@ -446,6 +445,10 @@ impl BackupRange {
                     return Err(e.into());
                 };
                 if batch.is_empty() {
+                    // nothing to scan, but also archive the file metadata
+                    if first_scan {
+                        writer.try_archive_meta(physical_id);
+                    }
                     break;
                 }
                 debug!("backup scan entries"; "len" => batch.len());
@@ -456,7 +459,7 @@ impl BackupRange {
                     let this_end_key = if first_scan {
                         next_file_start_key = start_key_raw_vec.clone();
                         // the last_key can not be empty.
-                        last_key.as_ref().unwrap().to_raw().unwrap()
+                        last_brange_end_key.as_ref().unwrap().to_raw().unwrap()
                     } else {
                         next_file_start_key = entries.as_slice().first().map_or_else(
                             || Err(Error::Other(box_err!("get entry error: nothing in batch"))),
@@ -512,15 +515,15 @@ impl BackupRange {
                 .with_label_values(&["scan"])
                 .observe(take);
             total_stat.add(&stat);
-            last_key = end_key;
+            last_brange_end_key = end_key;
         }
 
         let msg = InMemBackupFiles {
             files: KvWriter::Txn(writer),
             start_key: next_file_start_key,
-            end_key: brange_end_key
-                .clone()
-                .map_or_else(Vec::new, |k| k.into_raw().unwrap()),
+            end_key: last_brange_end_key
+                .as_ref()
+                .map_or_else(Vec::new, |k| k.to_raw().unwrap()),
             start_version: begin_ts,
             end_version: backup_ts,
             region: self.region.clone(),
@@ -596,18 +599,27 @@ impl BackupRange {
 
     async fn backup_raw_kv_to_file<E: Engine>(
         &self,
-        start_key: Option<Key>,
-        end_key: Option<Key>,
+        store_id: u64,
         mut engine: E,
         db: E::Local,
         rate_limiter: &Limiter,
-        file_name: String,
+        storage_name: &str,
         cf: CfNameWrap,
         compression_type: Option<SstCompressionType>,
         compression_level: i32,
         cipher: CipherInfo,
         saver_tx: async_channel::Sender<InMemBackupFiles<E::Local>>,
     ) -> Result<Statistics> {
+        assert!(self.ranges.len() == 1);
+        let (start_key, end_key) = self.ranges.last().unwrap().clone();
+        // TODO: make file_name unique and short
+        let key = start_key.clone().and_then(|k| {
+            // use start_key sha256 instead of start_key to avoid file name too long os
+            // error
+            let input = self.codec.decode_backup_key(Some(k)).unwrap_or_default();
+            file_system::sha256(&input).ok().map(hex::encode)
+        });
+        let file_name = backup_file_name(store_id, &self.region, key, storage_name);
         let mut writer = match BackupRawKvWriter::new(
             db,
             &file_name,
@@ -781,7 +793,6 @@ pub struct Endpoint<E: Engine, R: RegionInfoProvider + Clone + 'static> {
 pub struct ProgressGroup<R: RegionInfoProvider> {
     ranges_groups_desc: Vec<Vec<(Option<Key>, Option<Key>)>>,
     progress: Progress<R>,
-    finished: bool,
 }
 
 impl<R: RegionInfoProvider> ProgressGroup<R> {
@@ -792,41 +803,23 @@ impl<R: RegionInfoProvider> ProgressGroup<R> {
         codec: KeyValueCodec,
         cf: CfName,
     ) -> Self {
-        let mut prs_group = ProgressGroup {
+        ProgressGroup {
             ranges_groups_desc,
             progress: Progress::new(store_id, region_info, codec, cf),
-            finished: false,
-        };
-        prs_group.try_next_group();
-        prs_group
-    }
-
-    fn new_with_range(
-        store_id: u64,
-        next_start: Option<Key>,
-        end_key: Option<Key>,
-        region_info: R,
-        codec: KeyValueCodec,
-        cf: CfName,
-    ) -> Self {
-        let ranges_groups = vec![vec![(next_start, end_key)]];
-        Self::new(store_id, ranges_groups, region_info, codec, cf)
+        }
     }
 
     // try the next ranges group if the currnet progress is finished.
-    fn try_next_group(&mut self) {
-        if self.finished {
-            return;
-        }
+    // and return false if it cannot advance next group anymore.
+    fn try_next_group(&mut self) -> bool {
         loop {
             if !self.progress.finished {
-                return;
+                return true;
             }
             let next_ranges_group = match self.ranges_groups_desc.pop() {
                 Some(next_ranges_group) => next_ranges_group,
                 None => {
-                    self.finished = true;
-                    return;
+                    return false;
                 }
             };
             self.progress.reset(next_ranges_group);
@@ -834,13 +827,10 @@ impl<R: RegionInfoProvider> ProgressGroup<R> {
     }
 
     fn forward(&mut self, limit: usize, replica_read: bool) -> Option<Vec<BackupRange>> {
-        if self.finished {
+        if !self.try_next_group() {
             return None;
         }
-        let branges = self.progress.forward(limit, replica_read);
-        self.try_next_group();
-
-        branges
+        self.progress.forward(limit, replica_read)
     }
 }
 
@@ -963,7 +953,7 @@ impl<R: RegionInfoProvider> Progress<R> {
                 return;
             }
             // collect the remaining ranges when it is the last region
-            if brange.region.get_end_key().is_empty() {
+            if region_end_key.is_empty() {
                 brange
                     .ranges
                     .push((self.next_start.clone(), self.end_key.clone()));
@@ -975,13 +965,13 @@ impl<R: RegionInfoProvider> Progress<R> {
                 range_raw_end_key.push(u8::MAX);
                 let table_end_key = encode_bytes(&range_raw_end_key);
                 let table_end_key_ref = table_end_key.as_slice();
-                if table_end_key_ref > brange.region.get_end_key() {
+                if table_end_key_ref > region_end_key {
                     return;
                 }
             }
             // now both region end key and range end key is not empty
-            if range_end_key.as_encoded().as_slice() > brange.region.get_end_key() {
-                let next_end_key = Some(Key::from_encoded_slice(brange.region.get_end_key()));
+            if range_end_key.as_encoded().as_slice() > region_end_key {
+                let next_end_key = Some(Key::from_encoded_slice(region_end_key));
                 brange
                     .ranges
                     .push((self.next_start.clone(), next_end_key.clone()));
@@ -1217,23 +1207,13 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                     };
 
                     let stat = if is_raw_kv {
-                        // TODO: make file_name unique and short
-                        assert!(brange.ranges.len() == 1);
-                        let (start_key, end_key) = brange.ranges.last().unwrap().clone();
-                        let key = start_key.clone().and_then(|k| {
-                            // use start_key sha256 instead of start_key to avoid file name too long os error
-                            let input = brange.codec.decode_backup_key(Some(k)).unwrap_or_default();
-                            file_system::sha256(&input).ok().map(hex::encode)
-                        });
-                        let name = backup_file_name(store_id, &brange.region, key, _backend.name());
                         brange
                             .backup_raw_kv_to_file(
-                                start_key,
-                                end_key,
+                                store_id,
                                 engine,
                                 db.into_owned(),
                                 &request.rate_limiter,
-                                name,
+                                _backend.name(),
                                 cf.into(),
                                 ct,
                                 request.compression_level,
@@ -1294,10 +1274,9 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         if request.sub_ranges.is_empty() && request.sub_ranges_groups.is_empty() {
             let start_key = codec.encode_backup_key(request.start_key.clone());
             let end_key = codec.encode_backup_key(request.end_key.clone());
-            Arc::new(Mutex::new(ProgressGroup::new_with_range(
+            Arc::new(Mutex::new(ProgressGroup::new(
                 self.store_id,
-                start_key,
-                end_key,
+                vec![vec![(start_key, end_key)]],
                 self.region_info.clone(),
                 codec,
                 request.cf,
@@ -1803,10 +1782,9 @@ pub mod tests {
             |start_key: &[u8], end_key: &[u8], expect: Vec<(&[u8], &[u8])>| {
                 let start_key = (!start_key.is_empty()).then_some(Key::from_raw(start_key));
                 let end_key = (!end_key.is_empty()).then_some(Key::from_raw(end_key));
-                let mut prs = ProgressGroup::new_with_range(
+                let mut prs = ProgressGroup::new(
                     endpoint.store_id,
-                    start_key,
-                    end_key,
+                    vec![vec![(start_key, end_key)]],
                     endpoint.region_info.clone(),
                     KeyValueCodec::new(false, ApiVersion::V1, ApiVersion::V1),
                     engine_traits::CF_DEFAULT,
@@ -2589,14 +2567,10 @@ pub mod tests {
                 e.1 += bytes;
             })
             .or_insert((kvs, bytes));
-        let (kvs, bytes) = write_kv(&endpoint.engine, table::encode_row_key(4, 10));
+        // empty table 4
         expect_table_meta
             .entry(4)
-            .and_modify(|e| {
-                e.0 += kvs;
-                e.1 += bytes;
-            })
-            .or_insert((kvs, bytes));
+            .or_insert((0, 0));
         let (kvs, bytes) = write_kv(&endpoint.engine, table::encode_index_seek_key(5, 1, b"11"));
         expect_table_meta
             .entry(5)
@@ -2735,10 +2709,6 @@ pub mod tests {
             ),
             (
                 table::encode_row_key(3, 0),
-                table::encode_row_key(3, i64::MAX),
-            ),
-            (
-                table::encode_row_key(4, 0),
                 table::encode_row_key(4, i64::MAX),
             ),
             (
@@ -2831,12 +2801,12 @@ pub mod tests {
                     .iter()
                     .any(|b| { a.get_start_key() == b.0 && a.get_end_key() == b.1 }),
                 "{:?} {:?}",
-                resps,
+                a,
                 expect
             );
         }
         assert_eq!(resps.len(), expect.len());
-        assert_eq!(expect_table_meta.len(), actual_table_meta.len());
+        assert_eq!(expect_table_meta.len(), actual_table_meta.len(), "{:?}", actual_table_meta);
         for (id, (kvs, bytes)) in expect_table_meta {
             let (actual_kvs, actual_bytes) = *actual_table_meta.get(&id).unwrap();
             assert_eq!(kvs, actual_kvs);
