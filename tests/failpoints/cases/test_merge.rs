@@ -1812,8 +1812,6 @@ fn test_destroy_race_during_atomic_snapshot_after_merge() {
     cluster.must_transfer_leader(right.get_id(), new_peer(3, new_peer_id));
     cluster.must_put(b"k4", b"v4");
 }
-<<<<<<< HEAD
-=======
 
 // `test_raft_log_gc_after_merge` tests when a region is destoryed, e.g. due to
 // region merge, PeerFsm can still handle pending raft messages correctly.
@@ -1882,4 +1880,3 @@ fn test_raft_log_gc_after_merge() {
     let resp = rx.recv().unwrap();
     assert!(resp.response.get_header().has_error());
 }
->>>>>>> 6b78e092ec (raftstore: do not skip handling raft command (#18013))
