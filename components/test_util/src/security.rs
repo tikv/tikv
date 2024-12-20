@@ -7,7 +7,10 @@ use encryption_export::EncryptionConfig;
 use grpcio::{ChannelCredentials, ChannelCredentialsBuilder};
 use security::SecurityConfig;
 
-pub fn new_security_cfg(cn: Option<HashSet<String>>, san: Option<HashSet<String>>) -> SecurityConfig {
+pub fn new_security_cfg(
+    cn: Option<HashSet<String>>,
+    san: Option<HashSet<String>>,
+) -> SecurityConfig {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     SecurityConfig {
         ca_path: format!("{}", p.join("data/ca.pem").display()),

@@ -47,7 +47,6 @@ fn test_check_cn_fail() {
     status.unwrap_err();
 }
 
-
 #[test]
 fn test_check_san_success() {
     let mut cluster = new_server_cluster(0, 1);

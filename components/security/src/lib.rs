@@ -308,8 +308,8 @@ fn check_common_name(
 }
 
 /// Check peer SAN with cert-allowed-san field.
-/// Similar to check_common_name, but allows for a match on any available certificate SAN (there
-/// may be multiple).
+/// Similar to check_common_name, but allows for a match on any available
+/// certificate SAN (there may be multiple).
 fn check_subject_alternative_name(
     cert_allowed_san: &HashSet<String>,
     ctx: &RpcContext<'_>,
