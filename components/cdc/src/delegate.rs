@@ -616,7 +616,7 @@ impl Delegate {
         rows_builder.is_one_pc = flags.contains(WriteBatchFlags::ONE_PC);
         for mut req in requests {
             match req.get_cmd_type() {
-                CmdType::Put => self.sink_put(req.take_put(), &mut rows_builder).await?,
+                CmdType::Put => self.sink_put(req.take_put(), &mut rows_builder)?,
                 _ => debug!("cdc skip other command";
                     "region_id" => self.region_id,
                     "command" => ?req),
@@ -728,12 +728,12 @@ impl Delegate {
         Ok(())
     }
 
-    async fn sink_put(&mut self, put: PutRequest, rows_builder: &mut RowsBuilder) -> Result<()> {
+    fn sink_put(&mut self, put: PutRequest, rows_builder: &mut RowsBuilder) -> Result<()> {
         let key_mode = ApiV2::parse_key_mode(put.get_key());
         if key_mode == KeyMode::Raw {
             self.sink_raw_put(put, rows_builder)
         } else {
-            self.sink_txn_put(put, rows_builder).await
+            self.sink_txn_put(put, rows_builder)
         }
     }
 
@@ -922,8 +922,7 @@ impl Delegate {
                     build_resolver,
                     cb,
                 } => {
-                    self.on_init_downstream(observe_id, downstream_id, build_resolver, cb)
-                        .await;
+                    self.on_init_downstream(observe_id, downstream_id, build_resolver, cb);
                 }
                 DelegateTask::Validate(validate) => {
                     validate(Some(self));
@@ -1812,7 +1811,7 @@ mod tests {
                 false,
             )
             .to_bytes();
-            block_on(delegate.sink_txn_put(put, &mut rows_builder)).unwrap();
+            delegate.sink_txn_put(put, &mut rows_builder).unwrap();
         }
         assert_eq!(rows_builder.txns_by_key.len(), 5);
 
@@ -1878,7 +1877,7 @@ mod tests {
                 lock = lock.set_txn_source(txn_source.into());
             }
             put.value = lock.to_bytes();
-            block_on(delegate.sink_txn_put(put, &mut rows_builder)).unwrap();
+            delegate.sink_txn_put(put, &mut rows_builder).unwrap();
         }
         assert_eq!(rows_builder.txns_by_key.len(), 5);
 
