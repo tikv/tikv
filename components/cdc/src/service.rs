@@ -409,24 +409,26 @@ impl Service {
                 scheduler
                     .schedule(Task::OpenConn { conn })
                     .map_err(|e| format!("cdc failed to schedule OpenConn {:?}", e))?;
-
                 Self::handle_request(&scheduler, &peer, request, conn_id, &sink)?;
             }
             while let Some(request) = stream.try_next().await? {
                 Self::handle_request(&scheduler, &peer, request, conn_id, &sink)?;
             }
-            scheduler
-                .schedule(Task::Deregister(Deregister::Conn(conn_id)))
-                .map_err(|e| format!("cdc failed to schedule Deregister {:?}", e))?;
             Ok::<(), String>(())
         };
 
         let peer = ctx.peer();
-        ctx.spawn(async move {
+        let scheduler = self.scheduler.clone();
+        self.workers.spawn(async move {
             if let Err(e) = recv_req.await {
-                warn!("cdc receive failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
+                warn!("cdc receive failed"; "error" => ?e, "downstream" => &peer, "conn_id" => ?conn_id);
             } else {
-                info!("cdc receive closed"; "downstream" => peer, "conn_id" => ?conn_id);
+                info!("cdc receive closed"; "downstream" => &peer, "conn_id" => ?conn_id);
+            }
+            let deregister = Task::Deregister(Deregister::Conn(conn_id));
+            if let Err(e) = scheduler.schedule(deregister) {
+                warn!("cdc failed to schedule Deregister";
+                    "error" => ?e, "downstream" => &peer, "conn_id" => ?conn_id);
             }
         });
 
@@ -435,13 +437,13 @@ impl Service {
             #[cfg(feature = "failpoints")]
             sleep_before_drain_change_event().await;
 
-            // NOTE: enhance_batch so that we can set `buffer_hint(true)` for all messages.
+            // NOTE: enhance_batch so that we can set `buffer_hint(false)` for all messages.
             rpc_sink.enhance_batch(true);
-            let flags = WriteFlags::default().buffer_hint(true);
+            let flags = WriteFlags::default().buffer_hint(false);
             if let Err(e) = drain.map(|x| Ok((x, flags))).forward(&mut rpc_sink).await {
-                warn!("cdc send failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
+                warn!("cdc send failed"; "error" => ?e, "downstream" => &peer, "conn_id" => ?conn_id);
             } else {
-                info!("cdc send closed"; "downstream" => peer, "conn_id" => ?conn_id);
+                info!("cdc send closed"; "downstream" => &peer, "conn_id" => ?conn_id);
             }
         });
     }
