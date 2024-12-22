@@ -19,7 +19,7 @@ use kvproto::{
     import_sstpb::SstMeta,
     kvrpcpb::Context,
     raft_cmdpb::{AdminCmdType, CmdType, RaftCmdRequest, RaftRequestHeader, Request},
-    raft_serverpb::RaftMessage,
+    raft_serverpb::{PeerState, RaftMessage},
 };
 use pd_client::PdClient;
 use protobuf::Message;
@@ -36,8 +36,9 @@ use test_coprocessor::{
     handle_request, init_data_with_details_pd_client, DagChunkSpliter, DagSelect, ProductTable,
 };
 use test_raftstore::{
-    get_tso, new_learner_peer, new_peer, new_put_cf_cmd, new_server_cluster_with_hybrid_engine,
-    CloneFilterFactory, Cluster, Direction, RegionPacketFilter, ServerCluster,
+    configure_for_merge, get_tso, must_get_equal, new_learner_peer, new_peer, new_put_cf_cmd,
+    new_server_cluster_with_hybrid_engine, CloneFilterFactory, Cluster, Direction,
+    RegionPacketFilter, ServerCluster,
 };
 use test_util::eventually;
 use tidb_query_datatype::{
@@ -1058,4 +1059,97 @@ fn test_eviction_when_destroy_uninitialized_peer() {
     let learner2 = new_learner_peer(2, 3);
     pd_client.must_add_peer(region.get_id(), learner2.clone());
     cluster.must_region_exist(region.get_id(), 2);
+}
+
+// IME should also handle RollbackMerge event, we also try to evict the region
+// on merge rollback for simplicity. If region is loaded after PrepareMerge and
+// the merge is rollbacked, IME should track this rollback because it will also
+// change epoch version.
+#[test]
+fn test_region_rollback_merge() {
+    let mut cluster = new_server_cluster_with_hybrid_engine(0, 3);
+    configure_for_merge(&mut cluster.cfg);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run_conf_change();
+
+    let region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k2").unwrap();
+
+    pd_client.must_add_peer(left.get_id(), new_peer(2, 2));
+    pd_client.must_add_peer(right.get_id(), new_peer(2, 4));
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    let mut region = pd_client.get_region(b"k1").unwrap();
+    let target_region = pd_client.get_region(b"k3").unwrap();
+
+    let schedule_merge_fp = "on_schedule_merge";
+    fail::cfg(schedule_merge_fp, "return()").unwrap();
+
+    let (tx, rx) = sync_channel(1);
+    fail::cfg_callback("on_apply_res_prepare_merge", move || {
+        tx.send(()).unwrap();
+    })
+    .unwrap();
+
+    cluster.merge_region(region.get_id(), target_region.get_id(), Callback::None);
+    // PrepareMerge is applied.
+    rx.recv().unwrap();
+
+    let leader = cluster.leader_of_region(left.get_id()).unwrap();
+
+    let region_cache_engine = cluster.sim.rl().get_region_cache_engine(leader.store_id);
+
+    // After prepare merge, version becomes 2 + 1 = 3;
+    region.mut_region_epoch().set_version(3);
+    // load region after PrepareMerge.
+    {
+        let cache_region = CacheRegion::from_region(&region);
+        region_cache_engine
+            .core()
+            .region_manager()
+            .new_region(cache_region);
+    }
+
+    // Add a peer to trigger rollback.
+    pd_client.must_add_peer(right.get_id(), new_peer(3, 5));
+    cluster.must_put(b"k4", b"v4");
+    must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
+
+    let mut region = pd_client.get_region(b"k1").unwrap();
+    // After split and prepare_merge, version becomes 1 + 2 = 3;
+    assert_eq!(region.get_region_epoch().get_version(), 3);
+    // After ConfChange and prepare_merge, conf version becomes 1 + 2 = 3;
+    assert_eq!(region.get_region_epoch().get_conf_ver(), 3);
+    fail::remove(schedule_merge_fp);
+    // Wait till rollback.
+    cluster.must_put(b"k11", b"v11");
+
+    // After rollback, version becomes 3 + 1 = 4;
+    region.mut_region_epoch().set_version(4);
+    for i in 1..3 {
+        must_get_equal(&cluster.get_engine(i), b"k11", b"v11");
+        let state = cluster.region_local_state(region.get_id(), i);
+        assert_eq!(state.get_state(), PeerState::Normal);
+        assert_eq!(*state.get_region(), region);
+    }
+
+    // after rollback, IME cached region is evicted.
+    test_util::eventually(
+        Duration::from_millis(10),
+        Duration::from_millis(1000),
+        || {
+            let region_map = region_cache_engine
+                .core()
+                .region_manager()
+                .regions_map()
+                .read();
+            region_map.regions().is_empty()
+        },
+    );
 }

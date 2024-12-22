@@ -411,7 +411,7 @@ pub fn conv(n: BytesRef, from_base: &Int, to_base: &Int) -> Result<Option<Bytes>
 #[inline]
 #[rpn_fn]
 pub fn round_real(arg: &Real) -> Result<Option<Real>> {
-    Ok(Real::new(arg.round()).ok())
+    Ok(Real::new(arg.round_ties_even()).ok())
 }
 
 #[inline]
@@ -551,9 +551,12 @@ fn round_with_frac_dec(arg0: &Decimal, arg1: &Int) -> Result<Option<Decimal>> {
 pub fn round_with_frac_real(arg0: &Real, arg1: &Int) -> Result<Option<Real>> {
     let number = arg0;
     let digits = arg1;
-    let power = 10.0_f64.powi(-digits as i32);
-    let frac = *number / power;
-    Ok(Some(Real::new(frac.round() * power).unwrap()))
+    let power = 10.0_f64.powi(*digits as i32);
+    let frac = *number * power;
+    if frac.is_infinite() {
+        return Ok(Some(*number));
+    }
+    Ok(Some(Real::new(frac.round_ties_even() / power).unwrap()))
 }
 
 thread_local! {
@@ -1703,6 +1706,14 @@ mod tests {
                 Some(Real::new(-3f64).unwrap()),
             ),
             (
+                Some(Real::new(-3.5_f64).unwrap()),
+                Some(Real::new(-4f64).unwrap()),
+            ),
+            (
+                Some(Real::new(-4.5_f64).unwrap()),
+                Some(Real::new(-4f64).unwrap()),
+            ),
+            (
                 Some(Real::new(f64::MAX).unwrap()),
                 Some(Real::new(f64::MAX).unwrap()),
             ),
@@ -2071,6 +2082,21 @@ mod tests {
                 Some(Real::new(23.298_f64).unwrap()),
                 Some(-1),
                 Some(Real::new(20.0_f64).unwrap()),
+            ),
+            (
+                Some(Real::new(0.95_f64).unwrap()),
+                Some(1),
+                Some(Real::new(1.0_f64).unwrap()),
+            ),
+            (
+                Some(Real::new(1.05_f64).unwrap()),
+                Some(1),
+                Some(Real::new(1.0_f64).unwrap()),
+            ),
+            (
+                Some(Real::new(1.05_f64).unwrap()),
+                Some(1000000),
+                Some(Real::new(1.05_f64).unwrap()),
             ),
             (Some(Real::new(23.298_f64).unwrap()), None, None),
             (None, Some(2), None),
