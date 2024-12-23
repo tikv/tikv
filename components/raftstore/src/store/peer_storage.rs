@@ -1145,8 +1145,12 @@ where
         last_applied_term,
         apply_state.get_applied_index(),
     );
-    mgr.register(key.clone(), SnapEntry::Generating);
-    defer!(mgr.deregister(&key, &SnapEntry::Generating));
+    let snap = mgr
+        .get_snapshot_for_building(&key)
+        .map_err(|e| storage_error(e))?;
+    mgr.register(key.clone(), snap)
+        .map_err(|e| storage_error(e))?;
+    defer!(mgr.deregister(&key));
 
     let region_state: RegionLocalState = kv_snap
         .get_msg_cf(CF_RAFT, &keys::region_state_key(key.region_id))
@@ -1171,7 +1175,9 @@ where
         .mut_metadata()
         .set_conf_state(util::conf_state_from_region(region_state.get_region()));
     // Set snapshot data.
-    let mut s = mgr.get_snapshot_for_building(&key)?;
+    let mut s = mgr
+        .get_snapshot_for_building(&key)
+        .map_err(|e| storage_error(e))?;
     let snap_data = s.build(
         engine,
         &kv_snap,
