@@ -487,6 +487,7 @@ where
     /// with it.
     fn clean_overlap_ranges(&mut self, start_key: Vec<u8>, end_key: Vec<u8>) -> Result<()> {
         let (start_key, end_key) = self.clean_overlap_ranges_roughly(start_key, end_key);
+        // Directly delete the stale ranges without ingesting.
         self.delete_all_in_range(&[Range::new(&start_key, &end_key)], true)
     }
 
@@ -549,11 +550,8 @@ where
                 error!("failed to delete files in range"; "err" => %e);
             })
             .unwrap();
-        // Directly delete the stale ranges without ingesting.
-        if let Err(e) = self.delete_all_in_range(&ranges, true) {
-            error!("failed to cleanup stale range"; "err" => %e);
-            return;
-        }
+        // Skip remove all overlapped ranges here, which will be cleared by
+        // ticking automatically.
         self.engine
             .delete_ranges_cfs(
                 &WriteOptions::default(),
