@@ -984,7 +984,7 @@ impl Delegate {
     }
 
     async fn on_stop(&mut self, err: Option<Error>) {
-        fail_point!("cdc_before_handle_stop_delegate", |_| return);
+        fail_point!("cdc_before_handle_stop_delegate", |_| {});
         info!("cdc stop delegate"; "region_id" => self.region_id, "error" => ?err);
         let err_event = err.map(|x| x.into_error_event(self.region_id));
         while !self.downstreams.is_empty() {
