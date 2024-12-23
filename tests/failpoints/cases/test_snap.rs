@@ -676,8 +676,8 @@ fn test_sending_fail_with_net_error() {
     // need to wait receiver handle the snapshot request
     sleep_ms(100);
 
-    // peer2 can't receive any snapshot, so it doesn't have any key valuse.
-    // but the receiving_count should be zero if receiving snapshot is failed.
+    // peer2 can't receive any snapshot, so it doesn't have any key values.
+    // but the receiving_count should be zero if receiving snapshot failed.
     let engine2 = cluster.get_engine(2);
     must_get_none(&engine2, b"k1");
     assert_eq!(cluster.get_snap_mgr(2).stats().receiving_count, 0);
@@ -1150,4 +1150,62 @@ fn test_snapshot_receiver_busy() {
     fail::remove("before_region_gen_snap");
     fail::remove("receiving_snapshot_callback");
     fail::remove("snap_gen_precheck_failed");
+}
+
+#[test]
+fn test_snapshot_receiver_not_busy_after_precheck_is_complete() {
+    let mut cluster = new_server_cluster(0, 2);
+    // Test that a snapshot generation is paused when the receiver is busy. To
+    // trigger the scenario, two regions are set up to send snapshots to the
+    // same store concurrently while configuring the receiving limit to 1.
+    cluster.cfg.server.concurrent_recv_snap_limit = 1;
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    // Disable default max peer count check.
+    pd_client.disable_default_operator();
+
+    let right_region = cluster.run_conf_change();
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    // Do a split to create the second region.
+    let r = cluster.get_region(b"k1");
+    cluster.must_split(&r, b"k2");
+    // After the split, the keyspace layout looks like this:
+    //
+    //                   k2 (split point)
+    //                    │
+    //       (k1,v1)      │      (k3,v3)
+    // ───────────────────┼──────────────────
+    //     left_region         right_region
+    let left_region = cluster.get_region(b"k1").id;
+
+    // When a snapshot receiver is busy, we want the snapshot generation to
+    // pause and wait until the receiver becomes available. For the two regions
+    // in this test, there should only be two snapshot generations in total.
+    fail::cfg("before_region_gen_snap", "2*print()->panic()").unwrap();
+
+    // Test flow:
+    // 1. `right_region` sends its snapshot first. The thread will be paused at the
+    //    `post_recv_snap_complete2` failpoint.
+    // 2. Before `right_region` is paused, the `post_recv_snap_complete1` failpoint
+    //    callback triggers `left_region` to send its snapshot.
+    fail::cfg_callback("post_recv_snap_complete1", move || {
+        pd_client.must_add_peer(left_region, new_peer(2, 1002));
+    })
+    .unwrap();
+    fail::cfg("post_recv_snap_complete2", "pause").unwrap();
+
+    let pd_client2 = Arc::clone(&cluster.pd_client);
+    pd_client2.must_add_peer(right_region, new_peer(2, 2));
+    // Check that the `left_region` succeeds in sending its snapshot.
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+
+    // Unblock the `right_region` as well.
+    fail::remove("post_recv_snap_complete2");
+    must_get_equal(&cluster.get_engine(2), b"k3", b"v3");
+
+    fail::remove("post_recv_snap_complete1");
+    fail::remove("before_region_gen_snap");
 }
