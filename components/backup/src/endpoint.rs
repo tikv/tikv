@@ -307,7 +307,9 @@ impl BackupRange {
         ctx.set_peer(self.leader.clone());
 
         // Update max_ts and check the in-memory lock table before getting the snapshot
-        concurrency_manager.update_max_ts(backup_ts);
+        concurrency_manager
+            .update_max_ts(backup_ts, "backup_range")
+            .map_err(TxnError::from)?;
         concurrency_manager
             .read_range_check(
                 self.start_key.as_ref(),
