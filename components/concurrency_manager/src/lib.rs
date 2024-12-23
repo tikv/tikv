@@ -180,7 +180,7 @@ impl ConcurrencyManager {
             if duration_to_last_limit_update < self.limit_valid_duration {
                 // limit is valid
                 let source = source.into_error_source();
-                self.report_error(new_ts, limit.limit, source, true)?;
+                self.report_error(new_ts, limit.limit, source, false)?;
             } else {
                 // limit is stale
                 // use an approximate limit to avoid false alerts caused by failed limit updates
@@ -192,7 +192,7 @@ impl ConcurrencyManager {
 
                 if new_ts > approximate_limit {
                     let source = source.into_error_source();
-                    self.report_error(new_ts, approximate_limit, source, false)?;
+                    self.report_error(new_ts, approximate_limit, source, true)?;
                 }
             }
         }
@@ -210,12 +210,14 @@ impl ConcurrencyManager {
         new_ts: TimeStamp,
         limit: TimeStamp,
         source: impl slog::Value + Display,
-        can_panic: bool,
+        using_approximate: bool,
     ) -> Result<(), InvalidMaxTsUpdate> {
+        let can_panic = !using_approximate;
         error!("invalid max_ts update";
             "attempted_ts" => new_ts,
             "max_allowed" => limit.into_inner(),
             "source" => &source,
+            "using_approximate" => using_approximate,
         );
         match self.action_on_invalid_max_ts.load() {
             ActionOnInvalidMaxTs::Panic if can_panic => {
