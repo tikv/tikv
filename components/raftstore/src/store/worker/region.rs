@@ -487,7 +487,7 @@ where
     /// with it.
     fn clean_overlap_ranges(&mut self, start_key: Vec<u8>, end_key: Vec<u8>) -> Result<()> {
         let (start_key, end_key) = self.clean_overlap_ranges_roughly(start_key, end_key);
-        self.delete_all_in_range(&[Range::new(&start_key, &end_key)])
+        self.delete_all_in_range(&[Range::new(&start_key, &end_key)], true)
     }
 
     /// Inserts a new pending range, and it will be cleaned up with some delay.
@@ -549,7 +549,8 @@ where
                 error!("failed to delete files in range"; "err" => %e);
             })
             .unwrap();
-        if let Err(e) = self.delete_all_in_range(&ranges) {
+        // Directly delete the stale ranges without ingesting.
+        if let Err(e) = self.delete_all_in_range(&ranges, true) {
             error!("failed to cleanup stale range"; "err" => %e);
             return;
         }
@@ -588,11 +589,13 @@ where
         false
     }
 
-    fn delete_all_in_range(&self, ranges: &[Range<'_>]) -> Result<()> {
+    fn delete_all_in_range(&self, ranges: &[Range<'_>], forcely_by_key: bool) -> Result<()> {
         let wopts = WriteOptions::default();
         for cf in self.engine.cf_names() {
             // CF_LOCK usually contains fewer keys than other CFs, so we delete them by key.
-            let (strategy, observer) = if cf == CF_LOCK {
+            // Meanwhile, if `forcely_by_key` is specified, it should remove the range by
+            // delete keys rather than ingestion.
+            let (strategy, observer) = if cf == CF_LOCK || forcely_by_key {
                 (
                     DeleteStrategy::DeleteByKey,
                     &CLEAR_OVERLAP_REGION_DURATION.by_key,
