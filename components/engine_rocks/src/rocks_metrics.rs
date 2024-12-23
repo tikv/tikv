@@ -1047,10 +1047,7 @@ impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
                 .get_or_insert_default() += v;
         }
         if let Some(v) = db.get_property_int(ROCKSDB_NUM_RUNNING_FLUSHES) {
-            *self
-                .db_stats
-                .num_running_compactions
-                .get_or_insert_default() += v;
+            *self.db_stats.num_running_flushes.get_or_insert_default() += v;
         }
 
         // For snapshot

@@ -5453,7 +5453,7 @@ def RocksDB() -> RowPanel:
             graph_panel(
                 title="Compaction operations",
                 description="The count of compaction and flush operations",
-                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC, right_format=UNITS.SHORT),
                 targets=[
                     target(
                         expr=expr_sum_rate(
@@ -5464,6 +5464,34 @@ def RocksDB() -> RowPanel:
                             by_labels=["type"],
                         ),
                         additional_groupby=True,
+                    ),
+                    target(
+                        expr=expr_sum(
+                            "tikv_engine_num_running_compactions",
+                            label_selectors=[
+                                'db="$db"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="running-compactions",
+                        additional_groupby=True,
+                    ),
+                    target(
+                        expr=expr_sum(
+                            "tikv_engine_num_running_flushes",
+                            label_selectors=[
+                                'db="$db"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="running-flushes",
+                        additional_groupby=True,
+                    ),
+                ],
+                series_overrides=[
+                    series_override(
+                        alias="/running-.*/",
+                        yaxis=2,
                     ),
                 ],
             ),
@@ -5594,39 +5622,6 @@ def RocksDB() -> RowPanel:
                             by_labels=[],  # override default by instance.
                         ),
                         legend_format="avg",
-                        additional_groupby=True,
-                    ),
-                ],
-            ),
-        ]
-    )
-    layout.row(
-        [
-            graph_panel(
-                title="Compactions running jobs",
-                description="The count of running compaction and flush jobs",
-                yaxes=yaxes(left_format=UNITS.SHORT),
-                targets=[
-                    target(
-                        expr=expr_sum(
-                            "tikv_engine_num_running_compactions",
-                            label_selectors=[
-                                'db="$db"',
-                            ],
-                            by_labels=[],  # override default by instance.
-                        ),
-                        legend_format="compactions",
-                        additional_groupby=True,
-                    ),
-                    target(
-                        expr=expr_sum(
-                            "tikv_engine_num_running_flushes",
-                            label_selectors=[
-                                'db="$db"',
-                            ],
-                            by_labels=[],  # override default by instance.
-                        ),
-                        legend_format="flushes",
                         additional_groupby=True,
                     ),
                 ],
