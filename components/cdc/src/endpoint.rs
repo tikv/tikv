@@ -15,7 +15,6 @@ use causal_ts::{CausalTsProvider, CausalTsProviderImpl};
 use collections::{HashMap, HashMapEntry, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
-use fail::fail_point;
 use futures::{compat::Future01CompatExt, executor::block_on, lock::Mutex};
 use grpcio::Environment;
 use kvproto::{
