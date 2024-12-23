@@ -141,7 +141,7 @@ pub fn new_cluster_and_tikv_import_client_tde() -> (
 ) {
     let tmp_dir = tempfile::TempDir::new().unwrap();
     let encryption_cfg = test_util::new_file_security_config(tmp_dir.path());
-    let mut security = test_util::new_security_cfg(None);
+    let mut security = test_util::new_security_cfg(None, None);
     security.encryption = encryption_cfg;
     let mut config = TikvConfig::default();
     config.server.addr = "127.0.0.1:0".to_owned();
