@@ -602,7 +602,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
 
     fn on_deregister(&mut self, deregister: Deregister) {
         info!("cdc deregister"; "deregister" => ?deregister);
-        fail_point!("cdc_before_handle_deregister", |_| {});
         match deregister {
             Deregister::Conn(conn_id) => {
                 let conn = self.connections.remove(&conn_id).unwrap();

@@ -350,7 +350,7 @@ fn test_cdc_observed_before_incremental_scan_snapshot() {
     let req_0 = suite.new_changedata_request(region.id);
     block_on(req_tx_0.send((req_0, WriteFlags::default()))).unwrap();
 
-    fail::cfg("cdc_before_handle_multi_batch", "pause").unwrap();
+    fail::cfg("cdc_before_initialize", "pause").unwrap();
     fail::cfg("cdc_sleep_before_drain_change_event", "return").unwrap();
     let (mut req_tx, event_feed, receive_event) =
         new_event_feed(suite.get_region_cdc_client(region.id));
@@ -370,7 +370,7 @@ fn test_cdc_observed_before_incremental_scan_snapshot() {
         lead_client.must_kv_commit(vec![key.into_bytes()], start_ts, commit_ts);
     }
 
-    fail::cfg("cdc_before_handle_multi_batch", "off").unwrap();
+    fail::cfg("cdc_before_initialize", "off").unwrap();
     fail::cfg("cdc_before_drain_change_event", "off").unwrap();
     // Wait the client wake up from `cdc_sleep_before_drain_change_event`.
     thread::sleep(Duration::from_secs(5));

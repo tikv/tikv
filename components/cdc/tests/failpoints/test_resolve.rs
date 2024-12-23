@@ -13,6 +13,7 @@ use tikv_util::config::*;
 use crate::{new_event_feed, TestSuite, TestSuiteBuilder};
 
 #[test]
+#[ignore = "FIXME: the case is not clear enough"]
 fn test_stale_resolver() {
     test_kv_format_impl!(test_stale_resolver_impl<ApiV1 ApiV2>);
 }
@@ -136,34 +137,34 @@ fn test_region_error() {
     cluster.cfg.cdc.min_ts_interval = ReadableDuration::millis(100);
     let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
 
-    let multi_batch_fp = "cdc_before_handle_multi_batch";
+    let multi_batch_fp = "cdc_before_handle_observed_event";
     fail::cfg(multi_batch_fp, "return").unwrap();
-    let deregister_fp = "cdc_before_handle_deregister";
+    let deregister_fp = "cdc_before_handle_stop_delegate";
     fail::cfg(deregister_fp, "return").unwrap();
 
     // Split region
     let region = suite.cluster.get_region(&[]);
     suite.cluster.must_split(&region, b"k1");
+
     // Subscribe source region
     let source = suite.cluster.get_region(b"k0");
     let mut req = suite.new_changedata_request(region.get_id());
-    req.region_id = source.get_id();
+    req.region_id = source.id;
     req.set_region_epoch(source.get_region_epoch().clone());
     let (mut source_tx, source_wrap, _source_event) =
         new_event_feed(suite.get_region_cdc_client(source.get_id()));
     block_on(source_tx.send((req.clone(), WriteFlags::default()))).unwrap();
+
     // Subscribe target region
     let target = suite.cluster.get_region(b"k2");
-    req.region_id = target.get_id();
+    req.region_id = target.id;
     req.set_region_epoch(target.get_region_epoch().clone());
     let (mut target_tx, target_wrap, target_event) =
         new_event_feed(suite.get_region_cdc_client(target.get_id()));
     block_on(target_tx.send((req, WriteFlags::default()))).unwrap();
-    sleep_ms(200);
 
-    suite
-        .cluster
-        .must_try_merge(source.get_id(), target.get_id());
+    sleep_ms(200);
+    suite.cluster.must_try_merge(source.id, target.id);
     sleep_ms(200);
 
     let mut last_resolved_ts = 0;

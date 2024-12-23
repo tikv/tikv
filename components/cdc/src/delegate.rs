@@ -578,6 +578,7 @@ impl Delegate {
     }
 
     async fn on_batch(&mut self, batch: CmdBatch, old_value_cb: OldValueCallback) -> Result<()> {
+        fail_point!("cdc_before_handle_observed_event", |_| Ok(()));
         if batch.cdc_id != self.handle.id {
             return Ok(());
         }
@@ -875,7 +876,6 @@ impl Delegate {
                     }
                 }
                 DelegateTask::ObservedEvent { cmds, old_value_cb } => {
-                    fail_point!("cdc_before_handle_multi_batch", |_| {});
                     self.memory_quota.free(cmds.size());
                     if let Err(e) = self.on_batch(cmds, old_value_cb).await {
                         self.on_stop(Some(e)).await;
@@ -984,6 +984,7 @@ impl Delegate {
     }
 
     async fn on_stop(&mut self, err: Option<Error>) {
+        fail_point!("cdc_before_handle_stop_delegate", |_| return);
         info!("cdc stop delegate"; "region_id" => self.region_id, "error" => ?err);
         let err_event = err.map(|x| x.into_error_event(self.region_id));
         while !self.downstreams.is_empty() {
