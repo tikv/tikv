@@ -72,7 +72,8 @@ impl Runner {
     /// Only for test.
     /// Generate a dummy Runner.
     pub fn dummy() -> Self {
-        Self::build(PathBuf::from("./").join(Self::DISK_IO_LATENCY_INSPECT_FILENAME))
+        let tmp = std::env::temp_dir();
+        Self::build(tmp.join(Self::DISK_IO_LATENCY_INSPECT_FILENAME))
     }
 
     #[inline]
