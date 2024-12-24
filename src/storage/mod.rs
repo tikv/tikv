@@ -1449,7 +1449,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
                 // Update max_ts and check the in-memory lock table before getting the snapshot
                 if !ctx.get_stale_read() {
-                    concurrency_manager.update_max_ts(start_ts);
+                    concurrency_manager
+                        .update_max_ts(start_ts, "scan")
+                        .map_err(txn::Error::from)?;
                 }
                 if need_check_locks(ctx.get_isolation_level()) {
                     let begin_instant = Instant::now();
@@ -1614,7 +1616,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
                 let command_duration = Instant::now();
 
-                concurrency_manager.update_max_ts(max_ts);
+                concurrency_manager
+                    .update_max_ts(max_ts, "scan_lock")
+                    .map_err(txn::Error::from)?;
                 let begin_instant = Instant::now();
                 // TODO: Though it's very unlikely to find a conflicting memory lock here, it's
                 // not a good idea to return an error to the client, making the GC fail. A
@@ -3310,7 +3314,11 @@ fn prepare_snap_ctx<'a>(
 ) -> Result<SnapContext<'a>> {
     // Update max_ts and check the in-memory lock table before getting the snapshot
     if !pb_ctx.get_stale_read() {
-        concurrency_manager.update_max_ts(start_ts);
+        concurrency_manager
+            .update_max_ts(start_ts, || {
+                format!("prepare_snap_ctx-{}-{}", cmd, start_ts)
+            })
+            .map_err(txn::Error::from)?;
     }
     fail_point!("before-storage-check-memory-locks");
     let isolation_level = pb_ctx.get_isolation_level();
@@ -10206,7 +10214,7 @@ mod tests {
             .build()
             .unwrap();
         let cm = storage.concurrency_manager.clone();
-        cm.update_max_ts(10.into());
+        cm.update_max_ts(10.into(), "").unwrap();
 
         // Optimistic prewrite
         let (tx, rx) = channel();
@@ -10254,7 +10262,7 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
 
-        cm.update_max_ts(1000.into());
+        cm.update_max_ts(1000.into(), "").unwrap();
 
         let (tx, rx) = channel();
         storage
@@ -11361,7 +11369,7 @@ mod tests {
         // commit enabled, and max_ts changes when the second request arrives.
 
         // A retrying prewrite request arrives.
-        cm.update_max_ts(20.into());
+        cm.update_max_ts(20.into(), "").unwrap();
         let mut ctx = Context::default();
         ctx.set_is_retry_request(true);
         let (tx, rx) = channel();
@@ -11545,7 +11553,7 @@ mod tests {
 
         // 1PC update
         let (tx, rx) = channel();
-        cm.update_max_ts(59.into());
+        cm.update_max_ts(59.into(), "").unwrap();
         storage
             .sched_txn_command(
                 Prewrite::new(
