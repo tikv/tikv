@@ -1844,7 +1844,7 @@ mod tests {
 
         // Pause scan task runtime.
         let (pause_tx, pause_rx) = std::sync::mpsc::channel::<()>();
-        suite.scan_workers.spawn(async move {
+        suite.scan_workers.as_ref().unwrap().spawn(async move {
             let _ = pause_rx.recv();
         });
 

@@ -31,10 +31,12 @@ use tikv::{
 use tikv_util::{
     config::ReadableDuration,
     memory::MemoryQuota,
+    sys::thread::ThreadBuildWrapper,
     worker::{LazyWorker, Runnable},
     HandyRwLock,
 };
 use txn_types::TimeStamp;
+
 static INIT: Once = Once::new();
 
 pub fn init() {
@@ -189,10 +191,18 @@ impl TestSuiteBuilder {
                 .entry(id)
                 .or_default()
                 .push(Box::new(move || {
+                    // NOTE: Use a seperate pool for grpc messages because
+                    // sharing the same one with `Endpoint` makes code complex
+                    // here.
+                    let workers = tokio::runtime::Builder::new_multi_thread()
+                        .worker_threads(1)
+                        .with_sys_hooks()
+                        .build()
+                        .unwrap();
                     create_change_data(cdc::Service::new(
                         scheduler.clone(),
                         memory_quota_.clone(),
-                        1,
+                        workers.handle().clone(),
                     ))
                 }));
             sim.txn_extra_schedulers.insert(
