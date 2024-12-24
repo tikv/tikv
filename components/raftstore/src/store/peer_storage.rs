@@ -36,6 +36,7 @@ use tikv_util::{
     time::{Instant, UnixSecs},
     warn,
     worker::Scheduler,
+    DeferContext,
 };
 
 use super::{metrics::*, worker::RegionTask, SnapEntry, SnapKey, SnapManager};
@@ -1145,12 +1146,14 @@ where
         last_applied_term,
         apply_state.get_applied_index(),
     );
+    // Set snapshot data.
     let snap = mgr
         .get_snapshot_for_building(&key)
         .map_err(|e| storage_error(e))?;
-    mgr.register(key.clone(), snap)
-        .map_err(|e| storage_error(e))?;
-    defer!(mgr.deregister(&key));
+    let mut deregister = {
+        let (mgr, key) = (mgr.clone(), key.clone());
+        DeferContext::new(move || mgr.deregister(&key))
+    };
 
     let region_state: RegionLocalState = kv_snap
         .get_msg_cf(CF_RAFT, &keys::region_state_key(key.region_id))
@@ -1174,11 +1177,11 @@ where
     snapshot
         .mut_metadata()
         .set_conf_state(util::conf_state_from_region(region_state.get_region()));
-    // Set snapshot data.
-    let mut s = mgr
-        .get_snapshot_for_building(&key)
-        .map_err(|e| storage_error(e))?;
-    let snap_data = s.build(
+    // Set raft snapshot payload. Note that the payload doesn't carry kv data.
+    // It actually is the necessary metadata of sending kv data. Kv data will be
+    // sent separately by a dedicated socket connection.
+    // Check `send_snapshot_sock`in `raft_client.rs` to see how socket connect.
+    let snap_payload = snap.build(
         engine,
         &kv_snap,
         region_state.get_region(),
@@ -1186,8 +1189,9 @@ where
         for_balance,
         start,
     )?;
-    snapshot.set_data(snap_data.write_to_bytes()?.into());
+    snapshot.set_data(snap_payload.write_to_bytes()?.into());
 
+    deregister.cancel();
     Ok(snapshot)
 }
 
