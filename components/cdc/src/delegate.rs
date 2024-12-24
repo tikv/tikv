@@ -45,7 +45,7 @@ use tikv_util::{
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteBatchFlags, WriteRef, WriteType};
 
 use crate::{
-    channel::{DownstreamSink, CDC_EVENT_MAX_BYTES},
+    channel::DownstreamSink,
     endpoint::{Deregister, Task},
     initializer::KvEntry,
     metrics::*,
@@ -54,6 +54,9 @@ use crate::{
     txn_source::TxnSource,
     Error, Result,
 };
+
+// The maximum bytes of events can be batched into one `CdcEvent::Event`, 32KB.
+const CDC_EVENT_MAX_BYTES: usize = 32 * 1024;
 
 static DOWNSTREAM_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 

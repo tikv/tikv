@@ -667,20 +667,14 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 region_id,
                 observe_id,
             } => {
-                let delegate = match self.capture_regions.entry(region_id) {
-                    HashMapEntry::Vacant(_) => return,
-                    HashMapEntry::Occupied(x) => {
-                        // To avoid ABA problem, we must check the unique ObserveId.
-                        if x.get().handle.id != observe_id {
-                            return;
-                        }
-                        x.remove()
+                if let HashMapEntry::Occupied(x) = self.capture_regions.entry(region_id) {
+                    // To avoid ABA problem, we must check the unique ObserveId.
+                    if x.get().handle.id == observe_id {
+                        let delegate = x.remove();
+                        assert!(delegate.sched.is_closed());
                     }
-                };
-                self.observer
-                    .unsubscribe_region(region_id, observe_id)
-                    .unwrap();
-                delegate.sched.close_channel();
+                }
+                self.observer.unsubscribe_region(region_id, observe_id);
             }
         }
     }

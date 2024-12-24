@@ -323,6 +323,9 @@ fn test_cdc_not_leader_impl<F: KvFormat>() {
         }
         other => panic!("unknown event {:?}", other),
     }
+
+    // Sleep a while to make sure the stream is deregistered.
+    sleep_ms(200);
     assert!(
         suite
             .obs
@@ -331,9 +334,6 @@ fn test_cdc_not_leader_impl<F: KvFormat>() {
             .get_subscribed(1)
             .is_none()
     );
-
-    // Sleep a while to make sure the stream is deregistered.
-    sleep_ms(200);
     scheduler
         .schedule(Task::Validate(Validate::Region(
             1,
@@ -357,6 +357,9 @@ fn test_cdc_not_leader_impl<F: KvFormat>() {
         }
         other => panic!("unknown event {:?}", other),
     }
+
+    // Sleep a while to make sure the stream is deregistered.
+    sleep_ms(200);
     assert!(
         suite
             .obs

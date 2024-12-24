@@ -29,10 +29,7 @@ use crate::{
     Error, Result,
 };
 
-/// The maximum bytes of events can be batched into one `CdcEvent::Event`, 32KB.
-pub const CDC_EVENT_MAX_BYTES: usize = 32 * 1024;
-
-/// The maximum bytes of ChangeDataEvent, 6MB.
+// The maximum bytes of ChangeDataEvent, 6MB.
 const CDC_RESP_MAX_BYTES: usize = 6 * 1024 * 1024;
 
 pub enum CdcEvent {
