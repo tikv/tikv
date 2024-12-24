@@ -31,10 +31,13 @@ use tikv::{
 use tikv_util::{
     config::ReadableDuration,
     memory::MemoryQuota,
+    sys::thread::ThreadBuildWrapper,
     worker::{LazyWorker, Runnable},
     HandyRwLock,
 };
+use tokio::runtime::{self, Runtime};
 use txn_types::TimeStamp;
+
 static INIT: Once = Once::new();
 
 pub fn init() {
@@ -175,6 +178,11 @@ impl TestSuiteBuilder {
         let mut quotas = HashMap::default();
         let mut obs = HashMap::default();
         let mut concurrency_managers = HashMap::default();
+        let service_workers = runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .with_sys_hooks()
+            .build()
+            .unwrap();
         // Hack! node id are generated from 1..count+1.
         for id in 1..=count as u64 {
             // Create and run cdc endpoints.
@@ -185,11 +193,16 @@ impl TestSuiteBuilder {
             let memory_quota = Arc::new(MemoryQuota::new(memory_quota));
             let memory_quota_ = memory_quota.clone();
             let scheduler = worker.scheduler();
+            let handle = service_workers.handle().clone();
             sim.pending_services
                 .entry(id)
                 .or_default()
                 .push(Box::new(move || {
-                    create_change_data(cdc::Service::new(scheduler.clone(), memory_quota_.clone()))
+                    create_change_data(cdc::Service::new(
+                        scheduler.clone(),
+                        memory_quota_.clone(),
+                        handle.clone(),
+                    ))
                 }));
             sim.txn_extra_schedulers.insert(
                 id,
@@ -198,8 +211,7 @@ impl TestSuiteBuilder {
                     memory_quota.clone(),
                 )),
             );
-            let scheduler = worker.scheduler();
-            let cdc_ob = cdc::CdcObserver::new(scheduler.clone(), memory_quota.clone());
+            let cdc_ob = cdc::CdcObserver::new(memory_quota.clone());
             obs.insert(id, cdc_ob.clone());
             sim.coprocessor_hosts.entry(id).or_default().push(Box::new(
                 move |host: &mut CoprocessorHost<RocksEngine>| {
@@ -248,10 +260,11 @@ impl TestSuiteBuilder {
             cluster,
             endpoints,
             obs,
-            concurrency_managers,
-            env: Arc::new(Environment::new(1)),
             tikv_cli: HashMap::default(),
             cdc_cli: HashMap::default(),
+            concurrency_managers,
+            env: Arc::new(Environment::new(1)),
+            _service_workers: service_workers,
         }
     }
 }
@@ -265,6 +278,10 @@ pub struct TestSuite {
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
 
     env: Arc<Environment>,
+
+    // In TestSuite, Service use a different thread pool from Endpoint.
+    // It can simplify `build_with_cluster_runner`.
+    _service_workers: Runtime,
 }
 
 impl Default for TestSuiteBuilder {
