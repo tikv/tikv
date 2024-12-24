@@ -183,9 +183,6 @@ pub fn send_snap(
         (key, snap_start, generate_duration_sec, io_type)
     };
 
-    let snap = mgr.get_snapshot_for_building(&key)?;
-    mgr.register(key.clone(), snap)
-        .map_err::<Error, _>(|e| box_err!("failed to gen snapshot: {:?}", e))?;
     let deregister = {
         let (mgr, key) = (mgr.clone(), key.clone());
         DeferContext::new(move || mgr.deregister(&key))
