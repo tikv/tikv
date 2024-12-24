@@ -1073,7 +1073,7 @@ pub(crate) mod tests {
             let mut s3 = mgr
                 .get_snapshot_for_receiving(&key, data.take_meta())
                 .unwrap();
-            io::copy(&mut s2, &mut s3).unwrap();
+            io::copy(&mut &*s2, &mut &*s3).unwrap();
             s3.save().unwrap();
 
             // set applying state
