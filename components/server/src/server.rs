@@ -136,7 +136,7 @@ use tikv_util::{
     yatp_pool::CleanupMethod,
     Either,
 };
-use tokio::runtime::Builder;
+use tokio::runtime::{Builder, Handle};
 
 use crate::{
     common::{
@@ -293,6 +293,7 @@ struct Servers<RocksEngine: KvEngine, ER: RaftEngine, F: KvFormat> {
     importer: Arc<SstImporter<RocksEngine>>,
     cdc_scheduler: tikv_util::worker::Scheduler<cdc::Task>,
     cdc_memory_quota: Arc<MemoryQuota>,
+    cdc_responser_workers: Handle,
     rsmeter_pubsub_service: resource_metering::PubSubService,
     backup_stream_scheduler: Option<tikv_util::worker::Scheduler<backup_stream::Task>>,
     debugger: DebuggerImpl<
@@ -1112,6 +1113,7 @@ where
             cdc_memory_quota.clone(),
             self.causal_ts_provider.clone(),
         );
+        let cdc_responser_workers = cdc_endpoint.get_responser_workers();
         cdc_worker.start_with_timer(cdc_endpoint);
         self.core.to_stop.push(cdc_worker);
 
@@ -1157,6 +1159,7 @@ where
             importer,
             cdc_scheduler,
             cdc_memory_quota,
+            cdc_responser_workers,
             rsmeter_pubsub_service,
             backup_stream_scheduler,
             debugger,
@@ -1323,7 +1326,7 @@ where
         let cdc_service = cdc::Service::new(
             servers.cdc_scheduler.clone(),
             servers.cdc_memory_quota.clone(),
-            self.core.config.cdc.responser_threads,
+            servers.cdc_responser_workers.clone(),
         );
         if servers
             .server

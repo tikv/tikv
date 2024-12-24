@@ -46,7 +46,7 @@ use tikv_util::{
     worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler},
 };
 use tokio::{
-    runtime::{Builder, Runtime},
+    runtime::{Builder, Handle, Runtime},
     sync::Semaphore,
 };
 use txn_types::{TimeStamp, TxnExtra, TxnExtraScheduler};
@@ -393,10 +393,10 @@ pub struct Endpoint<T, E, S> {
     resolved_ts_config: ResolvedTsConfig,
     api_version: ApiVersion,
 
-    workers: Runtime,
+    workers: Option<Runtime>,
 
     // Incremental scan stuffs.
-    scan_workers: Runtime,
+    scan_workers: Option<Runtime>,
     scan_task_counter: Arc<AtomicIsize>,
     scan_concurrency_semaphore: Arc<Semaphore>,
     scan_speed_limiter: Limiter,
@@ -438,7 +438,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
     ) -> Endpoint<T, E, S> {
         let workers = Builder::new_multi_thread()
             .thread_name("cdc-main-workers")
-            .worker_threads(2)
+            .worker_threads(config.responser_threads)
             .with_sys_hooks()
             .build()
             .unwrap();
@@ -510,9 +510,9 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             resolved_ts_config: resolved_ts_config.clone(),
             api_version,
 
-            workers,
+            workers: Some(workers),
 
-            scan_workers,
+            scan_workers: Some(scan_workers),
             scan_task_counter: Arc::default(),
             scan_concurrency_semaphore,
             scan_speed_limiter,
@@ -532,6 +532,10 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         };
         ep.register_min_ts_event(leader_resolver, Instant::now());
         ep
+    }
+
+    pub fn get_responser_workers(&self) -> Handle {
+        self.workers.as_ref().unwrap().handle().clone()
     }
 
     fn on_change_cfg(&mut self, change: ConfigChange) {
@@ -789,7 +793,9 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 );
                 let delegate = d.meta();
                 e.insert(delegate.clone());
-                self.workers.spawn(async move { d.handle_tasks().await });
+                if let Some(workers) = self.workers.as_ref() {
+                    workers.spawn(async move { d.handle_tasks().await });
+                }
 
                 let old_ob = self.observer.subscribe_region(
                     region_id,
@@ -854,29 +860,31 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         };
 
         let cdc_handle = self.cdc_handle.clone();
-        self.scan_workers.spawn(async move {
-            if fut.await.is_err() {
-                info!("cdc initialize is canceled before start"; "region_id" => region_id,
-                    "conn_id" => ?init.conn_id, "request_id" => ?init.request_id);
+        if let Some(workers) = self.scan_workers.as_ref() {
+            workers.spawn(async move {
+                if fut.await.is_err() {
+                    info!("cdc initialize is canceled before start"; "region_id" => region_id,
+                        "conn_id" => ?init.conn_id, "request_id" => ?init.request_id);
+                    drop(release_scan_task_counter);
+                    return;
+                }
+                CDC_SCAN_TASKS.with_label_values(&["total"]).inc();
+                match init.initialize(cdc_handle).await {
+                    Ok(()) => {
+                        CDC_SCAN_TASKS.with_label_values(&["finish"]).inc();
+                    }
+                    Err(e) => {
+                        CDC_SCAN_TASKS.with_label_values(&["abort"]).inc();
+                        error!(
+                            "cdc initialize fail: {}", e; "region_id" => region_id,
+                            "conn_id" => ?init.conn_id, "request_id" => ?init.request_id,
+                        );
+                        init.deregister_downstream(e);
+                    }
+                }
                 drop(release_scan_task_counter);
-                return;
-            }
-            CDC_SCAN_TASKS.with_label_values(&["total"]).inc();
-            match init.initialize(cdc_handle).await {
-                Ok(()) => {
-                    CDC_SCAN_TASKS.with_label_values(&["finish"]).inc();
-                }
-                Err(e) => {
-                    CDC_SCAN_TASKS.with_label_values(&["abort"]).inc();
-                    error!(
-                        "cdc initialize fail: {}", e; "region_id" => region_id,
-                        "conn_id" => ?init.conn_id, "request_id" => ?init.request_id,
-                    );
-                    init.deregister_downstream(e);
-                }
-            }
-            drop(release_scan_task_counter);
-        });
+            });
+        }
     }
 
     fn on_min_ts(&mut self, regions: Vec<u64>, min_ts: TimeStamp, current_ts: TimeStamp) {
@@ -1130,6 +1138,14 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
     fn get_interval(&self) -> Duration {
         // Currently there is only one timeout for CDC.
         Duration::from_millis(METRICS_FLUSH_INTERVAL)
+    }
+}
+
+impl<T, E, S> Drop for Endpoint<T, E, S> {
+    fn drop(&mut self) {
+        let dur = Duration::from_secs(1);
+        self.workers.take().unwrap().shutdown_timeout(dur);
+        self.scan_workers.take().unwrap().shutdown_timeout(dur);
     }
 }
 

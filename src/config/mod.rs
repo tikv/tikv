@@ -3000,11 +3000,14 @@ impl Default for BackupStreamConfig {
 pub struct CdcConfig {
     pub min_ts_interval: ReadableDuration,
     pub hibernate_regions_compatible: bool,
+
+    /// Threads for collecting and sending events to TiCDC clients.
     #[online_config(skip)]
     pub responser_threads: usize,
-    // TODO(hi-rustin): Consider resizing the thread pool based on `incremental_scan_threads`.
+    /// Threads for incremental scans.
     #[online_config(skip)]
     pub incremental_scan_threads: usize,
+
     // The number of scan tasks that is allowed to run concurrently.
     pub incremental_scan_concurrency: usize,
     // The number of scan tasks that is allowed to be created. In other words,

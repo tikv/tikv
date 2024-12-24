@@ -17,7 +17,7 @@ use kvproto::{
 };
 use semver::Version;
 use tikv_util::{error, info, memory::MemoryQuota, warn, worker::*};
-use tokio::runtime::{self, Runtime};
+use tokio::runtime::Handle;
 
 use crate::{
     channel::{channel, DownstreamSink, Sink},
@@ -212,7 +212,7 @@ impl EventFeedHeaders {
 pub struct Service {
     scheduler: Scheduler<Task>,
     memory_quota: Arc<MemoryQuota>,
-    workers: Arc<Runtime>,
+    workers: Handle,
 }
 
 impl Service {
@@ -222,14 +222,8 @@ impl Service {
     pub fn new(
         scheduler: Scheduler<Task>,
         memory_quota: Arc<MemoryQuota>,
-        workers: usize,
+        workers: Handle,
     ) -> Service {
-        let workers = runtime::Builder::new_multi_thread()
-            .thread_name("cdc-responsers")
-            .worker_threads(workers)
-            .build()
-            .unwrap();
-        let workers = Arc::new(workers);
         Service {
             scheduler,
             memory_quota,
