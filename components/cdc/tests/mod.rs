@@ -35,6 +35,7 @@ use tikv_util::{
     worker::{LazyWorker, Runnable},
     HandyRwLock,
 };
+use tokio::runtime::{self, Runtime};
 use txn_types::TimeStamp;
 
 static INIT: Once = Once::new();
@@ -177,6 +178,11 @@ impl TestSuiteBuilder {
         let mut quotas = HashMap::default();
         let mut obs = HashMap::default();
         let mut concurrency_managers = HashMap::default();
+        let service_workers = runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .with_sys_hooks()
+            .build()
+            .unwrap();
         // Hack! node id are generated from 1..count+1.
         for id in 1..=count as u64 {
             // Create and run cdc endpoints.
@@ -187,22 +193,15 @@ impl TestSuiteBuilder {
             let memory_quota = Arc::new(MemoryQuota::new(memory_quota));
             let memory_quota_ = memory_quota.clone();
             let scheduler = worker.scheduler();
+            let handle = service_workers.handle().clone();
             sim.pending_services
                 .entry(id)
                 .or_default()
                 .push(Box::new(move || {
-                    // NOTE: Use a seperate pool for grpc messages because
-                    // sharing the same one with `Endpoint` makes code complex
-                    // here.
-                    let workers = tokio::runtime::Builder::new_multi_thread()
-                        .worker_threads(1)
-                        .with_sys_hooks()
-                        .build()
-                        .unwrap();
                     create_change_data(cdc::Service::new(
                         scheduler.clone(),
                         memory_quota_.clone(),
-                        workers.handle().clone(),
+                        handle.clone(),
                     ))
                 }));
             sim.txn_extra_schedulers.insert(
@@ -261,10 +260,11 @@ impl TestSuiteBuilder {
             cluster,
             endpoints,
             obs,
-            concurrency_managers,
-            env: Arc::new(Environment::new(1)),
             tikv_cli: HashMap::default(),
             cdc_cli: HashMap::default(),
+            concurrency_managers,
+            env: Arc::new(Environment::new(1)),
+            _service_workers: service_workers,
         }
     }
 }
@@ -278,6 +278,10 @@ pub struct TestSuite {
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
 
     env: Arc<Environment>,
+
+    // In TestSuite, Service use a different thread pool from Endpoint.
+    // It can simplify `build_with_cluster_runner`.
+    _service_workers: Runtime,
 }
 
 impl Default for TestSuiteBuilder {
