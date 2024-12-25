@@ -267,9 +267,16 @@ impl RoleObserver for LoadEvictionObserver {
 }
 
 impl ExtraMessageObserver for LoadEvictionObserver {
-    fn on_extra_message(&self, r: &Region, extra_msg: &ExtraMessage) {
+    fn on_extra_message(&self, region: &Region, extra_msg: &ExtraMessage) {
         if extra_msg.get_type() == ExtraMessageType::MsgPreLoadRegionRequest {
-            self.cache_engine.load_region(r);
+            if region.get_peers().is_empty() {
+                // MsgPreLoadRegionRequest is sent before leader issue a
+                // transfer leader request. It is possible that the peer
+                // is not initialized yet.
+                warn!("ime skip pre-load an uninitialized region"; "region" => ?region);
+                return;
+            }
+            self.cache_engine.load_region(region);
         }
     }
 }
