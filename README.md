@@ -5,6 +5,7 @@
 [![Build Status](https://ci.pingcap.net/buildStatus/icon?job=tikv_ghpr_build_master)](https://ci.pingcap.net/blue/organizations/jenkins/tikv_ghpr_build_master/activity)
 [![Coverage Status](https://codecov.io/gh/tikv/tikv/branch/master/graph/badge.svg)](https://codecov.io/gh/tikv/tikv)
 [![CII Best Practices](https://bestpractices.coreinfrastructure.org/projects/2574/badge)](https://bestpractices.coreinfrastructure.org/projects/2574)
+[![Gurubase](https://img.shields.io/badge/Gurubase-Ask%20TiKV%20Guru-006BFF)](https://gurubase.io/g/tikv)
 
 TiKV is an open-source, distributed, and transactional key-value database. Unlike other traditional NoSQL systems, TiKV not only provides classical key-value APIs, but also transactional APIs with ACID compliance. Built in Rust and powered by Raft, TiKV was originally created by [PingCAP](https://en.pingcap.com) to complement [TiDB](https://github.com/pingcap/tidb), a distributed HTAP database compatible with the MySQL protocol.
 
