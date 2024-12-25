@@ -91,7 +91,7 @@ fn test_observe_duplicate_cmd_impl<F: KvFormat>() {
     req.request_id = 3;
     block_on(req_tx_3.send((req, WriteFlags::default()))).unwrap();
 
-    sleep_ms(200);
+    sleep_ms(500);
     drop(req_tx_1);
     drop(req_tx_2);
     drop(event_feed_wrap_1);
