@@ -136,7 +136,7 @@ pub struct Downstream {
 
     /// The request ID set by CDC to identify events corresponding different
     /// requests.
-    pub req_id: RequestId,
+    pub request_id: RequestId,
     pub conn_id: ConnId,
     pub peer: String,
     pub region_epoch: RegionEpoch,
@@ -157,7 +157,7 @@ impl fmt::Debug for Downstream {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Downstream")
             .field("id", &self.id)
-            .field("req_id", &self.req_id)
+            .field("request_id", &self.request_id)
             .field("conn_id", &self.conn_id)
             .finish()
     }
@@ -169,7 +169,7 @@ impl Downstream {
     /// peer is the address of the downstream.
     /// sink sends data to the downstream.
     pub fn new(
-        req_id: RequestId,
+        request_id: RequestId,
         conn_id: ConnId,
         peer: String,
         region_epoch: RegionEpoch,
@@ -180,7 +180,7 @@ impl Downstream {
     ) -> Downstream {
         Downstream {
             id: DownstreamId::new(),
-            req_id,
+            request_id,
             conn_id,
             peer,
             region_epoch,
@@ -852,7 +852,7 @@ impl Delegate {
                 "region_id" => region.id,
                 "downstream_id" => ?downstream.id,
                 "conn_id" => ?downstream.conn_id,
-                "req_id" => ?downstream.req_id,
+                "request_id" => ?downstream.request_id,
                 "err" => ?e
             );
             // Downstream is outdated, mark stop.
@@ -963,12 +963,12 @@ impl Delegate {
                 warn!("cdc send region error failed";
                     "region_id" => self.region_id, "error" => ?err,
                     "downstream_id" => ?downstream.id, "downstream" => ?downstream.peer,
-                    "request_id" => ?downstream.req_id, "conn_id" => ?downstream.conn_id);
+                    "request_id" => ?downstream.request_id, "conn_id" => ?downstream.conn_id);
             } else {
                 info!("cdc send region error success";
                     "region_id" => self.region_id,
                     "downstream_id" => ?downstream.id, "downstream" => ?downstream.peer,
-                    "request_id" => ?downstream.req_id, "conn_id" => ?downstream.conn_id);
+                    "request_id" => ?downstream.request_id, "conn_id" => ?downstream.conn_id);
             }
         }
         downstream.state.store(DownstreamState::Stopped);
@@ -976,7 +976,7 @@ impl Delegate {
             .feedbacks
             .schedule_force(Task::Deregister(Deregister::Downstream {
                 conn_id: downstream.conn_id,
-                request_id: downstream.req_id,
+                request_id: downstream.request_id,
                 region_id: self.region_id,
                 downstream_id: downstream.id,
             }));
@@ -1642,19 +1642,19 @@ mod tests {
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
         let (sink, _drain) = channel(conn_id, quota.clone());
 
-        let new_downstream = |req_id: RequestId, region_version: u64, sink| {
+        let new_downstream = |request_id: RequestId, region_version: u64, sink| {
             let mut epoch = RegionEpoch::default();
             epoch.set_conf_ver(region_version);
             epoch.set_version(region_version);
             Downstream::new(
-                req_id,
+                request_id,
                 conn_id,
-                format!("{:?}", req_id),
+                format!("{:?}", request_id),
                 epoch,
                 ChangeDataRequestKvApi::TiDb,
                 false,
                 ObservedRange::default(),
-                DownstreamSink::new(1, req_id, sink),
+                DownstreamSink::new(1, request_id, sink),
             )
         };
 

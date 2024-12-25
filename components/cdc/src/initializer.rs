@@ -491,7 +491,7 @@ impl<E: KvEngine> Initializer<E> {
     async fn sink_scan_events(&mut self, entries: Vec<Option<KvEntry>>) -> Result<()> {
         let events = convert_to_grpc_events(entries, self.filter_loop)?;
         if let Err(e) = self.sink.send_scaned(events).await {
-            error!("cdc send scan event failed"; "req_id" => ?self.request_id);
+            error!("cdc send scan event failed"; "request_id" => ?self.request_id);
             return Err(e);
         }
         Ok(())

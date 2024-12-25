@@ -290,7 +290,7 @@ impl Service {
         sink: Sink,
     ) -> Result<(), String> {
         let region_id = request.region_id;
-        let req_id = RequestId(request.request_id);
+        let request_id = RequestId(request.request_id);
 
         let observed_range = ObservedRange::new(request.start_key.clone(), request.end_key.clone())
             .unwrap_or_else(|e| {
@@ -298,7 +298,7 @@ impl Service {
                     "cdc invalid observed start key or end key version";
                     "downstream" => ?peer,
                     "region_id" => region_id,
-                    "request_id" => ?req_id,
+                    "request_id" => ?request_id,
                     "error" => ?e,
                     "start_key" => log_wrappers::Value::key(&request.start_key),
                     "end_key" => log_wrappers::Value::key(&request.end_key),
@@ -313,9 +313,9 @@ impl Service {
             request.kv_api,
             request.filter_loop,
             observed_range,
-            DownstreamSink::new(region_id, req_id, sink),
+            DownstreamSink::new(region_id, request_id, sink),
         );
-        info!("creates cdc downstream"; "conn_id" => ?conn_id, "region_id" => region_id, "request_id" => ?req_id);
+        info!("creates cdc downstream"; "conn_id" => ?conn_id, "region_id" => region_id, "request_id" => ?request_id);
 
         let task = Task::Register {
             request,

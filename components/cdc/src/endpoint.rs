@@ -292,24 +292,25 @@ impl Advance {
     fn emit_resolved_ts(&mut self, connections: &HashMap<ConnId, Conn>) {
         let mut batch_min_resolved_ts = 0;
         let mut batch_min_ts_region_id = 0;
-        let mut batch_send = |ts: u64, conn: &Conn, req_id: RequestId, regions: Vec<u64>| {
+        let mut batch_send = |ts: u64, conn: &Conn, request_id: RequestId, regions: Vec<u64>| {
             if batch_min_resolved_ts == 0 || batch_min_resolved_ts > ts {
                 batch_min_resolved_ts = ts;
                 if !regions.is_empty() {
                     batch_min_ts_region_id = regions[0];
                 }
             }
-            conn.sink.send_batch_resolved_ts(regions, req_id.0, ts);
+            conn.sink.send_batch_resolved_ts(regions, request_id.0, ts);
         };
 
         let mut compat_min_resolved_ts = 0;
         let mut compat_min_ts_region_id = 0;
-        let mut compat_send = |ts: u64, conn: &Conn, region_id: u64, req_id: RequestId| {
+        let mut compat_send = |ts: u64, conn: &Conn, region_id: u64, request_id: RequestId| {
             if compat_min_resolved_ts == 0 || compat_min_resolved_ts > ts {
                 compat_min_resolved_ts = ts;
                 compat_min_ts_region_id = region_id;
             }
-            conn.sink.send_region_resolved_ts(region_id, req_id.0, ts);
+            conn.sink
+                .send_region_resolved_ts(region_id, request_id.0, ts);
         };
 
         let multiplexing = std::mem::take(&mut self.multiplexing).into_iter();
@@ -318,19 +319,19 @@ impl Advance {
             .map(|((a, b), c)| (a, b, c))
             .chain(exclusive.map(|(a, c)| (a, RequestId(0), c)));
 
-        for (conn_id, req_id, mut region_ts_heap) in unioned {
+        for (conn_id, request_id, mut region_ts_heap) in unioned {
             let conn = connections.get(&conn_id).unwrap();
             let mut batch_count = 8;
             while !region_ts_heap.is_empty() {
                 let (ts, regions) = region_ts_heap.pop(batch_count);
-                batch_send(ts.into_inner(), conn, req_id, Vec::from_iter(regions));
+                batch_send(ts.into_inner(), conn, request_id, Vec::from_iter(regions));
                 batch_count *= 4;
             }
         }
 
-        for ((conn_id, region_id), (req_id, ts)) in std::mem::take(&mut self.compat) {
+        for ((conn_id, region_id), (request_id, ts)) in std::mem::take(&mut self.compat) {
             let conn = connections.get(&conn_id).unwrap();
-            compat_send(ts.into_inner(), conn, region_id, req_id);
+            compat_send(ts.into_inner(), conn, region_id, request_id);
         }
 
         if batch_min_resolved_ts > 0 {
@@ -415,7 +416,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             .with_sys_hooks()
             .build()
             .unwrap();
-
         let scan_workers = Builder::new_multi_thread()
             .thread_name("cdc-scan-workers")
             .worker_threads(config.incremental_scan_threads)
@@ -672,7 +672,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 info!("cdc register region on an deregistered connection, ignore";
                     "region_id" => region_id,
                     "conn_id" => ?conn_id,
-                    "req_id" => ?request_id,
+                    "request_id" => ?request_id,
                     "downstream_id" => ?downstream_id);
                 return;
             }
@@ -711,7 +711,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             debug!("cdc rejects registration, too many scan tasks";
                 "region_id" => region_id,
                 "conn_id" => ?conn_id,
-                "req_id" => ?request_id,
+                "request_id" => ?request_id,
                 "scan_task_count" => scan_task_count,
                 "incremental_scan_concurrency_limit" => self.config.incremental_scan_concurrency_limit,
             );
@@ -743,7 +743,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             error!("cdc duplicate register";
                 "region_id" => region_id,
                 "conn_id" => ?conn_id,
-                "req_id" => ?request_id,
+                "request_id" => ?request_id,
                 "downstream_id" => ?downstream_id);
             return;
         }
@@ -787,7 +787,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             error!("cdc delegate is stopped when subscribe";
                 "region_id" => region_id,
                 "conn_id" => ?conn_id,
-                "req_id" => ?request_id,
+                "request_id" => ?request_id,
                 "downstream_id" => ?downstream_id);
             let mut err_event = EventError::default();
             err_event.mut_region_not_found().region_id = region_id;
@@ -813,7 +813,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         info!("cdc register region";
             "region_id" => region_id,
             "conn_id" => ?conn.id,
-            "req_id" => ?request_id,
+            "request_id" => ?request_id,
             "observe_id" => ?handle.id,
             "downstream_id" => ?downstream_id);
 
@@ -903,10 +903,13 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         let mut advance = Advance::default();
         for (conn_id, conn) in &self.connections {
             if conn.features.contains(FeatureGate::STREAM_MULTIPLEXING) {
-                conn.iter_downstreams(|req_id, region_id, _, advanced_to| {
+                conn.iter_downstreams(|request_id, region_id, _, advanced_to| {
                     let advanced_to = TimeStamp::from(advanced_to.load(Ordering::Acquire));
                     if !advanced_to.is_zero() {
-                        let heap = advance.multiplexing.entry((*conn_id, req_id)).or_default();
+                        let heap = advance
+                            .multiplexing
+                            .entry((*conn_id, request_id))
+                            .or_default();
                         heap.push(region_id, advanced_to);
                     }
                 });
@@ -919,12 +922,12 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                     }
                 });
             } else {
-                conn.iter_downstreams(|req_id, region_id, _, advanced_to| {
+                conn.iter_downstreams(|request_id, region_id, _, advanced_to| {
                     let advanced_to = TimeStamp::from(advanced_to.load(Ordering::Acquire));
                     if !advanced_to.is_zero() {
                         advance
                             .compat
-                            .insert((*conn_id, region_id), (req_id, advanced_to));
+                            .insert((*conn_id, region_id), (request_id, advanced_to));
                     }
                 });
             }

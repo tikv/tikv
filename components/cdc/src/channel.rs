@@ -339,16 +339,16 @@ impl Drop for Drain {
 #[derive(Clone)]
 pub struct DownstreamSink {
     region_id: u64,
-    req_id: RequestId,
+    request_id: RequestId,
     canceled: Arc<RwLock<bool>>,
     sink: Sink,
 }
 
 impl DownstreamSink {
-    pub fn new(region_id: u64, req_id: RequestId, sink: Sink) -> Self {
+    pub fn new(region_id: u64, request_id: RequestId, sink: Sink) -> Self {
         DownstreamSink {
             region_id,
-            req_id,
+            request_id,
             canceled: Arc::new(RwLock::new(false)),
             sink,
         }
@@ -358,11 +358,11 @@ impl DownstreamSink {
         match e {
             SendError::Disconnected => {
                 debug!("cdc send events failed, disconnected"; "conn_id" => ?self.sink.conn_id,
-                    "region_id" => self.region_id, "request_id" => self.req_id.0);
+                    "region_id" => self.region_id, "request_id" => self.request_id.0);
             }
             SendError::Congested => {
                 info!("cdc send events failed, congested"; "conn_id" => ?self.sink.conn_id,
-                    "region_id" => self.region_id, "request_id" => self.req_id.0);
+                    "region_id" => self.region_id, "request_id" => self.request_id.0);
             }
         }
         Error::Sink(e)
@@ -386,7 +386,7 @@ impl DownstreamSink {
         let event = CdcEvent::Event(Event {
             region_id: self.region_id,
             index,
-            request_id: self.req_id.0,
+            request_id: self.request_id.0,
             event: Some(Event_oneof_event::Entries(EventEntries {
                 entries: events.into(),
                 ..Default::default()
@@ -402,7 +402,7 @@ impl DownstreamSink {
     pub async fn send_observed_tidb(&self, events: Vec<EventRow>) -> Result<()> {
         let event = CdcEvent::Event(Event {
             region_id: self.region_id,
-            request_id: self.req_id.0,
+            request_id: self.request_id.0,
             event: Some(Event_oneof_event::Entries(EventEntries {
                 entries: events.into(),
                 ..Default::default()
@@ -420,7 +420,7 @@ impl DownstreamSink {
         for x in events.into_iter().filter(|x| !x.is_empty()) {
             rows.push(CdcEvent::Event(Event {
                 region_id: self.region_id,
-                request_id: self.req_id.0,
+                request_id: self.request_id.0,
                 event: Some(Event_oneof_event::Entries(EventEntries {
                     entries: x.into(),
                     ..Default::default()
@@ -440,7 +440,7 @@ impl DownstreamSink {
             *canceled = true;
             let event = Event {
                 region_id: self.region_id,
-                request_id: self.req_id.0,
+                request_id: self.request_id.0,
                 event: Some(Event_oneof_event::Error(err_event)),
                 ..Default::default()
             };
