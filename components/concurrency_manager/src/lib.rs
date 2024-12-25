@@ -29,9 +29,10 @@ use std::{
 
 use crossbeam::atomic::AtomicCell;
 use lazy_static::lazy_static;
+use pd_client::{PdClient, PdFuture};
 use prometheus::{register_int_gauge, IntGauge};
 use thiserror::Error;
-use tikv_util::{error, time::Instant};
+use tikv_util::{error, future::block_on_timeout, time::Instant};
 use txn_types::{Key, Lock, TimeStamp};
 
 pub use self::{
@@ -58,10 +59,22 @@ const DEFAULT_LIMIT_VALID_DURATION: Duration = Duration::from_secs(60);
 //    between TiKV and PD.
 pub const LIMIT_VALID_TIME_MULTIPLIER: u32 = 3;
 
+const TSO_TIMEOUT: Duration = Duration::from_secs(5);
+
 #[derive(Copy, Clone, PartialEq, Eq)]
 struct MaxTsLimit {
     limit: TimeStamp,
     update_time: Instant,
+}
+
+pub trait TSOProvider: Send + Sync {
+    fn get_tso(&self) -> PdFuture<TimeStamp>;
+}
+
+impl<T: PdClient> TSOProvider for T {
+    fn get_tso(&self) -> PdFuture<TimeStamp> {
+        PdClient::get_tso(self)
+    }
 }
 
 // Pay attention that the async functions of ConcurrencyManager should not hold
@@ -82,6 +95,14 @@ pub struct ConcurrencyManager {
     limit_valid_duration: Duration,
     action_on_invalid_max_ts: Arc<AtomicActionOnInvalidMaxTs>,
 
+    // the allowance is only used when the concurrency manager is double-checking an invalid
+    // max_ts by fetching TSO directly.
+    // In normal cases, the allowance is not used. Upper layers calculate the limit and pass the
+    // result to `set_max_ts_limit`.
+    max_ts_drift_allowance_ms: Arc<AtomicU64>,
+
+    tso: Option<Arc<dyn TSOProvider>>,
+
     time_provider: Arc<dyn TimeProvider>,
 }
 
@@ -91,6 +112,8 @@ impl ConcurrencyManager {
             latest_ts,
             DEFAULT_LIMIT_VALID_DURATION,
             ActionOnInvalidMaxTs::Panic,
+            None,
+            Duration::ZERO,
         )
     }
 
@@ -98,6 +121,8 @@ impl ConcurrencyManager {
         latest_ts: TimeStamp,
         limit_valid_duration: Duration,
         action_on_invalid_max_ts: ActionOnInvalidMaxTs,
+        tso: Option<Arc<dyn TSOProvider>>,
+        max_ts_drift_allowance: Duration,
     ) -> Self {
         let initial_limit = MaxTsLimit {
             limit: TimeStamp::new(0),
@@ -113,6 +138,10 @@ impl ConcurrencyManager {
             )),
             limit_valid_duration,
             time_provider: Arc::new(CoarseInstantTimeProvider),
+            tso,
+            max_ts_drift_allowance_ms: Arc::new(AtomicU64::new(
+                max_ts_drift_allowance.as_millis() as u64
+            )),
         }
     }
 
@@ -122,6 +151,8 @@ impl ConcurrencyManager {
         limit_valid_duration: Duration,
         action_on_invalid_max_ts: ActionOnInvalidMaxTs,
         time_provider: Arc<dyn TimeProvider>,
+        tso: Option<Arc<dyn TSOProvider>>,
+        max_ts_drift_allowance: Duration,
     ) -> Self {
         let initial_limit = MaxTsLimit {
             limit: TimeStamp::new(0),
@@ -136,6 +167,10 @@ impl ConcurrencyManager {
             )),
             limit_valid_duration,
             time_provider,
+            tso,
+            max_ts_drift_allowance_ms: Arc::new(AtomicU64::new(
+                max_ts_drift_allowance.as_millis() as u64
+            )),
         }
     }
 
@@ -180,7 +215,7 @@ impl ConcurrencyManager {
             if duration_to_last_limit_update < self.limit_valid_duration {
                 // limit is valid
                 let source = source.into_error_source();
-                self.report_error(new_ts, limit.limit, source, false)?;
+                self.double_check(new_ts, limit.limit, source, false)?;
             } else {
                 // limit is stale
                 // use an approximate limit to avoid false alerts caused by failed limit updates
@@ -192,7 +227,7 @@ impl ConcurrencyManager {
 
                 if new_ts > approximate_limit {
                     let source = source.into_error_source();
-                    self.report_error(new_ts, approximate_limit, source, true)?;
+                    self.double_check(new_ts, approximate_limit, source, true)?;
                 }
             }
         }
@@ -202,6 +237,45 @@ impl ConcurrencyManager {
                 .fetch_max(new_ts.into_inner(), Ordering::SeqCst)
                 .max(new_ts.into_inner()) as i64,
         );
+        Ok(())
+    }
+
+    // new_ts is greater than limit, or the approximate limit.
+    // To avoid false positive and guarantee TiKV availability, we need to
+    // double-check the new_ts with PD TSO.
+    fn double_check(
+        &self,
+        new_ts: TimeStamp,
+        limit: TimeStamp,
+        source: impl slog::Value + Display,
+        using_approximate: bool,
+    ) -> Result<(), crate::InvalidMaxTsUpdate> {
+        error!("possible invalid max-ts update; double checking";
+            "attempted_ts" => new_ts,
+            "max_allowed" => limit.into_inner(),
+            "source" => &source,
+            "using_approximate" => using_approximate,
+            "TSO_TIMEOUT" => ?TSO_TIMEOUT,
+        );
+        if let Some(tso) = &self.tso {
+            match block_on_timeout(tso.get_tso(), TSO_TIMEOUT) {
+                Ok(Ok(ts)) => {
+                    self.set_max_ts_limit(TimeStamp::compose(
+                        ts.physical() + self.max_ts_drift_allowance_ms.load(Ordering::SeqCst),
+                        ts.logical(),
+                    ));
+                }
+                Ok(Err(e)) => {
+                    error!("failed to fetch from TSO"; "err" => ?e);
+                }
+                Err(()) => {
+                    error!("timeout when fetching from TSO"; "timeout" => ?TSO_TIMEOUT);
+                }
+            }
+        }
+        if new_ts > self.max_ts_limit.load().limit {
+            self.report_error(new_ts, limit, source, using_approximate)?;
+        }
         Ok(())
     }
 
@@ -363,6 +437,11 @@ impl ConcurrencyManager {
     pub fn set_action_on_invalid_max_ts(&self, action: ActionOnInvalidMaxTs) {
         self.action_on_invalid_max_ts.store(action);
     }
+
+    pub fn set_max_ts_drift_allowance(&self, allowance: Duration) {
+        self.max_ts_drift_allowance_ms
+            .store(allowance.as_millis() as u64, Ordering::SeqCst);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -512,8 +591,9 @@ impl TimeProvider for CoarseInstantTimeProvider {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use std::{future::ready, sync::Mutex};
 
+    use futures::FutureExt;
     use txn_types::LockType;
 
     use super::*;
@@ -629,6 +709,8 @@ mod tests {
             TimeStamp::new(100),
             DEFAULT_LIMIT_VALID_DURATION,
             ActionOnInvalidMaxTs::Error,
+            None,
+            Duration::ZERO,
         );
 
         // Initially limit should be 0
@@ -671,6 +753,8 @@ mod tests {
             TimeStamp::new(100),
             DEFAULT_LIMIT_VALID_DURATION,
             ActionOnInvalidMaxTs::Error,
+            None,
+            Duration::ZERO,
         );
 
         // Set limit to 200
@@ -703,6 +787,8 @@ mod tests {
             Duration::from_secs(60),
             ActionOnInvalidMaxTs::Error,
             time_provider.clone(),
+            None,
+            Duration::ZERO,
         );
 
         cm.set_max_ts_limit(TimeStamp::new(200));
@@ -726,6 +812,8 @@ mod tests {
             Duration::from_secs(60),
             ActionOnInvalidMaxTs::Error,
             time_provider.clone(),
+            None,
+            Duration::ZERO,
         );
 
         cm.set_max_ts_limit(TimeStamp::new(200));
@@ -757,5 +845,41 @@ mod tests {
         cm.update_max_ts(TimeStamp::new(500), "test_source".to_string())
             .unwrap();
         assert_eq!(cm.max_ts().into_inner(), 500);
+    }
+
+    struct MockPD {
+        tso: AtomicU64,
+    }
+
+    impl MockPD {
+        fn new(ts: u64) -> Self {
+            Self {
+                tso: AtomicU64::new(ts),
+            }
+        }
+    }
+
+    impl TSOProvider for MockPD {
+        fn get_tso(&self) -> PdFuture<TimeStamp> {
+            ready(Ok(TimeStamp::new(self.tso.fetch_add(1, Ordering::SeqCst)))).boxed()
+        }
+    }
+
+    #[test]
+    fn test_pd_tso_jump_not_panic() {
+        let mock_pd = Arc::new(MockPD::new(100));
+        let cm = ConcurrencyManager::new_with_config(
+            TimeStamp::new(100),
+            DEFAULT_LIMIT_VALID_DURATION,
+            ActionOnInvalidMaxTs::Panic,
+            Some(mock_pd.clone()),
+            Duration::ZERO,
+        );
+
+        cm.set_max_ts_limit(TimeStamp::new(200));
+        // PD TSO jumps from 100 to 300
+        mock_pd.tso.store(300, Ordering::SeqCst);
+        cm.update_max_ts(TimeStamp::new(300), "test_source".to_string())
+            .unwrap();
     }
 }

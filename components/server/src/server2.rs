@@ -335,6 +335,8 @@ where
                 .as_str()
                 .try_into()
                 .unwrap(),
+            Some(pd_client.clone()),
+            config.storage.max_ts_drift_allowance.0,
         );
 
         // use different quota for front-end and back-end requests
