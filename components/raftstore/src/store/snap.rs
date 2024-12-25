@@ -886,6 +886,12 @@ impl Snapshot {
             };
             total_size += cf_stats.total_kv_size;
             total_count += cf_stats.key_count;
+            SNAPSHOT_LIMIT_GENERATE_BYTES_VEC
+                .kv
+                .inc_by(cf_stats.total_kv_size as u64);
+            SNAPSHOT_LIMIT_GENERATE_BYTES_VEC
+                .sst
+                .inc_by(cf_stats.total_sst_size as u64);
             SNAPSHOT_CF_KV_COUNT
                 .get(*cf_enum)
                 .observe(cf_stats.key_count as f64);
