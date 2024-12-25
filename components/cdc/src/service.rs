@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::{
-    atomic::{AtomicU64, AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     Arc,
 };
 
@@ -392,8 +392,11 @@ impl Service {
         }
         info!("cdc connection created"; "downstream" => ctx.peer(), "conn_id" => ?conn_id, "features" => ?features);
 
+        let conn_registered = Arc::new(AtomicBool::new(false));
+
         let peer = ctx.peer();
         let scheduler = self.scheduler.clone();
+        let conn_registered_ = conn_registered.clone();
         let recv_req = async move {
             let mut stream = stream.map_err(|e| format!("{:?}", e));
             if let Some(request) = stream.try_next().await? {
@@ -403,6 +406,7 @@ impl Service {
                 scheduler
                     .schedule(Task::OpenConn { conn })
                     .map_err(|e| format!("cdc failed to schedule OpenConn {:?}", e))?;
+                conn_registered_.store(true, Ordering::Release);
                 Self::handle_request(&scheduler, &peer, request, conn_id, &sink)?;
             }
             while let Some(request) = stream.try_next().await? {
@@ -413,16 +417,19 @@ impl Service {
 
         let peer = ctx.peer();
         let scheduler = self.scheduler.clone();
+        let conn_registered_ = conn_registered.clone();
         self.workers.spawn(async move {
             if let Err(e) = recv_req.await {
                 warn!("cdc receive failed"; "error" => ?e, "downstream" => &peer, "conn_id" => ?conn_id);
             } else {
                 info!("cdc receive closed"; "downstream" => &peer, "conn_id" => ?conn_id);
             }
-            let deregister = Task::Deregister(Deregister::Conn(conn_id));
-            if let Err(e) = scheduler.schedule(deregister) {
-                warn!("cdc failed to schedule Deregister";
-                    "error" => ?e, "downstream" => &peer, "conn_id" => ?conn_id);
+            if conn_registered_.load(Ordering::Acquire) {
+                let deregister = Task::Deregister(Deregister::Conn(conn_id));
+                if let Err(e) = scheduler.schedule(deregister) {
+                    warn!("cdc failed to schedule Deregister";
+                        "error" => ?e, "downstream" => &peer, "conn_id" => ?conn_id);
+                }
             }
         });
 
