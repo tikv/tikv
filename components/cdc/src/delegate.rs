@@ -892,7 +892,6 @@ impl Delegate {
                     if let Err(e) = self.on_batch(cmds, old_value_cb).await {
                         self.on_stop(Some(e)).await;
                     }
-                    // flush_oldvalue_stats(&statistics, TAG_DELTA_CHANGE);
                 }
                 DelegateTask::Stop { observe_id, err } => {
                     if self.handle.id != observe_id {
@@ -935,6 +934,10 @@ impl Delegate {
                     cb,
                 } => {
                     self.on_init_downstream(observe_id, downstream_id, build_resolver, cb);
+                }
+                DelegateTask::FlushStats => {
+                    flush_oldvalue_stats(&self.old_value_stats, TAG_DELTA_CHANGE);
+                    self.old_value_stats = Statistics::default();
                 }
                 DelegateTask::Validate(validate) => {
                     validate(Some(self));
@@ -1368,6 +1371,7 @@ pub enum DelegateTask {
         build_resolver: Arc<AtomicBool>,
         cb: Box<dyn FnOnce() + Send>,
     },
+    FlushStats,
     Validate(Box<dyn FnOnce(Option<&Delegate>) + Send>),
 }
 
@@ -1382,6 +1386,7 @@ impl fmt::Debug for DelegateTask {
             DelegateTask::MinTs { .. } => de.field("type", &"MinTs"),
             DelegateTask::FinishScanLocks { .. } => de.field("type", &"FinishScanLocks"),
             DelegateTask::InitDownstream { .. } => de.field("type", &"InitDownstream"),
+            DelegateTask::FlushStats => de.field("type", &"FlushStats"),
             DelegateTask::Validate(..) => de.field("type", &"Validate"),
         };
         de.finish()
@@ -1393,6 +1398,18 @@ pub struct DelegateMeta {
     pub region_id: u64,
     pub handle: ObserveHandle,
     pub sched: UnboundedSender<DelegateTask>,
+}
+
+impl DelegateMeta {
+    pub async fn flush_stats_periodically(&self) {
+        let mut ticker = tokio::time::interval(Duration::from_secs(10));
+        loop {
+            ticker.tick().await;
+            if self.sched.unbounded_send(DelegateTask::FlushStats).is_err() {
+                break;
+            }
+        }
+    }
 }
 
 const WARN_LAG_THRESHOLD: Duration = Duration::from_secs(600);

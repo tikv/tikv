@@ -92,15 +92,14 @@ impl fmt::Debug for Deregister {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut de = f.debug_struct("Deregister");
         match self {
-            Deregister::Conn(ref conn_id) => de
-                .field("deregister", &"conn")
-                .field("conn_id", conn_id)
-                .finish(),
+            Deregister::Conn(ref conn_id) => {
+                de.field("type", &"Conn").field("conn_id", conn_id).finish()
+            }
             Deregister::Request {
                 ref conn_id,
                 ref request_id,
             } => de
-                .field("deregister", &"request")
+                .field("type", &"Request")
                 .field("conn_id", conn_id)
                 .field("request_id", request_id)
                 .finish(),
@@ -109,7 +108,7 @@ impl fmt::Debug for Deregister {
                 ref request_id,
                 ref region_id,
             } => de
-                .field("deregister", &"region")
+                .field("type", &"Region")
                 .field("conn_id", conn_id)
                 .field("request_id", request_id)
                 .field("region_id", region_id)
@@ -120,7 +119,7 @@ impl fmt::Debug for Deregister {
                 ref region_id,
                 ref downstream_id,
             } => de
-                .field("deregister", &"downstream")
+                .field("type", &"Downstream")
                 .field("conn_id", conn_id)
                 .field("request_id", request_id)
                 .field("region_id", region_id)
@@ -130,7 +129,7 @@ impl fmt::Debug for Deregister {
                 ref region_id,
                 ref observe_id,
             } => de
-                .field("deregister", &"delegate")
+                .field("type", &"Delegate")
                 .field("region_id", region_id)
                 .field("observe_id", observe_id)
                 .finish(),
@@ -176,40 +175,33 @@ impl fmt::Debug for Task {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut de = f.debug_struct("CdcTask");
         let de = match self {
-            Task::OpenConn { ref conn } => {
-                de.field("type", &"open_conn").field("conn_id", &conn.id)
-            }
+            Task::OpenConn { ref conn } => de.field("type", &"OpenConn").field("conn_id", &conn.id),
             Task::Register {
                 ref request,
                 ref downstream,
                 ..
             } => de
-                .field("type", &"register")
+                .field("type", &"Register")
                 .field("request", request)
                 .field("downstream", downstream),
             Task::Deregister(deregister) => de
-                .field("type", &"deregister")
+                .field("type", &"Deregister")
                 .field("deregister", deregister),
             Task::MinTs {
                 ref min_ts,
                 ref current_ts,
                 ..
             } => de
-                .field("type", &"min_ts")
+                .field("type", &"MinTs")
                 .field("current_ts", current_ts)
                 .field("min_ts", min_ts),
-            Task::CollectProgress => de.field("type", &"collect_progress"),
+            Task::CollectProgress => de.field("type", &"CollectProgress"),
             Task::RegisterMinTsEvent { ref event_time, .. } => de
-                .field("type", &"register_min_ts_event")
+                .field("type", &"RegisterMinTsEvent")
                 .field("event_time", &event_time),
-            Task::TxnExtra(_) => de.field("type", &"txn_extra"),
-            Task::ChangeConfig(change) => {
-                de.field("type", &"change_config").field("change", change)
-            }
-            Task::Validate(validate) => match validate {
-                Validate::Region(region_id, _) => de.field("region_id", &region_id),
-                Validate::OldValueCache(_) => &mut de,
-            },
+            Task::TxnExtra(_) => de.field("type", &"TxnExtra"),
+            Task::ChangeConfig(change) => de.field("type", &"ChangeConfig").field("change", change),
+            Task::Validate(..) => de.field("type", &"Validate"),
         };
         de.finish()
     }
@@ -389,6 +381,8 @@ pub struct Endpoint<T, E, S> {
     min_ts_region_id: u64,
     resolved_region_count: usize,
     unresolved_region_count: usize,
+
+    pending_progress_collecting: usize,
 }
 
 impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, S> {
@@ -502,6 +496,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             min_ts_region_id: 0,
             resolved_region_count: 0,
             unresolved_region_count: 0,
+
+            pending_progress_collecting: 0,
         };
         ep.register_min_ts_event(leader_resolver, Instant::now());
         ep
@@ -763,6 +759,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 e.insert(delegate.clone());
 
                 if let Some(workers) = self.workers.as_ref() {
+                    let m = delegate.clone();
+                    workers.spawn(async move { m.flush_stats_periodically().await });
                     workers.spawn(async move { d.handle_tasks().await });
                 }
 
@@ -890,16 +888,24 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 futs.push(fut);
             }
         }
-        let scheduler = self.scheduler.clone();
-        self.tso_worker.spawn(async move {
-            for fut in futs {
-                let _ = fut.await;
-            }
-            let _ = scheduler.schedule(Task::CollectProgress);
-        });
+        if self.pending_progress_collecting > 0 {
+            return;
+        }
+        if let Some(workers) = self.workers.as_ref() {
+            self.pending_progress_collecting += 1;
+            let scheduler = self.scheduler.clone();
+            workers.spawn(async move {
+                for fut in futs {
+                    let _ = fut.await;
+                }
+                let _ = scheduler.schedule(Task::CollectProgress);
+            });
+        }
     }
 
     fn on_collect_progress(&mut self) {
+        self.pending_progress_collecting -= 1;
+
         let mut advance = Advance::default();
         for (conn_id, conn) in &self.connections {
             if conn.features.contains(FeatureGate::STREAM_MULTIPLEXING) {
