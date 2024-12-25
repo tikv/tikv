@@ -815,6 +815,14 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             let mut err_event = EventError::default();
             err_event.mut_region_not_found().region_id = region_id;
             let _ = block_on(downstream_sink.cancel_by_error(err_event));
+
+            self.on_deregister(Deregister::Downstream {
+                conn_id,
+                request_id,
+                region_id,
+                downstream_id,
+            });
+            return;
         }
 
         let handle = delegate.handle.clone();

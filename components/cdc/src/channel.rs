@@ -7,7 +7,6 @@ use futures::{
         unbounded, SendError as FuturesSendError, TrySendError, UnboundedReceiver, UnboundedSender,
     },
     executor::block_on,
-    lock::Mutex,
     task::Poll,
     SinkExt, Stream, StreamExt,
 };
@@ -22,6 +21,7 @@ use tikv_util::{
     time::Instant,
     warn,
 };
+use tokio::sync::RwLock;
 
 use crate::{
     metrics::*,
@@ -304,7 +304,7 @@ impl Drop for Drain {
 pub struct DownstreamSink {
     region_id: u64,
     req_id: RequestId,
-    canceled: Arc<Mutex<bool>>,
+    canceled: Arc<RwLock<bool>>,
     sink: Sink,
 }
 
@@ -313,7 +313,7 @@ impl DownstreamSink {
         DownstreamSink {
             region_id,
             req_id,
-            canceled: Arc::new(Mutex::new(false)),
+            canceled: Arc::new(RwLock::new(false)),
             sink,
         }
     }
@@ -357,7 +357,7 @@ impl DownstreamSink {
             })),
             ..Default::default()
         });
-        if !*self.canceled.lock().await {
+        if !*self.canceled.read().await {
             return self.send(event, false);
         }
         Ok(())
@@ -373,7 +373,7 @@ impl DownstreamSink {
             })),
             ..Default::default()
         });
-        if !*self.canceled.lock().await {
+        if !*self.canceled.read().await {
             return self.send(event, false);
         }
         Ok(())
@@ -392,14 +392,14 @@ impl DownstreamSink {
                 ..Default::default()
             }));
         }
-        if !*self.canceled.lock().await {
+        if !*self.canceled.read().await {
             return self.send_all(rows).await;
         }
         Ok(())
     }
 
     pub async fn cancel_by_error(&self, err_event: ErrorEvent) -> Result<()> {
-        let mut canceled = self.canceled.lock().await;
+        let mut canceled = self.canceled.write().await;
         if !*canceled {
             *canceled = true;
             let event = Event {
