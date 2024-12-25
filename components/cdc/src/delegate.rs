@@ -45,7 +45,7 @@ use tikv_util::{
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteBatchFlags, WriteRef, WriteType};
 
 use crate::{
-    channel::DownstreamSink,
+    channel::{DownstreamSink, SendError},
     endpoint::{Deregister, Task},
     initializer::KvEntry,
     metrics::*,
@@ -645,19 +645,22 @@ impl Delegate {
             return Ok(());
         }
 
-        for downstream in downstreams {
-            let filtered_entries: Vec<_> = entries
+        let mut failed_downstreams = vec![];
+        for d in downstreams {
+            let v: Vec<_> = entries
                 .iter()
-                .filter(|x| downstream.observed_range.contains_raw_key(&x.key))
+                .filter(|x| d.observed_range.contains_raw_key(&x.key))
                 .cloned()
                 .collect();
-            if filtered_entries.is_empty() {
+            if v.is_empty() {
                 continue;
             }
-            downstream
-                .sink
-                .send_observed_raw(index, filtered_entries)
-                .await?;
+            if let Err(e) = d.sink.send_observed_raw(index, v).await {
+                failed_downstreams.push((d.id, e));
+            }
+        }
+        for (d, e) in failed_downstreams {
+            self.on_stop_downstream(Some(e), d).await
         }
         Ok(())
     }
@@ -675,7 +678,8 @@ impl Delegate {
             }
         }
 
-        for downstream in downstreams {
+        let mut failed_downstreams = vec![];
+        for d in downstreams {
             let mut filtered_entries = Vec::with_capacity(entries.len());
             for RowInBuilding {
                 v,
@@ -684,7 +688,7 @@ impl Delegate {
                 ..
             } in &mut entries
             {
-                if !downstream.observed_range.contains_raw_key(&v.key) {
+                if !d.observed_range.contains_raw_key(&v.key) {
                     continue;
                 }
                 if let Some(ts) = needs_old_value {
@@ -695,8 +699,8 @@ impl Delegate {
                     *needs_old_value = None;
                 }
 
-                if *lock_count_modify != 0 && downstream.lock_heap.is_some() {
-                    let lock_heap = downstream.lock_heap.as_mut().unwrap();
+                if *lock_count_modify != 0 && d.lock_heap.is_some() {
+                    let lock_heap = d.lock_heap.as_mut().unwrap();
                     match lock_heap.entry(v.start_ts.into()) {
                         BTreeMapEntry::Vacant(x) => {
                             x.insert(*lock_count_modify);
@@ -717,7 +721,7 @@ impl Delegate {
 
                 if TxnSource::is_lightning_physical_import(v.txn_source)
                     || TxnSource::is_lossy_ddl_reorg_source_set(v.txn_source)
-                    || downstream.filter_loop && TxnSource::is_cdc_write_source_set(v.txn_source)
+                    || d.filter_loop && TxnSource::is_cdc_write_source_set(v.txn_source)
                 {
                     continue;
                 }
@@ -727,7 +731,12 @@ impl Delegate {
             if filtered_entries.is_empty() {
                 continue;
             }
-            downstream.sink.send_observed_tidb(filtered_entries).await?;
+            if let Err(e) = d.sink.send_observed_tidb(filtered_entries).await {
+                failed_downstreams.push((d.id, e));
+            }
+        }
+        for (d, e) in failed_downstreams {
+            self.on_stop_downstream(Some(e), d).await
         }
         Ok(())
     }
@@ -950,6 +959,7 @@ impl Delegate {
     ) -> bool {
         if let Some(err_event) = err_event {
             if let Err(err) = downstream.sink.cancel_by_error(err_event).await {
+                assert!(matches!(err, Error::Sink(SendError::Disconnected)));
                 warn!("cdc send region error failed";
                     "region_id" => self.region_id, "error" => ?err,
                     "downstream_id" => ?downstream.id, "downstream" => ?downstream.peer,
@@ -1473,7 +1483,7 @@ mod tests {
     use tikv_util::{config::ReadableSize, memory::MemoryQuota, worker::dummy_scheduler};
 
     use super::*;
-    use crate::channel::{channel, recv_timeout, SendError};
+    use crate::channel::{channel, recv_timeout};
 
     #[test]
     fn test_error() {

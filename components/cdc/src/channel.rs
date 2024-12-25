@@ -92,6 +92,7 @@ pub fn channel(conn_id: ConnId, memory_quota: Arc<MemoryQuota>) -> (Sink, Drain)
     let (tx, rx) = unbounded();
     (
         Sink {
+            conn_id,
             tx,
             memory_quota: memory_quota.clone(),
         },
@@ -162,6 +163,7 @@ impl ObservedEvent {
 
 #[derive(Clone)]
 pub struct Sink {
+    conn_id: ConnId,
     tx: UnboundedSender<ObservedEvent>,
     memory_quota: Arc<MemoryQuota>,
 }
@@ -215,8 +217,42 @@ impl Sink {
         Ok(())
     }
 
-    pub fn send_resolved_ts(&self, ts_event: CdcEvent) -> StdResult<(), SendError> {
-        self.send(ts_event, false)
+    pub fn send_batch_resolved_ts(&self, regions: Vec<u64>, request_id: u64, ts: u64) {
+        let mut resolved_ts = ResolvedTs::default();
+        *resolved_ts.mut_regions() = regions;
+        resolved_ts.request_id = request_id;
+        resolved_ts.ts = ts;
+
+        match self.send(CdcEvent::ResolvedTs(resolved_ts), false) {
+            Ok(_) => {}
+            Err(SendError::Disconnected) => {
+                debug!("cdc send batch resolved ts failed, disconnected"; "conn_id" => ?self.conn_id,
+                    "request_id" => request_id);
+            }
+            Err(SendError::Congested) => {
+                info!("cdc send batch resolved ts failed, congested"; "conn_id" => ?self.conn_id,
+                    "request_id" => request_id);
+            }
+        }
+    }
+
+    pub fn send_region_resolved_ts(&self, region_id: u64, request_id: u64, ts: u64) {
+        let mut event = Event::default();
+        event.region_id = region_id;
+        event.request_id = request_id;
+        event.event = Some(Event_oneof_event::ResolvedTs(ts));
+
+        match self.send(CdcEvent::Event(event), false) {
+            Ok(_) => {}
+            Err(SendError::Disconnected) => {
+                debug!("cdc send region resolved ts failed, disconnected"; "conn_id" => ?self.conn_id,
+                    "request_id" => request_id, "region_id" => region_id);
+            }
+            Err(SendError::Congested) => {
+                info!("cdc send region resolved ts failed, congested"; "conn_id" => ?self.conn_id,
+                    "request_id" => request_id, "region_id" => region_id);
+            }
+        }
     }
 }
 
@@ -321,11 +357,11 @@ impl DownstreamSink {
     fn handle_error(&self, e: SendError) -> Error {
         match e {
             SendError::Disconnected => {
-                debug!("cdc send event failed, disconnected";
+                debug!("cdc send events failed, disconnected"; "conn_id" => ?self.sink.conn_id,
                     "region_id" => self.region_id, "request_id" => self.req_id.0);
             }
             SendError::Congested => {
-                info!("cdc send event failed, congested";
+                info!("cdc send events failed, congested"; "conn_id" => ?self.sink.conn_id,
                     "region_id" => self.region_id, "request_id" => self.req_id.0);
             }
         }

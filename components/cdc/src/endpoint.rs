@@ -21,7 +21,7 @@ use kvproto::{
     cdcpb::{
         ChangeDataRequest, ClusterIdMismatch as ErrorClusterIdMismatch,
         Compatibility as ErrorCompatibility, DuplicateRequest as ErrorDuplicateRequest,
-        Error as EventError, Event, Event_oneof_event, ResolvedTs,
+        Error as EventError,
     },
     kvrpcpb::ApiVersion,
 };
@@ -52,7 +52,6 @@ use tokio::{
 use txn_types::{TimeStamp, TxnExtra, TxnExtraScheduler};
 
 use crate::{
-    channel::{CdcEvent, SendError},
     delegate::{Delegate, DelegateMeta, DelegateTask, Downstream, DownstreamId},
     initializer::Initializer,
     metrics::*,
@@ -291,16 +290,6 @@ pub(crate) struct Advance {
 
 impl Advance {
     fn emit_resolved_ts(&mut self, connections: &HashMap<ConnId, Conn>) {
-        let handle_send_result = |conn: &Conn, res: Result<(), SendError>| match res {
-            Ok(_) => {}
-            Err(SendError::Disconnected) => {
-                debug!("cdc send event failed, disconnected"; "conn_id" => ?conn.id);
-            }
-            Err(SendError::Congested) => {
-                info!("cdc send event failed, congested"; "conn_id" => ?conn.id);
-            }
-        };
-
         let mut batch_min_resolved_ts = 0;
         let mut batch_min_ts_region_id = 0;
         let mut batch_send = |ts: u64, conn: &Conn, req_id: RequestId, regions: Vec<u64>| {
@@ -310,15 +299,7 @@ impl Advance {
                     batch_min_ts_region_id = regions[0];
                 }
             }
-
-            let mut resolved_ts = ResolvedTs::default();
-            resolved_ts.ts = ts;
-            resolved_ts.request_id = req_id.0;
-            *resolved_ts.mut_regions() = regions;
-
-            let event = CdcEvent::ResolvedTs(resolved_ts);
-            let res = conn.sink.send_resolved_ts(event);
-            handle_send_result(conn, res);
+            conn.sink.send_batch_resolved_ts(regions, req_id.0, ts);
         };
 
         let mut compat_min_resolved_ts = 0;
@@ -328,15 +309,7 @@ impl Advance {
                 compat_min_resolved_ts = ts;
                 compat_min_ts_region_id = region_id;
             }
-
-            let event = Event {
-                region_id,
-                request_id: req_id.0,
-                event: Some(Event_oneof_event::ResolvedTs(ts)),
-                ..Default::default()
-            };
-            let res = conn.sink.send_resolved_ts(CdcEvent::Event(event));
-            handle_send_result(conn, res);
+            conn.sink.send_region_resolved_ts(region_id, req_id.0, ts);
         };
 
         let multiplexing = std::mem::take(&mut self.multiplexing).into_iter();
