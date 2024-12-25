@@ -775,6 +775,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             return;
         }
 
+        let mut is_new_delegate = false;
         let delegate = match self.capture_regions.entry(region_id) {
             HashMapEntry::Occupied(e) => e.get().clone(),
             HashMapEntry::Vacant(e) => {
@@ -787,6 +788,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 );
                 let delegate = d.meta();
                 e.insert(delegate.clone());
+
                 if let Some(workers) = self.workers.as_ref() {
                     workers.spawn(async move { d.handle_tasks().await });
                 }
@@ -797,6 +799,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                     delegate.sched.clone(),
                 );
                 assert!(old_ob.is_none());
+
+                is_new_delegate = true;
                 delegate
             }
         };
@@ -822,6 +826,13 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 region_id,
                 downstream_id,
             });
+            if is_new_delegate {
+                let observe_id = delegate.handle.id;
+                self.on_deregister(Deregister::Delegate {
+                    region_id,
+                    observe_id,
+                });
+            }
             return;
         }
 
