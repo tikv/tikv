@@ -406,6 +406,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
     ) -> Endpoint<T, E, S> {
         let workers = Builder::new_multi_thread()
             .thread_name("cdc-main-workers")
+            .enable_time()
             .worker_threads(config.responser_threads)
             .with_sys_hooks()
             .build()
