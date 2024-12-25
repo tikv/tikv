@@ -899,9 +899,18 @@ impl Snapshot {
                         .get_actual_max_per_file_size(allow_multi_files_snapshot),
                     &self.mgr.limiter,
                     self.mgr.encryption_key_manager.clone(),
+                    for_balance,
                 )?
             };
-            SNAPSHOT_LIMIT_GENERATE_BYTES.inc_by(cf_stat.total_size as u64);
+            SNAPSHOT_LIMIT_GENERATE_BYTES_VEC
+                .kv
+                .inc_by(cf_stat.total_kv_size as u64);
+            SNAPSHOT_LIMIT_GENERATE_BYTES_VEC
+                .sst
+                .inc_by(cf_stat.total_sst_size as u64);
+            SNAPSHOT_LIMIT_GENERATE_BYTES_VEC
+                .plain
+                .inc_by(cf_stat.total_plain_size as u64);
             cf_file.kv_count = cf_stat.key_count as u64;
             if cf_file.kv_count > 0 {
                 // Use `kv_count` instead of file size to check empty files because encrypted
@@ -924,14 +933,16 @@ impl Snapshot {
                 .observe(cf_stat.key_count as f64);
             SNAPSHOT_CF_SIZE
                 .get(*cf_enum)
-                .observe(cf_stat.total_size as f64);
+                .observe(cf_stat.total_kv_size as f64);
             info!(
                 "scan snapshot of one cf";
                 "region_id" => region.get_id(),
                 "snapshot" => self.path(),
                 "cf" => cf,
                 "key_count" => cf_stat.key_count,
-                "size" => cf_stat.total_size,
+                "size" => cf_stat.total_kv_size,
+                "sst_size" => cf_stat.total_sst_size,
+                "plain_size" => cf_stat.total_plain_size,
             );
         }
 
@@ -1916,7 +1927,11 @@ impl SnapManager {
     /// recv_snap_complete is part of the snapshot recv precheck process, and
     /// should be called when a follower finishes receiving a snapshot.
     pub fn recv_snap_complete(&self, region_id: u64) {
-        self.core.recv_concurrency_limiter.finish_recv(region_id)
+        self.core.recv_concurrency_limiter.finish_recv(region_id);
+        // In tests, the first failpoint can be used to trigger a callback while
+        // the second failpoint can be used to pause the thread.
+        fail_point!("post_recv_snap_complete1", region_id == 1, |_| {});
+        fail_point!("post_recv_snap_complete2", region_id == 1, |_| {});
     }
 
     /// Adjusts the capacity of the snapshot receive concurrency limiter to
@@ -2596,13 +2611,25 @@ pub mod tests {
     where
         E: KvEngine + KvEngineConstructorExt,
     {
+        open_test_db_with_nkeys(path, db_opt, cf_opts, 100)
+    }
+
+    pub fn open_test_db_with_nkeys<E>(
+        path: &Path,
+        db_opt: Option<DbOptions>,
+        cf_opts: Option<Vec<(&'static str, CfOptions)>>,
+        nkeys: u64,
+    ) -> Result<E>
+    where
+        E: KvEngine + KvEngineConstructorExt,
+    {
         let db = open_test_empty_db::<E>(path, db_opt, cf_opts).unwrap();
         // write some data into each cf
         for (i, cf) in db.cf_names().into_iter().enumerate() {
             let mut p = Peer::default();
             p.set_store_id(TEST_STORE_ID);
             p.set_id((i + 1) as u64);
-            for k in 0..100 {
+            for k in 0..nkeys {
                 let key = keys::data_key(format!("akey{}", k).as_bytes());
                 db.put_msg_cf(cf, &key[..], &p)?;
             }

@@ -672,8 +672,10 @@ where
             // skip handling remain messages if fsm is destroyed. This can aviod handling
             // arbitary messages(e.g. CasualMessage::ForceCompactRaftLogs) that may need
             // to read raft logs which maybe lead to panic.
-            if self.fsm.stopped {
-                break;
+            // We do not skip RaftCommand because raft commond callback should always be
+            // handled or it will cause panic.
+            if self.fsm.stopped && !matches!(&m, PeerMsg::RaftCommand(_)) {
+                continue;
             }
             distribution[m.discriminant()] += 1;
             match m {
