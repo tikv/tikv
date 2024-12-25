@@ -24,7 +24,7 @@ use cloud::{
     metrics::CLOUD_REQUEST_HISTOGRAM_VEC,
 };
 use fail::fail_point;
-use futures::{executor::block_on, stream::Stream};
+use futures::stream::Stream;
 use futures_util::{
     future::{FutureExt, LocalBoxFuture},
     io::{AsyncRead, AsyncReadExt},
