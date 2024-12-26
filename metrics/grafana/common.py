@@ -1117,7 +1117,8 @@ def graph_panel_histogram_quantiles(
         ],
         series_overrides=[
             series_override(
-                alias="count",
+                # use regex because the real alias is "count ${additional_groupby}"
+                alias="/^count/",
                 fill=2,
                 yaxis=2,
                 zindex=-3,
@@ -1127,7 +1128,8 @@ def graph_panel_histogram_quantiles(
                 transform_negative_y=True,
             ),
             series_override(
-                alias="avg",
+                # use regex because the real alias is "avg ${additional_groupby}"
+                alias="/^avg/",
                 fill=7,
             ),
         ],
