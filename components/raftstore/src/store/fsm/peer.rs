@@ -80,7 +80,7 @@ use crate::{
         entry_storage::MAX_WARMED_UP_CACHE_KEEP_TIME,
         fsm::{
             apply,
-            store::{PollContext, StoreMeta},
+            store::{PendingCreateState, PollContext, StoreMeta},
             ApplyMetrics, ApplyTask, ApplyTaskRes, CatchUpLogs, ChangeObserver, ChangePeer,
             ExecResult, SwitchWitness,
         },
@@ -3722,15 +3722,32 @@ where
             //   least one time. However, the prerequisite of merge includes the
             //   initialization of all target peers and source peers, which is conflict with
             //   1.
-            let pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
+            let mut pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
             let status = pending_create_peers.get(&region_id).cloned();
-            if status != Some((self.fsm.peer_id(), false)) {
+            if status == Some((self.fsm.peer_id(), PendingCreateState::WillSplit)) {
+                if !regions_to_destroy.is_empty() {
+                    // This is the only allowed exception.
+                    // The snapshot skipped the range check on an existing region that is being
+                    // merged to the snapshot.
+                    self.ctx.raft_metrics.message_dropped.region_overlap.inc();
+                    return Ok(Either::Left(key));
+                }
                 drop(pending_create_peers);
                 panic!("{} status {:?} is not expected", self.fsm.peer.tag, status);
             }
+            // Use this as a marker. `exec_batch_split` will not touch this region.
+            pending_create_peers.insert(
+                region_id,
+                (self.fsm.peer_id(), PendingCreateState::WillApplySnapshot),
+            );
         }
         meta.pending_snapshot_regions.push(snap_region);
 
+        fail_point!(
+            "after_check_snapshot_1000_2",
+            self.fsm.region_id() == 1000 && self.store_id() == 2,
+            |_| { unreachable!() }
+        );
         Ok(Either::Right(regions_to_destroy))
     }
 
@@ -4602,7 +4619,7 @@ where
                 let mut pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
                 assert_eq!(
                     pending_create_peers.remove(&new_region_id),
-                    Some((new_split_peer.peer_id, true))
+                    Some((new_split_peer.peer_id, PendingCreateState::WillSplit))
                 );
             }
 
@@ -5468,7 +5485,7 @@ where
             let mut pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
             assert_eq!(
                 pending_create_peers.remove(&self.fsm.region_id()),
-                Some((self.fsm.peer_id(), false))
+                Some((self.fsm.peer_id(), PendingCreateState::WillApplySnapshot))
             );
         }
 

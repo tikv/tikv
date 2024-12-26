@@ -98,7 +98,7 @@ use crate::{
         async_io::{read::ReadTask, write::WriteMsg, write_router::WriteRouter},
         fsm::{
             apply::{self, CatchUpLogs},
-            store::PollContext,
+            store::{PendingCreateState, PollContext},
             Apply, ApplyMetrics, ApplyTask, Proposal,
         },
         hibernate_state::GroupState,
@@ -1378,7 +1378,7 @@ where
         engines: &Engines<EK, ER>,
         perf_context: &mut ER::PerfContext,
         keep_data: bool,
-        pending_create_peers: &Mutex<HashMap<u64, (u64, bool)>>,
+        pending_create_peers: &Mutex<HashMap<u64, (u64, PendingCreateState)>>,
     ) -> Result<()> {
         fail_point!("raft_store_skip_destroy_peer", |_| Ok(()));
         let t = TiInstant::now();
@@ -1396,13 +1396,15 @@ where
                 assert_eq!(pending.get(&region.get_id()), None);
                 (None, true)
             } else if let Some(status) = pending.get(&region.get_id()) {
-                if *status == (self.peer.get_id(), false) {
+                if *status == (self.peer.get_id(), PendingCreateState::None) {
                     pending.remove(&region.get_id());
                     // Hold the lock to avoid apply worker applies split.
                     (Some(pending), true)
-                } else if *status == (self.peer.get_id(), true) {
+                } else if *status == (self.peer.get_id(), PendingCreateState::WillSplit) {
                     // It's already marked to split by apply worker, skip delete.
                     (None, false)
+                } else if *status == (self.peer.get_id(), PendingCreateState::WillApplySnapshot) {
+                    panic!("unimplemented");
                 } else {
                     // Peer id can't be different as router should exist all the time, their is no
                     // chance for store to insert a different peer id. And apply worker should skip
