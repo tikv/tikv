@@ -795,6 +795,46 @@ pub struct ProgressGroup<R: RegionInfoProvider> {
     progress: Progress<R>,
 }
 
+// check whether ranges in each group are ordered
+fn check_ranges_groups_desc(
+    ranges_groups_desc: &Vec<Vec<(Option<Key>, Option<Key>)>>,
+) -> Result<()> {
+    for ranges in ranges_groups_desc {
+        let (first_start_key, first_end_key) = ranges.first().ok_or(crate::Error::Other(
+            box_err!(format!("given ranges is empty")),
+        ))?;
+        if first_end_key.is_some() && first_start_key >= first_end_key {
+            return Err(crate::Error::Other(box_err!(format!(
+                "the given range is not valid: start_key: {:?}, end_key: {:?}",
+                first_start_key, first_end_key
+            ))));
+        }
+        let mut last_end_key = first_end_key;
+        for (start_key, end_key) in &ranges[1..] {
+            if last_end_key.is_none() {
+                return Err(crate::Error::Other(box_err!(format!(
+                    "given ranges are not ordered: last_end_key: +inf, this_start_key: {:?}",
+                    start_key
+                ))));
+            }
+            if last_end_key > start_key {
+                return Err(crate::Error::Other(box_err!(format!(
+                    "given ranges are not ordered: last_end_key: {:?}, this_start_key: {:?}",
+                    last_end_key, start_key
+                ))));
+            }
+            if end_key.is_some() && start_key > end_key {
+                return Err(crate::Error::Other(box_err!(format!(
+                    "the given range is not valid: start_key: {:?}, end_key: {:?}",
+                    start_key, end_key
+                ))));
+            }
+            last_end_key = end_key;
+        }
+    }
+    Ok(())
+}
+
 impl<R: RegionInfoProvider> ProgressGroup<R> {
     fn new(
         store_id: u64,
@@ -802,11 +842,12 @@ impl<R: RegionInfoProvider> ProgressGroup<R> {
         region_info: R,
         codec: KeyValueCodec,
         cf: CfName,
-    ) -> Self {
-        ProgressGroup {
+    ) -> Result<Self> {
+        check_ranges_groups_desc(&ranges_groups_desc)?;
+        Ok(ProgressGroup {
             ranges_groups_desc,
             progress: Progress::new(store_id, region_info, codec, cf),
-        }
+        })
     }
 
     // try the next ranges group if the currnet progress is finished.
@@ -1270,17 +1311,17 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         &self,
         request: &Request,
         codec: KeyValueCodec,
-    ) -> Arc<Mutex<ProgressGroup<R>>> {
+    ) -> Result<Arc<Mutex<ProgressGroup<R>>>> {
         if request.sub_ranges.is_empty() && request.sub_ranges_groups.is_empty() {
             let start_key = codec.encode_backup_key(request.start_key.clone());
             let end_key = codec.encode_backup_key(request.end_key.clone());
-            Arc::new(Mutex::new(ProgressGroup::new(
+            Ok(Arc::new(Mutex::new(ProgressGroup::new(
                 self.store_id,
                 vec![vec![(start_key, end_key)]],
                 self.region_info.clone(),
                 codec,
                 request.cf,
-            )))
+            )?)))
         } else if request.sub_ranges_groups.is_empty() {
             let mut ranges_groups = Vec::with_capacity(request.sub_ranges.len());
             for k in <[KeyRange]>::iter(&request.sub_ranges).rev() {
@@ -1288,13 +1329,13 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                 let end_key = codec.encode_backup_key(k.end_key.clone());
                 ranges_groups.push(vec![(start_key, end_key)]);
             }
-            Arc::new(Mutex::new(ProgressGroup::new(
+            Ok(Arc::new(Mutex::new(ProgressGroup::new(
                 self.store_id,
                 ranges_groups,
                 self.region_info.clone(),
                 codec,
                 request.cf,
-            )))
+            )?)))
         } else {
             let mut ranges_groups = Vec::with_capacity(request.sub_ranges_groups.len());
             for groups in <[SortedSubRanges]>::iter(&request.sub_ranges_groups).rev() {
@@ -1306,13 +1347,13 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                 }
                 ranges_groups.push(ranges);
             }
-            Arc::new(Mutex::new(ProgressGroup::new(
+            Ok(Arc::new(Mutex::new(ProgressGroup::new(
                 self.store_id,
                 ranges_groups,
                 self.region_info.clone(),
                 codec,
                 request.cf,
-            )))
+            )?)))
         }
     }
 
@@ -1355,7 +1396,17 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
             }
         }
 
-        let prs = self.get_progress_by_req(&request, codec);
+        let prs = match self.get_progress_by_req(&request, codec) {
+            Ok(prs) => prs,
+            Err(err) => {
+                let mut response = BackupResponse::default();
+                response.set_error(err.into());
+                if let Err(err) = resp.unbounded_send(response) {
+                    error_unknown!(?err; "backup failed to send response");
+                }
+                return;
+            }
+        };
 
         let backend = match create_storage(&request.backend, self.get_config()) {
             Ok(backend) => backend,
@@ -1788,7 +1839,8 @@ pub mod tests {
                     endpoint.region_info.clone(),
                     KeyValueCodec::new(false, ApiVersion::V1, ApiVersion::V1),
                     engine_traits::CF_DEFAULT,
-                );
+                )
+                .unwrap();
 
                 let mut ranges = Vec::with_capacity(expect.len());
                 while ranges.len() != expect.len() {
@@ -2044,7 +2096,8 @@ pub mod tests {
                     endpoint.region_info.clone(),
                     KeyValueCodec::new(false, ApiVersion::V1, ApiVersion::V1),
                     engine_traits::CF_DEFAULT,
-                );
+                )
+                .unwrap();
 
                 let mut ranges = Vec::with_capacity(expect.len());
                 loop {
@@ -2240,7 +2293,8 @@ pub mod tests {
             endpoint.region_info.clone(),
             KeyValueCodec::new(false, ApiVersion::V1, ApiVersion::V1),
             engine_traits::CF_DEFAULT,
-        );
+        )
+        .unwrap();
 
         let mut ranges = Vec::with_capacity(expect.len());
         loop {
@@ -2568,9 +2622,7 @@ pub mod tests {
             })
             .or_insert((kvs, bytes));
         // empty table 4
-        expect_table_meta
-            .entry(4)
-            .or_insert((0, 0));
+        expect_table_meta.entry(4).or_insert((0, 0));
         let (kvs, bytes) = write_kv(&endpoint.engine, table::encode_index_seek_key(5, 1, b"11"));
         expect_table_meta
             .entry(5)
@@ -2806,7 +2858,12 @@ pub mod tests {
             );
         }
         assert_eq!(resps.len(), expect.len());
-        assert_eq!(expect_table_meta.len(), actual_table_meta.len(), "{:?}", actual_table_meta);
+        assert_eq!(
+            expect_table_meta.len(),
+            actual_table_meta.len(),
+            "{:?}",
+            actual_table_meta
+        );
         for (id, (kvs, bytes)) in expect_table_meta {
             let (actual_kvs, actual_bytes) = *actual_table_meta.get(&id).unwrap();
             assert_eq!(kvs, actual_kvs);
@@ -2945,6 +3002,54 @@ pub mod tests {
             );
         }
         assert_eq!(resps.len(), expect.len());
+    }
+
+    #[test]
+    fn test_check_ranges_groups_desc() {
+        let a: &Option<Key> = &None;
+        let b: &Option<Key> = &Some(Key::from_raw(b"aa"));
+        assert!(a < b);
+        let ok_ranges_groups_desc = vec![
+            vec![(None, None)],
+            vec![(None, Some(Key::from_raw(b"aa")))],
+            vec![
+                (None, Some(Key::from_raw(b"aa"))),
+                (Some(Key::from_raw(b"bb")), Some(Key::from_raw(b"cc"))),
+            ],
+            vec![
+                (None, Some(Key::from_raw(b"aa"))),
+                (Some(Key::from_raw(b"bb")), Some(Key::from_raw(b"cc"))),
+                (Some(Key::from_raw(b"cc")), None),
+            ],
+            vec![(Some(Key::from_raw(b"aa")), None)],
+            vec![
+                (Some(Key::from_raw(b"aa")), Some(Key::from_raw(b"bb"))),
+                (Some(Key::from_raw(b"cc")), None),
+            ],
+        ];
+        check_ranges_groups_desc(&ok_ranges_groups_desc).unwrap();
+
+        let err_ranges_groups_desc = vec![vec![
+            (None, Some(Key::from_raw(b"aa"))),
+            (Some(Key::from_raw(b"bb")), Some(Key::from_raw(b"aa"))),
+        ]];
+        assert!(check_ranges_groups_desc(&err_ranges_groups_desc).is_err());
+        let err_ranges_groups_desc = vec![vec![
+            (None, Some(Key::from_raw(b"aa"))),
+            (Some(Key::from_raw(b"a")), Some(Key::from_raw(b"bb"))),
+        ]];
+        assert!(check_ranges_groups_desc(&err_ranges_groups_desc).is_err());
+        let err_ranges_groups_desc = vec![vec![
+            (None, Some(Key::from_raw(b"aa"))),
+            (None, Some(Key::from_raw(b"bb"))),
+        ]];
+        assert!(check_ranges_groups_desc(&err_ranges_groups_desc).is_err());
+        let err_ranges_groups_desc = vec![vec![
+            (None, Some(Key::from_raw(b"aa"))),
+            (Some(Key::from_raw(b"bb")), None),
+            (Some(Key::from_raw(b"cc")), Some(Key::from_raw(b"dd"))),
+        ]];
+        assert!(check_ranges_groups_desc(&err_ranges_groups_desc).is_err());
     }
 
     #[test]
