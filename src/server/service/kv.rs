@@ -28,8 +28,9 @@ use protobuf::RepeatedField;
 use raft::eraftpb::MessageType;
 use raftstore::{
     store::{
+        get_memory_usage_entry_cache,
         memory::{MEMTRACE_APPLYS, MEMTRACE_RAFT_ENTRIES, MEMTRACE_RAFT_MESSAGES},
-        metrics::{MESSAGE_RECV_BY_STORE, RAFT_ENTRIES_CACHES_GAUGE},
+        metrics::MESSAGE_RECV_BY_STORE,
         CheckLeaderTask,
     },
     Error as RaftStoreError, Result as RaftStoreResult,
@@ -2533,7 +2534,7 @@ fn needs_reject_raft_append(reject_messages_on_memory_ratio: f64) -> bool {
     let mut usage = 0;
     if memory_usage_reaches_high_water(&mut usage) {
         let raft_msg_usage = (MEMTRACE_RAFT_ENTRIES.sum() + MEMTRACE_RAFT_MESSAGES.sum()) as u64;
-        let cached_entries = RAFT_ENTRIES_CACHES_GAUGE.get() as u64;
+        let cached_entries = get_memory_usage_entry_cache();
         let applying_entries = MEMTRACE_APPLYS.sum() as u64;
         if (raft_msg_usage + cached_entries + applying_entries) as f64
             > usage as f64 * reject_messages_on_memory_ratio
