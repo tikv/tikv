@@ -7325,7 +7325,11 @@ dependencies = [
 
 [[package]]
 name = "tikv"
+<<<<<<< HEAD
 version = "8.5.4"
+=======
+version = "9.0.0-alpha"
+>>>>>>> 34fc67832b (build: bump tikv pkg version (#18062))
 dependencies = [
  "anyhow",
  "api_version",
