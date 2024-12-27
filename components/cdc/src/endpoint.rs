@@ -15,7 +15,7 @@ use causal_ts::{CausalTsProvider, CausalTsProviderImpl};
 use collections::{HashMap, HashMapEntry, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
-use futures::{compat::Future01CompatExt, executor::block_on, lock::Mutex};
+use futures::{executor::block_on, lock::Mutex};
 use grpcio::Environment;
 use kvproto::{
     cdcpb::{
@@ -35,13 +35,11 @@ use tikv::{
     storage::kv::LocalTablets,
 };
 use tikv_util::{
-    debug, defer, error, impl_display_as_debug, info,
+    debug, error, impl_display_as_debug, info,
     memory::MemoryQuota,
-    mpsc::bounded,
     slow_log,
     sys::thread::ThreadBuildWrapper,
-    time::{Instant, Limiter, SlowTimer},
-    timer::SteadyTimer,
+    time::{Limiter, SlowTimer},
     warn,
     worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler},
 };
@@ -159,8 +157,6 @@ pub enum Task {
     CollectProgress,
     RegisterMinTsEvent {
         leader_resolver: LeadershipResolver,
-        // The time at which the event actually occurred.
-        event_time: Instant,
     },
     // The result of ChangeCmd should be returned from CDC Endpoint to ensure
     // the downstream switches to Normal after the previous commands was sunk.
@@ -196,9 +192,7 @@ impl fmt::Debug for Task {
                 .field("current_ts", current_ts)
                 .field("min_ts", min_ts),
             Task::CollectProgress => de.field("type", &"CollectProgress"),
-            Task::RegisterMinTsEvent { ref event_time, .. } => de
-                .field("type", &"RegisterMinTsEvent")
-                .field("event_time", &event_time),
+            Task::RegisterMinTsEvent { .. } => de.field("type", &"RegisterMinTsEvent"),
             Task::TxnExtra(_) => de.field("type", &"TxnExtra"),
             Task::ChangeConfig(change) => de.field("type", &"ChangeConfig").field("change", change),
             Task::Validate(..) => de.field("type", &"Validate"),
@@ -347,7 +341,6 @@ pub struct Endpoint<T, E, S> {
     observer: CdcObserver,
 
     pd_client: Arc<dyn PdClient>,
-    timer: SteadyTimer,
     tso_worker: Runtime,
     store_meta: Arc<StdMutex<S>>,
     /// The concurrency manager for transactions. It's needed for CDC to check
@@ -369,10 +362,9 @@ pub struct Endpoint<T, E, S> {
     fetch_speed_limiter: Limiter,
     max_scan_batch_bytes: usize,
     max_scan_batch_size: usize,
+
     sink_memory_quota: Arc<MemoryQuota>,
-
     old_value_cache: Arc<Mutex<OldValueCache>>,
-
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
 
     // Metrics and logging.
@@ -468,7 +460,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             observer,
 
             pd_client,
-            timer: SteadyTimer::default(),
             tso_worker,
             store_meta,
             concurrency_manager,
@@ -487,8 +478,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             fetch_speed_limiter,
             max_scan_batch_bytes,
             max_scan_batch_size,
-            sink_memory_quota,
 
+            sink_memory_quota,
             old_value_cache: Arc::new(Mutex::new(old_value_cache)),
             causal_ts_provider,
 
@@ -500,7 +491,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
 
             pending_progress_collecting: 0,
         };
-        ep.register_min_ts_event(leader_resolver, Instant::now());
+        ep.register_min_ts_event(leader_resolver);
         ep
     }
 
@@ -944,31 +935,20 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         self.min_ts_region_id = advance.min_ts_region_id;
     }
 
-    fn register_min_ts_event(&self, mut leader_resolver: LeadershipResolver, event_time: Instant) {
-        // Try to keep advance resolved ts every `min_ts_interval`, thus
-        // the actual wait interval = `min_ts_interval` - the last register min_ts event
-        // time.
-        let interval = self
-            .config
-            .min_ts_interval
-            .0
-            .checked_sub(event_time.saturating_elapsed());
-        let timeout = self.timer.delay(interval.unwrap_or_default());
+    fn register_min_ts_event(&self, mut leader_resolver: LeadershipResolver) {
+        let min_ts_interval = self.config.min_ts_interval.0;
+        let advance_ts_interval = self.resolved_ts_config.advance_ts_interval.0;
         let pd_client = self.pd_client.clone();
         let scheduler = self.scheduler.clone();
         let cdc_handle = self.cdc_handle.clone();
         let regions: Vec<u64> = self.capture_regions.keys().copied().collect();
-        let cm: ConcurrencyManager = self.concurrency_manager.clone();
+        let cm = self.concurrency_manager.clone();
         let hibernate_regions_compatible = self.config.hibernate_regions_compatible;
         let causal_ts_provider = self.causal_ts_provider.clone();
-        // We use channel to deliver leader_resolver in async block.
-        let (leader_resolver_tx, leader_resolver_rx) = bounded(1);
-        let advance_ts_interval = self.resolved_ts_config.advance_ts_interval.0;
 
         let fut = async move {
-            let _ = timeout.compat().await;
             // Ignore get tso errors since we will retry every `min_ts_interval`.
-            let min_ts_pd = match causal_ts_provider {
+            let current_ts = match causal_ts_provider {
                 // TiKV API v2 is enabled when causal_ts_provider is Some.
                 // In this scenario, get TSO from causal_ts_provider to make sure that
                 // RawKV write requests will get larger TSO after this point.
@@ -977,7 +957,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 Some(provider) => provider.async_get_ts().await.unwrap_or_default(),
                 None => pd_client.get_tso().await.unwrap_or_default(),
             };
-            let mut min_ts = min_ts_pd;
+            let mut min_ts = current_ts;
 
             // Sync with concurrency manager so that it can work correctly when
             // optimizations like async commit is enabled.
@@ -991,47 +971,36 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             }
 
             let slow_timer = SlowTimer::default();
-            defer!({
-                slow_log!(T slow_timer, "cdc resolve region leadership");
-                if let Ok(leader_resolver) = leader_resolver_rx.try_recv() {
-                    match scheduler.schedule(Task::RegisterMinTsEvent {
-                        leader_resolver,
-                        event_time: Instant::now(),
-                    }) {
-                        Ok(_) | Err(ScheduleError::Stopped(_)) => (),
-                        Err(e) => warn!("cdc failed to schedule RegisterMinTsEvent"; "err" => ?e),
-                    }
-                } else {
-                    // During shutdown, tso runtime drops future immediately,
-                    // leader_resolver may be lost when this future drops before
-                    // delivering leader_resolver.
-                    warn!("cdc leader resolver is lost, are we shutdown?");
-                }
-            });
-
-            // Check region peer leadership, make sure they are leaders.
-            let gate = pd_client.feature_gate();
-            let regions =
-                if hibernate_regions_compatible && gate.can_enable(FEATURE_RESOLVED_TS_STORE) {
-                    CDC_RESOLVED_TS_ADVANCE_METHOD.set(1);
-                    leader_resolver
-                        .resolve(regions, min_ts, Some(advance_ts_interval))
-                        .await
-                } else {
-                    CDC_RESOLVED_TS_ADVANCE_METHOD.set(0);
-                    resolve_by_raft(regions, min_ts, cdc_handle).await
-                };
-            leader_resolver_tx.send(leader_resolver).unwrap();
+            let regions = if hibernate_regions_compatible
+                && pd_client
+                    .feature_gate()
+                    .can_enable(FEATURE_RESOLVED_TS_STORE)
+            {
+                CDC_RESOLVED_TS_ADVANCE_METHOD.set(1);
+                leader_resolver
+                    .resolve(regions, min_ts, Some(advance_ts_interval))
+                    .await
+            } else {
+                CDC_RESOLVED_TS_ADVANCE_METHOD.set(0);
+                resolve_by_raft(regions, min_ts, cdc_handle).await
+            };
+            slow_log!(T slow_timer, "cdc resolve region leadership");
 
             if !regions.is_empty() {
                 match scheduler.schedule(Task::MinTs {
                     regions,
                     min_ts,
-                    current_ts: min_ts_pd,
+                    current_ts,
                 }) {
                     Ok(_) | Err(ScheduleError::Stopped(_)) => (),
-                    Err(err) => warn!("cdc failed to schedule MinTs"; "err" => ?err),
+                    Err(e) => warn!("cdc failed to schedule MinTs"; "err" => ?e),
                 }
+            }
+
+            tokio::time::sleep(min_ts_interval).await;
+            match scheduler.schedule(Task::RegisterMinTsEvent { leader_resolver }) {
+                Ok(_) | Err(ScheduleError::Stopped(_)) => (),
+                Err(e) => warn!("cdc failed to schedule RegisterMinTsEvent"; "err" => ?e),
             }
         };
         self.tso_worker.spawn(fut);
@@ -1063,10 +1032,9 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
                 current_ts,
             } => self.on_min_ts(regions, min_ts, current_ts),
             Task::CollectProgress => self.on_collect_progress(),
-            Task::RegisterMinTsEvent {
-                leader_resolver,
-                event_time,
-            } => self.register_min_ts_event(leader_resolver, event_time),
+            Task::RegisterMinTsEvent { leader_resolver } => {
+                self.register_min_ts_event(leader_resolver)
+            }
             Task::TxnExtra(txn_extra) => {
                 self.sink_memory_quota.free(txn_extra.size());
                 let mut cache = block_on(self.old_value_cache.lock());
@@ -1911,10 +1879,7 @@ mod tests {
         let mut suite =
             mock_endpoint_with_ts_provider(&cfg, None, ApiVersion::V2, Some(ts_provider.clone()));
         let leader_resolver = suite.leader_resolver.take().unwrap();
-        suite.run(Task::RegisterMinTsEvent {
-            leader_resolver,
-            event_time: Instant::now(),
-        });
+        suite.run(Task::RegisterMinTsEvent { leader_resolver });
         suite.recv_task_timely();
         let end_ts = block_on(ts_provider.async_get_ts()).unwrap();
         assert!(end_ts.into_inner() > start_ts.next().into_inner()); // may trigger more than once.
