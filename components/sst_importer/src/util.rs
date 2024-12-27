@@ -220,9 +220,11 @@ impl<'a> PrefixReplacer<'a> {
         false
     }
 
-    // The SST reader iterator reads the key-value pairs in the range [to_old_prefix(range_start), to_old_prefix(range_end)),
-    // so any key starts with the prefix that is from first_old_prefix to last_old_prefix. In the former version, 
-    // that first_old_prefix equals to last_old_prefix, any key starts with the old_prefix.
+    // The SST reader iterator reads the key-value pairs in the range
+    // [to_old_prefix(range_start), to_old_prefix(range_end)), so any key starts
+    // with the prefix that is from first_old_prefix to last_old_prefix. In the
+    // former version, that first_old_prefix equals to last_old_prefix, any key
+    // starts with the old_prefix.
     pub fn try_update_rewrite_rule(
         &mut self,
         old_key: &[u8],
@@ -593,7 +595,7 @@ mod tests {
                 } else {
                     assert!(seek_key_op.is_none());
                 }
-            } else{
+            } else {
                 let expect_user_key = expect_user_key_op.unwrap();
                 let (user_key, new_timestamp) = res.unwrap().left().unwrap();
                 assert_eq!(new_timestamp, expect_new_timestamp);

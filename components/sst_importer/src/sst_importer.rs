@@ -1320,9 +1320,9 @@ impl<E: KvEngine> SstImporter<E> {
                             // skip some kvs that may be filtered
                             iter.seek(&keys::data_key(seek_key))?;
                             continue;
-                        },
+                        }
                         None => break,
-                    }
+                    },
                 };
             data_key.truncate(data_key_prefix_len);
             if req_type == DownloadRequestType::Keyspace {
@@ -3142,7 +3142,7 @@ mod tests {
             DownloadExt::default(),
         );
 
-        assert!(result.is_ok());
+        result.unwrap();
     }
 
     #[test]
@@ -3173,10 +3173,7 @@ mod tests {
 
         match &result {
             Err(Error::WrongKeyPrefix { what, key, prefix }) => {
-                assert_eq!(
-                    what.as_bytes(),
-                    b"SST start range"
-                );
+                assert_eq!(what.as_bytes(), b"SST start range");
                 assert_eq!(key, b"zt123_r01");
                 assert_eq!(prefix, b"yyy");
             }
@@ -3205,7 +3202,7 @@ mod tests {
             DownloadExt::default(),
         );
 
-        assert!(result.is_ok());
+        result.unwrap();
     }
 
     fn table_prefix(table_id: i64) -> Vec<u8> {
