@@ -1315,10 +1315,13 @@ impl<E: KvEngine> SstImporter<E> {
             let (user_key, new_timestamp) =
                 match prefix_replacer.try_update_rewrite_rule(old_key.as_ref())? {
                     Either::Left((user_key, new_timestamp)) => (user_key, new_timestamp),
-                    Either::Right(seek_key) => {
-                        // skip some kvs that may be filtered
-                        iter.seek(&keys::data_key(seek_key))?;
-                        continue;
+                    Either::Right(seek_key_op) => match seek_key_op {
+                        Some(seek_key) => {
+                            // skip some kvs that may be filtered
+                            iter.seek(&keys::data_key(seek_key))?;
+                            continue;
+                        },
+                        None => break,
                     }
                 };
             data_key.truncate(data_key_prefix_len);
@@ -3139,17 +3142,70 @@ mod tests {
             DownloadExt::default(),
         );
 
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_download_sst_wrong_key_prefix_2() {
+        let (_ext_sst_dir, backend, mut meta) = create_sample_external_sst_file().unwrap();
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let importer =
+            SstImporter::<TestEngine>::new(&cfg, &importer_dir, None, ApiVersion::V1, false)
+                .unwrap();
+        let db = create_sst_test_engine().unwrap();
+
+        let mut range = Range::default();
+        range.set_start(b"zt123_r01".to_vec());
+        range.set_end(b"zt123_r13".to_vec());
+        meta.set_range(range);
+
+        let result = importer.download(
+            &meta,
+            &backend,
+            "sample.sst",
+            &[new_rewrite_rule(b"xxx", b"yyy", 0)],
+            None,
+            Limiter::new(f64::INFINITY),
+            db,
+            DownloadExt::default(),
+        );
+
         match &result {
             Err(Error::WrongKeyPrefix { what, key, prefix }) => {
                 assert_eq!(
                     what.as_bytes(),
-                    b"Key in SST does not match any rewrite rule"
+                    b"SST start range"
                 );
-                assert_eq!(key, b"t123_r01");
-                assert_eq!(prefix, b"");
+                assert_eq!(key, b"zt123_r01");
+                assert_eq!(prefix, b"yyy");
             }
             _ => panic!("unexpected download result: {:?}", result),
         }
+    }
+
+    #[test]
+    fn test_download_sst_wrong_key_prefix_3() {
+        let (_ext_sst_dir, backend, meta) = create_sample_external_sst_file().unwrap();
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let importer =
+            SstImporter::<TestEngine>::new(&cfg, &importer_dir, None, ApiVersion::V1, false)
+                .unwrap();
+        let db = create_sst_test_engine().unwrap();
+
+        let result = importer.download(
+            &meta,
+            &backend,
+            "sample.sst",
+            &[new_rewrite_rule(b"aaa", b"bbb", 0)],
+            None,
+            Limiter::new(f64::INFINITY),
+            db,
+            DownloadExt::default(),
+        );
+
+        assert!(result.is_ok());
     }
 
     fn table_prefix(table_id: i64) -> Vec<u8> {

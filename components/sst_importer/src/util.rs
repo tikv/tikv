@@ -220,10 +220,13 @@ impl<'a> PrefixReplacer<'a> {
         false
     }
 
+    // The SST reader iterator reads the key-value pairs in the range [to_old_prefix(range_start), to_old_prefix(range_end)),
+    // so any key starts with the prefix that is from first_old_prefix to last_old_prefix. In the former version, 
+    // that first_old_prefix equals to last_old_prefix, any key starts with the old_prefix.
     pub fn try_update_rewrite_rule(
         &mut self,
         old_key: &[u8],
-    ) -> Result<Either<(&[u8], u64), &[u8]>> {
+    ) -> Result<Either<(&[u8], u64), Option<&[u8]>>> {
         while self.next_index < self.rewrite_rules.len() {
             let rewrite_rule = &self.rewrite_rules[self.next_index];
             let old_key_prefix = rewrite_rule.get_old_key_prefix();
@@ -232,15 +235,11 @@ impl<'a> PrefixReplacer<'a> {
                 self.update_user_key(old_key);
                 return Ok(Either::Left((&self.user_key, self.new_timestamp)));
             } else if old_key < old_key_prefix {
-                return Ok(Either::Right(old_key_prefix));
+                return Ok(Either::Right(Some(old_key_prefix)));
             }
             self.next_index += 1;
         }
-        Err(Error::WrongKeyPrefix {
-            what: "Key in SST does not match any rewrite rule",
-            key: old_key.to_vec(),
-            prefix: vec![],
-        })
+        Ok(Either::Right(None))
     }
 
     fn try_update_rewrite_rule_internal(&mut self) -> Result<()> {
@@ -551,7 +550,7 @@ mod tests {
         for (old_key, expect_user_key, expect_new_timestamp) in cases {
             let res = prefix_replacer.try_update_rewrite_rule(&old_key);
             if expect_user_key.is_empty() {
-                assert!(res.is_err());
+                assert!(res.unwrap().right().unwrap().is_none());
             } else {
                 let (user_key, new_timestamp) = res.unwrap().left().unwrap();
                 assert_eq!(new_timestamp, expect_new_timestamp);
@@ -572,26 +571,30 @@ mod tests {
         assert!(prefix_replacer.need_to_replace());
 
         let cases = vec![
-            (b"aa".to_vec(), b"A".to_vec(), false, 1),
-            (b"aaa".to_vec(), b"Aa".to_vec(), false, 1),
-            (b"aabc".to_vec(), b"Abc".to_vec(), false, 1),
-            (b"abc".to_vec(), b"bb".to_vec(), true, 0),
-            (b"abcd".to_vec(), b"bb".to_vec(), true, 0),
+            (b"aa".to_vec(), Some(b"A".to_vec()), false, 1),
+            (b"aaa".to_vec(), Some(b"Aa".to_vec()), false, 1),
+            (b"aabc".to_vec(), Some(b"Abc".to_vec()), false, 1),
+            (b"abc".to_vec(), Some(b"bb".to_vec()), true, 0),
+            (b"abcd".to_vec(), Some(b"bb".to_vec()), true, 0),
             // skip rewrite rule bb -> BB
-            (b"bccd".to_vec(), b"cc".to_vec(), true, 0),
-            (b"ccde".to_vec(), b"CCCde".to_vec(), false, 3),
-            (b"cdcd".to_vec(), b"dd".to_vec(), true, 0),
-            (b"dddd".to_vec(), b"DDDDdd".to_vec(), false, 4),
-            (b"eeee".to_vec(), vec![], false, 0),
+            (b"bccd".to_vec(), Some(b"cc".to_vec()), true, 0),
+            (b"ccde".to_vec(), Some(b"CCCde".to_vec()), false, 3),
+            (b"cdcd".to_vec(), Some(b"dd".to_vec()), true, 0),
+            (b"dddd".to_vec(), Some(b"DDDDdd".to_vec()), false, 4),
+            (b"eeee".to_vec(), None, true, 0),
         ];
-        for (old_key, expect_user_key, is_right, expect_new_timestamp) in cases {
+        for (old_key, expect_user_key_op, is_right, expect_new_timestamp) in cases {
             let res = prefix_replacer.try_update_rewrite_rule(&old_key);
             if is_right {
-                let seek_key = res.unwrap().right().unwrap();
-                assert_eq!(expect_user_key, seek_key);
-            } else if expect_user_key.is_empty() {
-                assert!(res.is_err());
-            } else {
+                let seek_key_op = res.unwrap().right().unwrap();
+                if let Some(expect_user_key) = expect_user_key_op {
+                    let seek_key = seek_key_op.unwrap();
+                    assert_eq!(expect_user_key, seek_key);
+                } else {
+                    assert!(seek_key_op.is_none());
+                }
+            } else{
+                let expect_user_key = expect_user_key_op.unwrap();
                 let (user_key, new_timestamp) = res.unwrap().left().unwrap();
                 assert_eq!(new_timestamp, expect_new_timestamp);
                 assert_eq!(user_key, expect_user_key);
