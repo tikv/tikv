@@ -110,6 +110,10 @@ impl<EK: Engine, K: ConfigurableDb, L: LockManager> ConfigManager
             self.concurrency_manager
                 .set_action_on_invalid_max_ts(action);
         }
+        if let Some(v) = change.remove("max_ts_drift_allowance") {
+            let dur_v: ReadableDuration = v.into();
+            self.concurrency_manager.set_max_ts_drift_allowance(dur_v.0);
+        }
         Ok(())
     }
 }
