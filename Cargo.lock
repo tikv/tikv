@@ -1030,6 +1030,7 @@ dependencies = [
  "lazy_static",
  "online_config",
  "parking_lot 0.12.0",
+ "pd_client",
  "prometheus",
  "rand 0.8.5",
  "serde",

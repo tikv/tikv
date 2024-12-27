@@ -2,14 +2,20 @@
 
 use std::time::Duration;
 
-use concurrency_manager::ConcurrencyManager;
+use concurrency_manager::{ActionOnInvalidMaxTs, ConcurrencyManager};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use txn_types::TimeStamp;
 
 fn benchmark_update_max_ts(c: &mut Criterion) {
     let latest_ts = TimeStamp::new(1000);
     let limit_valid_time = Duration::from_secs(20);
-    let cm = ConcurrencyManager::new_with_config(latest_ts, limit_valid_time);
+    let cm = ConcurrencyManager::new_with_config(
+        latest_ts,
+        limit_valid_time,
+        ActionOnInvalidMaxTs::Error,
+        None,
+        Duration::ZERO,
+    );
 
     cm.set_max_ts_limit(TimeStamp::new(4000));
 
