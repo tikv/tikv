@@ -17,7 +17,6 @@ use test_coprocessor::*;
 use test_raftstore::{must_kv_commit, must_kv_prewrite, must_new_cluster_and_kv_client};
 use test_raftstore_macro::test_case;
 use test_storage::*;
-use test_util::init_log_for_test;
 use tidb_query_datatype::{
     codec::{datum, table::encode_row_key, Datum},
     expr::EvalContext,
