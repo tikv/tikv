@@ -503,7 +503,15 @@ impl<E: Engine> Endpoint<E> {
                 COPR_RESP_SIZE.inc_by(resp.data.len() as u64);
                 resp
             }
-            Err(e) => make_error_response(e).into(),
+            Err(e) => {
+                if let Error::DefaultNotFound(errmsg) = &e {
+                    error!("default not found in coprocessor request processing";
+                        "err" => errmsg,
+                        "reqCtx" => ?&tracker.req_ctx,
+                    );
+                }
+                make_error_response(e).into()
+            }
         };
         resp.set_exec_details(exec_details);
         resp.set_exec_details_v2(exec_details_v2);
@@ -932,6 +940,10 @@ macro_rules! make_error_response_common {
                 let mut err = errorpb::Error::default();
                 err.set_message(e.to_string());
                 $resp.set_region_error(err);
+            }
+            Error::DefaultNotFound(_) => {
+                $tag = "default_not_found";
+                $resp.set_other_error($e.to_string());
             }
             Error::Other(_) => {
                 $tag = "other";
