@@ -95,10 +95,6 @@ pub struct ConcurrencyManager {
     limit_valid_duration: Duration,
     action_on_invalid_max_ts: Arc<AtomicActionOnInvalidMaxTs>,
 
-    // the allowance is only used when the concurrency manager is double-checking an invalid
-    // max_ts by fetching TSO directly.
-    // In normal cases, the allowance is not used. Upper layers calculate the limit and pass the
-    // result to `set_max_ts_limit`.
     max_ts_drift_allowance_ms: Arc<AtomicU64>,
 
     tso: Option<Arc<dyn TSOProvider>>,
@@ -260,16 +256,13 @@ impl ConcurrencyManager {
         if let Some(tso) = &self.tso {
             match block_on_timeout(tso.get_tso(), TSO_TIMEOUT) {
                 Ok(Ok(ts)) => {
-                    self.set_max_ts_limit(TimeStamp::compose(
-                        ts.physical() + self.max_ts_drift_allowance_ms.load(Ordering::SeqCst),
-                        ts.logical(),
-                    ));
+                    self.set_max_ts_limit(ts);
                 }
                 Ok(Err(e)) => {
-                    error!("failed to fetch from TSO"; "err" => ?e);
+                    error!("failed to fetch from TSO for double checking"; "err" => ?e);
                 }
                 Err(()) => {
-                    error!("timeout when fetching from TSO"; "timeout" => ?TSO_TIMEOUT);
+                    error!("timeout when fetching from TSO for double checking"; "timeout" => ?TSO_TIMEOUT);
                 }
             }
         }
@@ -320,11 +313,16 @@ impl ConcurrencyManager {
     /// # Note
     /// If the new limit is smaller than the current limit, this operation will
     /// have no effect and return silently.
-    pub fn set_max_ts_limit(&self, limit: TimeStamp) {
-        if limit.is_max() {
+    pub fn set_max_ts_limit(&self, ts_from_tso: TimeStamp) {
+        if ts_from_tso.is_max() {
             error!("max_ts_limit cannot be set to u64::max");
             return;
         }
+
+        let limit = TimeStamp::compose(
+            ts_from_tso.physical() + self.max_ts_drift_allowance_ms.load(Ordering::SeqCst),
+            ts_from_tso.logical(),
+        );
 
         loop {
             let current = self.max_ts_limit.load();
