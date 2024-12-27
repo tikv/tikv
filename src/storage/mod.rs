@@ -707,7 +707,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     ) = &result
                     {
                         error!("default not found in storage get";
-                            "err" => e.to_string(),
+                            "err" => ?e,
                             "RpcContext" => ?&ctx,
                         );
                     }
@@ -1330,7 +1330,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     ) = &result
                     {
                         error!("default not found in storage batch_get";
-                            "err" => e.to_string(),
+                            "err" => ?e,
                             "RpcContext" => ?&ctx,
                         );
                     }
