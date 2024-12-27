@@ -12,6 +12,7 @@ kvproto = { workspace = true }
 lazy_static = "1.4.0"
 online_config = { workspace = true }
 parking_lot = "0.12"
+pd_client = { workspace = true }
 prometheus = "0.13"
 serde = { version = "1.0.194", features = ["derive"] }
 slog = { workspace = true }

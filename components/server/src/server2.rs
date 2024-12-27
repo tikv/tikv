@@ -30,8 +30,8 @@ use backup_stream::{
 use causal_ts::CausalTsProviderImpl;
 use cdc::CdcConfigManager;
 use concurrency_manager::{
-    ConcurrencyManager, DEFAULT_MAX_TS_DRIFT_ALLOWANCE, DEFAULT_MAX_TS_SYNC_INTERVAL,
-    LIMIT_VALID_TIME_MULTIPLIER,
+    ActionOnInvalidMaxTs, ConcurrencyManager, DEFAULT_MAX_TS_DRIFT_ALLOWANCE,
+    DEFAULT_MAX_TS_SYNC_INTERVAL, LIMIT_VALID_TIME_MULTIPLIER,
 };
 use engine_rocks::{from_rocks_compression_type, RocksEngine, RocksStatistics};
 use engine_traits::{Engines, KvEngine, MiscExt, RaftEngine, TabletRegistry, CF_DEFAULT, CF_WRITE};
@@ -93,7 +93,7 @@ use tikv::{
         config::EngineType,
         config_manager::StorageConfigManger,
         kv::LocalTablets,
-        mvcc::{MvccConsistencyCheckObserver, TimeStamp},
+        mvcc::MvccConsistencyCheckObserver,
         txn::flow_controller::{FlowController, TabletFlowController},
         Engine, Storage,
     },
@@ -313,6 +313,9 @@ where
         let concurrency_manager = ConcurrencyManager::new_with_config(
             latest_ts,
             DEFAULT_MAX_TS_SYNC_INTERVAL * LIMIT_VALID_TIME_MULTIPLIER,
+            ActionOnInvalidMaxTs::Log,
+            Some(pd_client.clone()),
+            DEFAULT_MAX_TS_DRIFT_ALLOWANCE,
         );
 
         // use different quota for front-end and back-end requests
@@ -913,12 +916,11 @@ where
             .spawn_interval_async_task(max_ts_sync_interval, move || {
                 let cm = cm.clone();
                 let pd_client = pd_client.clone();
-                let allowance_ms = DEFAULT_MAX_TS_DRIFT_ALLOWANCE.as_millis() as u64;
 
                 async move {
                     let pd_tso = pd_client.get_tso().await;
                     if let Ok(ts) = pd_tso {
-                        cm.set_max_ts_limit(TimeStamp::compose(ts.physical() + allowance_ms, 0));
+                        cm.set_max_ts_limit(ts);
                     } else {
                         warn!("failed to get tso from pd in background");
                     }
