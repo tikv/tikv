@@ -13,6 +13,8 @@ fn benchmark_update_max_ts(c: &mut Criterion) {
         latest_ts,
         limit_valid_time,
         ActionOnInvalidMaxTs::Error,
+        None,
+        Duration::ZERO,
     );
 
     cm.set_max_ts_limit(TimeStamp::new(4000));
