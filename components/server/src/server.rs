@@ -114,7 +114,7 @@ use tikv::{
         config::EngineType,
         config_manager::StorageConfigManger,
         kv::LocalTablets,
-        mvcc::{MvccConsistencyCheckObserver, TimeStamp},
+        mvcc::MvccConsistencyCheckObserver,
         txn::{
             flow_controller::{EngineFlowController, FlowController},
             txn_status_cache::TxnStatusCache,
@@ -412,6 +412,8 @@ where
                 .as_str()
                 .try_into()
                 .unwrap(),
+            Some(pd_client.clone()),
+            config.storage.max_ts_drift_allowance.0,
         );
 
         // use different quota for front-end and back-end requests
@@ -1173,19 +1175,16 @@ where
         let pd_client = self.pd_client.clone();
 
         let max_ts_sync_interval = self.core.config.storage.max_ts_sync_interval.into();
-        let cfg_controller = self.cfg_controller.as_ref().unwrap().clone();
         self.core
             .background_worker
             .spawn_interval_async_task(max_ts_sync_interval, move || {
                 let cm = cm.clone();
                 let pd_client = pd_client.clone();
-                let allowance_ms =
-                    cfg_controller.get_current().storage.max_ts_drift_allowance.as_millis();
 
                 async move {
                     let pd_tso = pd_client.get_tso().await;
                     if let Ok(ts) = pd_tso {
-                        cm.set_max_ts_limit(TimeStamp::compose(ts.physical() + allowance_ms, 0));
+                        cm.set_max_ts_limit(ts);
                     } else {
                         warn!("failed to get tso from pd in background, the max_ts validity check could be skipped");
                     }
