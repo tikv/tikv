@@ -39,7 +39,7 @@ pub struct BackwardKvScanner<S: Snapshot> {
     is_started: bool,
     statistics: Statistics,
     met_newer_ts_data: NewerTsCheckState,
-    in_memory_engine_hit: bool,
+    _in_memory_engine_hit: bool,
 }
 
 impl<S: Snapshot> BackwardKvScanner<S> {
@@ -61,7 +61,7 @@ impl<S: Snapshot> BackwardKvScanner<S> {
             statistics: Statistics::default(),
             default_cursor: None,
             is_started: false,
-            in_memory_engine_hit,
+            _in_memory_engine_hit: in_memory_engine_hit,
         }
     }
 

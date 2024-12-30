@@ -1697,7 +1697,7 @@ impl Filter {
                 self.metrics.filtered += 1;
                 info!(
                     "jepsen gc filter write tombstone";
-                    "key" => log_wrappers::Value(&self.cached_skiplist_delete_key.as_ref().unwrap()),
+                    "key" => log_wrappers::Value(self.cached_skiplist_delete_key.as_ref().unwrap()),
                     "safe_ts" => self.safe_point,
                     "commit_ts" => commit_ts,
                 );
@@ -1719,7 +1719,7 @@ impl Filter {
                 .remove(&InternalBytes::from_bytes(key.clone()), guard);
             info!(
                 "jepsen gc filter write user key";
-                "key" => log_wrappers::Value(&key),
+                "key" => log_wrappers::Value(key),
                 "safe_ts" => self.safe_point,
                 "commit_ts" => commit_ts,
             );
@@ -1772,7 +1772,7 @@ impl Filter {
                 "jepsen gc filter not filter";
                 "key" => log_wrappers::Value(key),
                 "seqno" => sequence,
-                "write type" => ?write.write_type,
+                "write_type" => ?write.write_type,
                 "start_ts" => write.start_ts,
                 "commit_ts" => commit_ts,
             );
@@ -1785,7 +1785,7 @@ impl Filter {
             "jepsen gc filter write";
             "key" => log_wrappers::Value(key),
             "seqno" => sequence,
-            "write type" => ?write.write_type,
+            "write_type" => ?write.write_type,
             "start_ts" => write.start_ts,
             "safe_ts" => self.safe_point,
             "commit_ts" => commit_ts,
