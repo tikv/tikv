@@ -1,6 +1,7 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    fmt::Debug,
     sync::{atomic::Ordering, Arc},
     time::Duration,
 };
@@ -223,6 +224,11 @@ impl RegionCacheWriteBatch {
         // record last region before flush.
         self.record_last_written_region();
 
+        info!(
+            "jepsen write impl";
+            "seq" => seq,
+        );
+
         fail::fail_point!("ime_on_region_cache_write_batch_write_impl");
         let guard = &epoch::pin();
         let start = Instant::now();
@@ -386,11 +392,23 @@ impl WriteBatchEntryInternal {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(crate) struct RegionCacheWriteBatchEntry {
     cf: usize,
     key: Bytes,
     inner: WriteBatchEntryInternal,
+}
+
+impl Debug for RegionCacheWriteBatchEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Region Cache Entry: Key {}, Value {:?}, CF {}",
+            log_wrappers::hex_encode_upper(&self.key),
+            self.inner,
+            self.cf,
+        )
+    }
 }
 
 impl RegionCacheWriteBatchEntry {
@@ -453,6 +471,12 @@ impl RegionCacheWriteBatchEntry {
         key.set_memory_controller(memory_controller.clone());
         value.set_memory_controller(memory_controller);
         handle.insert(key, value, guard);
+
+        info!(
+            "jepsen write to memory";
+            "entry" => ?self,
+            "seqno" => seq,
+        );
     }
 }
 
