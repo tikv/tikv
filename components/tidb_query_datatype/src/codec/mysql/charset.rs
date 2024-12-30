@@ -15,16 +15,11 @@ pub const CHARSET_ASCII: &str = "ascii";
 pub const CHARSET_LATIN1: &str = "latin1";
 /// `CHARSET_GBK` is Chinese character set.
 pub const CHARSET_GBK: &str = "gbk";
-<<<<<<< HEAD
-=======
-/// `CHARSET_GB18030` is another Chinese character set containing GBK.
-pub const CHARSET_GB18030: &str = "gb18030";
 // For a new implemented multi-byte charset, add it to MULTI_BYTES_CHARSETS
->>>>>>> 27acfb345a (charset: fix the `cast` for gbk/gb18030 charset (#18067))
 
 lazy_static! {
     pub static ref MULTI_BYTES_CHARSETS: collections::HashSet<&'static str> =
-        [CHARSET_UTF8, CHARSET_UTF8MB4, CHARSET_GBK, CHARSET_GB18030,]
+        [CHARSET_UTF8, CHARSET_UTF8MB4, CHARSET_GBK,]
             .iter()
             .cloned()
             .collect();
