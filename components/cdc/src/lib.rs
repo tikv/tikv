@@ -8,6 +8,7 @@ mod config;
 mod delegate;
 mod endpoint;
 mod errors;
+mod fair_queues;
 mod initializer;
 pub mod metrics;
 mod observer;

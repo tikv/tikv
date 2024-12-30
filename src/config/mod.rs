@@ -3116,6 +3116,20 @@ impl CdcConfig {
             );
             self.incremental_scan_concurrency_limit = self.incremental_scan_concurrency
         }
+        if self.incremental_scan_speed_limit.0 == 0 {
+            warn!(
+                "cdc.incremental-scan-speed-limit can't be 0, change it to {}",
+                default_cfg.incremental_scan_speed_limit
+            );
+            self.incremental_scan_speed_limit = default_cfg.incremental_scan_speed_limit;
+        }
+        if self.incremental_fetch_speed_limit.0 == 0 {
+            warn!(
+                "cdc.incremental-fetch-speed-limit can't be 0, change it to {}",
+                default_cfg.incremental_fetch_speed_limit
+            );
+            self.incremental_fetch_speed_limit = default_cfg.incremental_fetch_speed_limit;
+        }
         if self.incremental_scan_ts_filter_ratio < 0.0
             || self.incremental_scan_ts_filter_ratio > 1.0
         {

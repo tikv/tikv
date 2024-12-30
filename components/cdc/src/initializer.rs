@@ -47,7 +47,6 @@ use tikv_util::{
     time::{duration_to_sec, Instant, Limiter},
     warn, Either,
 };
-use tokio::sync::Semaphore;
 use txn_types::{Key, KvPair, LockType, OldValue, TimeStamp};
 
 use crate::{
@@ -104,7 +103,6 @@ pub(crate) struct Initializer<E> {
     pub(crate) tablet: Option<E>,
     pub(crate) sched: UnboundedSender<DelegateTask>,
     pub(crate) sink: DownstreamSink,
-    pub(crate) concurrency_semaphore: Arc<Semaphore>,
 
     pub(crate) scan_speed_limiter: Limiter,
     pub(crate) fetch_speed_limiter: Limiter,
@@ -123,9 +121,6 @@ impl<E: KvEngine> Initializer<E> {
         T: 'static + CdcHandle<E>,
     {
         fail_point!("cdc_before_initialize");
-        let concurrency_semaphore = self.concurrency_semaphore.clone();
-        let _permit = concurrency_semaphore.acquire().await;
-
         let region_id = self.region_id;
         let downstream_id = self.downstream_id;
         let observe_id = self.observe_handle.id;
@@ -140,8 +135,6 @@ impl<E: KvEngine> Initializer<E> {
             return Err(Error::Other(box_err!("scan canceled")));
         }
 
-        // To avoid holding too many snapshots and holding them too long,
-        // we need to acquire scan concurrency permit before taking snapshot.
         let sched = self.sched.clone();
         let region_epoch = self.region_epoch.clone();
         let (cb, fut) = tikv_util::future::paired_future_callback();
@@ -599,7 +592,7 @@ impl<E: KvEngine> Initializer<E> {
 mod tests {
     use std::{
         collections::BTreeMap,
-        sync::{atomic::AtomicBool, mpsc::sync_channel, Arc},
+        sync::{atomic::AtomicBool, Arc},
         time::Duration,
     };
 
@@ -611,8 +604,7 @@ mod tests {
         StreamExt,
     };
     use kvproto::{cdcpb::EventLogType, errorpb::Error as ErrorHeader};
-    use raftstore::{coprocessor::ObserveHandle, router::CdcRaftRouter};
-    use test_raftstore::MockRaftStoreRouter;
+    use raftstore::coprocessor::ObserveHandle;
     use tikv::{
         config::DbConfig,
         storage::{
@@ -674,7 +666,6 @@ mod tests {
             }),
             sched: tx,
             sink: DownstreamSink::new(1, RequestId(0), sink),
-            concurrency_semaphore: Arc::new(Semaphore::new(1)),
 
             scan_speed_limiter: Limiter::new(scan_limit as _),
             fetch_speed_limiter: Limiter::new(fetch_limit as _),
@@ -959,45 +950,6 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(matches!(task, DelegateTask::Stop { .. }));
-    }
-
-    #[test]
-    fn test_initializer_initialize() {
-        test_initializer_initialize_impl(ChangeDataRequestKvApi::TiDb);
-        test_initializer_initialize_impl(ChangeDataRequestKvApi::RawKv);
-    }
-
-    fn test_initializer_initialize_impl(kv_api: ChangeDataRequestKvApi) {
-        let total_bytes = 1;
-        let (pool, mut initializer, _rx, _drain) =
-            mock_initializer(total_bytes, total_bytes, None, kv_api, false);
-
-        let raft_router = CdcRaftRouter(MockRaftStoreRouter::new());
-        initializer.downstream_state.store(DownstreamState::Stopped);
-        block_on(initializer.initialize(raft_router.clone())).unwrap_err();
-
-        let (tx, rx) = sync_channel(1);
-        let concurrency_semaphore = initializer.concurrency_semaphore.clone();
-        pool.spawn(async move {
-            let _permit = concurrency_semaphore.acquire().await;
-            tx.send(()).unwrap();
-            tx.send(()).unwrap();
-            tx.send(()).unwrap();
-        });
-        rx.recv_timeout(Duration::from_millis(200)).unwrap();
-
-        let (tx1, rx1) = sync_channel(1);
-        pool.spawn(async move {
-            let res = initializer.initialize(raft_router).await;
-            tx1.send(res).unwrap();
-        });
-        // Must timeout because there is no enough permit.
-        rx1.recv_timeout(Duration::from_millis(200)).unwrap_err();
-
-        // Release the permit
-        rx.recv_timeout(Duration::from_millis(200)).unwrap();
-        let res = rx1.recv_timeout(Duration::from_millis(200)).unwrap();
-        res.unwrap_err();
     }
 
     #[test]

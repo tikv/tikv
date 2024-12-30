@@ -4,6 +4,7 @@ use std::{
     cmp::{Ord, Ordering as CmpOrdering, PartialOrd, Reverse},
     collections::BinaryHeap,
     fmt,
+    marker::PhantomData,
     sync::{
         atomic::{AtomicIsize, Ordering},
         Arc, Mutex as StdMutex,
@@ -14,20 +15,26 @@ use std::{
 use causal_ts::{CausalTsProvider, CausalTsProviderImpl};
 use collections::{HashMap, HashMapEntry, HashSet};
 use concurrency_manager::ConcurrencyManager;
+use crossbeam::atomic::AtomicCell;
 use engine_traits::KvEngine;
-use futures::{executor::block_on, lock::Mutex};
+use futures::{channel::mpsc::UnboundedSender, executor::block_on, lock::Mutex, StreamExt};
 use grpcio::Environment;
 use kvproto::{
     cdcpb::{
-        ChangeDataRequest, ClusterIdMismatch as ErrorClusterIdMismatch,
+        ChangeDataRequest, ChangeDataRequestKvApi, ClusterIdMismatch as ErrorClusterIdMismatch,
         Compatibility as ErrorCompatibility, DuplicateRequest as ErrorDuplicateRequest,
         Error as EventError,
     },
     kvrpcpb::ApiVersion,
+    metapb::RegionEpoch,
 };
 use online_config::{ConfigChange, OnlineConfig};
 use pd_client::{Feature, PdClient};
-use raftstore::{coprocessor::ObserveId, router::CdcHandle, store::fsm::store::StoreRegionMeta};
+use raftstore::{
+    coprocessor::{ObserveHandle, ObserveId},
+    router::CdcHandle,
+    store::fsm::store::StoreRegionMeta,
+};
 use resolved_ts::{resolve_by_raft, LeadershipResolver};
 use security::SecurityManager;
 use tikv::{
@@ -42,6 +49,7 @@ use tikv_util::{
     time::{Limiter, SlowTimer},
     warn,
     worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler},
+    DeferContext,
 };
 use tokio::{
     runtime::{Builder, Handle, Runtime},
@@ -50,7 +58,12 @@ use tokio::{
 use txn_types::{TimeStamp, TxnExtra, TxnExtraScheduler};
 
 use crate::{
-    delegate::{Delegate, DelegateMeta, DelegateTask, Downstream, DownstreamId},
+    channel::DownstreamSink,
+    delegate::{
+        Delegate, DelegateMeta, DelegateTask, Downstream, DownstreamId, DownstreamState,
+        ObservedRange,
+    },
+    fair_queues::{self, FairQueues},
     initializer::Initializer,
     metrics::*,
     old_value::OldValueCache,
@@ -352,16 +365,17 @@ pub struct Endpoint<T, E, S> {
     resolved_ts_config: ResolvedTsConfig,
     api_version: ApiVersion,
 
-    workers: Option<Runtime>,
+    workers: Runtime,
 
     // Incremental scan stuffs.
-    scan_workers: Option<Runtime>,
+    scan_workers: Runtime,
     scan_task_counter: Arc<AtomicIsize>,
     scan_concurrency_semaphore: Arc<Semaphore>,
     scan_speed_limiter: Limiter,
     fetch_speed_limiter: Limiter,
     max_scan_batch_bytes: usize,
     max_scan_batch_size: usize,
+    pending_scans: FairQueues<(ConnId, RequestId), PendingInitialize<E>>,
 
     sink_memory_quota: Arc<MemoryQuota>,
     old_value_cache: Arc<Mutex<OldValueCache>>,
@@ -396,6 +410,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         sink_memory_quota: Arc<MemoryQuota>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
     ) -> Endpoint<T, E, S> {
+        CDC_SINK_CAP.set(sink_memory_quota.capacity() as i64);
+
         let workers = Builder::new_multi_thread()
             .thread_name("cdc-main-workers")
             .enable_time()
@@ -417,38 +433,19 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             .build()
             .unwrap();
 
-        // Initialized for the first time, subsequent adjustments will be made based on
-        // configuration updates.
-        let scan_concurrency_semaphore =
-            Arc::new(Semaphore::new(config.incremental_scan_concurrency));
-        let old_value_cache = OldValueCache::new(config.old_value_cache_memory_quota);
-        let scan_speed_limiter = Limiter::new(if config.incremental_scan_speed_limit.0 > 0 {
-            config.incremental_scan_speed_limit.0 as f64
-        } else {
-            f64::INFINITY
-        });
-        let fetch_speed_limiter = Limiter::new(if config.incremental_fetch_speed_limit.0 > 0 {
-            config.incremental_fetch_speed_limit.0 as f64
-        } else {
-            f64::INFINITY
-        });
-
-        CDC_SINK_CAP.set(sink_memory_quota.capacity() as i64);
-        // For scan efficiency, the scan batch bytes should be around 1MB.
-        let max_scan_batch_bytes = 1024 * 1024;
-        // Assume 1KB per entry.
-        let max_scan_batch_size = 1024;
-
-        let region_read_progress = store_meta.lock().unwrap().region_read_progress().clone();
-        let store_resolver_gc_interval = Duration::from_secs(60);
+        let store_id = store_meta.lock().unwrap().store_id();
+        let read_progress = store_meta.lock().unwrap().region_read_progress().clone();
         let leader_resolver = LeadershipResolver::new(
-            store_meta.lock().unwrap().store_id(),
+            store_id,
             pd_client.clone(),
             env,
             security_mgr,
-            region_read_progress,
-            store_resolver_gc_interval,
+            read_progress,
+            Duration::from_secs(60),
         );
+
+        let (pending_scans, scan_consumer) = fair_queues::create();
+
         let ep = Endpoint {
             cluster_id,
 
@@ -469,18 +466,23 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             resolved_ts_config: resolved_ts_config.clone(),
             api_version,
 
-            workers: Some(workers),
+            workers,
 
-            scan_workers: Some(scan_workers),
-            scan_task_counter: Arc::default(),
-            scan_concurrency_semaphore,
-            scan_speed_limiter,
-            fetch_speed_limiter,
-            max_scan_batch_bytes,
-            max_scan_batch_size,
+            scan_workers,
+            scan_task_counter: Default::default(),
+            scan_concurrency_semaphore: Arc::new(Semaphore::new(
+                config.incremental_scan_concurrency,
+            )),
+            scan_speed_limiter: Limiter::new(config.incremental_scan_speed_limit.0 as _),
+            fetch_speed_limiter: Limiter::new(config.incremental_fetch_speed_limit.0 as _),
+            max_scan_batch_bytes: 1024 * 1024,
+            max_scan_batch_size: 1024,
+            pending_scans,
 
             sink_memory_quota,
-            old_value_cache: Arc::new(Mutex::new(old_value_cache)),
+            old_value_cache: Arc::new(Mutex::new(OldValueCache::new(
+                config.old_value_cache_memory_quota,
+            ))),
             causal_ts_provider,
 
             current_ts: TimeStamp::zero(),
@@ -492,17 +494,13 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             pending_progress_collecting: 0,
         };
 
-        let min_ts_interval = ep.config.min_ts_interval.0;
-        let scheduler = ep.scheduler.clone();
-        ep.tso_worker.spawn(async move {
-            Self::register_min_ts_event(scheduler, min_ts_interval, leader_resolver).await;
-        });
-
+        ep.handle_pending_scans(scan_consumer);
+        ep.register_min_ts_event(leader_resolver);
         ep
     }
 
     pub fn get_responser_workers(&self) -> Handle {
-        self.workers.as_ref().unwrap().handle().clone()
+        self.workers.handle().clone()
     }
 
     fn on_change_cfg(&mut self, change: ConfigChange) {
@@ -698,9 +696,9 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
 
         let scan_task_counter = self.scan_task_counter.clone();
         let scan_task_count = scan_task_counter.fetch_add(1, Ordering::Relaxed);
-        let release_scan_task_counter = tikv_util::DeferContext::new(move || {
+        let release_scan_task_counter = DeferContext::new(Box::new(move || {
             scan_task_counter.fetch_sub(1, Ordering::Relaxed);
-        });
+        }) as _);
         if scan_task_count >= self.config.incremental_scan_concurrency_limit as isize {
             debug!("cdc rejects registration, too many scan tasks";
                 "region_id" => region_id,
@@ -756,11 +754,10 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 let delegate = d.meta();
                 e.insert(delegate.clone());
 
-                if let Some(workers) = self.workers.as_ref() {
-                    let m = delegate.clone();
-                    workers.spawn(async move { m.flush_stats_periodically().await });
-                    workers.spawn(async move { d.handle_tasks().await });
-                }
+                let m = delegate.clone();
+                self.workers
+                    .spawn(async move { m.flush_stats_periodically().await });
+                self.workers.spawn(async move { d.handle_tasks().await });
 
                 let old_ob = self.observer.subscribe_region(
                     region_id,
@@ -813,60 +810,26 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             "observe_id" => ?handle.id,
             "downstream_id" => ?downstream_id);
 
-        let mut init = Initializer {
+        CDC_SCAN_TASKS.with_label_values(&["total"]).inc();
+        let scan_task = PendingInitialize {
             region_id,
-            conn_id,
-            request_id,
             checkpoint_ts: request.checkpoint_ts.into(),
             region_epoch: request.take_region_epoch(),
-
-            build_resolver: Arc::new(Default::default()),
             observed_range,
+            kv_api,
+            filter_loop,
+
             observe_handle: handle,
             downstream_id,
             downstream_state,
-
-            tablet: self.tablets.get(region_id).map(|t| t.into_owned()),
             sched: delegate.sched.clone(),
             sink: downstream_sink.clone(),
-            concurrency_semaphore: self.scan_concurrency_semaphore.clone(),
 
-            scan_speed_limiter: self.scan_speed_limiter.clone(),
-            fetch_speed_limiter: self.fetch_speed_limiter.clone(),
-            max_scan_batch_bytes: self.max_scan_batch_bytes,
-            max_scan_batch_size: self.max_scan_batch_size,
-
-            ts_filter_ratio: self.config.incremental_scan_ts_filter_ratio,
-            kv_api,
-            filter_loop,
+            fut,
+            release_scan_task_counter,
+            _phantom: Default::default(),
         };
-
-        let cdc_handle = self.cdc_handle.clone();
-        if let Some(workers) = self.scan_workers.as_ref() {
-            workers.spawn(async move {
-                if fut.await.is_err() {
-                    info!("cdc initialize is canceled before start"; "region_id" => region_id,
-                        "conn_id" => ?init.conn_id, "request_id" => ?init.request_id);
-                    drop(release_scan_task_counter);
-                    return;
-                }
-                CDC_SCAN_TASKS.with_label_values(&["total"]).inc();
-                match init.initialize(cdc_handle).await {
-                    Ok(()) => {
-                        CDC_SCAN_TASKS.with_label_values(&["finish"]).inc();
-                    }
-                    Err(e) => {
-                        CDC_SCAN_TASKS.with_label_values(&["abort"]).inc();
-                        error!(
-                            "cdc initialize fail: {}", e; "region_id" => region_id,
-                            "conn_id" => ?init.conn_id, "request_id" => ?init.request_id,
-                        );
-                        init.deregister_downstream(e);
-                    }
-                }
-                drop(release_scan_task_counter);
-            });
-        }
+        assert!(self.pending_scans.push((conn_id, request_id), scan_task));
     }
 
     fn on_min_ts(&mut self, regions: Vec<u64>, min_ts: TimeStamp, current_ts: TimeStamp) {
@@ -889,16 +852,15 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         if self.pending_progress_collecting > 0 {
             return;
         }
-        if let Some(workers) = self.workers.as_ref() {
-            self.pending_progress_collecting += 1;
-            let scheduler = self.scheduler.clone();
-            workers.spawn(async move {
-                for fut in futs {
-                    let _ = fut.await;
-                }
-                let _ = scheduler.schedule(Task::CollectProgress);
-            });
-        }
+
+        self.pending_progress_collecting += 1;
+        let scheduler = self.scheduler.clone();
+        self.workers.spawn(async move {
+            for fut in futs {
+                let _ = fut.await;
+            }
+            let _ = scheduler.schedule(Task::CollectProgress);
+        });
     }
 
     fn on_collect_progress(&mut self) {
@@ -1003,7 +965,11 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 }
             }
 
-            Self::register_min_ts_event(scheduler, min_ts_interval, leader_resolver).await;
+            tokio::time::sleep(min_ts_interval).await;
+            match scheduler.schedule_force(Task::RegisterMinTsEvent { leader_resolver }) {
+                Ok(_) | Err(ScheduleError::Stopped(..)) => (),
+                Err(ScheduleError::Full(..)) => unreachable!(),
+            }
         };
         self.tso_worker.spawn(fut);
     }
@@ -1012,16 +978,89 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         self.connections.insert(conn.id, conn);
     }
 
-    async fn register_min_ts_event(
-        scheduler: Scheduler<Task>,
-        min_ts_interval: Duration,
-        leader_resolver: LeadershipResolver,
+    fn handle_pending_scans(
+        &self,
+        mut scan_consumer: fair_queues::Receiver<(ConnId, RequestId), PendingInitialize<E>>,
     ) {
-        tokio::time::sleep(min_ts_interval).await;
-        match scheduler.schedule_force(Task::RegisterMinTsEvent { leader_resolver }) {
-            Ok(_) | Err(ScheduleError::Stopped(..)) => return,
-            Err(ScheduleError::Full(..)) => unreachable!(),
-        }
+        let tablets = self.tablets.clone();
+        let scan_concurrency_semaphore = self.scan_concurrency_semaphore.clone();
+        let scan_speed_limiter = self.scan_speed_limiter.clone();
+        let fetch_speed_limiter = self.fetch_speed_limiter.clone();
+        let max_scan_batch_bytes = self.max_scan_batch_bytes;
+        let max_scan_batch_size = self.max_scan_batch_size;
+        let ts_filter_ratio = self.config.incremental_scan_ts_filter_ratio;
+        let cdc_handle = self.cdc_handle.clone();
+
+        let workers_handle = self.scan_workers.handle().clone();
+        self.scan_workers.spawn(async move {
+            while let Some(((conn_id, request_id), task)) = scan_consumer.next().await {
+                let permit = scan_concurrency_semaphore.clone().acquire_owned().await;
+                let release_scan_task_counter = task.release_scan_task_counter;
+                let wait_until = task.fut;
+                let cdc_handle_ = cdc_handle.clone();
+
+                let mut init = Initializer {
+                    region_id: task.region_id,
+                    conn_id,
+                    request_id,
+                    checkpoint_ts: task.checkpoint_ts,
+                    region_epoch: task.region_epoch,
+
+                    build_resolver: Arc::new(Default::default()),
+                    observed_range: task.observed_range,
+                    observe_handle: task.observe_handle,
+                    downstream_id: task.downstream_id,
+                    downstream_state: task.downstream_state,
+
+                    tablet: tablets.get(task.region_id).map(|t| t.into_owned()),
+                    sched: task.sched,
+                    sink: task.sink,
+
+                    scan_speed_limiter: scan_speed_limiter.clone(),
+                    fetch_speed_limiter: fetch_speed_limiter.clone(),
+                    max_scan_batch_bytes,
+                    max_scan_batch_size,
+
+                    ts_filter_ratio,
+                    kv_api: task.kv_api,
+                    filter_loop: task.filter_loop,
+                };
+
+                workers_handle.spawn(async move {
+                    if wait_until.await.is_err() {
+                        info!("cdc initialize is canceled before start"; "region_id" => task.region_id,
+                            "conn_id" => ?conn_id, "request_id" => ?request_id);
+                        CDC_SCAN_TASKS.with_label_values(&["abort"]).inc();
+                        return;
+                    }
+                    match init.initialize(cdc_handle_).await {
+                        Ok(()) => {
+                            CDC_SCAN_TASKS.with_label_values(&["finish"]).inc();
+                        }
+                        Err(e) => {
+                            CDC_SCAN_TASKS.with_label_values(&["abort"]).inc();
+                            error!("cdc initialize fail: {}", e; "region_id" => task.region_id,
+                                "conn_id" => ?conn_id, "request_id" => ?request_id);
+                            init.deregister_downstream(e);
+                        }
+                    }
+                    drop(permit);
+                    drop(release_scan_task_counter);
+                });
+            }
+        });
+    }
+
+    fn register_min_ts_event(&self, leader_resolver: LeadershipResolver) {
+        let scheduler = self.scheduler.clone();
+        let min_ts_interval = self.config.min_ts_interval.0;
+        self.tso_worker.spawn(async move {
+            tokio::time::sleep(min_ts_interval).await;
+            match scheduler.schedule_force(Task::RegisterMinTsEvent { leader_resolver }) {
+                Ok(_) | Err(ScheduleError::Stopped(..)) => (),
+                Err(ScheduleError::Full(..)) => unreachable!(),
+            }
+        });
     }
 }
 
@@ -1121,10 +1160,27 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
 
 impl<T, E, S> Drop for Endpoint<T, E, S> {
     fn drop(&mut self) {
-        let dur = Duration::from_secs(1);
-        self.workers.take().unwrap().shutdown_timeout(dur);
-        self.scan_workers.take().unwrap().shutdown_timeout(dur);
+        self.pending_scans.close();
     }
+}
+
+struct PendingInitialize<E> {
+    region_id: u64,
+    checkpoint_ts: TimeStamp,
+    region_epoch: RegionEpoch,
+    observed_range: ObservedRange,
+    kv_api: ChangeDataRequestKvApi,
+    filter_loop: bool,
+
+    observe_handle: ObserveHandle,
+    downstream_id: DownstreamId,
+    downstream_state: Arc<AtomicCell<DownstreamState>>,
+    sched: UnboundedSender<DelegateTask>,
+    sink: DownstreamSink,
+
+    fut: futures::channel::oneshot::Receiver<()>,
+    release_scan_task_counter: DeferContext<Box<dyn FnOnce() + Send + 'static>>,
+    _phantom: PhantomData<E>,
 }
 
 pub struct CdcTxnExtraScheduler {
@@ -1337,18 +1393,16 @@ mod tests {
         let cdc_handle = CdcRaftRouter(MockRaftStoreRouter::new());
         let mut store_meta = StoreMeta::new(0);
         store_meta.store_id = Some(1);
-        let region_read_progress = store_meta.region_read_progress.clone();
         let pd_client = Arc::new(TestPdClient::new(0, true));
         let env = Arc::new(Environment::new(1));
         let security_mgr = Arc::new(SecurityManager::default());
-        let store_resolver_gc_interval = Duration::from_secs(60);
         let leader_resolver = LeadershipResolver::new(
             1,
             pd_client.clone(),
             env.clone(),
             security_mgr.clone(),
-            region_read_progress,
-            store_resolver_gc_interval,
+            store_meta.region_read_progress.clone(),
+            Duration::from_secs(60),
         );
 
         let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
@@ -1822,7 +1876,7 @@ mod tests {
 
         // Pause scan task runtime.
         let (pause_tx, pause_rx) = std::sync::mpsc::channel::<()>();
-        suite.scan_workers.as_ref().unwrap().spawn(async move {
+        suite.scan_workers.spawn(async move {
             let _ = pause_rx.recv();
         });
 
