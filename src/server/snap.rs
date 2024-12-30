@@ -378,6 +378,7 @@ fn recv_snap<R: RaftExtension + 'static>(
         let mut stream = stream.map_err(Error::from);
         let head = stream.next().await.transpose()?;
         let mut context = RecvSnapContext::new(head, &snap_mgr)?;
+        let _guard = set_panic_context! {"snap_key" => context.key.to_string()};
         // Record the region_id for later cleanup.
         region_id.store(context.raft_msg.region_id, Ordering::SeqCst);
         if context.file.is_none() {
