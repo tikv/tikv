@@ -926,12 +926,21 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 }
             };
 
+            let mut rewrite_rules = req.get_sorted_rewrite_rules();
+            if rewrite_rules.is_empty() {
+                rewrite_rules = std::slice::from_ref(req.get_rewrite_rule());
+            } else if let Err(e) = check_rewrite_rules_ordered(rewrite_rules) {
+                let mut resp = DownloadResponse::default();
+                resp.set_error(e.into());
+                return crate::send_rpc_response!(Ok(resp), sink, label, timer);
+            }
+
             let res = with_resource_limiter(
                 importer.download_ext(
                     req.get_sst(),
                     req.get_storage_backend(),
                     req.get_name(),
-                    req.get_rewrite_rule(),
+                    rewrite_rules,
                     cipher,
                     limiter,
                     tablet.into_owned(),
@@ -1234,6 +1243,37 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
     }
 }
 
+fn check_rewrite_rules_ordered(rewrite_rules: &[RewriteRule]) -> Result<()> {
+    let first_rewrite_rule =
+        rewrite_rules
+            .first()
+            .ok_or(sst_importer::Error::WrongRewriteRules(
+                "rewrite rules is empty".into(),
+            ))?;
+    let mut last_old_prefix = first_rewrite_rule.get_old_key_prefix();
+    let mut last_new_prefix = first_rewrite_rule.get_new_key_prefix();
+    for rewrite_rule in rewrite_rules {
+        let this_new_prefix = rewrite_rule.get_new_key_prefix();
+        if this_new_prefix < last_new_prefix {
+            return Err(sst_importer::Error::WrongRewriteRules(format!(
+                "the new prefixs are not ordered: last new prefix is {:?}, this new prefix is {:?}",
+                last_new_prefix, this_new_prefix
+            )));
+        }
+        let this_old_prefix = rewrite_rule.get_old_key_prefix();
+        if this_old_prefix < last_old_prefix {
+            return Err(sst_importer::Error::WrongRewriteRules(format!(
+                "the new prefixs are not ordered: last old prefix is {:?}, this old prefix is {:?}",
+                last_old_prefix, this_old_prefix
+            )));
+        }
+        last_old_prefix = this_old_prefix;
+        last_new_prefix = this_new_prefix;
+    }
+
+    Ok(())
+}
+
 fn write_needs_restore(write: &[u8]) -> bool {
     let w = WriteRef::parse(write);
     match w {
@@ -1265,6 +1305,7 @@ mod test {
 
     use engine_traits::{CF_DEFAULT, CF_WRITE};
     use kvproto::{
+        import_sstpb::RewriteRule,
         kvrpcpb::Context,
         metapb::{Region, RegionEpoch},
         raft_cmdpb::{RaftCmdRequest, Request},
@@ -1276,7 +1317,9 @@ mod test {
     use txn_types::{Key, TimeStamp, Write, WriteBatchFlags, WriteType};
 
     use crate::{
-        import::sst_service::{check_local_region_stale, RequestCollector},
+        import::sst_service::{
+            check_local_region_stale, check_rewrite_rules_ordered, RequestCollector,
+        },
         server::raftkv,
     };
 
@@ -1629,5 +1672,46 @@ mod test {
                 .to_string()
                 .contains("retry write later")
         );
+    }
+
+    fn new_rewrite_rule(old_key_prefix: &[u8], new_key_prefix: &[u8]) -> RewriteRule {
+        let mut rewrite_rule = RewriteRule::default();
+        rewrite_rule.set_old_key_prefix(old_key_prefix.to_vec());
+        rewrite_rule.set_new_key_prefix(new_key_prefix.to_vec());
+        rewrite_rule
+    }
+
+    #[test]
+    fn test_check_rewrite_rules_ordered() {
+        let rewrite_rules = [];
+        assert!(check_rewrite_rules_ordered(&rewrite_rules).is_err());
+        let rewrite_rules = [new_rewrite_rule(b"", b"")];
+        check_rewrite_rules_ordered(&rewrite_rules).unwrap();
+        let rewrite_rules = [new_rewrite_rule(b"123", b"456")];
+        check_rewrite_rules_ordered(&rewrite_rules).unwrap();
+        let rewrite_rules = [new_rewrite_rule(b"", b""), new_rewrite_rule(b"123", b"456")];
+        check_rewrite_rules_ordered(&rewrite_rules).unwrap();
+        let rewrite_rules = [
+            new_rewrite_rule(b"122", b"455"),
+            new_rewrite_rule(b"123", b"456"),
+        ];
+        check_rewrite_rules_ordered(&rewrite_rules).unwrap();
+        let rewrite_rules = [
+            new_rewrite_rule(b"122", b"455"),
+            new_rewrite_rule(b"123", b"456"),
+            new_rewrite_rule(b"124", b"457"),
+            new_rewrite_rule(b"125", b"458"),
+        ];
+        check_rewrite_rules_ordered(&rewrite_rules).unwrap();
+        let rewrite_rules = [
+            new_rewrite_rule(b"122", b"455"),
+            new_rewrite_rule(b"123", b"454"),
+        ];
+        assert!(check_rewrite_rules_ordered(&rewrite_rules).is_err());
+        let rewrite_rules = [
+            new_rewrite_rule(b"122", b"455"),
+            new_rewrite_rule(b"121", b"456"),
+        ];
+        assert!(check_rewrite_rules_ordered(&rewrite_rules).is_err());
     }
 }
