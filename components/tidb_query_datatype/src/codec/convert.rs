@@ -718,16 +718,16 @@ pub fn produce_str_with_specified_tp<'a>(
     // too long.
     if MULTI_BYTES_CHARSETS.contains(chs) {
         let (char_count, truncate_pos) = {
-            let ss = String::from_utf8_lossy(&s);
+            let s = &String::from_utf8_lossy(&s);
             let mut truncate_pos = 0;
-            ss.chars().take(flen).for_each(|utf8_char| {
+            s.chars().take(flen).for_each(|utf8_char| {
                 if utf8_char == char::REPLACEMENT_CHARACTER {
                     truncate_pos += 1;
                 } else {
                     truncate_pos += utf8_char.len_utf8();
                 }
             });
-            (ss.chars().count(), truncate_pos)
+            (s.chars().count(), truncate_pos)
         };
         if char_count <= flen {
             return Ok(s);

@@ -17,11 +17,7 @@ pub const CHARSET_LATIN1: &str = "latin1";
 pub const CHARSET_GBK: &str = "gbk";
 /// `CHARSET_GB18030` is another Chinese character set containing GBK.
 pub const CHARSET_GB18030: &str = "gb18030";
-
-/// For a new implemented multi-byte charset, add it to MULTI_BYTES_CHARSETS
-
-/// All utf8 charsets.
-pub const UTF8_CHARSETS: &[&str] = &[CHARSET_UTF8, CHARSET_UTF8MB4, CHARSET_ASCII];
+// For a new implemented multi-byte charset, add it to MULTI_BYTES_CHARSETS
 
 lazy_static! {
     pub static ref MULTI_BYTES_CHARSETS: collections::HashSet<&'static str> =
