@@ -11,6 +11,7 @@ use std::{
     time::Duration,
 };
 
+use futures::StreamExt;
 use causal_ts::{CausalTsProvider, CausalTsProviderImpl};
 use collections::{HashMap, HashMapEntry, HashSet};
 use concurrency_manager::ConcurrencyManager;
@@ -23,7 +24,8 @@ use kvproto::{
         Compatibility as ErrorCompatibility, DuplicateRequest as ErrorDuplicateRequest,
         Error as EventError,
     },
-    kvrpcpb::ApiVersion,
+    kvrpcpb::{ApiVersion},
+    metapb::RegionEpoch,
 };
 use online_config::{ConfigChange, OnlineConfig};
 use pd_client::{Feature, PdClient};
@@ -50,6 +52,7 @@ use tokio::{
 use txn_types::{TimeStamp, TxnExtra, TxnExtraScheduler};
 
 use crate::{
+    fair_queues::FairQueues,
     delegate::{Delegate, DelegateMeta, DelegateTask, Downstream, DownstreamId},
     initializer::Initializer,
     metrics::*,
@@ -362,6 +365,7 @@ pub struct Endpoint<T, E, S> {
     fetch_speed_limiter: Limiter,
     max_scan_batch_bytes: usize,
     max_scan_batch_size: usize,
+    pending_scans: FairQueues<(ConnId, RequestId), Initializer>,
 
     sink_memory_quota: Arc<MemoryQuota>,
     old_value_cache: Arc<Mutex<OldValueCache>>,
@@ -478,6 +482,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             fetch_speed_limiter,
             max_scan_batch_bytes,
             max_scan_batch_size,
+            pending_scans: FairQueues::new(),
 
             sink_memory_quota,
             old_value_cache: Arc::new(Mutex::new(old_value_cache)),
@@ -491,6 +496,13 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
 
             pending_progress_collecting: 0,
         };
+
+        let mut pending_scans = ep.pending_scans.clone();
+        ep.scan_workers.as_ref().unwrap().spawn(async move {
+            while let Some(_, mut initializer) = pending_scans.next().await {
+            }
+        });
+
         ep.register_min_ts_event(leader_resolver);
         ep
     }
@@ -1107,6 +1119,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
 
 impl<T, E, S> Drop for Endpoint<T, E, S> {
     fn drop(&mut self) {
+        self.pending_scans.close();
+
         let dur = Duration::from_secs(1);
         self.workers.take().unwrap().shutdown_timeout(dur);
         self.scan_workers.take().unwrap().shutdown_timeout(dur);
