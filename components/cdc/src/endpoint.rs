@@ -1,10 +1,10 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    marker::PhantomData,
     cmp::{Ord, Ordering as CmpOrdering, PartialOrd, Reverse},
     collections::BinaryHeap,
     fmt,
+    marker::PhantomData,
     sync::{
         atomic::{AtomicIsize, Ordering},
         Arc, Mutex as StdMutex,
@@ -12,29 +12,29 @@ use std::{
     time::Duration,
 };
 
-use futures::StreamExt;
 use causal_ts::{CausalTsProvider, CausalTsProviderImpl};
 use collections::{HashMap, HashMapEntry, HashSet};
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::KvEngine;
 use crossbeam::atomic::AtomicCell;
-use kvproto::{cdcpb::ChangeDataRequestKvApi};
-use futures::{executor::block_on, lock::Mutex};
-use futures::channel::mpsc::UnboundedSender;
+use engine_traits::KvEngine;
+use futures::{channel::mpsc::UnboundedSender, executor::block_on, lock::Mutex, StreamExt};
 use grpcio::Environment;
-use raftstore::coprocessor::ObserveHandle;
 use kvproto::{
     cdcpb::{
-        ChangeDataRequest, ClusterIdMismatch as ErrorClusterIdMismatch,
+        ChangeDataRequest, ChangeDataRequestKvApi, ClusterIdMismatch as ErrorClusterIdMismatch,
         Compatibility as ErrorCompatibility, DuplicateRequest as ErrorDuplicateRequest,
         Error as EventError,
     },
-    kvrpcpb::{ApiVersion},
+    kvrpcpb::ApiVersion,
     metapb::RegionEpoch,
 };
 use online_config::{ConfigChange, OnlineConfig};
 use pd_client::{Feature, PdClient};
-use raftstore::{coprocessor::ObserveId, router::CdcHandle, store::fsm::store::StoreRegionMeta};
+use raftstore::{
+    coprocessor::{ObserveHandle, ObserveId},
+    router::CdcHandle,
+    store::fsm::store::StoreRegionMeta,
+};
 use resolved_ts::{resolve_by_raft, LeadershipResolver};
 use security::SecurityManager;
 use tikv::{
@@ -58,8 +58,11 @@ use txn_types::{TimeStamp, TxnExtra, TxnExtraScheduler};
 
 use crate::{
     channel::DownstreamSink,
+    delegate::{
+        Delegate, DelegateMeta, DelegateTask, Downstream, DownstreamId, DownstreamState,
+        ObservedRange,
+    },
     fair_queues::{self, FairQueues},
-    delegate::{Delegate, DelegateMeta, DelegateTask, Downstream, DownstreamId, ObservedRange, DownstreamState},
     initializer::Initializer,
     metrics::*,
     old_value::OldValueCache,
@@ -458,7 +461,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             Duration::from_secs(60),
         );
 
-        let (pending_scans, mut scan_consumer) = fair_queues::create();
+        let (pending_scans, scan_consumer) = fair_queues::create();
 
         let ep = Endpoint {
             cluster_id,
@@ -489,7 +492,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             fetch_speed_limiter,
             max_scan_batch_bytes,
             max_scan_batch_size,
-            pending_scans: pending_scans,
+            pending_scans,
 
             sink_memory_quota,
             old_value_cache: Arc::new(Mutex::new(old_value_cache)),
@@ -504,78 +507,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             pending_progress_collecting: 0,
         };
 
-        let tablets = ep.tablets.clone();
-        let scan_concurrency_semaphore = ep.scan_concurrency_semaphore.clone();
-        let scan_speed_limiter = ep.scan_speed_limiter.clone();
-        let fetch_speed_limiter = ep.fetch_speed_limiter.clone();
-        let max_scan_batch_bytes = ep.max_scan_batch_bytes;
-        let max_scan_batch_size = ep.max_scan_batch_size;
-        let ts_filter_ratio = ep.config.incremental_scan_ts_filter_ratio;
-        let handle = ep.scan_workers.as_ref().unwrap().handle().clone();
-        let scan_task_counter = ep.scan_task_counter.clone();
-        let cdc_handle = ep.cdc_handle.clone();
-        ep.scan_workers.as_ref().unwrap().spawn(async move {
-            while let Some(((conn_id, request_id), task)) = scan_consumer.next().await {
-                tikv_util::defer!({ scan_task_counter.fetch_sub(1, Ordering::Relaxed); });
-                let permit = scan_concurrency_semaphore.clone().acquire_owned().await;
-
-                if task.fut.await.is_err() {
-                    info!("cdc initialize is canceled before start"; "region_id" => task.region_id,
-                        "conn_id" => ?conn_id, "request_id" => ?request_id);
-                    return;
-                }
-
-                let mut init = Initializer {
-                    region_id: task.region_id,
-                    conn_id,
-                    request_id,
-                    checkpoint_ts: task.checkpoint_ts,
-                    region_epoch: task.region_epoch,
-
-                    build_resolver: Arc::new(Default::default()),
-                    observed_range: task.observed_range,
-                    observe_handle: task.observe_handle,
-                    downstream_id: task.downstream_id,
-                    downstream_state: task.downstream_state,
-
-                    tablet: tablets.get(task.region_id).map(|t| t.into_owned()),
-                    sched: task.sched,
-                    sink: task.sink,
-                    concurrency_semaphore: scan_concurrency_semaphore.clone(),
-
-                    scan_speed_limiter: scan_speed_limiter.clone(),
-                    fetch_speed_limiter: fetch_speed_limiter.clone(),
-                    max_scan_batch_bytes,
-                    max_scan_batch_size,
-
-                    ts_filter_ratio,
-                    kv_api: task.kv_api,
-                    filter_loop: task.filter_loop,
-                };
-                let cdc_handle_ = cdc_handle.clone();
-                handle.spawn(async move {
-                    match init.initialize(cdc_handle_).await {
-                        Ok(()) => {
-                            CDC_SCAN_TASKS.with_label_values(&["finish"]).inc();
-                        }
-                        Err(e) => {
-                            CDC_SCAN_TASKS.with_label_values(&["abort"]).inc();
-                            error!("cdc initialize fail: {}", e; "region_id" => task.region_id,
-                                "conn_id" => ?conn_id, "request_id" => ?request_id);
-                            init.deregister_downstream(e);
-                        }
-                    }
-                    drop(permit);
-                });
-            }
-        });
-
-        let min_ts_interval = ep.config.min_ts_interval.0;
-        let scheduler = ep.scheduler.clone();
-        ep.tso_worker.spawn(async move {
-            Self::register_min_ts_event(scheduler, min_ts_interval, leader_resolver).await;
-        });
-
+        ep.handles_pending_scans(scan_consumer);
+        ep.register_min_ts_event(leader_resolver);
         ep
     }
 
@@ -1044,7 +977,11 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 }
             }
 
-            Self::register_min_ts_event(scheduler, min_ts_interval, leader_resolver).await;
+            tokio::time::sleep(min_ts_interval).await;
+            match scheduler.schedule_force(Task::RegisterMinTsEvent { leader_resolver }) {
+                Ok(_) | Err(ScheduleError::Stopped(..)) => return,
+                Err(ScheduleError::Full(..)) => unreachable!(),
+            }
         };
         self.tso_worker.spawn(fut);
     }
@@ -1053,16 +990,89 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         self.connections.insert(conn.id, conn);
     }
 
-    async fn register_min_ts_event(
-        scheduler: Scheduler<Task>,
-        min_ts_interval: Duration,
-        leader_resolver: LeadershipResolver,
+    fn handles_pending_scans(
+        &self,
+        mut scan_consumer: fair_queues::Receiver<(ConnId, RequestId), PendingInitialize<E>>,
     ) {
-        tokio::time::sleep(min_ts_interval).await;
-        match scheduler.schedule_force(Task::RegisterMinTsEvent { leader_resolver }) {
-            Ok(_) | Err(ScheduleError::Stopped(..)) => return,
-            Err(ScheduleError::Full(..)) => unreachable!(),
-        }
+        let tablets = self.tablets.clone();
+        let scan_concurrency_semaphore = self.scan_concurrency_semaphore.clone();
+        let scan_speed_limiter = self.scan_speed_limiter.clone();
+        let fetch_speed_limiter = self.fetch_speed_limiter.clone();
+        let max_scan_batch_bytes = self.max_scan_batch_bytes;
+        let max_scan_batch_size = self.max_scan_batch_size;
+        let ts_filter_ratio = self.config.incremental_scan_ts_filter_ratio;
+        let scan_task_counter = self.scan_task_counter.clone();
+        let cdc_handle = self.cdc_handle.clone();
+
+        let workers_handle = self.scan_workers.as_ref().unwrap().handle().clone();
+        self.scan_workers.as_ref().unwrap().spawn(async move {
+            while let Some(((conn_id, request_id), task)) = scan_consumer.next().await {
+                tikv_util::defer!({
+                    scan_task_counter.fetch_sub(1, Ordering::Relaxed);
+                });
+                let permit = scan_concurrency_semaphore.clone().acquire_owned().await;
+
+                if task.fut.await.is_err() {
+                    info!("cdc initialize is canceled before start"; "region_id" => task.region_id,
+                        "conn_id" => ?conn_id, "request_id" => ?request_id);
+                    return;
+                }
+
+                let mut init = Initializer {
+                    region_id: task.region_id,
+                    conn_id,
+                    request_id,
+                    checkpoint_ts: task.checkpoint_ts,
+                    region_epoch: task.region_epoch,
+
+                    build_resolver: Arc::new(Default::default()),
+                    observed_range: task.observed_range,
+                    observe_handle: task.observe_handle,
+                    downstream_id: task.downstream_id,
+                    downstream_state: task.downstream_state,
+
+                    tablet: tablets.get(task.region_id).map(|t| t.into_owned()),
+                    sched: task.sched,
+                    sink: task.sink,
+
+                    scan_speed_limiter: scan_speed_limiter.clone(),
+                    fetch_speed_limiter: fetch_speed_limiter.clone(),
+                    max_scan_batch_bytes,
+                    max_scan_batch_size,
+
+                    ts_filter_ratio,
+                    kv_api: task.kv_api,
+                    filter_loop: task.filter_loop,
+                };
+                let cdc_handle_ = cdc_handle.clone();
+                workers_handle.spawn(async move {
+                    match init.initialize(cdc_handle_).await {
+                        Ok(()) => {
+                            CDC_SCAN_TASKS.with_label_values(&["finish"]).inc();
+                        }
+                        Err(e) => {
+                            CDC_SCAN_TASKS.with_label_values(&["abort"]).inc();
+                            error!("cdc initialize fail: {}", e; "region_id" => task.region_id,
+                                "conn_id" => ?conn_id, "request_id" => ?request_id);
+                            init.deregister_downstream(e);
+                        }
+                    }
+                    drop(permit);
+                });
+            }
+        });
+    }
+
+    fn register_min_ts_event(&self, leader_resolver: LeadershipResolver) {
+        let scheduler = self.scheduler.clone();
+        let min_ts_interval = self.config.min_ts_interval.0;
+        self.tso_worker.spawn(async move {
+            tokio::time::sleep(min_ts_interval).await;
+            match scheduler.schedule_force(Task::RegisterMinTsEvent { leader_resolver }) {
+                Ok(_) | Err(ScheduleError::Stopped(..)) => return,
+                Err(ScheduleError::Full(..)) => unreachable!(),
+            }
+        });
     }
 }
 

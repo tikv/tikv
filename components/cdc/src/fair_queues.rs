@@ -54,13 +54,15 @@ pub fn create<K: Eq + PartialEq + Hash + Copy, I>() -> (FairQueues<K, I>, Receiv
         waker: AtomicWaker::new(),
         closed: false,
     }));
-    let queues = FairQueues { inner: inner.clone() };
+    let queues = FairQueues {
+        inner: inner.clone(),
+    };
 
     let rng = StdRng::seed_from_u64(
         SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs(),
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs(),
     );
     let receiver = Receiver { inner, rng };
 
@@ -129,4 +131,3 @@ impl<K: Eq + PartialEq + Hash + Copy, I> Inner<K, I> {
         }
     }
 }
-
