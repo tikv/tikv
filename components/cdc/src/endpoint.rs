@@ -49,6 +49,7 @@ use tikv_util::{
     time::{Limiter, SlowTimer},
     warn,
     worker::{Runnable, RunnableWithTimer, ScheduleError, Scheduler},
+    DeferContext,
 };
 use tokio::{
     runtime::{Builder, Handle, Runtime},
@@ -693,7 +694,11 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             return;
         }
 
-        let scan_task_count = self.scan_task_counter.fetch_add(1, Ordering::Relaxed);
+        let scan_task_counter = self.scan_task_counter.clone();
+        let scan_task_count = scan_task_counter.fetch_add(1, Ordering::Relaxed);
+        let release_scan_task_counter = DeferContext::new(Box::new(move || {
+            scan_task_counter.fetch_sub(1, Ordering::Relaxed);
+        }) as _);
         if scan_task_count >= self.config.incremental_scan_concurrency_limit as isize {
             debug!("cdc rejects registration, too many scan tasks";
                 "region_id" => region_id,
@@ -702,8 +707,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 "scan_task_count" => scan_task_count,
                 "incremental_scan_concurrency_limit" => self.config.incremental_scan_concurrency_limit,
             );
-            self.scan_task_counter.fetch_sub(1, Ordering::Relaxed);
-
             // To avoid OOM (e.g., https://github.com/tikv/tikv/issues/16035),
             // TiKV needs to reject and return error immediately.
             let mut err_event = EventError::default();
@@ -807,6 +810,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             "observe_id" => ?handle.id,
             "downstream_id" => ?downstream_id);
 
+        CDC_SCAN_TASKS.with_label_values(&["total"]).inc();
         let scan_task = PendingInitialize {
             region_id,
             checkpoint_ts: request.checkpoint_ts.into(),
@@ -822,10 +826,10 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             sink: downstream_sink.clone(),
 
             fut,
+            release_scan_task_counter,
             _phantom: Default::default(),
         };
         assert!(self.pending_scans.push((conn_id, request_id), scan_task));
-        CDC_SCAN_TASKS.with_label_values(&["total"]).inc();
     }
 
     fn on_min_ts(&mut self, regions: Vec<u64>, min_ts: TimeStamp, current_ts: TimeStamp) {
@@ -985,22 +989,15 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         let max_scan_batch_bytes = self.max_scan_batch_bytes;
         let max_scan_batch_size = self.max_scan_batch_size;
         let ts_filter_ratio = self.config.incremental_scan_ts_filter_ratio;
-        let scan_task_counter = self.scan_task_counter.clone();
         let cdc_handle = self.cdc_handle.clone();
 
         let workers_handle = self.scan_workers.handle().clone();
         self.scan_workers.spawn(async move {
             while let Some(((conn_id, request_id), task)) = scan_consumer.next().await {
-                tikv_util::defer!({
-                    scan_task_counter.fetch_sub(1, Ordering::Relaxed);
-                });
                 let permit = scan_concurrency_semaphore.clone().acquire_owned().await;
-
-                if task.fut.await.is_err() {
-                    info!("cdc initialize is canceled before start"; "region_id" => task.region_id,
-                        "conn_id" => ?conn_id, "request_id" => ?request_id);
-                    return;
-                }
+                let release_scan_task_counter = task.release_scan_task_counter;
+                let wait_until = task.fut;
+                let cdc_handle_ = cdc_handle.clone();
 
                 let mut init = Initializer {
                     region_id: task.region_id,
@@ -1028,8 +1025,14 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                     kv_api: task.kv_api,
                     filter_loop: task.filter_loop,
                 };
-                let cdc_handle_ = cdc_handle.clone();
+
                 workers_handle.spawn(async move {
+                    if wait_until.await.is_err() {
+                        info!("cdc initialize is canceled before start"; "region_id" => task.region_id,
+                            "conn_id" => ?conn_id, "request_id" => ?request_id);
+                        CDC_SCAN_TASKS.with_label_values(&["abort"]).inc();
+                        return;
+                    }
                     match init.initialize(cdc_handle_).await {
                         Ok(()) => {
                             CDC_SCAN_TASKS.with_label_values(&["finish"]).inc();
@@ -1042,6 +1045,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                         }
                     }
                     drop(permit);
+                    drop(release_scan_task_counter);
                 });
             }
         });
@@ -1175,6 +1179,7 @@ struct PendingInitialize<E> {
     sink: DownstreamSink,
 
     fut: futures::channel::oneshot::Receiver<()>,
+    release_scan_task_counter: DeferContext<Box<dyn FnOnce() + Send + 'static>>,
     _phantom: PhantomData<E>,
 }
 
