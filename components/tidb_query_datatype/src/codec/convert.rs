@@ -13,7 +13,7 @@ use crate::{
     codec::{
         data_type::*,
         error::ERR_DATA_OUT_OF_RANGE,
-        mysql::{charset, decimal::max_or_min_dec, Res},
+        mysql::{decimal::max_or_min_dec, Res},
     },
     expr::{EvalContext, Flag},
     Collation, FieldTypeAccessor, FieldTypeTp, UNSPECIFIED_LENGTH,
@@ -1143,7 +1143,7 @@ mod tests {
                 ERR_DATA_OUT_OF_RANGE, ERR_M_BIGGER_THAN_D, ERR_TRUNCATE_WRONG_VALUE,
                 WARN_DATA_TRUNCATED,
             },
-            mysql::{Res, UNSPECIFIED_FSP},
+            mysql::{charset, Res, UNSPECIFIED_FSP},
         },
         expr::{EvalConfig, EvalContext, Flag},
         Collation, FieldTypeFlag,
