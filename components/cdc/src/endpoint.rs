@@ -491,7 +491,13 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
 
             pending_progress_collecting: 0,
         };
-        ep.register_min_ts_event(leader_resolver);
+
+        let min_ts_interval = ep.config.min_ts_interval.0;
+        let scheduler = ep.scheduler.clone();
+        ep.tso_worker.spawn(async move {
+            Self::register_min_ts_event(scheduler, min_ts_interval, leader_resolver).await;
+        });
+
         ep
     }
 
@@ -935,7 +941,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         self.min_ts_region_id = advance.min_ts_region_id;
     }
 
-    fn register_min_ts_event(&self, mut leader_resolver: LeadershipResolver) {
+    fn on_register_min_ts_event(&self, mut leader_resolver: LeadershipResolver) {
         let min_ts_interval = self.config.min_ts_interval.0;
         let advance_ts_interval = self.resolved_ts_config.advance_ts_interval.0;
         let pd_client = self.pd_client.clone();
@@ -997,17 +1003,25 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 }
             }
 
-            tokio::time::sleep(min_ts_interval).await;
-            match scheduler.schedule(Task::RegisterMinTsEvent { leader_resolver }) {
-                Ok(_) | Err(ScheduleError::Stopped(_)) => (),
-                Err(e) => warn!("cdc failed to schedule RegisterMinTsEvent"; "err" => ?e),
-            }
+            Self::register_min_ts_event(scheduler, min_ts_interval, leader_resolver).await;
         };
         self.tso_worker.spawn(fut);
     }
 
     fn on_open_conn(&mut self, conn: Conn) {
         self.connections.insert(conn.id, conn);
+    }
+
+    async fn register_min_ts_event(
+        scheduler: Scheduler<Task>,
+        min_ts_interval: Duration,
+        leader_resolver: LeadershipResolver,
+    ) {
+        tokio::time::sleep(min_ts_interval).await;
+        match scheduler.schedule_force(Task::RegisterMinTsEvent { leader_resolver }) {
+            Ok(_) | Err(ScheduleError::Stopped(..)) => return,
+            Err(ScheduleError::Full(..)) => unreachable!(),
+        }
     }
 }
 
@@ -1033,7 +1047,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
             } => self.on_min_ts(regions, min_ts, current_ts),
             Task::CollectProgress => self.on_collect_progress(),
             Task::RegisterMinTsEvent { leader_resolver } => {
-                self.register_min_ts_event(leader_resolver)
+                self.on_register_min_ts_event(leader_resolver)
             }
             Task::TxnExtra(txn_extra) => {
                 self.sink_memory_quota.free(txn_extra.size());
