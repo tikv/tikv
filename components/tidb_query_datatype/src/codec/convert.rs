@@ -713,7 +713,7 @@ pub fn produce_str_with_specified_tp<'a>(
         return Ok(s);
     }
     let flen = flen as usize;
-    // flen is the char length, not byte length, for UTF8 and GBK/GB18030 charset,
+    // flen is the char length, not byte length, for UTF8 and GBK charset,
     // we need to calculate the char count and truncate to flen chars if it is
     // too long.
     if MULTI_BYTES_CHARSETS.contains(chs) {
@@ -2222,19 +2222,13 @@ mod tests {
             ("世界，中国", 4, charset::CHARSET_ASCII),
             ("世界，中国", 5, charset::CHARSET_ASCII),
             ("世界，中国", 6, charset::CHARSET_ASCII),
-            // GBK/GB18030
+            // GBK
             ("世界，中国", 1, charset::CHARSET_GBK),
             ("世界，中国", 2, charset::CHARSET_GBK),
             ("世界，中国", 3, charset::CHARSET_GBK),
             ("世界，中国", 4, charset::CHARSET_GBK),
             ("世界，中国", 5, charset::CHARSET_GBK),
             ("世界，中国", 6, charset::CHARSET_GBK),
-            ("世界，中国", 1, charset::CHARSET_GB18030),
-            ("世界，中国", 2, charset::CHARSET_GB18030),
-            ("世界，中国", 3, charset::CHARSET_GB18030),
-            ("世界，中国", 4, charset::CHARSET_GB18030),
-            ("世界，中国", 5, charset::CHARSET_GB18030),
-            ("世界，中国", 6, charset::CHARSET_GB18030),
         ];
 
         let cfg = EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING);
