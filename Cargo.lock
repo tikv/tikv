@@ -7916,6 +7916,7 @@ dependencies = [
  "codec",
  "collections",
  "error_code",
+ "fail",
  "farmhash",
  "kvproto",
  "log_wrappers",

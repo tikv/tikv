@@ -365,6 +365,12 @@ pub fn near_load_data_by_write<I>(
 where
     I: Iterator,
 {
+    fail_point!("near_load_data_by_write_default_not_found", |_| Err(
+        default_not_found_error(
+            user_key.clone().append_ts(write_start_ts).into_encoded(),
+            "near_load_data_by_write",
+        )
+    ));
     let seek_key = user_key.clone().append_ts(write_start_ts);
     match statistics.load_data_hint() {
         LoadDataHint::NearSeek => default_cursor.near_seek(&seek_key, &mut statistics.data)?,

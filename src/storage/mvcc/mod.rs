@@ -449,10 +449,12 @@ pub fn default_not_found_error(key: Vec<u8>, hint: &str) -> Error {
             hint,
         );
     } else {
+        let bt = backtrace::Backtrace::new();
         error!(
             "default value not found";
             "key" => &log_wrappers::Value::key(&key),
             "hint" => hint,
+            "bt" => ?bt,
         );
         Error::from(ErrorInner::DefaultNotFound { key })
     }
