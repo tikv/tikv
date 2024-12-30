@@ -125,7 +125,7 @@ impl<K: Eq + PartialEq + Hash + Copy, I> Inner<K, I> {
                     x.shrink_to(cap / 2);
                 }
             }
-            return Poll::Ready(Some((key, item)));
+            Poll::Ready(Some((key, item)))
         } else {
             unreachable!();
         }

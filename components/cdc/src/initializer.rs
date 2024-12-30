@@ -592,7 +592,7 @@ impl<E: KvEngine> Initializer<E> {
 mod tests {
     use std::{
         collections::BTreeMap,
-        sync::{atomic::AtomicBool, mpsc::sync_channel, Arc},
+        sync::{atomic::AtomicBool, Arc},
         time::Duration,
     };
 
@@ -604,8 +604,7 @@ mod tests {
         StreamExt,
     };
     use kvproto::{cdcpb::EventLogType, errorpb::Error as ErrorHeader};
-    use raftstore::{coprocessor::ObserveHandle, router::CdcRaftRouter};
-    use test_raftstore::MockRaftStoreRouter;
+    use raftstore::coprocessor::ObserveHandle;
     use tikv::{
         config::DbConfig,
         storage::{

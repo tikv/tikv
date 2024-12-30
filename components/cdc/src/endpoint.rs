@@ -364,10 +364,10 @@ pub struct Endpoint<T, E, S> {
     resolved_ts_config: ResolvedTsConfig,
     api_version: ApiVersion,
 
-    workers: Option<Runtime>,
+    workers: Runtime,
 
     // Incremental scan stuffs.
-    scan_workers: Option<Runtime>,
+    scan_workers: Runtime,
     scan_task_counter: Arc<AtomicIsize>,
     scan_concurrency_semaphore: Arc<Semaphore>,
     scan_speed_limiter: Limiter,
@@ -409,6 +409,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         sink_memory_quota: Arc<MemoryQuota>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
     ) -> Endpoint<T, E, S> {
+        CDC_SINK_CAP.set(sink_memory_quota.capacity() as i64);
+
         let workers = Builder::new_multi_thread()
             .thread_name("cdc-main-workers")
             .enable_time()
@@ -430,34 +432,14 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             .build()
             .unwrap();
 
-        // Initialized for the first time, subsequent adjustments will be made based on
-        // configuration updates.
-        let scan_concurrency_semaphore =
-            Arc::new(Semaphore::new(config.incremental_scan_concurrency));
-        let old_value_cache = OldValueCache::new(config.old_value_cache_memory_quota);
-        let scan_speed_limiter = Limiter::new(if config.incremental_scan_speed_limit.0 > 0 {
-            config.incremental_scan_speed_limit.0 as f64
-        } else {
-            f64::INFINITY
-        });
-        let fetch_speed_limiter = Limiter::new(if config.incremental_fetch_speed_limit.0 > 0 {
-            config.incremental_fetch_speed_limit.0 as f64
-        } else {
-            f64::INFINITY
-        });
-
-        CDC_SINK_CAP.set(sink_memory_quota.capacity() as i64);
-        // For scan efficiency, the scan batch bytes should be around 1MB.
-        let max_scan_batch_bytes = 1024 * 1024;
-        // Assume 1KB per entry.
-        let max_scan_batch_size = 1024;
-
+        let store_id = store_meta.lock().unwrap().store_id();
+        let read_progress = store_meta.lock().unwrap().region_read_progress().clone();
         let leader_resolver = LeadershipResolver::new(
-            store_meta.lock().unwrap().store_id(),
+            store_id,
             pd_client.clone(),
             env,
             security_mgr,
-            store_meta.lock().unwrap().region_read_progress().clone(),
+            read_progress,
             Duration::from_secs(60),
         );
 
@@ -483,19 +465,23 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             resolved_ts_config: resolved_ts_config.clone(),
             api_version,
 
-            workers: Some(workers),
+            workers,
 
-            scan_workers: Some(scan_workers),
-            scan_task_counter: Arc::default(),
-            scan_concurrency_semaphore,
-            scan_speed_limiter,
-            fetch_speed_limiter,
-            max_scan_batch_bytes,
-            max_scan_batch_size,
+            scan_workers,
+            scan_task_counter: Default::default(),
+            scan_concurrency_semaphore: Arc::new(Semaphore::new(
+                config.incremental_scan_concurrency,
+            )),
+            scan_speed_limiter: Limiter::new(config.incremental_scan_speed_limit.0 as _),
+            fetch_speed_limiter: Limiter::new(config.incremental_fetch_speed_limit.0 as _),
+            max_scan_batch_bytes: 1024 * 1024,
+            max_scan_batch_size: 1024,
             pending_scans,
 
             sink_memory_quota,
-            old_value_cache: Arc::new(Mutex::new(old_value_cache)),
+            old_value_cache: Arc::new(Mutex::new(OldValueCache::new(
+                config.old_value_cache_memory_quota,
+            ))),
             causal_ts_provider,
 
             current_ts: TimeStamp::zero(),
@@ -507,13 +493,13 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             pending_progress_collecting: 0,
         };
 
-        ep.handles_pending_scans(scan_consumer);
+        ep.handle_pending_scans(scan_consumer);
         ep.register_min_ts_event(leader_resolver);
         ep
     }
 
     pub fn get_responser_workers(&self) -> Handle {
-        self.workers.as_ref().unwrap().handle().clone()
+        self.workers.handle().clone()
     }
 
     fn on_change_cfg(&mut self, change: ConfigChange) {
@@ -765,11 +751,10 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 let delegate = d.meta();
                 e.insert(delegate.clone());
 
-                if let Some(workers) = self.workers.as_ref() {
-                    let m = delegate.clone();
-                    workers.spawn(async move { m.flush_stats_periodically().await });
-                    workers.spawn(async move { d.handle_tasks().await });
-                }
+                let m = delegate.clone();
+                self.workers
+                    .spawn(async move { m.flush_stats_periodically().await });
+                self.workers.spawn(async move { d.handle_tasks().await });
 
                 let old_ob = self.observer.subscribe_region(
                     region_id,
@@ -863,16 +848,15 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         if self.pending_progress_collecting > 0 {
             return;
         }
-        if let Some(workers) = self.workers.as_ref() {
-            self.pending_progress_collecting += 1;
-            let scheduler = self.scheduler.clone();
-            workers.spawn(async move {
-                for fut in futs {
-                    let _ = fut.await;
-                }
-                let _ = scheduler.schedule(Task::CollectProgress);
-            });
-        }
+
+        self.pending_progress_collecting += 1;
+        let scheduler = self.scheduler.clone();
+        self.workers.spawn(async move {
+            for fut in futs {
+                let _ = fut.await;
+            }
+            let _ = scheduler.schedule(Task::CollectProgress);
+        });
     }
 
     fn on_collect_progress(&mut self) {
@@ -979,7 +963,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
 
             tokio::time::sleep(min_ts_interval).await;
             match scheduler.schedule_force(Task::RegisterMinTsEvent { leader_resolver }) {
-                Ok(_) | Err(ScheduleError::Stopped(..)) => return,
+                Ok(_) | Err(ScheduleError::Stopped(..)) => (),
                 Err(ScheduleError::Full(..)) => unreachable!(),
             }
         };
@@ -990,7 +974,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         self.connections.insert(conn.id, conn);
     }
 
-    fn handles_pending_scans(
+    fn handle_pending_scans(
         &self,
         mut scan_consumer: fair_queues::Receiver<(ConnId, RequestId), PendingInitialize<E>>,
     ) {
@@ -1004,8 +988,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         let scan_task_counter = self.scan_task_counter.clone();
         let cdc_handle = self.cdc_handle.clone();
 
-        let workers_handle = self.scan_workers.as_ref().unwrap().handle().clone();
-        self.scan_workers.as_ref().unwrap().spawn(async move {
+        let workers_handle = self.scan_workers.handle().clone();
+        self.scan_workers.spawn(async move {
             while let Some(((conn_id, request_id), task)) = scan_consumer.next().await {
                 tikv_util::defer!({
                     scan_task_counter.fetch_sub(1, Ordering::Relaxed);
@@ -1069,7 +1053,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         self.tso_worker.spawn(async move {
             tokio::time::sleep(min_ts_interval).await;
             match scheduler.schedule_force(Task::RegisterMinTsEvent { leader_resolver }) {
-                Ok(_) | Err(ScheduleError::Stopped(..)) => return,
+                Ok(_) | Err(ScheduleError::Stopped(..)) => (),
                 Err(ScheduleError::Full(..)) => unreachable!(),
             }
         });
@@ -1173,10 +1157,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
 impl<T, E, S> Drop for Endpoint<T, E, S> {
     fn drop(&mut self) {
         self.pending_scans.close();
-
-        let dur = Duration::from_secs(1);
-        self.workers.take().unwrap().shutdown_timeout(dur);
-        self.scan_workers.take().unwrap().shutdown_timeout(dur);
     }
 }
 
@@ -1891,7 +1871,7 @@ mod tests {
 
         // Pause scan task runtime.
         let (pause_tx, pause_rx) = std::sync::mpsc::channel::<()>();
-        suite.scan_workers.as_ref().unwrap().spawn(async move {
+        suite.scan_workers.spawn(async move {
             let _ = pause_rx.recv();
         });
 
