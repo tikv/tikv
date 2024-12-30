@@ -358,11 +358,11 @@ impl DownstreamSink {
         match e {
             SendError::Disconnected => {
                 debug!("cdc send events failed, disconnected"; "conn_id" => ?self.sink.conn_id,
-                    "region_id" => self.region_id, "request_id" => self.request_id.0);
+                    "region_id" => self.region_id, "request_id" => ?self.request_id);
             }
             SendError::Congested => {
                 info!("cdc send events failed, congested"; "conn_id" => ?self.sink.conn_id,
-                    "region_id" => self.region_id, "request_id" => self.request_id.0);
+                    "region_id" => self.region_id, "request_id" => ?self.request_id);
             }
         }
         Error::Sink(e)

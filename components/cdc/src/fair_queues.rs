@@ -16,23 +16,6 @@ pub struct FairQueues<K: Eq + PartialEq + Hash + Copy, I> {
 }
 
 impl<K: Eq + PartialEq + Hash + Copy, I> FairQueues<K, I> {
-    pub fn new() -> Self {
-        FairQueues {
-            inner: Arc::new(Mutex::new(Inner {
-                keys: vec![],
-                queues: HashMap::default(),
-                waker: AtomicWaker::new(),
-                closed: false,
-                rng: StdRng::seed_from_u64(
-                    SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs(),
-                ),
-            })),
-        }
-    }
-
     pub fn push(&self, key: K, item: I) -> bool {
         let mut inner = self.inner.lock().unwrap();
         if !inner.closed {
@@ -48,14 +31,40 @@ impl<K: Eq + PartialEq + Hash + Copy, I> FairQueues<K, I> {
     }
 }
 
-impl<K: Eq + PartialEq + Hash + Copy, I> Stream for FairQueues<K, I> {
+pub struct Receiver<K: Eq + PartialEq + Hash + Copy, I> {
+    inner: Arc<Mutex<Inner<K, I>>>,
+    rng: StdRng,
+}
+
+impl<K: Eq + PartialEq + Hash + Copy, I> Stream for Receiver<K, I> {
     type Item = (K, I);
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let this = self.as_ref();
-        let mut inner = this.inner.lock().unwrap();
-        inner.poll_next(cx)
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let mut this = self.as_mut();
+        let inner = this.inner.clone();
+        let mut inner_ = inner.lock().unwrap();
+        inner_.poll_next(cx, &mut this.rng)
     }
+}
+
+pub fn create<K: Eq + PartialEq + Hash + Copy, I>() -> (FairQueues<K, I>, Receiver<K, I>) {
+    let inner = Arc::new(Mutex::new(Inner {
+        keys: vec![],
+        queues: HashMap::default(),
+        waker: AtomicWaker::new(),
+        closed: false,
+    }));
+    let queues = FairQueues { inner: inner.clone() };
+
+    let rng = StdRng::seed_from_u64(
+        SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs(),
+    );
+    let receiver = Receiver { inner, rng };
+
+    (queues, receiver)
 }
 
 struct Inner<K: Eq + PartialEq + Hash + Copy, I> {
@@ -63,7 +72,6 @@ struct Inner<K: Eq + PartialEq + Hash + Copy, I> {
     queues: HashMap<K, VecDeque<I>>,
     waker: AtomicWaker,
     closed: bool,
-    rng: StdRng,
 }
 
 impl<K: Eq + PartialEq + Hash + Copy, I> Inner<K, I> {
@@ -88,7 +96,7 @@ impl<K: Eq + PartialEq + Hash + Copy, I> Inner<K, I> {
         }
     }
 
-    fn poll_next(&mut self, cx: &mut Context<'_>) -> Poll<Option<(K, I)>> {
+    fn poll_next(&mut self, cx: &mut Context<'_>, rng: &mut StdRng) -> Poll<Option<(K, I)>> {
         if self.closed {
             return Poll::Ready(None);
         }
@@ -100,7 +108,7 @@ impl<K: Eq + PartialEq + Hash + Copy, I> Inner<K, I> {
             return Poll::Pending;
         }
 
-        let offset = self.rng.next_u64() as usize % self.keys.len();
+        let offset = rng.next_u64() as usize % self.keys.len();
         let key = self.keys[offset];
         if let Entry::Occupied(mut x) = self.queues.entry(key) {
             let item = x.get_mut().pop_front().unwrap();
@@ -121,3 +129,4 @@ impl<K: Eq + PartialEq + Hash + Copy, I> Inner<K, I> {
         }
     }
 }
+
