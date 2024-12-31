@@ -20,7 +20,6 @@ use kvproto::{
     kvrpcpb::{PrewriteRequestPessimisticAction::*, *},
     tikvpb::TikvClient,
 };
-use online_config::OnlineConfig;
 use raftstore::{coprocessor::CoprocessorHost, router::CdcRaftRouter};
 use test_raftstore::*;
 use tikv::{
@@ -29,11 +28,8 @@ use tikv::{
     storage::kv::LocalTablets,
 };
 use tikv_util::{
-    config::ReadableDuration,
-    memory::MemoryQuota,
-    sys::thread::ThreadBuildWrapper,
-    worker::{LazyWorker, Runnable},
-    HandyRwLock,
+    config::ReadableDuration, memory::MemoryQuota, sys::thread::ThreadBuildWrapper,
+    worker::LazyWorker, HandyRwLock,
 };
 use tokio::runtime::{self, Runtime};
 use txn_types::TimeStamp;
@@ -229,8 +225,9 @@ impl TestSuiteBuilder {
             let cdc_ob = obs.get(id).unwrap().clone();
             let cm = sim.get_concurrency_manager(*id);
             let env = Arc::new(Environment::new(1));
-            let cfg = CdcConfig::default();
-            let mut cdc_endpoint = cdc::Endpoint::new(
+            let mut cfg = CdcConfig::default();
+            cfg.min_ts_interval = ReadableDuration::millis(100);
+            let cdc_endpoint = cdc::Endpoint::new_for_integration_tests(
                 DEFAULT_CLUSTER_ID,
                 &cfg,
                 &ResolvedTsConfig::default(),
@@ -248,10 +245,6 @@ impl TestSuiteBuilder {
                 quotas[id].clone(),
                 sim.get_causal_ts_provider(*id),
             );
-            let mut updated_cfg = cfg.clone();
-            updated_cfg.min_ts_interval = ReadableDuration::millis(100);
-            cdc_endpoint.run(Task::ChangeConfig(cfg.diff(&updated_cfg)));
-            cdc_endpoint.set_max_scan_batch_size(2);
             concurrency_managers.insert(*id, cm);
             worker.start(cdc_endpoint);
         }

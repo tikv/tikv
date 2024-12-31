@@ -410,6 +410,118 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         sink_memory_quota: Arc<MemoryQuota>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
     ) -> Endpoint<T, E, S> {
+        let (pending_scans, scan_consumer) = fair_queues::create();
+
+        let ep = Self::new_inner(
+            cluster_id,
+            config,
+            resolved_ts_config,
+            raftstore_v2,
+            api_version,
+            pd_client.clone(),
+            scheduler,
+            cdc_handle,
+            tablets,
+            observer,
+            store_meta.clone(),
+            concurrency_manager,
+            sink_memory_quota,
+            causal_ts_provider,
+            pending_scans,
+        );
+
+        ep.handle_pending_scans(scan_consumer);
+
+        let store_id = store_meta.lock().unwrap().store_id();
+        let read_progress = store_meta.lock().unwrap().region_read_progress().clone();
+        let leader_resolver = LeadershipResolver::new(
+            store_id,
+            pd_client,
+            env,
+            security_mgr,
+            read_progress,
+            Duration::from_secs(60),
+        );
+
+        ep.register_min_ts_event(leader_resolver);
+        ep
+    }
+
+    // TODO: the only difference with `new` is `scan_max_batch_size`.
+    // We will update cases depend on it and remove `new_for_integration_tests`.
+    pub fn new_for_integration_tests(
+        cluster_id: u64,
+        config: &CdcConfig,
+        resolved_ts_config: &ResolvedTsConfig,
+        raftstore_v2: bool,
+        api_version: ApiVersion,
+        pd_client: Arc<dyn PdClient>,
+        scheduler: Scheduler<Task>,
+        cdc_handle: T,
+        tablets: LocalTablets<E>,
+        observer: CdcObserver,
+        store_meta: Arc<StdMutex<S>>,
+        concurrency_manager: ConcurrencyManager,
+        env: Arc<Environment>,
+        security_mgr: Arc<SecurityManager>,
+        sink_memory_quota: Arc<MemoryQuota>,
+        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
+    ) -> Endpoint<T, E, S> {
+        let (pending_scans, scan_consumer) = fair_queues::create();
+
+        let mut ep = Self::new_inner(
+            cluster_id,
+            config,
+            resolved_ts_config,
+            raftstore_v2,
+            api_version,
+            pd_client.clone(),
+            scheduler,
+            cdc_handle,
+            tablets,
+            observer,
+            store_meta.clone(),
+            concurrency_manager,
+            sink_memory_quota,
+            causal_ts_provider,
+            pending_scans,
+        );
+        ep.max_scan_batch_size = 2;
+
+        ep.handle_pending_scans(scan_consumer);
+
+        let store_id = store_meta.lock().unwrap().store_id();
+        let read_progress = store_meta.lock().unwrap().region_read_progress().clone();
+        let leader_resolver = LeadershipResolver::new(
+            store_id,
+            pd_client,
+            env,
+            security_mgr,
+            read_progress,
+            Duration::from_secs(60),
+        );
+
+        ep.register_min_ts_event(leader_resolver);
+        ep
+    }
+
+    fn new_inner(
+        cluster_id: u64,
+        config: &CdcConfig,
+        resolved_ts_config: &ResolvedTsConfig,
+        raftstore_v2: bool,
+        api_version: ApiVersion,
+        pd_client: Arc<dyn PdClient>,
+        scheduler: Scheduler<Task>,
+        cdc_handle: T,
+        tablets: LocalTablets<E>,
+        observer: CdcObserver,
+        store_meta: Arc<StdMutex<S>>,
+        concurrency_manager: ConcurrencyManager,
+        sink_memory_quota: Arc<MemoryQuota>,
+        causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
+        pending_scans: FairQueues<(ConnId, RequestId), PendingInitialize<E>>,
+    ) -> Endpoint<T, E, S> {
         CDC_SINK_CAP.set(sink_memory_quota.capacity() as i64);
 
         let workers = Builder::new_multi_thread()
@@ -433,20 +545,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             .build()
             .unwrap();
 
-        let store_id = store_meta.lock().unwrap().store_id();
-        let read_progress = store_meta.lock().unwrap().region_read_progress().clone();
-        let leader_resolver = LeadershipResolver::new(
-            store_id,
-            pd_client.clone(),
-            env,
-            security_mgr,
-            read_progress,
-            Duration::from_secs(60),
-        );
-
-        let (pending_scans, scan_consumer) = fair_queues::create();
-
-        let ep = Endpoint {
+        Endpoint {
             cluster_id,
 
             capture_regions: HashMap::default(),
@@ -492,11 +591,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             unresolved_region_count: 0,
 
             pending_progress_collecting: 0,
-        };
-
-        ep.handle_pending_scans(scan_consumer);
-        ep.register_min_ts_event(leader_resolver);
-        ep
+        }
     }
 
     pub fn get_responser_workers(&self) -> Handle {
