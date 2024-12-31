@@ -595,9 +595,7 @@ where
         let wopts = WriteOptions::default();
         for cf in self.engine.cf_names() {
             // CF_LOCK usually contains fewer keys than other CFs, so we delete them by key.
-            // Meanwhile, if `forcely_by_key` is specified, it should remove the range by
-            // delete keys rather than ingestion.
-            let (strategy, observer) = if cf == CF_LOCK || forcely_by_key {
+            let (strategy, observer) = if cf == CF_LOCK {
                 (
                     DeleteStrategy::DeleteByKey,
                     &CLEAR_OVERLAP_REGION_DURATION.by_key,
@@ -606,6 +604,14 @@ where
                 (
                     DeleteStrategy::DeleteByRange,
                     &CLEAR_OVERLAP_REGION_DURATION.by_range,
+                )
+            // Meanwhile, if `forcely_by_key` is specified and
+            // `cfg.use_delete_range` is not enabled, it should remove the
+            // range by delete keys rather than ingestion.
+            } else if forcely_by_key {
+                (
+                    DeleteStrategy::DeleteByKey,
+                    &CLEAR_OVERLAP_REGION_DURATION.by_key,
                 )
             } else {
                 (
