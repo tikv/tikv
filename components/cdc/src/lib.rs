@@ -8,6 +8,7 @@ mod config;
 mod delegate;
 mod endpoint;
 mod errors;
+mod fair_queues;
 mod initializer;
 pub mod metrics;
 mod observer;
@@ -15,7 +16,7 @@ mod old_value;
 mod service;
 mod txn_source;
 
-pub use channel::{recv_timeout, CdcEvent};
+pub use channel::{recv_events_timely, recv_resolved_ts_timely, recv_timeout, CdcEvent};
 pub use config::CdcConfigManager;
 pub use delegate::Delegate;
 pub use endpoint::{CdcTxnExtraScheduler, Endpoint, Task, Validate};
