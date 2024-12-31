@@ -539,7 +539,7 @@ where
                 Range::new(start, end)
             })
             .collect();
-
+        // Clear sst files belonging to the given range directly.
         self.engine
             .delete_ranges_cfs(
                 &WriteOptions::default(),
@@ -550,8 +550,7 @@ where
                 error!("failed to delete files in range"; "err" => %e);
             })
             .unwrap();
-        // Skip remove all overlapped ranges here, which will be cleared by
-        // ticking automatically.
+        // Clear related blob files belonging to the given range directly.
         self.engine
             .delete_ranges_cfs(
                 &WriteOptions::default(),
@@ -562,6 +561,11 @@ where
                 error!("failed to delete blobs in range"; "err" => %e);
             })
             .unwrap();
+        // Remove all overlapped ranges directly without ingesting.
+        if let Err(e) = self.delete_all_in_range(&ranges, true) {
+            error!("failed to cleanup stale range"; "err" => %e);
+            return;
+        }
 
         for (_, key, _) in region_ranges {
             assert!(
