@@ -487,7 +487,8 @@ where
     /// with it.
     fn clean_overlap_ranges(&mut self, start_key: Vec<u8>, end_key: Vec<u8>) -> Result<()> {
         let (start_key, end_key) = self.clean_overlap_ranges_roughly(start_key, end_key);
-        self.delete_all_in_range(&[Range::new(&start_key, &end_key)])
+        // Directly delete the stale ranges without ingesting.
+        self.delete_all_in_range(&[Range::new(&start_key, &end_key)], true)
     }
 
     /// Inserts a new pending range, and it will be cleaned up with some delay.
@@ -538,7 +539,7 @@ where
                 Range::new(start, end)
             })
             .collect();
-
+        // Clear sst files belonging to the given range directly.
         self.engine
             .delete_ranges_cfs(
                 &WriteOptions::default(),
@@ -549,10 +550,7 @@ where
                 error!("failed to delete files in range"; "err" => %e);
             })
             .unwrap();
-        if let Err(e) = self.delete_all_in_range(&ranges) {
-            error!("failed to cleanup stale range"; "err" => %e);
-            return;
-        }
+        // Clear related blob files belonging to the given range directly.
         self.engine
             .delete_ranges_cfs(
                 &WriteOptions::default(),
@@ -563,6 +561,11 @@ where
                 error!("failed to delete blobs in range"; "err" => %e);
             })
             .unwrap();
+        // Remove all overlapped ranges directly without ingesting.
+        if let Err(e) = self.delete_all_in_range(&ranges, true) {
+            error!("failed to cleanup stale range"; "err" => %e);
+            return;
+        }
 
         for (_, key, _) in region_ranges {
             assert!(
@@ -588,7 +591,7 @@ where
         false
     }
 
-    fn delete_all_in_range(&self, ranges: &[Range<'_>]) -> Result<()> {
+    fn delete_all_in_range(&self, ranges: &[Range<'_>], forcely_by_key: bool) -> Result<()> {
         let wopts = WriteOptions::default();
         for cf in self.engine.cf_names() {
             // CF_LOCK usually contains fewer keys than other CFs, so we delete them by key.
@@ -601,6 +604,14 @@ where
                 (
                     DeleteStrategy::DeleteByRange,
                     &CLEAR_OVERLAP_REGION_DURATION.by_range,
+                )
+            // Meanwhile, if `forcely_by_key` is specified and
+            // `cfg.use_delete_range` is not enabled, it should remove the
+            // range by delete keys rather than ingestion.
+            } else if forcely_by_key {
+                (
+                    DeleteStrategy::DeleteByKey,
+                    &CLEAR_OVERLAP_REGION_DURATION.by_key,
                 )
             } else {
                 (
