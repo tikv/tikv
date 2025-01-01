@@ -1650,7 +1650,7 @@ fn test_prewrite_check_max_commit_ts() {
     cluster.run();
 
     let cm = cluster.sim.read().unwrap().get_concurrency_manager(1);
-    cm.update_max_ts(100.into());
+    cm.update_max_ts(100.into(), "").unwrap();
 
     let (client, ctx) = build_client(&cluster);
 
