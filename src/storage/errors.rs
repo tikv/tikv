@@ -303,6 +303,20 @@ pub fn extract_region_error_from_error(e: &Error) -> Option<errorpb::Error> {
             err.set_flashback_not_prepared(flashback_not_prepared_err);
             Some(err)
         }
+        Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::InvalidMaxTsUpdate(
+            invalid_max_ts_update,
+        )))) => {
+            let mut err = errorpb::Error::default();
+            err.set_message(invalid_max_ts_update.to_string());
+            Some(err)
+        }
+        Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
+            box MvccErrorInner::InvalidMaxTsUpdate(invalid_max_ts_update),
+        ))))) => {
+            let mut err = errorpb::Error::default();
+            err.set_message(invalid_max_ts_update.to_string());
+            Some(err)
+        }
         Error(box ErrorInner::SchedTooBusy) => {
             let mut err = errorpb::Error::default();
             let mut server_is_busy_err = errorpb::ServerIsBusy::default();

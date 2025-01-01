@@ -174,6 +174,9 @@ pub enum ErrorInner {
     #[error("check_txn_status sent to secondary lock, current lock: {0:?}")]
     PrimaryMismatch(kvproto::kvrpcpb::LockInfo),
 
+    #[error("{0}")]
+    InvalidMaxTsUpdate(#[from] concurrency_manager::InvalidMaxTsUpdate),
+
     #[error("{0:?}")]
     Other(#[from] Box<dyn error::Error + Sync + Send>),
 }
@@ -304,6 +307,7 @@ impl ErrorInner {
                 })
             }
             ErrorInner::PrimaryMismatch(l) => Some(ErrorInner::PrimaryMismatch(l.clone())),
+            ErrorInner::InvalidMaxTsUpdate(e) => Some(ErrorInner::InvalidMaxTsUpdate(e.clone())),
             ErrorInner::Io(_) | ErrorInner::Other(_) => None,
         }
     }
@@ -407,6 +411,7 @@ impl ErrorCodeExt for Error {
             ErrorInner::AssertionFailed { .. } => error_code::storage::ASSERTION_FAILED,
             ErrorInner::LockIfExistsFailed { .. } => error_code::storage::LOCK_IF_EXISTS_FAILED,
             ErrorInner::PrimaryMismatch(_) => error_code::storage::PRIMARY_MISMATCH,
+            ErrorInner::InvalidMaxTsUpdate(_) => error_code::storage::INVALID_MAX_TS_UPDATE,
             ErrorInner::Other(_) => error_code::storage::UNKNOWN,
         }
     }
