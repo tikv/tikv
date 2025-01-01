@@ -112,7 +112,8 @@ impl<E: Engine> Endpoint<E> {
     fn check_memory_locks(&self, req_ctx: &ReqContext) -> Result<()> {
         let start_ts = req_ctx.txn_start_ts;
         if !req_ctx.context.get_stale_read() {
-            self.concurrency_manager.update_max_ts(start_ts);
+            self.concurrency_manager
+                .update_max_ts(start_ts, || format!("coprocessor-{}", start_ts))?;
         }
         if need_check_locks(req_ctx.context.get_isolation_level()) {
             let begin_instant = Instant::now();
@@ -811,6 +812,12 @@ fn make_error_batch_response(batch_resp: &mut coppb::StoreBatchTaskResponse, e: 
             errorpb.set_server_is_busy(server_is_busy_err);
             batch_resp.set_region_error(errorpb);
         }
+        Error::InvalidMaxTsUpdate(e) => {
+            tag = "invalid_max_ts_update";
+            let mut err = errorpb::Error::default();
+            err.set_message(e.to_string());
+            batch_resp.set_region_error(err);
+        }
         Error::Other(_) => {
             tag = "other";
             batch_resp.set_other_error(e.to_string());
@@ -847,6 +854,12 @@ fn make_error_response(e: Error) -> coppb::Response {
             errorpb.set_message(e.to_string());
             errorpb.set_server_is_busy(server_is_busy_err);
             resp.set_region_error(errorpb);
+        }
+        Error::InvalidMaxTsUpdate(e) => {
+            tag = "invalid_max_ts_update";
+            let mut err = errorpb::Error::default();
+            err.set_message(e.to_string());
+            resp.set_region_error(err);
         }
         Error::Other(_) => {
             tag = "other";

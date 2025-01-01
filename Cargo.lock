@@ -1027,12 +1027,20 @@ name = "concurrency_manager"
 version = "0.0.1"
 dependencies = [
  "criterion",
+ "crossbeam",
  "crossbeam-skiplist",
  "fail",
  "futures 0.3.15",
  "kvproto",
+ "lazy_static",
+ "online_config",
  "parking_lot 0.12.1",
+ "prometheus",
  "rand 0.8.5",
+ "serde",
+ "slog",
+ "slog-global",
+ "thiserror",
  "tikv_alloc",
  "tikv_util",
  "tokio",
@@ -5026,9 +5034,9 @@ dependencies = [
 
 [[package]]
 name = "serde"
-version = "1.0.106"
+version = "1.0.216"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "36df6ac6412072f67cf767ebbde4133a5b2e88e76dc6187fa7104cd16f783399"
+checksum = "0b9781016e935a97e8beecf0c933758c97a5520d32930e460142b4cd80c6338e"
 dependencies = [
  "serde_derive",
 ]
@@ -5057,13 +5065,13 @@ dependencies = [
 
 [[package]]
 name = "serde_derive"
-version = "1.0.106"
+version = "1.0.216"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e549e3abf4fb8621bd1609f11dfc9f5e50320802273b12f3811a67e6716ea6c"
+checksum = "46f859dbbf73865c6627ed570e78961cd3ac92407a2d117204c49232485da55e"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 1.0.103",
+ "syn 2.0.85",
 ]
 
 [[package]]
