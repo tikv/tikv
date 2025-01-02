@@ -149,6 +149,9 @@ pub enum ErrorInner {
 
     #[error("region {0} not prepared the flashback")]
     FlashbackNotPrepared(u64),
+
+    #[error("{0}")]
+    InvalidMaxTsUpdate(#[from] concurrency_manager::InvalidMaxTsUpdate),
 }
 
 impl ErrorInner {
@@ -187,6 +190,9 @@ impl ErrorInner {
             }
             ErrorInner::FlashbackNotPrepared(region_id) => {
                 Some(ErrorInner::FlashbackNotPrepared(region_id))
+            }
+            ErrorInner::InvalidMaxTsUpdate(ref e) => {
+                Some(ErrorInner::InvalidMaxTsUpdate(e.clone()))
             }
             ErrorInner::Other(_) | ErrorInner::ProtoBuf(_) | ErrorInner::Io(_) => None,
         }
@@ -242,6 +248,7 @@ impl ErrorCodeExt for Error {
                 error_code::storage::MAX_TIMESTAMP_NOT_SYNCED
             }
             ErrorInner::FlashbackNotPrepared(_) => error_code::storage::FLASHBACK_NOT_PREPARED,
+            ErrorInner::InvalidMaxTsUpdate { .. } => error_code::storage::INVALID_MAX_TS_UPDATE,
         }
     }
 }

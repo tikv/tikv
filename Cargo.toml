@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "8.5.0-alpha"
+version = "9.0.0-alpha"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -36,6 +36,7 @@ testexport = [
   "engine_rocks/testexport",
   "engine_panic/testexport",
   "encryption/testexport",
+  "file_system/testexport"
 ]
 test-engine-kv-rocksdb = ["engine_test/test-engine-kv-rocksdb"]
 test-engine-raft-raft-engine = ["engine_test/test-engine-raft-raft-engine"]

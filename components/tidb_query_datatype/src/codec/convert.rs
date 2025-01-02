@@ -5,7 +5,7 @@ use std::{borrow::Cow, fmt::Display};
 use tipb::FieldType;
 
 use super::{
-    mysql::{RoundMode, DEFAULT_FSP},
+    mysql::{charset::MULTI_BYTES_CHARSETS, RoundMode, DEFAULT_FSP},
     Error, Result,
 };
 // use crate::{self, FieldTypeTp, UNSPECIFIED_LENGTH};
@@ -13,7 +13,7 @@ use crate::{
     codec::{
         data_type::*,
         error::ERR_DATA_OUT_OF_RANGE,
-        mysql::{charset, decimal::max_or_min_dec, Res},
+        mysql::{decimal::max_or_min_dec, Res},
     },
     expr::{EvalContext, Flag},
     Collation, FieldTypeAccessor, FieldTypeTp, UNSPECIFIED_LENGTH,
@@ -289,7 +289,7 @@ impl ToInt for f64 {
     /// anymore.
     fn to_int(&self, ctx: &mut EvalContext, tp: FieldTypeTp) -> Result<i64> {
         #![allow(clippy::float_cmp)]
-        let val = self.round();
+        let val = self.round_ties_even();
         let lower_bound = integer_signed_lower_bound(tp);
         if val < lower_bound as f64 {
             ctx.handle_overflow_err(overflow(val, tp))?;
@@ -713,9 +713,10 @@ pub fn produce_str_with_specified_tp<'a>(
         return Ok(s);
     }
     let flen = flen as usize;
-    // flen is the char length, not byte length, for UTF8 charset, we need to
-    // calculate the char count and truncate to flen chars if it is too long.
-    if chs == charset::CHARSET_UTF8 || chs == charset::CHARSET_UTF8MB4 {
+    // flen is the char length, not byte length, for UTF8 and GBK/GB18030 charset,
+    // we need to calculate the char count and truncate to flen chars if it is
+    // too long.
+    if MULTI_BYTES_CHARSETS.contains(chs) {
         let (char_count, truncate_pos) = {
             let s = &String::from_utf8_lossy(&s);
             let mut truncate_pos = 0;
@@ -1142,7 +1143,7 @@ mod tests {
                 ERR_DATA_OUT_OF_RANGE, ERR_M_BIGGER_THAN_D, ERR_TRUNCATE_WRONG_VALUE,
                 WARN_DATA_TRUNCATED,
             },
-            mysql::{Res, UNSPECIFIED_FSP},
+            mysql::{charset, Res, UNSPECIFIED_FSP},
         },
         expr::{EvalConfig, EvalContext, Flag},
         Collation, FieldTypeFlag,
@@ -1230,14 +1231,14 @@ mod tests {
             (-256.6, FieldTypeTp::Short, Some(-257)),
             (65535.5, FieldTypeTp::Short, None),
             (65536.1, FieldTypeTp::Int24, Some(65536)),
-            (65536.5, FieldTypeTp::Int24, Some(65537)),
+            (65536.5, FieldTypeTp::Int24, Some(65536)),
             (-65536.1, FieldTypeTp::Int24, Some(-65536)),
-            (-65536.5, FieldTypeTp::Int24, Some(-65537)),
+            (-65536.5, FieldTypeTp::Int24, Some(-65536)),
             (8388610.2, FieldTypeTp::Int24, None),
             (8388610.4, FieldTypeTp::Long, Some(8388610)),
-            (8388610.5, FieldTypeTp::Long, Some(8388611)),
+            (8388610.5, FieldTypeTp::Long, Some(8388610)),
             (-8388610.4, FieldTypeTp::Long, Some(-8388610)),
-            (-8388610.5, FieldTypeTp::Long, Some(-8388611)),
+            (-8388610.5, FieldTypeTp::Long, Some(-8388610)),
             (4294967296.8, FieldTypeTp::Long, None),
             (4294967296.8, FieldTypeTp::LongLong, Some(4294967297)),
             (4294967297.1, FieldTypeTp::LongLong, Some(4294967297)),
@@ -1518,7 +1519,7 @@ mod tests {
             ("3", 3),
             ("-3", -3),
             ("4.1", 4),
-            ("4.5", 5),
+            ("4.5", 4),
             ("true", 1),
             ("false", 0),
             ("null", 0),
@@ -2221,6 +2222,19 @@ mod tests {
             ("世界，中国", 4, charset::CHARSET_ASCII),
             ("世界，中国", 5, charset::CHARSET_ASCII),
             ("世界，中国", 6, charset::CHARSET_ASCII),
+            // GBK/GB18030
+            ("世界，中国", 1, charset::CHARSET_GBK),
+            ("世界，中国", 2, charset::CHARSET_GBK),
+            ("世界，中国", 3, charset::CHARSET_GBK),
+            ("世界，中国", 4, charset::CHARSET_GBK),
+            ("世界，中国", 5, charset::CHARSET_GBK),
+            ("世界，中国", 6, charset::CHARSET_GBK),
+            ("世界，中国", 1, charset::CHARSET_GB18030),
+            ("世界，中国", 2, charset::CHARSET_GB18030),
+            ("世界，中国", 3, charset::CHARSET_GB18030),
+            ("世界，中国", 4, charset::CHARSET_GB18030),
+            ("世界，中国", 5, charset::CHARSET_GB18030),
+            ("世界，中国", 6, charset::CHARSET_GB18030),
         ];
 
         let cfg = EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING);
@@ -2232,10 +2246,10 @@ mod tests {
             ft.set_flen(char_num);
             let bs = s.as_bytes();
             let r = produce_str_with_specified_tp(&mut ctx, Cow::Borrowed(bs), &ft, false);
-            assert!(r.is_ok(), "{}, {}, {}", s, char_num, cs);
+            assert!(r.is_ok(), "{}, {}, {}, {}", s, char_num, cs, r.unwrap_err());
             let p = r.unwrap();
 
-            if cs == charset::CHARSET_UTF8MB4 || cs == charset::CHARSET_UTF8 {
+            if MULTI_BYTES_CHARSETS.contains(cs) {
                 let ns: String = s.chars().take(char_num as usize).collect();
                 assert_eq!(p.as_ref(), ns.as_bytes(), "{}, {}, {}", s, char_num, cs);
             } else {
@@ -2271,7 +2285,7 @@ mod tests {
             ft.set_flen(char_num);
             let bs = s.as_bytes();
             let r = produce_str_with_specified_tp(&mut ctx, Cow::Borrowed(bs), &ft, true);
-            assert!(r.is_ok(), "{}, {}, {}", s, char_num, cs);
+            assert!(r.is_ok(), "{}, {}, {}, {}", s, char_num, cs, r.unwrap_err());
 
             let p = r.unwrap();
             assert_eq!(p.len(), char_num as usize, "{}, {}, {}", s, char_num, cs);
@@ -2306,7 +2320,15 @@ mod tests {
             ft.set_charset(cs.to_string());
             ft.set_flen(char_num);
             let r = produce_str_with_specified_tp(&mut ctx, Cow::Borrowed(&s), &ft, true);
-            assert!(r.is_ok(), "{:?}, {}, {}, {:?}", &s, char_num, cs, result);
+            assert!(
+                r.is_ok(),
+                "{:?}, {}, {}, {:?}, {}",
+                &s,
+                char_num,
+                cs,
+                result,
+                r.unwrap_err()
+            );
 
             let p = r.unwrap();
             assert_eq!(p, result, "{:?}, {}, {}, {:?}", &s, char_num, cs, result);
