@@ -127,11 +127,13 @@ impl ConcurrencyManager {
             update_time: Instant::now(),
         };
 
-        // if limit_valid_duration > max_ts_drift_allowance {
-        //     limit_valid_duration must be smaller than max_ts_drift_allowance,
-        //     otherwise failure to update the limit can block max_ts update.
-        // limit_valid_duration = max_ts_drift_allowance;
-        // }
+        if limit_valid_duration >= max_ts_drift_allowance {
+            error!("improper setting: limit_valid_duration >= max_ts_drift_allowance; \
+                consider increasing max-ts-drift-allowance or decreasing max-ts-sync-interval";
+                "limit_valid_duration" => ?limit_valid_duration,
+                "max_ts_drift_allowance" => ?max_ts_drift_allowance,
+            );
+        }
 
         ConcurrencyManager {
             max_ts: Arc::new(AtomicU64::new(latest_ts.into_inner())),
@@ -873,7 +875,7 @@ mod tests {
     #[test]
     fn test_do_not_panic_under_pd_tso_jump_and_network_partition() {
         let mut mock_pd = MockTSOProvider::new();
-        // Network Partition between PD and TiKV
+        // Network partition between PD and TiKV
         mock_pd
             .expect_get_tso()
             .return_once(|| std::future::pending().boxed());

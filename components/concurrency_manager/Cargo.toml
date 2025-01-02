@@ -21,7 +21,6 @@ slog = { workspace = true }
 slog-global = { workspace = true }
 thiserror = "1.0"
 tikv_util = { workspace = true }
-time = "0.1.43"
 tokio = { version = "1.5", features = ["macros", "sync", "time"] }
 txn_types = { workspace = true }
 
