@@ -923,12 +923,15 @@ where
             if let Err(ref err) = &res {
                 err.report("during updating flush status")
             }
-            let flush_res = FlushResult { task, error: res.err() };
-            if !syncer.await {
-                warn!("force_flush: syncing checkpoint manager failed. The progress may not be advanced.";
-                    "task" => %flush_res.task);
+            // If nobody waits us, it is no need to construct the result.
+            if !cb.is_closed() {
+                let flush_res = FlushResult { task, error: res.err() };
+                if !syncer.await {
+                    warn!("force_flush: syncing checkpoint manager failed. The progress may not be advanced.";
+                        "task" => %flush_res.task);
+                }
+                let _ = cb.send(flush_res).await;
             }
-            let _ = cb.send(flush_res).await;
         }));
     }
 
