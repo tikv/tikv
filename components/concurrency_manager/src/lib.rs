@@ -29,6 +29,7 @@ use std::{
 
 use crossbeam::atomic::AtomicCell;
 use lazy_static::lazy_static;
+use mockall::automock;
 use pd_client::{PdClient, PdFuture};
 use prometheus::{register_int_gauge, IntGauge};
 use thiserror::Error;
@@ -50,7 +51,7 @@ lazy_static! {
         register_int_gauge!("tikv_concurrency_manager_max_ts", "Current value of max_ts").unwrap();
 }
 
-const DEFAULT_LIMIT_VALID_DURATION: Duration = Duration::from_secs(60);
+const DEFAULT_LIMIT_VALID_DURATION: Duration = Duration::from_secs(45);
 
 // It is suggested that limit_valid_duration = sync_interval *
 // LIMIT_VALID_TIME_MULTIPLIER, to balance between
@@ -67,6 +68,7 @@ struct MaxTsLimit {
     update_time: Instant,
 }
 
+#[automock]
 pub trait TSOProvider: Send + Sync {
     fn get_tso(&self) -> PdFuture<TimeStamp>;
 }
@@ -124,6 +126,12 @@ impl ConcurrencyManager {
             limit: TimeStamp::new(0),
             update_time: Instant::now(),
         };
+
+        // if limit_valid_duration > max_ts_drift_allowance {
+        //     limit_valid_duration must be smaller than max_ts_drift_allowance,
+        //     otherwise failure to update the limit can block max_ts update.
+        // limit_valid_duration = max_ts_drift_allowance;
+        // }
 
         ConcurrencyManager {
             max_ts: Arc::new(AtomicU64::new(latest_ts.into_inner())),
@@ -197,12 +205,6 @@ impl ConcurrencyManager {
 
         // check that new_ts is less than or equal to the limit
         if !limit.limit.is_zero() && new_ts > limit.limit {
-            // NOTE: `limit` and `last_update` are read non-atomically as a whole, so they
-            // can be inconsistent, i.e. they may not be from the same event of
-            // setting the limit. The consequence is that we may mistakenly
-            // treat an "invalid" limit as a "valid" one. This is acceptable
-            // because the limit is just an assertion, and the inconsistency
-            // is not harmful.
             let last_update = limit.update_time;
             let now = self.time_provider.now();
             assert!(now >= last_update);
@@ -253,10 +255,12 @@ impl ConcurrencyManager {
             "using_approximate" => using_approximate,
             "TSO_TIMEOUT" => ?TSO_TIMEOUT,
         );
+        let mut tso_confirmed = false;
         if let Some(tso) = &self.tso {
             match block_on_timeout(tso.get_tso(), TSO_TIMEOUT) {
                 Ok(Ok(ts)) => {
                     self.set_max_ts_limit(ts);
+                    tso_confirmed = true;
                 }
                 Ok(Err(e)) => {
                     error!("failed to fetch from TSO for double checking"; "err" => ?e);
@@ -267,7 +271,7 @@ impl ConcurrencyManager {
             }
         }
         if new_ts > self.max_ts_limit.load().limit {
-            self.report_error(new_ts, limit, source, using_approximate)?;
+            self.report_error(new_ts, limit, source, using_approximate, tso_confirmed)?;
         }
         Ok(())
     }
@@ -278,8 +282,8 @@ impl ConcurrencyManager {
         limit: TimeStamp,
         source: impl slog::Value + Display,
         using_approximate: bool,
+        tso_confirmed: bool,
     ) -> Result<(), InvalidMaxTsUpdate> {
-        let can_panic = !using_approximate;
         error!("invalid max_ts update";
             "attempted_ts" => new_ts,
             "max_allowed" => limit.into_inner(),
@@ -287,7 +291,7 @@ impl ConcurrencyManager {
             "using_approximate" => using_approximate,
         );
         match self.action_on_invalid_max_ts.load() {
-            ActionOnInvalidMaxTs::Panic if can_panic => {
+            ActionOnInvalidMaxTs::Panic if tso_confirmed => {
                 panic!(
                     "invalid max_ts update: {} exceeds the limit {}, source={}",
                     new_ts,
@@ -295,12 +299,11 @@ impl ConcurrencyManager {
                     source
                 );
             }
-            ActionOnInvalidMaxTs::Error => Err(InvalidMaxTsUpdate {
+            ActionOnInvalidMaxTs::Error if tso_confirmed => Err(InvalidMaxTsUpdate {
                 attempted_ts: new_ts,
                 max_allowed: limit,
             }),
-            ActionOnInvalidMaxTs::Log => Ok(()),
-            ActionOnInvalidMaxTs::Panic => Ok(()),
+            _ => Ok(()),
         }
     }
 
@@ -845,27 +848,14 @@ mod tests {
         assert_eq!(cm.max_ts().into_inner(), 500);
     }
 
-    struct MockPD {
-        tso: AtomicU64,
-    }
-
-    impl MockPD {
-        fn new(ts: u64) -> Self {
-            Self {
-                tso: AtomicU64::new(ts),
-            }
-        }
-    }
-
-    impl TSOProvider for MockPD {
-        fn get_tso(&self) -> PdFuture<TimeStamp> {
-            ready(Ok(TimeStamp::new(self.tso.fetch_add(1, Ordering::SeqCst)))).boxed()
-        }
-    }
-
     #[test]
     fn test_pd_tso_jump_not_panic() {
-        let mock_pd = Arc::new(MockPD::new(100));
+        let mut mock_pd = MockTSOProvider::new();
+        // The double check procedure gets latest_ts=300 from TSO
+        mock_pd
+            .expect_get_tso()
+            .return_once(|| ready(Ok(300.into())).boxed());
+        let mock_pd = Arc::new(mock_pd);
         let cm = ConcurrencyManager::new_with_config(
             TimeStamp::new(100),
             DEFAULT_LIMIT_VALID_DURATION,
@@ -876,7 +866,28 @@ mod tests {
 
         cm.set_max_ts_limit(TimeStamp::new(200));
         // PD TSO jumps from 100 to 300
-        mock_pd.tso.store(300, Ordering::SeqCst);
+        cm.update_max_ts(TimeStamp::new(300), "test_source".to_string())
+            .unwrap();
+    }
+
+    #[test]
+    fn test_do_not_panic_under_pd_tso_jump_and_network_partition() {
+        let mut mock_pd = MockTSOProvider::new();
+        // Network Partition between PD and TiKV
+        mock_pd
+            .expect_get_tso()
+            .return_once(|| std::future::pending().boxed());
+        let mock_pd = Arc::new(mock_pd);
+        let cm = ConcurrencyManager::new_with_config(
+            TimeStamp::new(100),
+            DEFAULT_LIMIT_VALID_DURATION,
+            ActionOnInvalidMaxTs::Panic,
+            Some(mock_pd.clone()),
+            Duration::ZERO,
+        );
+        cm.set_max_ts_limit(200.into());
+
+        // PD TSO jumps from 100 to 300
         cm.update_max_ts(TimeStamp::new(300), "test_source".to_string())
             .unwrap();
     }
