@@ -30064,7 +30064,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The count of compaction and flush operations",
+          "description": "The rate of completed compaction and flush operations (left axis) and the count of running operations (right axis).",
           "editable": true,
           "error": false,
           "fieldConfig": {
