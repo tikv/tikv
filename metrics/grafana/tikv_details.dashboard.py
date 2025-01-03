@@ -5471,7 +5471,7 @@ def RocksDB() -> RowPanel:
         [
             graph_panel(
                 title="Compaction operations",
-                description="The count of compaction and flush operations",
+                description="The rate of completed compaction and flush operations (left axis) and the count of running operations (right axis).",
                 yaxes=yaxes(left_format=UNITS.OPS_PER_SEC, right_format=UNITS.SHORT),
                 targets=[
                     target(
