@@ -640,14 +640,19 @@ pub enum Cmd {
             )
         )]
         name: String,
-        #[structopt(long = "from", help("from when we need to compact."))]
+        #[structopt(
+            long = "from",
+            help(
+                "from when we need to include files into the compaction.\
+                files contains any record within the [--from, --until) will be selected."
+            )
+        )]
         from_ts: u64,
         #[structopt(
             long = "until",
             help(
-                "until when we need to compact. \
-                Also note that records out of the [--from, --until) range may also be compacted \
-                if their neighbour in the same file needs to be compacted."
+                "until when we need to include files into the compaction.\
+                files contains any record within the [--from, --until) will be selected."
             )
         )]
         until_ts: u64,
