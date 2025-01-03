@@ -774,10 +774,8 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "failpoints")]
     fn test_io_bytes_tracker_normal() {
-        #[cfg(not(feature = "failpoints"))]
-        return;
-
         fail::cfg("delta_read_io_bytes", "return(100)").unwrap();
         fail::cfg("delta_write_io_bytes", "return(50)").unwrap();
         let mut io_tracker = IoBytesTracker::new();
@@ -792,10 +790,8 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "failpoints")]
     fn test_io_bytes_tracker_initialization_failure() {
-        #[cfg(not(feature = "failpoints"))]
-        return;
-
         fail::cfg("failed_to_get_thread_io_bytes_stats", "1*return").unwrap();
         fail::cfg("delta_read_io_bytes", "return(100)").unwrap();
         fail::cfg("delta_write_io_bytes", "return(50)").unwrap();
