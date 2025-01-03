@@ -11,6 +11,7 @@ crossbeam-skiplist = { workspace = true }
 fail = "0.5"
 kvproto = { workspace = true }
 lazy_static = "1.4.0"
+mockall = "0.13"
 online_config = { workspace = true }
 parking_lot = "0.12"
 pd_client = { workspace = true }
