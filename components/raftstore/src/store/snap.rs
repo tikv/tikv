@@ -899,6 +899,7 @@ impl Snapshot {
                         .get_actual_max_per_file_size(allow_multi_files_snapshot),
                     &self.mgr.limiter,
                     self.mgr.encryption_key_manager.clone(),
+                    for_balance,
                 )?
             };
             SNAPSHOT_LIMIT_GENERATE_BYTES.inc_by(cf_stat.total_size as u64);
@@ -2596,13 +2597,25 @@ pub mod tests {
     where
         E: KvEngine + KvEngineConstructorExt,
     {
+        open_test_db_with_nkeys(path, db_opt, cf_opts, 100)
+    }
+
+    pub fn open_test_db_with_nkeys<E>(
+        path: &Path,
+        db_opt: Option<DbOptions>,
+        cf_opts: Option<Vec<(&'static str, CfOptions)>>,
+        nkeys: u64,
+    ) -> Result<E>
+    where
+        E: KvEngine + KvEngineConstructorExt,
+    {
         let db = open_test_empty_db::<E>(path, db_opt, cf_opts).unwrap();
         // write some data into each cf
         for (i, cf) in db.cf_names().into_iter().enumerate() {
             let mut p = Peer::default();
             p.set_store_id(TEST_STORE_ID);
             p.set_id((i + 1) as u64);
-            for k in 0..100 {
+            for k in 0..nkeys {
                 let key = keys::data_key(format!("akey{}", k).as_bytes());
                 db.put_msg_cf(cf, &key[..], &p)?;
             }
