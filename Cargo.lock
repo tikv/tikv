@@ -1563,6 +1563,7 @@ dependencies = [
  "lazy_static",
  "online_config",
  "parking_lot 0.12.1",
+ "pd_client",
  "prometheus",
  "rand 0.8.5",
  "serde",
@@ -7231,7 +7232,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "8.5.0-alpha"
+version = "9.0.0-alpha"
 dependencies = [
  "anyhow",
  "api_version",
@@ -7915,6 +7916,7 @@ dependencies = [
  "codec",
  "collections",
  "error_code",
+ "fail",
  "farmhash",
  "kvproto",
  "log_wrappers",
