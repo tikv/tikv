@@ -4981,7 +4981,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        server::{config::ServerConfigManager, ttl::TtlCheckerTask},
+        server::{config::ServerConfigManager, ttl::TtlCheckerTask, GrpcCompressionType},
         storage::{
             config_manager::StorageConfigManger,
             lock_manager::MockLockManager,
@@ -6400,6 +6400,40 @@ mod tests {
         cfg.server.raft_msg_max_batch_size = 32;
         assert_eq_debug(&cfg_controller.get_current(), &cfg);
         check_cfg(&cfg);
+    }
+
+    #[test]
+    fn test_grpc_config() {
+        let content = r#"
+            [server]
+            grpc-compression-type = "deflate"
+        "#;
+        let mut cfg: TikvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap();
+        assert_eq!(
+            cfg.server.grpc_raft_compression_type,
+            GrpcCompressionType::Deflate
+        );
+        assert_eq!(
+            cfg.server.grpc_client_compression_type,
+            GrpcCompressionType::None
+        );
+
+        let content = r#"
+            [server]
+            grpc-client-compression-type = "gzip"
+            grpc-raft-compression-type = "none"
+        "#;
+        let mut cfg: TikvConfig = toml::from_str(content).unwrap();
+        cfg.validate().unwrap();
+        assert_eq!(
+            cfg.server.grpc_client_compression_type,
+            GrpcCompressionType::Gzip
+        );
+        assert_eq!(
+            cfg.server.grpc_raft_compression_type,
+            GrpcCompressionType::None
+        );
     }
 
     #[test]

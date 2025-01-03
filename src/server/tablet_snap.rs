@@ -73,7 +73,10 @@ use super::{
     snap::{Task, DEFAULT_POOL_SIZE},
     Config, Error, Result,
 };
-use crate::tikv_util::{sys::thread::ThreadBuildWrapper, time::Limiter};
+use crate::{
+    server::grpc_compression_algorithm,
+    tikv_util::{sys::thread::ThreadBuildWrapper, time::Limiter},
+};
 
 const PREVIEW_CHUNK_LEN: usize = ReadableSize::kb(1).0 as usize;
 const PREVIEW_BATCH_SIZE: usize = 256;
@@ -959,7 +962,9 @@ where
                     .stream_initial_window_size(self.cfg.grpc_stream_initial_window_size.0 as i32)
                     .keepalive_time(self.cfg.grpc_keepalive_time.0)
                     .keepalive_timeout(self.cfg.grpc_keepalive_timeout.0)
-                    .default_compression_algorithm(self.cfg.grpc_compression_algorithm())
+                    .default_compression_algorithm(grpc_compression_algorithm(
+                        self.cfg.grpc_raft_compression_type.clone(),
+                    ))
                     .default_gzip_compression_level(self.cfg.grpc_gzip_compression_level)
                     .default_grpc_min_message_size_to_compress(
                         self.cfg.grpc_min_message_size_to_compress,

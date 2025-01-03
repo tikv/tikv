@@ -207,12 +207,9 @@ pub async fn with_resource_limiter<F: Future>(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc::{channel, Sender};
-
-    use tikv_util::yatp_pool::{DefaultTicker, FuturePool, YatpPoolBuilder};
+    use std::sync::mpsc::Sender;
 
     use super::*;
-    use crate::resource_limiter::{GroupStatistics, ResourceType::Io};
 
     #[pin_project]
     struct NotifyFuture<F> {
@@ -222,6 +219,7 @@ mod tests {
     }
 
     impl<F> NotifyFuture<F> {
+        #[allow(dead_code)]
         fn new(f: F, sender: Sender<()>) -> Self {
             Self { f, sender }
         }
@@ -239,13 +237,17 @@ mod tests {
         }
     }
 
-    #[allow(clippy::unused_async)]
+    #[allow(dead_code)]
     async fn empty() {}
 
     #[test]
+    #[cfg(feature = "failpoints")]
     fn test_limited_future() {
-        #[cfg(not(feature = "failpoints"))]
-        return;
+        use std::sync::mpsc::{channel, Sender};
+
+        use tikv_util::yatp_pool::{DefaultTicker, FuturePool, YatpPoolBuilder};
+
+        use crate::resource_limiter::{GroupStatistics, ResourceType::Io};
 
         let pool = YatpPoolBuilder::new(DefaultTicker::default())
             .thread_count(1, 1, 1)
