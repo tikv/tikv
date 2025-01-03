@@ -33,7 +33,7 @@ use mockall::automock;
 use pd_client::{PdClient, PdFuture};
 use prometheus::{register_int_gauge, IntGauge};
 use thiserror::Error;
-use tikv_util::{error, future::block_on_timeout, time::Instant};
+use tikv_util::{error, future::block_on_timeout, time::Instant, warn};
 use txn_types::{Key, Lock, TimeStamp};
 
 pub use self::{
@@ -250,7 +250,7 @@ impl ConcurrencyManager {
         source: impl slog::Value + Display,
         using_approximate: bool,
     ) -> Result<(), crate::InvalidMaxTsUpdate> {
-        error!("possible invalid max-ts update; double checking";
+        warn!("possible invalid max-ts update; double checking";
             "attempted_ts" => new_ts,
             "max_allowed" => limit.into_inner(),
             "source" => &source,
@@ -286,12 +286,22 @@ impl ConcurrencyManager {
         using_approximate: bool,
         tso_confirmed: bool,
     ) -> Result<(), InvalidMaxTsUpdate> {
-        error!("invalid max_ts update";
-            "attempted_ts" => new_ts,
-            "max_allowed" => limit.into_inner(),
-            "source" => &source,
-            "using_approximate" => using_approximate,
-        );
+        if tso_confirmed {
+            error!("invalid max_ts update";
+                "attempted_ts" => new_ts,
+                "max_allowed" => limit.into_inner(),
+                "source" => &source,
+                "using_approximate" => using_approximate,
+            );
+        } else {
+            warn!("possible invalid max_ts update";
+                "attempted_ts" => new_ts,
+                "max_allowed" => limit.into_inner(),
+                "source" => &source,
+                "using_approximate" => using_approximate,
+            );
+        }
+
         match self.action_on_invalid_max_ts.load() {
             ActionOnInvalidMaxTs::Panic if tso_confirmed => {
                 panic!(
