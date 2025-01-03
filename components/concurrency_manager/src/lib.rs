@@ -612,14 +612,14 @@ mod tests {
     use super::*;
 
     #[derive(Clone)]
-    struct MockTimeProvider {
+    struct StubTimeProvider {
         current_time: Arc<Mutex<Instant>>,
     }
 
-    impl MockTimeProvider {
+    impl StubTimeProvider {
         /// Creates a new MockTimeProvider initialized with the given instant.
         fn new(start_time: Instant) -> Self {
-            MockTimeProvider {
+            StubTimeProvider {
                 current_time: Arc::new(Mutex::new(start_time)),
             }
         }
@@ -633,7 +633,7 @@ mod tests {
         }
     }
 
-    impl TimeProvider for MockTimeProvider {
+    impl TimeProvider for StubTimeProvider {
         fn now(&self) -> Instant {
             let time = self.current_time.lock().unwrap();
             *time
@@ -792,8 +792,8 @@ mod tests {
     #[test]
     fn test_limit_valid_duration_boundary() {
         let start_time = Instant::now();
-        let mock_time = MockTimeProvider::new(start_time);
-        let time_provider = Arc::new(mock_time.clone());
+        let stub_time = StubTimeProvider::new(start_time);
+        let time_provider = Arc::new(stub_time.clone());
 
         let cm = ConcurrencyManager::new_with_time_provider(
             TimeStamp::new(100),
@@ -817,8 +817,8 @@ mod tests {
     #[test]
     fn test_max_ts_limit_expired_allows_update() {
         let start_time = Instant::now();
-        let mock_time = MockTimeProvider::new(start_time);
-        let time_provider = Arc::new(mock_time.clone());
+        let stub_time = StubTimeProvider::new(start_time);
+        let time_provider = Arc::new(stub_time.clone());
 
         let cm = ConcurrencyManager::new_with_time_provider(
             TimeStamp::new(100),
@@ -831,7 +831,7 @@ mod tests {
 
         cm.set_max_ts_limit(TimeStamp::new(200));
 
-        mock_time.advance(Duration::from_secs(61));
+        stub_time.advance(Duration::from_secs(61));
 
         // Updating to 250 should be allowed, since the limit should be invalidated
         cm.update_max_ts(TimeStamp::new(250), "test_source".to_string())
@@ -862,12 +862,12 @@ mod tests {
 
     #[test]
     fn test_pd_tso_jump_not_panic() {
-        let mut mock_pd = MockTSOProvider::new();
+        let mut stub_pd = MockTSOProvider::new();
         // The double check procedure gets latest_ts=300 from TSO
-        mock_pd
+        stub_pd
             .expect_get_tso()
             .return_once(|| ready(Ok(300.into())).boxed());
-        let mock_pd = Arc::new(mock_pd);
+        let mock_pd = Arc::new(stub_pd);
         let cm = ConcurrencyManager::new_with_config(
             TimeStamp::new(100),
             DEFAULT_LIMIT_VALID_DURATION,
@@ -884,12 +884,12 @@ mod tests {
 
     #[test]
     fn test_do_not_panic_under_pd_tso_jump_and_network_partition() {
-        let mut mock_pd = MockTSOProvider::new();
+        let mut stub_pd = MockTSOProvider::new();
         // Network partition between PD and TiKV
-        mock_pd
+        stub_pd
             .expect_get_tso()
             .return_once(|| std::future::pending().boxed());
-        let mock_pd = Arc::new(mock_pd);
+        let mock_pd = Arc::new(stub_pd);
         let cm = ConcurrencyManager::new_with_config(
             TimeStamp::new(100),
             DEFAULT_LIMIT_VALID_DURATION,
