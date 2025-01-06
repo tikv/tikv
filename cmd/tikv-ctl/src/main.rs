@@ -472,7 +472,7 @@ fn main() {
                 (save_meta, with_lock),
             );
             match exec.run(hooks) {
-                Ok(()) => tikv_util::info!("Compact log backup exits successfully."),
+                Ok(()) => tikv_util::info!("Compact log backup successfully."),
                 Err(err) => {
                     tikv_util::error!("Failed to compact log backup."; "err" => %err, "err_verbose" => ?err);
                     std::process::exit(1);
