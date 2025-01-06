@@ -750,8 +750,8 @@ impl<E: Engine> GcRunnerCore<E> {
             let cfs = &[CF_LOCK, CF_DEFAULT, CF_WRITE];
 
             // First, use DeleteStrategy::DeleteFiles to free as much disk space as possible
-            // CF_LOCK is not proper to be handled in DeleteFiles mode because it might make some
-            // deleted locks show up again, and has risk to affect data correctness.
+            // CF_LOCK is not proper to be handled in DeleteFiles mode because it might make
+            // some deleted locks show up again, and has risk to affect data correctness.
             let delete_files_start_time = Instant::now();
             for cf in unsafe_delete_cfs {
                 local_storage
