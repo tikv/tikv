@@ -219,7 +219,7 @@ where
         self.meta_client.clone()
     }
 
-    fn on_fatal_error_of_task(&self, task: &str, err: &Error) -> future![()] {
+    fn on_fatal_error_of_task(&self, task: &str, err: &Error) -> future![bool] {
         metrics::update_task_status(TaskStatus::Error, task);
         let meta_cli = self.get_meta_client();
         let pdc = self.pd_client.clone();
@@ -269,7 +269,9 @@ where
                         )
                     );
                 });
+                return false;
             }
+            true
         };
         tracing_active_tree::frame!("on_fatal_error_of_task"; f; %err, %task)
     }
@@ -279,9 +281,9 @@ where
         let tasks = self.range_router.select_task(select.reference());
         warn!("fatal error reporting"; "selector" => ?select, "selected" => ?tasks, "err" => %err);
         for task in tasks {
-            // Let's pause the task first.
-            self.unload_task(&task);
-            self.pool.block_on(self.on_fatal_error_of_task(&task, &err));
+            if self.pool.block_on(self.on_fatal_error_of_task(&task, &err)) {
+                self.unload_task(&task);
+            }
         }
     }
 
