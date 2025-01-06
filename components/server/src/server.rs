@@ -111,11 +111,8 @@ use tikv::{
         config::EngineType,
         config_manager::StorageConfigManger,
         kv::LocalTablets,
-        mvcc::{MvccConsistencyCheckObserver, TimeStamp},
-        txn::{
-            flow_controller::{EngineFlowController, FlowController},
-            txn_status_cache::TxnStatusCache,
-        },
+        mvcc::MvccConsistencyCheckObserver,
+        txn::flow_controller::{EngineFlowController, FlowController},
         Engine, Storage,
     },
 };
