@@ -237,7 +237,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "failpoints")]
+    #[allow(clippy::unused_async)]
     async fn empty() {}
 
     #[test]
