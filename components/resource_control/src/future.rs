@@ -237,6 +237,9 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "failpoints")]
+    async fn empty() {}
+
     #[test]
     #[cfg(feature = "failpoints")]
     fn test_limited_future() {
