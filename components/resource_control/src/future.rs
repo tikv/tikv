@@ -237,13 +237,10 @@ mod tests {
         }
     }
 
-    #[allow(dead_code)]
-    async fn empty() {}
-
     #[test]
     #[cfg(feature = "failpoints")]
     fn test_limited_future() {
-        use std::sync::mpsc::{channel, Sender};
+        use std::sync::mpsc::channel;
 
         use tikv_util::yatp_pool::{DefaultTicker, FuturePool, YatpPoolBuilder};
 
