@@ -6,6 +6,7 @@ use std::{
     ops::Not,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
+    u64,
 };
 
 use engine_rocks::RocksEngine;
@@ -253,7 +254,7 @@ impl LogFileBuilder {
             is_meta: false,
 
             content: zstd::Encoder::new(Cursor::new(vec![]), 3).unwrap(),
-            min_ts: 0,
+            min_ts: u64::MAX,
             max_ts: 0,
             min_key: vec![],
             max_key: vec![],

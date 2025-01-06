@@ -209,7 +209,7 @@ async fn load_locks(storage: &dyn ExternalStorage) -> Vec<String> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_consistency_guard_() {
+async fn test_consistency_guard() {
     let st = TmpStorage::create();
     let strg = st.storage().as_ref();
     put_checkpoint(strg, 1, 42).await;

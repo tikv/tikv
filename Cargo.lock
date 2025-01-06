@@ -1526,21 +1526,21 @@ dependencies = [
  "file_system",
  "futures 0.3.15",
  "futures-io",
- "hex 0.4.2",
+ "hex 0.4.3",
  "keys",
  "kvproto",
  "lazy_static",
  "pin-project",
- "pprof",
+ "pprof 0.13.0",
  "prometheus",
- "protobuf",
+ "protobuf 2.8.0",
  "serde",
  "serde_json",
  "slog",
  "slog-global",
  "tempdir",
  "test_util",
- "thiserror",
+ "thiserror 1.0.40",
  "tidb_query_datatype",
  "tikv_alloc",
  "tikv_util",
@@ -4874,6 +4874,29 @@ checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
 
 [[package]]
 name = "pprof"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef5c97c51bd34c7e742402e216abdeb44d415fbe6ae41d56b114723e953711cb"
+dependencies = [
+ "backtrace",
+ "cfg-if 1.0.0",
+ "findshlibs",
+ "inferno",
+ "libc 0.2.186",
+ "log",
+ "nix 0.26.2",
+ "once_cell",
+ "parking_lot 0.12.1",
+ "protobuf 2.8.0",
+ "protobuf-codegen-pure",
+ "smallvec",
+ "symbolic-demangle",
+ "tempfile",
+ "thiserror 1.0.40",
+]
+
+[[package]]
+name = "pprof"
 version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "38a01da47675efa7673b032bf8efd8214f1917d89685e07e395ab125ea42b187"
@@ -5126,6 +5149,16 @@ dependencies = [
  "regex",
  "tempfile",
  "thiserror 1.0.40",
+]
+
+[[package]]
+name = "protobuf-codegen-pure"
+version = "2.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "00993dc5fbbfcf9d8a005f6b6c29fd29fd6d86deba3ae3f41fd20c624c414616"
+dependencies = [
+ "protobuf 2.8.0",
+ "protobuf-codegen 2.8.0",
 ]
 
 [[package]]
@@ -7440,7 +7473,7 @@ dependencies = [
  "pd_client",
  "pin-project",
  "pnet_datalink",
- "pprof",
+ "pprof 0.15.0",
  "prometheus",
  "prometheus-static-metric",
  "protobuf 2.8.0",
@@ -8037,7 +8070,7 @@ version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
- "cfg-if 0.1.10",
+ "cfg-if 1.0.0",
  "static_assertions",
 ]
 
@@ -8857,7 +8890,7 @@ version = "5.0.2+zstd.1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d2a5585e04f9eea4b2a3d1eca508c4dee9592a89ef6f450c11719da0726f4db"
 dependencies = [
- "libc 0.2.151",
+ "libc 0.2.186",
  "zstd-sys",
 ]
 
