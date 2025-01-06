@@ -15,7 +15,7 @@ use super::{
 use crate::{
     errors::Result,
     storage::{
-        LoadFromExt, LogFile, LogFileId, MetaFile, MigartionStorageWrapper, PhysicalLogFile,
+        LoadFromExt, LogFile, LogFileId, MetaFile, MigrationStorageWrapper, PhysicalLogFile,
         StreamMetaStorage,
     },
 };
@@ -251,7 +251,7 @@ impl CompactionRunInfoBuilder {
 
     pub async fn write_migration(&self, s: &dyn ExternalStorage) -> Result<()> {
         let migration = self.migration_of(self.find_expiring_files(s).await?);
-        let wrapped_storage = MigartionStorageWrapper::new(s);
+        let wrapped_storage = MigrationStorageWrapper::new(s);
         wrapped_storage.write(migration.into()).await?;
         Ok(())
     }
