@@ -252,7 +252,7 @@ impl ConcurrencyManager {
     ) -> Result<(), crate::InvalidMaxTsUpdate> {
         warn!("possible invalid max-ts update; double checking";
             "attempted_ts" => new_ts,
-            "max_allowed" => limit.into_inner(),
+            "limit" => limit.into_inner(),
             "source" => &source,
             "using_approximate" => using_approximate,
             "TSO_TIMEOUT" => ?TSO_TIMEOUT,
@@ -272,8 +272,9 @@ impl ConcurrencyManager {
                 }
             }
         }
-        if new_ts > self.max_ts_limit.load().limit {
-            self.report_error(new_ts, limit, source, using_approximate, tso_confirmed)?;
+        let new_limit = self.max_ts_limit.load();
+        if new_ts > new_limit.limit {
+            self.report_error(new_ts, new_limit, source, using_approximate, tso_confirmed)?;
         }
         Ok(())
     }
@@ -281,7 +282,7 @@ impl ConcurrencyManager {
     fn report_error(
         &self,
         new_ts: TimeStamp,
-        limit: TimeStamp,
+        limit: MaxTsLimit,
         source: impl slog::Value + Display,
         using_approximate: bool,
         tso_confirmed: bool,
@@ -289,14 +290,16 @@ impl ConcurrencyManager {
         if tso_confirmed {
             error!("invalid max_ts update";
                 "attempted_ts" => new_ts,
-                "max_allowed" => limit.into_inner(),
+                "limit" => limit.limit.into_inner(),
+                "limit_update_time" => ?limit.update_time,
                 "source" => &source,
                 "using_approximate" => using_approximate,
             );
         } else {
             warn!("possible invalid max_ts update";
                 "attempted_ts" => new_ts,
-                "max_allowed" => limit.into_inner(),
+                "limit" => limit.limit.into_inner(),
+                "limit_update_time" => ?limit.update_time,
                 "source" => &source,
                 "using_approximate" => using_approximate,
             );
@@ -307,13 +310,13 @@ impl ConcurrencyManager {
                 panic!(
                     "invalid max_ts update: {} exceeds the limit {}, source={}",
                     new_ts,
-                    limit.into_inner(),
+                    limit.limit.into_inner(),
                     source
                 );
             }
             ActionOnInvalidMaxTs::Error if tso_confirmed => Err(InvalidMaxTsUpdate {
                 attempted_ts: new_ts,
-                max_allowed: limit,
+                limit: limit.limit,
             }),
             _ => Ok(()),
         }
@@ -533,10 +536,10 @@ impl AtomicActionOnInvalidMaxTs {
 }
 
 #[derive(Debug, Error, Clone)]
-#[error("invalid max_ts update: {attempted_ts} exceeds the limit {max_allowed}")]
+#[error("invalid max_ts update: {attempted_ts} exceeds the limit {limit}")]
 pub struct InvalidMaxTsUpdate {
     pub attempted_ts: TimeStamp,
-    pub max_allowed: TimeStamp,
+    pub limit: TimeStamp,
 }
 
 pub trait ValueDisplay: slog::Value + Display {}
@@ -718,11 +721,16 @@ mod tests {
 
     #[test]
     fn test_max_ts_limit() {
+        let mut stub_pd = MockTSOProvider::new();
+        stub_pd
+            .expect_get_tso()
+            .return_once(|| ready(Ok(160.into())).boxed());
+        let stub_pd = Arc::new(stub_pd);
         let cm = ConcurrencyManager::new_with_config(
             TimeStamp::new(100),
             DEFAULT_LIMIT_VALID_DURATION,
             ActionOnInvalidMaxTs::Error,
-            None,
+            Some(stub_pd),
             Duration::ZERO,
         );
 
@@ -762,11 +770,17 @@ mod tests {
 
     #[test]
     fn test_max_ts_updates_with_monotonic_limit() {
+        let mut stub_pd = MockTSOProvider::new();
+        // Assertion: should fail to update max_ts to 250 and query PD
+        stub_pd
+            .expect_get_tso()
+            .return_once(|| ready(Ok(201.into())).boxed());
+        let stub_pd = Arc::new(stub_pd);
         let cm = ConcurrencyManager::new_with_config(
             TimeStamp::new(100),
             DEFAULT_LIMIT_VALID_DURATION,
             ActionOnInvalidMaxTs::Error,
-            None,
+            Some(stub_pd),
             Duration::ZERO,
         );
 
@@ -785,7 +799,7 @@ mod tests {
         assert!(result.is_err());
         if let Err(e) = result {
             assert_eq!(e.attempted_ts, TimeStamp::new(250));
-            assert_eq!(e.max_allowed, TimeStamp::new(200));
+            assert_eq!(e.limit, TimeStamp::new(201));
         }
     }
 
@@ -794,13 +808,18 @@ mod tests {
         let start_time = Instant::now();
         let stub_time = StubTimeProvider::new(start_time);
         let time_provider = Arc::new(stub_time.clone());
+        let mut stub_pd = MockTSOProvider::new();
+        stub_pd
+            .expect_get_tso()
+            .return_once(|| ready(Ok(200.into())).boxed());
+        let stub_pd = Arc::new(stub_pd);
 
         let cm = ConcurrencyManager::new_with_time_provider(
             TimeStamp::new(100),
             Duration::from_secs(60),
             ActionOnInvalidMaxTs::Error,
             time_provider.clone(),
-            None,
+            Some(stub_pd),
             Duration::ZERO,
         );
 
@@ -842,7 +861,18 @@ mod tests {
     #[test]
     #[should_panic(expected = "invalid max_ts update")]
     fn test_panic_on_invalid_max_ts_enabled() {
-        let cm = ConcurrencyManager::new(TimeStamp::new(100));
+        let mut stub_pd = MockTSOProvider::new();
+        stub_pd
+            .expect_get_tso()
+            .return_once(|| ready(Ok(201.into())).boxed());
+        let stub_pd = Arc::new(stub_pd);
+        let cm = ConcurrencyManager::new_with_config(
+            TimeStamp::new(100),
+            DEFAULT_LIMIT_VALID_DURATION,
+            ActionOnInvalidMaxTs::Panic,
+            Some(stub_pd),
+            Duration::ZERO,
+        );
 
         cm.set_max_ts_limit(TimeStamp::new(200));
 
@@ -867,12 +897,12 @@ mod tests {
         stub_pd
             .expect_get_tso()
             .return_once(|| ready(Ok(300.into())).boxed());
-        let mock_pd = Arc::new(stub_pd);
+        let stub_pd = Arc::new(stub_pd);
         let cm = ConcurrencyManager::new_with_config(
             TimeStamp::new(100),
             DEFAULT_LIMIT_VALID_DURATION,
             ActionOnInvalidMaxTs::Panic,
-            Some(mock_pd.clone()),
+            Some(stub_pd.clone()),
             Duration::ZERO,
         );
 
@@ -889,12 +919,12 @@ mod tests {
         stub_pd
             .expect_get_tso()
             .return_once(|| std::future::pending().boxed());
-        let mock_pd = Arc::new(stub_pd);
+        let stub_pd = Arc::new(stub_pd);
         let cm = ConcurrencyManager::new_with_config(
             TimeStamp::new(100),
             DEFAULT_LIMIT_VALID_DURATION,
             ActionOnInvalidMaxTs::Panic,
-            Some(mock_pd.clone()),
+            Some(stub_pd.clone()),
             Duration::ZERO,
         );
         cm.set_max_ts_limit(200.into());
