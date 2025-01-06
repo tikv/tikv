@@ -471,8 +471,13 @@ fn main() {
                 ((log_to_term, checkpoint), with_status_server),
                 (save_meta, with_lock),
             );
-            exec.run(hooks)
-                .expect("failed to execute compact-log-backup")
+            match exec.run(hooks) {
+                Ok(()) => tikv_util::info!("Compact log backup successfully."),
+                Err(err) => {
+                    tikv_util::error!("Failed to compact log backup."; "err" => %err, "err_verbose" => ?err);
+                    std::process::exit(1);
+                }
+            }
         }
         // Commands below requires either the data dir or the host.
         cmd => {
