@@ -34,7 +34,9 @@ use tikv::{
 use tikv_util::{
     box_err,
     config::ReadableDuration,
-    debug, defer, info,
+    debug, defer,
+    future::paired_future_callback,
+    info,
     memory::MemoryQuota,
     sys::thread::ThreadBuildWrapper,
     time::{Instant, Limiter},
@@ -917,7 +919,7 @@ where
     fn on_exec_flush(&mut self, task: String, resolved: ResolvedRegions, cb: Sender<FlushResult>) {
         self.checkpoint_mgr.freeze();
         let fut = self.do_flush(task.clone(), resolved);
-        let syncer = self.checkpoint_mgr.make_syncer();
+        let sched = self.scheduler.clone();
         self.pool.spawn(root!("flush"; async move {
             let res = fut.await;
             if let Err(ref err) = &res {
@@ -925,7 +927,13 @@ where
             }
             // If nobody waits us, it is no need to construct the result.
             if !cb.is_closed() {
+                let (ccb, fut) = paired_future_callback();
+                // We may have a better way to sync the tasks in the queue...
+                try_send!(sched, Task::Sync(Box::new(|| ccb(())), Box::new(|_| true)));
                 let flush_res = FlushResult { task, error: res.err() };
+                let syncer = async move {
+                    fut.await.is_ok()
+                };
                 if !syncer.await {
                     warn!("force_flush: syncing checkpoint manager failed. The progress may not be advanced.";
                         "task" => %flush_res.task);
@@ -1291,16 +1299,13 @@ pub enum Task {
     ForceFlush(TaskSelector, Sender<FlushResult>),
     /// FatalError pauses the task and set the error.
     FatalError(TaskSelector, Box<Error>),
-    /// Run the callback when see this message. Only for test usage.
-    /// NOTE: Those messages for testing are not guarded by `#[cfg(test)]` for
-    /// now, because the integration test would not enable test config when
-    /// compiling (why?)
+    /// Run the callback when see this message.
     Sync(
         // Run the closure if ...
         Box<dyn FnOnce() + Send>,
         // This returns `true`.
         // The argument should be `self`, but there are too many generic argument for `self`...
-        // So let the caller in test cases downcast this to the type they need manually...
+        // So let the caller downcast this to the type they need manually...
         Box<dyn FnMut(&mut dyn Any) -> bool + Send>,
     ),
     /// Mark the store as a failover store.

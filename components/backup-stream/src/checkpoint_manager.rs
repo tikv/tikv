@@ -21,7 +21,7 @@ use uuid::Uuid;
 
 use crate::{
     annotate,
-    errors::{Error, ReportableResult, Result},
+    errors::{Error, Result},
     future,
     metadata::{store::MetaStore, Checkpoint, CheckpointProvider, MetadataClient},
     metrics,
@@ -53,6 +53,7 @@ impl std::fmt::Debug for CheckpointManager {
 enum SubscriptionOp {
     Add(Subscription),
     Emit(Box<[FlushEvent]>),
+    #[cfg(test)]
     Inspect(Box<dyn FnOnce(&SubscriptionManager) + Send>),
 }
 
@@ -75,6 +76,7 @@ impl SubscriptionManager {
                 SubscriptionOp::Emit(events) => {
                     self.emit_events(events).await;
                 }
+                #[cfg(test)]
                 SubscriptionOp::Inspect(f) => {
                     f(&self);
                 }
@@ -177,25 +179,6 @@ impl GetCheckpointResult {
 }
 
 impl CheckpointManager {
-    pub fn make_syncer(&mut self) -> future![bool] {
-        let mut hnd = self
-            .manager_handle
-            .as_ref()
-            .cloned()
-            .expect("make_syncer: called before `spawn_subscription_mgr`");
-        async move {
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            let msg = SubscriptionOp::Inspect(Box::new(move |_| {
-                let _ = tx.send(());
-            }));
-            hnd.send(msg)
-                .await
-                .map_err(|err| annotate!(err, "checkpoint manager is gone"))
-                .report_if_err("make syncer");
-            rx.map(|res| res.is_ok()).await
-        }
-    }
-
     pub fn spawn_subscription_mgr(&mut self) -> future![()] {
         let (tx, rx) = async_mpsc::channel(1024);
         let sub = SubscriptionManager {
@@ -913,8 +896,8 @@ pub mod tests {
         let r = flush_observer.after(&task, rts).await;
         assert_eq!(r.is_ok(), true);
 
-        let serivce_id = format!("backup-stream-{}-{}", task, store_id);
-        let r = pd_cli.get_service_safe_point(serivce_id).unwrap();
+        let service_id = format!("backup-stream-{}-{}", task, store_id);
+        let r = pd_cli.get_service_safe_point(service_id).unwrap();
         assert_eq!(r.into_inner(), rts - 1);
     }
 }

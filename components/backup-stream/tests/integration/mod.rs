@@ -516,12 +516,26 @@ mod all {
         let mut suite = SuiteBuilder::new_named("force_flush").nodes(1).build();
         suite.must_register_task(1, "force_flush");
         let recs = run_async_test(suite.write_records(0, 128, 1));
+        let mut strm = suite.flush_stream(true);
+        let tso = suite.tso();
+
         suite.for_each_log_backup_cli(|_id, c| {
             let res = c.flush_now(Default::default()).unwrap();
             assert_eq!(res.results.len(), 1);
             assert!(res.results[0].error_message.is_empty(), "{:?}", res);
             assert!(res.results[0].success, "{:?}", res);
         });
+
+        let Some((_, resp)) = run_async_test(strm.next()) else {
+            panic!("subscribe stream close early")
+        };
+        assert_eq!(resp.events.len(), 1, "{:?}", resp.events);
+        assert!(
+            resp.events[0].checkpoint > tso.into_inner(),
+            "{:?}, {}",
+            resp.events[0],
+            tso
+        );
 
         suite.check_for_write_records(
             suite.flushed_files.path(),
