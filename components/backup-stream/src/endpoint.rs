@@ -930,10 +930,14 @@ where
                 let (ccb, fut) = paired_future_callback();
                 // We may have a better way to sync the tasks in the queue...
                 try_send!(sched, Task::Sync(Box::new(|| ccb(())), Box::new(|_| true)));
-                let flush_res = FlushResult { task, error: res.err() };
-                if !fut.await.is_ok() {
+                let mut flush_res = FlushResult { task, error: res.err() };
+                if fut.await.is_err() {
                     warn!("force_flush: syncing checkpoint manager failed. The progress may not be advanced.";
                         "task" => %flush_res.task);
+                    if flush_res.error.is_none() {
+                        flush_res.error = Some(Error::Other(
+                            box_err!("syncing checkpoint manager failed: the progress may take more time to be advanced")))
+                    }
                 }
                 let _ = cb.send(flush_res).await;
             }
