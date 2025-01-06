@@ -47,7 +47,7 @@ use kvproto::{
     errorpb::Error as ErrorHeader,
     import_sstpb::SstMeta,
     kvrpcpb::{Context, DiskFullOpt, ExtraOp as TxnExtraOp, KeyRange},
-    raft_cmdpb,
+    metapb, raft_cmdpb,
 };
 use pd_client::BucketMeta;
 use raftstore::store::{PessimisticLockPair, TxnExt};
@@ -366,6 +366,10 @@ pub trait Engine: Send + Clone + 'static {
     /// Note the snapshot is queried immediately no matter whether the returned
     /// future is polled or not.
     fn async_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::SnapshotRes;
+
+    fn locate_key(&self, _key: &[u8]) -> Option<(Arc<metapb::Region>, u64, u64)> {
+        None
+    }
 
     /// Precheck request which has write with it's context.
     fn precheck_write_with_ctx(&self, _ctx: &Context) -> Result<()> {

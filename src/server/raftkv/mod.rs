@@ -27,6 +27,7 @@ use futures::{future::BoxFuture, task::AtomicWaker, Future, Stream, StreamExt, T
 use kvproto::{
     errorpb,
     kvrpcpb::{Context, IsolationLevel},
+    metapb,
     raft_cmdpb::{
         AdminCmdType, CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request,
         Response,
@@ -724,6 +725,10 @@ where
                 }
             }
         }
+    }
+
+    fn locate_key(&self, key: &[u8]) -> Option<(Arc<metapb::Region>, u64, u64)> {
+        self.router.locate_key(key)
     }
 
     fn release_snapshot(&mut self) {

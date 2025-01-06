@@ -47,6 +47,7 @@ use rand::prelude::*;
 use tidb_query_common::execute_stats::ExecSummary;
 use tikv_alloc::{mem_trace, Id, MemoryTrace, MemoryTraceGuard};
 use tikv_util::{deadline::Deadline, memory::HeapSize, time::Duration};
+use tipb::{DagRequest, FieldType, TableScan};
 use txn_types::TsSet;
 
 pub use self::{
@@ -84,6 +85,14 @@ pub trait RequestHandler: Send {
     /// Collects scan executor time in this request handler so far.
     fn collect_scan_summary(&mut self, _dest: &mut ExecSummary) {
         // Do nothing by default
+    }
+
+    fn index_lookup(&self) -> Option<(Vec<FieldType>, i64)> {
+        None
+    }
+
+    fn get_schema(&self) -> Option<Vec<FieldType>> {
+        None
     }
 
     fn into_boxed(self) -> Box<dyn RequestHandler>

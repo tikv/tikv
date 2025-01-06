@@ -726,6 +726,15 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
 
         Ok(s_resp)
     }
+
+    pub fn schema(&self) -> Vec<FieldType> {
+        let schema = self.out_most_executor.schema();
+        let mut res = Vec::new();
+        for off in &self.output_offsets {
+            res.push(schema[*off as usize].clone());
+        }
+        res
+    }
 }
 
 #[inline]
