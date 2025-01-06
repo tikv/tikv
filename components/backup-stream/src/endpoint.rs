@@ -931,10 +931,7 @@ where
                 // We may have a better way to sync the tasks in the queue...
                 try_send!(sched, Task::Sync(Box::new(|| ccb(())), Box::new(|_| true)));
                 let flush_res = FlushResult { task, error: res.err() };
-                let syncer = async move {
-                    fut.await.is_ok()
-                };
-                if !syncer.await {
+                if !fut.await.is_ok() {
                     warn!("force_flush: syncing checkpoint manager failed. The progress may not be advanced.";
                         "task" => %flush_res.task);
                 }
