@@ -7,6 +7,8 @@ pub const ROCKSDB_TABLE_READERS_MEM: &str = "rocksdb.estimate-table-readers-mem"
 pub const ROCKSDB_CUR_SIZE_ALL_MEM_TABLES: &str = "rocksdb.cur-size-all-mem-tables";
 pub const ROCKSDB_SIZE_ALL_MEM_TABLES: &str = "rocksdb.size-all-mem-tables";
 pub const ROCKSDB_ESTIMATE_NUM_KEYS: &str = "rocksdb.estimate-num-keys";
+pub const ROCKSDB_NUM_RUNNING_FLUSHES: &str = "rocksdb.num-running-flushes";
+pub const ROCKSDB_NUM_RUNNING_COMPACTIONS: &str = "rocksdb.num-running-compactions";
 pub const ROCKSDB_PENDING_COMPACTION_BYTES: &str = "rocksdb.\
                                                     estimate-pending-compaction-bytes";
 pub const ROCKSDB_COMPRESSION_RATIO_AT_LEVEL: &str = "rocksdb.compression-ratio-at-level";
