@@ -558,16 +558,16 @@ impl Default for VersionedMigration {
     }
 }
 
-pub struct MigartionStorageWrapper<'a> {
+pub struct MigrationStorageWrapper<'a> {
     storage: &'a dyn ExternalStorage,
-    migartions_prefix: &'a str,
+    migrations_prefix: &'a str,
 }
 
-impl<'a> MigartionStorageWrapper<'a> {
+impl<'a> MigrationStorageWrapper<'a> {
     pub fn new(storage: &'a dyn ExternalStorage) -> Self {
         Self {
             storage,
-            migartions_prefix: MIGRATION_PREFIX,
+            migrations_prefix: MIGRATION_PREFIX,
         }
     }
 
@@ -583,7 +583,7 @@ impl<'a> MigartionStorageWrapper<'a> {
         retry_expr!(
             self.storage
                 .write(
-                    &format!("{}/{}", self.migartions_prefix, name),
+                    &format!("{}/{}", self.migrations_prefix, name),
                     UnpinReader(Box::new(Cursor::new(&bytes))),
                     bytes.len() as u64
                 )
@@ -596,7 +596,7 @@ impl<'a> MigartionStorageWrapper<'a> {
 
     pub async fn largest_id(&self) -> Result<u64> {
         self.storage
-            .iter_prefix(self.migartions_prefix)
+            .iter_prefix(self.migrations_prefix)
             .err_into::<Error>()
             .map(|v| {
                 v.and_then(|v| match id_of_migration(&v.key) {
