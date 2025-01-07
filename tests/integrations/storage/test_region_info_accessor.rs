@@ -209,7 +209,7 @@ fn test_region_collection_get_top_regions() {
         let engine = &region_info_providers[&node_id];
         for r in &regions {
             let mut region_stat = RegionStat::default();
-            region_stat.cop_detail = RegionWriteCfCopDetail::new(10, 10, 10);
+            region_stat.cop_detail = RegionWriteCfCopDetail::new(0, 10, 10, 10);
             let _ = engine.scheduler().schedule(RegionInfoQuery::RaftStoreEvent(
                 RaftStoreEvent::UpdateRegionActivity {
                     region: r.clone(),
