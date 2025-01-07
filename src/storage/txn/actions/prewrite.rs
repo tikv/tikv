@@ -930,7 +930,7 @@ pub mod tests {
     use std::sync::Arc;
 
     use concurrency_manager::ConcurrencyManager;
-    use kvproto::kvrpcpb::{Context, IsolationLevel};
+    use kvproto::kvrpcpb::Context;
     #[cfg(test)]
     use rand::{Rng, SeedableRng};
     #[cfg(test)]
@@ -2805,7 +2805,7 @@ pub mod tests {
                 &k,
                 TimeStamp::max(),
                 &TsSet::Empty,
-                IsolationLevel::Si,
+                crate::storage::IsolationLevel::Si,
             )
         });
         assert!(res.is_err());
