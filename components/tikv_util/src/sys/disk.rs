@@ -7,6 +7,12 @@ use std::{
 use fail::fail_point;
 pub use kvproto::disk_usage::DiskUsage;
 
+// The following variables are used to store the disk capacity, used size, and
+// available size.
+static DISK_CAPACITY: AtomicU64 = AtomicU64::new(0);
+static DISK_USED_SIZE: AtomicU64 = AtomicU64::new(0);
+static DISK_AVAILABLE_SIZE: AtomicU64 = AtomicU64::new(0);
+
 // DISK_RESERVED_SPACE means if left space is less than this, tikv will
 // turn to maintenance mode. There are another 2 value derived from this,
 // 50% for a migration only mode and 20% for disk space holder size.
@@ -16,18 +22,52 @@ static DISK_RESERVED_SPACE: AtomicU64 = AtomicU64::new(0);
 static RAFT_DISK_RESERVED_SPACE: AtomicU64 = AtomicU64::new(0);
 static DISK_STATUS: AtomicI32 = AtomicI32::new(0);
 
+#[inline]
+pub fn set_disk_capacity(v: u64) {
+    DISK_CAPACITY.store(v, Ordering::Release)
+}
+
+#[inline]
+pub fn get_disk_capacity() -> u64 {
+    DISK_CAPACITY.load(Ordering::Acquire)
+}
+
+#[inline]
+pub fn set_disk_used_size(v: u64) {
+    DISK_USED_SIZE.store(v, Ordering::Release)
+}
+
+#[inline]
+pub fn get_disk_used_size() -> u64 {
+    DISK_USED_SIZE.load(Ordering::Acquire)
+}
+
+#[inline]
+pub fn set_disk_available_size(v: u64) {
+    DISK_AVAILABLE_SIZE.store(v, Ordering::Release)
+}
+
+#[inline]
+pub fn get_disk_available_size() -> u64 {
+    DISK_AVAILABLE_SIZE.load(Ordering::Acquire)
+}
+
+#[inline]
 pub fn set_disk_reserved_space(v: u64) {
     DISK_RESERVED_SPACE.store(v, Ordering::Release)
 }
 
+#[inline]
 pub fn get_disk_reserved_space() -> u64 {
     DISK_RESERVED_SPACE.load(Ordering::Acquire)
 }
 
+#[inline]
 pub fn set_raft_disk_reserved_space(v: u64) {
     RAFT_DISK_RESERVED_SPACE.store(v, Ordering::Release)
 }
 
+#[inline]
 pub fn get_raft_disk_reserved_space() -> u64 {
     RAFT_DISK_RESERVED_SPACE.load(Ordering::Acquire)
 }

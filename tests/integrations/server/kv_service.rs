@@ -30,7 +30,7 @@ use pd_client::PdClient;
 use raft::eraftpb;
 use raftstore::{
     coprocessor::CoprocessorHost,
-    store::{fsm::store::StoreMeta, AutoSplitController, SnapManager},
+    store::{fsm::store::StoreMeta, AutoSplitController, DiskCheckRunner, SnapManager},
 };
 use resource_metering::CollectorRegHandle;
 use service::service_manager::GrpcServiceManager;
@@ -1411,6 +1411,7 @@ fn test_double_run_node() {
             ConcurrencyManager::new(1.into()),
             CollectorRegHandle::new_for_test(),
             None,
+            DiskCheckRunner::dummy(),
             GrpcServiceManager::dummy(),
             Arc::new(AtomicU64::new(0)),
         )
@@ -1929,7 +1930,7 @@ fn test_prewrite_check_max_commit_ts() {
     let (cluster, client, ctx) = new_cluster();
 
     let cm = cluster.sim.read().unwrap().get_concurrency_manager(1);
-    cm.update_max_ts(100.into());
+    cm.update_max_ts(100.into(), "").unwrap();
 
     let mut req = PrewriteRequest::default();
     req.set_context(ctx.clone());

@@ -30,6 +30,7 @@ pub struct TxnSstWriter<E: KvEngine> {
     write_meta: SstMeta,
     key_manager: Option<Arc<DataKeyManager>>,
     api_version: ApiVersion,
+    txn_source: u64,
 }
 
 impl<E: KvEngine> TxnSstWriter<E> {
@@ -42,6 +43,7 @@ impl<E: KvEngine> TxnSstWriter<E> {
         write_meta: SstMeta,
         key_manager: Option<Arc<DataKeyManager>>,
         api_version: ApiVersion,
+        txn_source: u64,
     ) -> Self {
         TxnSstWriter {
             default,
@@ -56,6 +58,7 @@ impl<E: KvEngine> TxnSstWriter<E> {
             write_meta,
             key_manager,
             api_version,
+            txn_source,
         }
     }
 
@@ -102,6 +105,7 @@ impl<E: KvEngine> TxnSstWriter<E> {
                 KvWrite::new(WriteType::Put, commit_ts, None)
             }
         };
+        let w = w.set_txn_source(self.txn_source);
         let write = w.as_ref().to_bytes();
         self.write.put(&k, &write)?;
         self.write_entries += 1;
@@ -301,7 +305,7 @@ mod tests {
     use crate::{Config, SstImporter};
 
     // Return the temp dir path to avoid it drop out of the scope.
-    fn new_writer<W, F: Fn(&SstImporter<RocksEngine>, &RocksEngine, SstMeta) -> Result<W>>(
+    fn new_writer<W, F: Fn(&SstImporter<RocksEngine>, &RocksEngine, SstMeta, u64) -> Result<W>>(
         f: F,
         api_version: ApiVersion,
     ) -> (W, TempDir) {
@@ -314,7 +318,24 @@ mod tests {
             SstImporter::<RocksEngine>::new(&cfg, &importer_dir, None, api_version, false).unwrap();
         let db_path = importer_dir.path().join("db");
         let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
-        (f(&importer, &db, meta).unwrap(), importer_dir)
+        (f(&importer, &db, meta, 0).unwrap(), importer_dir)
+    }
+
+    #[test]
+    fn test_new_txn_writer_with_lightning_txn_source() {
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let importer =
+            SstImporter::<RocksEngine>::new(&cfg, &importer_dir, None, ApiVersion::V1, false)
+                .unwrap();
+        let db_path = importer_dir.path().join("db");
+        let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
+
+        let mut meta = SstMeta::default();
+        meta.set_uuid(Uuid::new_v4().as_bytes().to_vec());
+
+        let writer = SstImporter::new_txn_writer(&importer, &db, meta, 1 << 16);
+        assert_eq!(writer.unwrap().txn_source, 1 << 16);
     }
 
     #[test]

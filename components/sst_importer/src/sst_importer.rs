@@ -1427,7 +1427,12 @@ impl<E: KvEngine> SstImporter<E> {
         self.dir.list_ssts()
     }
 
-    pub fn new_txn_writer(&self, db: &E, meta: SstMeta) -> Result<TxnSstWriter<E>> {
+    pub fn new_txn_writer(
+        &self,
+        db: &E,
+        meta: SstMeta,
+        txn_source: u64,
+    ) -> Result<TxnSstWriter<E>> {
         let mut default_meta = meta.clone();
         default_meta.set_cf_name(CF_DEFAULT.to_owned());
         let default_path = self.dir.join_for_write(&default_meta)?;
@@ -1457,10 +1462,11 @@ impl<E: KvEngine> SstImporter<E> {
             write_meta,
             self.key_manager.clone(),
             self.api_version,
+            txn_source,
         ))
     }
 
-    pub fn new_raw_writer(&self, db: &E, mut meta: SstMeta) -> Result<RawSstWriter<E>> {
+    pub fn new_raw_writer(&self, db: &E, mut meta: SstMeta, _: u64) -> Result<RawSstWriter<E>> {
         meta.set_cf_name(CF_DEFAULT.to_owned());
         let default_path = self.dir.join_for_write(&meta)?;
         let default = E::SstWriterBuilder::new()
@@ -3393,7 +3399,7 @@ mod tests {
         let db_path = importer_dir.path().join("db");
         let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
 
-        let mut w = importer.new_txn_writer(&db, meta).unwrap();
+        let mut w = importer.new_txn_writer(&db, meta, 0).unwrap();
         let mut batch = WriteBatch::default();
         let mut pairs = vec![];
 
