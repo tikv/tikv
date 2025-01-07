@@ -620,9 +620,12 @@ impl RegionCollector {
             .collect::<Vec<_>>();
 
         // TODO(SpadeA): remove it when auto load/evict is stable
+        // Limit the number of regions to log, to avoid log flooding.
+        let log_count_limit = 20;
         {
             let debug: Vec<_> = top_regions
                 .iter()
+                .take(log_count_limit)
                 .map(|(r, s)| {
                     format!(
                         "region_id={}, read_keys={}, cop={}, cop_detail={:?}, mvcc_amplification={}",
@@ -669,6 +672,7 @@ impl RegionCollector {
         {
             let debug: Vec<_> = top_regions
                 .iter()
+                .take(log_count_limit)
                 .map(|(r, s)| {
                     format!(
                         "region_id={}, read_keys={}, cop={}, cop_detail={:?}, mvcc_amplification={}",
@@ -1865,7 +1869,7 @@ mod tests {
                 role: StateRole::Leader,
             });
             let mut stat = RegionStat::default();
-            stat.cop_detail = RegionWriteCfCopDetail::new(next, prev, processed_keys);
+            stat.cop_detail = RegionWriteCfCopDetail::new(0, next, prev, processed_keys);
             collector.handle_raftstore_event(RaftStoreEvent::UpdateRegionActivity {
                 region,
                 activity: RegionActivity { region_stat: stat },

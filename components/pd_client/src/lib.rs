@@ -571,6 +571,8 @@ fn check_update_service_safe_point_resp(
 // Record the coprocessor details for region level.
 #[derive(Clone, Debug, Default)]
 pub struct RegionWriteCfCopDetail {
+    // How many times the `seek` is called when handling cop request
+    pub seek: usize,
     // How many times the `next` is called when handling cop request
     pub next: usize,
     // How many times the `prev` is called when handling cop request
@@ -580,8 +582,9 @@ pub struct RegionWriteCfCopDetail {
 }
 
 impl RegionWriteCfCopDetail {
-    pub fn new(next: usize, prev: usize, processed_keys: usize) -> Self {
+    pub fn new(seek: usize, next: usize, prev: usize, processed_keys: usize) -> Self {
         Self {
+            seek,
             next,
             prev,
             processed_keys,
@@ -589,6 +592,7 @@ impl RegionWriteCfCopDetail {
     }
 
     pub fn add(&mut self, other: &RegionWriteCfCopDetail) {
+        self.seek += other.seek;
         self.next += other.next;
         self.prev += other.prev;
         self.processed_keys += other.processed_keys;
@@ -596,6 +600,7 @@ impl RegionWriteCfCopDetail {
 
     pub fn sub(&self, other: &RegionWriteCfCopDetail) -> Self {
         Self::new(
+            self.seek - other.seek,
             self.next - other.next,
             self.prev - other.prev,
             self.processed_keys - other.processed_keys,
@@ -619,7 +624,7 @@ mod tests {
     use crate::RegionWriteCfCopDetail;
 
     #[test]
-    fn test_procssed_key_0() {
+    fn test_processed_key_0() {
         let mut cop_detail = RegionWriteCfCopDetail::default();
         cop_detail.next = 11;
 
