@@ -37,7 +37,7 @@ use test_coprocessor::{
 };
 use test_raftstore::{
     configure_for_merge, get_tso, must_get_equal, new_learner_peer, new_peer, new_put_cf_cmd,
-    new_server_cluster_with_hybrid_engine, CloneFilterFactory, Cluster, Direction,
+    new_server_cluster_with_hybrid_engine, sleep_ms, CloneFilterFactory, Cluster, Direction,
     RegionPacketFilter, ServerCluster,
 };
 use test_util::eventually;
@@ -1152,4 +1152,52 @@ fn test_region_rollback_merge() {
             region_map.regions().is_empty()
         },
     );
+}
+
+// IME must not panic when pre-load an uninitialized peer.
+#[test]
+fn test_transfer_leader_pre_load_uninitialized_peer() {
+    let mut cluster = new_server_cluster_with_hybrid_engine(0, 2);
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+    cluster.run_conf_change();
+
+    let region = pd_client.get_region(b"").unwrap();
+    assert!(
+        !region.get_peers().iter().any(|p| p.get_store_id() == 2),
+        "{:?}",
+        region
+    );
+
+    // Load the region in leader.
+    let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
+    region_cache_engine
+        .load_region(CacheRegion::from_region(&region))
+        .unwrap();
+    // Put some key to trigger load
+    cluster.must_put(b"k", b"val");
+    eventually(Duration::from_millis(100), Duration::from_secs(5), || {
+        region_cache_engine
+            .snapshot(CacheRegion::from_region(&region), 100, 100)
+            .is_ok()
+    });
+
+    // Block snapshot messages, so that new peers will never be initialized.
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(region.get_id(), 2)
+            .msg_type(MessageType::MsgSnapshot)
+            .direction(Direction::Recv),
+    ));
+
+    let peer1 = new_peer(2, 2);
+    pd_client.must_add_peer(region.get_id(), peer1.clone());
+    cluster.must_region_exist(region.get_id(), 2);
+
+    // IME will send a MsgPreLoadRegion message before transferring leader,
+    // and this message must not cause panic.
+    cluster.transfer_leader(region.get_id(), new_peer(2, 2));
+    // Give some time for handling MsgPreLoadRegion message.
+    sleep_ms(100);
+    cluster.clear_send_filters();
+    cluster.must_transfer_leader(region.get_id(), new_peer(2, 2));
 }
