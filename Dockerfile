@@ -1,7 +1,7 @@
 # This Docker image contains a minimal build environment for TiKV
 #
 # It contains all the tools necessary to reproduce develop builds of TiKV
-# This file may be outdated, you can check the latest version at: 
+# This file may be outdated, you can check the latest version at:
 #   https://github.com/PingCAP-QE/artifacts/blob/main/dockerfiles/cd/builders/tikv/Dockerfile
 
 # build requires:
@@ -9,7 +9,8 @@
 #
 # build steps:
 #   - git clone --recurse-submodules https://github.com/tikv/tikv.git tikv
-#   - docker build -t tikv -f Dockerfile ./tikv
+#   - cd tikv
+#   - docker build -t tikv -f Dockerfile .
 
 ########### stage: builder
 FROM quay.io/rockylinux/rockylinux:8.10.20240528-ubi as builder
@@ -18,8 +19,8 @@ FROM quay.io/rockylinux/rockylinux:8.10.20240528-ubi as builder
 RUN --mount=type=cache,target=/var/cache/dnf \
     dnf upgrade-minimal -y && \
     dnf --enablerepo=powertools install -y \
-      make git findutils gcc gcc-c++ cmake curl openssl-devel perl python3 \
-      libstdc++-static
+    dwz make git findutils gcc gcc-c++ cmake curl openssl-devel perl python3 \
+    libstdc++-static
 
 # install protoc.
 # renovate: datasource=github-release depName=protocolbuffers/protobuf

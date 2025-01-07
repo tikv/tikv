@@ -9,7 +9,7 @@ FROM quay.io/rockylinux/rockylinux:8.10.20240528-ubi as builder
 RUN --mount=type=cache,target=/var/cache/dnf \
     dnf upgrade-minimal -y && \
     dnf --enablerepo=powertools install -y \
-      make git findutils gcc gcc-c++ cmake curl openssl-devel perl python3 \
+      dwz make git findutils gcc gcc-c++ cmake curl openssl-devel perl python3 \
       libstdc++-static
 
 # install protoc.
