@@ -46,5 +46,5 @@ ENV MALLOC_CONF="prof:true,prof_active:false"
 COPY --from=building /tikv/bin/tikv-server  /tikv-server
 COPY --from=building /tikv/bin/tikv-ctl     /tikv-ctl
 
-EXPOSE 20160
+EXPOSE 20160 20180
 ENTRYPOINT ["/tikv-server"]
