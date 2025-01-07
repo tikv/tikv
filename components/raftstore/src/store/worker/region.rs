@@ -550,7 +550,13 @@ where
                 error!("failed to delete files in range"; "err" => %e);
             })
             .unwrap();
-        // Clear related blob files belonging to the given range directly.
+        // Remove all overlapped ranges directly without ingesting.
+        if let Err(e) = self.delete_all_in_range(&ranges, true) {
+            error!("failed to cleanup stale range"; "err" => %e);
+            return;
+        }
+        // Clear related blob files belonging to the given range directly after clearing
+        // all stale keys in sst files.
         self.engine
             .delete_ranges_cfs(
                 &WriteOptions::default(),
@@ -561,11 +567,6 @@ where
                 error!("failed to delete blobs in range"; "err" => %e);
             })
             .unwrap();
-        // Remove all overlapped ranges directly without ingesting.
-        if let Err(e) = self.delete_all_in_range(&ranges, true) {
-            error!("failed to cleanup stale range"; "err" => %e);
-            return;
-        }
 
         for (_, key, _) in region_ranges {
             assert!(
@@ -614,6 +615,8 @@ where
                     &CLEAR_OVERLAP_REGION_DURATION.by_key,
                 )
             } else {
+                // Deprecated method for clearing overlapped ranges due to potential latency
+                // jitters. It may still be applicable in other scenarios.
                 (
                     DeleteStrategy::DeleteByWriter {
                         sst_path: self.mgr.get_temp_path_for_ingest(),
