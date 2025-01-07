@@ -814,6 +814,14 @@ fn async_commit_timestamps(
     max_commit_ts: TimeStamp,
     txn: &mut MvccTxn,
 ) -> Result<TimeStamp> {
+    // When 1pc is enable and async-commit is diabled, a transaction can be commited
+    // by 1pc but lock.use_async_commit might be still false.
+    // And if async-prewrite-apply is also enabled, then there is a chance that
+    // reads with max_ts cannot see the previous writes because the mem lock can
+    // be skipped and the data hasn't been applied yet.
+    // So we always set use_async_commit to true here to avoid the issue.
+    lock.use_async_commit = true;
+
     // This operation should not block because the latch makes sure only one thread
     // is operating on this key.
     let key_guard = ::futures_executor::block_on(txn.concurrency_manager.lock_key(key));
@@ -917,16 +925,18 @@ fn amend_pessimistic_lock<S: Snapshot>(
 
 pub mod tests {
     #[cfg(test)]
+    use std::borrow::Cow;
+    #[cfg(test)]
     use std::sync::Arc;
 
     use concurrency_manager::ConcurrencyManager;
-    use kvproto::kvrpcpb::Context;
+    use kvproto::kvrpcpb::{Context, IsolationLevel};
     #[cfg(test)]
     use rand::{Rng, SeedableRng};
     #[cfg(test)]
     use tikv_kv::RocksEngine;
     #[cfg(test)]
-    use txn_types::OldValue;
+    use txn_types::{OldValue, TsSet};
 
     use super::*;
     #[cfg(test)]
@@ -2756,5 +2766,48 @@ pub mod tests {
         must_unlocked(&mut engine, key);
         prewrite_err(&mut engine, key, value, key, 120, 130, Some(130));
         must_unlocked(&mut engine, key);
+    }
+
+    #[test]
+    fn test_1pc_set_lock_use_async_commit() {
+        let mut engine = crate::storage::TestEngineBuilder::new().build().unwrap();
+        let cm = ConcurrencyManager::new(42.into());
+
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+
+        let mut txn = MvccTxn::new(10.into(), cm.clone());
+        let mut reader = SnapshotReader::new(10.into(), snapshot, false);
+
+        prewrite(
+            &mut txn,
+            &mut reader,
+            &optimistic_async_props(b"k", 10.into(), 50.into(), 1, true),
+            Mutation::make_put(Key::from_raw(b"k"), b"v".to_vec()),
+            &None,
+            SkipPessimisticCheck,
+            None,
+        )
+        .unwrap();
+
+        // lock.use_async_commit should be set to true when using 1PC even when
+        // secondary_keys is empty.
+        assert_eq!(txn.guards.len(), 1);
+        txn.guards[0].with_lock(|l| {
+            let l = l.as_ref().unwrap();
+            assert_eq!(l.use_async_commit, true);
+        });
+
+        // read with max_ts should be blocked by the lock.
+        let k = Key::from_raw(b"k");
+        let res = cm.read_key_check(&k, |l| {
+            Lock::check_ts_conflict(
+                Cow::Borrowed(l),
+                &k,
+                TimeStamp::max(),
+                &TsSet::Empty,
+                IsolationLevel::Si,
+            )
+        });
+        assert!(res.is_err());
     }
 }
