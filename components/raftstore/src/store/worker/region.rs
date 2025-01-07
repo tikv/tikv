@@ -624,6 +624,15 @@ where
                 (
                     DeleteStrategy::DeleteByWriter {
                         sst_path: self.mgr.get_temp_path_for_ingest(),
+                        // We set `allow_write_during_ingestion` to true to minimize the impact on
+                        // foreground performance. This is because no concurrent writes overlap
+                        // with the data to be ingested due to:
+                        // 1. Either the region is already destroyed (or being destroyed), ensuring
+                        //    there are no foreground write operations.
+                        // 2. Or the `ApplyTask` does not trigger, as the region worker enforces
+                        //    sequential task execution of the `ApplyTask` and `DestroyTask`.
+                        // Refer to https://github.com/tikv/tikv/issues/18081.
+                        allow_write_during_ingestion: true,
                     },
                     &CLEAR_OVERLAP_REGION_DURATION.by_ingest_files,
                 )

@@ -32,6 +32,7 @@ impl RocksEngine {
         cf: &str,
         sst_path: String,
         ranges: &[Range<'_>],
+        allow_write_during_ingestion: bool,
     ) -> Result<bool> {
         let mut written = false;
         let mut ranges = ranges.to_owned();
@@ -87,7 +88,7 @@ impl RocksEngine {
 
         if let Some(writer) = writer_wrapper {
             writer.finish()?;
-            self.ingest_external_file_cf(cf, &[sst_path.as_str()])?;
+            self.ingest_external_file_cf(cf, &[sst_path.as_str()], allow_write_during_ingestion)?;
         } else {
             let mut wb = self.write_batch();
             for key in data.iter() {
@@ -266,8 +267,17 @@ impl MiscExt for RocksEngine {
                     written |= self.delete_all_in_range_cf_by_key(wopts, cf, r)?;
                 }
             }
-            DeleteStrategy::DeleteByWriter { sst_path } => {
-                written |= self.delete_all_in_range_cf_by_ingest(wopts, cf, sst_path, ranges)?;
+            DeleteStrategy::DeleteByWriter {
+                sst_path,
+                allow_write_during_ingestion,
+            } => {
+                written |= self.delete_all_in_range_cf_by_ingest(
+                    wopts,
+                    cf,
+                    sst_path,
+                    ranges,
+                    allow_write_during_ingestion,
+                )?;
             }
         }
         Ok(written)
@@ -614,8 +624,12 @@ mod tests {
         for i in 1000..5000 {
             data.push(i.to_string().as_bytes().to_vec());
         }
+        let allow_write_during_ingestion = false;
         test_delete_ranges(
-            DeleteStrategy::DeleteByWriter { sst_path },
+            DeleteStrategy::DeleteByWriter {
+                sst_path,
+                allow_write_during_ingestion,
+            },
             &data,
             &[
                 Range::new(&data[2], &data[499]),

@@ -413,7 +413,7 @@ impl<E: KvEngine> ImportDir<E> {
 
         for (cf, cf_paths) in paths {
             let files: Vec<&str> = cf_paths.iter().map(|p| p.clone.to_str().unwrap()).collect();
-            engine.ingest_external_file_cf(cf, &files)?;
+            engine.ingest_external_file_cf(cf, &files, false)?;
         }
         INPORTER_INGEST_COUNT.observe(metas.len() as _);
         IMPORTER_INGEST_BYTES.observe(ingest_bytes as _);
@@ -607,7 +607,7 @@ mod test {
 
     #[cfg(feature = "test-engines-rocksdb")]
     fn test_path_with_range_and_km(km: Option<DataKeyManager>) {
-        use engine_rocks::{RocksEngine, RocksSstWriterBuilder};
+        use engine_rocks::RocksSstWriterBuilder;
         use engine_test::ctor::{CfOptions, DbOptions};
         use engine_traits::{SstWriter, SstWriterBuilder};
         use tempfile::TempDir;

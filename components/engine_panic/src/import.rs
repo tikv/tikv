@@ -1,7 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::path::Path;
-
 use engine_traits::{ImportExt, IngestExternalFileOptions, Result};
 
 use crate::engine::PanicEngine;
@@ -9,7 +7,12 @@ use crate::engine::PanicEngine;
 impl ImportExt for PanicEngine {
     type IngestExternalFileOptions = PanicIngestExternalFileOptions;
 
-    fn ingest_external_file_cf(&self, cf: &str, files: &[&str]) -> Result<()> {
+    fn ingest_external_file_cf(
+        &self,
+        cf: &str,
+        files: &[&str],
+        allow_write_during_ingestion: bool,
+    ) -> Result<()> {
         panic!()
     }
 }
@@ -22,6 +25,10 @@ impl IngestExternalFileOptions for PanicIngestExternalFileOptions {
     }
 
     fn move_files(&mut self, f: bool) {
+        panic!()
+    }
+
+    fn allow_write(&mut self, f: bool) {
         panic!()
     }
 }

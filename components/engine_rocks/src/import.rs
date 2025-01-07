@@ -11,10 +11,16 @@ use crate::{
 impl ImportExt for RocksEngine {
     type IngestExternalFileOptions = RocksIngestExternalFileOptions;
 
-    fn ingest_external_file_cf(&self, cf_name: &str, files: &[&str]) -> Result<()> {
+    fn ingest_external_file_cf(
+        &self,
+        cf_name: &str,
+        files: &[&str],
+        allow_write_during_ingestion: bool,
+    ) -> Result<()> {
         let cf = util::get_cf_handle(self.as_inner(), cf_name)?;
         let mut opts = RocksIngestExternalFileOptions::new();
         opts.move_files(true);
+        opts.allow_write(allow_write_during_ingestion);
         // Note: no need reset the global seqno to 0 for compatibility as #16992
         // enable the TiKV to handle the case on applying abnormal snapshot.
         let now = Instant::now_coarse();
@@ -52,6 +58,10 @@ impl IngestExternalFileOptions for RocksIngestExternalFileOptions {
 
     fn move_files(&mut self, f: bool) {
         self.0.move_files(f);
+    }
+
+    fn allow_write(&mut self, f: bool) {
+        self.0.set_allow_write(f);
     }
 }
 
@@ -126,7 +136,11 @@ mod tests {
             sst2.put(v.as_bytes(), v.as_bytes()).unwrap();
         }
         sst2.finish().unwrap();
-        db.ingest_external_file_cf(CF_DEFAULT, &[p1.to_str().unwrap(), p2.to_str().unwrap()])
-            .unwrap();
+        db.ingest_external_file_cf(
+            CF_DEFAULT,
+            &[p1.to_str().unwrap(), p2.to_str().unwrap()],
+            false,
+        )
+        .unwrap();
     }
 }
