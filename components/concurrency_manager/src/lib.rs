@@ -252,7 +252,7 @@ impl ConcurrencyManager {
         source: impl slog::Value + Display,
         using_approximate: bool,
     ) -> Result<(), crate::InvalidMaxTsUpdate> {
-        warn!("possible invalid max-ts update; double checking";
+        warn!("possible invalid max_ts update; double checking";
             "attempted_ts" => new_ts,
             "limit" => limit.into_inner(),
             "source" => &source,
