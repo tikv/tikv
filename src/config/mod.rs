@@ -5198,7 +5198,6 @@ mod tests {
                 scheduler,
                 flow_controller.clone(),
                 storage.get_scheduler(),
-                storage.get_concurrency_manager(),
             )),
         );
         (storage, cfg_controller, receiver, flow_controller)
