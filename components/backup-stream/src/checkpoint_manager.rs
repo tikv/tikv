@@ -896,8 +896,8 @@ pub mod tests {
         let r = flush_observer.after(&task, rts).await;
         assert_eq!(r.is_ok(), true);
 
-        let serivce_id = format!("backup-stream-{}-{}", task, store_id);
-        let r = pd_cli.get_service_safe_point(serivce_id).unwrap();
+        let service_id = format!("backup-stream-{}-{}", task, store_id);
+        let r = pd_cli.get_service_safe_point(service_id).unwrap();
         assert_eq!(r.into_inner(), rts - 1);
     }
 }
