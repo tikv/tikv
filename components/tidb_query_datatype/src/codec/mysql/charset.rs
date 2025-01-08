@@ -1,5 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use lazy_static::*;
+
 /// `CHARSET_BIN` is used for marking binary charset.
 pub const CHARSET_BIN: &str = "binary";
 /// `CHARSET_UTF8` is the default charset for string types.
@@ -13,6 +15,12 @@ pub const CHARSET_ASCII: &str = "ascii";
 pub const CHARSET_LATIN1: &str = "latin1";
 /// `CHARSET_GBK` is Chinese character set.
 pub const CHARSET_GBK: &str = "gbk";
+// For a new implemented multi-byte charset, add it to MULTI_BYTES_CHARSETS
 
-/// All utf8 charsets.
-pub const UTF8_CHARSETS: &[&str] = &[CHARSET_UTF8, CHARSET_UTF8MB4, CHARSET_ASCII];
+lazy_static! {
+    pub static ref MULTI_BYTES_CHARSETS: collections::HashSet<&'static str> =
+        [CHARSET_UTF8, CHARSET_UTF8MB4, CHARSET_GBK,]
+            .iter()
+            .cloned()
+            .collect();
+}
