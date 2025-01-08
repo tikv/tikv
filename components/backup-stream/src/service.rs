@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use futures::future::FutureExt;
 use grpcio::{RpcContext, RpcStatus, RpcStatusCode};
 use kvproto::{logbackuppb::*, metapb::Region};
-use tikv_util::{warn, worker::Scheduler};
+use tikv_util::{info, warn, worker::Scheduler};
 
 use crate::{
     checkpoint_manager::{GetCheckpointResult, RegionIdWithVersion},
@@ -48,6 +48,7 @@ impl LogBackup for BackupStreamGrpcService {
         _req: FlushNowRequest,
         sink: grpcio::UnarySink<FlushNowResponse>,
     ) {
+        info!("Client requests force flush."; "cli" => %ctx.peer());
         let mut resp = FlushNowResponse::new();
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
         let task = Task::ForceFlush(TaskSelector::All, tx);

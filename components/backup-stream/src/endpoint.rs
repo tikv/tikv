@@ -34,9 +34,7 @@ use tikv::{
 use tikv_util::{
     box_err,
     config::ReadableDuration,
-    debug, defer,
-    future::paired_future_callback,
-    info,
+    debug, defer, info,
     memory::MemoryQuota,
     sys::thread::ThreadBuildWrapper,
     time::{Instant, Limiter},
@@ -869,8 +867,8 @@ where
 
     pub fn on_force_flush(&self, task: TaskSelectorRef<'_>, sender: Sender<FlushResult>) {
         self.pool.block_on(async move {
+            info!("Triggering force flush."; "selector" => ?task);
             let handlers = self.range_router.select_task_handler(task);
-            // This should only happen in testing, it would be to unwrap...
             for hnd in handlers {
                 let mts = self.prepare_min_ts().await;
                 let sched = self.scheduler.clone();
@@ -919,7 +917,6 @@ where
     fn on_exec_flush(&mut self, task: String, resolved: ResolvedRegions, cb: Sender<FlushResult>) {
         self.checkpoint_mgr.freeze();
         let fut = self.do_flush(task.clone(), resolved);
-        let sched = self.scheduler.clone();
         self.pool.spawn(root!("flush"; async move {
             let res = fut.await;
             if let Err(ref err) = &res {
@@ -927,18 +924,7 @@ where
             }
             // If nobody waits us, it is no need to construct the result.
             if !cb.is_closed() {
-                let (ccb, fut) = paired_future_callback();
-                // We may have a better way to sync the tasks in the queue...
-                try_send!(sched, Task::Sync(Box::new(|| ccb(())), Box::new(|_| true)));
-                let mut flush_res = FlushResult { task, error: res.err() };
-                if fut.await.is_err() {
-                    warn!("force_flush: syncing checkpoint manager failed. The progress may not be advanced.";
-                        "task" => %flush_res.task);
-                    if flush_res.error.is_none() {
-                        flush_res.error = Some(Error::Other(
-                            box_err!("syncing checkpoint manager failed: the progress may take more time to be advanced")))
-                    }
-                }
+                let flush_res = FlushResult { task, error: res.err() };
                 let _ = cb.send(flush_res).await;
             }
         }));
