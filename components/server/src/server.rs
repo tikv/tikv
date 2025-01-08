@@ -869,7 +869,6 @@ where
                 ttl_scheduler,
                 flow_controller,
                 storage.get_scheduler(),
-                storage.get_concurrency_manager(),
             )),
         );
 
