@@ -3062,11 +3062,11 @@ mod tests {
                 new_compacted_file_rewrite_rule(b"t123", b"t123", 0, 5, 5),
                 vec![
                     (
-                        get_encoded_key(b"t567_r01", 5),
+                        get_encoded_key(b"t123_r01", 5),
                         get_write_value(WriteType::Put, 1, None),
                     ),
                     (
-                        get_encoded_key(b"t567_r02", 5),
+                        get_encoded_key(b"t123_r02", 5),
                         get_write_value(WriteType::Delete, 1, None),
                     ),
                 ],
