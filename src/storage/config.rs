@@ -2,7 +2,7 @@
 
 //! Storage configuration.
 
-use std::{borrow::ToOwned, cmp::max, error::Error, path::Path};
+use std::{cmp::max, error::Error, path::Path};
 
 use engine_rocks::raw::{Cache, LRUCacheOptions, MemoryAllocator};
 use file_system::{IoPriority, IoRateLimitMode, IoRateLimiter, IoType};

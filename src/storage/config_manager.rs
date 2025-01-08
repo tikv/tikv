@@ -4,7 +4,6 @@
 
 use std::{convert::TryInto, sync::Arc};
 
-use concurrency_manager::ConcurrencyManager;
 use engine_traits::{ALL_CFS, CF_DEFAULT};
 use file_system::{get_io_rate_limiter, IoPriority, IoType};
 use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResult};
@@ -26,7 +25,6 @@ pub struct StorageConfigManger<E: Engine, K, L: LockManager> {
     ttl_checker_scheduler: Scheduler<TtlCheckerTask>,
     flow_controller: Arc<FlowController>,
     scheduler: TxnScheduler<E, L>,
-    concurrency_manager: ConcurrencyManager,
 }
 
 unsafe impl<E: Engine, K, L: LockManager> Send for StorageConfigManger<E, K, L> {}
@@ -38,14 +36,12 @@ impl<E: Engine, K, L: LockManager> StorageConfigManger<E, K, L> {
         ttl_checker_scheduler: Scheduler<TtlCheckerTask>,
         flow_controller: Arc<FlowController>,
         scheduler: TxnScheduler<E, L>,
-        concurrency_manager: ConcurrencyManager,
     ) -> Self {
         StorageConfigManger {
             configurable_db,
             ttl_checker_scheduler,
             flow_controller,
             scheduler,
-            concurrency_manager,
         }
     }
 }
