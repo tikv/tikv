@@ -39,7 +39,7 @@ pub struct SecurityConfig {
     pub override_ssl_target: String,
     #[online_config(skip)]
     pub cert_allowed_cn: HashSet<String>,
-    pub redact_info_log: RedactOption,
+    pub redact_info_log: String,
     #[online_config(skip)]
     pub encryption: EncryptionConfig,
 }
