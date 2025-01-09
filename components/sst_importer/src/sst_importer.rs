@@ -1363,7 +1363,7 @@ impl<E: KvEngine> SstImporter<E> {
                 let ts = Key::decode_ts_from(iter.key())?;
                 if ts > TimeStamp::new(rewrite_rule.ignore_after_timestamp) {
                     iter.next()?;
-                    INPORTER_COMPACT_KEYS_COUNT
+                    INPORTER_DOWNLOAD_COMPACT_KEYS_COUNT
                         .with_label_values(&["after"])
                         .inc();
                     continue;
@@ -1375,7 +1375,7 @@ impl<E: KvEngine> SstImporter<E> {
                 let ts = Key::decode_ts_from(iter.key())?;
                 if ts < TimeStamp::new(rewrite_rule.ignore_before_timestamp) {
                     iter.next()?;
-                    INPORTER_COMPACT_KEYS_COUNT
+                    INPORTER_DOWNLOAD_COMPACT_KEYS_COUNT
                         .with_label_values(&["before"])
                         .inc();
                     continue;
