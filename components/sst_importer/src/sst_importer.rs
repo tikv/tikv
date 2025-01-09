@@ -1369,9 +1369,9 @@ impl<E: KvEngine> SstImporter<E> {
                     continue;
                 }
             }
-            if rewrite_rule.ignore_before_timestamp != 0 && cf_name == CF_WRITE {
-                // only few write cf keys will be dropped. so we can keep default cf here for
-                // simplicity
+            if rewrite_rule.ignore_before_timestamp != 0 {
+                // Let the client decide the ts here for default/write CF.
+                // Normally the ts in default CF is less than the ts in write CF.
                 let ts = Key::decode_ts_from(iter.key())?;
                 if ts < TimeStamp::new(rewrite_rule.ignore_before_timestamp) {
                     iter.next()?;
