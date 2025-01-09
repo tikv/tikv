@@ -595,10 +595,33 @@ impl Suite {
         ts
     }
 
+    pub fn for_each_log_backup_cli(&self, mut cb: impl FnMut(u64, &LogBackupClient)) {
+        for (k, v) in self.log_backup_cli.iter() {
+            cb(*k, v)
+        }
+    }
+
     pub fn force_flush_files(&self, task: &str) {
-        // TODO: use the callback to make the test more stable.
-        self.run(|| Task::ForceFlush(task.to_owned()));
-        self.sync();
+        // Force flush but not wait...
+        // Then the case may use `wait_flush`...
+        let _ = self.force_flush_files_and_wait(task);
+    }
+
+    pub fn force_flush_files_and_wait(&self, task: &str) -> impl Future<Output = ()> + '_ {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        self.run(|| Task::ForceFlush(TaskSelector::ByName(task.to_owned()), tx.clone()));
+        drop(tx);
+
+        async move {
+            while let Some(res) = tokio::time::timeout(Duration::from_secs(30), rx.recv())
+                .await
+                .expect("flush not finish after 30s")
+            {
+                if let Some(ref err) = res.error {
+                    panic!("failed to flush: {}", err)
+                }
+            }
+        }
     }
 
     pub fn run(&self, mut t: impl FnMut() -> Task) {
