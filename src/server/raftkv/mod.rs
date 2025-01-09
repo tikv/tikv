@@ -621,19 +621,13 @@ where
     type IMSnap = RegionSnapshot<HybridEngineSnapshot<E, RegionCacheMemoryEngine>>;
     type IMSnapshotRes = impl Future<Output = kv::Result<Self::IMSnap>> + Send;
     fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes {
-        let replica_read = ctx.pb_ctx.get_replica_read();
-        async_snapshot(&mut self.router, ctx).map_ok(move |region_snap| {
+        async_snapshot(&mut self.router, ctx).map_ok(|region_snap| {
             // TODO: Remove replace_snapshot. Taking a snapshot and replacing it
             // with a new one is a bit confusing.
             // A better way to build an in-memory snapshot is to return
             // `HybridEngineSnapshot<RegionSnapshot<E>, RegionCacheMemoryEngine>>;`
             // so the `replace_snapshot` can be removed.
-            region_snap.replace_snapshot(move |disk_snap, mut pinned| {
-                // Disable in-memory-engine snapshot for now as there may be some bugs.
-                // TODO: we may remove this restriction once we fix the related bug.
-                if replica_read {
-                    pinned = None;
-                }
+            region_snap.replace_snapshot(move |disk_snap, pinned| {
                 HybridEngineSnapshot::from_observed_snapshot(disk_snap, pinned)
             })
         })
@@ -842,7 +836,12 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
             let begin_instant = Instant::now();
 
             let start_ts = request.get_start_ts().into();
-            self.concurrency_manager.update_max_ts(start_ts);
+            if let Err(e) = self
+                .concurrency_manager
+                .update_max_ts(start_ts, || format!("read_index-{}", start_ts))
+            {
+                error!("failed to update max ts in concurrency manager"; "err" => ?e);
+            }
             for range in request.mut_key_ranges().iter_mut() {
                 let key_bound = |key: Vec<u8>| {
                     if key.is_empty() {

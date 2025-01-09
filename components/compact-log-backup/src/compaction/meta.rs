@@ -15,7 +15,7 @@ use super::{
 use crate::{
     errors::Result,
     storage::{
-        LoadFromExt, LogFile, LogFileId, MetaFile, MigartionStorageWrapper, PhysicalLogFile,
+        LoadFromExt, LogFile, LogFileId, MetaFile, MigrationStorageWrapper, PhysicalLogFile,
         StreamMetaStorage,
     },
 };
@@ -162,10 +162,21 @@ impl Ord for SortByOffset {
 /// Collecting metadata of subcomapctions.
 ///
 /// Finally, it calculates which files can be deleted.
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct CompactionRunInfoBuilder {
     files: HashMap<Arc<str>, BTreeSet<SortByOffset>>,
     compaction: brpb::LogFileCompaction,
+}
+
+impl Default for CompactionRunInfoBuilder {
+    fn default() -> Self {
+        let mut this = Self {
+            files: Default::default(),
+            compaction: Default::default(),
+        };
+        this.compaction.input_min_ts = u64::MAX;
+        this
+    }
 }
 
 /// A set of deletable log files from the same metadata.
@@ -230,6 +241,8 @@ impl CompactionRunInfoBuilder {
                 .insert(SortByOffset(file.id.clone()));
         }
         self.compaction.artifacts_hash ^= c.origin.crc64();
+        self.compaction.input_min_ts = self.compaction.input_min_ts.min(c.origin.input_min_ts);
+        self.compaction.input_max_ts = self.compaction.input_max_ts.max(c.origin.input_max_ts);
     }
 
     pub fn mut_meta(&mut self) -> &mut brpb::LogFileCompaction {
@@ -238,7 +251,7 @@ impl CompactionRunInfoBuilder {
 
     pub async fn write_migration(&self, s: &dyn ExternalStorage) -> Result<()> {
         let migration = self.migration_of(self.find_expiring_files(s).await?);
-        let wrapped_storage = MigartionStorageWrapper::new(s);
+        let wrapped_storage = MigrationStorageWrapper::new(s);
         wrapped_storage.write(migration.into()).await?;
         Ok(())
     }
@@ -382,6 +395,11 @@ mod test {
         let mig = coll.mig(st.storage().as_ref()).await.unwrap();
         assert_eq!(mig.edit_meta.len(), 1);
         assert!(mig.edit_meta[0].destruct_self);
+
+        assert_eq!(mig.compactions.len(), 1);
+        let c = &mig.compactions[0];
+        assert_eq!(c.input_min_ts, 10);
+        assert_eq!(c.input_max_ts, 25);
     }
 
     #[tokio::test]
@@ -439,5 +457,10 @@ mod test {
             _ => unreachable!(),
         };
         mig.edit_meta.iter().for_each(check);
+
+        assert_eq!(mig.compactions.len(), 1);
+        let c = &mig.compactions[0];
+        assert_eq!(c.input_min_ts, 10);
+        assert_eq!(c.input_max_ts, 20);
     }
 }

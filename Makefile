@@ -427,7 +427,7 @@ docker_shell:
 		.
 	docker run -it -v $(shell pwd):/tikv \
 		${DEV_DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} \
-		/bin/bash
+		bash
 
 ## The driver for script/run-cargo.sh
 ## ----------------------------------
