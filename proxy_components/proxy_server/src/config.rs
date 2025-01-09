@@ -267,10 +267,6 @@ pub struct ProxyConfig {
     #[online_config(skip)]
     pub enable_io_snoop: bool,
 
-    #[doc(hidden)]
-    #[online_config(skip)]
-    pub memory_usage_high_water: f64,
-
     #[online_config(submodule)]
     pub readpool: ReadPoolConfig,
 
@@ -295,7 +291,14 @@ impl Default for ProxyConfig {
             raftdb: RaftDbConfig::default(),
             storage: StorageConfig::default(),
             enable_io_snoop: false,
-            memory_usage_high_water: 0.1,
+            // Previously, we set `memory_usage_high_water` to 0.1, in order to make TiFlash to be
+            // always in a high-water situation. thus by setting
+            // `evict_cache_on_memory_ratio`, we can evict entry cache if there is a memory usage
+            // peak after restart. However there're some cases that the raftstore could
+            // take more than 5% of the total used memory, so TiFlash will reject
+            // msgAppend to every region. So, it actually not a good idea to make
+            // TiFlash Proxy always run in a high-water state, in order to reduce the
+            // memory usage peak after restart.
             readpool: ReadPoolConfig::default(),
             import: ImportConfig::default(),
             engine_store: EngineStoreConfig::default(),
@@ -423,7 +426,6 @@ pub fn address_proxy_config(config: &mut TikvConfig, proxy_config: &ProxyConfig)
     config.storage.reserve_space = proxy_config.storage.reserve_space;
 
     config.enable_io_snoop = proxy_config.enable_io_snoop;
-    config.memory_usage_high_water = proxy_config.memory_usage_high_water;
 
     config.server.addr = proxy_config.server.addr.clone();
     config.server.advertise_addr = proxy_config.server.advertise_addr.clone();

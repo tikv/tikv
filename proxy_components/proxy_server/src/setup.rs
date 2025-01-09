@@ -4,8 +4,8 @@ use std::borrow::ToOwned;
 use clap::ArgMatches;
 use collections::HashMap;
 pub use server::setup::initial_logger;
-use tikv::config::{MetricConfig, TikvConfig};
-use tikv_util::{self, logger};
+use tikv::config::{MetricConfig, TikvConfig, MEMORY_USAGE_LIMIT_RATE};
+use tikv_util::{self, config::ReadableSize, logger, sys::SysQuota};
 
 use crate::config::ProxyConfig;
 pub use crate::fatal;
@@ -159,5 +159,50 @@ pub fn overwrite_config_with_cmd_args(
             fatal!("invalid unips-enabled: {}", e);
         });
         proxy_config.engine_store.enable_unips = enabled == 1;
+    }
+
+    let mut memory_limit_set = config.memory_usage_limit.is_some();
+    if !memory_limit_set {
+        if let Some(s) = matches.value_of("memory-limit-size") {
+            let result: Result<u64, _> = s.parse();
+            if let Ok(memory_limit_size) = result {
+                info!(
+                    "overwrite memory_usage_limit by `memory-limit-size` to {}",
+                    memory_limit_size
+                );
+                config.memory_usage_limit = Some(ReadableSize(memory_limit_size));
+                memory_limit_set = true;
+            } else {
+                info!("overwrite memory_usage_limit by `memory-limit-size` failed"; "memory_limit_size" => s);
+            }
+        }
+    }
+
+    let total = SysQuota::memory_limit_in_bytes();
+    if !memory_limit_set {
+        if let Some(s) = matches.value_of("memory-limit-ratio") {
+            let result: Result<f64, _> = s.parse();
+            if let Ok(memory_limit_ratio) = result {
+                if memory_limit_ratio <= 0.0 || memory_limit_ratio > 1.0 {
+                    info!("overwrite memory_usage_limit meets error ratio"; "ratio" => memory_limit_ratio);
+                } else {
+                    let limit = (total as f64 * memory_limit_ratio) as u64;
+                    info!(
+                        "overwrite memory_usage_limit by `memory-limit-ratio`={} to {}",
+                        memory_limit_ratio, limit
+                    );
+                    config.memory_usage_limit = Some(ReadableSize(limit));
+                    memory_limit_set = true;
+                }
+            } else {
+                info!("overwrite memory_usage_limit meets error ratio"; "ratio" => s);
+            }
+        }
+    }
+
+    if !memory_limit_set && config.memory_usage_limit.is_none() {
+        let limit = (total as f64 * MEMORY_USAGE_LIMIT_RATE) as u64;
+        info!("overwrite memory_usage_limit failed, use TiKV's default"; "limit" => limit);
+        config.memory_usage_limit = Some(ReadableSize(limit));
     }
 }

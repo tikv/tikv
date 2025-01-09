@@ -8,6 +8,7 @@ use proxy_server::{
     proxy::{gen_proxy_config, gen_tikv_config},
     setup::overwrite_config_with_cmd_args,
 };
+use tikv::config::MEMORY_USAGE_LIMIT_RATE;
 use tikv_util::sys::SysQuota;
 
 use crate::utils::v1::*;
@@ -139,7 +140,7 @@ fn test_default_no_config_item() {
     assert_eq!(config.server.status_thread_pool_size, 2);
 
     assert_eq!(config.raft_store.evict_cache_on_memory_ratio, 0.1);
-    assert_eq!(config.memory_usage_high_water, 0.1);
+    assert_eq!(config.memory_usage_high_water, 0.9);
     assert_eq!(config.server.reject_messages_on_memory_ratio, 0.05);
 
     assert_eq!(config.raft_store.enable_v2_compatible_learner, true);
@@ -330,4 +331,150 @@ enable-fast-add-peer = true
 
     info!("using proxy config"; "config" => ?proxy_config);
     assert_eq!(true, proxy_config.engine_store.enable_fast_add_peer);
+}
+
+#[test]
+fn test_memory_limit_overwrite() {
+    let app = App::new("RaftStore Proxy")
+        .arg(
+            Arg::with_name("memory-limit-size")
+                .long("memory-limit-size")
+                .help("Used as the maximum memory we can consume, in bytes")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("memory-limit-ratio")
+                .long("memory-limit-ratio")
+                .help("Used as the maximum memory we can consume, in percentage")
+                .takes_value(true),
+        );
+
+    let bootstrap = |args: Vec<&str>| {
+        let mut v: Vec<String> = vec![];
+        let matches = app.clone().get_matches_from(args);
+        let mut config = gen_tikv_config(&None, false, &mut v);
+        let mut proxy_config = gen_proxy_config(&None, false, &mut v);
+        proxy_config.raftdb.defaultcf.block_cache_size = Some(ReadableSize(0));
+        proxy_config.rocksdb.defaultcf.block_cache_size = Some(ReadableSize(0));
+        proxy_config.rocksdb.lockcf.block_cache_size = Some(ReadableSize(0));
+        proxy_config.rocksdb.writecf.block_cache_size = Some(ReadableSize(0));
+        overwrite_config_with_cmd_args(&mut config, &mut proxy_config, &matches);
+        address_proxy_config(&mut config, &proxy_config);
+        config.compatible_adjust();
+        config
+    };
+
+    {
+        let args = vec![
+            "test_memory_limit_overwrite1",
+            "--memory-limit-size",
+            "12345",
+        ];
+        let mut config = bootstrap(args);
+        assert!(config.validate().is_ok());
+        assert_eq!(config.memory_usage_limit, Some(ReadableSize(12345)));
+    }
+
+    {
+        let args = vec![
+            "test_memory_limit_overwrite2",
+            "--memory-limit-size",
+            "12345",
+            "--memory-limit-ratio",
+            "0.9",
+        ];
+        let mut config = bootstrap(args);
+        assert!(config.validate().is_ok());
+        assert_eq!(config.memory_usage_limit, Some(ReadableSize(12345)));
+    }
+
+    let total = SysQuota::memory_limit_in_bytes();
+    {
+        let args = vec![
+            "test_memory_limit_overwrite3",
+            "--memory-limit-ratio",
+            "0.800000",
+        ];
+        let mut config = bootstrap(args);
+        assert!(config.validate().is_ok());
+        let limit = (total as f64 * 0.8) as u64;
+        assert_eq!(config.memory_usage_limit, Some(ReadableSize(limit)));
+    }
+
+    let default_limit = (total as f64 * MEMORY_USAGE_LIMIT_RATE) as u64;
+    {
+        let args = vec![
+            "test_memory_limit_overwrite4",
+            "--memory-limit-ratio",
+            "7.9",
+        ];
+        let mut config = bootstrap(args);
+        assert!(config.validate().is_ok());
+        assert_eq!(config.memory_usage_limit, Some(ReadableSize(default_limit)));
+    }
+
+    {
+        let args = vec![
+            "test_memory_limit_overwrite5",
+            "--memory-limit-ratio",
+            "'-0.9'",
+        ];
+        let mut config = bootstrap(args);
+        assert!(config.validate().is_ok());
+        assert_eq!(config.memory_usage_limit, Some(ReadableSize(default_limit)));
+    }
+
+    {
+        let args = vec!["test_memory_limit_overwrite6"];
+        let mut config = bootstrap(args);
+        assert!(config.validate().is_ok());
+        assert_eq!(config.memory_usage_limit, Some(ReadableSize(default_limit)));
+    }
+
+    let bootstrap2 = |args: Vec<&str>| {
+        let mut v: Vec<String> = vec![];
+        let matches = app.clone().get_matches_from(args);
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        write!(
+            file,
+            "
+memory-usage-limit = 42
+            "
+        )
+        .unwrap();
+        let path = file.path();
+        let cpath = Some(path.as_os_str());
+        let mut config = gen_tikv_config(&cpath, false, &mut v);
+        let mut proxy_config = gen_proxy_config(&cpath, false, &mut v);
+        proxy_config.raftdb.defaultcf.block_cache_size = Some(ReadableSize(0));
+        proxy_config.rocksdb.defaultcf.block_cache_size = Some(ReadableSize(0));
+        proxy_config.rocksdb.lockcf.block_cache_size = Some(ReadableSize(0));
+        proxy_config.rocksdb.writecf.block_cache_size = Some(ReadableSize(0));
+        overwrite_config_with_cmd_args(&mut config, &mut proxy_config, &matches);
+        address_proxy_config(&mut config, &proxy_config);
+        config.compatible_adjust();
+        config
+    };
+
+    {
+        let args = vec![
+            "test_memory_limit_nooverwrite3",
+            "--memory-limit-ratio",
+            "0.800000",
+        ];
+        let mut config = bootstrap2(args);
+        assert!(config.validate().is_ok());
+        assert_eq!(config.memory_usage_limit, Some(ReadableSize(42)));
+    }
+
+    {
+        let args = vec![
+            "test_memory_limit_nooverwrite1",
+            "--memory-limit-size",
+            "12345",
+        ];
+        let mut config = bootstrap2(args);
+        assert!(config.validate().is_ok());
+        assert_eq!(config.memory_usage_limit, Some(ReadableSize(42)));
+    }
 }
