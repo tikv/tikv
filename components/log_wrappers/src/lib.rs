@@ -78,6 +78,15 @@ impl Default for RedactOption {
     }
 }
 
+impl fmt::Display for RedactOption {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Flag(flag) => write!(f, "{}", if *flag { "on" } else { "off" }),
+            Self::Marker => write!(f, "marker"),
+        }
+    }
+}
+
 impl FromStr for RedactOption {
     type Err = String;
     fn from_str(s: &str) -> Result<RedactOption, String> {
@@ -110,6 +119,7 @@ impl From<RedactOption> for ConfigValue {
         }
     }
 }
+
 
 impl Serialize for RedactOption {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
