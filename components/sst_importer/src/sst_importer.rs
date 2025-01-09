@@ -2914,22 +2914,13 @@ mod tests {
             ),
             (
                 // filter key between ts range [2, 6],
-                // ignore_before_timestamp will take no effects on default cf
-                // so only t123_r07 will be dropped
                 new_compacted_file_rewrite_rule(b"t123", b"t123", 0, 2, 6),
-                vec![
-                    (get_encoded_key(b"t123_r01", 1), b"abc".to_vec()),
-                    (get_encoded_key(b"t123_r04", 3), b"xyz".to_vec()),
-                ],
+                vec![(get_encoded_key(b"t123_r04", 3), b"xyz".to_vec())],
             ),
             (
-                // filter key between ts range [17, 18], will take no effects on default cf
-                new_compacted_file_rewrite_rule(b"t123", b"t567", 0, 17, 18),
-                vec![
-                    (get_encoded_key(b"t567_r01", 1), b"abc".to_vec()),
-                    (get_encoded_key(b"t567_r04", 3), b"xyz".to_vec()),
-                    (get_encoded_key(b"t567_r07", 7), b"pqrst".to_vec()),
-                ],
+                // filter key between ts range [7, 18]
+                new_compacted_file_rewrite_rule(b"t123", b"t567", 0, 7, 18),
+                vec![(get_encoded_key(b"t567_r07", 7), b"pqrst".to_vec())],
             ),
         ];
         for case in downloads {
