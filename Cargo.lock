@@ -3814,7 +3814,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/LykxSassinator/rust-rocksdb?branch=fix_clock_skew#736390009e6679eb0ce5d99e264898d96b21bd9f"
+source = "git+https://github.com/LykxSassinator/rust-rocksdb?branch=fix_clock_skew#0aa21fa38b6bcf949b9b7a1afedb83d73849b341"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -3833,7 +3833,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/LykxSassinator/rust-rocksdb?branch=fix_clock_skew#736390009e6679eb0ce5d99e264898d96b21bd9f"
+source = "git+https://github.com/LykxSassinator/rust-rocksdb?branch=fix_clock_skew#0aa21fa38b6bcf949b9b7a1afedb83d73849b341"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -5791,7 +5791,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/LykxSassinator/rust-rocksdb?branch=fix_clock_skew#736390009e6679eb0ce5d99e264898d96b21bd9f"
+source = "git+https://github.com/LykxSassinator/rust-rocksdb?branch=fix_clock_skew#0aa21fa38b6bcf949b9b7a1afedb83d73849b341"
 dependencies = [
  "libc 0.2.151",
  "librocksdb_sys",
