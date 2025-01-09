@@ -47,12 +47,11 @@ fn test_check_cn_fail() {
     status.unwrap_err();
 }
 
-
 #[test]
 fn test_check_san_success() {
     let mut cluster = new_server_cluster(0, 1);
     let mut allowed_san = HashSet::default();
-    allowed_san.insert("tikv-server".to_owned());
+    allowed_san.insert("IP".to_owned());
     cluster.cfg.security = test_util::new_security_cfg(None, Some(allowed_san));
     cluster.run();
 

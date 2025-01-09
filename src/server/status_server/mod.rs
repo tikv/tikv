@@ -1104,36 +1104,39 @@ fn check_cert(security_config: Arc<SecurityConfig>, cert: Option<X509>) -> bool 
         let mut is_san_authorized = true;
         if !security_config.cert_allowed_cn.is_empty() {
             is_cn_authorized = false;
-                if let Some(name) = x509
-                    .subject_name()
-                    .entries_by_nid(openssl::nid::Nid::COMMONNAME)
-                    .next()
-                {
-                    let data = name.data().as_slice();
-                    // Check common name in peer cert
-                    is_cn_authorized = security::match_peer_names(
-                        &security_config.cert_allowed_cn,
-                        std::str::from_utf8(data).unwrap(),
-                    );
-                }
+            if let Some(name) = x509
+                .subject_name()
+                .entries_by_nid(openssl::nid::Nid::COMMONNAME)
+                .next()
+            {
+                let data = name.data().as_slice();
+                // Check common name in peer cert
+                is_cn_authorized = security::match_peer_names(
+                    &security_config.cert_allowed_cn,
+                    std::str::from_utf8(data).unwrap(),
+                );
             }
-        
-   
-            if !security_config.cert_allowed_san.is_empty() {
-                is_san_authorized = false;
-                    if let Some(sans) = x509.subject_alt_names() {
-                        is_san_authorized = sans.into_iter().any(|san| {
-                            if let Some(dns_name) = san.dnsname() {
-                                return security::match_peer_names(&security_config.cert_allowed_san, dns_name);
-                            } 
-                            if let Some(uri) = san.uri() {
-                                return security::match_peer_names(&security_config.cert_allowed_san, uri);
-                            } 
-                            return false;
-                        });
+        }
+
+        if !security_config.cert_allowed_san.is_empty() {
+            is_san_authorized = false;
+            if let Some(sans) = x509.subject_alt_names() {
+                is_san_authorized = sans.into_iter().any(|san| {
+                    if let Some(dns_name) = san.dnsname() {
+                        return security::match_peer_names(
+                            &security_config.cert_allowed_san,
+                            dns_name,
+                        );
                     }
+                    if let Some(uri) = san.uri() {
+                        return security::match_peer_names(&security_config.cert_allowed_san, uri);
+                    }
+                    false
+                });
             }
-        // if `cert_allowed_cn` and `cert_allowed_san` is empty, skip check and return true
+        }
+        // if `cert_allowed_cn` and `cert_allowed_san` is empty, skip check and return
+        // true
         is_cn_authorized && is_san_authorized
     } else {
         false
@@ -1452,7 +1455,7 @@ mod tests {
     fn test_security_status_service_with_san() {
         let mut allowed_san = HashSet::default();
         allowed_san.insert("tikv-server".to_owned());
-        do_test_security_status_service( HashSet::default(), allowed_san, true);
+        do_test_security_status_service(HashSet::default(), allowed_san, true);
     }
 
     #[test]
@@ -1466,7 +1469,7 @@ mod tests {
     fn test_security_status_service_with_san_fail() {
         let mut allowed_san = HashSet::default();
         allowed_san.insert("invaild-san".to_owned());
-        do_test_security_status_service( HashSet::default(), allowed_san,  false);
+        do_test_security_status_service(HashSet::default(), allowed_san, false);
     }
 
     #[test]
@@ -1790,7 +1793,11 @@ mod tests {
         status_server.stop();
     }
 
-    fn do_test_security_status_service(allowed_cn: HashSet<String>, allowed_san: HashSet<String>, expected: bool) {
+    fn do_test_security_status_service(
+        allowed_cn: HashSet<String>,
+        allowed_san: HashSet<String>,
+        expected: bool,
+    ) {
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
