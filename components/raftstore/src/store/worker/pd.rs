@@ -1274,6 +1274,7 @@ where
 
         let scheduler = self.scheduler.clone();
         let router = self.router.clone();
+        let mut snap_mgr = self.snap_mgr.clone();
         let resp = self
             .pd_client
             .store_heartbeat(stats, store_report, dr_autosync_status);
@@ -1344,6 +1345,26 @@ where
                             scheduler.schedule(Task::ControlGrpcServer(op.get_ctrl_event()))
                         {
                             warn!("fail to schedule control grpc task"; "err" => ?e);
+                        }
+                    }
+                    // NodeState for this store.
+                    {
+                        let state = (|| {
+                            #[cfg(feature = "failpoints")]
+                            fail_point!("manually_set_store_offline", |_| {
+                                metapb::NodeState::Removing
+                            });
+                            resp.get_state()
+                        })();
+                        match state {
+                            metapb::NodeState::Removing | metapb::NodeState::Removed => {
+                                let is_offlined = snap_mgr.is_offlined();
+                                if !is_offlined {
+                                    snap_mgr.set_offlined(true);
+                                    info!("store is offlined by pd");
+                                }
+                            }
+                            _ => {}
                         }
                     }
                 }

@@ -487,8 +487,7 @@ where
     /// with it.
     fn clean_overlap_ranges(&mut self, start_key: Vec<u8>, end_key: Vec<u8>) -> Result<()> {
         let (start_key, end_key) = self.clean_overlap_ranges_roughly(start_key, end_key);
-        // Directly delete the stale ranges without ingesting.
-        self.delete_all_in_range(&[Range::new(&start_key, &end_key)], true)
+        self.delete_all_in_range(&[Range::new(&start_key, &end_key)], false)
     }
 
     /// Inserts a new pending range, and it will be cleaned up with some delay.
@@ -511,6 +510,10 @@ where
 
     /// Cleans up stale ranges.
     fn clean_stale_ranges(&mut self) {
+        if self.mgr.is_offlined() {
+            info!("no need to clear stale range as store is marked offlined");
+            return;
+        }
         STALE_PEER_PENDING_DELETE_RANGE_GAUGE.set(self.pending_delete_ranges.len() as f64);
         if self.ingest_maybe_stall() {
             return;
@@ -615,8 +618,8 @@ where
                     &CLEAR_OVERLAP_REGION_DURATION.by_key,
                 )
             } else {
-                // Deprecated method for clearing overlapped ranges due to potential latency
-                // jitters. It may still be applicable in other scenarios.
+                // Deprecated method for clearing stale ranges due to potential latency
+                // jitters. It's still applicable when clearing overlapped regions.
                 (
                     DeleteStrategy::DeleteByWriter {
                         sst_path: self.mgr.get_temp_path_for_ingest(),

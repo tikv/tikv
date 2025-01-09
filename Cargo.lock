@@ -3743,7 +3743,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#c35d2b41011503a386db9ae2b7f4bcec653dab61"
+source = "git+https://github.com/LykxSassinator/kvproto?branch=notify_tikv_offlined#7099a32e318ca4c336ae6e902f4c60fe16e1b4bf"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
