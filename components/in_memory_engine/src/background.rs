@@ -3248,7 +3248,7 @@ pub mod tests {
         // 840*2 > capacity 1500, so the load will fail and the loaded keys should be
         // removed. However now we change the memory quota to 2000, so the range2 can be
         // cached.
-        let mut config_manager = InMemoryEngineConfigManager(config.clone());
+        let mut config_manager = InMemoryEngineConfigManager::new(config.clone());
         let mut config_change = ConfigChange::new();
         config_change.insert(String::from("capacity"), ConfigValue::Size(2000));
         config_manager.dispatch(config_change).unwrap();
