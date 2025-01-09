@@ -35,7 +35,10 @@ use backup_stream::{
 };
 use causal_ts::CausalTsProviderImpl;
 use cdc::CdcConfigManager;
-use concurrency_manager::ConcurrencyManager;
+use concurrency_manager::{
+    ActionOnInvalidMaxTs, ConcurrencyManager, DEFAULT_MAX_TS_DRIFT_ALLOWANCE,
+    DEFAULT_MAX_TS_SYNC_INTERVAL, LIMIT_VALID_TIME_MULTIPLIER,
+};
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{
     from_rocks_compression_type,
@@ -174,6 +177,7 @@ fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(
     tikv.register_services();
     tikv.init_metrics_flusher(fetcher, engines_info);
     tikv.init_storage_stats_task(engines);
+    tikv.init_max_ts_updater();
     tikv.run_server(server_config);
     tikv.run_status_server();
     tikv.init_quota_tuning_task(tikv.quota_limiter.clone());
@@ -374,7 +378,13 @@ where
 
         // Initialize concurrency manager
         let latest_ts = block_on(pd_client.get_tso()).expect("failed to get timestamp from PD");
-        let concurrency_manager = ConcurrencyManager::new(latest_ts);
+        let concurrency_manager = ConcurrencyManager::new_with_config(
+            latest_ts,
+            DEFAULT_MAX_TS_SYNC_INTERVAL * LIMIT_VALID_TIME_MULTIPLIER,
+            ActionOnInvalidMaxTs::Log,
+            Some(pd_client.clone()),
+            DEFAULT_MAX_TS_DRIFT_ALLOWANCE,
+        );
 
         // use different quota for front-end and back-end requests
         let quota_limiter = Arc::new(QuotaLimiter::new(
@@ -1246,6 +1256,27 @@ where
         });
 
         server_config
+    }
+
+    fn init_max_ts_updater(&self) {
+        let cm = self.concurrency_manager.clone();
+        let pd_client = self.pd_client.clone();
+
+        let max_ts_sync_interval = DEFAULT_MAX_TS_SYNC_INTERVAL;
+        self.background_worker
+            .spawn_interval_async_task(max_ts_sync_interval, move || {
+                let cm = cm.clone();
+                let pd_client = pd_client.clone();
+
+                async move {
+                    let pd_tso = pd_client.get_tso().await;
+                    if let Ok(ts) = pd_tso {
+                        cm.set_max_ts_limit(ts);
+                    } else {
+                        warn!("failed to get tso from pd in background, the max_ts validity check could be skipped");
+                    }
+                }
+            });
     }
 
     fn register_services(&mut self) {
