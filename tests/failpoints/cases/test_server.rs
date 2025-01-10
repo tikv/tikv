@@ -159,9 +159,6 @@ fn test_serving_status() {
 
 #[test]
 fn test_raft_message_observer() {
-    use raft::eraftpb::ConfChangeType;
-
-    test_util::init_log_for_test();
     let mut cluster = new_server_cluster(0, 3);
     cluster.pd_client.disable_default_operator();
     let r1 = cluster.run_conf_change();
@@ -188,17 +185,17 @@ fn test_raft_message_observer() {
 
     fail::cfg("force_reject_raft_append_message", "return").unwrap();
 
-    let _ = cluster.async_put(b"k3", b"v3").unwrap();
+    let _ = cluster.async_put(b"k2", b"v2").unwrap();
 
     std::thread::sleep(std::time::Duration::from_millis(500));
 
-    must_get_none(&cluster.get_engine(2), b"k3");
-    must_get_none(&cluster.get_engine(3), b"k3");
+    must_get_none(&cluster.get_engine(2), b"k2");
+    must_get_none(&cluster.get_engine(3), b"k2");
 
     fail::remove("force_reject_raft_append_message");
 
-    cluster.must_put(b"k4", b"v4");
+    cluster.must_put(b"k3", b"v3");
     for id in 1..=3 {
-        must_get_equal(&cluster.get_engine(id), b"k4", b"v4");
+        must_get_equal(&cluster.get_engine(id), b"k3", b"v3");
     }
 }
