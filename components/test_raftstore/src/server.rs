@@ -67,7 +67,7 @@ use tikv::{
         lock_manager::LockManager,
         raftkv::ReplicaReadLockChecker,
         resolve::{self, StoreAddrResolver},
-        service::DebugService,
+        service::{DebugService, DefaultGrpcMessageObserver},
         tablet_snap::NoSnapshotCache,
         ConnectionBuilder, Error, MultiRaftServer, PdStoreAddrResolver, RaftClient, RaftKv,
         Result as ServerResult, Server, ServerTransport,
@@ -617,6 +617,7 @@ impl ServerCluster {
                 debug_thread_pool.clone(),
                 health_controller.clone(),
                 resource_manager.clone(),
+                Arc::new(DefaultGrpcMessageObserver::default()),
             )
             .unwrap();
             svr.register_service(create_import_sst(import_service.clone()));

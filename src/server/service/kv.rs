@@ -71,6 +71,26 @@ use crate::{
 const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 
+pub trait RaftGrpcMessageObserver {
+    fn should_reject_append(&self) -> Option<bool>;
+    fn should_reject_snapshot(&self) -> Option<bool>;
+}
+
+#[derive(Clone, Default)]
+pub struct DefaultGrpcMessageObserver {}
+
+impl RaftGrpcMessageObserver for DefaultGrpcMessageObserver {
+    fn should_reject_append(&self) -> Option<bool> {
+        fail::fail_point!("force_reject_raft_append_message", |_| Some(true));
+        None
+    }
+
+    fn should_reject_snapshot(&self) -> Option<bool> {
+        fail::fail_point!("force_reject_raft_snapshot_message", |_| Some(true));
+        None
+    }
+}
+
 /// Service handles the RPC messages for the `Tikv` service.
 pub struct Service<E: Engine, L: LockManager, F: KvFormat> {
     cluster_id: u64,
@@ -103,6 +123,8 @@ pub struct Service<E: Engine, L: LockManager, F: KvFormat> {
     health_controller: HealthController,
     health_feedback_interval: Option<Duration>,
     health_feedback_seq: Arc<AtomicU64>,
+
+    raft_message_observer: Arc<dyn RaftGrpcMessageObserver + Send + Sync>,
 }
 
 impl<E: Engine, L: LockManager, F: KvFormat> Drop for Service<E, L, F> {
@@ -130,6 +152,7 @@ impl<E: Engine + Clone, L: LockManager + Clone, F: KvFormat> Clone for Service<E
             health_controller: self.health_controller.clone(),
             health_feedback_seq: self.health_feedback_seq.clone(),
             health_feedback_interval: self.health_feedback_interval,
+            raft_message_observer: self.raft_message_observer.clone(),
         }
     }
 }
@@ -152,6 +175,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
         resource_manager: Option<Arc<ResourceGroupManager>>,
         health_controller: HealthController,
         health_feedback_interval: Option<Duration>,
+        raft_message_observer: Arc<dyn RaftGrpcMessageObserver + Send + Sync>,
     ) -> Self {
         let now_unix = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -174,6 +198,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
             health_controller,
             health_feedback_interval,
             health_feedback_seq: Arc::new(AtomicU64::new(now_unix)),
+            raft_message_observer,
         }
     }
 
@@ -182,6 +207,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
         ch: &E::RaftExtension,
         msg: RaftMessage,
         reject: bool,
+        reject_snap: bool,
     ) -> RaftStoreResult<()> {
         let to_store_id = msg.get_to_peer().get_store_id();
         if to_store_id != store_id {
@@ -190,7 +216,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
                 my_store_id: store_id,
             });
         }
-        if reject && msg.get_message().get_msg_type() == MessageType::MsgAppend {
+        if (reject && msg.get_message().get_msg_type() == MessageType::MsgAppend)
+            || (reject_snap && msg.get_message().get_msg_type() == MessageType::MsgSnapshot)
+        {
             RAFT_APPEND_REJECTS.inc();
             let id = msg.get_region_id();
             let peer_id = msg.get_message().get_from();
@@ -754,15 +782,24 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         let store_id = self.store_id;
         let ch = self.storage.get_engine().raft_extension();
         let reject_messages_on_memory_ratio = self.reject_messages_on_memory_ratio;
+        let ob = self.raft_message_observer.clone();
 
         let res = async move {
             let mut stream = stream.map_err(Error::from);
             while let Some(msg) = stream.try_next().await? {
                 RAFT_MESSAGE_RECV_COUNTER.inc();
 
-                let reject = needs_reject_raft_append(reject_messages_on_memory_ratio);
+                let reject = match ob.should_reject_append() {
+                    Some(b) => b,
+                    None => needs_reject_raft_append(reject_messages_on_memory_ratio),
+                };
+                let reject_snap = if let Some(b) = ob.should_reject_snapshot() {
+                    b
+                } else {
+                    false
+                };
                 if let Err(err @ RaftStoreError::StoreNotMatch { .. }) =
-                    Self::handle_raft_message(store_id, &ch, msg, reject)
+                    Self::handle_raft_message(store_id, &ch, msg, reject, reject_snap)
                 {
                     // Return an error here will break the connection, only do that for
                     // `StoreNotMatch` to let tikv to resolve a correct address from PD
@@ -808,6 +845,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         let store_id = self.store_id;
         let ch = self.storage.get_engine().raft_extension();
         let reject_messages_on_memory_ratio = self.reject_messages_on_memory_ratio;
+        let ob = self.raft_message_observer.clone();
 
         let res = async move {
             let mut stream = stream.map_err(Error::from);
@@ -822,10 +860,18 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                 let len = batch_msg.get_msgs().len();
                 RAFT_MESSAGE_RECV_COUNTER.inc_by(len as u64);
                 RAFT_MESSAGE_BATCH_SIZE.observe(len as f64);
-                let reject = needs_reject_raft_append(reject_messages_on_memory_ratio);
+                let reject = match ob.should_reject_append() {
+                    Some(b) => b,
+                    None => needs_reject_raft_append(reject_messages_on_memory_ratio),
+                };
+                let reject_snap = if let Some(b) = ob.should_reject_snapshot() {
+                    b
+                } else {
+                    false
+                };
                 for msg in batch_msg.take_msgs().into_iter() {
                     if let Err(err @ RaftStoreError::StoreNotMatch { .. }) =
-                        Self::handle_raft_message(store_id, &ch, msg, reject)
+                        Self::handle_raft_message(store_id, &ch, msg, reject, reject_snap)
                     {
                         // Return an error here will break the connection, only do that for
                         // `StoreNotMatch` to let tikv to resolve a correct address from PD
@@ -862,6 +908,10 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         stream: RequestStream<SnapshotChunk>,
         sink: ClientStreamingSink<Done>,
     ) {
+        if let Some(true) = self.raft_message_observer.should_reject_snapshot() {
+            RAFT_SNAPSHOT_REJECTS.inc();
+            return;
+        };
         let task = SnapTask::Recv { stream, sink };
         if let Err(e) = self.snap_scheduler.schedule(task) {
             let err_msg = format!("{}", e);
