@@ -91,7 +91,7 @@ use tikv::{
         lock_manager::LockManager,
         raftkv::ReplicaReadLockChecker,
         resolve,
-        service::{DebugService, DefaultGrpcMessageObserver, DiagnosticsService},
+        service::{DebugService, DefaultGrpcMessageFilter, DiagnosticsService},
         status_server::StatusServer,
         KvEngineFactoryBuilder, NodeV2, RaftKv2, Server, CPU_CORES_QUOTA_GAUGE, GRPC_THREAD_PREFIX,
         MEMORY_LIMIT_GAUGE,
@@ -826,7 +826,7 @@ where
             debug_thread_pool,
             health_controller,
             self.resource_manager.clone(),
-            Arc::new(DefaultGrpcMessageObserver::default()),
+            Arc::new(DefaultGrpcMessageFilter::default()),
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
         cfg_controller.register(

@@ -61,7 +61,7 @@ use tikv::{
         lock_manager::LockManager,
         raftkv::ReplicaReadLockChecker,
         resolve,
-        service::{DebugService, DefaultGrpcMessageObserver, DiagnosticsService},
+        service::{DebugService, DefaultGrpcMessageFilter, DiagnosticsService},
         ConnectionBuilder, Error, Extension, NodeV2, PdStoreAddrResolver, RaftClient, RaftKv2,
         Result as ServerResult, Server, ServerTransport,
     },
@@ -644,7 +644,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
                 debug_thread_pool.clone(),
                 health_controller.clone(),
                 resource_manager.clone(),
-                Arc::new(DefaultGrpcMessageObserver::default()),
+                Arc::new(DefaultGrpcMessageFilter::default()),
             )
             .unwrap();
             svr.register_service(create_diagnostics(diag_service.clone()));

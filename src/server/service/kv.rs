@@ -71,15 +71,15 @@ use crate::{
 const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 
-pub trait RaftGrpcMessageObserver {
+pub trait RaftGrpcMessageFilter {
     fn should_reject_append(&self) -> Option<bool>;
     fn should_reject_snapshot(&self) -> Option<bool>;
 }
 
 #[derive(Clone, Default)]
-pub struct DefaultGrpcMessageObserver {}
+pub struct DefaultGrpcMessageFilter {}
 
-impl RaftGrpcMessageObserver for DefaultGrpcMessageObserver {
+impl RaftGrpcMessageFilter for DefaultGrpcMessageFilter {
     fn should_reject_append(&self) -> Option<bool> {
         fail::fail_point!("force_reject_raft_append_message", |_| Some(true));
         None
@@ -124,7 +124,7 @@ pub struct Service<E: Engine, L: LockManager, F: KvFormat> {
     health_feedback_interval: Option<Duration>,
     health_feedback_seq: Arc<AtomicU64>,
 
-    raft_message_observer: Arc<dyn RaftGrpcMessageObserver + Send + Sync>,
+    raft_message_filter: Arc<dyn RaftGrpcMessageFilter + Send + Sync>,
 }
 
 impl<E: Engine, L: LockManager, F: KvFormat> Drop for Service<E, L, F> {
@@ -152,7 +152,7 @@ impl<E: Engine + Clone, L: LockManager + Clone, F: KvFormat> Clone for Service<E
             health_controller: self.health_controller.clone(),
             health_feedback_seq: self.health_feedback_seq.clone(),
             health_feedback_interval: self.health_feedback_interval,
-            raft_message_observer: self.raft_message_observer.clone(),
+            raft_message_filter: self.raft_message_filter.clone(),
         }
     }
 }
@@ -175,7 +175,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
         resource_manager: Option<Arc<ResourceGroupManager>>,
         health_controller: HealthController,
         health_feedback_interval: Option<Duration>,
-        raft_message_observer: Arc<dyn RaftGrpcMessageObserver + Send + Sync>,
+        raft_message_filter: Arc<dyn RaftGrpcMessageFilter + Send + Sync>,
     ) -> Self {
         let now_unix = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -198,7 +198,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
             health_controller,
             health_feedback_interval,
             health_feedback_seq: Arc::new(AtomicU64::new(now_unix)),
-            raft_message_observer,
+            raft_message_filter,
         }
     }
 
@@ -782,7 +782,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         let store_id = self.store_id;
         let ch = self.storage.get_engine().raft_extension();
         let reject_messages_on_memory_ratio = self.reject_messages_on_memory_ratio;
-        let ob = self.raft_message_observer.clone();
+        let ob = self.raft_message_filter.clone();
 
         let res = async move {
             let mut stream = stream.map_err(Error::from);
@@ -845,7 +845,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         let store_id = self.store_id;
         let ch = self.storage.get_engine().raft_extension();
         let reject_messages_on_memory_ratio = self.reject_messages_on_memory_ratio;
-        let ob = self.raft_message_observer.clone();
+        let ob = self.raft_message_filter.clone();
 
         let res = async move {
             let mut stream = stream.map_err(Error::from);
@@ -908,7 +908,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         stream: RequestStream<SnapshotChunk>,
         sink: ClientStreamingSink<Done>,
     ) {
-        if let Some(true) = self.raft_message_observer.should_reject_snapshot() {
+        if let Some(true) = self.raft_message_filter.should_reject_snapshot() {
             RAFT_SNAPSHOT_REJECTS.inc();
             return;
         };
