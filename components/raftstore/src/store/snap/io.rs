@@ -670,11 +670,9 @@ mod tests {
     // function returns 4096 bytes of I/O usage, resulting in total of 8192 bytes.
     // With the 8000 bytes/sec limitation, we assert that the elapsed time must
     // exceed 1 second.
+    #[cfg(feature = "failpoints")]
     #[test]
     fn test_build_sst_with_io_limiter() {
-        #[cfg(not(feature = "failpoints"))]
-        return;
-
         let dir = Builder::new().prefix("test-io-limiter").tempdir().unwrap();
         let db = open_test_db_with_nkeys(dir.path(), None, None, 1000).unwrap();
         // The max throughput is 8000 bytes/sec.
@@ -703,6 +701,8 @@ mod tests {
             true,
         )
         .unwrap();
+        // 8192 represents the mocked total I/O bytes.
+        assert_eq!(stats.total_io_size, 8192);
         assert_eq!(stats.total_kv_size, 11890);
         // Must exceed 1 second!
         assert!(start.saturating_elapsed_secs() > 1_f64);
