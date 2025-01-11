@@ -111,13 +111,13 @@ impl SnapshotList {
 
 /// Estimates the smoothed coprocessor request rate over the last hour using a
 /// simple moving average.
-pub(crate) type CopRequestsSMA = Smoother<f64, RECORD_COUNT, ONE_HOUR_IN_SECS, 0>;
+pub(crate) type CopRequestsSMA = Smoother<f64, COP_REQUEST_SMA_RECORD_COUNT, ONE_HOUR_IN_SECS, 0>;
 /// Represents the number of seconds in an hour.
 const ONE_HOUR_IN_SECS: u64 = 60 * 60;
 /// The default interval for observing requests is 10 minutes
 /// (load_evict_interval), but this can be adjusted by users. To maintain
 /// accuracy, we double the record count for intervals smaller than the default.
-const RECORD_COUNT: usize = 6 * 2;
+pub(crate) const COP_REQUEST_SMA_RECORD_COUNT: usize = 6 * 2;
 
 pub struct CacheRegionMeta {
     // the cached region meta.

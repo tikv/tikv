@@ -31,7 +31,8 @@ pub const DEFAULT_EVICT_MIN_DURATION: Duration = Duration::from_secs(60 * 5);
 const MIN_REGION_COUNT_TO_EVICT: usize = 5;
 // TODO(SpadeA): this 10 and 20 may be adjusted by observing more workloads.
 const ITERATED_COUNT_FILTER_FACTOR: usize = 20;
-const COP_REQUEST_COUNT_FILTER_FACTOR: usize = 20;
+const SMA_COP_REQUEST_AVG_FILTER_FACTOR: usize = 20;
+const SMA_COP_REQUEST_COUNT_FILTER: usize = 2;
 
 #[derive(Clone)]
 pub(crate) struct RegionStatsManager {
@@ -202,7 +203,7 @@ impl RegionStatsManager {
                         "region_id={}, cop={}, avg_cop={}, cop_detail={:?}, mvcc_amplification={}",
                         crs.region.id,
                         crs.stat.query_stats.coprocessor,
-                        crs.avg_cop_requests,
+                        crs.sma_cop_requests_avg,
                         crs.stat.cop_detail,
                         crs.stat.cop_detail.mvcc_amplification(),
                     )
@@ -229,15 +230,10 @@ impl RegionStatsManager {
         let mut total_cop_requests = 0;
         for crs in &cached_region_stats {
             total_next_prev += crs.stat.cop_detail.iterated_count();
-            total_cop_requests += crs.avg_cop_requests;
+            total_cop_requests += crs.sma_cop_requests_avg;
         }
         let avg_next_prev = total_next_prev / cached_region_stats.len();
         let avg_cop_requests = total_cop_requests / cached_region_stats.len();
-        info!(
-            "ime auto load evict parameters";
-            "avg_next_prev" => avg_next_prev,
-            "avg_cop_requests" => avg_cop_requests,
-        );
 
         let now = Instant::now();
         let mut region_to_evict = Vec::with_capacity(max_count_to_evict);
@@ -252,13 +248,16 @@ impl RegionStatsManager {
                 //
                 // Instead, we assume workload patterns remain consistent after
                 // caching and evict based on request frequency.
-                let is_low_cop_requests =
-                    crs.avg_cop_requests <= avg_cop_requests / COP_REQUEST_COUNT_FILTER_FACTOR;
+                let is_cop_requests_low = crs.sma_cop_requests_avg
+                    <= avg_cop_requests / SMA_COP_REQUEST_AVG_FILTER_FACTOR;
 
-                let is_low_next_prev = crs.stat.cop_detail.iterated_count()
+                let is_cop_requests_reliable =
+                    crs.sma_cop_requests_count > SMA_COP_REQUEST_COUNT_FILTER;
+
+                let is_iterated_count_low = crs.stat.cop_detail.iterated_count()
                     <= avg_next_prev / ITERATED_COUNT_FILTER_FACTOR;
 
-                is_low_cop_requests && is_low_next_prev
+                is_cop_requests_reliable && is_cop_requests_low && is_iterated_count_low
             };
             if !need_evict {
                 continue;
@@ -287,7 +286,7 @@ impl RegionStatsManager {
                     "region_id={}, cop={}, avg_cop={}, cop_detail={:?}, mvcc_amplification={}",
                     crs.region.id,
                     crs.stat.query_stats.coprocessor,
-                    crs.avg_cop_requests,
+                    crs.sma_cop_requests_avg,
                     crs.stat.cop_detail,
                     crs.stat.cop_detail.mvcc_amplification(),
                 )
@@ -302,6 +301,8 @@ impl RegionStatsManager {
             "reached_stop_limit" => reach_stop_load,
             "load" => ?debug_load,
             "evicts" => ?debug_evict,
+            "avg_next_prev" => avg_next_prev,
+            "avg_cop_requests" => avg_cop_requests,
         );
         let regions_to_evict = region_to_evict.into_iter().map(|crs| crs.region).collect();
         (regions_to_load, regions_to_evict)
@@ -333,7 +334,7 @@ impl RegionStatsManager {
         // amplification
         let avg_cop_requests = regions_activity
             .iter()
-            .map(|crs| crs.avg_cop_requests)
+            .map(|crs| crs.sma_cop_requests_avg)
             .sum::<usize>()
             / regions_activity.len();
 
@@ -346,7 +347,7 @@ impl RegionStatsManager {
             let mut filter_by_avg_cop_requests = 0;
             evict_candidates.retain(|crs| {
                 // Do not evict regions with high mvcc amplification
-                if crs.avg_cop_requests > avg_cop_requests {
+                if crs.sma_cop_requests_avg > avg_cop_requests {
                     filter_by_avg_cop_requests += 1;
                     return false;
                 }
@@ -415,7 +416,8 @@ impl RegionStatsManager {
 struct CachedRegionStat {
     region: Region,
     stat: RegionStat,
-    avg_cop_requests: usize,
+    sma_cop_requests_count: usize,
+    sma_cop_requests_avg: usize,
     iterated_count: usize,
 }
 
@@ -429,34 +431,37 @@ fn sort_cached_region_stats(
     cached_regions: &HashMap<u64, Arc<StdMutex<CopRequestsSMA>>>,
 ) -> Vec<CachedRegionStat> {
     // update the moving average of the coprocessor requests.
-    let mut samples = Vec::with_capacity(region_stats.len());
+    let mut crss = Vec::with_capacity(region_stats.len());
     for (region, stat) in region_stats {
-        let mut avg_cop_requests = stat.query_stats.coprocessor as usize;
+        let mut cop_requests_avg = stat.query_stats.coprocessor as usize;
+        let mut cop_requests_count = 0;
         let cop_requests = stat.query_stats.coprocessor as usize;
         if let Some(cached_region) = cached_regions.get(&region.id)
             && let Ok(mut avg) = cached_region.lock()
         {
             avg.observe(cop_requests as f64);
-            avg_cop_requests = avg.get_avg().ceil() as usize;
+            cop_requests_avg = avg.get_avg().ceil() as usize;
+            cop_requests_count = avg.get_count();
         }
-        samples.push(CachedRegionStat {
+        crss.push(CachedRegionStat {
             iterated_count: stat.cop_detail.iterated_count(),
             region,
             stat,
-            avg_cop_requests,
+            sma_cop_requests_avg: cop_requests_avg,
+            sma_cop_requests_count: cop_requests_count,
         });
     }
 
-    samples.sort_by(|a, b| {
-        if a.avg_cop_requests != b.avg_cop_requests {
-            return a.avg_cop_requests.cmp(&b.avg_cop_requests);
+    crss.sort_by(|a, b| {
+        if a.sma_cop_requests_avg != b.sma_cop_requests_avg {
+            return a.sma_cop_requests_avg.cmp(&b.sma_cop_requests_avg);
         }
         if a.iterated_count != b.iterated_count {
             return a.iterated_count.cmp(&b.iterated_count);
         }
         std::cmp::Ordering::Equal
     });
-    samples
+    crss
 }
 
 #[cfg(test)]
@@ -471,7 +476,10 @@ pub mod tests {
     };
 
     use super::*;
-    use crate::{engine::SkiplistEngine, test_util::new_region, InMemoryEngineConfig};
+    use crate::{
+        engine::SkiplistEngine, region_manager::COP_REQUEST_SMA_RECORD_COUNT,
+        test_util::new_region, InMemoryEngineConfig,
+    };
 
     struct RegionInfoSimulator {
         regions: Mutex<TopRegions>,
@@ -835,29 +843,48 @@ pub mod tests {
 
         // All regions are busy, should be cached.
         let empty_cached_regions = new_cached_regions(vec![]);
-        let mut top_regions = regions
+        let all_busy = regions
             .iter()
             .map(|r| (r.clone(), new_region_stat(1000, 1000, 10)))
             .collect();
-        sim.set_top_regions(&top_regions);
+        sim.set_top_regions(&all_busy);
         let (added, removed) = rsm.collect_regions_to_load_and_evict(0, empty_cached_regions, &mc);
         assert_eq!(added.len(), regions.len());
         assert!(removed.is_empty());
 
-        // All regions are still busy.
-        sim.set_region_stats(&top_regions);
-        let cached_regions = new_cached_regions(regions.iter().map(|r| r.id).collect());
-        let (added, removed) =
-            rsm.collect_regions_to_load_and_evict(0, cached_regions.clone(), &mc);
-        assert!(removed.is_empty(), "{:?}", removed);
-        assert!(added.is_empty(), "{:?}", added);
-
-        // Region 1 is in idle for a very short period, should not be evicted.
+        // Within SMA unreliable period, any idle region should not be evicted.
         std::thread::sleep(Duration::from_millis(50));
-        top_regions[0].1 = new_region_stat(0, 0, 0);
-        sim.set_region_stats(&top_regions);
-        top_regions.remove(0);
-        sim.set_top_regions(&top_regions);
+        let cached_regions = new_cached_regions(regions.iter().map(|r| r.id).collect());
+        for _ in 0..SMA_COP_REQUEST_COUNT_FILTER {
+            let mut region1_idle = all_busy.clone();
+            region1_idle[0].1 = new_region_stat(0, 0, 0);
+            sim.set_region_stats(&region1_idle);
+            region1_idle.remove(0);
+            sim.set_top_regions(&region1_idle);
+
+            let (added, removed) =
+                rsm.collect_regions_to_load_and_evict(0, cached_regions.clone(), &mc);
+            assert!(removed.is_empty(), "{:?}", removed);
+            assert!(added.is_empty(), "{:?}", added);
+        }
+
+        // All regions are busy.
+        let sma_cap = COP_REQUEST_SMA_RECORD_COUNT;
+        sim.set_top_regions(&all_busy);
+        sim.set_region_stats(&all_busy);
+        for _ in 0..sma_cap {
+            let (added, removed) =
+                rsm.collect_regions_to_load_and_evict(0, cached_regions.clone(), &mc);
+            assert!(added.is_empty());
+            assert!(removed.is_empty());
+        }
+
+        // Region 1 is idle for a short period, it should not be evicted.
+        let mut region1_idle = all_busy.clone();
+        region1_idle[0].1 = new_region_stat(0, 0, 0);
+        sim.set_region_stats(&region1_idle);
+        region1_idle.remove(0);
+        sim.set_top_regions(&region1_idle);
         let (added, removed) =
             rsm.collect_regions_to_load_and_evict(0, cached_regions.clone(), &mc);
         assert!(removed.is_empty(), "{:?}", removed);
@@ -866,7 +893,6 @@ pub mod tests {
         // Region 1 is in idle for a long period, should be evicted.
         std::thread::sleep(Duration::from_millis(50));
         let mut has_removed = false;
-        let sma_cap = 10; // The capacity of CopRequestSMA is 10
         for _ in 0..2 * sma_cap {
             let (added, removed) =
                 rsm.collect_regions_to_load_and_evict(0, cached_regions.clone(), &mc);

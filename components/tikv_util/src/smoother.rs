@@ -95,6 +95,10 @@ where
         }
     }
 
+    pub fn get_count(&self) -> usize {
+        self.records.len()
+    }
+
     pub fn get_recent(&self) -> T {
         if self.records.is_empty() {
             return T::default();
@@ -230,6 +234,22 @@ pub(super) mod tests {
         assert!((smoother.get_max() - 9.0).abs() < f64::EPSILON);
         assert!((smoother.get_percentile_90() - 5.0).abs() < f64::EPSILON);
         assert_eq!(smoother.trend(), Trend::Increasing);
+    }
+
+    #[test]
+    fn test_smoother_count() {
+        let mut smoother = Smoother::<u64, 5, SMOOTHER_STALE_RECORD_THRESHOLD, 0>::default();
+        assert_eq!(smoother.get_count(), 0);
+        smoother.observe(1);
+        assert_eq!(smoother.get_count(), 1);
+        smoother.observe(2);
+        assert_eq!(smoother.get_count(), 2);
+        smoother.observe(3);
+        smoother.observe(4);
+        smoother.observe(5);
+        smoother.observe(6);
+        smoother.observe(7);
+        assert_eq!(smoother.get_count(), 5);
     }
 
     #[test]
