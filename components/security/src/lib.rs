@@ -347,7 +347,21 @@ fn check_subject_alternative_name(
             }
         }
 
-        Err("no matching x509_subject_alternative_name or doesn't exist".to_string())
+        let mut auth_debug_info = String::new();
+        for x in &auth_ctx {
+            auth_debug_info.push_str(&format!(
+                "Auth property: name = {}, value = {:?}\n",
+                x.name(),
+                x.value()
+            ));
+        }
+
+        let error_message = format!(
+            "No matching x509_subject_alternative_name or it doesn't exist. Debug info:\n{}",
+            auth_debug_info
+        );
+
+        Err(error_message)
     } else {
         Ok(())
     }
