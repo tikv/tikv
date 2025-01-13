@@ -358,25 +358,21 @@ impl<S: EngineSnapshot> MvccReader<S> {
             let next_key = match (memory_pair.as_ref(), storage_pair.as_ref()) {
                 (Some((memory_key, _)), Some((storage_key, _))) => {
                     if storage_key <= memory_key {
-                        // locks.push(storage_pair.take().unwrap());
                         let next_key = storage_pair.take().unwrap();
                         storage_pair = next_pair_from_storage()?;
                         next_key
                     } else {
-                        // locks.push(memory_pair.take().unwrap());
                         let next_key = memory_pair.take().unwrap();
                         memory_pair = memory_iter.next();
                         next_key
                     }
                 }
                 (Some(_), None) => {
-                    // locks.push(memory_pair.take().unwrap());
                     let next_key = memory_pair.take().unwrap();
                     memory_pair = memory_iter.next();
                     next_key
                 }
                 (None, Some(_)) => {
-                    // locks.push(storage_pair.take().unwrap());
                     let next_key = storage_pair.take().unwrap();
                     storage_pair = next_pair_from_storage()?;
                     next_key
