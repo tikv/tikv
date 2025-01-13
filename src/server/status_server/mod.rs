@@ -1139,7 +1139,7 @@ fn check_cert(security_config: Arc<SecurityConfig>, cert: Option<X509>) -> bool 
         // true
         is_cn_authorized && is_san_authorized
     } else {
-        false
+        security_config.cert_allowed_cn.is_empty() && security_config.cert_allowed_san.is_empty()
     }
 }
 
@@ -1454,7 +1454,7 @@ mod tests {
     #[test]
     fn test_security_status_service_with_san() {
         let mut allowed_san = HashSet::default();
-        allowed_san.insert("tikv-server".to_owned());
+        allowed_san.insert("127.0.0.1".to_owned());
         do_test_security_status_service(HashSet::default(), allowed_san, true);
     }
 

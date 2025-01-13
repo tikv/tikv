@@ -51,7 +51,7 @@ fn test_check_cn_fail() {
 fn test_check_san_success() {
     let mut cluster = new_server_cluster(0, 1);
     let mut allowed_san = HashSet::default();
-    allowed_san.insert("IP".to_owned());
+    allowed_san.insert("127.0.0.1".to_owned());
     cluster.cfg.security = test_util::new_security_cfg(None, Some(allowed_san));
     cluster.run();
 

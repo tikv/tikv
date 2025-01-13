@@ -338,7 +338,7 @@ fn check_subject_alternative_name(
     if let Some(auth_ctx) = ctx.auth_context() {
         let auth_property_sans = auth_ctx
             .into_iter()
-            .filter(|x| x.name() == "x509_subject_alternative_name");
+            .filter(|x| x.name().contains("subject_alternative_name"));
 
         for auth_property in auth_property_sans {
             let peer_san = auth_property.value_str().unwrap();
@@ -356,12 +356,7 @@ fn check_subject_alternative_name(
             ));
         }
 
-        let error_message = format!(
-            "No matching x509_subject_alternative_name or it doesn't exist. Debug info:\n{}",
-            auth_debug_info
-        );
-
-        Err(error_message)
+        Err("No matching x509_subject_alternative_name or it doesn't exist.".to_string())
     } else {
         Ok(())
     }
