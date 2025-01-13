@@ -190,12 +190,10 @@ mod all {
             suite.write_records(0, 128, 1).await;
             let ts = suite.just_async_commit_prewrite(256, 1);
             suite.write_records(258, 128, 1).await;
-            suite.force_flush_files("test_async_commit");
-            std::thread::sleep(Duration::from_secs(4));
+            suite.force_flush_files_and_wait("test_async_commit").await;
             assert_eq!(suite.global_checkpoint(), 256);
             suite.just_commit_a_key(make_record_key(1, 256), TimeStamp::new(256), ts);
-            suite.force_flush_files("test_async_commit");
-            suite.wait_for_flush();
+            suite.force_flush_files_and_wait("test_async_commit").await;
             let cp = suite.global_checkpoint();
             assert!(cp > 256, "it is {:?}", cp);
         });
@@ -425,22 +423,22 @@ mod all {
         let leader = suite.cluster.leader_of_region(1).unwrap();
         suite.must_shuffle_leader(1);
         let round2 = run_async_test(suite.write_records(256, 128, 1));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
         suite
             .endpoints
             .get(&leader.store_id)
             .unwrap()
             .scheduler()
-            .schedule(Task::ForceFlush("r".to_owned()))
+            .schedule(Task::ForceFlush(TaskSelector::All, tx))
             .unwrap();
-        suite.sync();
-        std::thread::sleep(Duration::from_secs(2));
+        while rx.blocking_recv().is_some() {}
+
         suite.check_for_write_records(
             suite.flushed_files.path(),
             round1.iter().map(|x| x.as_slice()),
         );
         assert!(suite.global_checkpoint() > 256);
-        suite.force_flush_files("r");
-        suite.wait_for_flush();
+        run_async_test(suite.force_flush_files_and_wait("r"));
         assert!(suite.global_checkpoint() > 512);
         suite.check_for_write_records(
             suite.flushed_files.path(),
@@ -495,12 +493,11 @@ mod all {
 
     #[test]
     fn update_config() {
-        let suite = SuiteBuilder::new_named("network_partition")
-            .nodes(1)
-            .build();
+        let suite = SuiteBuilder::new_named("update_config").nodes(1).build();
         let mut basic_config = BackupStreamConfig::default();
         basic_config.initial_scan_concurrency = 4;
         suite.run(|| Task::ChangeConfig(basic_config.clone()));
+        suite.sync();
         suite.wait_with(|e| {
             assert_eq!(e.initial_scan_semaphore.available_permits(), 4,);
             true
@@ -512,5 +509,37 @@ mod all {
             assert_eq!(e.initial_scan_semaphore.available_permits(), 16,);
             true
         });
+    }
+
+    #[test]
+    fn force_flush() {
+        let mut suite = SuiteBuilder::new_named("force_flush").nodes(1).build();
+        suite.must_register_task(1, "force_flush");
+        let recs = run_async_test(suite.write_records(0, 128, 1));
+        let mut strm = suite.flush_stream(true);
+        let tso = suite.tso();
+
+        suite.for_each_log_backup_cli(|_id, c| {
+            let res = c.flush_now(Default::default()).unwrap();
+            assert_eq!(res.results.len(), 1);
+            assert!(res.results[0].error_message.is_empty(), "{:?}", res);
+            assert!(res.results[0].success, "{:?}", res);
+        });
+
+        let Some((_, resp)) = run_async_test(strm.next()) else {
+            panic!("subscribe stream close early")
+        };
+        assert_eq!(resp.events.len(), 1, "{:?}", resp.events);
+        assert!(
+            resp.events[0].checkpoint > tso.into_inner(),
+            "{:?}, {}",
+            resp.events[0],
+            tso
+        );
+
+        suite.check_for_write_records(
+            suite.flushed_files.path(),
+            recs.iter().map(|v| v.as_slice()),
+        )
     }
 }
