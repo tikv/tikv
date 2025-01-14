@@ -1139,7 +1139,7 @@ fn check_cert(security_config: Arc<SecurityConfig>, cert: Option<X509>) -> bool 
         // true
         is_cn_authorized && is_san_authorized
     } else {
-        security_config.cert_allowed_cn.is_empty() && security_config.cert_allowed_san.is_empty()
+        false
     }
 }
 
