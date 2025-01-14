@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, Mutex, RwLock},
 };
 
-use crate::errors::Result;
+use crate::{errors::Result, Range};
 
 /// Currently used to ensure mutual exclusion between
 /// compaction filter GC and ingest SST operations.
@@ -176,14 +176,10 @@ impl Drop for RangeLatchGuard {
 pub trait ImportExt {
     type IngestExternalFileOptions: IngestExternalFileOptions;
 
-    fn ingest_external_file_cf(
-        &self,
-        cf: &str,
-        files: &[&str],
-        range: Option<(Vec<u8>, Vec<u8>)>,
-    ) -> Result<()>;
+    fn ingest_external_file_cf(&self, cf: &str, files: &[&str], range: Option<Range>)
+    -> Result<()>;
 
-    fn acquire_ingest_latch(&self, range: (Vec<u8>, Vec<u8>)) -> Result<RangeLatchGuard>;
+    fn acquire_ingest_latch(&self, range: Range) -> Result<RangeLatchGuard>;
 }
 
 pub trait IngestExternalFileOptions {

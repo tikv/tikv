@@ -10,7 +10,8 @@ use std::{
 use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter, Iv};
 use engine_traits::{
     CfName, Error as EngineError, ExternalSstFileInfo, IterOptions, Iterable, Iterator, KvEngine,
-    Mutable, RefIterable, SstCompressionType, SstReader, SstWriter, SstWriterBuilder, WriteBatch,
+    Mutable, Range, RefIterable, SstCompressionType, SstReader, SstWriter, SstWriterBuilder,
+    WriteBatch,
 };
 use fail::fail_point;
 use file_system::{File, IoBytesTracker, IoType, OpenOptions, WithIoType};
@@ -378,7 +379,14 @@ where
     //    region worker enforces sequential task execution of the `ApplyTask` and
     //    `DestroyTask`.
     // Refer to https://github.com/tikv/tikv/issues/18081.
-    box_try!(db.ingest_external_file_cf(cf, files, Some((start_key, end_key))));
+    box_try!(db.ingest_external_file_cf(
+        cf,
+        files,
+        Some(Range {
+            start_key: start_key.as_slice(),
+            end_key: end_key.as_slice()
+        })
+    ));
     Ok(())
 }
 

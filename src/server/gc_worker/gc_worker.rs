@@ -1054,12 +1054,28 @@ impl<E: Engine> GcRunnerCore<E> {
                 id,
                 region_info_provider,
             } => {
-                // Locking the range is necessary to prevent conflicts with ingestion operations
-                // using IngestExternalFileOptions.allow_write = true.
-                let _ingest_latch_guard = self.engine.kv_engine().unwrap().acquire_ingest_latch((
-                    wb.smallest_key.as_ref().unwrap().as_encoded().clone(),
-                    wb.largest_key.as_ref().unwrap().as_encoded().clone(),
-                ));
+                // Acquire latch to prevent conflicts with ingestion operations
+                // using RocksDB IngestExternalFileOptions.allow_write = true.
+                let _ingest_latch_guard =
+                    self.engine
+                        .kv_engine()
+                        .unwrap()
+                        .acquire_ingest_latch(Range {
+                            start_key: wb
+                                .smallest_key
+                                .as_ref()
+                                .unwrap()
+                                .as_encoded()
+                                .clone()
+                                .as_slice(),
+                            end_key: wb
+                                .largest_key
+                                .as_ref()
+                                .unwrap()
+                                .as_encoded()
+                                .clone()
+                                .as_slice(),
+                        });
 
                 let count = wb.count();
                 match wb.batch {
@@ -2938,10 +2954,10 @@ mod tests {
             coprocessor_host,
         );
 
-        let _ingest_latch_guard = engine
-            .kv_engine()
-            .unwrap()
-            .acquire_ingest_latch((b"a".to_vec(), b"b".to_vec()));
+        let _ingest_latch_guard = engine.kv_engine().unwrap().acquire_ingest_latch(Range {
+            start_key: b"a",
+            end_key: b"b",
+        });
 
         let gc_task_completed = Arc::new(AtomicBool::new(false));
         let gc_task_completed_clone = gc_task_completed.clone();

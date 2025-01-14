@@ -1,5 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
-use engine_traits::{ImportExt, IngestExternalFileOptions, RangeLatchGuard, Result};
+use engine_traits::{ImportExt, IngestExternalFileOptions, Range, RangeLatchGuard, Result};
 use fail::fail_point;
 use rocksdb::IngestExternalFileOptions as RawIngestExternalFileOptions;
 use tikv_util::time::Instant;
@@ -15,16 +15,19 @@ impl ImportExt for RocksEngine {
         &self,
         cf_name: &str,
         files: &[&str],
-        range: Option<(Vec<u8>, Vec<u8>)>,
+        range: Option<Range>,
     ) -> Result<()> {
+        // Acquire latch to prevent conflicts with compaction-filter operations
+        // when using RocksDB IngestExternalFileOptions.allow_write = true.
         let _region_inject_latch_guard = match &range {
-            Some((start_key, end_key)) => Some(
+            Some(r) => Some(
                 self.ingest_latch
-                    .acquire(start_key.clone(), end_key.clone())?,
+                    .acquire(r.start_key.to_vec(), r.end_key.to_vec())?,
             ),
             None => None,
         };
         fail_point!("after_apply_snapshot_ingest_latch_acquired");
+
         let cf = util::get_cf_handle(self.as_inner(), cf_name)?;
         let mut opts = RocksIngestExternalFileOptions::new();
         opts.move_files(true);
@@ -56,8 +59,10 @@ impl ImportExt for RocksEngine {
         Ok(())
     }
 
-    fn acquire_ingest_latch(&self, range: (Vec<u8>, Vec<u8>)) -> Result<RangeLatchGuard> {
-        Ok(self.ingest_latch.acquire(range.0, range.1)?)
+    fn acquire_ingest_latch(&self, range: Range) -> Result<RangeLatchGuard> {
+        Ok(self
+            .ingest_latch
+            .acquire(range.start_key.to_vec(), range.end_key.to_vec())?)
     }
 }
 

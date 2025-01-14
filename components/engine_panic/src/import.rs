@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{ImportExt, IngestExternalFileOptions, RangeLatchGuard, Result};
+use engine_traits::{ImportExt, IngestExternalFileOptions, Range, RangeLatchGuard, Result};
 
 use crate::engine::PanicEngine;
 
@@ -11,12 +11,12 @@ impl ImportExt for PanicEngine {
         &self,
         cf: &str,
         files: &[&str],
-        range: Option<(Vec<u8>, Vec<u8>)>,
+        range: Option<Range>,
     ) -> Result<()> {
         panic!()
     }
 
-    fn acquire_ingest_latch(&self, range: (Vec<u8>, Vec<u8>)) -> Result<RangeLatchGuard> {
+    fn acquire_ingest_latch(&self, range: Range) -> Result<RangeLatchGuard> {
         panic!()
     }
 }
