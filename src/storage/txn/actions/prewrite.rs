@@ -556,11 +556,9 @@ impl<'a> PrewriteMutation<'a> {
             lock.use_async_commit = true;
             lock.secondaries = secondary_keys.to_owned();
         } else if try_one_pc && lock.primary == self.key.to_raw()? {
-            // Set use_async_commit to true when try_one_pc and the key is primary. If
-            // use_async_commit is false and async-prewrite-apply is enabled, there is a
-            // chance that reads with max_ts cannot see the previous writes because the mem
-            // lock can be skipped and the data hasn't been applied yet.
-            lock.use_async_commit = true;
+            // Set `use_one_pc` to true when the key is primary. It's used to prevent the
+            // in-memory lock from being skipped when reading with max_ts.
+            lock.use_one_pc = true;
         }
 
         let final_min_commit_ts = if lock.use_async_commit || try_one_pc {
@@ -1219,7 +1217,7 @@ pub mod tests {
         assert_eq!(modifies.len(), 2); // the mutation that meets CommitTsTooLarge still exists
         write(&engine, &Default::default(), modifies);
         // success 1pc prewrite needs to be transformed to locks
-        assert!(must_locked(&mut engine, b"k1", 10).use_async_commit);
+        assert!(!must_locked(&mut engine, b"k1", 10).use_async_commit);
         assert!(!must_locked(&mut engine, b"k2", 10).use_async_commit);
     }
 
@@ -2706,7 +2704,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_1pc_set_lock_use_async_commit() {
+    fn test_1pc_set_lock_use_one_pc() {
         let mut engine = crate::storage::TestEngineBuilder::new().build().unwrap();
         let cm = ConcurrencyManager::new(42.into());
 
@@ -2739,11 +2737,10 @@ pub mod tests {
         )
         .unwrap();
 
-        // lock.use_async_commit should be set to true when using 1PC even when
-        // secondary_keys is empty.
+        // lock.use_one_pc should be set to true for primary key when using 1PC.
         assert_eq!(txn.guards.len(), 2);
-        txn.guards[0].with_lock(|l| assert!(l.as_ref().unwrap().use_async_commit));
-        txn.guards[1].with_lock(|l| assert!(!l.as_ref().unwrap().use_async_commit));
+        txn.guards[0].with_lock(|l| assert!(l.as_ref().unwrap().use_one_pc));
+        txn.guards[1].with_lock(|l| assert!(!l.as_ref().unwrap().use_one_pc));
 
         // read with max_ts should be blocked by the lock.
         for &key in &[k1, k2] {
