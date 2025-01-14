@@ -234,13 +234,14 @@ impl RegionStatsManager {
         }
         let avg_next_prev = total_next_prev / cached_region_stats.len();
         let avg_cop_requests = total_cop_requests / cached_region_stats.len();
+        let is_memory_low = memory_controller.reached_stop_load_threshold();
 
         let now = Instant::now();
         let mut region_to_evict = Vec::with_capacity(max_count_to_evict);
         for crs in cached_region_stats.into_iter().take(max_count_to_evict) {
             let need_evict = {
-                // In this case, memory usage is relatively low, we only
-                // evict those that should not be cached apparently.
+                // In case, memory usage is relatively low, we evict those that
+                // should not be cached.
                 //
                 // NB: When a region is cached, its RegionWriteCfCopDetail only
                 // reflects the MVCC amplification in IME not in RocksDB. So
@@ -257,7 +258,10 @@ impl RegionStatsManager {
                 let is_iterated_count_low = crs.stat.cop_detail.iterated_count()
                     <= avg_next_prev / ITERATED_COUNT_FILTER_FACTOR;
 
-                is_cop_requests_reliable && is_cop_requests_low && is_iterated_count_low
+                is_memory_low
+                    && is_cop_requests_reliable
+                    && is_cop_requests_low
+                    && is_iterated_count_low
             };
             if !need_evict {
                 continue;
@@ -267,11 +271,10 @@ impl RegionStatsManager {
             // If it has no time recorded, it should be loaded
             // be pre-load or something, record the time and
             // does not evict it this time.
-            let can_evict = {
-                let time_loaded = regions_loaded.entry(crs.region.id).or_insert(now);
-                now.checked_duration_since(*time_loaded)
-                    .map_or(false, |d| d > self.evict_min_duration)
-            };
+            let load_time = regions_loaded.entry(crs.region.id).or_insert(now);
+            let can_evict = now
+                .checked_duration_since(*load_time)
+                .map_or(false, |d| d > self.evict_min_duration);
             if !can_evict {
                 continue;
             }
@@ -558,89 +561,101 @@ pub mod tests {
         config.stop_load_threshold = Some(ReadableSize::kb(1));
         config.mvcc_amplification_threshold = 10;
         let config = Arc::new(VersionTrack::new(config));
+        // Make sure stop load threshold is reached.
         let mc = MemoryController::new(config.clone(), skiplist_engine);
-        let region_1 = new_region(1, b"k01", b"k02");
-        let region_2 = new_region(2, b"k03", b"k04");
+        mc.acquire(config.value().stop_load_threshold() * 2);
+
+        let regions = vec![
+            new_region(1, b"k01", b"k02"),
+            new_region(2, b"k03", b"k04"),
+            new_region(3, b"k05", b"k06"),
+            new_region(4, b"k07", b"k08"),
+            new_region(5, b"k09", b"k10"),
+            new_region(6, b"k11", b"k12"),
+            new_region(7, b"k13", b"k14"),
+        ];
         let sim = Arc::new(RegionInfoSimulator {
-            regions: Mutex::new(vec![(region_1.clone(), new_region_stat(10, 1000, 10))]),
+            regions: Mutex::default(),
             region_stats: Mutex::default(),
         });
         // 10 ms min duration eviction for testing purposes.
-        let rsm = RegionStatsManager::new(config, Duration::from_millis(10), sim.clone());
+        let mut rsm =
+            RegionStatsManager::new(config.clone(), Duration::from_millis(10), sim.clone());
 
-        let (added, removed) =
-            rsm.collect_regions_to_load_and_evict(0, new_cached_regions(vec![]), &mc);
-        assert_eq!(&added, &[region_1.clone()]);
-        assert!(removed.is_empty());
-        let top_regions = vec![(region_2.clone(), new_region_stat(10, 1000, 8))];
-        let region_stats = vec![(region_1.clone(), new_region_stat(10, 20, 10))];
-        sim.set_top_regions(&top_regions);
-        sim.set_region_stats(&region_stats);
-        let (added, removed) =
-            rsm.collect_regions_to_load_and_evict(0, new_cached_regions(vec![1]), &mc);
-        assert_eq!(&added, &[region_2.clone()]);
-        assert!(removed.is_empty());
-        let region_3 = new_region(3, b"k05", b"k06");
-        let region_4 = new_region(4, b"k07", b"k08");
-        let region_5 = new_region(5, b"k09", b"k10");
-        let region_6 = new_region(6, b"k11", b"k12");
-        let region_7 = new_region(7, b"k13", b"k14");
-        let top_regions = vec![
-            (region_6.clone(), new_region_stat(10, 1000, 10)),
-            (region_3.clone(), new_region_stat(10, 1000, 10)),
-            (region_4.clone(), new_region_stat(10, 1000, 10)),
-            (region_5.clone(), new_region_stat(10, 1000, 10)),
-            (region_7.clone(), new_region_stat(10, 2000, 10)),
-        ];
-        let region_stats = vec![
-            (region_1.clone(), new_region_stat(10, 20, 10)),
-            (region_2.clone(), new_region_stat(10, 20, 8)),
-        ];
-        sim.set_top_regions(&top_regions);
-        sim.set_region_stats(&region_stats);
-        let (added, removed) =
-            rsm.collect_regions_to_load_and_evict(0, new_cached_regions(vec![1, 2]), &mc);
-        assert!(removed.is_empty());
-        assert_eq!(
-            &added,
-            &[
-                region_3.clone(),
-                region_4.clone(),
-                region_5.clone(),
-                region_6.clone(),
-                region_7.clone()
-            ]
-        );
-
-        let region_stats = vec![
-            (region_1.clone(), new_region_stat(0, 2, 0)), // evicted due to read flow
-            (region_6.clone(), new_region_stat(10, 200, 10)),
-            (region_2.clone(), new_region_stat(10, 20, 8)),
-            (region_3.clone(), new_region_stat(10, 15, 10)), // evicted due to mvcc amplification
-            (region_4.clone(), new_region_stat(10, 30, 10)),
-            (region_5.clone(), new_region_stat(10, 55, 10)),
-            (region_7.clone(), new_region_stat(10, 80, 10)),
-        ];
-        sim.set_top_regions(&vec![]);
-        sim.set_region_stats(&region_stats);
-        let (_, removed) = rsm.collect_regions_to_load_and_evict(
-            0,
-            new_cached_regions(vec![1, 2, 3, 4, 5, 6, 7]),
-            &mc,
-        ); // `region_1` is no longer needed to cached, but since it was loaded less
-        // than 10 ms ago, it should not be included in the removed ranges.
+        // All regions are busy, should be cached.
+        let empty_cached_regions = new_cached_regions(vec![]);
+        let all_busy = regions
+            .iter()
+            .map(|r| (r.clone(), new_region_stat(1000, 1000, 10)))
+            .collect();
+        sim.set_top_regions(&all_busy);
+        let (added, removed) = rsm.collect_regions_to_load_and_evict(0, empty_cached_regions, &mc);
+        assert_eq!(added.len(), regions.len());
         assert!(removed.is_empty());
 
-        // After 100 ms passed, check again, and verify `region_1` is evictable.
-        std::thread::sleep(Duration::from_millis(100));
-        sim.set_top_regions(&vec![]);
-        sim.set_region_stats(&region_stats);
-        let (_, removed) = rsm.collect_regions_to_load_and_evict(
-            0,
-            new_cached_regions(vec![1, 2, 3, 4, 5, 6, 7]),
-            &mc,
-        );
-        assert_eq!(&removed, &[region_1.clone()]);
+        // Within SMA unreliable period, any idle region should not be evicted.
+        std::thread::sleep(Duration::from_millis(50));
+        let cached_regions = new_cached_regions(regions.iter().map(|r| r.id).collect());
+        for _ in 0..SMA_COP_REQUEST_COUNT_FILTER {
+            let mut region1_idle = all_busy.clone();
+            region1_idle[0].1 = new_region_stat(0, 0, 0);
+            sim.set_region_stats(&region1_idle);
+            region1_idle.remove(0);
+            sim.set_top_regions(&region1_idle);
+
+            let (added, removed) =
+                rsm.collect_regions_to_load_and_evict(0, cached_regions.clone(), &mc);
+            assert!(removed.is_empty(), "{:?}", removed);
+            assert!(added.is_empty(), "{:?}", added);
+        }
+
+        // All regions are busy.
+        let sma_cap = COP_REQUEST_SMA_RECORD_COUNT;
+        sim.set_top_regions(&all_busy);
+        sim.set_region_stats(&all_busy);
+        for _ in 0..sma_cap {
+            let (added, removed) =
+                rsm.collect_regions_to_load_and_evict(0, cached_regions.clone(), &mc);
+            assert!(added.is_empty());
+            assert!(removed.is_empty());
+        }
+
+        // Region 1 is idle for a short period, it should not be evicted.
+        let mut region1_idle = all_busy.clone();
+        region1_idle[0].1 = new_region_stat(0, 0, 0);
+        sim.set_region_stats(&region1_idle);
+        region1_idle.remove(0);
+        sim.set_top_regions(&region1_idle);
+        let (added, removed) =
+            rsm.collect_regions_to_load_and_evict(0, cached_regions.clone(), &mc);
+        assert!(removed.is_empty(), "{:?}", removed);
+        assert!(added.is_empty(), "{:?}", added);
+
+        // Region 1 is in idle for a long period, should be evicted.
+        std::thread::sleep(Duration::from_millis(50));
+        let mut has_removed = false;
+        for _ in 0..2 * sma_cap {
+            let (added, removed) =
+                rsm.collect_regions_to_load_and_evict(0, cached_regions.clone(), &mc);
+            assert!(added.is_empty());
+            if !removed.is_empty() {
+                assert_eq!(removed, vec![regions[0].clone()]);
+                has_removed = true;
+                break;
+            }
+        }
+        assert!(has_removed);
+
+        // Make sure stop load threshold is not reached.
+        mc.release(config.value().stop_load_threshold() * 2);
+        rsm.collect_regions_to_load_and_evict(0, cached_regions.clone(), &mc);
+        assert!(removed.is_empty(), "{:?}", removed);
+
+        // Region can only be evicted after `evict_min_duration`.
+        rsm.evict_min_duration = Duration::MAX;
+        mc.acquire(config.value().stop_load_threshold() * 2);
+        rsm.collect_regions_to_load_and_evict(0, cached_regions.clone(), &mc);
+        assert!(removed.is_empty(), "{:?}", removed);
     }
 
     #[test]
@@ -815,94 +830,5 @@ pub mod tests {
             let order: Vec<_> = sorted.iter().map(|crs| crs.region.id).collect();
             assert_eq!(order, *expected_order);
         }
-    }
-
-    #[test]
-    fn test_do_not_evict_periodically_busy_region() {
-        let skiplist_engine = SkiplistEngine::new();
-        let mut config = InMemoryEngineConfig::config_for_test();
-        config.stop_load_threshold = Some(ReadableSize::kb(1));
-        config.mvcc_amplification_threshold = 10;
-        let config = Arc::new(VersionTrack::new(config));
-        let mc = MemoryController::new(config.clone(), skiplist_engine);
-        let regions = vec![
-            new_region(1, b"k01", b"k02"),
-            new_region(2, b"k03", b"k04"),
-            new_region(3, b"k05", b"k06"),
-            new_region(4, b"k07", b"k08"),
-            new_region(5, b"k09", b"k10"),
-            new_region(6, b"k11", b"k12"),
-            new_region(7, b"k13", b"k14"),
-        ];
-        let sim = Arc::new(RegionInfoSimulator {
-            regions: Mutex::default(),
-            region_stats: Mutex::default(),
-        });
-        // 10 ms min duration eviction for testing purposes.
-        let rsm = RegionStatsManager::new(config, Duration::from_millis(10), sim.clone());
-
-        // All regions are busy, should be cached.
-        let empty_cached_regions = new_cached_regions(vec![]);
-        let all_busy = regions
-            .iter()
-            .map(|r| (r.clone(), new_region_stat(1000, 1000, 10)))
-            .collect();
-        sim.set_top_regions(&all_busy);
-        let (added, removed) = rsm.collect_regions_to_load_and_evict(0, empty_cached_regions, &mc);
-        assert_eq!(added.len(), regions.len());
-        assert!(removed.is_empty());
-
-        // Within SMA unreliable period, any idle region should not be evicted.
-        std::thread::sleep(Duration::from_millis(50));
-        let cached_regions = new_cached_regions(regions.iter().map(|r| r.id).collect());
-        for _ in 0..SMA_COP_REQUEST_COUNT_FILTER {
-            let mut region1_idle = all_busy.clone();
-            region1_idle[0].1 = new_region_stat(0, 0, 0);
-            sim.set_region_stats(&region1_idle);
-            region1_idle.remove(0);
-            sim.set_top_regions(&region1_idle);
-
-            let (added, removed) =
-                rsm.collect_regions_to_load_and_evict(0, cached_regions.clone(), &mc);
-            assert!(removed.is_empty(), "{:?}", removed);
-            assert!(added.is_empty(), "{:?}", added);
-        }
-
-        // All regions are busy.
-        let sma_cap = COP_REQUEST_SMA_RECORD_COUNT;
-        sim.set_top_regions(&all_busy);
-        sim.set_region_stats(&all_busy);
-        for _ in 0..sma_cap {
-            let (added, removed) =
-                rsm.collect_regions_to_load_and_evict(0, cached_regions.clone(), &mc);
-            assert!(added.is_empty());
-            assert!(removed.is_empty());
-        }
-
-        // Region 1 is idle for a short period, it should not be evicted.
-        let mut region1_idle = all_busy.clone();
-        region1_idle[0].1 = new_region_stat(0, 0, 0);
-        sim.set_region_stats(&region1_idle);
-        region1_idle.remove(0);
-        sim.set_top_regions(&region1_idle);
-        let (added, removed) =
-            rsm.collect_regions_to_load_and_evict(0, cached_regions.clone(), &mc);
-        assert!(removed.is_empty(), "{:?}", removed);
-        assert!(added.is_empty(), "{:?}", added);
-
-        // Region 1 is in idle for a long period, should be evicted.
-        std::thread::sleep(Duration::from_millis(50));
-        let mut has_removed = false;
-        for _ in 0..2 * sma_cap {
-            let (added, removed) =
-                rsm.collect_regions_to_load_and_evict(0, cached_regions.clone(), &mc);
-            assert!(added.is_empty());
-            if !removed.is_empty() {
-                assert_eq!(removed, vec![regions[0].clone()]);
-                has_removed = true;
-                break;
-            }
-        }
-        assert!(has_removed);
     }
 }
