@@ -176,10 +176,14 @@ impl Drop for RangeLatchGuard {
 pub trait ImportExt {
     type IngestExternalFileOptions: IngestExternalFileOptions;
 
-    fn ingest_external_file_cf(&self, cf: &str, files: &[&str], range: Option<Range>)
-    -> Result<()>;
+    fn ingest_external_file_cf(
+        &self,
+        cf: &str,
+        files: &[&str],
+        range: Option<Range<'_>>,
+    ) -> Result<()>;
 
-    fn acquire_ingest_latch(&self, range: Range) -> Result<RangeLatchGuard>;
+    fn acquire_ingest_latch(&self, range: Range<'_>) -> Result<RangeLatchGuard>;
 }
 
 pub trait IngestExternalFileOptions {

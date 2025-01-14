@@ -15,7 +15,7 @@ impl ImportExt for RocksEngine {
         &self,
         cf_name: &str,
         files: &[&str],
-        range: Option<Range>,
+        range: Option<Range<'_>>,
     ) -> Result<()> {
         // Acquire latch to prevent conflicts with compaction-filter operations
         // when using RocksDB IngestExternalFileOptions.allow_write = true.
@@ -59,7 +59,7 @@ impl ImportExt for RocksEngine {
         Ok(())
     }
 
-    fn acquire_ingest_latch(&self, range: Range) -> Result<RangeLatchGuard> {
+    fn acquire_ingest_latch(&self, range: Range<'_>) -> Result<RangeLatchGuard> {
         Ok(self
             .ingest_latch
             .acquire(range.start_key.to_vec(), range.end_key.to_vec())?)

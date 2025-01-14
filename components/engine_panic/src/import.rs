@@ -11,12 +11,12 @@ impl ImportExt for PanicEngine {
         &self,
         cf: &str,
         files: &[&str],
-        range: Option<Range>,
+        range: Option<Range<'_>>,
     ) -> Result<()> {
         panic!()
     }
 
-    fn acquire_ingest_latch(&self, range: Range) -> Result<RangeLatchGuard> {
+    fn acquire_ingest_latch(&self, range: Range<'_>) -> Result<RangeLatchGuard> {
         panic!()
     }
 }
