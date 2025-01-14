@@ -74,23 +74,38 @@ impl LoadEvictionObserver {
         // Evicting the cache for region splits is not worthwhile and may cause
         // performance regression due to frequent loading and evicting of
         // hot regions.
-        if apply.pending_handle_ssts.is_some()
-            || (state.modified_region.is_some()
-                && matches!(
-                    cmd.request.get_admin_request().get_cmd_type(),
-                    AdminCmdType::PrepareMerge
-                        | AdminCmdType::CommitMerge
-                        | AdminCmdType::RollbackMerge
-                ))
-        {
+        if apply.pending_handle_ssts.is_some() {
             let cache_region = CacheRegion::from_region(ctx.region());
             debug!(
-                "ime evict range due to apply commands";
+                "ime evict range due to ingest sst";
                 "region" => ?cache_region,
-                "is_ingest_sst" => apply.pending_handle_ssts.is_some(),
-                "admin_command" => ?cmd.request.get_admin_request().get_cmd_type(),
             );
-            self.evict_region(cache_region, EvictReason::Merge)
+            self.evict_region(cache_region, EvictReason::IngestSST)
+        }
+        if let Some(modified_region) = &state.modified_region {
+            if matches!(
+                cmd.request.get_admin_request().get_cmd_type(),
+                AdminCmdType::PrepareMerge
+            ) {
+                let cache_region = CacheRegion::from_region(ctx.region());
+                debug!(
+                    "ime evict range due to apply commands";
+                    "region" => ?cache_region,
+                    "admin_command" => ?cmd.request.get_admin_request().get_cmd_type(),
+                );
+                self.evict_region(cache_region, EvictReason::PrepareMerge)
+            } else if matches!(
+                cmd.request.get_admin_request().get_cmd_type(),
+                AdminCmdType::CommitMerge | AdminCmdType::RollbackMerge
+            ) {
+                let cache_region = CacheRegion::from_region(ctx.region());
+                debug!(
+                    "ime evict range due to apply commands";
+                    "region" => ?cache_region,
+                    "admin_command" => ?cmd.request.get_admin_request().get_cmd_type(),
+                );
+                self.merge_region(cache_region.clone(), modified_region.clone())
+            }
         }
         // there are new_regions, this must be a split event.
         if !state.new_regions.is_empty() {
@@ -122,6 +137,23 @@ impl LoadEvictionObserver {
         });
     }
 
+    fn merge_region(&self, region: CacheRegion, modified_region: Region) {
+        let cache_engine = self.cache_engine.clone();
+        let modified_region = CacheRegion::from_region(&modified_region);
+        self.cache_engine.on_region_event(RegionEvent::Eviction {
+            region: region.clone(),
+            reason: EvictReason::Merge,
+            on_evict_finished: Some(Box::new(move || {
+                Box::pin(async move {
+                    cache_engine.on_region_event(RegionEvent::TryLoad {
+                        region: modified_region,
+                        for_manual_range: false,
+                    });
+                })
+            })),
+        });
+    }
+
     // Try to load region. It will be loaded if it's overlapped with maunal range
     fn try_load_region(&self, region: CacheRegion) {
         self.cache_engine.on_region_event(RegionEvent::TryLoad {
@@ -131,8 +163,11 @@ impl LoadEvictionObserver {
     }
 
     fn evict_region(&self, region: CacheRegion, reason: EvictReason) {
-        self.cache_engine
-            .on_region_event(RegionEvent::Eviction { region, reason });
+        self.cache_engine.on_region_event(RegionEvent::Eviction {
+            region,
+            reason,
+            on_evict_finished: None,
+        });
     }
 }
 
@@ -293,7 +328,8 @@ impl DestroyPeerObserver for LoadEvictionObserver {
         }
         self.cache_engine.on_region_event(RegionEvent::Eviction {
             region: CacheRegion::from_region(&region),
-            reason: EvictReason::PeerDestroy,
+            reason: EvictReason::DestroyPeer,
+            on_evict_finished: None,
         });
     }
 }
@@ -336,6 +372,40 @@ mod tests {
             .mut_admin_request()
             .set_cmd_type(AdminCmdType::BatchSplit);
         request
+    }
+
+    fn assert_eq_region_events(got: &RegionEvent, expected: &RegionEvent) {
+        match (got, expected) {
+            (
+                RegionEvent::TryLoad {
+                    region: got_region,
+                    for_manual_range: got_for_manual_range,
+                },
+                RegionEvent::TryLoad {
+                    region: expected_region,
+                    for_manual_range: expected_for_manual_range,
+                },
+            ) => {
+                assert_eq!(got_region, expected_region);
+                assert_eq!(got_for_manual_range, expected_for_manual_range);
+            }
+            (
+                RegionEvent::Eviction {
+                    region: got_region,
+                    reason: got_reason,
+                    on_evict_finished: _,
+                },
+                RegionEvent::Eviction {
+                    region: expected_region,
+                    reason: expected_reason,
+                    on_evict_finished: _,
+                },
+            ) => {
+                assert_eq!(got_region, expected_region);
+                assert_eq!(got_reason, expected_reason);
+            }
+            _ => panic!("unexpected region event"),
+        }
     }
 
     #[test]
@@ -400,9 +470,10 @@ mod tests {
         let cached_region = CacheRegion::from_region(&region);
         let expected = RegionEvent::Eviction {
             region: cached_region,
-            reason: EvictReason::Merge,
+            reason: EvictReason::IngestSST,
+            on_evict_finished: None,
         };
-        assert_eq!(&cache_engine.region_events.lock().unwrap()[0], &expected);
+        assert_eq_region_events(&cache_engine.region_events.lock().unwrap()[0], &expected);
     }
 
     #[test]
@@ -421,6 +492,6 @@ mod tests {
             region: cached_region,
             for_manual_range: true,
         };
-        assert_eq!(&cache_engine.region_events.lock().unwrap()[0], &expected);
+        assert_eq_region_events(&cache_engine.region_events.lock().unwrap()[0], &expected);
     }
 }

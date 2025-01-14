@@ -14,8 +14,8 @@ use crossbeam_skiplist::{
 };
 use engine_rocks::RocksEngine;
 use engine_traits::{
-    CacheRegion, EvictReason, FailedReason, KvEngine, RegionCacheEngine, RegionCacheEngineExt,
-    RegionEvent, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
+    CacheRegion, EvictReason, FailedReason, KvEngine, OnEvictFinishedCallback, RegionCacheEngine,
+    RegionCacheEngineExt, RegionEvent, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
 use fail::fail_point;
 use kvproto::metapb::Region;
@@ -31,9 +31,7 @@ use crate::{
     },
     memory_controller::MemoryController,
     read::RegionCacheSnapshot,
-    region_manager::{
-        AsyncFnOnce, LoadFailedReason, RegionCacheStatus, RegionManager, RegionState,
-    },
+    region_manager::{LoadFailedReason, RegionCacheStatus, RegionManager, RegionState},
     statistics::Statistics,
     InMemoryEngineConfig, InMemoryEngineContext,
 };
@@ -415,12 +413,12 @@ impl RegionCacheMemoryEngine {
         &self,
         region: &CacheRegion,
         evict_reason: EvictReason,
-        cb: Option<Box<dyn AsyncFnOnce + Send + Sync>>,
+        on_evict_finished: Option<OnEvictFinishedCallback>,
     ) {
-        let deletable_regions = self
-            .core
-            .region_manager
-            .evict_region(region, evict_reason, cb);
+        let deletable_regions =
+            self.core
+                .region_manager
+                .evict_region(region, evict_reason, on_evict_finished);
         if !deletable_regions.is_empty() {
             // The region can be deleted directly.
             if let Err(e) = self
@@ -545,8 +543,12 @@ impl RegionCacheEngine for RegionCacheMemoryEngine {
 impl RegionCacheEngineExt for RegionCacheMemoryEngine {
     fn on_region_event(&self, event: RegionEvent) {
         match event {
-            RegionEvent::Eviction { region, reason } => {
-                self.evict_region(&region, reason, None);
+            RegionEvent::Eviction {
+                region,
+                reason,
+                on_evict_finished,
+            } => {
+                self.evict_region(&region, reason, on_evict_finished);
             }
             RegionEvent::TryLoad {
                 region,
@@ -829,6 +831,7 @@ pub mod tests {
         engine.on_region_event(RegionEvent::Eviction {
             region: new_regions[0].clone(),
             reason: EvictReason::AutoEvict,
+            on_evict_finished: None,
         });
 
         // trigger split again
@@ -855,6 +858,7 @@ pub mod tests {
         engine.on_region_event(RegionEvent::Eviction {
             region: cache_region,
             reason: EvictReason::AutoEvict,
+            on_evict_finished: None,
         });
 
         // engine should become inactive after all regions are evicted.

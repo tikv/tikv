@@ -9,8 +9,8 @@ use crossbeam::{
 };
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{
-    CacheRegion, EvictReason, IterOptions, Iterable, Iterator, MiscExt, RangeHintService,
-    SnapshotMiscExt, CF_DEFAULT, CF_WRITE, DATA_CFS,
+    CacheRegion, EvictReason, IterOptions, Iterable, Iterator, MiscExt, OnEvictFinishedCallback,
+    RangeHintService, SnapshotMiscExt, CF_DEFAULT, CF_WRITE, DATA_CFS,
 };
 use fail::fail_point;
 use keys::{origin_end_key, origin_key};
@@ -49,7 +49,7 @@ use crate::{
     region_label::{
         LabelRule, RegionLabelChangedCallback, RegionLabelRulesManager, RegionLabelServiceBuilder,
     },
-    region_manager::{AsyncFnOnce, CacheRegionMeta, RegionState},
+    region_manager::{CacheRegionMeta, RegionState},
     region_stats::{RegionStatsManager, DEFAULT_EVICT_MIN_DURATION},
     write_batch::RegionCacheWriteBatchEntry,
     InMemoryEngineConfig, RegionCacheMemoryEngine,
@@ -1150,7 +1150,7 @@ impl Runnable for BackgroundRunner {
 
                             let evict_fn = |evict_region: &CacheRegion,
                                             evict_reason: EvictReason,
-                                            cb: Option<Box<dyn AsyncFnOnce + Send + Sync>>|
+                                            cb: Option<OnEvictFinishedCallback>|
                              -> Vec<CacheRegion> {
                                 core.engine.region_manager.evict_region(
                                     evict_region,
