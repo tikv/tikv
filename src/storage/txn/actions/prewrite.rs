@@ -573,6 +573,7 @@ impl<'a> PrewriteMutation<'a> {
             fail_point!("after_calculate_min_commit_ts");
             if let Err(Error(box ErrorInner::CommitTsTooLarge { .. })) = &res {
                 try_one_pc = false;
+                lock.use_one_pc = false;
                 lock.use_async_commit = false;
                 lock.secondaries = Vec::new();
             }
@@ -1219,6 +1220,8 @@ pub mod tests {
         // success 1pc prewrite needs to be transformed to locks
         assert!(!must_locked(&mut engine, b"k1", 10).use_async_commit);
         assert!(!must_locked(&mut engine, b"k2", 10).use_async_commit);
+        assert!(!must_locked(&mut engine, b"k1", 10).use_one_pc);
+        assert!(!must_locked(&mut engine, b"k2", 10).use_one_pc);
     }
 
     pub fn try_pessimistic_prewrite_check_not_exists<E: Engine>(
