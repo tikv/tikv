@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
-
-use engine_traits::{ImportExt, IngestExternalFileOptions, Result};
+use engine_traits::{ImportExt, IngestExternalFileOptions, RangeLatchGuard, Result};
+use fail::fail_point;
 use rocksdb::IngestExternalFileOptions as RawIngestExternalFileOptions;
 use tikv_util::time::Instant;
 
@@ -15,12 +15,20 @@ impl ImportExt for RocksEngine {
         &self,
         cf_name: &str,
         files: &[&str],
-        allow_write_during_ingestion: bool,
+        range: Option<(Vec<u8>, Vec<u8>)>,
     ) -> Result<()> {
+        let _region_inject_latch_guard = match &range {
+            Some((start_key, end_key)) => Some(
+                self.ingest_latch
+                    .acquire(start_key.clone(), end_key.clone())?,
+            ),
+            None => None,
+        };
+        fail_point!("after_apply_snapshot_ingest_latch_acquired");
         let cf = util::get_cf_handle(self.as_inner(), cf_name)?;
         let mut opts = RocksIngestExternalFileOptions::new();
         opts.move_files(true);
-        opts.allow_write(allow_write_during_ingestion);
+        opts.allow_write(range.is_some());
         // Note: no need reset the global seqno to 0 for compatibility as #16992
         // enable the TiKV to handle the case on applying abnormal snapshot.
         let now = Instant::now_coarse();
@@ -46,6 +54,10 @@ impl ImportExt for RocksEngine {
                 .observe(time_cost);
         }
         Ok(())
+    }
+
+    fn acquire_ingest_latch(&self, range: (Vec<u8>, Vec<u8>)) -> Result<RangeLatchGuard> {
+        Ok(self.ingest_latch.acquire(range.0, range.1)?)
     }
 }
 
@@ -139,7 +151,7 @@ mod tests {
         db.ingest_external_file_cf(
             CF_DEFAULT,
             &[p1.to_str().unwrap(), p2.to_str().unwrap()],
-            false,
+            None,
         )
         .unwrap();
     }

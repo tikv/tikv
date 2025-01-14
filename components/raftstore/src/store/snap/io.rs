@@ -352,7 +352,13 @@ where
     }
 }
 
-pub fn apply_sst_cf_files_by_ingest<E>(files: &[&str], db: &E, cf: &str) -> Result<(), Error>
+pub fn apply_sst_cf_files_by_ingest<E>(
+    files: &[&str],
+    db: &E,
+    cf: &str,
+    start_key: Vec<u8>,
+    end_key: Vec<u8>,
+) -> Result<(), Error>
 where
     E: KvEngine,
 {
@@ -362,16 +368,17 @@ where
             cf, files
         );
     }
-    // We set `allow_write_during_ingestion` to true to minimize the impact on
-    // foreground performance. This is because no concurrent writes overlap
-    // with the data to be ingested due to:
+    // We set start_key and end_key to enable RocksDB
+    // IngestExternalFileOptions.allow_write = true, minimizing the impact on
+    // foreground performance. This is because no concurrent writes overlap with the
+    // data to be ingested due to:
     // 1. Either the region's snapshot is unapplied, ensuring there are no
     //    foreground write operations.
     // 2. Or the `delete_all_in_range` in `DestroyTask` does not trigger, as the
     //    region worker enforces sequential task execution of the `ApplyTask` and
     //    `DestroyTask`.
     // Refer to https://github.com/tikv/tikv/issues/18081.
-    box_try!(db.ingest_external_file_cf(cf, files, true /* allow_write_during_ingestion */));
+    box_try!(db.ingest_external_file_cf(cf, files, Some((start_key, end_key))));
     Ok(())
 }
 
@@ -660,7 +667,14 @@ mod tests {
                         .iter()
                         .map(|s| s.as_str())
                         .collect::<Vec<&str>>();
-                    apply_sst_cf_files_by_ingest(&tmp_file_paths, &db1, CF_DEFAULT).unwrap();
+                    apply_sst_cf_files_by_ingest(
+                        &tmp_file_paths,
+                        &db1,
+                        CF_DEFAULT,
+                        vec![0],
+                        vec![0],
+                    )
+                    .unwrap();
                     assert_eq_db(&db, &db1);
                 }
             }

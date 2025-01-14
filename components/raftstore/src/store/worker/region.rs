@@ -417,6 +417,7 @@ where
             }
         };
 
+        fail_point!("apply_snapshot_finished");
         SNAP_HISTOGRAM
             .apply
             .observe(start.saturating_elapsed_secs());
@@ -486,6 +487,7 @@ where
     /// Cleans up data in the given range and all pending ranges overlapping
     /// with it.
     fn clean_overlap_ranges(&mut self, start_key: Vec<u8>, end_key: Vec<u8>) -> Result<()> {
+        fail_point!("before_clean_overlap_ranges", |_| { Ok(()) });
         let (start_key, end_key) = self.clean_overlap_ranges_roughly(start_key, end_key);
         self.delete_all_in_range(&[Range::new(&start_key, &end_key)], false)
     }
@@ -510,6 +512,9 @@ where
 
     /// Cleans up stale ranges.
     fn clean_stale_ranges(&mut self) {
+        fail_point!("before_clean_stale_ranges", |_| {
+            return;
+        });
         if self.mgr.is_offlined() {
             info!("no need to clear stale range as store is marked offlined");
             return;
@@ -624,15 +629,6 @@ where
                 (
                     DeleteStrategy::DeleteByWriter {
                         sst_path: self.mgr.get_temp_path_for_ingest(),
-                        // We set `allow_write_during_ingestion` to true to minimize the impact on
-                        // foreground performance. This is because no concurrent writes overlap
-                        // with the data to be ingested due to:
-                        // 1. Either the region is already destroyed (or being destroyed), ensuring
-                        //    there are no foreground write operations.
-                        // 2. Or the `ApplyTask` does not trigger, as the region worker enforces
-                        //    sequential task execution of the `ApplyTask` and `DestroyTask`.
-                        // Refer to https://github.com/tikv/tikv/issues/18081.
-                        allow_write_during_ingestion: true,
                     },
                     &CLEAR_OVERLAP_REGION_DURATION.by_ingest_files,
                 )

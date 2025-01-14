@@ -288,10 +288,12 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
 
 pub struct DeleteBatch<B> {
     pub batch: Either<B, Vec<Key>>,
+    pub smallest_key: Option<Key>,
+    pub largest_key: Option<Key>,
 }
 
 impl<B: WriteBatch> DeleteBatch<B> {
-    fn new<EK>(db: &Option<EK>) -> Self
+    pub fn new<EK>(db: &Option<EK>) -> Self
     where
         EK: KvEngine<WriteBatch = B>,
     {
@@ -300,11 +302,34 @@ impl<B: WriteBatch> DeleteBatch<B> {
                 Some(db) => Either::Left(db.write_batch_with_cap(DEFAULT_DELETE_BATCH_SIZE)),
                 None => Either::Right(Vec::with_capacity(64)),
             },
+            smallest_key: None,
+            largest_key: None,
         }
     }
 
     // `key` has prefix `DATA_KEY`.
-    fn delete(&mut self, key: &[u8], ts: TimeStamp) -> Result<(), String> {
+    pub fn delete(&mut self, key: &[u8], ts: TimeStamp) -> Result<(), String> {
+        match &self.smallest_key {
+            Some(smallest) => {
+                debug_assert!(key >= smallest.as_encoded().as_slice());
+            }
+            None => {
+                // Smallest key is the first key because compaction processes keys in asending
+                // order.
+                self.smallest_key = Some(Key::from_encoded_slice(key));
+            }
+        }
+        match &self.largest_key {
+            Some(largest) => {
+                debug_assert!(key >= largest.as_encoded().as_slice());
+                self.largest_key = Some(Key::from_encoded_slice(key));
+            }
+            None => {
+                self.largest_key = Some(Key::from_encoded_slice(key));
+            }
+        }
+        debug_assert_le!(self.smallest_key, self.largest_key);
+
         match &mut self.batch {
             Either::Left(batch) => {
                 let key = Key::from_encoded_slice(key).append_ts(ts);
@@ -555,6 +580,28 @@ impl WriteCompactionFilter {
         if self.write_batch.count() > DEFAULT_DELETE_BATCH_COUNT || force {
             let err = match &mut self.write_batch.batch {
                 Either::Left(wb) => {
+                    let _region_inject_latch_guard = match self.engine.as_ref() {
+                        Some(engine) => {
+                            let smallest_key = self
+                                .write_batch
+                                .smallest_key
+                                .as_ref()
+                                .unwrap()
+                                .as_encoded()
+                                .clone();
+                            let largest_key = self
+                                .write_batch
+                                .largest_key
+                                .as_ref()
+                                .unwrap()
+                                .as_encoded()
+                                .clone();
+                            Some(engine.ingest_latch.acquire(smallest_key, largest_key))
+                        }
+                        None => None,
+                    };
+                    fail_point!("compaction_filter_ingest_latch_acquired_flush");
+
                     let mut wopts = WriteOptions::default();
                     wopts.set_no_slowdown(true);
                     match do_flush(wb, &wopts) {
@@ -699,6 +746,7 @@ impl CompactionFilter for WriteCompactionFilter {
         value: &[u8],
         value_type: CompactionFilterValueType,
     ) -> CompactionFilterDecision {
+        fail_point!("before_compaction_filter");
         if self.encountered_errors {
             // If there are already some errors, do nothing.
             return CompactionFilterDecision::Keep;

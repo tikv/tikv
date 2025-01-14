@@ -17,8 +17,8 @@ use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{FlowInfo, RocksEngine};
 use engine_traits::{
-    raw_ttl::ttl_current_ts, DeleteStrategy, Error as EngineError, KvEngine, MiscExt, Range,
-    WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    raw_ttl::ttl_current_ts, DeleteStrategy, Error as EngineError, ImportExt, KvEngine, MiscExt,
+    Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use file_system::{IoType, WithIoType};
 use futures::executor::block_on;
@@ -1054,6 +1054,13 @@ impl<E: Engine> GcRunnerCore<E> {
                 id,
                 region_info_provider,
             } => {
+                // Locking the range is necessary to prevent conflicts with ingestion operations
+                // using IngestExternalFileOptions.allow_write = true.
+                let _ingest_latch_guard = self.engine.kv_engine().unwrap().acquire_ingest_latch((
+                    wb.smallest_key.as_ref().unwrap().as_encoded().clone(),
+                    wb.largest_key.as_ref().unwrap().as_encoded().clone(),
+                ));
+
                 let count = wb.count();
                 match wb.batch {
                     Either::Left(mut wb) => {
@@ -1570,11 +1577,10 @@ pub mod test_gc_worker {
 
 #[cfg(test)]
 mod tests {
-
     use std::{
         collections::{BTreeMap, BTreeSet},
         path::Path,
-        sync::mpsc,
+        sync::{atomic::AtomicBool, mpsc},
         thread,
         time::Duration,
     };
@@ -2909,5 +2915,62 @@ mod tests {
         cfg_manager.dispatch(config_change).unwrap();
 
         assert_eq!(gc_worker.get_worker_thread_count(), 2);
+    }
+
+    // This test verifies that the ingest latch functions correctly in the
+    // GcOrphanVersions task.
+    #[test]
+    fn test_gc_orphan_version_ingest_latch() {
+        let store_id = 1;
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let mut prefixed_engine = PrefixedEngine(engine.clone());
+        let (tx, _rx) = mpsc::channel();
+        let cfg = GcConfig::default();
+        let coprocessor_host = CoprocessorHost::default();
+        let mut runner = GcRunnerCore::new(
+            store_id,
+            prefixed_engine.clone(),
+            tx,
+            GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())), None)
+                .0
+                .tracker("gc-worker".to_owned()),
+            cfg,
+            coprocessor_host,
+        );
+
+        let _ingest_latch_guard = engine
+            .kv_engine()
+            .unwrap()
+            .acquire_ingest_latch((b"a".to_vec(), b"b".to_vec()));
+
+        let gc_task_completed = Arc::new(AtomicBool::new(false));
+        let gc_task_completed_clone = gc_task_completed.clone();
+        let gc_handle = thread::spawn(move || {
+            let mut wb = DeleteBatch::new(&Some(engine.kv_engine().unwrap()));
+            wb.delete(b"a", 100_u64.into());
+            wb.delete(b"b", 101_u64.into());
+            let region_info_provider = Arc::new(MockRegionInfoProvider::new(vec![]));
+            let task = GcTask::OrphanVersions {
+                wb,
+                region_info_provider,
+                id: 0,
+            };
+            runner.run(task);
+            gc_task_completed_clone.store(true, Ordering::SeqCst);
+        });
+
+        thread::sleep(Duration::from_millis(500));
+        // The GC task must remain pending as _ingest_latch_guard is holding the latch.
+        assert!(
+            !gc_task_completed.load(Ordering::SeqCst),
+            "GC task completed before dropping the guard"
+        );
+        drop(_ingest_latch_guard);
+        gc_handle.join().expect("Gc thread panicked");
+        // The GC task must have finished as _ingest_latch_guard has released the latch.
+        assert!(
+            gc_task_completed.load(Ordering::SeqCst),
+            "GC task did not complete as expected"
+        );
     }
 }

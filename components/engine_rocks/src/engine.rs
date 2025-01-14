@@ -2,7 +2,9 @@
 
 use std::{any::Any, sync::Arc};
 
-use engine_traits::{IterOptions, Iterable, KvEngine, Peekable, ReadOptions, Result, SyncMutable};
+use engine_traits::{
+    IterOptions, Iterable, KvEngine, Peekable, RangeLatch, ReadOptions, Result, SyncMutable,
+};
 use rocksdb::{DBIterator, Writable, DB};
 
 use crate::{
@@ -148,6 +150,7 @@ pub struct RocksEngine {
     support_multi_batch_write: bool,
     #[cfg(feature = "trace-lifetime")]
     _id: trace::TabletTraceId,
+    pub ingest_latch: Arc<RangeLatch>,
 }
 
 impl RocksEngine {
@@ -158,6 +161,7 @@ impl RocksEngine {
             #[cfg(feature = "trace-lifetime")]
             _id: trace::TabletTraceId::new(db.path(), &db),
             db,
+            ingest_latch: Arc::new(RangeLatch::new()),
         }
     }
 
