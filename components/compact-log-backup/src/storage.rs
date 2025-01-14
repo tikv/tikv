@@ -345,6 +345,7 @@ impl<'a> StreamMetaStorage<'a> {
                 Poll::Ready(Some(load)) => {
                     let load = load?;
                     if self.skip_map.should_fully_skip(&load.key) {
+                        info!("Skipping a metadata by migration."; "name" => %load.key);
                         self.stat.meta_filtered_out_by_migration += 1;
                         continue;
                     }
