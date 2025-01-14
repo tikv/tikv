@@ -618,9 +618,9 @@ impl<'a> PrewriteMutation<'a> {
         if let Some(secondary_keys) = self.secondary_keys {
             lock.use_async_commit = true;
             lock.secondaries = secondary_keys.to_owned();
-        } else if try_one_pc && lock.primary == self.key.to_raw()? {
-            // Set `use_one_pc` to true when the key is primary. It's used to prevent the
-            // in-memory lock from being skipped when reading with max_ts.
+        } else if try_one_pc {
+            // Set `use_one_pc` to true to prevent the in-memory lock from being skipped
+            // when reading with max-ts.
             lock.use_one_pc = true;
         }
 
@@ -2801,10 +2801,10 @@ pub mod tests {
         )
         .unwrap();
 
-        // lock.use_one_pc should be set to true for primary key when using 1PC.
+        // lock.use_one_pc should be set to true when using 1pc.
         assert_eq!(txn.guards.len(), 2);
         txn.guards[0].with_lock(|l| assert!(l.as_ref().unwrap().use_one_pc));
-        txn.guards[1].with_lock(|l| assert!(!l.as_ref().unwrap().use_one_pc));
+        txn.guards[1].with_lock(|l| assert!(l.as_ref().unwrap().use_one_pc));
 
         // read with max_ts should be blocked by the lock.
         for &key in &[k1, k2] {
