@@ -512,9 +512,7 @@ where
 
     /// Cleans up stale ranges.
     fn clean_stale_ranges(&mut self) {
-        fail_point!("before_clean_stale_ranges", |_| {
-            return;
-        });
+        fail_point!("before_clean_stale_ranges", |_| {});
         if self.mgr.is_offlined() {
             info!("no need to clear stale range as store is marked offlined");
             return;

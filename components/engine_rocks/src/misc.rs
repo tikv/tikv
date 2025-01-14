@@ -620,7 +620,6 @@ mod tests {
         for i in 1000..5000 {
             data.push(i.to_string().as_bytes().to_vec());
         }
-        let allow_write_during_ingestion = false;
         test_delete_ranges(
             DeleteStrategy::DeleteByWriter { sst_path },
             &data,

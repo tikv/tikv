@@ -20,7 +20,6 @@
 #![feature(option_get_or_insert_default)]
 #![feature(path_file_prefix)]
 
-extern crate core;
 #[cfg(test)]
 extern crate test;
 #[allow(unused_extern_crates)]

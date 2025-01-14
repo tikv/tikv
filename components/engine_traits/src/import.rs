@@ -135,6 +135,12 @@ impl RangeLatch {
     }
 }
 
+impl Default for RangeLatch {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// A guard that holds the range lock.
 #[derive(Debug)]
 pub struct RangeLatchGuard {

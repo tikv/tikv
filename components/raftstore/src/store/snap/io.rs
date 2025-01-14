@@ -675,14 +675,8 @@ mod tests {
                         .iter()
                         .map(|s| s.as_str())
                         .collect::<Vec<&str>>();
-                    apply_sst_cf_files_by_ingest(
-                        &tmp_file_paths,
-                        &db1,
-                        CF_DEFAULT,
-                        vec![0],
-                        vec![0],
-                    )
-                    .unwrap();
+                    apply_sst_cf_files_by_ingest(&tmp_file_paths, &db1, CF_DEFAULT, vec![], vec![])
+                        .unwrap();
                     assert_eq_db(&db, &db1);
                 }
             }

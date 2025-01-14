@@ -2939,7 +2939,7 @@ mod tests {
     fn test_gc_orphan_version_ingest_latch() {
         let store_id = 1;
         let engine = TestEngineBuilder::new().build().unwrap();
-        let mut prefixed_engine = PrefixedEngine(engine.clone());
+        let prefixed_engine = PrefixedEngine(engine.clone());
         let (tx, _rx) = mpsc::channel();
         let cfg = GcConfig::default();
         let coprocessor_host = CoprocessorHost::default();
@@ -2963,8 +2963,8 @@ mod tests {
         let gc_task_completed_clone = gc_task_completed.clone();
         let gc_handle = thread::spawn(move || {
             let mut wb = DeleteBatch::new(&Some(engine.kv_engine().unwrap()));
-            wb.delete(b"a", 100_u64.into());
-            wb.delete(b"b", 101_u64.into());
+            wb.delete(b"a", 100_u64.into()).unwrap();
+            wb.delete(b"b", 101_u64.into()).unwrap();
             let region_info_provider = Arc::new(MockRegionInfoProvider::new(vec![]));
             let task = GcTask::OrphanVersions {
                 wb,

@@ -60,9 +60,8 @@ impl ImportExt for RocksEngine {
     }
 
     fn acquire_ingest_latch(&self, range: Range<'_>) -> Result<RangeLatchGuard> {
-        Ok(self
-            .ingest_latch
-            .acquire(range.start_key.to_vec(), range.end_key.to_vec())?)
+        self.ingest_latch
+            .acquire(range.start_key.to_vec(), range.end_key.to_vec())
     }
 }
 

@@ -48,10 +48,10 @@ fn prepare_data_used_by_compaction_filter(
 
         for pk in &keys {
             let muts = vec![new_mutation(Op::Put, pk.as_slice(), &large_value)];
-            must_kv_prewrite(&client, ctx.clone(), muts, pk.clone(), start_ts);
+            must_kv_prewrite(client, ctx.clone(), muts, pk.clone(), start_ts);
         }
         must_kv_commit(
-            &client,
+            client,
             ctx.clone(),
             keys.clone(),
             start_ts,
