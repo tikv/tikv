@@ -1003,6 +1003,8 @@ fn handle_1pc_locks(txn: &mut MvccTxn, commit_ts: TimeStamp) -> ReleasedLocks {
 /// Change all 1pc locks in txn to 2pc locks.
 pub(in crate::storage::txn) fn fallback_1pc_locks(txn: &mut MvccTxn) {
     for (key, lock, remove_pessimistic_lock) in std::mem::take(&mut txn.locks_for_1pc) {
+        // Here we do not need to revert `lock.use_one_pc` since it's not persisted,
+        // that is, it just likes `lock.to_bytes()` will set it to false automatically.
         let is_new_lock = !remove_pessimistic_lock;
         txn.put_lock(key, &lock, is_new_lock);
     }
