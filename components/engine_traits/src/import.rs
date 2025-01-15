@@ -10,8 +10,12 @@ use crate::{errors::Result, Range};
 /// A structure used to manage range-based latch with mutual exclusion.
 ///
 /// Currently used to ensure mutual exclusion between compaction filter and
-/// ingest SST operations.
-///
+/// ingest SST operations. When using RocksDB
+/// IngestExternalFileOptions.allow_write = true for ingest SST, concurrent
+/// writes must be prevented during ingestion. However, the compaction filter
+/// might write to the default column family concurrently, so it must be made
+/// mutually exclusive with the ingest latch.
+//
 /// This implementation is designed for scenarios with low concurrency.
 /// In the current scenario, compaction filter threads are limited by
 /// `RocksDB.max_background_jobs`, and region worker threads typically run one

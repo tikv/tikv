@@ -378,6 +378,8 @@ where
     // 2. Or the `delete_all_in_range` in `DestroyTask` does not trigger, as the
     //    region worker enforces sequential task execution of the `ApplyTask` and
     //    `DestroyTask`.
+    // 3. Compaction filter, which writes to the default column family concurrently,
+    //    is mutually exclusive with the ingest latch.
     // Refer to https://github.com/tikv/tikv/issues/18081.
     box_try!(db.ingest_external_file_cf(
         cf,
