@@ -1054,27 +1054,23 @@ impl<E: Engine> GcRunnerCore<E> {
                 id,
                 region_info_provider,
             } => {
+                let smallest_key = wb.smallest_key.as_ref().unwrap().as_encoded().as_slice();
+                let largest_key = wb.largest_key.as_ref().unwrap().as_encoded().as_slice();
                 // Acquire latch to prevent conflicts with ingestion operations
                 // using RocksDB IngestExternalFileOptions.allow_write = true.
+                //
+                // Here, we can directly use [smallest_key, largest_key) for locking.
+                // Since for the same key, the largest_key here has a timestamp appended at the
+                // end, while the locking for SST ingestion uses Region.end_key
+                // without a timestamp, an overlap exists, ensuring mutual
+                // exclusion.
                 let _ingest_latch_guard =
                     self.engine
                         .kv_engine()
                         .unwrap()
                         .acquire_ingest_latch(Range {
-                            start_key: wb
-                                .smallest_key
-                                .as_ref()
-                                .unwrap()
-                                .as_encoded()
-                                .clone()
-                                .as_slice(),
-                            end_key: wb
-                                .largest_key
-                                .as_ref()
-                                .unwrap()
-                                .as_encoded()
-                                .clone()
-                                .as_slice(),
+                            start_key: smallest_key,
+                            end_key: largest_key,
                         });
 
                 let count = wb.count();
