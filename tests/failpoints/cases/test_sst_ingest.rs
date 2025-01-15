@@ -42,23 +42,32 @@ fn prepare_data_used_by_compaction_filter(
 ) {
     let large_value = vec![b'x'; 300];
 
-    let keys = vec![b"a".to_vec(), b"b".to_vec()];
-    for start_ts in [101, 103] {
-        let commit_ts = start_ts + 1;
+    {
+        let keys = vec![b"a".to_vec(), b"b".to_vec()];
+        for start_ts in [101, 103] {
+            let commit_ts = start_ts + 1;
 
-        for pk in &keys {
-            let muts = vec![new_mutation(Op::Put, pk.as_slice(), &large_value)];
-            must_kv_prewrite(client, ctx.clone(), muts, pk.clone(), start_ts);
+            for pk in &keys {
+                let muts = vec![new_mutation(Op::Put, pk.as_slice(), &large_value)];
+                must_kv_prewrite(client, ctx.clone(), muts, pk.clone(), start_ts);
+            }
+            must_kv_commit(
+                client,
+                ctx.clone(),
+                keys.clone(),
+                start_ts,
+                commit_ts,
+                commit_ts,
+            );
         }
-        must_kv_commit(
-            client,
-            ctx.clone(),
-            keys.clone(),
-            start_ts,
-            commit_ts,
-            commit_ts,
-        );
     }
+
+    // Region C needs to have data to trigger apply snapshot, but this data will not
+    // trigger the compaction filter.
+    let pk = b"c";
+    let muts = vec![new_mutation(Op::Put, pk.as_slice(), &large_value)];
+    must_kv_prewrite(client, ctx.clone(), muts, pk.to_vec(), 101);
+    must_kv_commit(client, ctx.clone(), vec![pk.to_vec()], 101, 102, 102);
 
     let region_a = cluster.get_region(b"a");
     cluster.must_split(&region_a, "b".as_bytes());
@@ -80,6 +89,65 @@ fn prepare_data_used_by_compaction_filter(
         .get_engine(3)
         .flush_cfs(&["default", "write"], true)
         .unwrap();
+}
+
+fn setup_cluster(
+    region_to_migrate: &[u8],
+) -> (Cluster<ServerCluster>, Region, Peer, Arc<TestPdClient>) {
+    let env = Arc::new(Environment::new(1));
+    let (mut cluster, leader, ctx) = must_new_cluster_mul(3);
+    let channel =
+        ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
+    let client = TikvClient::new(channel);
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+
+    prepare_data_used_by_compaction_filter(&client, &ctx, &mut cluster);
+
+    // Get the region dynamically based on the `region_to_migrate` parameter.
+    let region = cluster.get_region(region_to_migrate);
+    let peer = region.get_peers()[1].clone();
+
+    (cluster, region, peer, pd_client)
+}
+
+fn start_apply_snapshot(
+    region_id: u64,
+    pd_client: Arc<TestPdClient>,
+    peer: Peer,
+    pause: bool,
+) -> JoinHandle<()> {
+    thread::spawn(move || {
+        fail::cfg("apply_cf_without_ingest_false", "return").unwrap();
+        fail::cfg("before_clean_stale_ranges", "return").unwrap();
+        fail::cfg("before_clean_overlap_ranges", "return").unwrap();
+        if pause {
+            // fail::cfg("after_apply_snapshot_ingest_latch_acquired",
+            // "pause").unwrap();
+        }
+
+        pd_client.must_remove_peer(region_id, peer.clone());
+        pd_client.must_add_peer(region_id, peer.clone());
+    })
+}
+
+fn start_compaction_filter(cluster: &Cluster<ServerCluster>, store_id: u64) -> JoinHandle<()> {
+    let gc_engine = cluster.get_engine(store_id);
+    thread::spawn(move || {
+        let mut gc_runner = TestGcRunner::new(200);
+        gc_runner.gc(&gc_engine);
+    })
+}
+
+fn verify_pending(rx: &Receiver<bool>, duration: u64) {
+    assert_eq!(
+        rx.recv_timeout(Duration::from_millis(duration)),
+        Err(RecvTimeoutError::Timeout)
+    );
+}
+
+fn verify_completed(rx: &Receiver<bool>) {
+    assert_eq!(rx.recv_timeout(Duration::from_millis(1000)), Ok(true));
 }
 
 // Tests the behavior of the compaction filter GC when it is blocked by an
@@ -110,102 +178,134 @@ fn prepare_data_used_by_compaction_filter(
 // - Second, for region "c", where the compaction filter GC and the apply
 //   snapshot process do not overlap. This verifies that the compaction filter
 //   GC can finish without being blocked.
-#[test]
-fn test_compaction_filter_gc_blocked_by_ingest() {
-    fn setup_cluster(
-        region_to_migrate: &[u8],
-    ) -> (Cluster<ServerCluster>, Region, Peer, Arc<TestPdClient>) {
-        let env = Arc::new(Environment::new(1));
-        let (mut cluster, leader, ctx) = must_new_cluster_mul(3);
-        let channel =
-            ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
-        let client = TikvClient::new(channel);
-        let pd_client = cluster.pd_client.clone();
-        pd_client.disable_default_operator();
+fn compaction_filter_gc_blocked_by_ingest_test(region_to_migrate: &[u8]) {
+    let (cluster, region, peer, pd_client) = setup_cluster(region_to_migrate);
+    let region_id = region.id;
 
-        prepare_data_used_by_compaction_filter(&client, &ctx, &mut cluster);
+    // Start and pause the apply snapshot process.
+    fail::cfg("after_apply_snapshot_ingest_latch_acquired", "pause").unwrap();
+    let apply_snap_handle = start_apply_snapshot(region_id, pd_client, peer.clone(), true);
 
-        // Get the region dynamically based on the `region_to_migrate` parameter.
-        let region = cluster.get_region(region_to_migrate);
-        let peer = region.get_peers()[1].clone();
+    // Wait for snapshot to acquire the latch.
+    sleep_ms(1000);
 
-        (cluster, region, peer, pd_client)
-    }
+    let (tx, rx) = sync_channel(0);
+    fail::cfg_callback("compaction_filter_ingest_latch_acquired_flush", move || {
+        tx.send(true).unwrap();
+    })
+    .unwrap();
 
-    fn start_apply_snapshot(
-        region_id: u64,
-        pd_client: Arc<TestPdClient>,
-        peer: Peer,
-    ) -> JoinHandle<()> {
-        thread::spawn(move || {
-            fail::cfg("apply_cf_without_ingest_false", "return").unwrap();
-            fail::cfg("before_clean_stale_ranges", "return").unwrap();
-            fail::cfg("before_clean_overlap_ranges", "return").unwrap();
-            fail::cfg("after_apply_snapshot_ingest_latch_acquired", "pause").unwrap();
+    // Start GC, which might be blocked by the apply snapshot thread, depending
+    // on whether the ranges overlap.
+    let gc_handle = start_compaction_filter(&cluster, peer.store_id);
 
-            pd_client.must_remove_peer(region_id, peer.clone());
-            pd_client.must_add_peer(region_id, peer.clone());
-        })
-    }
-
-    fn start_compaction_filter(cluster: &Cluster<ServerCluster>, store_id: u64) -> JoinHandle<()> {
-        let gc_engine = cluster.get_engine(store_id);
-        thread::spawn(move || {
-            let mut gc_runner = TestGcRunner::new(200);
-            gc_runner.gc(&gc_engine);
-        })
-    }
-
-    fn verify_pending(rx: &Receiver<bool>, duration: u64) {
-        assert_eq!(
-            rx.recv_timeout(Duration::from_millis(duration)),
-            Err(RecvTimeoutError::Timeout)
-        );
-    }
-
-    fn verify_completed(rx: &Receiver<bool>, gc_handle: JoinHandle<()>) {
-        assert_eq!(rx.recv_timeout(Duration::from_millis(500)), Ok(true));
+    if region_to_migrate != b"c" {
+        // Other regions overlap, so the GC thread will be blocked.
+        verify_pending(&rx, 1000);
+    } else {
+        // Region "c" does not overlap with the snapshot process.
+        verify_completed(&rx);
+        fail::remove("after_apply_snapshot_ingest_latch_acquired");
         gc_handle.join().expect("GC thread panicked");
-    }
-
-    let do_test = |region_to_migrate: &[u8]| {
-        let (cluster, region, peer, pd_client) = setup_cluster(region_to_migrate);
-
-        let region_id = region.id;
-        let apply_snap_handle = start_apply_snapshot(region_id, pd_client, peer.clone());
         apply_snap_handle
             .join()
             .expect("apply snapshot thread panicked");
-
-        sleep_ms(500); // Wait for snapshot to acquire the latch.
-
-        let gc_handle = start_compaction_filter(&cluster, peer.store_id);
-
-        let (tx, rx) = sync_channel(0);
-        fail::cfg_callback("compaction_filter_ingest_latch_acquired_flush", move || {
-            tx.send(true).unwrap();
-        })
-        .unwrap();
-
-        if region_to_migrate != b"c" {
-            verify_pending(&rx, 500);
-        } else {
-            verify_completed(&rx, gc_handle);
-            fail::remove("compaction_filter_ingest_latch_acquired_flush");
-            fail::remove("after_apply_snapshot_ingest_latch_acquired");
-            return;
-        }
-
-        // Resume the snapshot process.
-        fail::remove("after_apply_snapshot_ingest_latch_acquired");
-        sleep_ms(500);
-        verify_completed(&rx, gc_handle);
         fail::remove("compaction_filter_ingest_latch_acquired_flush");
-    };
+        return;
+    }
 
-    do_test(b"a");
-    // Test that the `largest_key` used by the compaction filter matches the
-    // `Region.start_key`.
-    do_test(b"b");
-    do_test(b"c");
+    // Resume the snapshot process.
+    fail::remove("after_apply_snapshot_ingest_latch_acquired");
+    // Wait for the snapshot process to release the latch.
+    sleep_ms(1000);
+    // The GC thread can continue after the snapshot process releases the latch.
+    verify_completed(&rx);
+    gc_handle.join().expect("GC thread panicked");
+    apply_snap_handle
+        .join()
+        .expect("apply snapshot thread panicked");
+    fail::remove("compaction_filter_ingest_latch_acquired_flush");
+}
+
+#[test]
+fn test_compaction_filter_gc_blocked_by_ingest_basic() {
+    compaction_filter_gc_blocked_by_ingest_test(b"a");
+}
+
+// Test that the `end_key` used by the compaction filter matches the
+// `Region.start_key`.
+#[test]
+fn test_compaction_filter_gc_blocked_by_ingest_range_boundaries() {
+    compaction_filter_gc_blocked_by_ingest_test(b"b");
+}
+
+#[test]
+fn test_compaction_filter_gc_blocked_by_ingest_no_overlap() {
+    compaction_filter_gc_blocked_by_ingest_test(b"c");
+}
+
+// Similar as test_compaction_filter_gc_blocked_by_ingest.
+fn test_compaction_filter_gc_blocks_ingest_test(region_to_migrate: &[u8]) {
+    let (cluster, region, peer, pd_client) = setup_cluster(region_to_migrate);
+
+    // Start and pause the GC thread.
+    fail::cfg("compaction_filter_ingest_latch_acquired_flush", "pause").unwrap();
+    let gc_handle = start_compaction_filter(&cluster, peer.store_id);
+
+    let (tx, rx) = sync_channel(0);
+    fail::cfg_callback("after_apply_snapshot_ingest_latch_acquired", move || {
+        tx.send(true).unwrap();
+    })
+    .unwrap();
+
+    // Start the apply snapshot thread, which might be blocked by the GC thread,
+    // depending on whether the ranges overlap.
+    let region_id = region.id;
+    let apply_snap_handle = start_apply_snapshot(region_id, pd_client, peer.clone(), false);
+    // Wait for snapshot to acquire the latch.
+    sleep_ms(1000);
+    if region_to_migrate != b"c" {
+        // Other regions overlap, so the snapshot process will be blocked.
+        verify_pending(&rx, 1000);
+    } else {
+        // Region "c" does not overlap with the GC thread.
+        verify_completed(&rx);
+        fail::remove("compaction_filter_ingest_latch_acquired_flush");
+        gc_handle.join().expect("GC thread panicked");
+        apply_snap_handle
+            .join()
+            .expect("apply snapshot thread panicked");
+        fail::remove("after_apply_snapshot_ingest_latch_acquired");
+        return;
+    }
+
+    // Resume the compaction filter process.
+    fail::remove("compaction_filter_ingest_latch_acquired_flush");
+    // Wait for the GC thread to release the latch.
+    sleep_ms(1000);
+    // The apply snapshot thread can continue after the GC thread releases the
+    // latch.
+    verify_completed(&rx);
+    gc_handle.join().expect("GC thread panicked");
+    apply_snap_handle
+        .join()
+        .expect("apply snapshot thread panicked");
+    fail::remove("after_apply_snapshot_ingest_latch_acquired");
+}
+
+#[test]
+fn test_compaction_filter_gc_blocks_ingest() {
+    test_compaction_filter_gc_blocks_ingest_test(b"a");
+}
+
+// Test that the `end_key` used by the compaction filter matches the
+// `Region.start_key`.
+#[test]
+fn test_compaction_filter_gc_blocks_ingest_range_boundaries() {
+    test_compaction_filter_gc_blocks_ingest_test(b"b");
+}
+
+#[test]
+fn test_compaction_filter_gc_blocks_ingest_test_no_overlap() {
+    test_compaction_filter_gc_blocks_ingest_test(b"c");
 }

@@ -370,6 +370,7 @@ where
             "region_id" => region_id,
             "time_takes" => ?timer.saturating_elapsed(),
         );
+        fail_point!("apply_snapshot_finished");
         Ok(())
     }
 

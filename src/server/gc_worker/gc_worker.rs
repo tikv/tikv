@@ -1073,6 +1073,8 @@ impl<E: Engine> GcRunnerCore<E> {
                             end_key: largest_key,
                         });
 
+                fail_point!("after_gc_orphan_versions_ingest_latch_acquired");
+
                 let count = wb.count();
                 match wb.batch {
                     Either::Left(mut wb) => {
@@ -2932,7 +2934,7 @@ mod tests {
     // This test verifies that the ingest latch functions correctly in the
     // GcOrphanVersions task.
     #[test]
-    fn test_gc_orphan_version_ingest_latch() {
+    fn test_gc_orphan_version_blocked_by_ingest() {
         let store_id = 1;
         let engine = TestEngineBuilder::new().build().unwrap();
         let prefixed_engine = PrefixedEngine(engine.clone());
@@ -2983,6 +2985,71 @@ mod tests {
         assert!(
             gc_task_completed.load(Ordering::SeqCst),
             "GC task did not complete as expected"
+        );
+    }
+
+    // This test verifies that the GcOrphanVersions task blocks the ingest
+    // operation.
+    #[cfg(feature = "failpoints")]
+    #[test]
+    fn test_gc_orphan_version_blocks_ingest() {
+        let store_id = 1;
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let prefixed_engine = PrefixedEngine(engine.clone());
+        let (tx, _rx) = mpsc::channel();
+        let cfg = GcConfig::default();
+        let coprocessor_host = CoprocessorHost::default();
+        let mut runner = GcRunnerCore::new(
+            store_id,
+            prefixed_engine.clone(),
+            tx,
+            GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())), None)
+                .0
+                .tracker("gc-worker".to_owned()),
+            cfg,
+            coprocessor_host,
+        );
+
+        let engine_clone = engine.clone();
+        let gc_handle = thread::spawn(move || {
+            fail::cfg("after_gc_orphan_versions_ingest_latch_acquired", "pause").unwrap();
+            let mut wb = DeleteBatch::new(&Some(engine_clone.kv_engine().unwrap()));
+            wb.delete(b"a", 100_u64.into()).unwrap();
+            wb.delete(b"b", 101_u64.into()).unwrap();
+            let region_info_provider = Arc::new(MockRegionInfoProvider::new(vec![]));
+            let task = GcTask::OrphanVersions {
+                wb,
+                region_info_provider,
+                id: 0,
+            };
+            runner.run(task);
+        });
+
+        // Wait gc_handle to start.
+        thread::sleep(Duration::from_millis(500));
+        let ingest_task_completed = Arc::new(AtomicBool::new(false));
+        let ingest_task_completed_clone = ingest_task_completed.clone();
+        let ingest_handle = thread::spawn(move || {
+            let _ingest_latch_guard = engine.kv_engine().unwrap().acquire_ingest_latch(Range {
+                start_key: b"a",
+                end_key: b"b",
+            });
+            ingest_task_completed_clone.store(true, Ordering::SeqCst);
+        });
+        thread::sleep(Duration::from_millis(500));
+        // The ingest task must remain pending as _gc_latch_guard is holding the latch.
+        assert!(
+            !ingest_task_completed.load(Ordering::SeqCst),
+            "Ingest task completed before dropping the GC latch guard"
+        );
+        fail::remove("after_gc_orphan_versions_ingest_latch_acquired");
+        thread::sleep(Duration::from_millis(500));
+        gc_handle.join().expect("Gc thread panicked");
+        ingest_handle.join().expect("Ingest thread panicked");
+        // The ingest task must have finished as _gc_latch_guard has released the latch.
+        assert!(
+            ingest_task_completed.load(Ordering::SeqCst),
+            "Ingest task did not complete as expected"
         );
     }
 }
