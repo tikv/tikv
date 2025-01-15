@@ -685,7 +685,7 @@ impl<'a> MigrationStorageWrapper<'a> {
                     .read(&item.key)
                     .read_to_end(&mut content)
                     .await?;
-                Result::Ok(protobuf::parse_from_bytes(&content).adapt_err()?)
+                protobuf::parse_from_bytes(&content).adapt_err()
             })
             .try_collect()
             .await
