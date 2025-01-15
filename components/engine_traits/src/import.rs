@@ -2,7 +2,7 @@
 
 use std::{
     collections::BTreeMap,
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, Mutex},
 };
 
 use crate::{errors::Result, Range};
@@ -30,13 +30,13 @@ pub struct RangeLatch {
     ///   - `Arc<Mutex<()>>`: The latch object for this range.
     ///   - `(Vec<u8>, Vec<u8>)`: The actual range definition (start_key,
     ///     end_key).
-    range_latches: RwLock<BTreeMap<Vec<u8>, (Arc<Mutex<()>>, (Vec<u8>, Vec<u8>))>>,
+    range_latches: Mutex<BTreeMap<Vec<u8>, (Arc<Mutex<()>>, (Vec<u8>, Vec<u8>))>>,
 }
 
 impl RangeLatch {
     pub fn new() -> Self {
         Self {
-            range_latches: RwLock::new(BTreeMap::new()),
+            range_latches: Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -68,29 +68,25 @@ impl RangeLatch {
         end_key: Vec<u8>,
     ) -> Result<RangeLatchGuard> {
         loop {
-            // Collect all overlapping ranges
-            let overlapping_ranges = {
-                let range_latches = self.range_latches.read().unwrap();
+            let mut range_latches = self.range_latches.lock().unwrap();
 
-                range_latches
-                    .iter()
-                    .filter(|(_, (_, (existing_start, existing_end)))| {
-                        !(end_key <= *existing_start || start_key >= *existing_end)
-                    })
-                    .map(|(key, (mutex, range))| (key.clone(), (mutex.clone(), range.clone())))
-                    .collect::<Vec<_>>()
-            };
+            // Collect all overlapping ranges
+            let overlapping_ranges = range_latches
+                .iter()
+                .filter(|(_, (_, (existing_start, existing_end)))| {
+                    !(end_key <= *existing_start || start_key >= *existing_end)
+                })
+                .map(|(key, (mutex, range))| (key.clone(), (mutex.clone(), range.clone())))
+                .collect::<Vec<_>>();
 
             // If no conflicts, insert the new range and return the guard
             if overlapping_ranges.is_empty() {
                 let mutex = Arc::new(Mutex::new(()));
-                {
-                    let mut range_latches = self.range_latches.write().unwrap();
-                    range_latches.insert(
-                        start_key.clone(),
-                        (mutex.clone(), (start_key.clone(), end_key.clone())),
-                    );
-                }
+                range_latches.insert(
+                    start_key.clone(),
+                    (mutex.clone(), (start_key.clone(), end_key.clone())),
+                );
+
                 // Now acquire the lock after releasing the write guard
                 let lock = mutex.lock().unwrap();
                 // The lifetime of the lock returned by `mutex.lock()` is tied to the `_guard`
@@ -106,18 +102,18 @@ impl RangeLatch {
 
                 return Ok(RangeLatchGuard {
                     start_key,
-                    end_key,
                     _lock: lock,
                     latch: self.clone(),
                 });
             }
+            drop(range_latches);
 
             // Wait for all overlapping ranges to be released
             for (_, (mutex, (overlap_start_key, _))) in overlapping_ranges {
                 let _guard = mutex.lock().unwrap();
 
                 // Check if the range can be removed after unlocking
-                let mut range_latches = self.range_latches.write().unwrap();
+                let mut range_latches = self.range_latches.lock().unwrap();
                 if let Some((existing_mutex, _)) = range_latches.get(&overlap_start_key) {
                     if Arc::strong_count(existing_mutex) == 2 {
                         // Remove since it is only held by this thread: one reference is held by
@@ -134,7 +130,6 @@ impl RangeLatch {
 #[derive(Debug)]
 pub struct RangeLatchGuard {
     start_key: Vec<u8>,
-    end_key: Vec<u8>,
     /// Hold the mutex guard to prevent concurrent access to the same range.
     _lock: std::sync::MutexGuard<'static, ()>,
     /// Hold a reference to RangeLatch to release the lock when the guard is
@@ -144,7 +139,7 @@ pub struct RangeLatchGuard {
 
 impl Drop for RangeLatchGuard {
     fn drop(&mut self) {
-        let mut range_latches = self.latch.range_latches.write().unwrap();
+        let mut range_latches = self.latch.range_latches.lock().unwrap();
 
         if let Some((mutex, _)) = range_latches.get_mut(&self.start_key) {
             // Remove the lock if no other references exist
@@ -179,4 +174,101 @@ pub trait IngestExternalFileOptions {
     fn move_files(&mut self, f: bool);
 
     fn allow_write(&mut self, f: bool);
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        },
+        thread,
+        time::Duration,
+    };
+
+    use super::*;
+
+    #[test]
+    fn test_single_thread_non_overlapping_ranges() {
+        let latch = Arc::new(RangeLatch::new());
+
+        // Acquire non-overlapping ranges
+        let guard1 = latch.acquire(vec![0], vec![10]).unwrap();
+        let guard2 = latch.acquire(vec![20], vec![30]).unwrap();
+        let guard3 = latch.acquire(vec![30], vec![50]).unwrap();
+
+        // Drop guards to release locks
+        drop(guard1);
+        drop(guard2);
+        drop(guard3);
+    }
+
+    #[test]
+    fn test_two_threads_overlapping_ranges() {
+        fn do_test(range1: (Vec<u8>, Vec<u8>), range2: (Vec<u8>, Vec<u8>)) {
+            let latch = Arc::new(RangeLatch::new());
+            let latch_clone = Arc::clone(&latch);
+            let is_thread_done = Arc::new(AtomicBool::new(false));
+            let is_thread_done_clone = Arc::clone(&is_thread_done);
+
+            // Main thread acquires the first lock
+            let guard = latch.acquire(range1.0, range1.1).unwrap();
+
+            let handle = thread::spawn(move || {
+                let _guard = latch_clone.acquire(range2.0, range2.1).unwrap();
+                is_thread_done_clone.store(true, Ordering::SeqCst);
+            });
+
+            thread::sleep(Duration::from_millis(500));
+            // Verify that the second thread is still waiting
+            assert!(!is_thread_done.load(Ordering::SeqCst));
+
+            // Release the first lock
+            drop(guard);
+
+            // Wait a bit to let the second thread complete
+            thread::sleep(Duration::from_millis(100));
+            assert!(is_thread_done.load(Ordering::SeqCst));
+
+            // Ensure the second thread completes successfully
+            handle.join().unwrap();
+        }
+
+        // Test different overlapping cases
+        do_test((vec![0], vec![10]), (vec![5], vec![15])); // Overlap at the end
+        do_test((vec![5], vec![15]), (vec![0], vec![10])); // Overlap at the begin
+        do_test((vec![0], vec![10]), (vec![4], vec![5])); // Contained within
+        do_test((vec![5], vec![15]), (vec![0], vec![20])); // Fully contained
+    }
+
+    // #[test]
+    // fn test_concurrent_random_ranges() {
+    //     use rand::Rng;
+    //
+    //     let latch = Arc::new(RangeLatch::new());
+    //     let mut handles = Vec::new();
+    //
+    //     for _ in 0..5 {
+    //         let latch_clone = Arc::clone(&latch);
+    //
+    //         handles.push(thread::spawn(move || {
+    //             let mut rng = rand::thread_rng();
+    //
+    //             for _ in 0..50 {
+    //                 let start: u8 = rng.gen_range(0..200);
+    //                 let end = rng.gen_range(start + 1..201);
+    //
+    //                 let _guard = latch_clone.acquire(vec![start],
+    // vec![end]).unwrap();                 // Hold the lock for a short
+    // period                 thread::sleep(Duration::from_millis(100));
+    //             }
+    //         }));
+    //     }
+    //
+    //     // Wait for all threads to complete
+    //     for handle in handles {
+    //         handle.join().unwrap();
+    //     }
+    // }
 }
