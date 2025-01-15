@@ -5,6 +5,7 @@ use std::{
     collections::HashSet,
     fmt,
     marker::PhantomData,
+    mem::ManuallyDrop,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -64,7 +65,7 @@ use crate::{
     metadata::{store::MetaStore, MetadataClient, MetadataEvent, StreamTask},
     metrics::{self, TaskStatus},
     observer::BackupStreamObserver,
-    router::{self, ApplyEvents, FlushContext, Router, TaskSelector},
+    router::{self, ApplyEvents, FlushContext, Router, TaskSelector, TaskSelectorRef},
     subscription_manager::{RegionSubscriptionManager, ResolvedRegions},
     subscription_track::{Ref, RefMut, ResolveResult, SubscriptionTracer},
     try_send,
@@ -92,7 +93,7 @@ pub struct Endpoint<S, R, E: KvEngine, PDC> {
     // Note: some of the fields are public so test cases are able to access them.
     pub range_router: Router,
     observer: BackupStreamObserver,
-    pool: Runtime,
+    pool: ManuallyDrop<Runtime>,
     region_operator: Sender<ObserveOp>,
     failover_time: Option<Instant>,
     config: BackupStreamConfig,
@@ -104,6 +105,13 @@ pub struct Endpoint<S, R, E: KvEngine, PDC> {
     /// Each time we spawn a task, once time goes by, we abort that task.
     pub abort_last_storage_save: Option<AbortHandle>,
     pub initial_scan_semaphore: Arc<Semaphore>,
+}
+
+impl<S, R, E: KvEngine, PDC> Drop for Endpoint<S, R, E, PDC> {
+    fn drop(&mut self) {
+        // SAFETY: won't access thread pool after dropping.
+        unsafe { ManuallyDrop::take(&mut self.pool).shutdown_background() }
+    }
 }
 
 impl<S, R, E, PDC> Endpoint<S, R, E, PDC>
@@ -190,7 +198,7 @@ where
             range_router,
             scheduler,
             observer,
-            pool,
+            pool: ManuallyDrop::new(pool),
             store_id,
             regions: accessor,
             engine: PhantomData,
@@ -857,20 +865,36 @@ where
         }
     }
 
-    pub fn on_force_flush(&self, task: String) {
+    pub fn on_force_flush(&self, task: TaskSelectorRef<'_>, sender: Sender<FlushResult>) {
         self.pool.block_on(async move {
-            let handler_res = self.range_router.get_task_handler(&task);
-            // This should only happen in testing, it would be to unwrap...
-            let _ = handler_res.unwrap().set_flushing_status_cas(false, true);
-            let mts = self.prepare_min_ts().await;
-            let sched = self.scheduler.clone();
-            self.region_op(ObserveOp::ResolveRegions {
-                callback: Box::new(move |res| {
-                    try_send!(sched, Task::ExecFlush(task, res));
-                }),
-                min_ts: mts,
-            })
-            .await;
+            info!("Triggering force flush."; "selector" => ?task);
+            let handlers = self.range_router.select_task_handler(task);
+            for hnd in handlers {
+                let mts = self.prepare_min_ts().await;
+                let sched = self.scheduler.clone();
+                let sender = sender.clone();
+                match hnd.set_flushing_status_cas(false, true) {
+                    Ok(_) => {
+                        self.region_op(ObserveOp::ResolveRegions {
+                            callback: Box::new(move |res| {
+                                try_send!(
+                                    sched,
+                                    Task::ExecFlush(hnd.task.info.name.to_owned(), res, sender)
+                                );
+                            }),
+                            min_ts: mts,
+                        })
+                        .await;
+                    }
+                    Err(_) => {
+                        let res = FlushResult {
+                            task: hnd.task.info.name.to_owned(),
+                            error: Some(Error::Other(box_err!("task is flushing"))),
+                        };
+                        let _ = sender.send(res).await;
+                    }
+                }
+            }
         });
     }
 
@@ -879,9 +903,10 @@ where
             let mts = self.prepare_min_ts().await;
             let sched = self.scheduler.clone();
             info!("min_ts prepared for flushing"; "min_ts" => %mts);
+            let (tx, _) = tokio::sync::mpsc::channel(1);
             self.region_op(ObserveOp::ResolveRegions {
                 callback: Box::new(move |res| {
-                    try_send!(sched, Task::ExecFlush(task, res));
+                    try_send!(sched, Task::ExecFlush(task, res, tx));
                 }),
                 min_ts: mts,
             })
@@ -889,14 +914,20 @@ where
         })
     }
 
-    fn on_exec_flush(&mut self, task: String, resolved: ResolvedRegions) {
+    fn on_exec_flush(&mut self, task: String, resolved: ResolvedRegions, cb: Sender<FlushResult>) {
         self.checkpoint_mgr.freeze();
-        self.pool
-            .spawn(root!("flush"; self.do_flush(task, resolved).map(|r| {
-                if let Err(err) = r {
-                    err.report("during updating flush status")
-                }
-            })));
+        let fut = self.do_flush(task.clone(), resolved);
+        self.pool.spawn(root!("flush"; async move {
+            let res = fut.await;
+            if let Err(ref err) = &res {
+                err.report("during updating flush status")
+            }
+            // If nobody waits us, it is no need to construct the result.
+            if !cb.is_closed() {
+                let flush_res = FlushResult { task, error: res.err() };
+                let _ = cb.send(flush_res).await;
+            }
+        }));
     }
 
     fn update_global_checkpoint(&self, task: String) -> future![()] {
@@ -1024,7 +1055,7 @@ where
             Task::BatchEvent(events) => self.do_backup(events),
             Task::Flush(task) => self.on_flush(task),
             Task::ModifyObserve(op) => self.on_modify_observe(op),
-            Task::ForceFlush(task) => self.on_force_flush(task),
+            Task::ForceFlush(sel, cb) => self.on_force_flush(sel.reference(), cb),
             Task::FatalError(task, err) => self.on_fatal_error(task, err),
             Task::ChangeConfig(cfg) => {
                 self.on_update_change_config(cfg);
@@ -1041,7 +1072,7 @@ where
                 }
             }
             Task::MarkFailover(t) => self.failover_time = Some(t),
-            Task::ExecFlush(task, min_ts) => self.on_exec_flush(task, min_ts),
+            Task::ExecFlush(task, min_ts, cb) => self.on_exec_flush(task, min_ts, cb),
             Task::RegionCheckpointsOp(s) => self.handle_region_checkpoints_op(s),
             Task::UpdateGlobalCheckpoint(task) => self.on_update_global_checkpoint(task),
         }
@@ -1239,6 +1270,12 @@ impl fmt::Debug for RegionCheckpointOperation {
     }
 }
 
+#[derive(Debug)]
+pub struct FlushResult {
+    pub task: String,
+    pub error: Option<Error>,
+}
+
 pub enum Task {
     WatchTask(TaskOp),
     BatchEvent(Vec<CmdBatch>),
@@ -1246,19 +1283,16 @@ pub enum Task {
     /// Change the observe status of some region.
     ModifyObserve(ObserveOp),
     /// Convert status of some task into `flushing` and do flush then.
-    ForceFlush(String),
+    ForceFlush(TaskSelector, Sender<FlushResult>),
     /// FatalError pauses the task and set the error.
     FatalError(TaskSelector, Box<Error>),
-    /// Run the callback when see this message. Only for test usage.
-    /// NOTE: Those messages for testing are not guarded by `#[cfg(test)]` for
-    /// now, because the integration test would not enable test config when
-    /// compiling (why?)
+    /// Run the callback when see this message.
     Sync(
         // Run the closure if ...
         Box<dyn FnOnce() + Send>,
         // This returns `true`.
         // The argument should be `self`, but there are too many generic argument for `self`...
-        // So let the caller in test cases downcast this to the type they need manually...
+        // So let the caller downcast this to the type they need manually...
         Box<dyn FnMut(&mut dyn Any) -> bool + Send>,
     ),
     /// Mark the store as a failover store.
@@ -1271,7 +1305,7 @@ pub enum Task {
     Flush(String),
     /// Execute the flush with the calculated resolved result.
     /// This is an internal command only issued by the `Flush` task.
-    ExecFlush(String, ResolvedRegions),
+    ExecFlush(String, ResolvedRegions, Sender<FlushResult>),
     /// The command for getting region checkpoints.
     RegionCheckpointsOp(RegionCheckpointOperation),
     /// update global-checkpoint-ts to storage.
@@ -1377,7 +1411,7 @@ impl fmt::Debug for Task {
             Self::ChangeConfig(arg0) => f.debug_tuple("ChangeConfig").field(arg0).finish(),
             Self::Flush(arg0) => f.debug_tuple("Flush").field(arg0).finish(),
             Self::ModifyObserve(op) => f.debug_tuple("ModifyObserve").field(op).finish(),
-            Self::ForceFlush(arg0) => f.debug_tuple("ForceFlush").field(arg0).finish(),
+            Self::ForceFlush(sel, _) => f.debug_tuple("ForceFlush").field(sel).finish(),
             Self::FatalError(task, err) => {
                 f.debug_tuple("FatalError").field(task).field(err).finish()
             }
@@ -1386,7 +1420,7 @@ impl fmt::Debug for Task {
                 .debug_tuple("MarkFailover")
                 .field(&format_args!("{:?} ago", t.saturating_elapsed()))
                 .finish(),
-            Self::ExecFlush(arg0, arg1) => f
+            Self::ExecFlush(arg0, arg1, _) => f
                 .debug_tuple("ExecFlush")
                 .field(arg0)
                 .field(&arg1.global_checkpoint())

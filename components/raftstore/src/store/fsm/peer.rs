@@ -3820,6 +3820,10 @@ where
                 None => {
                     self.propose_pending_batch_raft_command();
                     if self.propose_locks_before_transfer_leader(msg) {
+                        fail_point!(
+                            "finish_proposing_transfer_cmd_after_proposing_locks",
+                            |_| {}
+                        );
                         // If some pessimistic locks are just proposed, we propose another
                         // TransferLeader command instead of transferring leader immediately.
                         info!("propose transfer leader command";
