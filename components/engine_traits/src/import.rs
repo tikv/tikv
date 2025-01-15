@@ -93,6 +93,15 @@ impl RangeLatch {
                 }
                 // Now acquire the lock after releasing the write guard
                 let lock = mutex.lock().unwrap();
+                // The lifetime of the lock returned by `mutex.lock()` is tied to the `_guard`
+                // variable, but we need to extend its lifetime to `'static` so it can be stored
+                // in the `RangeLatchGuard` struct. This is safe because:
+                // - The `lock` is managed by the `RangeLatchGuard`, ensuring proper drop
+                //   semantics.
+                // - The lifetime extension does not result in use-after-free, as the lock's
+                //   underlying resources are valid for the lifetime of the `mutex`.
+                // - The design guarantees that `RangeLatchGuard` will hold the lock for its
+                //   entire lifetime, preventing invalid access.
                 let lock = unsafe { std::mem::transmute(lock) };
 
                 return Ok(RangeLatchGuard {
