@@ -413,6 +413,7 @@ impl<E: KvEngine> ImportDir<E> {
 
         for (cf, cf_paths) in paths {
             let files: Vec<&str> = cf_paths.iter().map(|p| p.clone.to_str().unwrap()).collect();
+            // TODO(hwy): Use RocksDB IngestExternalFileOptions.allow_write = true.
             engine.ingest_external_file_cf(cf, &files, None)?;
         }
         INPORTER_INGEST_COUNT.observe(metas.len() as _);

@@ -7,8 +7,21 @@ use std::{
 
 use crate::{errors::Result, Range};
 
-/// Currently used to ensure mutual exclusion between
-/// compaction filter GC and ingest SST operations.
+/// A structure used to manage range-based latch with mutual exclusion.
+///
+/// Currently used to ensure mutual exclusion between compaction filter and
+/// ingest SST operations.
+///
+/// This implementation is designed for scenarios with low concurrency.
+/// In the current scenario, compaction filter threads are limited by
+/// `RocksDB.max_background_jobs`, and region worker threads typically run one
+/// at a time. Due to this low level of concurrency, the overhead of range
+/// locking is minimal, and potential conflicts are rare.
+///
+/// Additionally, both the compaction filter and ingest SST operations that
+/// use this `RangeLatch` enforce self-mutual exclusion. While this might
+/// appear somewhat overkill, its impact on performance is minimal due to
+/// the system's low concurrency and the brief duration of lock holding.
 #[derive(Debug, Default)]
 pub struct RangeLatch {
     /// A BTreeMap storing active range locks.
@@ -32,16 +45,11 @@ impl RangeLatch {
     /// no overlapping ranges already latched. If overlaps exist, the
     /// function waits until those latches are released before proceeding.
     ///
-    /// The concurrency is very low because only a few compaction filter
-    /// threads (limited by `max_background_jobs`) and a single region
-    /// worker thread run concurrently, with each thread holding at most one
-    /// latch.
-    ///
     /// Overlaps are determined by iterating through all active latches stored
     /// in `range_latches` and checking whether the specified range
     /// conflicts with any of them. While this approach may seem
     /// inefficient, the overhead of linear iteration is negligible in practice
-    /// due to the low concurrency of the system.
+    /// due to the low concurrency of the users.
     ///
     /// Live-locks can occur in this implementation. For example, a thread
     /// attempting to acquire a latch for the range `[a, z)` might encounter
@@ -51,7 +59,7 @@ impl RangeLatch {
     /// another thread might acquire `[a, b)` again, forcing the original
     /// thread to wait for `[a, b)` once more. This process could repeat
     /// indefinitely if threads continuously "jump the queue." Despite this,
-    /// such live-locks are unlikely to persist for long due to the system's low
+    /// such live-locks are unlikely to persist for long due to the user's low
     /// concurrency, as conflicting latches are eventually released, allowing
     /// threads to make progress naturally.
     pub fn acquire(
@@ -141,6 +149,11 @@ impl Drop for RangeLatchGuard {
 pub trait ImportExt {
     type IngestExternalFileOptions: IngestExternalFileOptions;
 
+    /// Ingests external files into the specified column family.
+    ///
+    /// If the range is specified, it enables `RocksDB
+    /// IngestExternalFileOptions.allow_write` and locks the
+    /// specified range.  
     fn ingest_external_file_cf(
         &self,
         cf: &str,
