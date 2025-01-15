@@ -203,6 +203,9 @@ fn test_compaction_filter_gc_blocked_by_ingest() {
         fail::remove("compaction_filter_ingest_latch_acquired_flush");
     };
 
+    do_test(b"a");
+    // Test that the `largest_key` used by the compaction filter matches the
+    // `Region.start_key`.
     do_test(b"b");
     do_test(b"c");
 }

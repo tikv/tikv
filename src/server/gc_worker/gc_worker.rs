@@ -1059,11 +1059,11 @@ impl<E: Engine> GcRunnerCore<E> {
                 // Acquire latch to prevent conflicts with ingestion operations
                 // using RocksDB IngestExternalFileOptions.allow_write = true.
                 //
-                // Here, we can directly use [smallest_key, largest_key) for locking.
-                // Since for the same key, the largest_key here has a timestamp appended at the
-                // end, while the locking for SST ingestion uses Region.end_key
-                // without a timestamp, an overlap exists, ensuring mutual
-                // exclusion.
+                // Here, we can directly use [`smallest_key`, `largest_key`) for locking.
+                // Since for the same key, the `largest_key` here has a timestamp appended at
+                // the end, while the locking for SST ingestion uses
+                // `Region.start_key` without a timestamp, an overlap exists,
+                // ensuring mutual exclusion.
                 let _ingest_latch_guard =
                     self.engine
                         .kv_engine()

@@ -598,10 +598,11 @@ impl WriteCompactionFilter {
                                 .unwrap()
                                 .as_encoded()
                                 .clone();
-                            // Here, we can directly use [smallest_key, largest_key) for locking.
-                            // Since for the same key, the largest_key here has a timestamp appended
+                            // Here, we can directly use [`smallest_key`, `largest_key`) for
+                            // locking. Since for the same key, the
+                            // `largest_key` here has a timestamp appended
                             // at the end, while the locking for SST
-                            // ingestion uses Region.end_key without a
+                            // ingestion uses `Region.start_key` without a
                             // timestamp, an overlap exists, ensuring mutual exclusion.
                             Some(engine.ingest_latch.acquire(smallest_key, largest_key))
                         }
