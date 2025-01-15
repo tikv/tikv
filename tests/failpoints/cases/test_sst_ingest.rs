@@ -245,7 +245,7 @@ fn test_compaction_filter_gc_blocked_by_ingest_no_overlap() {
 }
 
 // Similar as test_compaction_filter_gc_blocked_by_ingest.
-fn test_compaction_filter_gc_blocks_ingest_test(region_to_migrate: &[u8]) {
+fn compaction_filter_gc_blocks_ingest_test(region_to_migrate: &[u8]) {
     let (cluster, region, peer, pd_client) = setup_cluster(region_to_migrate);
 
     // Start and pause the GC thread.
@@ -295,17 +295,17 @@ fn test_compaction_filter_gc_blocks_ingest_test(region_to_migrate: &[u8]) {
 
 #[test]
 fn test_compaction_filter_gc_blocks_ingest() {
-    test_compaction_filter_gc_blocks_ingest_test(b"a");
+    compaction_filter_gc_blocks_ingest_test(b"a");
 }
 
 // Test that the `end_key` used by the compaction filter matches the
 // `Region.start_key`.
 #[test]
 fn test_compaction_filter_gc_blocks_ingest_range_boundaries() {
-    test_compaction_filter_gc_blocks_ingest_test(b"b");
+    compaction_filter_gc_blocks_ingest_test(b"b");
 }
 
 #[test]
 fn test_compaction_filter_gc_blocks_ingest_test_no_overlap() {
-    test_compaction_filter_gc_blocks_ingest_test(b"c");
+    compaction_filter_gc_blocks_ingest_test(b"c");
 }
