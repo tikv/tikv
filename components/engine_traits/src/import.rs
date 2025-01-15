@@ -245,4 +245,34 @@ mod tests {
         do_test((vec![0], vec![10]), (vec![4], vec![5])); // Contained within
         do_test((vec![5], vec![15]), (vec![0], vec![20])); // Fully contained
     }
+
+    #[test]
+    fn test_concurrent_random_ranges() {
+        use rand::Rng;
+
+        let latch = Arc::new(RangeLatch::new());
+        let mut handles = Vec::new();
+
+        for _ in 0..5 {
+            let latch_clone = Arc::clone(&latch);
+
+            handles.push(thread::spawn(move || {
+                let mut rng = rand::thread_rng();
+
+                for _ in 0..50 {
+                    let start: u8 = rng.gen_range(0..200);
+                    let end = rng.gen_range(start + 1..201);
+
+                    let _guard = latch_clone.acquire(vec![start], vec![end]).unwrap();
+                    // Hold the lock for a short period
+                    thread::sleep(Duration::from_millis(10));
+                }
+            }));
+        }
+
+        // Wait for all threads to complete
+        for handle in handles {
+            handle.join().unwrap();
+        }
+    }
 }

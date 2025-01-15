@@ -1298,4 +1298,55 @@ pub mod tests {
         gc_runner.safe_point(200).gc(&raw_engine);
         must_get_none(&mut engine, b"zkey", 200);
     }
+
+    #[test]
+    fn test_delete_batch_smallest_and_largest_key_update() {
+        let mut cfg = DbConfig::default();
+        cfg.writecf.disable_auto_compactions = true;
+        cfg.writecf.dynamic_level_bytes = false;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let builder = TestEngineBuilder::new().path(dir.path());
+        let engine = builder.build_with_cfg(&cfg).unwrap();
+        let raw_engine = engine.get_rocksdb();
+
+        let mut delete_batch = DeleteBatch::new(&Some(raw_engine.clone()));
+
+        let key1 = b"key1";
+        let key2 = b"key2";
+        let key3 = b"key3";
+        let ts1 = TimeStamp::new(100);
+        let ts2 = TimeStamp::new(200);
+        let ts3 = TimeStamp::new(300);
+
+        delete_batch.delete(key1, ts1).unwrap();
+        assert_eq!(
+            delete_batch.smallest_key.as_ref().unwrap().as_encoded(),
+            key1
+        );
+        assert_eq!(
+            delete_batch.largest_key.as_ref().unwrap().as_encoded(),
+            key1
+        );
+
+        delete_batch.delete(key2, ts2).unwrap();
+        assert_eq!(
+            delete_batch.smallest_key.as_ref().unwrap().as_encoded(),
+            key1
+        );
+        assert_eq!(
+            delete_batch.largest_key.as_ref().unwrap().as_encoded(),
+            key2
+        );
+
+        delete_batch.delete(key3, ts3).unwrap();
+        assert_eq!(
+            delete_batch.smallest_key.as_ref().unwrap().as_encoded(),
+            key1
+        );
+        assert_eq!(
+            delete_batch.largest_key.as_ref().unwrap().as_encoded(),
+            key3
+        );
+    }
 }
