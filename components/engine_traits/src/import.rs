@@ -86,10 +86,11 @@ impl RangeLatch {
             // If no conflicts, insert the new range and return the guard
             if overlapping_ranges.is_empty() {
                 let mutex = Arc::new(Mutex::new(()));
-                range_latches.insert(
+                let previous_value = range_latches.insert(
                     start_key.clone(),
                     (mutex.clone(), (start_key.clone(), end_key.clone())),
                 );
+                debug_assert!(previous_value.is_none());
 
                 // Now acquire the lock after releasing the write guard
                 let lock = mutex.lock().unwrap();
