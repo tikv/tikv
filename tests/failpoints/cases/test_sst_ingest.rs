@@ -147,7 +147,7 @@ fn verify_pending(rx: &Receiver<bool>, duration: u64) {
 }
 
 fn verify_completed(rx: &Receiver<bool>) {
-    assert_eq!(rx.recv_timeout(Duration::from_millis(1000)), Ok(true));
+    assert_eq!(rx.recv_timeout(Duration::from_millis(500)), Ok(true));
 }
 
 // Tests the behavior of the compaction filter GC when it is blocked by an
@@ -187,11 +187,14 @@ fn compaction_filter_gc_blocked_by_ingest_test(region_to_migrate: &[u8]) {
     let apply_snap_handle = start_apply_snapshot(region_id, pd_client, peer.clone(), true);
 
     // Wait for snapshot to acquire the latch.
-    sleep_ms(1000);
+    sleep_ms(500);
 
     let (tx, rx) = sync_channel(0);
     fail::cfg_callback("compaction_filter_ingest_latch_acquired_flush", move || {
-        tx.send(true).unwrap();
+        // Ignore the return value because the ingest process triggers twice. At the
+        // second trigger, the channel might already be dropped, causing send to fail.
+        // However, this does not affect the test functionality.
+        let _ = tx.send(true);
     })
     .unwrap();
 
@@ -201,7 +204,7 @@ fn compaction_filter_gc_blocked_by_ingest_test(region_to_migrate: &[u8]) {
 
     if region_to_migrate != b"c" {
         // Other regions overlap, so the GC thread will be blocked.
-        verify_pending(&rx, 1000);
+        verify_pending(&rx, 500);
     } else {
         // Region "c" does not overlap with the snapshot process.
         verify_completed(&rx);
@@ -217,7 +220,7 @@ fn compaction_filter_gc_blocked_by_ingest_test(region_to_migrate: &[u8]) {
     // Resume the snapshot process.
     fail::remove("after_apply_snapshot_ingest_latch_acquired");
     // Wait for the snapshot process to release the latch.
-    sleep_ms(1000);
+    sleep_ms(500);
     // The GC thread can continue after the snapshot process releases the latch.
     verify_completed(&rx);
     gc_handle.join().expect("GC thread panicked");
@@ -254,7 +257,10 @@ fn compaction_filter_gc_blocks_ingest_test(region_to_migrate: &[u8]) {
 
     let (tx, rx) = sync_channel(0);
     fail::cfg_callback("after_apply_snapshot_ingest_latch_acquired", move || {
-        tx.send(true).unwrap();
+        // Ignore the return value because the ingest process triggers twice. At the
+        // second trigger, the channel might already be dropped, causing send to fail.
+        // However, this does not affect the test functionality.
+        let _ = tx.send(true);
     })
     .unwrap();
 
@@ -263,10 +269,10 @@ fn compaction_filter_gc_blocks_ingest_test(region_to_migrate: &[u8]) {
     let region_id = region.id;
     let apply_snap_handle = start_apply_snapshot(region_id, pd_client, peer.clone(), false);
     // Wait for snapshot to acquire the latch.
-    sleep_ms(1000);
+    sleep_ms(500);
     if region_to_migrate != b"c" {
         // Other regions overlap, so the snapshot process will be blocked.
-        verify_pending(&rx, 1000);
+        verify_pending(&rx, 500);
     } else {
         // Region "c" does not overlap with the GC thread.
         verify_completed(&rx);
@@ -282,7 +288,7 @@ fn compaction_filter_gc_blocks_ingest_test(region_to_migrate: &[u8]) {
     // Resume the compaction filter process.
     fail::remove("compaction_filter_ingest_latch_acquired_flush");
     // Wait for the GC thread to release the latch.
-    sleep_ms(1000);
+    sleep_ms(500);
     // The apply snapshot thread can continue after the GC thread releases the
     // latch.
     verify_completed(&rx);
@@ -306,6 +312,6 @@ fn test_compaction_filter_gc_blocks_ingest_range_boundaries() {
 }
 
 #[test]
-fn test_compaction_filter_gc_blocks_ingest_test_no_overlap() {
+fn test_compaction_filter_gc_blocks_ingest_no_overlap() {
     compaction_filter_gc_blocks_ingest_test(b"c");
 }
