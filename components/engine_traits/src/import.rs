@@ -184,6 +184,7 @@ pub trait IngestExternalFileOptions {
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::HashSet,
         sync::{
             atomic::{AtomicBool, Ordering},
             Arc,
@@ -191,6 +192,8 @@ mod tests {
         thread,
         time::Duration,
     };
+
+    use rand::Rng;
 
     use super::*;
 
@@ -249,13 +252,15 @@ mod tests {
 
     #[test]
     fn test_concurrent_random_ranges() {
-        use rand::Rng;
-
+        // Shared latch and active ranges tracker
         let latch = Arc::new(RangeLatch::new());
+        let active_ranges = Arc::new(Mutex::new(HashSet::new()));
+
         let mut handles = Vec::new();
 
         for _ in 0..5 {
             let latch_clone = Arc::clone(&latch);
+            let active_ranges_clone = Arc::clone(&active_ranges);
 
             handles.push(thread::spawn(move || {
                 let mut rng = rand::thread_rng();
@@ -264,9 +269,35 @@ mod tests {
                     let start: u8 = rng.gen_range(0..200);
                     let end = rng.gen_range(start + 1..201);
 
+                    // Acquire the range lock
                     let _guard = latch_clone.acquire(vec![start], vec![end]).unwrap();
+
+                    // Check for overlap
+                    {
+                        let mut ranges = active_ranges_clone.lock().unwrap();
+                        for (existing_start, existing_end) in ranges.iter() {
+                            assert!(
+                                end <= *existing_start || start >= *existing_end,
+                                "Overlapping range detected: [{}, {}) overlaps with [{}, {})",
+                                start,
+                                end,
+                                existing_start,
+                                existing_end
+                            );
+                        }
+
+                        // Add the current range to the active set
+                        ranges.insert((start, end));
+                    }
+
                     // Hold the lock for a short period
                     thread::sleep(Duration::from_millis(10));
+
+                    // Remove the range from the active set
+                    {
+                        let mut ranges = active_ranges_clone.lock().unwrap();
+                        ranges.remove(&(start, end));
+                    }
                 }
             }));
         }
