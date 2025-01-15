@@ -18,17 +18,12 @@ pub struct RangeLatch {
     ///   - `(Vec<u8>, Vec<u8>)`: The actual range definition (start_key,
     ///     end_key).
     range_latches: RwLock<BTreeMap<Vec<u8>, (Arc<Mutex<()>>, (Vec<u8>, Vec<u8>))>>,
-
-    #[cfg(any(test, feature = "testexport"))]
-    latch_history: Mutex<Vec<String>>,
 }
 
 impl RangeLatch {
     pub fn new() -> Self {
         Self {
             range_latches: RwLock::new(BTreeMap::new()),
-            #[cfg(any(test, feature = "testexport"))]
-            latch_history: Mutex::new(Vec::new()),
         }
     }
 
@@ -37,7 +32,7 @@ impl RangeLatch {
     /// no overlapping ranges already latched. If overlaps exist, the
     /// function waits until those latches are released before proceeding.
     ///
-    ///  The concurrency is very low because only a few compaction filter
+    /// The concurrency is very low because only a few compaction filter
     /// threads (limited by `max_background_jobs`) and a single region
     /// worker thread run concurrently, with each thread holding at most one
     /// latch.
@@ -92,17 +87,6 @@ impl RangeLatch {
                 let lock = mutex.lock().unwrap();
                 let lock = unsafe { std::mem::transmute(lock) };
 
-                #[cfg(any(test, feature = "testexport"))]
-                {
-                    // Add history for testing purposes
-                    let mut history = self.latch_history.lock().unwrap();
-                    history.push(format!(
-                        "Acquired range: {:?} - {:?}",
-                        start_key.iter().map(|&c| c as char).collect::<String>(),
-                        end_key.iter().map(|&c| c as char).collect::<String>(),
-                    ));
-                }
-
                 return Ok(RangeLatchGuard {
                     start_key,
                     end_key,
@@ -127,12 +111,6 @@ impl RangeLatch {
             }
         }
     }
-
-    #[cfg(any(test, feature = "testexport"))]
-    pub fn get_latch_history(&self) -> Vec<String> {
-        let history = self.latch_history.lock().unwrap();
-        history.clone()
-    }
 }
 
 /// A guard that holds the range lock.
@@ -156,19 +134,6 @@ impl Drop for RangeLatchGuard {
             if Arc::strong_count(mutex) == 1 {
                 range_latches.remove(&self.start_key);
             }
-        }
-
-        #[cfg(any(test, feature = "testexport"))]
-        {
-            let mut history = self.latch.latch_history.lock().unwrap();
-            history.push(format!(
-                "Released range: {:?} - {:?}",
-                self.start_key
-                    .iter()
-                    .map(|&c| c as char)
-                    .collect::<String>(),
-                self.end_key.iter().map(|&c| c as char).collect::<String>(),
-            ));
         }
     }
 }
