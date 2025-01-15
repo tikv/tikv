@@ -9,7 +9,7 @@ use crate::{errors::Result, Range};
 
 /// Currently used to ensure mutual exclusion between
 /// compaction filter GC and ingest SST operations.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct RangeLatch {
     /// A BTreeMap storing active range locks.
     /// Key: The start key of the range (sorted order).
@@ -132,12 +132,6 @@ impl RangeLatch {
     pub fn get_latch_history(&self) -> Vec<String> {
         let history = self.latch_history.lock().unwrap();
         history.clone()
-    }
-}
-
-impl Default for RangeLatch {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
