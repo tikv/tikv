@@ -111,20 +111,15 @@ fn setup_cluster(
     (cluster, region, peer, pd_client)
 }
 
-fn start_apply_snapshot(
+fn start_region_migrate(
     region_id: u64,
     pd_client: Arc<TestPdClient>,
     peer: Peer,
-    pause: bool,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
         fail::cfg("apply_cf_without_ingest_false", "return").unwrap();
         fail::cfg("before_clean_stale_ranges", "return").unwrap();
         fail::cfg("before_clean_overlap_ranges", "return").unwrap();
-        if pause {
-            // fail::cfg("after_apply_snapshot_ingest_latch_acquired",
-            // "pause").unwrap();
-        }
 
         pd_client.must_remove_peer(region_id, peer.clone());
         pd_client.must_add_peer(region_id, peer.clone());
@@ -184,7 +179,7 @@ fn compaction_filter_gc_blocked_by_ingest_test(region_to_migrate: &[u8]) {
 
     // Start and pause the apply snapshot process.
     fail::cfg("after_apply_snapshot_ingest_latch_acquired", "pause").unwrap();
-    let apply_snap_handle = start_apply_snapshot(region_id, pd_client, peer.clone(), true);
+    let apply_snap_handle = start_region_migrate(region_id, pd_client, peer.clone());
 
     // Wait for snapshot to acquire the latch.
     sleep_ms(500);
@@ -267,7 +262,7 @@ fn compaction_filter_gc_blocks_ingest_test(region_to_migrate: &[u8]) {
     // Start the apply snapshot thread, which might be blocked by the GC thread,
     // depending on whether the ranges overlap.
     let region_id = region.id;
-    let apply_snap_handle = start_apply_snapshot(region_id, pd_client, peer.clone(), false);
+    let apply_snap_handle = start_region_migrate(region_id, pd_client, peer.clone());
     // Wait for snapshot to acquire the latch.
     sleep_ms(500);
     if region_to_migrate != b"c" {
@@ -314,4 +309,115 @@ fn test_compaction_filter_gc_blocks_ingest_range_boundaries() {
 #[test]
 fn test_compaction_filter_gc_blocks_ingest_no_overlap() {
     compaction_filter_gc_blocks_ingest_test(b"c");
+}
+
+// This test is designed to verify that when a region is migrated away and then
+// migrated back, the destroy peer task must complete first.
+//
+// Currently, since  the region worker operates on a single thread, when a
+// region is migrated away and back again, the destroy peer task is enqueued
+// before the apply snapshot task, ensuring sequential execution without
+// concurrency.
+//
+// As the apply snapshot ingestion uses RocksDB
+// IngestExternalFileOption.allow_write = true, concurrent writes are not
+// expected during apply snapshot ingestion. Therefore, this test ensures that
+// there are no concurrent writes from destroy peer during this process.
+#[test]
+fn test_apply_snapshot_must_wait_destroy_peer() {
+    let (mut cluster, ..) = must_new_cluster_mul(3);
+
+    cluster.must_put(b"k1", b"v1");
+    let peer = new_peer(2, 2);
+    let pk = b"k1".to_vec();
+    let region = cluster.get_region(&pk);
+    let region_id = region.get_id();
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+
+    // Start the destroy peer process, which will pause at
+    // before_clean_stale_ranges.
+    let pd_client_clone1 = pd_client.clone();
+    let peer_clone1 = peer.clone();
+    let destroy_handle = thread::spawn(move || {
+        fail::cfg("before_clean_stale_ranges", "pause").unwrap();
+        pd_client_clone1.must_remove_peer(region_id, peer_clone1);
+    });
+    // Wait for the destroy peer process to pause.
+    sleep_ms(500);
+
+    let (tx, rx) = sync_channel(0);
+    fail::cfg_callback("apply_snapshot_finished", move || {
+        tx.send(true).unwrap();
+    })
+    .unwrap();
+
+    let pd_client_clone2 = pd_client.clone();
+    let peer_clone2 = peer.clone();
+    let apply_handle = thread::spawn(move || {
+        pd_client_clone2.must_add_peer(region_id, peer_clone2);
+    });
+
+    // Verify that apply snapshot is pending.
+    assert_eq!(
+        rx.recv_timeout(Duration::from_millis(500)),
+        Err(RecvTimeoutError::Timeout)
+    );
+
+    // Resume the destroy peer process.
+    fail::remove("before_clean_stale_ranges");
+    // Verify that apply snapshot is finished
+    assert_eq!(rx.recv_timeout(Duration::from_millis(1000)), Ok(true));
+    destroy_handle.join().expect("destroy handle panicked");
+    apply_handle.join().expect("apply handle panicked");
+}
+
+// This test ensures that the destroy peer process will wait for the ongoing
+// foreground writes of the same region to finish.
+// Since test_apply_snapshot_must_wait_destroy_peer() has already verified that
+// when a region is migrated away and then back, the apply snapshot process will
+// wait for the destroy peer process to complete first, it can be considered
+// that apply snapshot will also wait for the ongoing foreground writes to
+// finish.
+#[test]
+fn test_destroy_peer_must_wait_ongoing_foreground_writes() {
+    let (mut cluster, ..) = must_new_cluster_mul(3);
+    // Use peer_id 3 since on_apply_write_cmd only works on peer 3.
+    let peer = new_peer(3, 3);
+    let pk = b"k1".to_vec();
+    let region = cluster.get_region(&pk);
+    let region_id = region.get_id();
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+
+    fail::cfg("on_apply_write_cmd", "pause").unwrap();
+    cluster.put(b"k1", b"v1").unwrap();
+    // Wait for foreground writes to pause.
+    sleep_ms(500);
+
+    let (tx, rx) = sync_channel(0);
+    fail::cfg_callback("raft_store_after_destroy_peer", move || {
+        tx.send(true).unwrap();
+    })
+    .unwrap();
+
+    // Start the destroy peer process, which will pause at
+    // before_clean_stale_ranges.
+    let pd_client_clone1 = pd_client.clone();
+    let peer_clone1 = peer.clone();
+    let destroy_handle = thread::spawn(move || {
+        pd_client_clone1.must_remove_peer(region_id, peer_clone1);
+    });
+
+    // Verify that apply snapshot is pending.
+    assert_eq!(
+        rx.recv_timeout(Duration::from_millis(500)),
+        Err(RecvTimeoutError::Timeout)
+    );
+
+    // Resume the foreground writes.
+    fail::remove("on_apply_write_cmd");
+    // Verify that apply snapshot is finished
+    assert_eq!(rx.recv_timeout(Duration::from_millis(500)), Ok(true));
+    destroy_handle.join().expect("destroy thread panicked");
 }

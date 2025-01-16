@@ -418,7 +418,6 @@ where
             }
         };
 
-        fail_point!("apply_snapshot_finished");
         SNAP_HISTOGRAM
             .apply
             .observe(start.saturating_elapsed_secs());
