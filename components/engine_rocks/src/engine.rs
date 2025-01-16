@@ -2,10 +2,9 @@
 
 use std::{any::Any, sync::Arc};
 
-use engine_traits::{
-    IterOptions, Iterable, KvEngine, Peekable, RangeLatch, ReadOptions, Result, SyncMutable,
-};
+use engine_traits::{IterOptions, Iterable, KvEngine, Peekable, ReadOptions, Result, SyncMutable};
 use rocksdb::{DBIterator, Writable, DB};
+use tikv_util::range_latch::RangeLatch;
 
 use crate::{
     db_vector::RocksDbVector, options::RocksReadOptions, r2e, util::get_cf_handle,

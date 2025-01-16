@@ -2143,6 +2143,7 @@ dependencies = [
  "engine_traits",
  "kvproto",
  "raft",
+ "tikv_util",
  "tracker",
  "txn_types",
 ]

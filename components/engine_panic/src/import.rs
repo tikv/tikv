@@ -1,6 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{ImportExt, IngestExternalFileOptions, Range, RangeLatchGuard, Result};
+use engine_traits::{ImportExt, IngestExternalFileOptions, Range, Result};
+use tikv_util::range_latch::RangeLatchGuard;
 
 use crate::engine::PanicEngine;
 
@@ -16,7 +17,7 @@ impl ImportExt for PanicEngine {
         panic!()
     }
 
-    fn acquire_ingest_latch(&self, range: Range<'_>) -> Result<RangeLatchGuard> {
+    fn acquire_ingest_latch(&self, range: Range<'_>) -> RangeLatchGuard {
         panic!()
     }
 }

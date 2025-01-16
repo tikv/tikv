@@ -1,8 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
-use engine_traits::{ImportExt, IngestExternalFileOptions, Range, RangeLatchGuard, Result};
+use engine_traits::{ImportExt, IngestExternalFileOptions, Range, Result};
 use fail::fail_point;
 use rocksdb::IngestExternalFileOptions as RawIngestExternalFileOptions;
-use tikv_util::time::Instant;
+use tikv_util::{range_latch::RangeLatchGuard, time::Instant};
 
 use crate::{
     engine::RocksEngine, perf_context_metrics::INGEST_EXTERNAL_FILE_TIME_HISTOGRAM, r2e, util,
@@ -22,7 +22,7 @@ impl ImportExt for RocksEngine {
         let _region_inject_latch_guard = match &range {
             Some(r) => Some(
                 self.ingest_latch
-                    .acquire(r.start_key.to_vec(), r.end_key.to_vec())?,
+                    .acquire(r.start_key.to_vec(), r.end_key.to_vec()),
             ),
             None => None,
         };
@@ -59,7 +59,7 @@ impl ImportExt for RocksEngine {
         Ok(())
     }
 
-    fn acquire_ingest_latch(&self, range: Range<'_>) -> Result<RangeLatchGuard> {
+    fn acquire_ingest_latch(&self, range: Range<'_>) -> RangeLatchGuard {
         self.ingest_latch
             .acquire(range.start_key.to_vec(), range.end_key.to_vec())
     }

@@ -67,6 +67,8 @@ pub mod topn;
 pub mod worker;
 pub mod yatp_pool;
 
+pub mod range_latch;
+
 static PANIC_WHEN_UNEXPECTED_KEY_OR_DATA: AtomicBool = AtomicBool::new(false);
 
 pub fn panic_when_unexpected_key_or_data() -> bool {
