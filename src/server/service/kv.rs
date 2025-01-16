@@ -222,7 +222,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
         ch: &E::RaftExtension,
         msg: RaftMessage,
         raft_msg_filter: &Arc<dyn RaftGrpcMessageFilter + Send + Sync>,
-        reject_messages_on_memory_ratio: f64,
     ) -> RaftStoreResult<()> {
         let to_store_id = msg.get_to_peer().get_store_id();
         if to_store_id != store_id {
@@ -810,7 +809,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                     &ch,
                     msg,
                     &ob,
-                    reject_messages_on_memory_ratio,
                 ) {
                     // Return an error here will break the connection, only do that for
                     // `StoreNotMatch` to let tikv to resolve a correct address from PD
@@ -879,7 +877,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                             &ch,
                             msg,
                             &ob,
-                            reject_messages_on_memory_ratio,
                         )
                     {
                         // Return an error here will break the connection, only do that for
