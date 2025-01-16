@@ -1869,7 +1869,7 @@ mod tests {
                 role: StateRole::Leader,
             });
             let mut stat = RegionStat::default();
-            stat.cop_detail = RegionWriteCfCopDetail::new(0, next, prev, processed_keys);
+            stat.cop_detail = RegionWriteCfCopDetail::new(next, prev, processed_keys);
             collector.handle_raftstore_event(RaftStoreEvent::UpdateRegionActivity {
                 region,
                 activity: RegionActivity { region_stat: stat },

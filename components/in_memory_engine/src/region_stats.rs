@@ -111,12 +111,12 @@ impl RegionStatsManager {
         self.region_loaded_at.write().unwrap().remove(&region.id);
     }
 
+    /// Get regions' stat of the cached region and sort them by coprocessor
+    /// requests and next + prev in descending order.
     fn get_cached_region_stats(
         &self,
         cached_regions: &HashMap<u64, Arc<StdMutex<CopRequestsSMA>>>,
     ) -> Vec<CachedRegionStat> {
-        // Get regions' stat of the cached region and sort them by coprocessor
-        // requests and next + prev in descending order.
         match self
             .info_provider
             .get_regions_stat(cached_regions.iter().map(|(id, _)| *id).collect())
@@ -133,12 +133,11 @@ impl RegionStatsManager {
         }
     }
 
-    /// Collects regions to load and evict based on region stat, mvcc
-    /// amplification, and memory constraints. New top regions will be
-    /// collected in `regions_added_out` to be loaded.
+    /// Collects regions to load and evict based on region stat and memory
+    /// constraints.
     ///
-    /// If memory usage is below the stop load threshold, regions with low read
-    /// flow are considered for eviction.
+    /// If memory usage is below the stop load threshold, regions will not be
+    /// evicted.
     ///
     /// If memory usage reaches stop load threshold, whether to evict region is
     /// determined by comparison between the new top regions' activity and the
@@ -152,8 +151,6 @@ impl RegionStatsManager {
         cached_regions: HashMap<u64, Arc<StdMutex<CopRequestsSMA>>>,
         memory_controller: &MemoryController,
     ) -> (Vec<Region>, Vec<Region>) {
-        // Get regions' stat of the cached region and sort them by coprocessor
-        // requests and next + prev in descending order.
         let cached_region_stats = self.get_cached_region_stats(&cached_regions);
 
         // Use evict-threshold rather than stop-load-threshold as there might
@@ -326,15 +323,13 @@ impl RegionStatsManager {
             Option<Box<dyn AsyncFnOnce + Send + Sync>>,
         ) -> Vec<CacheRegion>,
     {
-        // Get regions' stat of the cached region and sort them by next + prev in
-        // descending order.
         let regions_activity = self.get_cached_region_stats(&cached_regions);
         if regions_activity.is_empty() {
             return;
         }
 
-        // Use the average mvcc amplification to filter the regions with high mvcc
-        // amplification
+        // Use the average coprocessor requests to filter the regions with low
+        // read flow.
         let avg_cop_requests = regions_activity
             .iter()
             .map(|crs| crs.sma_cop_requests_avg)
@@ -382,7 +377,7 @@ impl RegionStatsManager {
                     &CacheRegion::from_region(r),
                     EvictReason::MemoryLimitReached,
                     // This callback will be executed when eviction finishes at `on_delete_regions`
-                    // and when the reletive rx.recv() returns, we know some memory are freed.
+                    // and when the rx.recv() returns, we know some memory are freed.
                     Some(Box::new(move || {
                         Box::pin(async move {
                             let _ = tx_clone.send(()).await;
@@ -540,7 +535,7 @@ pub mod tests {
     fn new_region_stat(cop_requests: usize, next: usize, processed_keys: usize) -> RegionStat {
         let mut stat = RegionStat::default();
         stat.query_stats.coprocessor = cop_requests as u64;
-        stat.cop_detail = RegionWriteCfCopDetail::new(0, next, 0, processed_keys);
+        stat.cop_detail = RegionWriteCfCopDetail::new(next, 0, processed_keys);
         stat
     }
 

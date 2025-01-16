@@ -85,7 +85,6 @@ pub fn tls_collect_read_flow(
             &statistics.write.flow_stats,
             &statistics.data.flow_stats,
             &RegionWriteCfCopDetail::new(
-                statistics.write.seek,
                 statistics.write.next,
                 statistics.write.prev,
                 statistics.write.processed_keys,
