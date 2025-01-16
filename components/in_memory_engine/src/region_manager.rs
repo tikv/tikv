@@ -1001,7 +1001,7 @@ impl RegionManager {
         }
     }
 
-    pub fn load_region(&self, cache_region: CacheRegion) -> Result<(), LoadFailedReason> {
+    pub(crate) fn load_region(&self, cache_region: CacheRegion) -> Result<(), LoadFailedReason> {
         self.regions_map.write().load_region(cache_region)
     }
 

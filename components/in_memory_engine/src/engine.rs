@@ -396,6 +396,7 @@ impl RegionCacheMemoryEngine {
     }
 
     pub fn load_region(&self, cache_region: CacheRegion) -> result::Result<(), LoadFailedReason> {
+        fail_point!("ime_on_load_region", |_| { Ok(()) });
         self.core.region_manager().load_region(cache_region)
     }
 
@@ -574,7 +575,7 @@ impl RegionCacheEngineExt for RegionCacheMemoryEngine {
                             );
                         }
                     }
-                } else if let Err(e) = self.core.region_manager().load_region(region.clone()) {
+                } else if let Err(e) = self.load_region(region.clone()) {
                     warn!(
                         "ime load region failed";
                         "error" => ?e,

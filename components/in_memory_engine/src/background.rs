@@ -2779,16 +2779,8 @@ pub mod tests {
         let k = format!("zk{:08}", 15).into_bytes();
         let region1 = CacheRegion::new(1, 0, DATA_MIN_KEY, k.clone());
         let region2 = CacheRegion::new(2, 0, k, DATA_MAX_KEY);
-        engine
-            .core
-            .region_manager()
-            .load_region(region1.clone())
-            .unwrap();
-        engine
-            .core
-            .region_manager()
-            .load_region(region2.clone())
-            .unwrap();
+        engine.load_region(region1.clone()).unwrap();
+        engine.load_region(region2.clone()).unwrap();
         engine.prepare_for_apply(&region1, false);
         engine.prepare_for_apply(&region2, false);
 

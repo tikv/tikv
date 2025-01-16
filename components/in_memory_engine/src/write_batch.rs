@@ -1023,7 +1023,7 @@ mod tests {
 
         let r1 = CacheRegion::new(1, 0, b"zk00", b"zk10");
 
-        engine.core().region_manager().load_region(r1).unwrap();
+        engine.load_region(r1).unwrap();
 
         // load a region with a newer epoch and small range, should trigger replace.
         let mut r_new = Region::default();
@@ -1057,11 +1057,7 @@ mod tests {
         let mut wb = RegionCacheWriteBatch::from(&engine);
         wb.prepare_for_region(&r);
 
-        engine
-            .core()
-            .region_manager()
-            .load_region(cache_region.clone())
-            .unwrap();
+        engine.load_region(cache_region.clone()).unwrap();
         wb.prepare_for_region(&r);
         wb.put(b"k1", b"val1").unwrap();
         wb.put(b"k2", b"val2").unwrap();
