@@ -72,22 +72,37 @@ const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 
 pub trait RaftGrpcMessageFilter {
-    fn should_reject_raft_message(&self, _: &RaftMessage) -> Option<bool>;
-    fn should_reject_snapshot(&self) -> Option<bool>;
+    fn should_reject_raft_message(&self, _: &RaftMessage) -> bool;
+    fn should_reject_snapshot(&self) -> bool;
 }
 
-#[derive(Clone, Default)]
-pub struct DefaultGrpcMessageFilter {}
+// The default filter is exported for other engines as reference.
+#[derive(Clone)]
+pub struct DefaultGrpcMessageFilter {
+    reject_messages_on_memory_ratio: f64,
+}
+
+impl DefaultGrpcMessageFilter {
+    pub fn new(reject_messages_on_memory_ratio: f64) -> Self {
+        Self {
+            reject_messages_on_memory_ratio,
+        }
+    }
+}
 
 impl RaftGrpcMessageFilter for DefaultGrpcMessageFilter {
-    fn should_reject_raft_message(&self, _: &RaftMessage) -> Option<bool> {
-        fail::fail_point!("force_reject_raft_append_message", |_| Some(true));
-        None
+    fn should_reject_raft_message(&self, msg: &RaftMessage) -> bool {
+        fail::fail_point!("force_reject_raft_append_message", |_| true);
+        if msg.get_message().get_msg_type() == MessageType::MsgAppend {
+            needs_reject_raft_append(self.reject_messages_on_memory_ratio)
+        } else {
+            false
+        }
     }
 
-    fn should_reject_snapshot(&self) -> Option<bool> {
-        fail::fail_point!("force_reject_raft_snapshot_message", |_| Some(true));
-        None
+    fn should_reject_snapshot(&self) -> bool {
+        fail::fail_point!("force_reject_raft_snapshot_message", |_| true);
+        false
     }
 }
 
@@ -217,18 +232,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
             });
         }
 
-        let reject = match raft_msg_filter.should_reject_raft_message(&msg) {
-            Some(b) => b,
-            None => {
-                if msg.get_message().get_msg_type() == MessageType::MsgAppend {
-                    needs_reject_raft_append(reject_messages_on_memory_ratio)
-                } else {
-                    false
-                }
-            }
-        };
-
-        if reject {
+        if raft_msg_filter.should_reject_raft_message(&msg) {
             if msg.get_message().get_msg_type() == MessageType::MsgAppend {
                 RAFT_APPEND_REJECTS.inc();
             }
@@ -913,7 +917,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         stream: RequestStream<SnapshotChunk>,
         sink: ClientStreamingSink<Done>,
     ) {
-        if let Some(true) = self.raft_message_filter.should_reject_snapshot() {
+        if self.raft_message_filter.should_reject_snapshot() {
             RAFT_SNAPSHOT_REJECTS.inc();
             return;
         };

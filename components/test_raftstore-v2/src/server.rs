@@ -644,7 +644,9 @@ impl<EK: KvEngine> ServerCluster<EK> {
                 debug_thread_pool.clone(),
                 health_controller.clone(),
                 resource_manager.clone(),
-                Arc::new(DefaultGrpcMessageFilter::default()),
+                Arc::new(DefaultGrpcMessageFilter::new(
+                    server_cfg.value().reject_messages_on_memory_ratio,
+                )),
             )
             .unwrap();
             svr.register_service(create_diagnostics(diag_service.clone()));

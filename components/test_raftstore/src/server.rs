@@ -617,7 +617,9 @@ impl ServerCluster {
                 debug_thread_pool.clone(),
                 health_controller.clone(),
                 resource_manager.clone(),
-                Arc::new(DefaultGrpcMessageFilter::default()),
+                Arc::new(DefaultGrpcMessageFilter::new(
+                    server_cfg.value().reject_messages_on_memory_ratio,
+                )),
             )
             .unwrap();
             svr.register_service(create_import_sst(import_service.clone()));

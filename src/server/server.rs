@@ -685,7 +685,7 @@ mod tests {
             debug_thread_pool,
             HealthController::new(),
             None,
-            Arc::new(DefaultGrpcMessageFilter::default()),
+            Arc::new(DefaultGrpcMessageFilter::new(0.2)),
         )
         .unwrap();
 
