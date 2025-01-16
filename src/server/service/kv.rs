@@ -71,7 +71,7 @@ use crate::{
 const GRPC_MSG_MAX_BATCH_SIZE: usize = 128;
 const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 
-pub trait RaftGrpcMessageFilter {
+pub trait RaftGrpcMessageFilter: Send + Sync {
     fn should_reject_raft_message(&self, _: &RaftMessage) -> bool;
     fn should_reject_snapshot(&self) -> bool;
 }
