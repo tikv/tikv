@@ -563,7 +563,7 @@ impl<E: Engine> Endpoint<E> {
         schema: Vec<FieldType>,
         table_id: i64,
     ) -> Option<(Vec<ExtraExecutorTask>, Vec<Vec<Datum>>, Vec<FieldType>)> {
-        if sel.get_encode_type() == EncodeType::TypeChunk {
+        if sel.get_encode_type() == EncodeType::TypeChunk && schema.len() == 1 {
             let schema_types: Vec<_> = schema
                 .iter()
                 .map(|ft| {
@@ -601,7 +601,18 @@ impl<E: Engine> Endpoint<E> {
                 for i in 0..len {
                     let mut dt = Vec::new();
                     for (j, ft) in schema.iter().enumerate() {
-                        dt.push(columns[j].get_datum(i, ft).expect("fail to get datum"));
+                        let v = match columns[j].get_datum(i, ft) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                info!("get datum error"; "err" => ?e, 
+                                    "schema" => ?schema, 
+                                    "j" =>j, 
+                                    "i" => i, 
+                                    "ft" => ?ft);
+                                return None;
+                            }
+                        };
+                        dt.push(v);
                     }
                     all_data.push(dt);
                 }
