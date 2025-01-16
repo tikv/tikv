@@ -712,6 +712,17 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                 r
                             })
                     });
+                    if let Err(
+                        e @ Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
+                            mvcc::Error(box mvcc::ErrorInner::DefaultNotFound { .. }),
+                        )))),
+                    ) = &result
+                    {
+                        error!("default not found in storage get";
+                            "err" => ?e,
+                            "RpcContext" => ?&ctx,
+                        );
+                    }
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(
                         ctx.get_region_id(),
@@ -1326,6 +1337,17 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             });
                         (result, stats)
                     });
+                    if let Err(
+                        e @ Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
+                            mvcc::Error(box mvcc::ErrorInner::DefaultNotFound { .. }),
+                        )))),
+                    ) = &result
+                    {
+                        error!("default not found in storage batch_get";
+                            "err" => ?e,
+                            "RpcContext" => ?&ctx,
+                        );
+                    }
                     metrics::tls_collect_scan_details(CMD, &stats);
                     let now = Instant::now();
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC

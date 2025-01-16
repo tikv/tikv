@@ -18,5 +18,6 @@ define_error_codes!(
     STORAGE_ERROR => ("StorageError", "", ""),
     INVALID_CHARACTER_STRING => ("InvalidCharacterString", "", ""),
 
-    INVALID_MAX_TS_UPDATE => ("InvalidMaxTsUpdate", "", "")
+    INVALID_MAX_TS_UPDATE => ("InvalidMaxTsUpdate", "", ""),
+    DEFAULT_NOT_FOUND => ("DefaultNotFound", "", "")
 );

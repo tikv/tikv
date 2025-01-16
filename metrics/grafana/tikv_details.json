@@ -30064,7 +30064,7 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The count of compaction and flush operations",
+          "description": "The rate of completed compaction and flush operations (left axis) and the count of running operations (right axis).",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -30127,7 +30127,17 @@
           "renderer": "flot",
           "repeat": null,
           "repeatDirection": null,
-          "seriesOverrides": [],
+          "seriesOverrides": [
+            {
+              "alias": "/running-.*/",
+              "bars": false,
+              "fill": 1,
+              "fillBelowTo": null,
+              "lines": true,
+              "yaxis": 2,
+              "zindex": 0
+            }
+          ],
           "span": null,
           "stack": false,
           "steppedLine": false,
@@ -30143,6 +30153,36 @@
               "legendFormat": "{{type}} {{$additional_groupby}}",
               "metric": "",
               "query": "sum(rate(\n    tikv_engine_event_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\"}\n    [$__rate_interval]\n)) by (type, $additional_groupby) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum((\n    tikv_engine_num_running_compactions\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\"}\n    \n)) by ($additional_groupby) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "running-compactions {{$additional_groupby}}",
+              "metric": "",
+              "query": "sum((\n    tikv_engine_num_running_compactions\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\"}\n    \n)) by ($additional_groupby) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum((\n    tikv_engine_num_running_flushes\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\"}\n    \n)) by ($additional_groupby) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "running-flushes {{$additional_groupby}}",
+              "metric": "",
+              "query": "sum((\n    tikv_engine_num_running_flushes\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\"}\n    \n)) by ($additional_groupby) ",
               "refId": "",
               "step": 10,
               "target": ""

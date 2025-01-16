@@ -5,6 +5,7 @@ use std::fmt::{self, Debug, Display, Formatter};
 use bitflags::bitflags;
 use byteorder::{ByteOrder, NativeEndian};
 use collections::HashMap;
+use fail::fail_point;
 use kvproto::kvrpcpb::{self, Assertion};
 use tikv_util::{
     codec,
@@ -23,6 +24,7 @@ pub const SHORT_VALUE_MAX_LEN: usize = 255;
 pub const SHORT_VALUE_PREFIX: u8 = b'v';
 
 pub fn is_short_value(value: &[u8]) -> bool {
+    fail_point!("is_short_value_always_false", |_| { false });
     value.len() <= SHORT_VALUE_MAX_LEN
 }
 
