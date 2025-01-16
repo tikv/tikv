@@ -804,12 +804,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             while let Some(msg) = stream.try_next().await? {
                 RAFT_MESSAGE_RECV_COUNTER.inc();
 
-                if let Err(err @ RaftStoreError::StoreNotMatch { .. }) = Self::handle_raft_message(
-                    store_id,
-                    &ch,
-                    msg,
-                    &ob,
-                ) {
+                if let Err(err @ RaftStoreError::StoreNotMatch { .. }) =
+                    Self::handle_raft_message(store_id, &ch, msg, &ob)
+                {
                     // Return an error here will break the connection, only do that for
                     // `StoreNotMatch` to let tikv to resolve a correct address from PD
                     return Err(Error::from(err));
@@ -872,12 +869,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
 
                 for msg in batch_msg.take_msgs().into_iter() {
                     if let Err(err @ RaftStoreError::StoreNotMatch { .. }) =
-                        Self::handle_raft_message(
-                            store_id,
-                            &ch,
-                            msg,
-                            &ob,
-                        )
+                        Self::handle_raft_message(store_id, &ch, msg, &ob)
                     {
                         // Return an error here will break the connection, only do that for
                         // `StoreNotMatch` to let tikv to resolve a correct address from PD
