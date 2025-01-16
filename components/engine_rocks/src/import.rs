@@ -5,7 +5,11 @@ use rocksdb::IngestExternalFileOptions as RawIngestExternalFileOptions;
 use tikv_util::{range_latch::RangeLatchGuard, time::Instant};
 
 use crate::{
-    engine::RocksEngine, perf_context_metrics::INGEST_EXTERNAL_FILE_TIME_HISTOGRAM, r2e, util,
+    engine::RocksEngine,
+    perf_context_metrics::{
+        INGEST_EXTERNAL_FILE_ALLOW_WEITE_COUNTER, INGEST_EXTERNAL_FILE_TIME_HISTOGRAM,
+    },
+    r2e, util,
 };
 
 impl ImportExt for RocksEngine {
@@ -19,19 +23,29 @@ impl ImportExt for RocksEngine {
     ) -> Result<()> {
         // Acquire latch to prevent conflicts with compaction-filter operations
         // when using RocksDB IngestExternalFileOptions.allow_write = true.
-        let _region_inject_latch_guard = match &range {
-            Some(r) => Some(
-                self.ingest_latch
-                    .acquire(r.start_key.to_vec(), r.end_key.to_vec()),
-            ),
-            None => None,
-        };
+        let _region_inject_latch_guard = range.as_ref().map(|r| {
+            self.ingest_latch
+                .acquire(r.start_key.to_vec(), r.end_key.to_vec())
+        });
         fail_point!("after_apply_snapshot_ingest_latch_acquired");
 
         let cf = util::get_cf_handle(self.as_inner(), cf_name)?;
         let mut opts = RocksIngestExternalFileOptions::new();
         opts.move_files(true);
-        opts.allow_write(range.is_some());
+        let allow_write = range.is_some();
+        opts.allow_write(allow_write);
+        if allow_write {
+            INGEST_EXTERNAL_FILE_ALLOW_WEITE_COUNTER
+                .with_label_values(&["
+            allow_write"])
+                .inc();
+        } else {
+            INGEST_EXTERNAL_FILE_ALLOW_WEITE_COUNTER
+                .with_label_values(&["
+            not_allow_write"])
+                .inc();
+        }
+
         // Note: no need reset the global seqno to 0 for compatibility as #16992
         // enable the TiKV to handle the case on applying abnormal snapshot.
         let now = Instant::now_coarse();
