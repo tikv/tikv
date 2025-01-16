@@ -107,7 +107,7 @@ impl RequestInfo {
             resource_group_tag: ctx.get_resource_group_tag().to_vec(),
             request_type,
             cid: 0,
-            is_external_req: ctx.get_request_source().starts_with("external"),
+            is_external_req: ctx.get_request_source().contains("external"),
         }
     }
 }
