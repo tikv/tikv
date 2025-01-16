@@ -919,6 +919,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     ) {
         if self.raft_message_filter.should_reject_snapshot() {
             RAFT_SNAPSHOT_REJECTS.inc();
+            let status = RpcStatus::with_message(RpcStatusCode::UNAVAILABLE, "rejected by peer");
+            ctx.spawn(sink.fail(status).map(|_| ()));
             return;
         };
         let task = SnapTask::Recv { stream, sink };
