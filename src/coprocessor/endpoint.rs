@@ -631,7 +631,6 @@ impl<E: Engine> Endpoint<E> {
                 }
                 keys.sort_by(|a, b| a.0.cmp(&b.0));
                 let mut ranges: Vec<coppb::KeyRange> = Vec::new();
-                let mut keep_indexes = Vec::new();
                 let mut last_region: Option<(Arc<metapb::Region>, u64, u64)> = None;
                 let mut extra_tasks = Vec::new();
                 fn add_point_range(
@@ -681,13 +680,15 @@ impl<E: Engine> Endpoint<E> {
                             last_handle = Some(handle);
                             continue;
                         } else {
-                            extra_tasks.push(ExtraExecutorTask {
-                                ranges: ranges.clone(),
-                                region: region.clone(),
-                                peer_id: *peer_id,
-                                term: *term,
-                                index_pointers: ranges_index_pointers.clone(),
-                            });
+                            if ranges.len() > 0 && ranges_index_pointers.len() > 0 {
+                                extra_tasks.push(ExtraExecutorTask {
+                                    ranges: ranges.clone(),
+                                    region: region.clone(),
+                                    peer_id: *peer_id,
+                                    term: *term,
+                                    index_pointers: ranges_index_pointers.clone(),
+                                });
+                            }
                             ranges.clear();
                             ranges_index_pointers.clear();
                         }
@@ -701,8 +702,7 @@ impl<E: Engine> Endpoint<E> {
                         last_handle = Some(handle);
                         ranges_index_pointers.push(i);
                     } else {
-                        // info!("index lookup not locate key"; "key" => ?key);
-                        keep_indexes.push(i);
+                        // info!("index lookup not locate key"; "key" => ?key, "handle" => handle);
                         index_not_located_task.index_pointers.push(i);
                     }
                 }
@@ -891,10 +891,11 @@ impl<E: Engine> Endpoint<E> {
         let mut keep_index = Vec::new();
         let mut handle_extra_request_cost: f64 = 0.0;
         if sel.merge_from_bytes(resp.get_data()).is_ok() {
-            let begin = std::time::Instant::now();
             for (i, task) in extra_tasks.iter().enumerate() {
                 if task.ranges.len() == 0 {
-                    keep_index.extend_from_slice(&task.index_pointers);
+                    if task.index_pointers.len() > 0 {
+                        keep_index.extend_from_slice(&task.index_pointers);
+                    }
                     continue;
                 }
                 let begin = std::time::Instant::now();
@@ -908,7 +909,7 @@ impl<E: Engine> Endpoint<E> {
                     start_ts,
                 );
                 handle_extra_request_cost += begin.elapsed().as_secs_f64();
-                result_futures.push((i, range_result));
+                result_futures.push(range_result);
             }
         }
 
@@ -919,12 +920,10 @@ impl<E: Engine> Endpoint<E> {
                 return Ok(resp);
             }
             let mut total_chunks = sel.take_extra_chunks();
-            let mut wait_extra_task_resp_cost: f64 = 0.0;
-            for (i, result) in result_futures {
-                let begin = std::time::Instant::now();
-                let extra_resp = result.await;
-                wait_extra_task_resp_cost += begin.elapsed().as_secs_f64();
-                // info!("get extra req resp"; "data.len" => extra_resp.data.len());
+            // let mut wait_extra_task_resp_cost: f64 = 0.0;
+            let batch_res: Vec<Option<MemoryTraceGuard<coppb::Response>>> =
+                futures::future::join_all(result_futures).await;
+            for (i, extra_resp) in batch_res.iter().enumerate() {
                 let mut extra_sel = SelectResponse::default();
                 if let Some(extra_resp) = extra_resp {
                     if extra_sel.merge_from_bytes(extra_resp.get_data()).is_ok() {
