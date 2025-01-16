@@ -1312,9 +1312,19 @@ impl<E: KvEngine> SstImporter<E> {
                 };
             }
 
-            let (user_key, new_timestamp) =
+            let (user_key, new_timestamp, ignore_after_timestamp, ignore_before_timestamp) =
                 match prefix_replacer.try_update_rewrite_rule(old_key.as_ref())? {
-                    Either::Left((user_key, new_timestamp)) => (user_key, new_timestamp),
+                    Either::Left((
+                        user_key,
+                        new_timestamp,
+                        ignore_after_timestamp,
+                        ignore_before_timestamp,
+                    )) => (
+                        user_key,
+                        new_timestamp,
+                        ignore_after_timestamp,
+                        ignore_before_timestamp,
+                    ),
                     Either::Right(seek_key_op) => match seek_key_op {
                         Some(seek_key) => {
                             // skip some kvs that may be filtered
@@ -1332,6 +1342,29 @@ impl<E: KvEngine> SstImporter<E> {
                 data_key.extend_from_slice(user_key);
             }
 
+            if ignore_after_timestamp != 0 {
+                let ts = Key::decode_ts_from(iter.key())?;
+                if ts > TimeStamp::new(ignore_after_timestamp) {
+                    iter.next()?;
+                    INPORTER_DOWNLOAD_COMPACT_KEYS_COUNT
+                        .with_label_values(&["after"])
+                        .inc();
+                    continue;
+                }
+            }
+            if ignore_before_timestamp != 0 {
+                // Let the client decide the ts here for default/write CF.
+                // Normally the ts in default CF is less than the ts in write CF.
+                let ts = Key::decode_ts_from(iter.key())?;
+                if ts < TimeStamp::new(ignore_before_timestamp) {
+                    iter.next()?;
+                    INPORTER_DOWNLOAD_COMPACT_KEYS_COUNT
+                        .with_label_values(&["before"])
+                        .inc();
+                    continue;
+                }
+            }
+
             let mut value = Cow::Borrowed(iter.value());
 
             if new_timestamp != 0 {
@@ -1346,7 +1379,7 @@ impl<E: KvEngine> SstImporter<E> {
                     })?
                     .append_ts(TimeStamp::new(new_timestamp))
                     .into_encoded();
-                if meta.get_cf_name() == CF_WRITE {
+                if cf_name == CF_WRITE {
                     let mut write = WriteRef::parse(iter.value()).map_err(|e| {
                         Error::BadFormat(format!(
                             "write {}: {}",
@@ -2101,6 +2134,19 @@ mod tests {
         Ok((ext_sst_dir, backend, meta))
     }
 
+    fn new_compacted_file_rewrite_rule(
+        old_key_prefix: &[u8],
+        new_key_prefix: &[u8],
+        new_timestamp: u64,
+        ignore_before_timestamp: u64,
+        ignore_after_timestamp: u64,
+    ) -> RewriteRule {
+        let mut rule = new_rewrite_rule(old_key_prefix, new_key_prefix, new_timestamp);
+        rule.ignore_before_timestamp = ignore_before_timestamp;
+        rule.ignore_after_timestamp = ignore_after_timestamp;
+        rule
+    }
+
     fn new_rewrite_rule(
         old_key_prefix: &[u8],
         new_key_prefix: &[u8],
@@ -2816,6 +2862,208 @@ mod tests {
                 (get_encoded_key(b"t123_r07", 16), b"pqrst".to_vec()),
             ]
         );
+    }
+    #[test]
+    fn test_download_compacted_sst_with_key_rewrite_ts_default() {
+        // performs the download.
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let importer =
+            SstImporter::<TestEngine>::new(&cfg, &importer_dir, None, ApiVersion::V1, false)
+                .unwrap();
+
+        // creates a sample SST file.
+        let (_ext_sst_dir, backend, meta) = create_sample_external_sst_file_txn_default().unwrap();
+        let db = create_sst_test_engine().unwrap();
+        let downloads = vec![
+            (
+                // no filter
+                new_compacted_file_rewrite_rule(b"t123", b"t567", 0, 0, 0),
+                vec![
+                    (get_encoded_key(b"t567_r01", 1), b"abc".to_vec()),
+                    (get_encoded_key(b"t567_r04", 3), b"xyz".to_vec()),
+                    (get_encoded_key(b"t567_r07", 7), b"pqrst".to_vec()),
+                ],
+            ),
+            (
+                // filter key between ts range [2, 6],
+                new_compacted_file_rewrite_rule(b"t123", b"t123", 0, 2, 6),
+                vec![(get_encoded_key(b"t123_r04", 3), b"xyz".to_vec())],
+            ),
+            (
+                // filter key between ts range [7, 18]
+                new_compacted_file_rewrite_rule(b"t123", b"t567", 0, 7, 18),
+                vec![(get_encoded_key(b"t567_r07", 7), b"pqrst".to_vec())],
+            ),
+        ];
+        for case in downloads {
+            let _ = importer
+                .download(
+                    &meta,
+                    &backend,
+                    "sample_default.sst",
+                    &[case.0],
+                    None,
+                    Limiter::new(f64::INFINITY),
+                    db.clone(),
+                    DownloadExt::default(),
+                )
+                .unwrap()
+                .unwrap();
+
+            // verifies that the file is saved to the correct place.
+            // (the file size may be changed, so not going to check the file size)
+            let sst_file_path = importer.dir.join_for_read(&meta).unwrap().save;
+            assert!(sst_file_path.is_file());
+
+            // verifies the SST content is correct.
+            let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
+            sst_reader.verify_checksum().unwrap();
+            let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
+            iter.seek_to_first().unwrap();
+            assert_eq!(collect(iter), case.1);
+        }
+    }
+
+    #[test]
+    fn test_download_compacted_sst_with_key_rewrite_ts_write() {
+        // performs the download.
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let importer =
+            SstImporter::<TestEngine>::new(&cfg, &importer_dir, None, ApiVersion::V1, false)
+                .unwrap();
+
+        // creates a sample SST file.
+        let (_ext_sst_dir, backend, meta) = create_sample_external_sst_file_txn_write().unwrap();
+        let db = create_sst_test_engine().unwrap();
+        let downloads = vec![
+            (
+                // filter key between ts range [4, 8]
+                new_compacted_file_rewrite_rule(b"t123", b"t567", 0, 4, 8),
+                vec![
+                    (
+                        get_encoded_key(b"t567_r01", 5),
+                        get_write_value(WriteType::Put, 1, None),
+                    ),
+                    (
+                        get_encoded_key(b"t567_r02", 5),
+                        get_write_value(WriteType::Delete, 1, None),
+                    ),
+                    (
+                        get_encoded_key(b"t567_r04", 4),
+                        get_write_value(WriteType::Put, 3, None),
+                    ),
+                    (
+                        get_encoded_key(b"t567_r07", 8),
+                        get_write_value(WriteType::Put, 7, None),
+                    ),
+                    (
+                        get_encoded_key(b"t567_r13", 8),
+                        get_write_value(WriteType::Put, 7, Some(b"www".to_vec())),
+                    ),
+                ],
+            ),
+            (
+                // filter key between ts range [5, 6]
+                new_compacted_file_rewrite_rule(b"t123", b"t567", 0, 5, 6),
+                vec![
+                    (
+                        get_encoded_key(b"t567_r01", 5),
+                        get_write_value(WriteType::Put, 1, None),
+                    ),
+                    (
+                        get_encoded_key(b"t567_r02", 5),
+                        get_write_value(WriteType::Delete, 1, None),
+                    ),
+                ],
+            ),
+            (
+                // filter key between ts range [4, 5]
+                new_compacted_file_rewrite_rule(b"t123", b"t567", 0, 4, 5),
+                vec![
+                    (
+                        get_encoded_key(b"t567_r01", 5),
+                        get_write_value(WriteType::Put, 1, None),
+                    ),
+                    (
+                        get_encoded_key(b"t567_r02", 5),
+                        get_write_value(WriteType::Delete, 1, None),
+                    ),
+                    (
+                        get_encoded_key(b"t567_r04", 4),
+                        get_write_value(WriteType::Put, 3, None),
+                    ),
+                ],
+            ),
+            (
+                // no filter
+                new_compacted_file_rewrite_rule(b"t123", b"t567", 0, 0, 0),
+                vec![
+                    (
+                        get_encoded_key(b"t567_r01", 5),
+                        get_write_value(WriteType::Put, 1, None),
+                    ),
+                    (
+                        get_encoded_key(b"t567_r02", 5),
+                        get_write_value(WriteType::Delete, 1, None),
+                    ),
+                    (
+                        get_encoded_key(b"t567_r04", 4),
+                        get_write_value(WriteType::Put, 3, None),
+                    ),
+                    (
+                        get_encoded_key(b"t567_r07", 8),
+                        get_write_value(WriteType::Put, 7, None),
+                    ),
+                    (
+                        get_encoded_key(b"t567_r13", 8),
+                        get_write_value(WriteType::Put, 7, Some(b"www".to_vec())),
+                    ),
+                ],
+            ),
+            (
+                // no rewrite rule, but has filter ts range [5, 5]
+                new_compacted_file_rewrite_rule(b"t123", b"t123", 0, 5, 5),
+                vec![
+                    (
+                        get_encoded_key(b"t123_r01", 5),
+                        get_write_value(WriteType::Put, 1, None),
+                    ),
+                    (
+                        get_encoded_key(b"t123_r02", 5),
+                        get_write_value(WriteType::Delete, 1, None),
+                    ),
+                ],
+            ),
+        ];
+        for case in downloads {
+            let _ = importer
+                .download(
+                    &meta,
+                    &backend,
+                    "sample_write.sst",
+                    &[case.0],
+                    None,
+                    Limiter::new(f64::INFINITY),
+                    db.clone(),
+                    DownloadExt::default(),
+                )
+                .unwrap()
+                .unwrap();
+
+            // verifies that the file is saved to the correct place.
+            // (the file size may be changed, so not going to check the file size)
+            let sst_file_path = importer.dir.join_for_read(&meta).unwrap().save;
+            assert!(sst_file_path.is_file());
+
+            // verifies the SST content is correct.
+            let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
+            sst_reader.verify_checksum().unwrap();
+            let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
+            iter.seek_to_first().unwrap();
+            assert_eq!(collect(iter), case.1);
+        }
     }
 
     #[test]

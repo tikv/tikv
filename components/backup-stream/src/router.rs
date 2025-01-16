@@ -619,6 +619,26 @@ impl RouterInner {
         r.get_value_by_point(key).cloned()
     }
 
+    pub fn select_task_handler(
+        &self,
+        selector: TaskSelectorRef<'_>,
+    ) -> impl Iterator<Item = Arc<StreamTaskHandler>> {
+        self.tasks
+            .iter()
+            .filter(|entry| {
+                let (name, info) = entry.pair();
+                selector.matches(
+                    name.as_str(),
+                    info.ranges
+                        .iter()
+                        .map(|(s, e)| (s.as_slice(), e.as_slice())),
+                )
+            })
+            .map(|entry| entry.value().clone())
+            .collect::<Vec<_>>()
+            .into_iter()
+    }
+
     pub fn select_task(&self, selector: TaskSelectorRef<'_>) -> Vec<String> {
         self.tasks
             .iter()

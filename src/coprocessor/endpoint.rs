@@ -137,7 +137,8 @@ impl<E: Engine> Endpoint<E> {
     fn check_memory_locks(&self, req_ctx: &ReqContext) -> Result<()> {
         let start_ts = req_ctx.txn_start_ts;
         if !req_ctx.context.get_stale_read() {
-            self.concurrency_manager.update_max_ts(start_ts);
+            self.concurrency_manager
+                .update_max_ts(start_ts, || format!("coprocessor-{}", start_ts))?;
         }
         if need_check_locks(req_ctx.context.get_isolation_level()) {
             let begin_instant = Instant::now();
@@ -502,7 +503,15 @@ impl<E: Engine> Endpoint<E> {
                 COPR_RESP_SIZE.inc_by(resp.data.len() as u64);
                 resp
             }
-            Err(e) => make_error_response(e).into(),
+            Err(e) => {
+                if let Error::DefaultNotFound(errmsg) = &e {
+                    error!("default not found in coprocessor request processing";
+                        "err" => errmsg,
+                        "reqCtx" => ?&tracker.req_ctx,
+                    );
+                }
+                make_error_response(e).into()
+            }
         };
         resp.set_exec_details(exec_details);
         resp.set_exec_details_v2(exec_details_v2);
@@ -925,6 +934,16 @@ macro_rules! make_error_response_common {
                 errorpb.set_message($e.to_string());
                 errorpb.set_server_is_busy(server_is_busy_err);
                 $resp.set_region_error(errorpb);
+            }
+            Error::InvalidMaxTsUpdate(e) => {
+                $tag = "invalid_max_ts_update";
+                let mut err = errorpb::Error::default();
+                err.set_message(e.to_string());
+                $resp.set_region_error(err);
+            }
+            Error::DefaultNotFound(_) => {
+                $tag = "default_not_found";
+                $resp.set_other_error($e.to_string());
             }
             Error::Other(_) => {
                 $tag = "other";

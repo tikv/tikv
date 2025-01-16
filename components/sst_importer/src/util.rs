@@ -142,6 +142,8 @@ pub struct PrefixReplacer<'a> {
 
     user_key: Vec<u8>,
     new_timestamp: u64,
+    ignore_after_timestamp: u64,
+    ignore_before_timestamp: u64,
     new_prefix_len: usize,
     old_prefix_len: usize,
 }
@@ -154,6 +156,8 @@ impl<'a> PrefixReplacer<'a> {
             last_index: usize::MAX,
             user_key: vec![],
             new_timestamp: 0,
+            ignore_after_timestamp: 0,
+            ignore_before_timestamp: 0,
             new_prefix_len: 0,
             old_prefix_len: 0,
         };
@@ -213,6 +217,8 @@ impl<'a> PrefixReplacer<'a> {
         for rewrite_rule in self.rewrite_rules {
             if rewrite_rule.old_key_prefix != rewrite_rule.new_key_prefix
                 || rewrite_rule.new_timestamp != 0
+                || rewrite_rule.ignore_after_timestamp != 0
+                || rewrite_rule.ignore_before_timestamp != 0
             {
                 return true;
             }
@@ -228,14 +234,19 @@ impl<'a> PrefixReplacer<'a> {
     pub fn try_update_rewrite_rule(
         &mut self,
         old_key: &[u8],
-    ) -> Result<Either<(&[u8], u64), Option<&[u8]>>> {
+    ) -> Result<Either<(&[u8], u64, u64, u64), Option<&[u8]>>> {
         while self.next_index < self.rewrite_rules.len() {
             let rewrite_rule = &self.rewrite_rules[self.next_index];
             let old_key_prefix = rewrite_rule.get_old_key_prefix();
             if old_key.starts_with(old_key_prefix) {
                 self.try_update_rewrite_rule_internal()?;
                 self.update_user_key(old_key);
-                return Ok(Either::Left((&self.user_key, self.new_timestamp)));
+                return Ok(Either::Left((
+                    &self.user_key,
+                    self.new_timestamp,
+                    self.ignore_after_timestamp,
+                    self.ignore_before_timestamp,
+                )));
             } else if old_key < old_key_prefix {
                 return Ok(Either::Right(Some(old_key_prefix)));
             }
@@ -259,6 +270,8 @@ impl<'a> PrefixReplacer<'a> {
         let new_prefix = rewrite_rule.get_new_key_prefix();
         self.user_key = new_prefix.to_vec();
         self.new_timestamp = rewrite_rule.new_timestamp;
+        self.ignore_after_timestamp = rewrite_rule.ignore_after_timestamp;
+        self.ignore_before_timestamp = rewrite_rule.ignore_before_timestamp;
         self.new_prefix_len = new_prefix.len();
         self.old_prefix_len = rewrite_rule.get_old_key_prefix().len();
         self.last_index = self.next_index;
@@ -475,6 +488,22 @@ mod tests {
         rewrite_rule
     }
 
+    fn new_rewrite_rule2(
+        old_prefix: &[u8],
+        new_prefix: &[u8],
+        new_timestamp: u64,
+        after: u64,
+        before: u64,
+    ) -> RewriteRule {
+        let mut rewrite_rule = RewriteRule::default();
+        rewrite_rule.set_old_key_prefix(old_prefix.to_vec());
+        rewrite_rule.set_new_key_prefix(new_prefix.to_vec());
+        rewrite_rule.set_new_timestamp(new_timestamp);
+        rewrite_rule.set_ignore_after_timestamp(after);
+        rewrite_rule.set_ignore_before_timestamp(before);
+        rewrite_rule
+    }
+
     #[test]
     fn test_prefix_replacer() {
         assert!(PrefixReplacer::new(&[]).is_err());
@@ -491,9 +520,9 @@ mod tests {
         let prefix_replacer = PrefixReplacer::new(&rewrite_rules).unwrap();
         assert!(prefix_replacer.need_to_replace());
         let rewrite_rules = vec![
-            new_rewrite_rule(b"aa", b"A", 1),
-            new_rewrite_rule(b"bb", b"BB", 2),
-            new_rewrite_rule(b"cc", b"CCC", 3),
+            new_rewrite_rule2(b"aa", b"A", 1, 11, 111),
+            new_rewrite_rule2(b"bb", b"BB", 2, 22, 222),
+            new_rewrite_rule2(b"cc", b"CCC", 3, 33, 333),
         ];
         let mut prefix_replacer = PrefixReplacer::new(&rewrite_rules).unwrap();
         assert!(prefix_replacer.need_to_replace());
@@ -542,20 +571,22 @@ mod tests {
         assert_eq!(&range_start, b"ccCc");
 
         let cases = vec![
-            (b"aa".to_vec(), b"A".to_vec(), 1),
-            (b"aaa".to_vec(), b"Aa".to_vec(), 1),
-            (b"aabc".to_vec(), b"Abc".to_vec(), 1),
-            (b"bbcd".to_vec(), b"BBcd".to_vec(), 2),
-            (b"ccde".to_vec(), b"CCCde".to_vec(), 3),
-            (b"dddd".to_vec(), vec![], 0),
+            (b"aa".to_vec(), b"A".to_vec(), 1, 11, 111),
+            (b"aaa".to_vec(), b"Aa".to_vec(), 1, 11, 111),
+            (b"aabc".to_vec(), b"Abc".to_vec(), 1, 11, 111),
+            (b"bbcd".to_vec(), b"BBcd".to_vec(), 2, 22, 222),
+            (b"ccde".to_vec(), b"CCCde".to_vec(), 3, 33, 333),
+            (b"dddd".to_vec(), vec![], 0, 0, 0),
         ];
-        for (old_key, expect_user_key, expect_new_timestamp) in cases {
+        for (old_key, expect_user_key, expect_new_timestamp, expect_after, expect_before) in cases {
             let res = prefix_replacer.try_update_rewrite_rule(&old_key);
             if expect_user_key.is_empty() {
                 assert!(res.unwrap().right().unwrap().is_none());
             } else {
-                let (user_key, new_timestamp) = res.unwrap().left().unwrap();
+                let (user_key, new_timestamp, after, before) = res.unwrap().left().unwrap();
                 assert_eq!(new_timestamp, expect_new_timestamp);
+                assert_eq!(after, expect_after);
+                assert_eq!(before, expect_before);
                 assert_eq!(user_key, expect_user_key);
             }
         }
@@ -564,28 +595,43 @@ mod tests {
     #[test]
     fn test_prefix_replacer2() {
         let rewrite_rules = vec![
-            new_rewrite_rule(b"aa", b"A", 1),
-            new_rewrite_rule(b"bb", b"BB", 2),
-            new_rewrite_rule(b"cc", b"CCC", 3),
-            new_rewrite_rule(b"dd", b"DDDD", 4),
+            new_rewrite_rule2(b"aa", b"A", 1, 11, 111),
+            new_rewrite_rule2(b"bb", b"BB", 2, 22, 222),
+            new_rewrite_rule2(b"cc", b"CCC", 3, 33, 333),
+            new_rewrite_rule2(b"dd", b"DDDD", 4, 44, 444),
         ];
         let mut prefix_replacer = PrefixReplacer::new(&rewrite_rules).unwrap();
         assert!(prefix_replacer.need_to_replace());
 
         let cases = vec![
-            (b"aa".to_vec(), Some(b"A".to_vec()), false, 1),
-            (b"aaa".to_vec(), Some(b"Aa".to_vec()), false, 1),
-            (b"aabc".to_vec(), Some(b"Abc".to_vec()), false, 1),
-            (b"abc".to_vec(), Some(b"bb".to_vec()), true, 0),
-            (b"abcd".to_vec(), Some(b"bb".to_vec()), true, 0),
+            (b"aa".to_vec(), Some(b"A".to_vec()), false, 1, 11, 111),
+            (b"aaa".to_vec(), Some(b"Aa".to_vec()), false, 1, 11, 111),
+            (b"aabc".to_vec(), Some(b"Abc".to_vec()), false, 1, 11, 111),
+            (b"abc".to_vec(), Some(b"bb".to_vec()), true, 0, 0, 0),
+            (b"abcd".to_vec(), Some(b"bb".to_vec()), true, 0, 0, 0),
             // skip rewrite rule bb -> BB
-            (b"bccd".to_vec(), Some(b"cc".to_vec()), true, 0),
-            (b"ccde".to_vec(), Some(b"CCCde".to_vec()), false, 3),
-            (b"cdcd".to_vec(), Some(b"dd".to_vec()), true, 0),
-            (b"dddd".to_vec(), Some(b"DDDDdd".to_vec()), false, 4),
-            (b"eeee".to_vec(), None, true, 0),
+            (b"bccd".to_vec(), Some(b"cc".to_vec()), true, 0, 0, 0),
+            (b"ccde".to_vec(), Some(b"CCCde".to_vec()), false, 3, 33, 333),
+            (b"cdcd".to_vec(), Some(b"dd".to_vec()), true, 0, 0, 0),
+            (
+                b"dddd".to_vec(),
+                Some(b"DDDDdd".to_vec()),
+                false,
+                4,
+                44,
+                444,
+            ),
+            (b"eeee".to_vec(), None, true, 0, 0, 0),
         ];
-        for (old_key, expect_user_key_op, is_right, expect_new_timestamp) in cases {
+        for (
+            old_key,
+            expect_user_key_op,
+            is_right,
+            expect_new_timestamp,
+            expect_after,
+            expect_before,
+        ) in cases
+        {
             let res = prefix_replacer.try_update_rewrite_rule(&old_key);
             if is_right {
                 let seek_key_op = res.unwrap().right().unwrap();
@@ -597,8 +643,10 @@ mod tests {
                 }
             } else {
                 let expect_user_key = expect_user_key_op.unwrap();
-                let (user_key, new_timestamp) = res.unwrap().left().unwrap();
+                let (user_key, new_timestamp, after, before) = res.unwrap().left().unwrap();
                 assert_eq!(new_timestamp, expect_new_timestamp);
+                assert_eq!(after, expect_after);
+                assert_eq!(before, expect_before);
                 assert_eq!(user_key, expect_user_key);
             }
         }

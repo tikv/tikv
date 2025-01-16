@@ -6,16 +6,26 @@ version = "0.0.1"
 license = "Apache-2.0"
 
 [dependencies]
+crossbeam = "0.8"
 crossbeam-skiplist = { workspace = true }
 fail = "0.5"
 kvproto = { workspace = true }
+lazy_static = "1.4.0"
+mockall = "0.13"
+online_config = { workspace = true }
 parking_lot = "0.12"
+pd_client = { workspace = true }
+prometheus = "0.13"
+serde = { version = "1.0.194", features = ["derive"] }
+slog = { workspace = true }
+slog-global = { workspace = true }
+thiserror = "1.0"
 tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["macros", "sync", "time"] }
 txn_types = { workspace = true }
 
 [dev-dependencies]
-criterion = "0.3"
+criterion = "0.4"
 futures = "0.3"
 rand = "0.8.3"
 tikv_alloc = { workspace = true, features = ["jemalloc"] }
@@ -23,4 +33,9 @@ tikv_alloc = { workspace = true, features = ["jemalloc"] }
 [[bench]]
 name = "lock_table"
 path = "benches/lock_table.rs"
+harness = false
+
+[[bench]]
+name = "update_max_ts"
+path = "benches/update_max_ts.rs"
 harness = false

@@ -5,18 +5,20 @@ use std::{sync::Arc, thread, time::Duration};
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
-    coprocessor::Request,
-    kvrpcpb::{Context, IsolationLevel},
+    coprocessor::{KeyRange, Request},
+    kvrpcpb::{Context, GetRequest, IsolationLevel, Mutation, Op},
     tikvpb::TikvClient,
 };
 use more_asserts::{assert_ge, assert_le};
+use pd_client::PdClient;
 use protobuf::Message;
 use raftstore::store::Bucket;
 use test_coprocessor::*;
+use test_raftstore::{must_kv_commit, must_kv_prewrite, must_new_cluster_and_kv_client};
 use test_raftstore_macro::test_case;
 use test_storage::*;
 use tidb_query_datatype::{
-    codec::{datum, Datum},
+    codec::{datum, table::encode_row_key, Datum},
     expr::EvalContext,
 };
 use tikv_util::HandyRwLock;
@@ -498,4 +500,90 @@ fn test_follower_buckets() {
         wait_refresh_buckets(endpoint, &mut req.clone());
     }
     fail::remove("skip_check_stale_read_safe");
+}
+
+#[test]
+fn test_default_not_found_log_info() {
+    let (mut cluster, _client, _ctx) = must_new_cluster_and_kv_client();
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let product = ProductTable::new();
+    let row_key = encode_row_key(product.table_id(), 2);
+
+    let r1 = cluster.get_region(row_key.as_slice());
+    let region_id = r1.get_id();
+    let leader = cluster.leader_of_region(region_id).unwrap();
+    let epoch = cluster.get_region_epoch(region_id);
+    let mut ctx = Context::default();
+    ctx.set_region_id(region_id);
+    ctx.set_peer(leader.clone());
+    ctx.set_region_epoch(epoch);
+    let env = Arc::new(Environment::new(1));
+    let channel =
+        ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
+    let client = TikvClient::new(channel);
+
+    // Write record.
+    fail::cfg("is_short_value_always_false", "return()").unwrap();
+    let mut mutation = Mutation::default();
+    let value = b"v2".to_vec();
+    mutation.set_op(Op::Put);
+    mutation.set_key(row_key.clone());
+    mutation.set_value(value.clone());
+    let prewrite_ts = block_on(pd_client.get_tso()).unwrap().into_inner();
+    must_kv_prewrite(
+        &client,
+        ctx.clone(),
+        vec![mutation],
+        row_key.clone(),
+        prewrite_ts,
+    );
+    let commit_ts = block_on(pd_client.get_tso()).unwrap().into_inner();
+    must_kv_commit(
+        &client,
+        ctx.clone(),
+        vec![row_key.clone()],
+        prewrite_ts,
+        commit_ts,
+        commit_ts,
+    );
+
+    let env = Arc::new(Environment::new(1));
+    let channel =
+        ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
+    let client = TikvClient::new(channel);
+
+    let mut ctx = Context::default();
+    ctx.set_region_id(r1.get_id());
+    ctx.set_region_epoch(r1.get_region_epoch().clone());
+    ctx.set_peer(test_raftstore::new_peer(1, 1));
+
+    // Read with coprocessor request.
+    let read_ts = block_on(pd_client.get_tso()).unwrap().into_inner();
+    let mut cop_req = DagSelect::from(&product).build();
+    cop_req.set_context(ctx.clone());
+    cop_req.set_start_ts(read_ts);
+    let mut key_range = KeyRange::new();
+    let start_key = encode_row_key(product.table_id(), 1);
+    let end_key = encode_row_key(product.table_id(), 3);
+    key_range.set_start(start_key);
+    key_range.set_end(end_key);
+    cop_req.mut_ranges().clear();
+    cop_req.mut_ranges().push(key_range);
+    fail::cfg("near_load_data_by_write_default_not_found", "return()").unwrap();
+    let cop_resp = client.coprocessor(&cop_req).unwrap();
+    assert!(cop_resp.get_other_error().contains("default not found"));
+
+    // Read with get request.
+    let mut get_req = GetRequest::default();
+    get_req.set_context(ctx);
+    get_req.set_key(row_key.clone());
+    get_req.set_version(read_ts);
+    fail::cfg("load_data_from_default_cf_default_not_found", "return()").unwrap();
+    let get_resp = client.kv_get(&get_req).unwrap();
+    assert!(get_resp.get_error().get_abort().contains("DefaultNotFound"));
+    fail::remove("is_short_value_always_false");
+    fail::remove("near_load_data_by_write_default_not_found");
+    fail::remove("load_data_from_default_cf_default_not_found");
 }
