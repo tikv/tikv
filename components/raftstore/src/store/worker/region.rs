@@ -619,7 +619,8 @@ where
                 )
             } else {
                 // Deprecated method for clearing stale ranges due to potential latency
-                // jitters. It's still applicable when clearing overlapped regions.
+                // jitters. It's still applicable when clearing overlapped regions
+                // before applying the newly added snapshot.
                 (
                     DeleteStrategy::DeleteByWriter {
                         sst_path: self.mgr.get_temp_path_for_ingest(),
