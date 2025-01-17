@@ -1946,7 +1946,7 @@ impl SnapManager {
             .set_reserved_capacity(num_pending_applies)
     }
 
-    pub fn set_offlined(&mut self, state: bool) {
+    pub fn set_offline(&mut self, state: bool) {
         self.core.offlined.store(state, Ordering::Release);
     }
 

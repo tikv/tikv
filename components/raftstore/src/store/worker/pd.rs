@@ -1360,7 +1360,7 @@ where
                             metapb::NodeState::Removing | metapb::NodeState::Removed => {
                                 let is_offlined = snap_mgr.is_offlined();
                                 if !is_offlined {
-                                    snap_mgr.set_offlined(true);
+                                    snap_mgr.set_offline(true);
                                     info!("store is offlined by pd");
                                 }
                             }
