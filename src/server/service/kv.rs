@@ -190,7 +190,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
         resource_manager: Option<Arc<ResourceGroupManager>>,
         health_controller: HealthController,
         health_feedback_interval: Option<Duration>,
-        raft_message_filter: Arc<dyn RaftGrpcMessageFilter + Send + Sync>,
+        raft_message_filter: Arc<dyn RaftGrpcMessageFilter>,
     ) -> Self {
         let now_unix = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -221,7 +221,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
         store_id: u64,
         ch: &E::RaftExtension,
         msg: RaftMessage,
-        raft_msg_filter: &Arc<dyn RaftGrpcMessageFilter + Send + Sync>,
+        raft_msg_filter: &Arc<dyn RaftGrpcMessageFilter>,
     ) -> RaftStoreResult<()> {
         let to_store_id = msg.get_to_peer().get_store_id();
         if to_store_id != store_id {
