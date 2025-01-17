@@ -237,9 +237,13 @@
 ## Max time to handle Coprocessor requests before timeout.
 # end-point-request-max-handle-duration = "60s"
 
+## Memory usage limit for TiKV handling coprocessor requests.
+## By default, it will be set to 12.5% of the available memory of TiKV.
+# end-point-memory-quota = "0B"
+
 ## Max bytes that snapshot can interact with disk in one second. It should be
 ## set based on your disk performance. Only write flow is considered, if
-## partiioned-raft-kv is used, read flow is also considered and it will be estimated
+## partitioned-raft-kv is used, read flow is also considered and it will be estimated
 ## as read_size * 0.5 to get around errors from page cache.
 # snap-io-max-bytes-per-sec = "100MB"
 
@@ -971,7 +975,7 @@
 ## default: 0
 # zstd-dict-size = 0
 
-## Whether to share blob cache with block cache. If set to true, Titan would use the shared block 
+## Whether to share blob cache with block cache. If set to true, Titan would use the shared block
 ## cache configured in `storage.block_cache` and ignore the setting of `blob-cache-size`.
 ## default: true
 # shared-blob-cache = true
@@ -1220,13 +1224,13 @@
 #
 ## Avoid outputing data (e.g. user keys) to info log. It currently does not avoid printing
 ## user data altogether, but greatly reduce those logs.
-## 
+##
 ## Candidates:
 ##   true | "on": Avoid outputing raw data to info log, raw data will be replaced with "?".
 ##   false | "off": Output raw data to info log.
 ##   "marker": Encapsulate the raw data with "‹..›" to info log.
 ##
-## Default is false. 
+## Default is false.
 # redact-info-log = false
 
 ## Configurations for encryption at rest. Experimental.
