@@ -1578,9 +1578,12 @@ impl Decimal {
         if val.is_infinite() {
             Err(invalid_type!("{} can't be convert to decimal'", val))
         } else {
-            let r = val.to_string();
-            Decimal::from_str(r.as_str())
+            Decimal::from_str(val.to_string().as_str())
         }
+    }
+
+    pub fn from_i64(val: i64) -> Result<Decimal> {
+        Decimal::from_str(val.to_string().as_str())
     }
 
     /// Returns a `Decimal` from a given bytes slice

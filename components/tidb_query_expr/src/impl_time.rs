@@ -1,7 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use tidb_query_codegen::rpn_fn;
-use tidb_query_common::Result;
+use tidb_query_common::{Result, error::EvaluateError};
 use tidb_query_datatype::{
     codec::{
         data_type::*,
@@ -15,13 +15,14 @@ use tidb_query_datatype::{
                 extension::DateTimeExtension, interval::*, weekmode::WeekMode, WeekdayExtension,
                 MONTH_NAMES,
             },
-            Duration, Time, TimeType, MAX_FSP,
+            Duration, Time, TimeType, MAX_FSP, Res, RoundMode, Tz,
         },
         Error, Result as CodecResult,
     },
     expr::{EvalContext, SqlMode},
     FieldTypeAccessor, FieldTypeFlag,
 };
+use chrono::{self, FixedOffset, Offset};
 use tipb::{Expr, ExprType};
 
 use crate::RpnFnCallExtra;
@@ -1516,6 +1517,74 @@ pub fn sub_date_time_duration_interval_any_as_duration<
         interval,
         Duration::checked_sub,
     )
+}
+
+// unix_timestamp_to_mysql_unix_timestamp converts micto timestamp into MySQL's Unix timestamp.
+// MySQL's Unix timestamp ranges from '1970-01-01 00:00:01.000000' UTC to '3001-01-18 23:59:59.999999' UTC. Values out of range should be rewritten to 0.
+// https://dev.mysql.com/doc/refman/8.0/en/date-and-time-functions.html#function_unix-timestamp
+fn unix_timestamp_to_mysql_unix_timestamp(micro_time: i64, frac: i8) -> Result<Decimal> {
+	if micro_time < 1000000 || micro_time > 32536771199999999 {
+		return Ok(Decimal::zero());
+	}
+
+    let time_in_decimal = Decimal::from_i64(micro_time)?;
+    let res = time_in_decimal.shift(-6);
+    let value = match res {
+        Res::Ok(value) => value,
+        Res::Truncated(_) => return Err(EvaluateError::Other("Decimal is truncated".to_string()).into()),
+        Res::Overflow(_) => return Err(EvaluateError::Other("Decimal is overflowed".to_string()).into()),
+    };
+
+    match value.round(frac, RoundMode::Truncate) {
+        Res::Ok(ret) => Ok(ret),
+        Res::Truncated(_) => return Err(EvaluateError::Other("Decimal is truncated".to_string()).into()),
+        Res::Overflow(_) => return Err(EvaluateError::Other("Decimal is overflowed".to_string()).into()),
+    }
+}
+
+fn get_micro_timestamp(time: &DateTime, tz: &Tz) -> i64 {
+    let naive_date = chrono::NaiveDate::from_ymd(time.year() as i32, time.month(), time.day());
+    let naive_time = chrono::NaiveTime::from_hms_micro(time.hour(), time.minute(), time.second(), time.micro());
+    let naive_datetime = chrono::NaiveDateTime::new(naive_date, naive_time);
+    return naive_datetime.timestamp_micros() - ((tz.get_offset().fix().local_minus_utc() as i64) * 1_000_000);
+}
+
+
+// todo persist the time zone offset
+#[rpn_fn]
+#[inline]
+pub fn unix_timestamp_current() -> Result<Option<i64>> {
+    let now = chrono::Utc::now();
+    let res = unix_timestamp_to_mysql_unix_timestamp(now.timestamp_micros(), 1);
+    match res {
+        Ok(value) => {
+            let i64_value_res = value.as_i64();
+            match i64_value_res {
+                Res::Ok(ret) => Ok(Some(ret)),
+                Res::Truncated(_) => Err(EvaluateError::Other("Decimal is truncated".to_string()).into()),
+                Res::Overflow(_) => Err(EvaluateError::Other("Decimal is overflowed".to_string()).into()),
+            }
+        }
+        Err(err) => Result::Err(err),
+    }
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn unix_timestamp_int(ctx: &mut EvalContext, time: &DateTime) -> Result<Option<i64>> {
+    let res = unix_timestamp_to_mysql_unix_timestamp(get_micro_timestamp(time, &ctx.cfg.tz), 1)?;
+    match res.as_i64() {
+        Res::Ok(value) => Ok(Some(value)),
+        Res::Truncated(_) => Err(EvaluateError::Other("Decimal is truncated".to_string()).into()),
+        Res::Overflow(_) => Err(EvaluateError::Other("Decimal is overflowed".to_string()).into()),
+    }
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn unix_timestamp_decimal(ctx: &mut EvalContext, time: &DateTime) -> Result<Option<Decimal>> {
+    let res = unix_timestamp_to_mysql_unix_timestamp(get_micro_timestamp(time, &ctx.cfg.tz), 1)?;
+    return Ok(Some(res));
 }
 
 #[cfg(test)]
