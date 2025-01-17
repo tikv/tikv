@@ -139,7 +139,7 @@ pub struct Service<E: Engine, L: LockManager, F: KvFormat> {
     health_feedback_interval: Option<Duration>,
     health_feedback_seq: Arc<AtomicU64>,
 
-    raft_message_filter: Arc<dyn RaftGrpcMessageFilter + Send + Sync>,
+    raft_message_filter: Arc<dyn RaftGrpcMessageFilter>,
 }
 
 impl<E: Engine, L: LockManager, F: KvFormat> Drop for Service<E, L, F> {
