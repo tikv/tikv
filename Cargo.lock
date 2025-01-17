@@ -3778,7 +3778,11 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-7.5#12bf60e27a527e7042dc3bc1e2f39342dfcb2cb4"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#19eeae6dc7734af12475fbcf9d368168a0314085"
+>>>>>>> d4bc987ace (rocksdb: resolve flow control issues caused by clock-skew problems. (#18102))
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -3797,7 +3801,11 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-7.5#12bf60e27a527e7042dc3bc1e2f39342dfcb2cb4"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#19eeae6dc7734af12475fbcf9d368168a0314085"
+>>>>>>> d4bc987ace (rocksdb: resolve flow control issues caused by clock-skew problems. (#18102))
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -5813,7 +5821,11 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-7.5#12bf60e27a527e7042dc3bc1e2f39342dfcb2cb4"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#19eeae6dc7734af12475fbcf9d368168a0314085"
+>>>>>>> d4bc987ace (rocksdb: resolve flow control issues caused by clock-skew problems. (#18102))
 dependencies = [
  "libc 0.2.151",
  "librocksdb_sys",
