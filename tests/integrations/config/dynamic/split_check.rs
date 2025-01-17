@@ -63,7 +63,7 @@ where
 #[test]
 fn test_update_split_check_config() {
     let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
-    cfg.validate().unwrap();
+    cfg.validate(None).unwrap();
     let engine = tmp_engine(&cfg.storage.data_dir);
     let (cfg_controller, mut worker) = setup(cfg.clone(), engine);
     let scheduler = worker.scheduler();

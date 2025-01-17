@@ -230,7 +230,7 @@ impl<T: Simulator> Cluster<T> {
     pub fn pre_start_check(&mut self) -> result::Result<(), Box<dyn StdError>> {
         for path in &self.paths {
             self.cfg.storage.data_dir = path.path().to_str().unwrap().to_owned();
-            self.cfg.validate()?
+            self.cfg.validate(None)?
         }
         Ok(())
     }
