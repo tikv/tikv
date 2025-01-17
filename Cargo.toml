@@ -44,6 +44,11 @@ testexport = [
   "engine_traits/testexport",
   "engine_rocks/testexport",
   "engine_panic/testexport",
+<<<<<<< HEAD
+=======
+  "encryption/testexport",
+  "file_system/testexport",
+>>>>>>> d4bc987ace (rocksdb: resolve flow control issues caused by clock-skew problems. (#18102))
 ]
 test-engine-kv-rocksdb = ["engine_test/test-engine-kv-rocksdb"]
 test-engine-raft-raft-engine = ["engine_test/test-engine-raft-raft-engine"]
