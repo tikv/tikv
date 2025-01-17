@@ -166,7 +166,7 @@ where
         debug_thread_pool: Arc<Runtime>,
         health_controller: HealthController,
         resource_manager: Option<Arc<ResourceGroupManager>>,
-        raft_message_filter: Arc<dyn RaftGrpcMessageFilter + Send + Sync>,
+        raft_message_filter: Arc<dyn RaftGrpcMessageFilter>,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
         let stats_pool = if cfg.value().stats_concurrency > 0 {
