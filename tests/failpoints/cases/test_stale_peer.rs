@@ -85,7 +85,7 @@ fn test_clean_stale_peer() {
     sleep_ms(500);
     let engine = cluster.get_engine(3);
     let engine_path = Path::new(engine.get_engine_path());
-    assert!(validate_data_files(&engine_path));
+    assert!(validate_data_files(engine_path));
     fail::remove("manually_set_store_offline");
 }
 
