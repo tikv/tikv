@@ -38,7 +38,7 @@ lazy_static! {
         "tikv_resource_control_priority_wait_duration",
         "Histogram of wait duration cause by priority quota limiter",
         &["priority"],
-        exponential_buckets(1e-5, 2.0, 18).unwrap() // 10us ~ 2.5s
+        exponential_buckets(1e-5, 2.0, 22).unwrap() // 10us ~ 42s
     )
     .unwrap();
 
