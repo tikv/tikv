@@ -960,7 +960,11 @@ impl Delegate {
         err_event: Option<ErrorEvent>,
         downstream: Downstream,
     ) -> bool {
+        downstream.state.store(DownstreamState::Stopped);
         if let Some(err_event) = err_event {
+            // To avoid ResolvedTs being sent out after the error event.
+            downstream.advanced_to.store(0, Ordering::Release);
+
             if let Err(err) = downstream.sink.cancel_by_error(err_event).await {
                 assert!(matches!(err, Error::Sink(SendError::Disconnected)));
                 warn!("cdc send region error failed";
@@ -974,7 +978,6 @@ impl Delegate {
                     "request_id" => ?downstream.request_id, "conn_id" => ?downstream.conn_id);
             }
         }
-        downstream.state.store(DownstreamState::Stopped);
         let _ = self
             .feedbacks
             .schedule_force(Task::Deregister(Deregister::Downstream {
