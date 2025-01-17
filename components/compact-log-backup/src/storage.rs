@@ -37,7 +37,7 @@ use super::{
 use crate::{compaction::EpochHint, errors::ErrorKind, util};
 
 pub const METADATA_PREFIX: &str = "v1/backupmeta";
-pub const COMPACTION_OUT_PREFIX: &str = "compaction_out";
+pub const DEFAULT_COMPACTION_OUT_PREFIX: &str = "v1/compaction_out";
 pub const MIGRATION_PREFIX: &str = "v1/migrations";
 pub const LOCK_PREFIX: &str = "v1/LOCK";
 
@@ -535,21 +535,46 @@ impl LogFile {
     }
 }
 
-pub struct MigartionStorageWrapper<'a> {
-    storage: &'a dyn ExternalStorage,
-    migartions_prefix: &'a str,
+#[derive(derive_more::Deref, derive_more::DerefMut, Debug)]
+/// A migration with version and creator info.
+/// Preferring use this instead of directly create `Migration`.
+pub struct VersionedMigration(Migration);
+
+impl From<Migration> for VersionedMigration {
+    fn from(mut mig: Migration) -> Self {
+        mig.set_version(brpb::MigrationVersion::M1);
+        mig.set_creator(format!(
+            "tikv;commit={};branch={}",
+            option_env!("TIKV_BUILD_GIT_HASH").unwrap_or("UNKNOWN"),
+            option_env!("TIKV_BUILD_GIT_BRANCH").unwrap_or("UNKNOWN"),
+        ));
+        Self(mig)
+    }
 }
 
-impl<'a> MigartionStorageWrapper<'a> {
+impl Default for VersionedMigration {
+    fn default() -> Self {
+        Self::from(Migration::default())
+    }
+}
+
+pub struct MigrationStorageWrapper<'a> {
+    storage: &'a dyn ExternalStorage,
+    migrations_prefix: &'a str,
+}
+
+impl<'a> MigrationStorageWrapper<'a> {
     pub fn new(storage: &'a dyn ExternalStorage) -> Self {
         Self {
             storage,
-            migartions_prefix: MIGRATION_PREFIX,
+            migrations_prefix: MIGRATION_PREFIX,
         }
     }
 
-    pub async fn write(&self, migration: Migration) -> Result<()> {
+    pub async fn write(&self, migration: VersionedMigration) -> Result<()> {
         use protobuf::Message;
+
+        let migration = migration.0;
         let id = self.largest_id().await?;
         // Note: perhaps we need to verify that there isn't concurrency writing in the
         // future.
@@ -558,7 +583,7 @@ impl<'a> MigartionStorageWrapper<'a> {
         retry_expr!(
             self.storage
                 .write(
-                    &format!("{}/{}", self.migartions_prefix, name),
+                    &format!("{}/{}", self.migrations_prefix, name),
                     UnpinReader(Box::new(Cursor::new(&bytes))),
                     bytes.len() as u64
                 )
@@ -571,7 +596,7 @@ impl<'a> MigartionStorageWrapper<'a> {
 
     pub async fn largest_id(&self) -> Result<u64> {
         self.storage
-            .iter_prefix(self.migartions_prefix)
+            .iter_prefix(self.migrations_prefix)
             .err_into::<Error>()
             .map(|v| {
                 v.and_then(|v| match id_of_migration(&v.key) {

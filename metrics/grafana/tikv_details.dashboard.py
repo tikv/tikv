@@ -3157,6 +3157,25 @@ def Storage() -> RowPanel:
             ),
         ]
     )
+    layout.row(
+        [
+            graph_panel(
+                title="Concurrency manager max-ts",
+                description="The max_ts in the concurrency manager",
+                yaxes=yaxes(left_format=UNITS.NONE_FORMAT),
+                targets=[
+                    target(
+                        expr="tikv_concurrency_manager_max_ts_limit",
+                        legend_format="max_ts_limit",
+                    ),
+                    target(
+                        expr="tikv_concurrency_manager_max_ts",
+                        legend_format="max_ts",
+                    ),
+                ],
+            )
+        ]
+    )
     return layout.row_panel
 
 
@@ -4095,6 +4114,15 @@ def Snapshot() -> RowPanel:
                         legend_format="clean-region-by-{{type}}",
                         additional_groupby=True,
                     ),
+                    target(
+                        expr=expr_sum_delta(
+                            "tikv_server_snapshot_task_total",
+                            range_selector="1m",
+                            by_labels=["type"],
+                        ),
+                        legend_format="{{type}}",
+                        additional_groupby=True,
+                    ),
                 ],
             ),
             graph_panel(
@@ -4106,13 +4134,14 @@ def Snapshot() -> RowPanel:
                         expr=expr_sum_rate(
                             "tikv_snapshot_limit_transport_bytes",
                             by_labels=["instance", "type"],
-                        ),
+                        )
                     ),
                     target(
                         expr=expr_sum_rate(
                             "tikv_snapshot_limit_generate_bytes",
+                            by_labels=["instance", "type"],
                         ),
-                        legend_format="{{instance}}-generate",
+                        legend_format="{{instance}}-generate-{{type}}",
                     ),
                 ],
             ),
@@ -5442,8 +5471,8 @@ def RocksDB() -> RowPanel:
         [
             graph_panel(
                 title="Compaction operations",
-                description="The count of compaction and flush operations",
-                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                description="The rate of completed compaction and flush operations (left axis) and the count of running operations (right axis).",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC, right_format=UNITS.SHORT),
                 targets=[
                     target(
                         expr=expr_sum_rate(
@@ -5454,6 +5483,34 @@ def RocksDB() -> RowPanel:
                             by_labels=["type"],
                         ),
                         additional_groupby=True,
+                    ),
+                    target(
+                        expr=expr_sum(
+                            "tikv_engine_num_running_compactions",
+                            label_selectors=[
+                                'db="$db"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="running-compactions",
+                        additional_groupby=True,
+                    ),
+                    target(
+                        expr=expr_sum(
+                            "tikv_engine_num_running_flushes",
+                            label_selectors=[
+                                'db="$db"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="running-flushes",
+                        additional_groupby=True,
+                    ),
+                ],
+                series_overrides=[
+                    series_override(
+                        alias="/running-.*/",
+                        yaxis=2,
                     ),
                 ],
             ),
