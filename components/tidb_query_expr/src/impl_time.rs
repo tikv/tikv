@@ -1518,6 +1518,88 @@ pub fn sub_date_time_duration_interval_any_as_duration<
     )
 }
 
+#[rpn_fn(capture = [ctx, extra])]
+#[inline]
+pub fn from_unixtime_1_arg(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    arg0: &Decimal,
+) -> Result<Option<DateTime>> {
+    eval_from_unixtime(ctx, extra.ret_field_type.get_decimal() as i8, *arg0)
+}
+
+#[rpn_fn(capture = [ctx, extra])]
+#[inline]
+pub fn from_unixtime_2_arg(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    arg0: &Decimal,
+    arg1: BytesRef,
+) -> Result<Option<Bytes>> {
+    let t = eval_from_unixtime(ctx, extra.ret_field_type.get_decimal() as i8, *arg0)?;
+    match t {
+        Some(t) => {
+            let res = t.date_format(std::str::from_utf8(arg1).map_err(Error::Encoding)?)?;
+            Ok(Some(res.into()))
+        }
+        None => Ok(None),
+    }
+}
+
+// Port from TiDB's evalFromUnixTime
+pub fn eval_from_unixtime(
+    ctx: &mut EvalContext,
+    mut fsp: i8,
+    unix_timestamp: Decimal,
+) -> Result<Option<DateTime>> {
+    // 0 <= unixTimeStamp <= 32536771199.999999
+    if unix_timestamp.is_negative() {
+        return Ok(None);
+    }
+    let integral_part = unix_timestamp.as_i64().unwrap(); // Ignore Truncated error and Overflow error
+    // The max integralPart should not be larger than 32536771199.
+    // Refer to https://dev.mysql.com/doc/relnotes/mysql/8.0/en/news-8-0-28.html
+    if integral_part > 32536771199 {
+        return Ok(None);
+    }
+    // Split the integral part and fractional part of a decimal timestamp.
+    // e.g. for timestamp 12345.678,
+    // first get the integral part 12345,
+    // then (12345.678 - 12345) * (10^9) to get the decimal part and convert it to
+    // nanosecond precision.
+    let integer_decimal_tp = Decimal::from(integral_part);
+    let frac_decimal_tp = &unix_timestamp - &integer_decimal_tp;
+    if !frac_decimal_tp.is_ok() {
+        return Ok(None);
+    }
+    let frac_decimal_tp = frac_decimal_tp.unwrap();
+    let nano = Decimal::from(NANOS_PER_SEC);
+    let x = &frac_decimal_tp * &nano;
+    if x.is_overflow() {
+        return Err(Error::overflow("DECIMAL", "").into());
+    }
+    if x.is_truncated() {
+        return Err(Error::truncated().into());
+    }
+    let x = x.unwrap();
+    let fractional_part = x.as_i64(); // here fractionalPart is result multiplying the original fractional part by 10^9.
+    if fractional_part.is_overflow() {
+        return Err(Error::overflow("DECIMAL", "").into());
+    }
+    let fractional_part = fractional_part.unwrap();
+    if fsp < 0 {
+        fsp = MAX_FSP;
+    }
+    let tmp = DateTime::from_unixtime(
+        ctx,
+        integral_part,
+        fractional_part as u32,
+        TimeType::DateTime,
+        fsp,
+    )?;
+    Ok(Some(tmp))
+}
+
 #[cfg(test)]
 mod tests {
     use std::{str::FromStr, sync::Arc};
@@ -3841,6 +3923,82 @@ mod tests {
                 }
                 _ => panic!("unknown field type {:?}", result_type),
             }
+        }
+    }
+
+    #[test]
+    fn test_from_unixtime_1_arg() {
+        let cases = vec![
+            (1451606400.0, 0, Some("2016-01-01 00:00:00")),
+            (1451606400.123456, 6, Some("2016-01-01 00:00:00.123456")),
+            (1451606400.999999, 6, Some("2016-01-01 00:00:00.999999")),
+            (1451606400.9999999, 6, Some("2016-01-01 00:00:01.000000")),
+            (1451606400.9999995, 6, Some("2016-01-01 00:00:01.000000")),
+            (1451606400.9999994, 6, Some("2016-01-01 00:00:00.999999")),
+            (1451606400.123, 3, Some("2016-01-01 00:00:00.123")),
+            (5000000000.0, 0, Some("2128-06-11 08:53:20")),
+            (32536771199.99999, 6, Some("3001-01-18 23:59:59.999990")),
+            (0.0, 6, Some("1970-01-01 00:00:00.000000")),
+            (-1.0, 6, None),
+            (32536771200.0, 6, None),
+        ];
+        let mut ctx = EvalContext::default();
+        for (datetime, fsp, expected) in cases {
+            let decimal = Decimal::from_f64(datetime).unwrap();
+            let mut result_field_type: FieldType = FieldTypeTp::DateTime.into();
+            result_field_type.set_decimal(fsp as i32);
+
+            let (result, _) = RpnFnScalarEvaluator::new()
+                .push_param(decimal)
+                .evaluate_raw(result_field_type, ScalarFuncSig::FromUnixTime1Arg);
+            let output: Option<DateTime> = result.unwrap().into();
+
+            let expected =
+                expected.map(|arg1| DateTime::parse_datetime(&mut ctx, arg1, fsp, false).unwrap());
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_from_unixtime_2_arg() {
+        let cases = vec![
+            (
+                1451606400.0,
+                "%Y %D %M %h:%i:%s %x",
+                0,
+                Some("2016 1st January 12:00:00 2015"),
+            ),
+            (
+                1451606400.123456,
+                "%Y %D %M %h:%i:%s %x",
+                6,
+                Some("2016 1st January 12:00:00 2015"),
+            ),
+            (
+                1451606400.999999,
+                "%Y %D %M %h:%i:%s %x",
+                6,
+                Some("2016 1st January 12:00:00 2015"),
+            ),
+            (
+                1451606400.9999999,
+                "%Y %D %M %h:%i:%s %x",
+                6,
+                Some("2016 1st January 12:00:01 2015"),
+            ),
+        ];
+        for (datetime, format, fsp, expected) in cases {
+            let decimal = Decimal::from_f64(datetime).unwrap();
+            let mut result_field_type: FieldType = FieldTypeTp::String.into();
+            result_field_type.set_decimal(fsp);
+            let (result, _) = RpnFnScalarEvaluator::new()
+                .push_param(decimal)
+                .push_param(format)
+                .evaluate_raw(result_field_type, ScalarFuncSig::FromUnixTime2Arg);
+            let output: Option<Bytes> = result.unwrap().into();
+
+            let expected = expected.map(|str| str.as_bytes().to_vec());
+            assert_eq!(output, expected);
         }
     }
 }

@@ -1484,6 +1484,19 @@ impl Time {
         Time::try_from_chrono_datetime(ctx, timestamp.naive_local(), time_type, fsp as i8)
     }
 
+    pub fn from_unixtime(
+        ctx: &mut EvalContext,
+        seconds: i64,
+        nanos: u32,
+        time_type: TimeType,
+        fsp: i8,
+    ) -> Result<Self> {
+        let timestamp = Utc.timestamp(seconds, nanos);
+        let timestamp = ctx.cfg.tz.from_utc_datetime(&timestamp.naive_utc());
+        let timestamp = timestamp.round_subsecs(fsp as u16);
+        Time::try_from_chrono_datetime(ctx, timestamp.naive_local(), time_type, fsp)
+    }
+
     pub fn from_year(
         ctx: &mut EvalContext,
         year: u32,
