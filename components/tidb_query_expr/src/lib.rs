@@ -934,6 +934,8 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::UnixTimestampCurrent => unix_timestamp_current_fn_meta(),
         ScalarFuncSig::UnixTimestampInt => unix_timestamp_int_fn_meta(),
         ScalarFuncSig::UnixTimestampDec => unix_timestamp_decimal_fn_meta(),
+        ScalarFuncSig::FromUnixTime1Arg => from_unixtime_1_arg_fn_meta(),
+        ScalarFuncSig::FromUnixTime2Arg => from_unixtime_2_arg_fn_meta(),
         _ => return Err(other_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value
