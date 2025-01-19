@@ -28,6 +28,7 @@ use tokio::runtime::{Builder as RuntimeBuilder, Handle as RuntimeHandle, Runtime
 use tokio_timer::timer::Handle;
 
 use super::{
+    grpc_compression_algorithm,
     load_statistics::*,
     metrics::{MEMORY_USAGE_GAUGE, SERVER_INFO_GAUGE_VEC},
     raft_client::{ConnectionBuilder, RaftClient},
@@ -102,7 +103,7 @@ where
             .http2_max_ping_strikes(i32::MAX) // For pings without data from clients.
             .keepalive_time(self.cfg.value().grpc_keepalive_time.into())
             .keepalive_timeout(self.cfg.value().grpc_keepalive_timeout.into())
-            .default_compression_algorithm(self.cfg.value().grpc_compression_algorithm())
+            .default_compression_algorithm(grpc_compression_algorithm(self.cfg.value().grpc_client_compression_type.clone()))
             .default_gzip_compression_level(self.cfg.value().grpc_gzip_compression_level)
             .build_args();
 

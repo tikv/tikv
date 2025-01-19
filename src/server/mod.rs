@@ -30,7 +30,10 @@ pub use engine_factory::{KvEngineFactory, KvEngineFactoryBuilder};
 #[cfg(any(test, feature = "testexport"))]
 pub use self::server::test_router::TestRaftStoreRouter;
 pub use self::{
-    config::{Config, ServerConfigManager, DEFAULT_CLUSTER_ID, DEFAULT_LISTENING_ADDR},
+    config::{
+        grpc_compression_algorithm, Config, GrpcCompressionType, ServerConfigManager,
+        DEFAULT_CLUSTER_ID, DEFAULT_LISTENING_ADDR,
+    },
     errors::{Error, Result},
     metrics::{
         CONFIG_ROCKSDB_GAUGE, CPU_CORES_QUOTA_GAUGE, MEMORY_LIMIT_GAUGE, MEM_TRACE_SUM_GAUGE,

@@ -46,6 +46,7 @@ use tikv_util::{
 use yatp::{task::future::TaskCell, ThreadPool};
 
 use crate::server::{
+    grpc_compression_algorithm,
     load_statistics::ThreadLoadPool,
     metrics::*,
     resolve::{Error as ResolveError, Result as ResolveResult},
@@ -714,7 +715,7 @@ where
             .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as i32)
             .keepalive_time(cfg.grpc_keepalive_time.0)
             .keepalive_timeout(cfg.grpc_keepalive_timeout.0)
-            .default_compression_algorithm(cfg.grpc_compression_algorithm())
+            .default_compression_algorithm(grpc_compression_algorithm(cfg.grpc_raft_compression_type.clone()))
             .default_gzip_compression_level(cfg.grpc_gzip_compression_level)
             .default_grpc_min_message_size_to_compress(cfg.grpc_min_message_size_to_compress)
             .max_reconnect_backoff(cfg.raft_client_max_backoff.0)

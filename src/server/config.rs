@@ -79,6 +79,17 @@ pub enum GrpcCompressionType {
     Gzip,
 }
 
+/// Gets configured grpc compression algorithm.
+pub fn grpc_compression_algorithm(
+    grpc_compression_type: GrpcCompressionType,
+) -> CompressionAlgorithms {
+    match grpc_compression_type {
+        GrpcCompressionType::None => CompressionAlgorithms::GRPC_COMPRESS_NONE,
+        GrpcCompressionType::Deflate => CompressionAlgorithms::GRPC_COMPRESS_DEFLATE,
+        GrpcCompressionType::Gzip => CompressionAlgorithms::GRPC_COMPRESS_GZIP,
+    }
+}
+
 /// OnlineConfig for the `server` module.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]
@@ -130,8 +141,17 @@ pub struct Config {
     pub raft_msg_max_batch_size: usize,
 
     // TODO: use CompressionAlgorithms instead once it supports traits like Clone etc.
+    // Compression algorithm used for gRPC messages between client and server
     #[online_config(skip)]
-    pub grpc_compression_type: GrpcCompressionType,
+    pub grpc_client_compression_type: GrpcCompressionType,
+    // Compression algorithm used for gRPC Raft messages between TiKV nodes
+    // For backward compatibility.
+    #[serde(
+        alias = "grpc-compression-type",
+        rename(serialize = "grpc-compression-type")
+    )]
+    #[online_config(skip)]
+    pub grpc_raft_compression_type: GrpcCompressionType,
     #[online_config(skip)]
     pub grpc_gzip_compression_level: usize,
     #[online_config(skip)]
@@ -264,7 +284,8 @@ impl Default for Config {
             raft_client_max_backoff: ReadableDuration::secs(5),
             raft_client_initial_reconnect_backoff: ReadableDuration::secs(1),
             raft_msg_max_batch_size: 256,
-            grpc_compression_type: GrpcCompressionType::None,
+            grpc_client_compression_type: GrpcCompressionType::None,
+            grpc_raft_compression_type: GrpcCompressionType::None,
             grpc_gzip_compression_level: DEFAULT_GRPC_GZIP_COMPRESSION_LEVEL,
             grpc_min_message_size_to_compress: DEFAULT_GRPC_MIN_MESSAGE_SIZE_TO_COMPRESS,
             grpc_concurrency: DEFAULT_GRPC_CONCURRENCY,
@@ -441,15 +462,6 @@ impl Config {
         }
 
         Ok(())
-    }
-
-    /// Gets configured grpc compression algorithm.
-    pub fn grpc_compression_algorithm(&self) -> CompressionAlgorithms {
-        match self.grpc_compression_type {
-            GrpcCompressionType::None => CompressionAlgorithms::GRPC_COMPRESS_NONE,
-            GrpcCompressionType::Deflate => CompressionAlgorithms::GRPC_COMPRESS_DEFLATE,
-            GrpcCompressionType::Gzip => CompressionAlgorithms::GRPC_COMPRESS_GZIP,
-        }
     }
 
     pub fn end_point_request_max_handle_duration(&self) -> ReadableDuration {

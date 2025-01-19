@@ -195,8 +195,10 @@
 ## Set the maximum number of worker threads for the status report HTTP service.
 # status-thread-pool-size = 1
 
-## Compression type for gRPC channel: none, deflate or gzip.
-# grpc-compression-type = "none"
+## Compression type for messages in gRPC channel between client and server: none, deflate or gzip.
+# grpc-client-compression-type = "none"
+## Compression type for messages in gRPC channel between TiKV nodes: none, deflate or gzip.
+# grpc-raft-compression-type = "none"
 
 ## Size of the thread pool for the gRPC server.
 # grpc-concurrency = 5
