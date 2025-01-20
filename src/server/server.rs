@@ -166,6 +166,7 @@ where
         debug_thread_pool: Arc<Runtime>,
         health_controller: HealthController,
         resource_manager: Option<Arc<ResourceGroupManager>>,
+        raft_message_filter: Arc<dyn RaftGrpcMessageFilter>,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
         let stats_pool = if cfg.value().stats_concurrency > 0 {
@@ -211,6 +212,7 @@ where
             resource_manager,
             health_controller.clone(),
             health_feedback_interval,
+            raft_message_filter,
         );
         let builder_factory = Box::new(BuilderFactory::new(
             kv_service,
@@ -683,6 +685,7 @@ mod tests {
             debug_thread_pool,
             HealthController::new(),
             None,
+            Arc::new(DefaultGrpcMessageFilter::new(0.2)),
         )
         .unwrap();
 

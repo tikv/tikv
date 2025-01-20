@@ -156,3 +156,47 @@ fn test_serving_status() {
     thread::sleep(Duration::from_millis(200));
     assert_eq!(check(), ServingStatus::Serving);
 }
+
+#[test]
+fn test_raft_message_observer() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.pd_client.disable_default_operator();
+    let r1 = cluster.run_conf_change();
+
+    cluster.must_put(b"k1", b"v1");
+
+    fail::cfg("force_reject_raft_append_message", "return").unwrap();
+    fail::cfg("force_reject_raft_snapshot_message", "return").unwrap();
+
+    cluster.pd_client.add_peer(r1, new_peer(2, 2));
+
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    must_get_none(&cluster.get_engine(2), b"k1");
+
+    fail::remove("force_reject_raft_append_message");
+    fail::remove("force_reject_raft_snapshot_message");
+
+    cluster.pd_client.must_have_peer(r1, new_peer(2, 2));
+    cluster.pd_client.must_add_peer(r1, new_peer(3, 3));
+
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+    fail::cfg("force_reject_raft_append_message", "return").unwrap();
+
+    let _ = cluster.async_put(b"k2", b"v2").unwrap();
+
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    must_get_none(&cluster.get_engine(2), b"k2");
+    must_get_none(&cluster.get_engine(3), b"k2");
+
+    fail::remove("force_reject_raft_append_message");
+
+    cluster.must_put(b"k3", b"v3");
+    for id in 1..=3 {
+        must_get_equal(&cluster.get_engine(id), b"k3", b"v3");
+    }
+    cluster.shutdown();
+}

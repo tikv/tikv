@@ -486,6 +486,11 @@ lazy_static! {
         "Count for rejected Raft append messages"
     )
     .unwrap();
+    pub static ref RAFT_SNAPSHOT_REJECTS: IntCounter = register_int_counter!(
+        "tikv_server_raft_snapshot_rejects",
+        "Count for rejected Raft snapshot messages"
+    )
+    .unwrap();
     pub static ref SNAP_LIMIT_TRANSPORT_BYTES_COUNTER: IntCounterVec = register_int_counter_vec!(
         "tikv_snapshot_limit_transport_bytes",
         "Total snapshot limit transport used",
