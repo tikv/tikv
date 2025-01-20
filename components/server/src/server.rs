@@ -102,7 +102,7 @@ use tikv::{
         lock_manager::LockManager,
         raftkv::ReplicaReadLockChecker,
         resolve,
-        service::{DebugService, DiagnosticsService},
+        service::{DebugService, DefaultGrpcMessageFilter, DiagnosticsService},
         status_server::StatusServer,
         tablet_snap::NoSnapshotCache,
         ttl::TtlChecker,
@@ -891,6 +891,9 @@ where
             debug_thread_pool,
             health_controller,
             self.resource_manager.clone(),
+            Arc::new(DefaultGrpcMessageFilter::new(
+                server_config.value().reject_messages_on_memory_ratio,
+            )),
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
         cfg_controller.register(
