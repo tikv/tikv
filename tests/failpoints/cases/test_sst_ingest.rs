@@ -165,14 +165,6 @@ fn verify_completed(rx: &Receiver<bool>) {
 //   while the snapshot process holds it.
 // - Resume the snapshot ingestion process and verify that the compaction filter
 //   GC can acquire the latch and complete its operation.
-//
-// The test runs the above validation twice:
-// - First, for region "b", where the compaction filter GC and the apply
-//   snapshot process overlap. This ensures that the compaction filter GC
-//   remains blocked while the range latch is held by the snapshot process.
-// - Second, for region "c", where the compaction filter GC and the apply
-//   snapshot process do not overlap. This verifies that the compaction filter
-//   GC can finish without being blocked.
 fn compaction_filter_gc_blocked_by_ingest_test(region_to_migrate: &[u8]) {
     let (cluster, region, peer, pd_client) = setup_cluster(region_to_migrate);
     let region_id = region.id;
