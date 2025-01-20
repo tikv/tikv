@@ -48,7 +48,10 @@ engine_traits = { workspace = true }
 error_code = { workspace = true }
 fail = "0.5"
 file_system = { workspace = true }
+<<<<<<< HEAD
 fs2 = "0.4"
+=======
+>>>>>>> da63ac3c2e (raftstore: add io throughput metrics for snapshot generation (#18110))
 futures = "0.3"
 futures-util = { version = "0.3.1", default-features = false, features = ["io"] }
 getset = "0.1"
@@ -100,5 +103,10 @@ yatp = { workspace = true }
 encryption_export = { workspace = true }
 engine_panic = { workspace = true }
 engine_rocks = { workspace = true }
+<<<<<<< HEAD
+=======
+engine_test = { workspace = true }
+file_system = { workspace = true, features = ["testexport"] }
+>>>>>>> da63ac3c2e (raftstore: add io throughput metrics for snapshot generation (#18110))
 panic_hook = { workspace = true }
 test_sst_importer = { workspace = true }

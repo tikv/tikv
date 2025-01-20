@@ -268,6 +268,16 @@ make_static_metric! {
         finished,
     }
 
+<<<<<<< HEAD
+=======
+    pub label_enum SnapshotGenerateBytesType {
+        kv,
+        sst,
+        plain,
+        io,
+    }
+
+>>>>>>> da63ac3c2e (raftstore: add io throughput metrics for snapshot generation (#18110))
     pub struct SnapshotBrWaitApplyEvent : IntCounter {
         "event" => SnapshotBrWaitApplyEventType
     }

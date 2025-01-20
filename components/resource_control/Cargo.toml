@@ -36,4 +36,5 @@ tokio-timer = { workspace = true }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
 [dev-dependencies]
+file_system = { workspace = true, features = ["testexport"] }
 rand = "0.8"

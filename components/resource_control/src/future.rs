@@ -277,6 +277,7 @@ mod tests {
 
     async fn empty() {}
 
+    #[cfg(feature = "failpoints")]
     #[test]
     fn test_limited_future() {
         let pool = YatpPoolBuilder::new(DefaultTicker::default())
