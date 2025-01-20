@@ -803,7 +803,7 @@ mod tests {
         let total_io_bytes = io_tracker.get_total_io_bytes();
         assert_eq!(total_io_bytes.read, 100);
         assert_eq!(total_io_bytes.write, 50);
-        let io_bytes = io_tracker.update();
+        let _ = io_tracker.update();
         let total_io_bytes = io_tracker.get_total_io_bytes();
         assert_eq!(total_io_bytes.read, 200);
         assert_eq!(total_io_bytes.write, 100);
