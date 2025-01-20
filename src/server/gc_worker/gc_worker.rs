@@ -755,11 +755,14 @@ impl<E: Engine> GcRunnerCore<E> {
             let start_data_key = keys::data_key(start_key.as_encoded());
             let end_data_key = keys::data_end_key(end_key.as_encoded());
 
+            let unsafe_delete_cfs = &[CF_DEFAULT, CF_WRITE];
             let cfs = &[CF_LOCK, CF_DEFAULT, CF_WRITE];
 
             // First, use DeleteStrategy::DeleteFiles to free as much disk space as possible
+            // CF_LOCK is not proper to be handled in DeleteFiles mode because it might make
+            // some deleted locks show up again, and has risk to affect data correctness.
             let delete_files_start_time = Instant::now();
-            for cf in cfs {
+            for cf in unsafe_delete_cfs {
                 local_storage
                 .delete_ranges_cf(
                     &WriteOptions::default(),

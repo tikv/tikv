@@ -20,7 +20,7 @@ lazy_static! {
         "tikv_yatp_pool_schedule_wait_duration",
         "Histogram of yatp pool schedule wait duration.",
         &["name", "priority"],
-        exponential_buckets(1e-5, 2.0, 18).unwrap() // 10us ~ 2.5s
+        exponential_buckets(1e-5, 2.0, 22).unwrap() // 10us ~ 42s
     )
     .unwrap();
 }
