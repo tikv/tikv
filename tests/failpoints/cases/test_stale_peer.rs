@@ -80,7 +80,7 @@ fn test_clean_stale_peer() {
     cluster.must_send_store_heartbeat(3);
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
     pd_client.must_remove_peer(region_id, new_peer(3, 3));
-    // SInce the node 3 is marked with NodeState::Removing, its `offlined == true`
+    // Since the node 3 is marked with NodeState::Removing, its `offlined == true`
     // in SnapManager, and no need to clear the corresponding data.
     sleep_ms(500);
     let engine = cluster.get_engine(3);
