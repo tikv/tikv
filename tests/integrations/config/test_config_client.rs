@@ -60,6 +60,15 @@ fn test_update_config() {
     cfg.storage.max_ts.max_drift = ReadableDuration::secs(365);
     assert_eq!(cfg_controller.get_current(), cfg);
 
+    // update that fails the validation
+    assert!(
+        cfg_controller
+            .update(change("storage.max-ts.max-drift", "3s"))
+            .unwrap_err()
+            .to_string()
+            .contains("smaller than or equal to storage.max-ts.cache-sync-interval")
+    );
+
     // update not support config
     let res = cfg_controller.update(change("server.addr", "localhost:3000"));
     res.unwrap_err();
