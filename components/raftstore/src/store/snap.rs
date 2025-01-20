@@ -902,7 +902,15 @@ impl Snapshot {
                     for_balance,
                 )?
             };
-            SNAPSHOT_LIMIT_GENERATE_BYTES.inc_by(cf_stat.total_size as u64);
+            SNAPSHOT_LIMIT_GENERATE_BYTES_VEC
+                .kv
+                .inc_by(cf_stat.total_kv_size as u64);
+            SNAPSHOT_LIMIT_GENERATE_BYTES_VEC
+                .sst
+                .inc_by(cf_stat.total_sst_size as u64);
+            SNAPSHOT_LIMIT_GENERATE_BYTES_VEC
+                .plain
+                .inc_by(cf_stat.total_plain_size as u64);
             cf_file.kv_count = cf_stat.key_count as u64;
             if cf_file.kv_count > 0 {
                 // Use `kv_count` instead of file size to check empty files because encrypted
@@ -925,14 +933,16 @@ impl Snapshot {
                 .observe(cf_stat.key_count as f64);
             SNAPSHOT_CF_SIZE
                 .get(*cf_enum)
-                .observe(cf_stat.total_size as f64);
+                .observe(cf_stat.total_kv_size as f64);
             info!(
                 "scan snapshot of one cf";
                 "region_id" => region.get_id(),
                 "snapshot" => self.path(),
                 "cf" => cf,
                 "key_count" => cf_stat.key_count,
-                "size" => cf_stat.total_size,
+                "size" => cf_stat.total_kv_size,
+                "sst_size" => cf_stat.total_sst_size,
+                "plain_size" => cf_stat.total_plain_size,
             );
         }
 
