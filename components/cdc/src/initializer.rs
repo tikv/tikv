@@ -357,8 +357,8 @@ impl<E: KvEngine> Initializer<E> {
                         if self.observed_range.contains_encoded_key(key) {
                             read_old_value(entry.old_value(), &mut stats.old_value)?;
                             total_bytes += entry.size();
-                            entries.push(Some(KvEntry::TxnEntry(entry)));
                         }
+                        entries.push(Some(KvEntry::TxnEntry(entry)));
                     }
                     None => {
                         entries.push(None);
@@ -443,6 +443,7 @@ impl<E: KvEngine> Initializer<E> {
             self.request_id,
             entries,
             self.filter_loop,
+            &self.observed_range,
         )?;
         if done {
             let (cb, fut) = tikv_util::future::paired_future_callback();
