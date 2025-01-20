@@ -1064,7 +1064,7 @@ impl<E: Engine> GcRunnerCore<E> {
                         .unwrap()
                         .acquire_ingest_latch(Range {
                             start_key: smallest_key,
-                            end_key: keys::next_key(&largest_key).as_slice(),
+                            end_key: keys::next_key(largest_key).as_slice(),
                         });
 
                 fail_point!("after_gc_orphan_versions_ingest_latch_acquired");
