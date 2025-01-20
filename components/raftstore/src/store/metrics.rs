@@ -275,6 +275,7 @@ make_static_metric! {
         kv,
         sst,
         plain,
+        io,
     }
 
     pub struct SnapshotBrWaitApplyEvent : IntCounter {

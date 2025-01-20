@@ -36,7 +36,7 @@ engine_rocks = { workspace = true, optional = true }
 engine_traits = { workspace = true }
 error_code = { workspace = true }
 fail = "0.5"
-file_system = { workspace = true, features = ["testexport"] }
+file_system = { workspace = true }
 futures = "0.3"
 futures-util = { version = "0.3.1", default-features = false, features = [
   "io",
@@ -88,5 +88,6 @@ encryption_export = { workspace = true }
 engine_panic = { workspace = true }
 engine_rocks = { workspace = true }
 engine_test = { workspace = true }
+file_system = { workspace = true, features = ["testexport"] }
 panic_hook = { workspace = true }
 test_sst_importer = { workspace = true }
