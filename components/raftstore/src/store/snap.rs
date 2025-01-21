@@ -1449,16 +1449,17 @@ struct SnapManagerCore {
     max_per_file_size: Arc<AtomicU64>,
     enable_multi_snapshot_files: Arc<AtomicBool>,
     stats: Arc<Mutex<Vec<SnapshotStat>>>,
+    max_total_size: Arc<AtomicU64>,
     // Minimal column family size & kv counts for applying by ingest.
     min_ingest_cf_size: u64,
     min_ingest_cf_kvs: u64,
+    // Marker to represent the relative store is marked with Offline.
+    offlined: Arc<AtomicBool>,
 }
 
 /// `SnapManagerCore` trace all current processing snapshots.
 pub struct SnapManager {
     core: SnapManagerCore,
-    max_total_size: Arc<AtomicU64>,
-
     // only used to receive snapshot from v2
     tablet_snap_manager: Option<TabletSnapManager>,
 }
@@ -1752,11 +1753,13 @@ impl SnapManager {
     }
 
     pub fn max_total_snap_size(&self) -> u64 {
-        self.max_total_size.load(Ordering::Acquire)
+        self.core.max_total_size.load(Ordering::Acquire)
     }
 
     pub fn set_max_total_snap_size(&self, max_total_size: u64) {
-        self.max_total_size.store(max_total_size, Ordering::Release);
+        self.core
+            .max_total_size
+            .store(max_total_size, Ordering::Release);
     }
 
     pub fn set_max_per_file_size(&mut self, max_per_file_size: u64) {
@@ -1896,6 +1899,47 @@ impl SnapManager {
     pub fn limiter(&self) -> &Limiter {
         &self.core.limiter
     }
+<<<<<<< HEAD
+=======
+
+    /// recv_snap_precheck is part of the snapshot recv precheck process, which
+    /// aims to reduce unnecessary snapshot drops and regenerations. When a
+    /// leader wants to generate a snapshot for a follower, it first sends a
+    /// precheck message. Upon receiving the message, the follower uses this
+    /// function to consult the concurrency limiter, determining if it can
+    /// receive a new snapshot. If the precheck is successful, the leader will
+    /// proceed to generate and send the snapshot.
+    pub fn recv_snap_precheck(&self, region_id: u64) -> bool {
+        self.core.recv_concurrency_limiter.try_recv(region_id)
+    }
+
+    /// recv_snap_complete is part of the snapshot recv precheck process, and
+    /// should be called when a follower finishes receiving a snapshot.
+    pub fn recv_snap_complete(&self, region_id: u64) {
+        self.core.recv_concurrency_limiter.finish_recv(region_id);
+        // In tests, the first failpoint can be used to trigger a callback while
+        // the second failpoint can be used to pause the thread.
+        fail_point!("post_recv_snap_complete1", region_id == 1, |_| {});
+        fail_point!("post_recv_snap_complete2", region_id == 1, |_| {});
+    }
+
+    /// Adjusts the capacity of the snapshot receive concurrency limiter to
+    /// account for the number of pending applies. This prevents more snapshots
+    /// to be generated if there are too many snapshots waiting to be applied.
+    pub fn set_pending_apply_count(&self, num_pending_applies: usize) {
+        self.core
+            .recv_concurrency_limiter
+            .set_reserved_capacity(num_pending_applies)
+    }
+
+    pub fn set_offline(&mut self, state: bool) {
+        self.core.offlined.store(state, Ordering::Release);
+    }
+
+    pub fn is_offlined(&self) -> bool {
+        self.core.offlined.load(Ordering::Acquire)
+    }
+>>>>>>> effe615237 (raftstore: remove stale ranges by DeleteByKeys rather than ingesting. (#18040))
 }
 
 impl SnapManagerCore {
@@ -2082,11 +2126,12 @@ impl SnapManagerBuilder {
                 enable_multi_snapshot_files: Arc::new(AtomicBool::new(
                     self.enable_multi_snapshot_files,
                 )),
+                max_total_size: Arc::new(AtomicU64::new(max_total_size)),
                 stats: Default::default(),
                 min_ingest_cf_size: self.min_ingest_snapshot_size,
                 min_ingest_cf_kvs: self.min_ingest_snapshot_kvs,
+                offlined: Arc::new(AtomicBool::new(false)),
             },
-            max_total_size: Arc::new(AtomicU64::new(max_total_size)),
             tablet_snap_manager,
         };
         snapshot.set_max_per_file_size(self.max_per_file_size); // set actual max_per_file_size
@@ -2567,9 +2612,11 @@ pub mod tests {
             encryption_key_manager: None,
             max_per_file_size: Arc::new(AtomicU64::new(max_per_file_size)),
             enable_multi_snapshot_files: Arc::new(AtomicBool::new(true)),
+            max_total_size: Arc::new(AtomicU64::new(u64::MAX)),
             stats: Default::default(),
             min_ingest_cf_size: 0,
             min_ingest_cf_kvs: 0,
+            offlined: Arc::new(AtomicBool::new(false)),
         }
     }
 
