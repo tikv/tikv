@@ -790,7 +790,8 @@ mod tests {
         assert_eq!(s.config.multi_part_size, 5 * 1024 * 1024);
 
         config.bucket.region = StringNonEmpty::opt("foo".to_string());
-        assert!(S3Storage::new(config).is_ok());
+        // should not panic even if region is invalid
+        S3Storage::new(config).unwrap();
     }
 
     #[tokio::test]
