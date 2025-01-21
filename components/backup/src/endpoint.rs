@@ -38,6 +38,7 @@ use tikv_util::{
     box_err, debug, error, error_unknown,
     future::RescheduleChecker,
     impl_display_as_debug, info,
+    resizable_threadpool::ResizableRuntime,
     store::find_peer,
     time::{Instant, Limiter},
     warn,
@@ -49,7 +50,7 @@ use txn_types::{Key, Lock, TimeStamp};
 use crate::{
     metrics::*,
     softlimit::{CpuStatistics, SoftLimit, SoftLimitByCpu},
-    utils::{ControlThreadPool, KeyValueCodec},
+    utils::KeyValueCodec,
     writer::{BackupWriterBuilder, CfNameWrap},
     Error, *,
 };
@@ -704,7 +705,7 @@ impl SoftLimitKeeper {
 /// It coordinates backup tasks and dispatches them to different workers.
 pub struct Endpoint<E: Engine, R: RegionInfoProvider + Clone + 'static> {
     store_id: u64,
-    pool: RefCell<ControlThreadPool>,
+    pool: RefCell<ResizableRuntime>,
     io_pool: Runtime,
     tablets: LocalTablets<E::Local>,
     config_manager: ConfigManager,
@@ -713,7 +714,6 @@ pub struct Endpoint<E: Engine, R: RegionInfoProvider + Clone + 'static> {
     api_version: ApiVersion,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used in rawkv apiv2 only
     resource_ctl: Option<Arc<ResourceGroupManager>>,
-
     pub(crate) engine: E,
     pub(crate) region_info: R,
 }

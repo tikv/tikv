@@ -12,7 +12,6 @@ use tikv_util::{config::ReadableDuration, resizable_threadpool::ResizableRuntime
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    #[online_config(skip)]
     pub num_threads: usize,
     #[online_config(skip)]
     pub stream_channel_window: usize,
@@ -105,8 +104,7 @@ impl online_config::ConfigManager for ConfigManager {
 
 impl std::ops::Deref for ConfigManager {
     type Target = RwLock<Config>;
-
     fn deref(&self) -> &Self::Target {
-        self.0.as_ref()
+        self.config.as_ref()
     }
 }

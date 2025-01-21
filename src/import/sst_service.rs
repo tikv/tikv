@@ -39,11 +39,14 @@ use tikv_util::{
     config::ReadableSize,
     future::{create_stream_with_buffer, paired_future_callback},
     resizable_threadpool::{DeamonRuntimeHandle, ResizableRuntime},
-    sys::disk::{get_disk_status, DiskUsage},
+    sys::{
+        disk::{get_disk_status, DiskUsage},
+        thread::ThreadBuildWrapper,
+    },
     time::{Instant, Limiter},
     HandyRwLock,
 };
-use tokio::{runtime::Runtime, time::sleep};
+use tokio::time::sleep;
 use txn_types::{Key, WriteRef, WriteType};
 
 use super::{
@@ -355,13 +358,13 @@ impl<E: Engine> ImportSstService<E> {
         let handle = threads.handle();
         let threads_clone = Arc::new(Mutex::new(threads));
         if let LocalTablets::Singleton(tablet) = &tablets {
-            importer.start_switch_mode_check(threads.handle(), Some(tablet.clone()));
+            importer.start_switch_mode_check(&handle.clone(), Some(tablet.clone()));
         } else {
-            importer.start_switch_mode_check(threads.handle(), None);
+            importer.start_switch_mode_check(&handle.clone(), None);
         }
         let writer = raft_writer::ThrottledTlsEngineWriter::default();
         let gc_handle = writer.clone();
-        threads.spawn(async move {
+        handle.spawn(async move {
             while gc_handle.try_gc() {
                 tokio::time::sleep(WRITER_GC_INTERVAL).await;
             }
