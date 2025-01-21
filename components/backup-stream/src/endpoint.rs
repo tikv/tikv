@@ -33,7 +33,7 @@ use tikv::{
 use tikv_util::{
     box_err,
     config::ReadableDuration,
-    debug, defer, info,
+    debug, defer, error, info,
     memory::MemoryQuota,
     sys::thread::ThreadBuildWrapper,
     time::{Instant, Limiter},
@@ -221,6 +221,8 @@ where
 
     fn on_fatal_error_of_task(&self, task: &str, err: &Error) -> future![bool] {
         metrics::update_task_status(TaskStatus::Error, task);
+        error!(?err; "Task encounters fatal error, will pause this task."; "task" => %task,);
+
         let meta_cli = self.get_meta_client();
         let pdc = self.pd_client.clone();
         let store_id = self.store_id;
