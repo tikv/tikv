@@ -1368,7 +1368,7 @@ def ThreadCPU() -> RowPanel:
                     target(
                         expr=expr_sum_rate(
                             "tikv_thread_cpu_seconds_total",
-                            label_selectors=['name=~"sst_.*"'],
+                            label_selectors=['name=~"(sst_|impwkr_).*"'],
                         ),
                     ),
                 ],
