@@ -110,16 +110,19 @@ impl<EK: Engine, K: ConfigurableDb, L: LockManager> ConfigManager
                 }
             }
         }
-        if let Some(v) = change.remove("action_on_invalid_max_ts") {
-            let str_v: String = v.into();
-            let action: concurrency_manager::ActionOnInvalidMaxTs = str_v.try_into()?;
-            self.concurrency_manager
-                .set_action_on_invalid_max_ts(action);
+        if let Some(ConfigValue::Module(mut max_ts)) = change.remove("max_ts") {
+            if let Some(v) = max_ts.remove("action_on_invalid_update") {
+                let str_v: String = v.into();
+                let action: concurrency_manager::ActionOnInvalidMaxTs = str_v.try_into()?;
+                self.concurrency_manager
+                    .set_action_on_invalid_max_ts_update(action);
+            }
+            if let Some(v) = max_ts.remove("max_drift") {
+                let dur_v: ReadableDuration = v.into();
+                self.concurrency_manager.set_max_ts_drift_allowance(dur_v.0);
+            }
         }
-        if let Some(v) = change.remove("max_ts_drift_allowance") {
-            let dur_v: ReadableDuration = v.into();
-            self.concurrency_manager.set_max_ts_drift_allowance(dur_v.0);
-        }
+
         Ok(())
     }
 }
