@@ -89,10 +89,7 @@ pub fn configure_endpoint(loader: ConfigLoader, endpoint: &str) -> ConfigLoader 
     }
 }
 
-pub fn configure_region(
-    loader: ConfigLoader,
-    region: &str,
-) -> io::Result<ConfigLoader> {
+pub fn configure_region(loader: ConfigLoader, region: &str) -> io::Result<ConfigLoader> {
     if !region.is_empty() {
         Ok(loader.region(Region::new(region.to_owned())))
     } else {
