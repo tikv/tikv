@@ -70,6 +70,8 @@ fn test_clean_stale_peer() {
     pd_client.disable_default_operator();
 
     let region_id = cluster.run_conf_change();
+
+    // Manually set store 3 is offlined.
     fail::cfg("manually_set_store_offline", "return").unwrap();
     pd_client.must_add_peer(region_id, new_peer(2, 2));
     pd_client.must_add_peer(region_id, new_peer(3, 3));
@@ -87,6 +89,21 @@ fn test_clean_stale_peer() {
     let engine_path = Path::new(engine.get_engine_path());
     assert!(validate_data_files(engine_path));
     fail::remove("manually_set_store_offline");
+    // After the state is cleared, the store should be marked with
+    // NodeState::Serving. And after adding a new peer to store 3,
+    // all previous data should be synced to it.
+    cluster.must_send_store_heartbeat(3);
+    cluster.must_put(b"k10", b"v10");
+    let mut engine = cluster.get_engine(3);
+    let (key, value) = (b"k10", b"v10");
+    must_get_none(&mut engine, key);
+    pd_client.must_add_peer(region_id, new_peer(3, 4));
+    must_get_equal(&engine, key, value);
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    // Remove the peer 4.
+    pd_client.must_remove_peer(region_id, new_peer(3, 4));
+    sleep_ms(500);
+    must_get_none(&mut engine, key);
 }
 
 #[test_case(test_raftstore::new_node_cluster)]

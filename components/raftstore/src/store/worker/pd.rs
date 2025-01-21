@@ -1364,7 +1364,17 @@ where
                                     info!("store is offlined by pd");
                                 }
                             }
-                            _ => {}
+                            // As for NodeState::Preparing | Serving, if `is_offlined == true`,
+                            // it means the store has been re-added into the cluster and
+                            // the offline operation is terminated. Therefore, the state
+                            // `is_offlined` should be reset with `false`.
+                            _ => {
+                                let is_offlined = snap_mgr.is_offlined();
+                                if is_offlined {
+                                    snap_mgr.set_offline(false);
+                                    info!("store is remarked with serving state by pd");
+                                }
+                            }
                         }
                     }
                 }
