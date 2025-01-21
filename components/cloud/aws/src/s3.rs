@@ -252,7 +252,7 @@ impl S3Storage {
         let mut loader =
             aws_config::defaults(BehaviorVersion::latest()).credentials_provider(creds);
 
-        loader = util::configure_region(loader, &bucket_region, !bucket_endpoint.is_empty())?;
+        loader = util::configure_region(loader, &bucket_region)?;
         loader = util::configure_endpoint(loader, &bucket_endpoint);
         loader = loader.http_client(client);
         Ok(loader.load().await)
