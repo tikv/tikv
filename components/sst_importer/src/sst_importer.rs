@@ -1649,15 +1649,20 @@ mod tests {
     use tempfile::{Builder, TempDir};
     use test_sst_importer::*;
     use test_util::new_test_key_manager;
-    use tikv_util::{codec::stream_event::EventEncoder, stream::block_on_external_io, resizable_threadpool::ResizableRuntime};
+    use tikv_util::{
+        codec::stream_event::EventEncoder, resizable_threadpool::ResizableRuntime,
+        stream::block_on_external_io,
+    };
+    use tokio::{
+        io::{AsyncWrite, AsyncWriteExt, Result as TokioResult},
+        runtime::Runtime,
+    };
     use tokio_util::compat::{FuturesAsyncWriteCompatExt, TokioAsyncWriteCompatExt};
-    use tokio::{runtime::Runtime, io::{Result as TokioResult, AsyncWrite, AsyncWriteExt}};
     use txn_types::{Value, WriteType};
     use uuid::Uuid;
 
     use super::*;
     use crate::{import_file::ImportPath, *};
-
 
     static COUNTER: AtomicUsize = AtomicUsize::new(0);
 

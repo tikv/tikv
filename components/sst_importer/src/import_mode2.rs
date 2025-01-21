@@ -155,10 +155,9 @@ mod test {
     use std::thread;
 
     use tikv_util::{config::ReadableDuration, resizable_threadpool::ResizableRuntime};
+    use tokio::{io::Result as TokioResult, runtime::Runtime};
 
     use super::*;
-
-    use tokio::{io::Result as TokioResult, runtime::Runtime};
 
     fn create_tokio_runtime(_: usize, _: &str) -> TokioResult<Runtime> {
         tokio::runtime::Builder::new_multi_thread()
