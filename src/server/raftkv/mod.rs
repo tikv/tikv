@@ -840,7 +840,7 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                 .concurrency_manager
                 .update_max_ts(start_ts, || format!("read_index-{}", start_ts))
             {
-                error!("failed to update max ts in concurrency manager"; "err" => ?e);
+                error!("failed to update max_ts in concurrency manager"; "err" => ?e);
             }
             for range in request.mut_key_ranges().iter_mut() {
                 let key_bound = |key: Vec<u8>| {
