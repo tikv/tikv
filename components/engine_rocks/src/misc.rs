@@ -91,8 +91,8 @@ impl RocksEngine {
             // IngestExternalFileOptions.allow_write = true`. Enabling it in the
             // future could minimize the impact on foreground performance.
             // However, it is not enabled now due to the following reasons:
-            // 1. destroy-peer ingest might be deprecated in favor of https://github.com/tikv/tikv/pull/18040.
-            // 2. `clean_overlap_range` is not very common.
+            //   1. The delete by ingest caused by destroying peer will be deprecated after https://github.com/tikv/tikv/pull/18040.
+            //   2. `clean_overlap_range` is not very common.
             self.ingest_external_file_cf(cf, &[sst_path.as_str()], None)?;
         } else {
             let mut wb = self.write_batch();

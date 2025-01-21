@@ -21,7 +21,7 @@ impl ImportExt for RocksEngine {
         files: &[&str],
         range: Option<Range<'_>>,
     ) -> Result<()> {
-        // Acquire latch to prevent conflicts with compaction-filter operations
+        // Acquire latch to prevent concurrency with compaction-filter operations
         // when using RocksDB IngestExternalFileOptions.allow_write = true.
         let _region_inject_latch_guard = range.as_ref().map(|r| {
             self.ingest_latch

@@ -580,7 +580,7 @@ impl WriteCompactionFilter {
         if self.write_batch.count() > DEFAULT_DELETE_BATCH_COUNT || force {
             let err = match &mut self.write_batch.batch {
                 Either::Left(wb) => {
-                    // Acquire latch to prevent conflicts with ingestion operations
+                    // Acquire latch to prevent concurrency with ingestion operations
                     // using RocksDB IngestExternalFileOptions.allow_write = true.
                     let _region_inject_latch_guard = match self.engine.as_ref() {
                         Some(engine) => {

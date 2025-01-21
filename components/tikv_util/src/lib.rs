@@ -54,6 +54,7 @@ pub mod memory;
 pub mod metrics;
 pub mod mpsc;
 pub mod quota_limiter;
+pub mod range_latch;
 pub mod resizable_threadpool;
 pub mod resource_control;
 pub mod smoother;
@@ -66,8 +67,6 @@ pub mod timer;
 pub mod topn;
 pub mod worker;
 pub mod yatp_pool;
-
-pub mod range_latch;
 
 static PANIC_WHEN_UNEXPECTED_KEY_OR_DATA: AtomicBool = AtomicBool::new(false);
 

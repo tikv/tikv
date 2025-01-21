@@ -26,15 +26,14 @@ use tikv_util::HandyRwLock;
 //
 // This function creates 3 regions and simulates some key-value writes with
 // timestamps. Specifically, it splits the keyspace into the following regions:
-// - Region 1: Covers the range `[-infinite, zb)`, where key `za` has values
+// - Region a: Covers the range `[-infinite, zb)`, where key `za` has values
 //   written at timestamps 101 and 103.
-// - Region 2: Covers the range `[zb, zc)`, where key `zb` has values written at
+// - Region b: Covers the range `[zb, zc)`, where key `zb` has values written at
 //   timestamps 101 and 103.
-// - Region 3: Covers the range `[zc, +infinite)`.
+// - Region c: Covers the range `[zc, +infinite)`.
 //
 // The function also flushes the data to disk for debugging purposes, allowing
-// tools like `tikv-ctl` to inspect the on-disk data. This ensures the data is
-// ready for compaction filter tests.
+// tools like `tikv-ctl` to inspect the on-disk data.
 fn prepare_data_used_by_compaction_filter(
     client: &TikvClient,
     ctx: &Context,
@@ -62,8 +61,9 @@ fn prepare_data_used_by_compaction_filter(
         }
     }
 
-    // Region C needs to have data to trigger apply snapshot, but this data will not
-    // trigger the compaction filter.
+    // Region c needs to contain data to trigger the apply-snapshot process.
+    // However, this data will not trigger the compaction filter, resulting in
+    // only one version being created.
     let pk = b"c";
     let muts = vec![new_mutation(Op::Put, pk.as_slice(), &large_value)];
     must_kv_prewrite(client, ctx.clone(), muts, pk.to_vec(), 101);
@@ -145,17 +145,8 @@ fn verify_completed(rx: &Receiver<bool>) {
     assert_eq!(rx.recv_timeout(Duration::from_millis(500)), Ok(true));
 }
 
-// Tests the behavior of the compaction filter GC when it is blocked by an
-// ongoing snapshot ingestion.
-//
-// Overview:
-// This test simulates a scenario where a snapshot ingestion process acquires a
-// range latch and blocks the compaction filter GC from proceeding. It
-// validates the following behaviors:
-// 1. When a snapshot is in progress and holding the range latch, the compaction
-//    filter GC remains pending and cannot proceed to the next phase.
-// 2. Once the snapshot process releases the range latch, the compaction filter
-//    GC can acquire the latch and complete its operation.
+// Test whether apply-snapshot ingestion blocks the compaction filter based on
+// whether they have overlapping keys.
 //
 // Steps:
 // - Prepare 3 regions with test data and ensure the environment is set up.
@@ -169,7 +160,7 @@ fn compaction_filter_gc_blocked_by_ingest_test(region_to_migrate: &[u8]) {
     let (cluster, region, peer, pd_client) = setup_cluster(region_to_migrate);
     let region_id = region.id;
 
-    // Start and pause the apply snapshot process.
+    // Start and pause the apply-snapshot process.
     fail::cfg("after_apply_snapshot_ingest_latch_acquired", "pause").unwrap();
     let apply_snap_handle = start_region_migrate(region_id, pd_client, peer.clone());
 
@@ -185,7 +176,7 @@ fn compaction_filter_gc_blocked_by_ingest_test(region_to_migrate: &[u8]) {
     })
     .unwrap();
 
-    // Start GC, which might be blocked by the apply snapshot thread, depending
+    // Start GC, which might be blocked by the apply-snapshot thread, depending
     // on whether the ranges overlap.
     let gc_handle = start_compaction_filter(&cluster, peer.store_id);
 
@@ -193,7 +184,7 @@ fn compaction_filter_gc_blocked_by_ingest_test(region_to_migrate: &[u8]) {
         // Other regions overlap, so the GC thread will be blocked.
         verify_pending(&rx, 500);
     } else {
-        // Region "c" does not overlap with the snapshot process.
+        // Region c does not overlap with the snapshot process.
         verify_completed(&rx);
         fail::remove("after_apply_snapshot_ingest_latch_acquired");
         gc_handle.join().expect("GC thread panicked");
@@ -251,7 +242,7 @@ fn compaction_filter_gc_blocks_ingest_test(region_to_migrate: &[u8]) {
     })
     .unwrap();
 
-    // Start the apply snapshot thread, which might be blocked by the GC thread,
+    // Start the apply-snapshot thread, which might be blocked by the GC thread,
     // depending on whether the ranges overlap.
     let region_id = region.id;
     let apply_snap_handle = start_region_migrate(region_id, pd_client, peer.clone());
@@ -261,13 +252,13 @@ fn compaction_filter_gc_blocks_ingest_test(region_to_migrate: &[u8]) {
         // Other regions overlap, so the snapshot process will be blocked.
         verify_pending(&rx, 500);
     } else {
-        // Region "c" does not overlap with the GC thread.
+        // Region c does not overlap with the GC thread.
         verify_completed(&rx);
         fail::remove("compaction_filter_ingest_latch_acquired_flush");
         gc_handle.join().expect("GC thread panicked");
         apply_snap_handle
             .join()
-            .expect("apply snapshot thread panicked");
+            .expect("apply-snapshot thread panicked");
         fail::remove("after_apply_snapshot_ingest_latch_acquired");
         return;
     }
@@ -276,7 +267,7 @@ fn compaction_filter_gc_blocks_ingest_test(region_to_migrate: &[u8]) {
     fail::remove("compaction_filter_ingest_latch_acquired_flush");
     // Wait for the GC thread to release the latch.
     sleep_ms(500);
-    // The apply snapshot thread can continue after the GC thread releases the
+    // The apply-snapshot thread can continue after the GC thread releases the
     // latch.
     verify_completed(&rx);
     gc_handle.join().expect("GC thread panicked");
@@ -303,18 +294,18 @@ fn test_compaction_filter_gc_blocks_ingest_no_overlap() {
     compaction_filter_gc_blocks_ingest_test(b"c");
 }
 
-// This test is designed to verify that when a region is migrated away and then
-// migrated back, the destroy peer task must complete first.
+// This test verifies that when a region is migrated out and then migrated back,
+// the destroy-peer task must complete before the apply-snapshot task.
 //
-// Currently, since  the region worker operates on a single thread, when a
-// region is migrated away and back again, the destroy peer task is enqueued
-// before the apply snapshot task, ensuring sequential execution without
+// Currently, since the region worker operates on a single thread, when a
+// region is migrated out and back again, the destroy-peer task is enqueued
+// before the apply-snapshot task, ensuring sequential execution without
 // concurrency.
 //
-// As the apply snapshot ingestion uses RocksDB
+// As the apply-snapshot ingestion uses RocksDB
 // IngestExternalFileOption.allow_write = true, concurrent writes are not
-// expected during apply snapshot ingestion. Therefore, this test ensures that
-// there are no concurrent writes from destroy peer during this process.
+// expected during apply-snapshot ingestion. Therefore, this test ensures that
+// there are no concurrent writes from destroy-peer during this process.
 #[test]
 fn test_apply_snapshot_must_wait_destroy_peer() {
     let (mut cluster, ..) = must_new_cluster_mul(3);
@@ -327,7 +318,7 @@ fn test_apply_snapshot_must_wait_destroy_peer() {
     let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
-    // Start the destroy peer process, which will pause at
+    // Start the destroy-peer process, which will pause at
     // before_clean_stale_ranges.
     let pd_client_clone1 = pd_client.clone();
     let peer_clone1 = peer.clone();
@@ -335,7 +326,7 @@ fn test_apply_snapshot_must_wait_destroy_peer() {
         fail::cfg("before_clean_stale_ranges", "pause").unwrap();
         pd_client_clone1.must_remove_peer(region_id, peer_clone1);
     });
-    // Wait for the destroy peer process to pause.
+    // Wait for the destroy-peer process to pause.
     sleep_ms(500);
 
     let (tx, rx) = sync_channel(0);
@@ -350,26 +341,27 @@ fn test_apply_snapshot_must_wait_destroy_peer() {
         pd_client_clone2.must_add_peer(region_id, peer_clone2);
     });
 
-    // Verify that apply snapshot is pending.
+    // Verify that apply-snapshot is pending.
     assert_eq!(
         rx.recv_timeout(Duration::from_millis(500)),
         Err(RecvTimeoutError::Timeout)
     );
 
-    // Resume the destroy peer process.
+    // Resume the destroy-peer process.
     fail::remove("before_clean_stale_ranges");
-    // Verify that apply snapshot is finished
+    // Verify that apply-snapshot is finished
     assert_eq!(rx.recv_timeout(Duration::from_millis(1000)), Ok(true));
     destroy_handle.join().expect("destroy handle panicked");
     apply_handle.join().expect("apply handle panicked");
 }
 
-// This test ensures that the destroy peer process will wait for the ongoing
+// This test ensures that the destroy-peer process will wait for the ongoing
 // foreground writes of the same region to finish.
+//
 // Since test_apply_snapshot_must_wait_destroy_peer() has already verified that
-// when a region is migrated away and then back, the apply snapshot process will
-// wait for the destroy peer process to complete first, it can be considered
-// that apply snapshot will also wait for the ongoing foreground writes to
+// when a region is migrated out and then back, the apply-snapshot process will
+// wait for the destroy-peer process to complete first, it can be considered
+// that apply-snapshot will also wait for the ongoing foreground writes to
 // finish.
 #[test]
 fn test_destroy_peer_must_wait_ongoing_foreground_writes() {
@@ -393,7 +385,7 @@ fn test_destroy_peer_must_wait_ongoing_foreground_writes() {
     })
     .unwrap();
 
-    // Start the destroy peer process, which will pause at
+    // Start the destroy-peer process, which will pause at
     // before_clean_stale_ranges.
     let pd_client_clone1 = pd_client.clone();
     let peer_clone1 = peer.clone();
@@ -401,7 +393,7 @@ fn test_destroy_peer_must_wait_ongoing_foreground_writes() {
         pd_client_clone1.must_remove_peer(region_id, peer_clone1);
     });
 
-    // Verify that apply snapshot is pending.
+    // Verify that apply-snapshot is pending.
     assert_eq!(
         rx.recv_timeout(Duration::from_millis(500)),
         Err(RecvTimeoutError::Timeout)
@@ -409,7 +401,7 @@ fn test_destroy_peer_must_wait_ongoing_foreground_writes() {
 
     // Resume the foreground writes.
     fail::remove("on_apply_write_cmd");
-    // Verify that apply snapshot is finished
+    // Verify that apply-snapshot is finished
     assert_eq!(rx.recv_timeout(Duration::from_millis(500)), Ok(true));
     destroy_handle.join().expect("destroy thread panicked");
 }

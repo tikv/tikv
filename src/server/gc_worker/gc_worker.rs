@@ -1056,7 +1056,7 @@ impl<E: Engine> GcRunnerCore<E> {
             } => {
                 let smallest_key = wb.smallest_key.as_ref().unwrap().as_encoded().as_slice();
                 let largest_key = wb.largest_key.as_ref().unwrap().as_encoded().as_slice();
-                // Acquire latch to prevent conflicts with ingestion operations
+                // Acquire latch to prevent concurrency with ingestion operations
                 // using RocksDB IngestExternalFileOptions.allow_write = true.
                 let _ingest_latch_guard =
                     self.engine
@@ -2925,8 +2925,8 @@ mod tests {
         assert_eq!(gc_worker.get_worker_thread_count(), 2);
     }
 
-    // This test verifies that the ingest latch functions correctly in the
-    // GcOrphanVersions task.
+    // This test verifies that the GcOrphanVersions task is blocked by concurrent
+    // ingest operations.
     #[test]
     fn test_gc_orphan_version_blocked_by_ingest() {
         let store_id = 1;

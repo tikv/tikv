@@ -149,6 +149,8 @@ pub struct RocksEngine {
     support_multi_batch_write: bool,
     #[cfg(feature = "trace-lifetime")]
     _id: trace::TabletTraceId,
+    // Used to ensure mutual exclusivity between compaction filter writes and the SST ingestion
+    // operation.
     pub ingest_latch: Arc<RangeLatch>,
 }
 

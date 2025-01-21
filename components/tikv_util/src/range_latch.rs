@@ -11,20 +11,30 @@ use std::{
 /// Currently used to ensure mutual exclusion between compaction filter and
 /// ingest SST operations. When using RocksDB
 /// IngestExternalFileOptions.allow_write = true for ingest SST, concurrent
-/// writes must not exist during ingestion. However, the compaction filter
-/// might write to the default column family concurrently, so it must be made
-/// mutually exclusive with the ingest latch.
+/// overlapping writes must be avoided during ingestion to ensure
+/// sequence number consistency across LSM-tree levels in RocksDB. However, the
+/// compaction filter might concurrently write overlapping keys to the default
+/// column family. For example, if a region is migrated out and then migrated
+/// back, it might cause concurrent overlaps with the apply-ingest process.
+/// Therefore, it must be made mutually exclusive with the ingest latch. latch.
 //
 /// This implementation is designed for scenarios with low concurrency.
-/// In the current scenario, compaction filter threads are limited by
-/// `RocksDB.max_background_jobs`, and region worker threads typically run one
-/// at a time. Due to this low level of concurrency, the overhead of range
-/// locking is minimal, and potential conflicts are rare.
+/// In the current scenario, the number of compaction filter threads are limited
+/// by `RocksDB.max_background_jobs`, and the region worker, which handles
+/// apply-ingest or delete-ingest, operates as a single thread. Due
+/// to this low level of concurrency, the overhead of range locking is minimal,
+/// and potential conflicts are rare.
 ///
-/// Additionally, both the compaction filter and ingest SST operations that
+/// NOTE: Both the compaction filter and ingest SST operations that
 /// use this `RangeLatch` enforce self-mutual exclusion. While this might
 /// appear somewhat overkill, its impact on performance is minimal due to
 /// the system's low concurrency and the brief duration of lock holding.
+///
+/// NOTE: Why do we use a range-latch instead of a region-id latch? This is
+/// because region-id is mutable and there is currently no mechanism to notify
+/// the compaction filter in real time. For example, if a region is migrated
+/// out, split, and then migrated back, the compaction filter might hold the old
+/// region-id while the apply-ingest process holds the new region-id.
 #[derive(Debug, Default)]
 pub struct RangeLatch {
     /// A BTreeMap storing active range locks.
@@ -48,23 +58,20 @@ impl RangeLatch {
     /// no overlapping ranges already latched. If overlaps exist, the
     /// function waits until those latches are released before proceeding.
     ///
-    /// Overlaps are determined by iterating through all active latches stored
-    /// in `range_latches` and checking whether the specified range
-    /// conflicts with any of them. While this approach may seem
-    /// inefficient, the overhead of linear iteration is negligible in practice
-    /// due to the low concurrency of the users.
-    ///
     /// Live-locks can occur in this implementation. For example, a thread
     /// attempting to acquire a latch for the range `[a, z)` might encounter
     /// that `[a, b)` and `[b, c)` are already latched by other threads. The
-    /// thread will first wait for `[a, b)` to be released, then proceed to wait
-    /// for `[b, c)`. However, during the wait for `[b, c)` to be released,
-    /// another thread might acquire `[a, b)` again, forcing the original
-    /// thread to wait for `[a, b)` once more. This process could repeat
-    /// indefinitely if threads continuously "jump the queue." Despite this,
+    /// thread will first wait for [a, b) to be released and successfully
+    /// acquire it. However, while waiting for [b, c) to be released,
+    /// another thread might acquire [a, b) again, forcing the original thread
+    /// to wait for [a, b) once more. This process could repeat
+    /// indefinitely if threads continuously "jump the queue.". Fortunately,
     /// such live-locks are unlikely to persist for long due to the user's low
     /// concurrency, as conflicting latches are eventually released, allowing
     /// threads to make progress naturally.
+    ///
+    /// Deadlocks cannot occur in the current scenario, as each caller thread
+    /// holds at most one lock at a time.
     pub fn acquire(self: &Arc<Self>, start_key: Vec<u8>, end_key: Vec<u8>) -> RangeLatchGuard {
         loop {
             let mut range_latches = self.range_latches.lock().unwrap();
