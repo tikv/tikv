@@ -61,7 +61,6 @@ impl AwsKms {
         loader = util::configure_region(
             loader,
             &config.location.region,
-            !config.location.endpoint.is_empty(),
         )?;
 
         loader = util::configure_endpoint(loader, &config.location.endpoint);
