@@ -94,16 +94,16 @@ fn test_clean_stale_peer() {
     // all previous data should be synced to it.
     cluster.must_send_store_heartbeat(3);
     cluster.must_put(b"k10", b"v10");
-    let mut engine = cluster.get_engine(3);
+    let engine = cluster.get_engine(3);
     let (key, value) = (b"k10", b"v10");
-    must_get_none(&mut engine, key);
+    must_get_none(&engine, key);
     pd_client.must_add_peer(region_id, new_peer(3, 4));
     must_get_equal(&engine, key, value);
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
     // Remove the peer 4.
     pd_client.must_remove_peer(region_id, new_peer(3, 4));
     sleep_ms(500);
-    must_get_none(&mut engine, key);
+    must_get_none(&engine, key);
 }
 
 #[test_case(test_raftstore::new_node_cluster)]
