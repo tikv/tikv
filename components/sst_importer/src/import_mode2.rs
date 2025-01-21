@@ -154,11 +154,11 @@ pub fn range_overlaps(range1: &HashRange, range2: &Range) -> bool {
 mod test {
     use std::thread;
 
-    use tikv_util::config::ReadableDuration;
+    use tikv_util::{config::ReadableDuration, resizable_threadpool::ResizableRuntime};
 
     use super::*;
 
-    type TokioResult<T> = std::io::Result<T>;
+    use tokio::{io::Result as TokioResult, runtime::Runtime};
 
     fn create_tokio_runtime(_: usize, _: &str) -> TokioResult<Runtime> {
         tokio::runtime::Builder::new_multi_thread()
@@ -304,7 +304,7 @@ mod test {
         assert!(switcher.region_in_import_mode(&region2));
         assert!(switcher.region_in_import_mode(&region3));
 
-        switcher.start(threads.handle());
+        switcher.start_resizable_threads(&handle.clone());
 
         thread::sleep(Duration::from_millis(400));
         // renew the timeout of key_range2
