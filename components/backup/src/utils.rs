@@ -1,16 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
-
 use api_version::{dispatch_api_version, ApiV2, KeyMode, KvFormat};
 use file_system::IoType;
-use futures::Future;
 use kvproto::kvrpcpb::ApiVersion;
 use tikv_util::{error, sys::thread::ThreadBuildWrapper};
 use tokio::{io::Result as TokioResult, runtime::Runtime};
 use txn_types::{Key, TimeStamp};
 
-use crate::{metrics::*, Result};
+use crate::Result;
 
 // BACKUP_V1_TO_V2_TS is used as causal timestamp to backup RawKV api version
 // V1/V1Ttl data and save to V2 format. Use 1 other than 0 because 0 is not a
