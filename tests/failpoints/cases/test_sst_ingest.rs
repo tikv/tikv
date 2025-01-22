@@ -26,11 +26,11 @@ use tikv_util::HandyRwLock;
 //
 // This function creates 3 regions and simulates some key-value writes with
 // timestamps. Specifically, it splits the keyspace into the following regions:
-// - Region a: Covers the range `[-infinite, zb)`, where key `za` has values
+// - Region A: Covers the range `[-infinite, zb)`, where key `za` has values
 //   written at timestamps 101 and 103.
-// - Region b: Covers the range `[zb, zc)`, where key `zb` has values written at
+// - Region B: Covers the range `[zb, zc)`, where key `zb` has values written at
 //   timestamps 101 and 103.
-// - Region c: Covers the range `[zc, +infinite)`.
+// - Region C: Covers the range `[zc, +infinite)`.
 //
 // The function also flushes the data to disk for debugging purposes, allowing
 // tools like `tikv-ctl` to inspect the on-disk data.
@@ -117,9 +117,10 @@ fn start_region_migrate(
     peer: Peer,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
+        // Force SST ingestion instead of using RocksDB writes.
         fail::cfg("apply_cf_without_ingest_false", "return").unwrap();
+        // Disabled for scenarios that are not relevant.
         fail::cfg("before_clean_stale_ranges", "return").unwrap();
-        fail::cfg("before_clean_overlap_ranges", "return").unwrap();
 
         pd_client.must_remove_peer(region_id, peer.clone());
         pd_client.must_add_peer(region_id, peer.clone());
@@ -145,20 +146,28 @@ fn verify_completed(rx: &Receiver<bool>) {
     assert_eq!(rx.recv_timeout(Duration::from_millis(500)), Ok(true));
 }
 
-// Test whether apply-snapshot ingestion blocks the compaction filter based on
+// Test whether ingestion blocks the compaction filter based on
 // whether they have overlapping keys.
 //
 // Steps:
 // - Prepare 3 regions with test data and ensure the environment is set up.
-// - Simulate a snapshot ingestion process that acquires the range latch and
-//   pauses.
+// - Simulate a apply-snapshot process that acquires the range latch and pauses.
 // - Start the compaction filter GC and verify that it cannot acquire the latch
-//   while the snapshot process holds it.
-// - Resume the snapshot ingestion process and verify that the compaction filter
-//   GC can acquire the latch and complete its operation.
-fn compaction_filter_gc_blocked_by_ingest_test(region_to_migrate: &[u8]) {
+//   while the apply-snapshot process holds it.
+// - Resume the apply-snapshot ingestion process and verify that the compaction
+//   filter GC can acquire the latch and complete its operation.
+fn blocked_by_ingest_test(region_to_migrate: &[u8], ingest_type: &str) {
     let (cluster, region, peer, pd_client) = setup_cluster(region_to_migrate);
     let region_id = region.id;
+
+    // If testing `clean_overlap_ingest`, skip `apply_snapshot`; otherwise, skip
+    // `clean_overlap_ingest`.
+    if ingest_type == "clean_overlap_ingest" {
+        fail::cfg("apply_snap_cleanup_range", "return").unwrap();
+        fail::cfg("manually_set_max_delete_count_by_key", "return").unwrap();
+    } else {
+        fail::cfg("before_clean_overlap_ranges", "return").unwrap();
+    }
 
     // Start and pause the apply-snapshot process.
     fail::cfg("after_apply_snapshot_ingest_latch_acquired", "pause").unwrap();
@@ -208,25 +217,55 @@ fn compaction_filter_gc_blocked_by_ingest_test(region_to_migrate: &[u8]) {
     fail::remove("compaction_filter_ingest_latch_acquired_flush");
 }
 
+// Test Region A: Verify that the compaction filter is blocked because it
+// overlaps with the region's data.
 #[test]
-fn test_compaction_filter_gc_blocked_by_ingest_basic() {
-    compaction_filter_gc_blocked_by_ingest_test(b"a");
+fn test_compaction_filter_blocked_by_snapshot_ingest_basic() {
+    blocked_by_ingest_test(b"a", "snapshot_ingest");
 }
 
-// Test that the `end_key` used by the compaction filter matches the
-// `Region.start_key`.
+// Test Region B: Verify that the compaction filter is blocked because its
+// `end_key` matches the `Region.start_key` and overlaps with this region's
+// data.
 #[test]
-fn test_compaction_filter_gc_blocked_by_ingest_range_boundaries() {
-    compaction_filter_gc_blocked_by_ingest_test(b"b");
+fn test_compaction_filter_blocked_by_snapshot_ingest_boundary() {
+    blocked_by_ingest_test(b"b", "snapshot_ingest");
 }
 
+// Test Region C: Verify that the compaction filter is not blocked because it
+// does not overlap with this region's data.
 #[test]
-fn test_compaction_filter_gc_blocked_by_ingest_no_overlap() {
-    compaction_filter_gc_blocked_by_ingest_test(b"c");
+fn test_compaction_filter_not_blocked_by_snapshot_ingest() {
+    blocked_by_ingest_test(b"c", "snapshot_ingest");
 }
 
-// Similar as test_compaction_filter_gc_blocked_by_ingest.
-fn compaction_filter_gc_blocks_ingest_test(region_to_migrate: &[u8]) {
+// Similar to `test_compaction_filter_blocked_by_snapshot_ingest_basic`, but
+// tests the `clean_overlap_range`.
+#[test]
+fn test_compaction_filter_blocked_by_clean_overlap_ingest_basic() {
+    blocked_by_ingest_test(b"a", "clean_overlap_ingest");
+}
+
+// Similar to `test_compaction_filter_blocked_by_snapshot_ingest_boundary`, but
+// tests the `clean_overlap_range`.
+#[test]
+fn test_compaction_filter_blocked_by_clean_overlap_ingest_boundary() {
+    blocked_by_ingest_test(b"b", "clean_overlap_ingest");
+}
+
+// Similar to `test_compaction_filter_not_blocked_by_snapshot_ingest`, but
+// tests the `clean_overlap_range`.
+#[test]
+fn test_compaction_filter_not_blocked_by_clean_overlap_ingest() {
+    blocked_by_ingest_test(b"c", "clean_overlap_ingest");
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// The following tests is similar to above tests, but tests the reverse scenario
+// where compaction filter blocks ingestion.
+///////////////////////////////////////////////////////////////////////////////
+
+fn blocks_ingest_test(region_to_migrate: &[u8], ingest_type: &str) {
     let (cluster, region, peer, pd_client) = setup_cluster(region_to_migrate);
 
     // Start and pause the GC thread.
@@ -242,9 +281,18 @@ fn compaction_filter_gc_blocks_ingest_test(region_to_migrate: &[u8]) {
     })
     .unwrap();
 
+    let region_id = region.id;
+
+    // If testing `clean_overlap_ingest`, skip `apply_snapshot`; otherwise, skip
+    // `clean_overlap_ingest`.
+    if ingest_type == "clean_overlap_ingest" {
+        fail::cfg("apply_snap_cleanup_range", "return").unwrap();
+        fail::cfg("manually_set_max_delete_count_by_key", "return").unwrap();
+    } else {
+        fail::cfg("before_clean_overlap_ranges", "return").unwrap();
+    }
     // Start the apply-snapshot thread, which might be blocked by the GC thread,
     // depending on whether the ranges overlap.
-    let region_id = region.id;
     let apply_snap_handle = start_region_migrate(region_id, pd_client, peer.clone());
     // Wait for snapshot to acquire the latch.
     sleep_ms(500);
@@ -278,20 +326,33 @@ fn compaction_filter_gc_blocks_ingest_test(region_to_migrate: &[u8]) {
 }
 
 #[test]
-fn test_compaction_filter_gc_blocks_ingest() {
-    compaction_filter_gc_blocks_ingest_test(b"a");
-}
-
-// Test that the `end_key` used by the compaction filter matches the
-// `Region.start_key`.
-#[test]
-fn test_compaction_filter_gc_blocks_ingest_range_boundaries() {
-    compaction_filter_gc_blocks_ingest_test(b"b");
+fn test_compaction_filter_blocks_snapshot_ingest_basic() {
+    blocks_ingest_test(b"a", "snapshot_ingest");
 }
 
 #[test]
-fn test_compaction_filter_gc_blocks_ingest_no_overlap() {
-    compaction_filter_gc_blocks_ingest_test(b"c");
+fn test_compaction_filter_blocks_snapshot_ingest_boundary() {
+    blocks_ingest_test(b"b", "snapshot_ingest");
+}
+
+#[test]
+fn test_compaction_filter_not_blocks_snapshot_ingest() {
+    blocks_ingest_test(b"c", "snapshot_ingest");
+}
+
+#[test]
+fn test_compaction_filter_blocks_clean_overlap_ingest_basic() {
+    blocks_ingest_test(b"a", "clean_overlap_ingest");
+}
+
+#[test]
+fn test_compaction_filter_blocks_clean_overlap_ingest_boundary() {
+    blocks_ingest_test(b"b", "clean_overlap_ingest");
+}
+
+#[test]
+fn test_compaction_filter_not_blocks_clean_overlap_ingest() {
+    blocks_ingest_test(b"c", "clean_overlap_ingest");
 }
 
 // This test verifies that when a region is migrated out and then migrated back,
