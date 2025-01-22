@@ -22,7 +22,7 @@ use tokio::sync::mpsc;
 
 use crate::{
     memory_controller::MemoryController,
-    region_manager::{AsyncFnOnce, CopRequestsSMA},
+    region_manager::{AsyncFnOnce, CopRequestsSma},
     BackgroundTask, InMemoryEngineConfig,
 };
 
@@ -115,7 +115,7 @@ impl RegionStatsManager {
     /// requests and next + prev in descending order.
     fn get_cached_region_stats(
         &self,
-        cached_regions: &HashMap<u64, Arc<StdMutex<CopRequestsSMA>>>,
+        cached_regions: &HashMap<u64, Arc<StdMutex<CopRequestsSma>>>,
     ) -> Vec<CachedRegionStat> {
         match self
             .info_provider
@@ -148,7 +148,7 @@ impl RegionStatsManager {
     pub fn collect_regions_to_load_and_evict(
         &self,
         current_region_count: usize,
-        cached_regions: HashMap<u64, Arc<StdMutex<CopRequestsSMA>>>,
+        cached_regions: HashMap<u64, Arc<StdMutex<CopRequestsSma>>>,
         memory_controller: &MemoryController,
     ) -> (Vec<Region>, Vec<Region>) {
         let cached_region_stats = self.get_cached_region_stats(&cached_regions);
@@ -212,7 +212,7 @@ impl RegionStatsManager {
             );
         }
 
-        let reach_stop_load = memory_controller.reached_stop_load_threshold();
+        let has_reached_stop_load = memory_controller.reached_stop_load_threshold();
         let mut regions_loaded = self.region_loaded_at.write().unwrap();
         // Evict at most 1/10 of the regions.
         let max_count_to_evict = usize::max(1, cached_region_stats.len() / 10);
@@ -231,7 +231,6 @@ impl RegionStatsManager {
         }
         let avg_next_prev = total_next_prev / cached_region_stats.len();
         let avg_cop_requests = total_cop_requests / cached_region_stats.len();
-        let is_memory_low = memory_controller.reached_stop_load_threshold();
 
         let now = Instant::now();
         let mut region_to_evict = Vec::with_capacity(max_count_to_evict);
@@ -249,13 +248,16 @@ impl RegionStatsManager {
                 let is_cop_requests_low = crs.sma_cop_requests_avg
                     <= avg_cop_requests / SMA_COP_REQUEST_AVG_FILTER_FACTOR;
 
+                // Reliable means the region has been loaded for a while (
+                // by default 30 minutes), and the SMA coprocessor requests is
+                // stable.
                 let is_cop_requests_reliable =
                     crs.sma_cop_requests_count > SMA_COP_REQUEST_COUNT_FILTER;
 
                 let is_iterated_count_low = crs.stat.cop_detail.iterated_count()
                     <= avg_next_prev / ITERATED_COUNT_FILTER_FACTOR;
 
-                is_memory_low
+                has_reached_stop_load
                     && is_cop_requests_reliable
                     && is_cop_requests_low
                     && is_iterated_count_low
@@ -298,7 +300,7 @@ impl RegionStatsManager {
             .collect();
         info!(
             "ime collect regions to load and evict";
-            "reached_stop_limit" => reach_stop_load,
+            "reached_stop_limit" => has_reached_stop_load,
             "load" => ?debug_load,
             "evicts" => ?debug_evict,
             "avg_next_prev" => avg_next_prev,
@@ -314,7 +316,7 @@ impl RegionStatsManager {
         &self,
         mut evict_region: F,
         delete_range_scheduler: &Scheduler<BackgroundTask>,
-        cached_regions: HashMap<u64, Arc<StdMutex<CopRequestsSMA>>>,
+        cached_regions: HashMap<u64, Arc<StdMutex<CopRequestsSma>>>,
         memory_controller: &MemoryController,
     ) where
         F: FnMut(
@@ -426,7 +428,7 @@ struct CachedRegionStat {
 /// amplification at least.
 fn sort_cached_region_stats(
     region_stats: Vec<(Region, RegionStat)>,
-    cached_regions: &HashMap<u64, Arc<StdMutex<CopRequestsSMA>>>,
+    cached_regions: &HashMap<u64, Arc<StdMutex<CopRequestsSma>>>,
 ) -> Vec<CachedRegionStat> {
     // update the moving average of the coprocessor requests.
     let mut crss = Vec::with_capacity(region_stats.len());
@@ -541,10 +543,10 @@ pub mod tests {
 
     fn new_cached_regions(
         cached_region_ids: Vec<u64>,
-    ) -> HashMap<u64, Arc<StdMutex<CopRequestsSMA>>> {
+    ) -> HashMap<u64, Arc<StdMutex<CopRequestsSma>>> {
         let mut cached_regions = HashMap::default();
         for id in cached_region_ids {
-            cached_regions.insert(id, Arc::new(StdMutex::new(CopRequestsSMA::default())));
+            cached_regions.insert(id, Arc::new(StdMutex::new(CopRequestsSma::default())));
         }
         cached_regions
     }
@@ -819,7 +821,7 @@ pub mod tests {
         for (regions_stat, expected_order) in cases {
             let mut cached_regions = HashMap::default();
             for (r, _) in &regions_stat {
-                cached_regions.insert(r.id, Arc::new(StdMutex::new(CopRequestsSMA::default())));
+                cached_regions.insert(r.id, Arc::new(StdMutex::new(CopRequestsSma::default())));
             }
             let sorted = sort_cached_region_stats(regions_stat, &cached_regions);
             let order: Vec<_> = sorted.iter().map(|crs| crs.region.id).collect();

@@ -35,6 +35,27 @@ where
     total: T,
 }
 
+impl<T, const CAP: usize, const STALE_DUR: u64, const MIN_TIME_SPAN: u64> Clone
+    for Smoother<T, CAP, STALE_DUR, MIN_TIME_SPAN>
+where
+    T: Default
+        + Add<Output = T>
+        + Sub<Output = T>
+        + AddAssign
+        + SubAssign
+        + PartialOrd
+        + AsPrimitive<f64>
+        + FromPrimitive
+        + Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            records: self.records.clone(),
+            total: self.total.clone(),
+        }
+    }
+}
+
 impl<T, const CAP: usize, const STALE_DUR: u64, const MIN_TIME_SPAN: u64> Default
     for Smoother<T, CAP, STALE_DUR, MIN_TIME_SPAN>
 where
