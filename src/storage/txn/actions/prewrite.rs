@@ -427,9 +427,9 @@ impl<'a> PrewriteMutation<'a> {
                             continue;
                         }
 
-                        warn!("conflicting write was found, pessimistic lock must be lost for the corresponding row key"; 
-                            "key" => %self.key, 
-                            "start_ts" => self.txn_props.start_ts, 
+                        warn!("conflicting write was found, pessimistic lock must be lost for the corresponding row key";
+                            "key" => %self.key,
+                            "start_ts" => self.txn_props.start_ts,
                             "for_update_ts" => for_update_ts,
                             "conflicting start_ts" => write.start_ts,
                             "conflicting commit_ts" => commit_ts);
@@ -2519,101 +2519,6 @@ pub mod tests {
         assert_eq!(lock.versions_to_last_change, 0);
         must_rollback(&mut engine, key, 40, false);
     }
-<<<<<<< HEAD
-=======
-
-    #[test]
-    fn test_pessimistic_prewrite_check_for_update_ts() {
-        let mut engine = crate::storage::TestEngineBuilder::new().build().unwrap();
-        let key = b"k";
-        let value = b"v";
-
-        let prewrite = &must_pessimistic_prewrite_put_check_for_update_ts;
-        let prewrite_err = &must_pessimistic_prewrite_put_check_for_update_ts_err;
-
-        let mut test_normal = |start_ts: u64,
-                               lock_for_update_ts: u64,
-                               prewrite_req_for_update_ts: u64,
-                               expected_for_update_ts: u64,
-                               success: bool,
-                               commit_ts: u64| {
-            // In actual cases these kinds of pessimistic locks should be locked in
-            // `allow_locking_with_conflict` mode. For simplicity, we pass a large
-            // for_update_ts to the pessimistic lock to simulate that case.
-            must_acquire_pessimistic_lock(&mut engine, key, key, start_ts, lock_for_update_ts);
-            must_pessimistic_locked(&mut engine, key, start_ts, lock_for_update_ts);
-            if success {
-                prewrite(
-                    &mut engine,
-                    key,
-                    value,
-                    key,
-                    start_ts,
-                    prewrite_req_for_update_ts,
-                    Some(expected_for_update_ts),
-                );
-                must_locked(&mut engine, key, start_ts);
-                // Test idempotency.
-                prewrite(
-                    &mut engine,
-                    key,
-                    value,
-                    key,
-                    start_ts,
-                    prewrite_req_for_update_ts,
-                    Some(expected_for_update_ts),
-                );
-                let prewrite_lock = must_locked(&mut engine, key, start_ts);
-                assert_le!(
-                    TimeStamp::from(lock_for_update_ts),
-                    prewrite_lock.for_update_ts
-                );
-                must_commit(&mut engine, key, start_ts, commit_ts);
-                must_unlocked(&mut engine, key);
-            } else {
-                let e = prewrite_err(
-                    &mut engine,
-                    key,
-                    value,
-                    key,
-                    start_ts,
-                    prewrite_req_for_update_ts,
-                    Some(expected_for_update_ts),
-                );
-                match e {
-                    Error(box ErrorInner::PessimisticLockNotFound { .. }) => (),
-                    e => panic!("unexpected error: {:?}", e),
-                }
-                must_pessimistic_locked(&mut engine, key, start_ts, lock_for_update_ts);
-                must_pessimistic_rollback(&mut engine, key, start_ts, lock_for_update_ts);
-                must_unlocked(&mut engine, key);
-            }
-        };
-
-        test_normal(10, 10, 10, 10, true, 19);
-        // Note that the `for_update_ts` field in prewrite request is not guaranteed to
-        // be greater or equal to the max for_update_ts that has been written to
-        // a pessimistic lock during the transaction.
-        test_normal(20, 20, 20, 24, false, 0);
-        test_normal(30, 35, 30, 35, true, 39);
-        test_normal(40, 45, 40, 40, false, 0);
-        test_normal(50, 55, 56, 51, false, 0);
-
-        // Amend pessimistic lock cases. Once amend-lock is passed, it can be guaranteed
-        // there are no conflict, so the check won't fail.
-        // Amending succeeds.
-        must_unlocked(&mut engine, key);
-        prewrite(&mut engine, key, value, key, 100, 105, Some(102));
-        must_locked(&mut engine, key, 100);
-        must_commit(&mut engine, key, 100, 125);
-
-        // Amending fails.
-        must_unlocked(&mut engine, key);
-        prewrite_err(&mut engine, key, value, key, 120, 120, Some(120));
-        must_unlocked(&mut engine, key);
-        prewrite_err(&mut engine, key, value, key, 120, 130, Some(130));
-        must_unlocked(&mut engine, key);
-    }
 
     #[test]
     fn test_1pc_set_lock_use_one_pc() {
@@ -2635,7 +2540,6 @@ pub mod tests {
             Mutation::make_put(Key::from_raw(k1), b"v1".to_vec()),
             &None,
             SkipPessimisticCheck,
-            None,
         )
         .unwrap();
         prewrite(
@@ -2645,7 +2549,6 @@ pub mod tests {
             Mutation::make_put(Key::from_raw(k2), b"v2".to_vec()),
             &None,
             SkipPessimisticCheck,
-            None,
         )
         .unwrap();
 
@@ -2669,5 +2572,4 @@ pub mod tests {
             assert!(res.is_err());
         }
     }
->>>>>>> 85d583c835 (txn: prevent 1pc locks from being skipped when reading with max-ts (#18095))
 }
