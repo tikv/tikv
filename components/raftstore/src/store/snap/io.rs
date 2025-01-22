@@ -383,7 +383,7 @@ where
     //      single-threaded, queue-based region worker ensures that DestroyTask is
     //      always completed before ApplyTask is executed.
     //   3. The compaction filter may write to the default column family
-    //      concurrently, but we ensure ingest latch to avoid such situations.
+    //      concurrently, but we use ingest latch to avoid such situations.
     //
     // Refer to https://github.com/tikv/tikv/issues/18081.
     box_try!(db.ingest_external_file_cf(

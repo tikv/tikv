@@ -15,15 +15,16 @@ use std::{
 /// sequence number consistency across LSM-tree levels in RocksDB. However, the
 /// compaction filter might concurrently write overlapping keys to the default
 /// column family. For example, if a region is migrated out and then migrated
-/// back, it might cause concurrent overlaps with the apply-ingest process.
-/// Therefore, it must be made mutually exclusive with the ingest latch. latch.
+/// back, it might cause concurrent compaction filter overlaps with the
+/// apply-snapshot-ingest process. Therefore, it must be made mutually exclusive
+/// with the ingest latch.
 //
 /// This implementation is designed for scenarios with low concurrency.
 /// In the current scenario, the number of compaction filter threads are limited
 /// by `RocksDB.max_background_jobs`, and the region worker, which handles
-/// apply-ingest or delete-ingest, operates as a single thread. Due
-/// to this low level of concurrency, the overhead of range locking is minimal,
-/// and potential conflicts are rare.
+/// apply-snapshot-ingest or destroy-peer-ingest, operates as a single thread.
+/// Due to this low level of concurrency, the overhead of range locking is
+/// minimal, and potential conflicts are rare.
 ///
 /// NOTE: Both the compaction filter and ingest SST operations that
 /// use this `RangeLatch` enforce self-mutual exclusion. While this might
@@ -34,7 +35,7 @@ use std::{
 /// because region-id is mutable and there is currently no mechanism to notify
 /// the compaction filter in real time. For example, if a region is migrated
 /// out, split, and then migrated back, the compaction filter might hold the old
-/// region-id while the apply-ingest process holds the new region-id.
+/// region-id while the apply-snapshot-ingest process holds the new region-id.
 #[derive(Debug, Default)]
 pub struct RangeLatch {
     /// A BTreeMap storing active range locks.
