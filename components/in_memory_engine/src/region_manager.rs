@@ -111,7 +111,7 @@ impl SnapshotList {
 
 /// Estimates the smoothed coprocessor request rate over the last hour using a
 /// simple moving average.
-pub(crate) type CopRequestsSMA = Smoother<f64, COP_REQUEST_SMA_RECORD_COUNT, ONE_HOUR_IN_SECS, 0>;
+pub(crate) type CopRequestsSma = Smoother<f64, COP_REQUEST_SMA_RECORD_COUNT, ONE_HOUR_IN_SECS, 0>;
 /// Represents the number of seconds in an hour.
 const ONE_HOUR_IN_SECS: u64 = 60 * 60;
 /// The default interval for observing requests is 10 minutes
@@ -134,7 +134,7 @@ pub struct CacheRegionMeta {
     // region eviction triggers info, and callback when eviction finishes.
     evict_info: Option<EvictInfo>,
 
-    average_cop_requests: Arc<Mutex<CopRequestsSMA>>,
+    average_cop_requests: Arc<Mutex<CopRequestsSma>>,
 }
 
 impl Debug for CacheRegionMeta {
@@ -278,6 +278,9 @@ impl CacheRegionMeta {
     // This method is currently only used for handling region split.
     pub(crate) fn derive_from(region: CacheRegion, source_meta: &Self) -> Self {
         assert!(source_meta.region.contains_range(&region));
+        let average_cop_requests = Arc::new(Mutex::new(
+            source_meta.average_cop_requests.lock().unwrap().clone(),
+        ));
         Self {
             region,
             region_snapshot_list: Mutex::new(SnapshotList::default()),
@@ -286,7 +289,7 @@ impl CacheRegionMeta {
             in_gc: AtomicBool::new(source_meta.in_gc.load(Ordering::Relaxed)),
             is_written: AtomicBool::new(source_meta.is_written.load(Ordering::Relaxed)),
             evict_info: None,
-            average_cop_requests: Arc::new(Mutex::new(Default::default())),
+            average_cop_requests,
         }
     }
 
@@ -440,7 +443,7 @@ impl RegionMetaMap {
         });
     }
 
-    pub fn cached_regions(&self) -> HashMap<u64, Arc<Mutex<CopRequestsSMA>>> {
+    pub fn cached_regions(&self) -> HashMap<u64, Arc<Mutex<CopRequestsSma>>> {
         self.regions
             .iter()
             .filter_map(|(id, meta)| {
