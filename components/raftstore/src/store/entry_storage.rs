@@ -53,7 +53,7 @@ pub fn last_index(state: &RaftLocalState) -> u64 {
 #[derive(Clone)]
 pub struct CachedEntries {
     pub range: Range<u64>,
-    // Entries and dangle size for them. `dangle` means not in entry cache.
+    // Entries and their size.
     entries: Arc<Mutex<(Vec<Entry>, usize)>>,
 }
 
@@ -76,8 +76,7 @@ impl CachedEntries {
         }
     }
 
-    /// Take cached entries and dangle size for them. `dangle` means not in
-    /// entry cache.
+    /// Take cached entries and their size.
     pub fn take_entries(&self) -> (Vec<Entry>, usize) {
         mem::take(&mut *self.entries.lock().unwrap())
     }
@@ -259,8 +258,8 @@ impl EntryCache {
                 }
                 break;
             }
-            let (_, dangle_size) = cached_entries.take_entries();
-            mem_size_change -= dangle_size as i64;
+            let (_, entries_size) = cached_entries.take_entries();
+            mem_size_change -= entries_size as i64;
             idx = cmp::max(cached_entries.range.end, idx);
         }
         let new_trace_cap = self.trace.capacity();
@@ -333,7 +332,7 @@ impl EntryCache {
     }
 
     fn trace_cached_entries(&mut self, entries: CachedEntries) {
-        let dangle_size = {
+        let entries_size = {
             let mut guard = entries.entries.lock().unwrap();
             let mut size = 0;
             for e in &guard.0 {
@@ -348,7 +347,7 @@ impl EntryCache {
         let new_capacity = self.trace.capacity();
         let diff = Self::trace_vec_mem_size_change(new_capacity, old_capacity);
 
-        self.flush_mem_size_change(diff + dangle_size as i64);
+        self.flush_mem_size_change(diff + entries_size as i64);
     }
 
     fn shrink_if_necessary(&mut self) -> i64 {
