@@ -56,8 +56,8 @@ use super::metrics::HANDLE_EVENT_DURATION_HISTOGRAM;
 use crate::{
     annotate,
     checkpoint_manager::{
-        BasicFlushObserver, CheckpointManager, CheckpointV3FlushObserver, FlushObserver,
-        GetCheckpointResult, RegionIdWithVersion, Subscription,
+        CheckpointManager, CheckpointV3FlushObserver, FlushObserver, GetCheckpointResult,
+        RegionIdWithVersion, Subscription,
     },
     errors::{Error, ReportableResult, Result},
     event_loader::InitialDataLoader,
@@ -457,8 +457,7 @@ where
     }
 
     fn flush_observer(&self) -> impl FlushObserver {
-        let basic = BasicFlushObserver::new(self.pd_client.clone(), self.store_id);
-        CheckpointV3FlushObserver::new(self.scheduler.clone(), self.meta_client.clone(), basic)
+        CheckpointV3FlushObserver::new(self.scheduler.clone(), self.meta_client.clone())
     }
 
     /// Convert a batch of events to the cmd batch, and update the resolver
