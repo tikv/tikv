@@ -8,7 +8,7 @@ use tikv_util::{range_latch::RangeLatchGuard, time::Instant};
 use crate::{
     engine::RocksEngine,
     perf_context_metrics::{
-        INGEST_EXTERNAL_FILE_ALLOW_WEITE_COUNTER, INGEST_EXTERNAL_FILE_TIME_HISTOGRAM,
+        INGEST_EXTERNAL_FILE_ALLOW_WRITE_COUNTER, INGEST_EXTERNAL_FILE_TIME_HISTOGRAM,
     },
     r2e, util,
 };
@@ -36,12 +36,12 @@ impl ImportExt for RocksEngine {
         let allow_write = range.is_some();
         opts.allow_write(allow_write);
         if allow_write {
-            INGEST_EXTERNAL_FILE_ALLOW_WEITE_COUNTER
+            INGEST_EXTERNAL_FILE_ALLOW_WRITE_COUNTER
                 .with_label_values(&["
             allow_write"])
                 .inc();
         } else {
-            INGEST_EXTERNAL_FILE_ALLOW_WEITE_COUNTER
+            INGEST_EXTERNAL_FILE_ALLOW_WRITE_COUNTER
                 .with_label_values(&["
             not_allow_write"])
                 .inc();
