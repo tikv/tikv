@@ -22,7 +22,7 @@ use tidb_query_datatype::{
     expr::{EvalContext, SqlMode},
     FieldTypeAccessor, FieldTypeFlag,
 };
-use chrono::{self, FixedOffset, Offset};
+use chrono::{self, Offset};
 use tipb::{Expr, ExprType};
 
 use crate::RpnFnCallExtra;
@@ -1665,6 +1665,72 @@ pub fn eval_from_unixtime(
         fsp,
     )?;
     Ok(Some(tmp))
+}
+
+// unix_timestamp_to_mysql_unix_timestamp converts micto timestamp into MySQL's Unix timestamp.
+// MySQL's Unix timestamp ranges from '1970-01-01 00:00:01.000000' UTC to '3001-01-18 23:59:59.999999' UTC. Values out of range should be rewritten to 0.
+// https://dev.mysql.com/doc/refman/8.0/en/date-and-time-functions.html#function_unix-timestamp
+fn unix_timestamp_to_mysql_unix_timestamp(micro_time: i64, frac: i8) -> Result<Decimal> {
+	if micro_time < 1000000 || micro_time > 32536771199999999 {
+		return Ok(Decimal::zero());
+	}
+
+    let time_in_decimal = Decimal::from_i64(micro_time)?;
+    let res = time_in_decimal.shift(-6);
+    let value = match res {
+        Res::Ok(value) => value,
+        Res::Truncated(_) => return Err(EvaluateError::Other("Decimal is truncated".to_string()).into()),
+        Res::Overflow(_) => return Err(EvaluateError::Other("Decimal is overflowed".to_string()).into()),
+    };
+
+    match value.round(frac, RoundMode::Truncate) {
+        Res::Ok(ret) => Ok(ret),
+        Res::Truncated(_) => return Err(EvaluateError::Other("Decimal is truncated".to_string()).into()),
+        Res::Overflow(_) => return Err(EvaluateError::Other("Decimal is overflowed".to_string()).into()),
+    }
+}
+
+fn get_micro_timestamp(time: &DateTime, tz: &Tz) -> i64 {
+    let naive_date = chrono::NaiveDate::from_ymd(time.year() as i32, time.month(), time.day());
+    let naive_time = chrono::NaiveTime::from_hms_micro(time.hour(), time.minute(), time.second(), time.micro());
+    let naive_datetime = chrono::NaiveDateTime::new(naive_date, naive_time);
+    return naive_datetime.timestamp_micros() - ((tz.get_offset().fix().local_minus_utc() as i64) * 1_000_000);
+}
+
+#[rpn_fn]
+#[inline]
+pub fn unix_timestamp_current() -> Result<Option<i64>> {
+    let now = chrono::Utc::now();
+    let res = unix_timestamp_to_mysql_unix_timestamp(now.timestamp_micros(), 1);
+    match res {
+        Ok(value) => {
+            let i64_value_res = value.as_i64();
+            match i64_value_res {
+                Res::Ok(ret) => Ok(Some(ret)),
+                Res::Truncated(_) => Err(EvaluateError::Other("Decimal is truncated".to_string()).into()),
+                Res::Overflow(_) => Err(EvaluateError::Other("Decimal is overflowed".to_string()).into()),
+            }
+        }
+        Err(err) => Result::Err(err),
+    }
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn unix_timestamp_int(ctx: &mut EvalContext, time: &DateTime) -> Result<Option<i64>> {
+    let res = unix_timestamp_to_mysql_unix_timestamp(get_micro_timestamp(time, &ctx.cfg.tz), 1)?;
+    match res.as_i64() {
+        Res::Ok(value) => Ok(Some(value)),
+        Res::Truncated(_) => Err(EvaluateError::Other("Decimal is truncated".to_string()).into()),
+        Res::Overflow(_) => Err(EvaluateError::Other("Decimal is overflowed".to_string()).into()),
+    }
+}
+
+#[rpn_fn(capture = [ctx, extra])]
+#[inline]
+pub fn unix_timestamp_decimal(ctx: &mut EvalContext, extra: &RpnFnCallExtra, time: &DateTime) -> Result<Option<Decimal>> {
+    let res = unix_timestamp_to_mysql_unix_timestamp(get_micro_timestamp(time, &ctx.cfg.tz), extra.ret_field_type.get_decimal() as i8)?;
+    return Ok(Some(res));
 }
 
 #[cfg(test)]
@@ -4073,21 +4139,60 @@ mod tests {
     fn test_unixtime_int() {
         let cases = vec![
             (Some("2016-01-01 00:00:00"), 0, 1451606400),
+            (Some("2015-11-13 10:20:19"), 0, 1447410019),
+            (Some("2015-11-13 10:20:19"), 3, 1447410016),
+            (Some("2015-11-13 10:20:19"), -3, 1447410022),
+            (Some("1970-01-01 00:00:00"), 0, 0),
+            (Some("1969-12-31 23:59:59"), 0, 0),
+            (Some("3001-01-19 00:00:00"), 0, 0),
+            (Some("4001-01-19 00:00:00"), 0, 0),
         ];
 
-        let mut ctx = EvalContext::default();
         for (datetime, offset, expected) in cases {
             let mut cfg = EvalConfig::new();
             cfg.set_time_zone_by_offset(offset).unwrap();
-            EvalContext::new(Arc::<EvalConfig>::new(cfg));
+            let mut ctx = EvalContext::new(Arc::<EvalConfig>::new(cfg));
             let result_field_type: FieldType = FieldTypeTp::LongLong.into();
 
             let arg = DateTime::parse_datetime(&mut ctx, datetime.unwrap(), 0, false).unwrap();
 
             let (result, _) = RpnFnScalarEvaluator::new()
+                .context(ctx)
                 .push_param(arg)
                 .evaluate_raw(result_field_type, ScalarFuncSig::UnixTimestampInt);
             let output: Option<i64> = result.unwrap().into();
+
+            assert_eq!(output.unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn test_unixtime_decimal() {
+        let cases = vec![
+            (Some("2016-01-01 00:00:00.123"), 0, 3, Decimal::from_str("1451606400.123").unwrap()),
+            (Some("2015-11-13 10:20:19.342"), 0, 3, Decimal::from_str("1447410019.342").unwrap()),
+            (Some("2015-11-13 10:20:19.522"), 3, 3, Decimal::from_str("1447410016.522").unwrap()),
+            (Some("2015-11-13 10:20:19.223"), -3, 3, Decimal::from_str("1447410022.223").unwrap()),
+            (Some("2015-11-13 10:20:19.2"), -3, 1, Decimal::from_str("1447410022.2").unwrap()),
+            (Some("1970-01-01 00:00:00.234"), 0, 3, Decimal::from_str("0").unwrap()),
+            (Some("1969-12-31 23:59:59.432"), 0, 3, Decimal::from_str("0").unwrap()),
+            (Some("3001-01-19 00:00:00.432"), 0, 3, Decimal::from_str("0").unwrap()),
+            (Some("4001-01-19 00:00:00.533"), 0, 3, Decimal::from_str("0").unwrap()),
+        ];
+
+        for (datetime, offset, fsp, expected) in cases {
+            let mut cfg = EvalConfig::new();
+            cfg.set_time_zone_by_offset(offset).unwrap();
+            let mut ctx = EvalContext::new(Arc::<EvalConfig>::new(cfg));
+            let mut result_field_type: FieldType = FieldTypeTp::NewDecimal.into();
+            result_field_type.set_decimal(fsp);
+
+            let arg = DateTime::parse_datetime(&mut ctx, datetime.unwrap(), 3, false).unwrap();
+            let (result, _) = RpnFnScalarEvaluator::new()
+                .context(ctx)
+                .push_param(arg)
+                .evaluate_raw(result_field_type, ScalarFuncSig::UnixTimestampDec);
+            let output: Option<Decimal> = result.unwrap().into();
 
             assert_eq!(output.unwrap(), expected);
         }
