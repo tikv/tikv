@@ -4068,4 +4068,28 @@ mod tests {
             assert_eq!(output, expected);
         }
     }
+
+    #[test]
+    fn test_unixtime_int() {
+        let cases = vec![
+            (Some("2016-01-01 00:00:00"), 0, 1451606400),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (datetime, offset, expected) in cases {
+            let mut cfg = EvalConfig::new();
+            cfg.set_time_zone_by_offset(offset).unwrap();
+            EvalContext::new(Arc::<EvalConfig>::new(cfg));
+            let result_field_type: FieldType = FieldTypeTp::LongLong.into();
+
+            let arg = DateTime::parse_datetime(&mut ctx, datetime.unwrap(), 0, false).unwrap();
+
+            let (result, _) = RpnFnScalarEvaluator::new()
+                .push_param(arg)
+                .evaluate_raw(result_field_type, ScalarFuncSig::UnixTimestampInt);
+            let output: Option<i64> = result.unwrap().into();
+
+            assert_eq!(output.unwrap(), expected);
+        }
+    }
 }
