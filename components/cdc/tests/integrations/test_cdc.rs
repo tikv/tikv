@@ -15,7 +15,7 @@ use tikv::server::DEFAULT_CLUSTER_ID;
 use tikv_util::{config::ReadableDuration, HandyRwLock};
 use txn_types::{Key, Lock, LockType};
 
-use crate::{new_event_feed, TestSuite, TestSuiteBuilder};
+use crate::{new_event_feed, new_event_feed_v2, TestSuite, TestSuiteBuilder};
 
 #[test]
 fn test_cdc_basic() {
@@ -2731,4 +2731,57 @@ fn test_cdc_filter_key_range() {
     }
 
     suite.stop();
+}
+
+#[test]
+fn test_partial_subscription_build_resolver() {
+    let cluster = new_server_cluster(0, 2);
+    cluster.pd_client.disable_default_operator();
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
+    let rid = suite.cluster.get_region(&[]).id;
+
+    let start_tso = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    let pk = format!("key_{:05}", 0).into_bytes();
+    let mut mutations = Vec::with_capacity(1000);
+    let mut keys = Vec::with_capacity(1000);
+    for i in 0..1 {
+        let key = format!("key_{:05}", i).into_bytes();
+        keys.push(key.clone());
+
+        let mut mutation = Mutation::default();
+        mutation.set_op(Op::Put);
+        mutation.key = key;
+        mutation.value = vec![b'x'; 16];
+        mutations.push(mutation);
+    }
+    suite.must_kv_prewrite(rid, mutations, pk, start_tso);
+
+    // Subscription a range without any locks.
+    let (mut req_tx, _, receive_event) = new_event_feed_v2(suite.get_region_cdc_client(rid));
+    let mut req = suite.new_changedata_request(rid);
+    req.request_id = 100;
+    req.checkpoint_ts = start_tso.into_inner() - 1;
+    req.set_start_key(Key::from_raw(b"m").into_encoded());
+    req.set_end_key(Key::from_raw(b"z").into_encoded());
+    block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
+    println!("send request ok");
+
+    // The region subscription can be initialized correctly.
+    let events = receive_event(false).events.to_vec();
+    assert_eq!(events.len(), 1, "{:?}", events);
+    match events[0].event.as_ref().unwrap() {
+        Event_oneof_event::Entries(es) => {
+            assert!(es.entries.len() == 1);
+            assert_eq!(es.entries[0].get_type(), EventLogType::Initialized);
+        }
+        _ => unreachable!(),
+    }
+
+    sleep_ms(1000);
+
+    // However, ResolvedTs shouldn't be advanced incorrectly.
+    let event = receive_event(true);
+    assert!(event.events.is_empty());
+    assert!(event.has_resolved_ts());
+    assert_eq!(event.get_resolved_ts().ts, start_tso.into_inner());
 }
