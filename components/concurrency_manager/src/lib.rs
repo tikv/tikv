@@ -95,7 +95,7 @@ pub struct ConcurrencyManager {
     // approximate limit.
     max_ts_limit: Arc<AtomicCell<MaxTsLimit>>,
     limit_valid_duration: Duration,
-    action_on_invalid_max_ts: Arc<AtomicActionOnInvalidMaxTs>,
+    action_on_invalid_max_ts_update: Arc<AtomicActionOnInvalidMaxTs>,
 
     max_ts_drift_allowance_ms: Arc<AtomicU64>,
 
@@ -118,7 +118,7 @@ impl ConcurrencyManager {
     pub fn new_with_config(
         latest_ts: TimeStamp,
         limit_valid_duration: Duration,
-        action_on_invalid_max_ts: ActionOnInvalidMaxTs,
+        action_on_invalid_max_ts_update: ActionOnInvalidMaxTs,
         tso: Option<Arc<dyn TSOProvider>>,
         max_ts_drift_allowance: Duration,
     ) -> Self {
@@ -129,7 +129,7 @@ impl ConcurrencyManager {
 
         if limit_valid_duration >= max_ts_drift_allowance {
             error!("improper setting: limit_valid_duration >= max_ts_drift_allowance; \
-                consider increasing max-ts-drift-allowance or decreasing max-ts-sync-interval";
+                consider increasing storage.max-ts.max-drift or decreasing storage.max-ts.cache-sync-interval";
                 "limit_valid_duration" => ?limit_valid_duration,
                 "max_ts_drift_allowance" => ?max_ts_drift_allowance,
             );
@@ -139,8 +139,8 @@ impl ConcurrencyManager {
             max_ts: Arc::new(AtomicU64::new(latest_ts.into_inner())),
             max_ts_limit: Arc::new(AtomicCell::new(initial_limit)),
             lock_table: LockTable::default(),
-            action_on_invalid_max_ts: Arc::new(AtomicActionOnInvalidMaxTs::new(
-                action_on_invalid_max_ts,
+            action_on_invalid_max_ts_update: Arc::new(AtomicActionOnInvalidMaxTs::new(
+                action_on_invalid_max_ts_update,
             )),
             limit_valid_duration,
             time_provider: Arc::new(CoarseInstantTimeProvider),
@@ -155,7 +155,7 @@ impl ConcurrencyManager {
     fn new_with_time_provider(
         latest_ts: TimeStamp,
         limit_valid_duration: Duration,
-        action_on_invalid_max_ts: ActionOnInvalidMaxTs,
+        action_on_invalid_max_ts_update: ActionOnInvalidMaxTs,
         time_provider: Arc<dyn TimeProvider>,
         tso: Option<Arc<dyn TSOProvider>>,
         max_ts_drift_allowance: Duration,
@@ -168,8 +168,8 @@ impl ConcurrencyManager {
             max_ts: Arc::new(AtomicU64::new(latest_ts.into_inner())),
             max_ts_limit: Arc::new(AtomicCell::new(initial_limit)),
             lock_table: LockTable::default(),
-            action_on_invalid_max_ts: Arc::new(AtomicActionOnInvalidMaxTs::new(
-                action_on_invalid_max_ts,
+            action_on_invalid_max_ts_update: Arc::new(AtomicActionOnInvalidMaxTs::new(
+                action_on_invalid_max_ts_update,
             )),
             limit_valid_duration,
             time_provider,
@@ -250,7 +250,7 @@ impl ConcurrencyManager {
         source: impl slog::Value + Display,
         using_approximate: bool,
     ) -> Result<(), crate::InvalidMaxTsUpdate> {
-        warn!("possible invalid max-ts update; double checking";
+        warn!("possible invalid max_ts update; double checking";
             "attempted_ts" => new_ts,
             "limit" => limit.into_inner(),
             "source" => &source,
@@ -305,7 +305,7 @@ impl ConcurrencyManager {
             );
         }
 
-        match self.action_on_invalid_max_ts.load() {
+        match self.action_on_invalid_max_ts_update.load() {
             ActionOnInvalidMaxTs::Panic if tso_confirmed => {
                 panic!(
                     "invalid max_ts update: {} exceeds the limit {}, source={}",
@@ -322,11 +322,13 @@ impl ConcurrencyManager {
         }
     }
 
-    /// Set the maximum allowed value for max_ts updates, except for the updates
-    /// from PD TSO. The limit must be updated regularly to prevent the
-    /// blocking of max_ts. It prevents max_ts from being updated to an
-    /// unreasonable value, which is usually caused by bugs or unsafe
-    /// usages.
+    /// Set the maximum allowed value for max_ts updates.
+    /// The actual limit is calculated by adding a drift allowance to the
+    /// provided timestamp to accommodate lag in TSO syncing.
+    /// The limit must be updated regularly to prevent failure of updating
+    /// max_ts.
+    /// It prevents max_ts from being updated to an unreasonable
+    /// value, which is usually caused by bugs or unsafe usages.
     ///
     /// # Note
     /// If the new limit is smaller than the current limit, this operation will
@@ -450,8 +452,8 @@ impl ConcurrencyManager {
         min_lock
     }
 
-    pub fn set_action_on_invalid_max_ts(&self, action: ActionOnInvalidMaxTs) {
-        self.action_on_invalid_max_ts.store(action);
+    pub fn set_action_on_invalid_max_ts_update(&self, action: ActionOnInvalidMaxTs) {
+        self.action_on_invalid_max_ts_update.store(action);
     }
 
     pub fn set_max_ts_drift_allowance(&self, allowance: Duration) {
