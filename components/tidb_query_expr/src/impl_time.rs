@@ -1616,6 +1616,12 @@ pub fn str_to_date_date(
         ctx.handle_invalid_time_error(Error::truncated_wrong_val("DATETIME", t))?;
         return Ok(None);
     }
+    if ctx.cfg.sql_mode.contains(SqlMode::NO_ZERO_DATE)
+        && (t.year() == 0 || t.month() == 0 || t.day() == 0)
+    {
+        ctx.handle_invalid_time_error(Error::truncated_wrong_val("DATETIME", t))?;
+        return Ok(None);
+    }
     t.set_time_type(TimeType::Date)?;
     t.set_fsp(0);
     Ok(Some(t))
@@ -1632,6 +1638,12 @@ pub fn str_to_date_datetime(
     let (succ, mut t) =
         Time::parse_from_string_with_format(ctx, from_utf8(date)?, from_utf8(format)?);
     if !succ {
+        ctx.handle_invalid_time_error(Error::truncated_wrong_val("DATETIME", t))?;
+        return Ok(None);
+    }
+    if ctx.cfg.sql_mode.contains(SqlMode::NO_ZERO_DATE)
+        && (t.year() == 0 || t.month() == 0 || t.day() == 0)
+    {
         ctx.handle_invalid_time_error(Error::truncated_wrong_val("DATETIME", t))?;
         return Ok(None);
     }
@@ -4838,39 +4850,172 @@ mod tests {
             ),
             // When `AllowInvalidDate` is true, check only that the month is in the range from 1 to
             // 12 and the day is in the range from 1 to 31
+            // TODO: Now tikv don't support this flag `AllowInvalidDate` , so we don't test it.
+            //(
+            //    Some("31/April/2016 12:34:56."),
+            //    Some("%d/%M/%Y %H:%i:%s.%f"),
+            //    Time::from_slice(
+            //        &mut ctx,
+            //        &[2016, 4, 31, 12, 34, 56, 0],
+            //        TimeType::DateTime,
+            //        0,
+            //    ),
+            //    None,
+            //    ScalarFuncSig::StrToDateDatetime,
+            //),
+            //(
+            //    Some("29/Feb/2021 12:34:56."),
+            //    Some("%d/%b/%Y %H:%i:%s.%f"),
+            //    Time::from_slice(
+            //        &mut ctx,
+            //        &[2021, 2, 29, 12, 34, 56, 0],
+            //        TimeType::DateTime,
+            //        0,
+            //    ),
+            //    None,
+            //    ScalarFuncSig::StrToDateDatetime,
+            //),
+            //(
+            //    Some("30/Feb/2016 12:34:56.1234"),
+            //    Some("%d/%b/%Y %H:%i:%S.%f"),
+            //    Time::from_slice(
+            //        &mut ctx,
+            //        &[2016, 2, 30, 12, 34, 56, 123400],
+            //        TimeType::DateTime,
+            //        0,
+            //    ),
+            //    None,
+            //    ScalarFuncSig::StrToDateDatetime,
+            //),
+            // Test Failed Case
+            // invalid days when `AllowInvalidDate` is false
             (
-                Some("31/April/2016 12:34:56."),
-                Some("%d/%M/%Y %H:%i:%s.%f"),
-                Time::from_slice(
-                    &mut ctx,
-                    &[2016, 4, 31, 12, 34, 56, 0],
-                    TimeType::DateTime,
-                    0,
-                ),
+                Some("04/31/2004"),
+                Some("%m/%d/%Y"),
+                None,
                 None,
                 ScalarFuncSig::StrToDateDatetime,
-            ),
+            ), // not exists in the real world
             (
                 Some("29/Feb/2021 12:34:56."),
                 Some("%d/%b/%Y %H:%i:%s.%f"),
-                Time::from_slice(
-                    &mut ctx,
-                    &[2021, 2, 29, 12, 34, 56, 0],
-                    TimeType::DateTime,
-                    0,
-                ),
+                None,
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ), // Feb 29 in non-leap-year
+            // MySQL will try to parse '51' for '%m', fail
+            (
+                Some("512 2021"),
+                Some("%m%d %Y"),
+                None,
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            // format mismatch
+            (
+                Some("a09:30:17"),
+                Some("%h:%i:%s"),
+                None,
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            // followed by incomplete 'AM'/'PM'
+            (
+                Some("12:43:24 a"),
+                Some("%r"),
+                None,
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            // invalid minute
+            (
+                Some("23:60:12"),
+                Some("%T"),
+                None,
                 None,
                 ScalarFuncSig::StrToDateDatetime,
             ),
             (
-                Some("30/Feb/2016 12:34:56.1234"),
-                Some("%d/%b/%Y %H:%i:%S.%f"),
-                Time::from_slice(
-                    &mut ctx,
-                    &[2016, 2, 30, 12, 34, 56, 123400],
-                    TimeType::DateTime,
-                    0,
-                ),
+                Some("18"),
+                Some("%l"),
+                None,
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("00:21:22 AM"),
+                Some("%h:%i:%s %p"),
+                None,
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("100/10/22"),
+                Some("%y/%m/%d"),
+                None,
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("2010-11-12 11 am"),
+                Some("%Y-%m-%d %H %p"),
+                None,
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("2010-11-12 13 am"),
+                Some("%Y-%m-%d %h %p"),
+                None,
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("2010-11-12 0 am"),
+                Some("%Y-%m-%d %h %p"),
+                None,
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            // MySQL accept `SEPTEMB` as `SEPTEMBER`, but we don't want this "feature" in TiDB
+            // unless we have to.
+            (
+                Some("15 SEPTEMB 2001"),
+                Some("%d %M %Y"),
+                None,
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            // '%r' tests
+            // hh = 13 with am is invalid
+            (
+                Some("13:13:56 AM13/5/2019"),
+                Some("%r"),
+                None,
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            // hh = 0 with am is invalid
+            (
+                Some("00:13:56 AM13/05/2019"),
+                Some("%r"),
+                None,
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            // hh = 0 with pm is invalid
+            (
+                Some("00:13:56 pM13/05/2019"),
+                Some("%r"),
+                None,
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            // EOF while parsing "AM"/"PM"
+            (
+                Some("11:13:56a"),
+                Some("%r"),
+                None,
                 None,
                 ScalarFuncSig::StrToDateDatetime,
             ),
