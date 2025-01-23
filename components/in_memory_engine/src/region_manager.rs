@@ -21,7 +21,7 @@ use engine_traits::{CacheRegion, EvictReason, FailedReason};
 use futures::executor::block_on;
 use parking_lot::RwLock;
 use strum::EnumCount;
-use tikv_util::{info, time::Instant, warn};
+use tikv_util::{info, smoother::Smoother, time::Instant, warn};
 
 use crate::{metrics::observe_eviction_duration, read::RegionCacheSnapshotMeta};
 
@@ -109,7 +109,16 @@ impl SnapshotList {
     }
 }
 
-#[derive(Debug)]
+/// Estimates the smoothed coprocessor request rate over the last hour using a
+/// simple moving average.
+pub(crate) type CopRequestsSma = Smoother<f64, COP_REQUEST_SMA_RECORD_COUNT, ONE_HOUR_IN_SECS, 0>;
+/// Represents the number of seconds in an hour.
+const ONE_HOUR_IN_SECS: u64 = 60 * 60;
+/// The default interval for observing requests is 10 minutes
+/// (load_evict_interval), but this can be adjusted by users. To maintain
+/// accuracy, we double the record count for intervals smaller than the default.
+pub(crate) const COP_REQUEST_SMA_RECORD_COUNT: usize = 6 * 2;
+
 pub struct CacheRegionMeta {
     // the cached region meta.
     region: CacheRegion,
@@ -124,6 +133,21 @@ pub struct CacheRegionMeta {
     is_written: AtomicBool,
     // region eviction triggers info, and callback when eviction finishes.
     evict_info: Option<EvictInfo>,
+
+    average_cop_requests: Arc<Mutex<CopRequestsSma>>,
+}
+
+impl Debug for CacheRegionMeta {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CacheRegionMeta")
+            .field("region", &self.region)
+            .field("state", &self.state)
+            .field("safe_point", &self.safe_point)
+            .field("in_gc", &self.in_gc)
+            .field("is_written", &self.is_written)
+            .field("evict_info", &self.evict_info)
+            .finish()
+    }
 }
 
 struct EvictInfo {
@@ -151,6 +175,7 @@ impl CacheRegionMeta {
             in_gc: AtomicBool::new(false),
             is_written: AtomicBool::new(false),
             evict_info: None,
+            average_cop_requests: Arc::new(Mutex::new(Default::default())),
         }
     }
 
@@ -253,6 +278,9 @@ impl CacheRegionMeta {
     // This method is currently only used for handling region split.
     pub(crate) fn derive_from(region: CacheRegion, source_meta: &Self) -> Self {
         assert!(source_meta.region.contains_range(&region));
+        let average_cop_requests = Arc::new(Mutex::new(
+            source_meta.average_cop_requests.lock().unwrap().clone(),
+        ));
         Self {
             region,
             region_snapshot_list: Mutex::new(SnapshotList::default()),
@@ -261,6 +289,7 @@ impl CacheRegionMeta {
             in_gc: AtomicBool::new(source_meta.in_gc.load(Ordering::Relaxed)),
             is_written: AtomicBool::new(source_meta.is_written.load(Ordering::Relaxed)),
             evict_info: None,
+            average_cop_requests,
         }
     }
 
@@ -414,17 +443,17 @@ impl RegionMetaMap {
         });
     }
 
-    pub fn cached_regions(&self) -> Vec<u64> {
+    pub fn cached_regions(&self) -> HashMap<u64, Arc<Mutex<CopRequestsSma>>> {
         self.regions
             .iter()
             .filter_map(|(id, meta)| {
                 if meta.state == RegionState::Active {
-                    Some(*id)
+                    Some((*id, meta.average_cop_requests.clone()))
                 } else {
                     None
                 }
             })
-            .collect::<Vec<_>>()
+            .collect::<HashMap<_, _>>()
     }
 
     pub fn iter_overlapped_regions(

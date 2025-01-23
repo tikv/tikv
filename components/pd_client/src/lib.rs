@@ -619,7 +619,7 @@ mod tests {
     use crate::RegionWriteCfCopDetail;
 
     #[test]
-    fn test_procssed_key_0() {
+    fn test_processed_key_0() {
         let mut cop_detail = RegionWriteCfCopDetail::default();
         cop_detail.next = 11;
 
