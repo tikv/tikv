@@ -17,7 +17,7 @@ impl ImportExt for PanicEngine {
         panic!()
     }
 
-    fn acquire_ingest_latch(&self, range: Range<'_>) -> RangeLatchGuard {
+    fn acquire_ingest_latch(&self, range: Range<'_>) -> RangeLatchGuard<'_> {
         panic!()
     }
 }

@@ -73,7 +73,11 @@ impl RangeLatch {
     ///
     /// Deadlocks cannot occur in the current scenario, as each caller thread
     /// holds at most one lock at a time.
-    pub fn acquire(self: &Arc<Self>, start_key: Vec<u8>, end_key: Vec<u8>) -> RangeLatchGuard {
+    pub fn acquire<'a>(
+        self: &'a Arc<Self>,
+        start_key: Vec<u8>,
+        end_key: Vec<u8>,
+    ) -> RangeLatchGuard<'a> {
         loop {
             let mut range_latches = self.range_latches.lock().unwrap();
 
@@ -111,7 +115,7 @@ impl RangeLatch {
                 return RangeLatchGuard {
                     start_key,
                     _mutex_guard: mutex_guard,
-                    handle: self.clone(),
+                    handle: self,
                 };
             }
             drop(range_latches);
@@ -126,21 +130,19 @@ impl RangeLatch {
 
 /// A guard that holds the range latch.
 #[derive(Debug)]
-pub struct RangeLatchGuard {
+pub struct RangeLatchGuard<'a> {
     start_key: Vec<u8>,
     /// Hold the mutex guard to prevent concurrent access to the same range.
     ///
     /// This field must be declared before `handle` so it will be dropped before
     /// `handle`.
-    _mutex_guard: std::sync::MutexGuard<'static, ()>,
-    /// Holds a reference to RangeLatch for:
-    ///   1. Releasing the latch when the guard is dropped.
-    ///   2. Ensuring the RangeLatch remains valid for the lifetime of this
-    ///      guard.
-    handle: Arc<RangeLatch>,
+    _mutex_guard: std::sync::MutexGuard<'a, ()>,
+    /// Holds a reference to RangeLatch to release the latch when the guard is
+    /// dropped.
+    handle: &'a RangeLatch,
 }
 
-impl Drop for RangeLatchGuard {
+impl<'a> Drop for RangeLatchGuard<'a> {
     fn drop(&mut self) {
         let mut range_latches = self.handle.range_latches.lock().unwrap();
         range_latches.remove(&self.start_key);

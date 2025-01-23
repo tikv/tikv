@@ -1056,16 +1056,14 @@ impl<E: Engine> GcRunnerCore<E> {
             } => {
                 let smallest_key = wb.smallest_key.as_ref().unwrap().as_encoded().as_slice();
                 let largest_key = wb.largest_key.as_ref().unwrap().as_encoded().as_slice();
+                // unwrap() is safe as None only occurs in multi-rocksdb version.
+                let kv_engine = self.engine.kv_engine().unwrap();
                 // Acquire latch to prevent concurrency with ingestion operations
                 // using RocksDB IngestExternalFileOptions.allow_write = true.
-                let _ingest_latch_guard =
-                    self.engine
-                        .kv_engine()
-                        .unwrap()
-                        .acquire_ingest_latch(Range {
-                            start_key: smallest_key,
-                            end_key: keys::next_key(largest_key).as_slice(),
-                        });
+                let _ingest_latch_guard = kv_engine.acquire_ingest_latch(Range {
+                    start_key: smallest_key,
+                    end_key: keys::next_key(largest_key).as_slice(),
+                });
 
                 fail_point!("after_gc_orphan_versions_ingest_latch_acquired");
 
@@ -2946,7 +2944,8 @@ mod tests {
             coprocessor_host,
         );
 
-        let _ingest_latch_guard = engine.kv_engine().unwrap().acquire_ingest_latch(Range {
+        let kv_engine = engine.kv_engine().unwrap();
+        let _ingest_latch_guard = kv_engine.acquire_ingest_latch(Range {
             start_key: b"a",
             end_key: b"b",
         });
@@ -3024,7 +3023,8 @@ mod tests {
         let ingest_task_completed = Arc::new(AtomicBool::new(false));
         let ingest_task_completed_clone = ingest_task_completed.clone();
         let ingest_handle = thread::spawn(move || {
-            let _ingest_latch_guard = engine.kv_engine().unwrap().acquire_ingest_latch(Range {
+            let kv_engine = engine.kv_engine().unwrap();
+            let _ingest_latch_guard = kv_engine.acquire_ingest_latch(Range {
                 start_key: b"a",
                 end_key: b"b",
             });

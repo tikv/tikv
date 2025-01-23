@@ -19,7 +19,7 @@ pub trait ImportExt {
         range: Option<Range<'_>>,
     ) -> Result<()>;
 
-    fn acquire_ingest_latch(&self, range: Range<'_>) -> RangeLatchGuard;
+    fn acquire_ingest_latch(&self, range: Range<'_>) -> RangeLatchGuard<'_>;
 }
 
 pub trait IngestExternalFileOptions {
