@@ -15,7 +15,7 @@ use tikv::server::DEFAULT_CLUSTER_ID;
 use tikv_util::{config::ReadableDuration, HandyRwLock};
 use txn_types::{Key, Lock, LockType};
 
-use crate::{new_event_feed, new_event_feed_v2, TestSuite, TestSuiteBuilder};
+use crate::{new_event_feed, TestSuite, TestSuiteBuilder};
 
 #[test]
 fn test_cdc_basic() {
@@ -2755,7 +2755,7 @@ fn test_partial_subscription_build_resolver() {
     suite.must_kv_prewrite(rid, mutations, pk, start_tso);
 
     // Subscription a range without any locks.
-    let (mut req_tx, _, receive_event) = new_event_feed_v2(suite.get_region_cdc_client(rid));
+    let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(rid));
     let mut req = suite.new_changedata_request(rid);
     req.request_id = 100;
     req.checkpoint_ts = start_tso.into_inner() - 1;
