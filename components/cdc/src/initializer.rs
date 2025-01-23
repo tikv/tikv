@@ -744,14 +744,12 @@ mod tests {
             total_bytes += v.len();
             let ts = TimeStamp::new(i as _);
             must_prewrite_put(&mut engine, k, v, k, ts);
-            if i < 90 {
-                let txn_locks = expected_locks.entry(ts).or_insert_with(|| {
-                    let mut txn_locks = TxnLocks::default();
-                    txn_locks.sample_lock = Some(k.to_vec().into());
-                    txn_locks
-                });
-                txn_locks.lock_count += 1;
-            }
+            let txn_locks = expected_locks.entry(ts).or_insert_with(|| {
+                let mut txn_locks = TxnLocks::default();
+                txn_locks.sample_lock = Some(k.to_vec().into());
+                txn_locks
+            });
+            txn_locks.lock_count += 1;
         }
 
         let region = Region::default();
