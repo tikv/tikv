@@ -51,7 +51,7 @@ where
     fn clone(&self) -> Self {
         Self {
             records: self.records.clone(),
-            total: self.total.clone(),
+            total: self.total,
         }
     }
 }
