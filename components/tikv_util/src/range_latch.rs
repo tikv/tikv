@@ -23,13 +23,13 @@ use std::{
 /// In the current scenario, the number of compaction filter threads are limited
 /// by `RocksDB.max_background_jobs`, and the region worker, which handles
 /// apply-snapshot-ingest or destroy-peer-ingest, operates as a single thread.
-/// Due to this low level of concurrency, the overhead of range locking is
+/// Due to this low level of concurrency, the overhead of range latch is
 /// minimal, and potential conflicts are rare.
 ///
 /// NOTE: Both the compaction filter and ingest SST operations that
 /// use this `RangeLatch` enforce self-mutual exclusion. While this might
 /// appear somewhat overkill, its impact on performance is minimal due to
-/// the system's low concurrency and the brief duration of lock holding.
+/// the system's low concurrency and the brief duration of latch holding.
 ///
 /// NOTE: Why do we use a range-latch instead of a region-id latch? This is
 /// because region-id is mutable and there is currently no mechanism to notify
@@ -38,7 +38,7 @@ use std::{
 /// region-id while the apply-snapshot-ingest process holds the new region-id.
 #[derive(Debug, Default)]
 pub struct RangeLatch {
-    /// A BTreeMap storing active range locks.
+    /// A BTreeMap storing active range latches.
     /// Key: The start key of the range (sorted order).
     /// Value: A tuple of:
     ///   - `Arc<Mutex<()>>`: The latch object for this range.
@@ -95,66 +95,55 @@ impl RangeLatch {
                 );
                 debug_assert!(previous_value.is_none());
 
-                // Now acquire the lock after releasing the write guard
-                let lock = mutex.lock().unwrap();
-                // The lifetime of the lock returned by `mutex.lock()` is tied to the `_guard`
-                // variable, but we need to extend its lifetime to `'static` so it can be stored
-                // in the `RangeLatchGuard` struct. This is safe because:
-                // - The `lock` is managed by the `RangeLatchGuard`, ensuring proper drop
-                //   semantics.
-                // - The lifetime extension does not result in use-after-free, as the lock's
-                //   underlying resources are valid for the lifetime of the `mutex`.
-                // - The design guarantees that `RangeLatchGuard` will hold the lock for its
-                //   entire lifetime, preventing invalid access.
-                let lock = unsafe { std::mem::transmute(lock) };
+                // Now acquire the latch after releasing the write guard
+                let mutex_guard = mutex.lock().unwrap();
+                // The `mutex_guard` is being extended to `'static` because its
+                // default lifetime is tied to the scope of this function (`'a`), as determined
+                // by Rust's borrow checker. By extending the lifetime to `'static`, we allow
+                // the `mutex_guard` to be stored in the `KeyHandleGuard` struct, which has a
+                // lifetime tied to its caller.
+                //
+                // Safety: `_mutex_guard` is declared before `handle` in `KeyHandleGuard`.
+                // So the mutex guard will be released earlier than the `Arc<KeyHandle>`.
+                // Then we can make sure the mutex guard doesn't point to released memory.
+                let mutex_guard = unsafe { std::mem::transmute(mutex_guard) };
 
                 return RangeLatchGuard {
                     start_key,
-                    _lock: lock,
-                    latch: self.clone(),
+                    _mutex_guard: mutex_guard,
+                    handle: self.clone(),
                 };
             }
             drop(range_latches);
 
             // Wait for all overlapping ranges to be released
-            for (_, (mutex, (overlap_start_key, _))) in overlapping_ranges {
+            for (_, (mutex, (..))) in overlapping_ranges {
                 let _guard = mutex.lock().unwrap();
-
-                // Check if the range can be removed after unlocking
-                let mut range_latches = self.range_latches.lock().unwrap();
-                if let Some((existing_mutex, _)) = range_latches.get(&overlap_start_key) {
-                    if Arc::strong_count(existing_mutex) == 2 {
-                        // Remove since it is only held by this thread: one reference is held by
-                        // `_guard`, and the other by `range_latches`.
-                        range_latches.remove(&overlap_start_key);
-                    }
-                }
             }
         }
     }
 }
 
-/// A guard that holds the range lock.
+/// A guard that holds the range latch.
 #[derive(Debug)]
 pub struct RangeLatchGuard {
     start_key: Vec<u8>,
     /// Hold the mutex guard to prevent concurrent access to the same range.
-    _lock: std::sync::MutexGuard<'static, ()>,
-    /// Hold a reference to RangeLatch to release the lock when the guard is
-    /// dropped.
-    latch: Arc<RangeLatch>,
+    ///
+    /// This field must be declared before `handle` so it will be dropped before
+    /// `handle`.
+    _mutex_guard: std::sync::MutexGuard<'static, ()>,
+    /// Holds a reference to RangeLatch for:
+    ///   1. Releasing the latch when the guard is dropped.
+    ///   2. Ensuring the RangeLatch remains valid for the lifetime of this
+    ///      guard.
+    handle: Arc<RangeLatch>,
 }
 
 impl Drop for RangeLatchGuard {
     fn drop(&mut self) {
-        let mut range_latches = self.latch.range_latches.lock().unwrap();
-
-        if let Some((mutex, _)) = range_latches.get_mut(&self.start_key) {
-            // Remove the lock if no other references exist
-            if Arc::strong_count(mutex) == 1 {
-                range_latches.remove(&self.start_key);
-            }
-        }
+        let mut range_latches = self.handle.range_latches.lock().unwrap();
+        range_latches.remove(&self.start_key);
     }
 }
 
@@ -183,7 +172,7 @@ mod tests {
         let guard2 = latch.acquire(vec![20], vec![30]);
         let guard3 = latch.acquire(vec![30], vec![50]);
 
-        // Drop guards to release locks
+        // Drop guards to release latches
         drop(guard1);
         drop(guard2);
         drop(guard3);
@@ -197,7 +186,7 @@ mod tests {
             let is_thread_done = Arc::new(AtomicBool::new(false));
             let is_thread_done_clone = Arc::clone(&is_thread_done);
 
-            // Main thread acquires the first lock
+            // Main thread acquires the first latch
             let guard = latch.acquire(range1.0, range1.1);
 
             let handle = thread::spawn(move || {
@@ -209,7 +198,7 @@ mod tests {
             // Verify that the second thread is still waiting
             assert!(!is_thread_done.load(Ordering::SeqCst));
 
-            // Release the first lock
+            // Release the first latch
             drop(guard);
 
             // Wait a bit to let the second thread complete
@@ -227,26 +216,25 @@ mod tests {
         do_test((vec![5], vec![15]), (vec![0], vec![20])); // Fully contained
     }
 
-    #[test]
-    fn test_concurrent_random_ranges() {
+    fn concurrent_random_ranges_test(num_threads: usize, num_latches: usize) {
         // Shared latch and active ranges tracker
         let latch = Arc::new(RangeLatch::new());
         let active_ranges = Arc::new(Mutex::new(HashSet::new()));
 
         let mut handles = Vec::new();
 
-        for _ in 0..5 {
+        for _ in 0..num_threads {
             let latch_clone = Arc::clone(&latch);
             let active_ranges_clone = Arc::clone(&active_ranges);
 
             handles.push(thread::spawn(move || {
                 let mut rng = rand::thread_rng();
 
-                for _ in 0..50 {
+                for _ in 0..num_latches {
                     let start: u8 = rng.gen_range(0..200);
                     let end = rng.gen_range(start + 1..201);
 
-                    // Acquire the range lock
+                    // Acquire the range latch
                     let _guard = latch_clone.acquire(vec![start], vec![end]);
 
                     // Check for overlap
@@ -267,7 +255,7 @@ mod tests {
                         ranges.insert((start, end));
                     }
 
-                    // Hold the lock for a short period
+                    // Hold the latch for a short period
                     thread::sleep(Duration::from_millis(10));
 
                     // Remove the range from the active set
@@ -283,5 +271,15 @@ mod tests {
         for handle in handles {
             handle.join().unwrap();
         }
+    }
+
+    #[test]
+    fn test_concurrent_random_ranges_many_latches() {
+        concurrent_random_ranges_test(5, 100);
+    }
+
+    #[test]
+    fn test_concurrent_random_ranges_many_threads() {
+        concurrent_random_ranges_test(100, 5);
     }
 }
