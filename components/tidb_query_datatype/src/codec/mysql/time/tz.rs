@@ -4,9 +4,8 @@ use std::{fmt, str::FromStr};
 
 use chrono::*;
 
-pub fn get_offset_for_chrono_tz(tz: &chrono_tz::Tz) -> offset::FixedOffset {
-    // Generate a random utc time
-    let utc_time = Utc.ymd(2025, 1, 15).and_hms(1, 1, 1); // These are random number
+pub fn get_offset_for_chrono_tz(tz: &chrono_tz::Tz, year: i32, month: u32, day: u32, hour: u32, minute: u32, second: u32) -> offset::FixedOffset {
+    let utc_time = Utc.ymd(year, month, day).and_hms(hour, minute, second);
 
     // Convert the utc time with tz
     let local_time = utc_time.with_timezone(tz);
@@ -32,10 +31,10 @@ pub enum Tz {
 }
 
 impl Tz {  
-    pub fn get_offset(&self) -> offset::FixedOffset {
+    pub fn get_offset(&self, year: i32, month: u32, day: u32, hour: u32, minute: u32, second: u32) -> offset::FixedOffset {
         match self {
             Tz::Offset(offset_val) => *offset_val,
-            Tz::Name(tz) => get_offset_for_chrono_tz(tz),
+            Tz::Name(tz) => get_offset_for_chrono_tz(tz, year, month, day, hour, minute, second),
             Tz::Local(_) => *Local::now().offset(),
         }
     }

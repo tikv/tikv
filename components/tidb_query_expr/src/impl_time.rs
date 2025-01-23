@@ -1690,11 +1690,26 @@ fn unix_timestamp_to_mysql_unix_timestamp(micro_time: i64, frac: i8) -> Result<D
     }
 }
 
+// fn get_micro_timestamp(time: &DateTime, tz: &Tz) -> i64 {
+//     let naive_date = chrono::NaiveDate::from_ymd(time.year() as i32, time.month(), time.day());
+//     let naive_time = chrono::NaiveTime::from_hms_micro(time.hour(), time.minute(), time.second(), time.micro());
+//     let naive_datetime = chrono::NaiveDateTime::new(naive_date, naive_time);
+//     println!("get_micro: {}, {}, {}", time.to_string(), naive_datetime.timestamp_micros(), ((tz.get_offset(time.year() as i32, time.month(), time.day(), time.hour(), time.minute(), time.second()).fix().local_minus_utc() as i64) * 1_000_000));
+//     return naive_datetime.timestamp_micros() - ((tz.get_offset(time.year() as i32, time.month(), time.day(), time.hour(), time.minute(), time.second()).fix().local_minus_utc() as i64) * 1_000_000);
+// }
+
 fn get_micro_timestamp(time: &DateTime, tz: &Tz) -> i64 {
-    let naive_date = chrono::NaiveDate::from_ymd(time.year() as i32, time.month(), time.day());
-    let naive_time = chrono::NaiveTime::from_hms_micro(time.hour(), time.minute(), time.second(), time.micro());
+    let year = time.year() as i32;
+    let month = time.month();
+    let day = time.day();
+    let hour = time.hour();
+    let minute = time.minute();
+    let second = time.second();
+    let naive_date = chrono::NaiveDate::from_ymd(year, month, day);
+    let naive_time = chrono::NaiveTime::from_hms_micro(hour, minute, second, time.micro());
     let naive_datetime = chrono::NaiveDateTime::new(naive_date, naive_time);
-    return naive_datetime.timestamp_micros() - ((tz.get_offset().fix().local_minus_utc() as i64) * 1_000_000);
+    println!("get_micro: {}, {}, {}, {}", time.to_string(), naive_datetime.to_string(), naive_datetime.timestamp_micros(), ((tz.get_offset(year, month, day, hour, minute, second).fix().local_minus_utc() as i64) * 1_000_000));
+    return naive_datetime.timestamp_micros() - ((tz.get_offset(year, month, day, hour, minute, second).fix().local_minus_utc() as i64) * 1_000_000);
 }
 
 #[rpn_fn]
@@ -1737,6 +1752,7 @@ pub fn unix_timestamp_decimal(ctx: &mut EvalContext, extra: &RpnFnCallExtra, tim
 mod tests {
     use std::{str::FromStr, sync::Arc};
 
+    use chrono::{Utc, offset};
     use tidb_query_datatype::{
         builder::FieldTypeBuilder,
         codec::{
@@ -4138,19 +4154,25 @@ mod tests {
     #[test]
     fn test_unixtime_int() {
         let cases = vec![
-            (Some("2016-01-01 00:00:00"), 0, 1451606400),
-            (Some("2015-11-13 10:20:19"), 0, 1447410019),
-            (Some("2015-11-13 10:20:19"), 3, 1447410016),
-            (Some("2015-11-13 10:20:19"), -3, 1447410022),
-            (Some("1970-01-01 00:00:00"), 0, 0),
-            (Some("1969-12-31 23:59:59"), 0, 0),
-            (Some("3001-01-19 00:00:00"), 0, 0),
-            (Some("4001-01-19 00:00:00"), 0, 0),
+            (Some("2016-01-01 00:00:00"), 0, "", 1451606400),
+            (Some("2015-11-13 10:20:19"), 0, "", 1447410019),
+            (Some("2015-11-13 10:20:19"), 3, "", 1447410016),
+            (Some("2015-11-13 10:20:19"), -3, "", 1447410022),
+            (Some("1970-01-01 00:00:00"), 0, "", 0),
+            (Some("1969-12-31 23:59:59"), 0, "", 0),
+            (Some("3001-01-19 00:00:00"), 0, "", 0),
+            (Some("4001-01-19 00:00:00"), 0, "", 0),
+            (Some("2015-11-13 10:20:19"), 0, "US/Eastern", 1447428019),
+            (Some("2009-09-20 07:32:39"), 0, "US/Eastern", 1253446359),
         ];
 
-        for (datetime, offset, expected) in cases {
+        for (datetime, offset, time_zone_name, expected) in cases {
             let mut cfg = EvalConfig::new();
-            cfg.set_time_zone_by_offset(offset).unwrap();
+            if time_zone_name.len() == 0 {
+                cfg.set_time_zone_by_offset(offset).unwrap();
+            } else {
+                cfg.set_time_zone_by_name(time_zone_name).unwrap();
+            }
             let mut ctx = EvalContext::new(Arc::<EvalConfig>::new(cfg));
             let result_field_type: FieldType = FieldTypeTp::LongLong.into();
 
@@ -4169,20 +4191,29 @@ mod tests {
     #[test]
     fn test_unixtime_decimal() {
         let cases = vec![
-            (Some("2016-01-01 00:00:00.123"), 0, 3, Decimal::from_str("1451606400.123").unwrap()),
-            (Some("2015-11-13 10:20:19.342"), 0, 3, Decimal::from_str("1447410019.342").unwrap()),
-            (Some("2015-11-13 10:20:19.522"), 3, 3, Decimal::from_str("1447410016.522").unwrap()),
-            (Some("2015-11-13 10:20:19.223"), -3, 3, Decimal::from_str("1447410022.223").unwrap()),
-            (Some("2015-11-13 10:20:19.2"), -3, 1, Decimal::from_str("1447410022.2").unwrap()),
-            (Some("1970-01-01 00:00:00.234"), 0, 3, Decimal::from_str("0").unwrap()),
-            (Some("1969-12-31 23:59:59.432"), 0, 3, Decimal::from_str("0").unwrap()),
-            (Some("3001-01-19 00:00:00.432"), 0, 3, Decimal::from_str("0").unwrap()),
-            (Some("4001-01-19 00:00:00.533"), 0, 3, Decimal::from_str("0").unwrap()),
+            (Some("2016-01-01 00:00:00.123"), 0, "", 3, Decimal::from_str("1451606400.123").unwrap()),
+            (Some("2015-11-13 10:20:19.342"), 0, "", 3, Decimal::from_str("1447410019.342").unwrap()),
+            (Some("2015-11-13 10:20:19.522"), 3, "", 3, Decimal::from_str("1447410016.522").unwrap()),
+            (Some("2015-11-13 10:20:19.223"), -3, "", 3, Decimal::from_str("1447410022.223").unwrap()),
+            (Some("2015-11-13 10:20:19.2"), -3, "", 1, Decimal::from_str("1447410022.2").unwrap()),
+            (Some("1970-01-01 00:00:00.234"), 0, "", 3, Decimal::from_str("0").unwrap()),
+            (Some("1969-12-31 23:59:59.432"), 0, "", 3, Decimal::from_str("0").unwrap()),
+            (Some("3001-01-19 00:00:00.432"), 0, "", 3, Decimal::from_str("0").unwrap()),
+            (Some("4001-01-19 00:00:00.533"), 0, "", 3, Decimal::from_str("0").unwrap()),
+            (Some("2015-11-13 10:20:19"), 0, "US/Eastern", 0, Decimal::from_str("1447428019").unwrap()),
+            (Some("2009-09-20 07:32:39"), 0, "US/Eastern", 0, Decimal::from_str("1253446359").unwrap()),
         ];
 
-        for (datetime, offset, fsp, expected) in cases {
+        let mut i = 0;
+        for (datetime, offset, time_zone_name, fsp, expected) in cases {
+            println!("test case idx: {i}");
+            i += 1;
             let mut cfg = EvalConfig::new();
-            cfg.set_time_zone_by_offset(offset).unwrap();
+            if time_zone_name.len() == 0 {
+                cfg.set_time_zone_by_offset(offset).unwrap();
+            } else {
+                cfg.set_time_zone_by_name(time_zone_name).unwrap();
+            }
             let mut ctx = EvalContext::new(Arc::<EvalConfig>::new(cfg));
             let mut result_field_type: FieldType = FieldTypeTp::NewDecimal.into();
             result_field_type.set_decimal(fsp);
