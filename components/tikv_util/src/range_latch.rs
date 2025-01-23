@@ -101,12 +101,6 @@ impl RangeLatch {
 
                 // Now acquire the latch after releasing the write guard
                 let mutex_guard = mutex.lock().unwrap();
-                // The `mutex_guard` is being extended to `'static` because its
-                // default lifetime is tied to the scope of this function (`'a`), as determined
-                // by Rust's borrow checker. By extending the lifetime to `'static`, we allow
-                // the `mutex_guard` to be stored in the `KeyHandleGuard` struct, which has a
-                // lifetime tied to its caller.
-                //
                 // Safety: `_mutex_guard` is declared before `handle` in `KeyHandleGuard`.
                 // So the mutex guard will be released earlier than the `Arc<KeyHandle>`.
                 // Then we can make sure the mutex guard doesn't point to released memory.
