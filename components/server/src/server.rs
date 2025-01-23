@@ -1756,7 +1756,8 @@ where
         } else {
             None
         };
-        let in_memory_engine_config_manager = InMemoryEngineConfigManager(in_memory_engine_config);
+        let in_memory_engine_config_manager =
+            InMemoryEngineConfigManager::new(in_memory_engine_config);
         self.kv_statistics = Some(factory.rocks_statistics());
         self.in_memory_engine_statistics = Some(in_memory_engine_statistics);
         let engines = Engines::new(kv_engine.clone(), raft_engine);

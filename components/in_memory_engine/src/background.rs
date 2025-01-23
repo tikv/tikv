@@ -713,7 +713,7 @@ impl BackgroundRunnerCore {
         let evict_count = regions_to_evict.len();
         let mut regions_to_delete = Vec::with_capacity(evict_count);
         info!(
-            "ime load_evict";
+            "ime auto load evict";
             "regions_to_load" => ?&regions_to_load,
             "regions_to_evict" => ?&regions_to_evict,
         );
@@ -730,11 +730,6 @@ impl BackgroundRunnerCore {
                         let _ = tx_clone.send(()).await;
                     })
                 })),
-            );
-            info!(
-                "ime load_evict: auto evict";
-                "region_to_evict" => ?&cache_region,
-                "evicted_regions" => ?&deletable_regions,
             );
             regions_to_delete.extend(deletable_regions);
         }
@@ -771,7 +766,7 @@ impl BackgroundRunnerCore {
             }
         }
         region_stats_manager.complete_auto_load_and_evict();
-        info!("ime load_evict complete");
+        info!("ime auto load evict complete");
     }
 }
 
@@ -934,7 +929,8 @@ impl BackgroundRunner {
         }
         let skiplist_engine = core.engine.engine.clone();
 
-        if core.memory_controller.reached_stop_load_threshold() {
+        let reached_stop_load = core.memory_controller.reached_stop_load_threshold();
+        if reached_stop_load {
             // We are running out of memory, so cancel the load.
             is_canceled = true;
         }
@@ -943,6 +939,7 @@ impl BackgroundRunner {
             info!(
                 "ime snapshot load canceled";
                 "region" => ?region,
+                "reached_stop_load" => reached_stop_load,
             );
             core.on_snapshot_load_failed(&region, &delete_range_scheduler, false);
             return;
@@ -3248,7 +3245,7 @@ pub mod tests {
         // 840*2 > capacity 1500, so the load will fail and the loaded keys should be
         // removed. However now we change the memory quota to 2000, so the range2 can be
         // cached.
-        let mut config_manager = InMemoryEngineConfigManager(config.clone());
+        let mut config_manager = InMemoryEngineConfigManager::new(config.clone());
         let mut config_change = ConfigChange::new();
         config_change.insert(String::from("capacity"), ConfigValue::Size(2000));
         config_manager.dispatch(config_change).unwrap();
