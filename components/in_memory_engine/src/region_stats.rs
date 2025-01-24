@@ -11,7 +11,7 @@ use std::{
 
 use collections::HashMap;
 use crossbeam::sync::ShardedLock;
-use engine_traits::{CacheRegion, EvictReason};
+use engine_traits::{CacheRegion, EvictReason, OnEvictFinishedCallback};
 use kvproto::metapb::Region;
 use parking_lot::Mutex;
 use pd_client::RegionStat;
@@ -21,9 +21,8 @@ use tikv_util::{config::VersionTrack, info, worker::Scheduler};
 use tokio::sync::mpsc;
 
 use crate::{
-    memory_controller::MemoryController,
-    region_manager::{AsyncFnOnce, CopRequestsSma},
-    BackgroundTask, InMemoryEngineConfig,
+    memory_controller::MemoryController, region_manager::CopRequestsSma, BackgroundTask,
+    InMemoryEngineConfig,
 };
 
 /// Do not evict a region if has been cached for less than this duration.
@@ -319,11 +318,7 @@ impl RegionStatsManager {
         cached_regions: HashMap<u64, Arc<StdMutex<CopRequestsSma>>>,
         memory_controller: &MemoryController,
     ) where
-        F: FnMut(
-            &CacheRegion,
-            EvictReason,
-            Option<Box<dyn AsyncFnOnce + Send + Sync>>,
-        ) -> Vec<CacheRegion>,
+        F: FnMut(&CacheRegion, EvictReason, Option<OnEvictFinishedCallback>) -> Vec<CacheRegion>,
     {
         let regions_activity = self.get_cached_region_stats(&cached_regions);
         if regions_activity.is_empty() {
@@ -716,7 +711,7 @@ pub mod tests {
         let cbs2 = cbs.clone();
         let evict_fn = move |evict_region: &CacheRegion,
                              _: EvictReason,
-                             cb: Option<Box<dyn AsyncFnOnce + Send + Sync>>|
+                             cb: Option<OnEvictFinishedCallback>|
               -> Vec<CacheRegion> {
             evicted_regions2.lock().push(evict_region.id);
             cbs2.lock().push(cb.unwrap());

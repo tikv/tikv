@@ -32,6 +32,7 @@ make_auto_flush_static_metric! {
     }
 
     pub label_enum EvictReasonType {
+        prepare_merge,
         merge,
         auto_evict,
         load_failed,
@@ -44,6 +45,7 @@ make_auto_flush_static_metric! {
         flashback,
         manual,
         destroy_peer,
+        ingest_sst,
     }
 
     pub label_enum OperationType {
@@ -246,6 +248,9 @@ pub(crate) fn observe_eviction_duration(secs: f64, evict_reason: EvictReason) {
         EvictReason::MemoryLimitReached => IN_MEMORY_ENGINE_EVICTION_DURATION_HISTOGRAM_STATIC
             .memory_limit_reached
             .observe(secs),
+        EvictReason::PrepareMerge => IN_MEMORY_ENGINE_EVICTION_DURATION_HISTOGRAM_STATIC
+            .prepare_merge
+            .observe(secs),
         EvictReason::Merge => IN_MEMORY_ENGINE_EVICTION_DURATION_HISTOGRAM_STATIC
             .merge
             .observe(secs),
@@ -261,8 +266,11 @@ pub(crate) fn observe_eviction_duration(secs: f64, evict_reason: EvictReason) {
         EvictReason::Manual => IN_MEMORY_ENGINE_EVICTION_DURATION_HISTOGRAM_STATIC
             .manual
             .observe(secs),
-        EvictReason::PeerDestroy => IN_MEMORY_ENGINE_EVICTION_DURATION_HISTOGRAM_STATIC
+        EvictReason::DestroyPeer => IN_MEMORY_ENGINE_EVICTION_DURATION_HISTOGRAM_STATIC
             .destroy_peer
+            .observe(secs),
+        EvictReason::IngestSST => IN_MEMORY_ENGINE_EVICTION_DURATION_HISTOGRAM_STATIC
+            .ingest_sst
             .observe(secs),
     }
 }
