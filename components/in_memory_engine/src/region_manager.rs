@@ -7,8 +7,6 @@ use std::{
         Bound::{self, Excluded, Unbounded},
     },
     fmt::Debug,
-    future::Future,
-    pin::Pin,
     result,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -17,15 +15,13 @@ use std::{
 };
 
 use collections::HashMap;
-use engine_traits::{CacheRegion, EvictReason, FailedReason};
+use engine_traits::{CacheRegion, EvictReason, FailedReason, OnEvictFinishedCallback};
 use futures::executor::block_on;
 use parking_lot::RwLock;
 use strum::EnumCount;
 use tikv_util::{info, time::Instant, warn};
 
 use crate::{metrics::observe_eviction_duration, read::RegionCacheSnapshotMeta};
-
-pub(crate) trait AsyncFnOnce = FnOnce() -> Pin<Box<dyn Future<Output = ()> + Send>>;
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy, Default, Hash, EnumCount)]
 #[repr(usize)]
@@ -130,7 +126,7 @@ struct EvictInfo {
     start: Instant,
     reason: EvictReason,
     // called when eviction finishes
-    cb: Option<Box<dyn AsyncFnOnce + Send + Sync>>,
+    on_evict_finished: Option<OnEvictFinishedCallback>,
 }
 
 impl Debug for EvictInfo {
@@ -215,7 +211,7 @@ impl CacheRegionMeta {
         &mut self,
         state: RegionState,
         reason: EvictReason,
-        cb: Option<Box<dyn AsyncFnOnce + Send + Sync>>,
+        on_evict_finished: Option<OnEvictFinishedCallback>,
     ) {
         use RegionState::*;
         assert_matches!(self.state, Loading | Active | LoadingCanceled);
@@ -224,7 +220,7 @@ impl CacheRegionMeta {
         self.evict_info = Some(EvictInfo {
             start: Instant::now_coarse(),
             reason,
-            cb,
+            on_evict_finished,
         });
     }
 
@@ -826,7 +822,7 @@ impl RegionManager {
         &self,
         evict_region: &CacheRegion,
         evict_reason: EvictReason,
-        mut cb: Option<Box<dyn AsyncFnOnce + Send + Sync>>,
+        mut on_evict_finished: Option<OnEvictFinishedCallback>,
     ) -> Vec<CacheRegion> {
         info!(
             "ime try to evict region";
@@ -854,7 +850,7 @@ impl RegionManager {
                 evict_reason,
                 &mut regions_map,
                 if rid == evict_region.id {
-                    cb.take()
+                    on_evict_finished.take()
                 } else {
                     None
                 },
@@ -872,7 +868,7 @@ impl RegionManager {
         evict_region: &CacheRegion,
         evict_reason: EvictReason,
         regions_map: &mut RegionMetaMap,
-        cb: Option<Box<dyn AsyncFnOnce + Send + Sync>>,
+        on_evict_finished: Option<OnEvictFinishedCallback>,
     ) -> Option<CacheRegion> {
         let meta = regions_map.mut_region_meta(id).unwrap();
         let prev_state = meta.state;
@@ -899,7 +895,7 @@ impl RegionManager {
         }
 
         if prev_state == RegionState::Active {
-            meta.mark_evict(RegionState::PendingEvict, evict_reason, cb);
+            meta.mark_evict(RegionState::PendingEvict, evict_reason, on_evict_finished);
         } else {
             meta.set_state(RegionState::LoadingCanceled)
         };
@@ -940,7 +936,7 @@ impl RegionManager {
                     evict_info.start.saturating_elapsed_secs(),
                     evict_info.reason,
                 );
-                if let Some(cb) = evict_info.cb {
+                if let Some(cb) = evict_info.on_evict_finished {
                     cbs.push(cb);
                 }
 
@@ -976,7 +972,7 @@ impl RegionManager {
         }
     }
 
-    pub fn load_region(&self, cache_region: CacheRegion) -> Result<(), LoadFailedReason> {
+    pub(crate) fn load_region(&self, cache_region: CacheRegion) -> Result<(), LoadFailedReason> {
         self.regions_map.write().load_region(cache_region)
     }
 
