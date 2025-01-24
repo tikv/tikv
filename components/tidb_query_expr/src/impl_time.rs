@@ -1717,28 +1717,6 @@ fn get_micro_timestamp(time: &DateTime, tz: &Tz) -> i64 {
             * 1_000_000);
 }
 
-#[rpn_fn]
-#[inline]
-pub fn unix_timestamp_current() -> Result<Option<i64>> {
-    let now = chrono::Utc::now();
-    let res = unix_timestamp_to_mysql_unix_timestamp(now.timestamp_micros(), 1);
-    match res {
-        Ok(value) => {
-            let i64_value_res = value.as_i64();
-            match i64_value_res {
-                Res::Ok(ret) => Ok(Some(ret)),
-                Res::Truncated(_) => {
-                    Err(EvaluateError::Other("Decimal is truncated".to_string()).into())
-                }
-                Res::Overflow(_) => {
-                    Err(EvaluateError::Other("Decimal is overflowed".to_string()).into())
-                }
-            }
-        }
-        Err(err) => Result::Err(err),
-    }
-}
-
 #[rpn_fn(capture = [ctx])]
 #[inline]
 pub fn unix_timestamp_int(ctx: &mut EvalContext, time: &DateTime) -> Result<Option<i64>> {
