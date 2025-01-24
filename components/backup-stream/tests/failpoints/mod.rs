@@ -18,16 +18,19 @@ mod all {
     };
 
     use backup_stream::{
+        errors::Error,
         metadata::{
             keys::MetaKey,
             store::{Keys, MetaStore},
         },
+        router::TaskSelector,
         GetCheckpointResult, RegionCheckpointOperation, RegionSet, Task,
     };
     use futures::executor::block_on;
     use tikv_util::{
+        box_err,
         config::{ReadableDuration, ReadableSize},
-        defer,
+        defer, HandyRwLock,
     };
     use txn_types::Key;
 
@@ -407,4 +410,139 @@ mod all {
             std::iter::once(enc_key.as_encoded().as_slice()),
         )
     }
+<<<<<<< HEAD
+=======
+
+    #[test]
+    fn encryption() {
+        let key_folder = TempDir::new().unwrap();
+        let key_file = key_folder.path().join("key.txt");
+        fail::cfg("log_backup_always_swap_out", "return()").unwrap();
+        std::fs::write(&key_file, "42".repeat(32) + "\n").unwrap();
+
+        let mut suite = SuiteBuilder::new_named("encryption")
+            .nodes(1)
+            .cluster_cfg(move |cfg| {
+                cfg.tikv.security.encryption.data_encryption_method = EncryptionMethod::Aes256Ctr;
+                cfg.tikv.security.encryption.master_key = MasterKeyConfig::File {
+                    config: FileConfig {
+                        path: key_file
+                            .to_str()
+                            .expect("cannot convert OsStr to Rust string")
+                            .to_owned(),
+                    },
+                };
+            })
+            .cfg(|cfg| cfg.temp_file_memory_quota = ReadableSize(16))
+            .build();
+
+        suite.must_register_task(1, "encryption");
+        let items = run_async_test(suite.write_records_batched(0, 128, 1));
+        // So the old files can be "flushed" to disk.
+        let items2 = run_async_test(suite.write_records_batched(256, 128, 1));
+        suite.sync();
+
+        let files = WalkDir::new(suite.temp_files.path())
+            .into_iter()
+            .filter_map(|file| file.ok().filter(|f| f.file_type().is_file()))
+            .collect::<Vec<_>>();
+        assert!(!files.is_empty());
+        for dir in files {
+            let data = std::fs::read(dir.path()).unwrap();
+            // assert it contains data...
+            assert_ne!(data.len(), 0);
+            // ... and is not plain zstd compression. (As it was encrypted.)
+            assert_ne!(
+                u32::from_le_bytes([data[0], data[1], data[2], data[3]]),
+                0xFD2FB528,
+                "not encrypted: found plain zstd header"
+            );
+            // ... and doesn't contains the raw value.
+            assert!(
+                !data
+                    .windows(Suite::PROMISED_SHORT_VALUE.len())
+                    .any(|w| w == Suite::PROMISED_SHORT_VALUE)
+            );
+            assert!(
+                !data
+                    .windows(Suite::PROMISED_LONG_VALUE.len())
+                    .any(|w| w == Suite::PROMISED_LONG_VALUE)
+            );
+        }
+
+        fail::remove("log_backup_always_swap_out");
+
+        suite.force_flush_files("encryption");
+        suite.sync();
+        suite.wait_for_flush();
+        suite.check_for_write_records(
+            suite.flushed_files.path(),
+            items.union(&items2).map(Vec::as_slice),
+        );
+    }
+
+    #[test]
+    fn failed_to_get_task_when_pausing() {
+        let suite = SuiteBuilder::new_named("resume_error").nodes(1).build();
+        suite.must_register_task(1, "resume_error");
+        let mcli = suite.get_meta_cli();
+        run_async_test(mcli.pause("resume_error")).unwrap();
+        suite.sync();
+        fail::cfg("failed_to_get_task", "1*return").unwrap();
+        run_async_test(mcli.resume("resume_error")).unwrap();
+        suite.sync();
+        // Make sure our suite doesn't panic.
+        suite.sync();
+    }
+
+    #[test]
+    fn fatal_error() {
+        let mut suite = SuiteBuilder::new_named("fatal_error").nodes(3).build();
+        suite.must_register_task(1, "test_fatal_error");
+        suite.sync();
+        run_async_test(suite.write_records(0, 1, 1));
+        suite.force_flush_files("test_fatal_error");
+        suite.wait_for_flush();
+        run_async_test(suite.advance_global_checkpoint("test_fatal_error")).unwrap();
+        fail::cfg("log-backup-upload-error", "1*return(not my fault)->off").unwrap();
+        let (victim, endpoint) = suite.endpoints.iter().next().unwrap();
+        endpoint
+            .scheduler()
+            .schedule(Task::FatalError(
+                TaskSelector::ByName("test_fatal_error".to_owned()),
+                Box::new(Error::Other(box_err!("everything is alright"))),
+            ))
+            .unwrap();
+        suite.sync();
+        fail::remove("log-backup-upload-error");
+        // Wait retry...
+        std::thread::sleep(Duration::from_secs(6));
+        suite.sync();
+        let err = run_async_test(
+            suite
+                .get_meta_cli()
+                .get_last_error_of("test_fatal_error", *victim),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(err.error_code, error_code::backup_stream::OTHER.code);
+        assert!(err.error_message.contains("everything is alright"));
+        assert_eq!(err.store_id, *victim);
+        let paused =
+            run_async_test(suite.get_meta_cli().check_task_paused("test_fatal_error")).unwrap();
+        assert!(paused);
+        let safepoints = suite.cluster.pd_client.gc_safepoints.rl();
+        let checkpoint = suite.global_checkpoint();
+
+        assert!(
+            safepoints.iter().any(|sp| {
+                sp.service.contains(&format!("{}", victim))
+                    && sp.ttl >= Duration::from_secs(60 * 60 * 24)
+                    && sp.safepoint.into_inner() == checkpoint - 1
+            }),
+            "{:?}",
+            safepoints
+        );
+    }
+>>>>>>> fcf4b967c3 (upload pause state before unloading a task (#18131))
 }
