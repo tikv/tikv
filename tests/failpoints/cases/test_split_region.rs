@@ -24,7 +24,9 @@ use kvproto::{
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use raftstore::{
-    store::{config::Config as RaftstoreConfig, util::is_vote_msg, Callback, PeerMsg},
+    store::{
+        config::Config as RaftstoreConfig, util::is_vote_msg, Callback, PeerMsg, WriteResponse,
+    },
     Result,
 };
 use test_raftstore::*;
@@ -1405,139 +1407,13 @@ fn test_split_region_with_no_valid_split_keys() {
     rx.recv_timeout(Duration::from_secs(5)).unwrap();
     rx.try_recv().unwrap_err();
 }
-<<<<<<< HEAD
-=======
-
-/// This test case test if a split failed for some reason,
-/// it can continue run split check and eventually the split will finish
-#[test_case(test_raftstore::new_node_cluster)]
-fn test_split_by_split_check_on_size() {
-    let mut cluster = new_cluster(0, 1);
-    cluster.cfg.raft_store.right_derive_when_split = true;
-    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(50);
-    cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
-    cluster.cfg.raft_store.region_split_check_diff = Some(ReadableSize(10));
-    let region_max_size = 1440;
-    let region_split_size = 960;
-    cluster.cfg.coprocessor.region_max_size = Some(ReadableSize(region_max_size));
-    cluster.cfg.coprocessor.region_split_size = Some(ReadableSize(region_split_size));
-    let pd_client = cluster.pd_client.clone();
-    pd_client.disable_default_operator();
-    let _r = cluster.run_conf_change();
-
-    // make first split fail
-    // 1*return means it would run "return" action once
-    fail::cfg("fail_pre_propose_split", "1*return").unwrap();
-
-    // Insert region_max_size into the cluster.
-    // It should trigger the split
-    let mut range = 1..;
-    let key = put_till_size(&mut cluster, region_max_size / 2, &mut range);
-    let region = pd_client.get_region(&key).unwrap();
-    put_till_size(&mut cluster, region_max_size / 2 + 100, &mut range);
-    // waiting the split,
-    cluster.wait_region_split(&region);
-}
-
-/// This test case test if a split failed for some reason,
-/// it can continue run split check and eventually the split will finish
-#[test_case(test_raftstore::new_node_cluster)]
-fn test_split_by_split_check_on_keys() {
-    let mut cluster = new_cluster(0, 1);
-    cluster.cfg.raft_store.right_derive_when_split = true;
-    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(50);
-    cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
-    cluster.cfg.raft_store.region_split_check_diff = Some(ReadableSize(10));
-    let region_max_keys = 15;
-    let region_split_keys = 10;
-    cluster.cfg.coprocessor.region_max_keys = Some(region_max_keys);
-    cluster.cfg.coprocessor.region_split_keys = Some(region_split_keys);
-    let pd_client = cluster.pd_client.clone();
-    pd_client.disable_default_operator();
-    let _r = cluster.run_conf_change();
-
-    // make first split fail
-    // 1*return means it would run "return" action once
-    fail::cfg("fail_pre_propose_split", "1*return").unwrap();
-
-    // Insert region_max_size into the cluster.
-    // It should trigger the split
-    let mut range = 1..;
-    let key = put_till_count(&mut cluster, region_max_keys / 2, &mut range);
-    let region = pd_client.get_region(&key).unwrap();
-    put_till_count(&mut cluster, region_max_keys / 2 + 3, &mut range);
-    // waiting the split,
-    cluster.wait_region_split(&region);
-}
-
-fn change(name: &str, value: &str) -> std::collections::HashMap<String, String> {
-    let mut m = std::collections::HashMap::new();
-    m.insert(name.to_owned(), value.to_owned());
-    m
-}
-
-#[test]
-fn test_turn_off_manual_compaction_caused_by_no_valid_split_key() {
-    let mut cluster = new_node_cluster(0, 1);
-    cluster.run();
-    let r = cluster.get_region(b"");
-    cluster.must_split(&r, b"k1");
-    let r = cluster.get_region(b"k1");
-    cluster.must_split(&r, b"k2");
-    cluster.must_put(b"k1", b"val");
-
-    let (tx, rx) = sync_channel(5);
-    fail::cfg_callback("on_compact_range_cf", move || {
-        tx.send(true).unwrap();
-    })
-    .unwrap();
-
-    let safe_point_inject = "safe_point_inject";
-    fail::cfg(safe_point_inject, "return(100)").unwrap();
-
-    {
-        let sim = cluster.sim.rl();
-        let cfg_controller = sim.get_cfg_controller(1).unwrap();
-        cfg_controller
-            .update(change(
-                "raftstore.skip-manual-compaction-in-clean_up-worker",
-                "true",
-            ))
-            .unwrap();
-    }
-
-    let r = cluster.get_region(b"k1");
-    cluster
-        .pd_client
-        .split_region(r.clone(), pdpb::CheckPolicy::Usekey, vec![b"k1".to_vec()]);
-    rx.recv_timeout(Duration::from_secs(1)).unwrap_err();
-
-    {
-        let sim = cluster.sim.rl();
-        let cfg_controller = sim.get_cfg_controller(1).unwrap();
-        cfg_controller
-            .update(change(
-                "raftstore.skip-manual-compaction-in-clean_up-worker",
-                "false",
-            ))
-            .unwrap();
-    }
-
-    cluster
-        .pd_client
-        .split_region(r, pdpb::CheckPolicy::Usekey, vec![b"k1".to_vec()]);
-    fail::cfg(safe_point_inject, "return(200)").unwrap();
-    rx.recv_timeout(Duration::from_secs(1)).unwrap();
-    rx.recv_timeout(Duration::from_secs(1)).unwrap();
-    rx.try_recv().unwrap_err();
-}
 
 /// Test that if the original leader of the parent region is tranfered to
 /// another peer, the new leader of the parent region will notify the new split
 /// region to campaign.
-#[test_case(test_raftstore::new_node_cluster)]
+#[test]
 fn test_region_split_after_parent_leader_transfer() {
-    let mut cluster = new_cluster(0, 3);
+    let mut cluster = test_raftstore::new_node_cluster(0, 3);
     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(50);
     cluster.cfg.raft_store.raft_election_timeout_ticks = 10;
 
@@ -1603,9 +1479,9 @@ fn test_region_split_after_parent_leader_transfer() {
 
 /// Test that the leader of the new split region will not be changed after
 /// the leader of the parent region is transferred.
-#[test_case(test_raftstore::new_node_cluster)]
+#[test]
 fn test_region_split_after_new_leader_elected() {
-    let mut cluster = new_cluster(0, 3);
+    let mut cluster = test_raftstore::new_node_cluster(0, 3);
     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(50);
     cluster.cfg.raft_store.raft_election_timeout_ticks = 10;
 
@@ -1667,4 +1543,3 @@ fn test_region_split_after_new_leader_elected() {
     );
     fail::remove(skip_clear_uncampaign);
 }
->>>>>>> 361a8ebfc6 (raftstore: `campaign` newly created regions in time after `Split` (#17625))

@@ -1809,13 +1809,7 @@ where
             // follower state
             let _ = self.ctx.router.send(
                 self.region_id(),
-<<<<<<< HEAD
-                PeerMsg::CasualMessage(CasualMessage::Campaign),
-=======
-                PeerMsg::CasualMessage(Box::new(CasualMessage::Campaign(
-                    CampaignType::ForceLeader,
-                ))),
->>>>>>> 361a8ebfc6 (raftstore: `campaign` newly created regions in time after `Split` (#17625))
+                PeerMsg::CasualMessage(CasualMessage::Campaign(CampaignType::ForceLeader)),
             );
         }
         self.fsm.has_ready = true;
@@ -4159,14 +4153,10 @@ where
         );
         self.fsm.peer.post_split();
 
-<<<<<<< HEAD
         // It's not correct anymore, so set it to false to schedule a split check task.
         self.fsm.peer.may_skip_split_check = false;
 
-        let is_leader = self.fsm.peer.is_leader();
-=======
         let (is_leader, is_follower) = (self.fsm.peer.is_leader(), self.fsm.peer.is_follower());
->>>>>>> 361a8ebfc6 (raftstore: `campaign` newly created regions in time after `Split` (#17625))
         if is_leader {
             if share_source_region_size {
                 self.fsm.peer.approximate_size = share_size;
