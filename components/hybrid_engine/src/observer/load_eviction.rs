@@ -77,44 +77,41 @@ impl LoadEvictionObserver {
         if apply.pending_handle_ssts.is_some() {
             let cache_region = CacheRegion::from_region(ctx.region());
             debug!(
-                "ime evict range due to ingest sst";
+                "ime evict region due to ingest sst";
                 "region" => ?cache_region,
             );
             self.evict_region(cache_region, EvictReason::IngestSST)
         }
+        let cmd_type = cmd.request.get_admin_request().get_cmd_type();
         if let Some(modified_region) = &state.modified_region {
-            if matches!(
-                cmd.request.get_admin_request().get_cmd_type(),
-                AdminCmdType::PrepareMerge
-            ) {
+            if matches!(cmd_type, AdminCmdType::PrepareMerge) {
                 let cache_region = CacheRegion::from_region(ctx.region());
                 debug!(
-                    "ime evict range due to apply commands";
+                    "ime evict region due to apply commands";
                     "region" => ?cache_region,
-                    "admin_command" => ?cmd.request.get_admin_request().get_cmd_type(),
+                    "admin_command" => ?cmd_type
                 );
                 self.evict_region(cache_region, EvictReason::PrepareMerge)
             } else if matches!(
-                cmd.request.get_admin_request().get_cmd_type(),
+                cmd_type,
                 AdminCmdType::CommitMerge | AdminCmdType::RollbackMerge
             ) {
                 let cache_region = CacheRegion::from_region(ctx.region());
                 debug!(
-                    "ime evict range due to apply commands";
+                    "ime evict region followed by reloading due to apply commands";
                     "region" => ?cache_region,
-                    "admin_command" => ?cmd.request.get_admin_request().get_cmd_type(),
+                    "admin_command" => ?cmd_type
                 );
                 self.merge_region(cache_region.clone(), modified_region.clone())
             }
         }
         // there are new_regions, this must be a split event.
         if !state.new_regions.is_empty() {
-            let cmd_type = cmd.request.get_admin_request().get_cmd_type();
             assert!(cmd_type == AdminCmdType::BatchSplit || cmd_type == AdminCmdType::Split);
             debug!(
                 "ime handle region split";
                 "region_id" => ctx.region().get_id(),
-                "admin_command" => ?cmd.request.get_admin_request().get_cmd_type(),
+                "admin_command" => ?cmd_type
                 "region" => ?state.modified_region.as_ref().unwrap(),
                 "new_regions" => ?state.new_regions,
             );
@@ -137,6 +134,8 @@ impl LoadEvictionObserver {
         });
     }
 
+    // Merged regions are evicted first and will be reloaded immediately to
+    // minimize the impact of the merge operations on the cache hit ratio.
     fn merge_region(&self, region: CacheRegion, modified_region: Region) {
         let cache_engine = self.cache_engine.clone();
         let modified_region = CacheRegion::from_region(&modified_region);
@@ -431,7 +430,7 @@ mod tests {
         let response = RaftCmdResponse::default();
         let cmd = Cmd::new(0, 0, request, response);
 
-        // Must not evict range for region split.
+        // Must not evict region for region split.
         observer.post_exec_cmd(&mut ctx, &cmd, &RegionState::default(), &mut apply);
         assert!(&cache_engine.region_events.lock().unwrap().is_empty());
     }
