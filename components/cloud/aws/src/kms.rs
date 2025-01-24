@@ -49,11 +49,25 @@ impl AwsKms {
         Creds: ProvideAwsCredentials + Send + Sync + 'static,
         Dispatcher: DispatchSignedRequest + Send + Sync + 'static,
     {
+<<<<<<< HEAD
         let region = util::get_region(
             config.location.region.as_ref(),
             config.location.endpoint.as_ref(),
         )?;
         let client = KmsClient::new_with(dispatcher, credentials_provider, region);
+=======
+        let mut loader = aws_config::defaults(BehaviorVersion::latest())
+            .credentials_provider(credentials_provider)
+            .http_client(client);
+
+        loader = util::configure_region(loader, &config.location.region)?;
+
+        loader = util::configure_endpoint(loader, &config.location.endpoint);
+
+        let sdk_config = block_on(loader.load());
+        let client = Client::new(&sdk_config);
+
+>>>>>>> 3c4cd29dd6 (aws: remove region check when create s3 storage (#18158))
         Ok(AwsKms {
             client,
             current_key_id: config.key_id,
