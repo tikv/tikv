@@ -5538,10 +5538,7 @@ mod tests {
             "storage.io-rate-limit.import-priority".to_owned(),
             "high".to_owned(),
         );
-        change.insert(
-            "security.redact-info-log".to_owned(),
-            "marker".to_owned(),
-        );
+        change.insert("security.redact-info-log".to_owned(), "marker".to_owned());
         let res = to_config_change(change).unwrap();
         assert_eq!(diff, res);
 

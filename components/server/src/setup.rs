@@ -4,7 +4,8 @@ use std::{
     borrow::ToOwned,
     io,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicBool, Ordering}, str::FromStr,
+    str::FromStr,
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 use chrono::Local;
@@ -218,7 +219,9 @@ pub fn initial_logger(config: &TikvConfig) {
     }
 
     // Set redact_info_log.
-    log_wrappers::set_redact_info_log(log_wrappers::RedactOption::from_str(&config.security.redact_info_log,).unwrap());
+    log_wrappers::set_redact_info_log(
+        log_wrappers::RedactOption::from_str(&config.security.redact_info_log).unwrap(),
+    );
 
     LOG_INITIALIZED.store(true, Ordering::SeqCst);
 }

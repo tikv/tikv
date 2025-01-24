@@ -120,7 +120,6 @@ impl From<RedactOption> for ConfigValue {
     }
 }
 
-
 impl Serialize for RedactOption {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
