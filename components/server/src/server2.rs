@@ -91,7 +91,7 @@ use tikv::{
         lock_manager::LockManager,
         raftkv::ReplicaReadLockChecker,
         resolve,
-        service::{DebugService, DiagnosticsService},
+        service::{DebugService, DefaultGrpcMessageFilter, DiagnosticsService},
         status_server::StatusServer,
         KvEngineFactoryBuilder, NodeV2, RaftKv2, Server, CPU_CORES_QUOTA_GAUGE, GRPC_THREAD_PREFIX,
         MEMORY_LIMIT_GAUGE,
@@ -109,7 +109,9 @@ use tikv::{
         Engine, Storage,
     },
 };
-use tikv_alloc::{add_thread_memory_accessor, remove_thread_memory_accessor};
+use tikv_alloc::{
+    add_thread_memory_accessor, remove_thread_memory_accessor, thread_allocate_exclusive_arena,
+};
 use tikv_util::{
     check_environment_variables,
     config::VersionTrack,
@@ -301,6 +303,7 @@ where
 
                     // SAFETY: we will call `remove_thread_memory_accessor` at before_stop.
                     unsafe { add_thread_memory_accessor() };
+                    thread_allocate_exclusive_arena().unwrap();
                 })
                 .before_stop(|| {
                     remove_thread_memory_accessor();
@@ -328,15 +331,16 @@ where
         let latest_ts = block_on(pd_client.get_tso()).expect("failed to get timestamp from PD");
         let concurrency_manager = ConcurrencyManager::new_with_config(
             latest_ts,
-            (config.storage.max_ts_sync_interval * LIMIT_VALID_TIME_MULTIPLIER).into(),
+            (config.storage.max_ts.cache_sync_interval * LIMIT_VALID_TIME_MULTIPLIER).into(),
             config
                 .storage
-                .action_on_invalid_max_ts
+                .max_ts
+                .action_on_invalid_update
                 .as_str()
                 .try_into()
                 .unwrap(),
             Some(pd_client.clone()),
-            config.storage.max_ts_drift_allowance.0,
+            config.storage.max_ts.max_drift.0,
         );
 
         // use different quota for front-end and back-end requests
@@ -826,6 +830,9 @@ where
             debug_thread_pool,
             health_controller,
             self.resource_manager.clone(),
+            Arc::new(DefaultGrpcMessageFilter::new(
+                server_config.value().reject_messages_on_memory_ratio,
+            )),
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
         cfg_controller.register(
@@ -964,7 +971,7 @@ where
         let cm = self.concurrency_manager.clone();
         let pd_client = self.pd_client.clone();
 
-        let max_ts_sync_interval = self.core.config.storage.max_ts_sync_interval.into();
+        let max_ts_sync_interval = self.core.config.storage.max_ts.cache_sync_interval.into();
         self.core
             .background_worker
             .spawn_interval_async_task(max_ts_sync_interval, move || {

@@ -487,7 +487,7 @@ where
     /// with it.
     fn clean_overlap_ranges(&mut self, start_key: Vec<u8>, end_key: Vec<u8>) -> Result<()> {
         let (start_key, end_key) = self.clean_overlap_ranges_roughly(start_key, end_key);
-        self.delete_all_in_range(&[Range::new(&start_key, &end_key)])
+        self.delete_all_in_range(&[Range::new(&start_key, &end_key)], false)
     }
 
     /// Inserts a new pending range, and it will be cleaned up with some delay.
@@ -510,6 +510,10 @@ where
 
     /// Cleans up stale ranges.
     fn clean_stale_ranges(&mut self) {
+        if self.mgr.is_offlined() {
+            info!("no need to clear stale range as store is marked offlined");
+            return;
+        }
         STALE_PEER_PENDING_DELETE_RANGE_GAUGE.set(self.pending_delete_ranges.len() as f64);
         if self.ingest_maybe_stall() {
             return;
@@ -538,7 +542,7 @@ where
                 Range::new(start, end)
             })
             .collect();
-
+        // Clear sst files belonging to the given range directly.
         self.engine
             .delete_ranges_cfs(
                 &WriteOptions::default(),
@@ -549,10 +553,13 @@ where
                 error!("failed to delete files in range"; "err" => %e);
             })
             .unwrap();
-        if let Err(e) = self.delete_all_in_range(&ranges) {
+        // Remove all overlapped ranges directly without ingesting.
+        if let Err(e) = self.delete_all_in_range(&ranges, true) {
             error!("failed to cleanup stale range"; "err" => %e);
             return;
         }
+        // Clear related blob files belonging to the given range directly after clearing
+        // all stale keys in sst files.
         self.engine
             .delete_ranges_cfs(
                 &WriteOptions::default(),
@@ -588,7 +595,7 @@ where
         false
     }
 
-    fn delete_all_in_range(&self, ranges: &[Range<'_>]) -> Result<()> {
+    fn delete_all_in_range(&self, ranges: &[Range<'_>], forcely_by_key: bool) -> Result<()> {
         let wopts = WriteOptions::default();
         for cf in self.engine.cf_names() {
             // CF_LOCK usually contains fewer keys than other CFs, so we delete them by key.
@@ -602,7 +609,18 @@ where
                     DeleteStrategy::DeleteByRange,
                     &CLEAR_OVERLAP_REGION_DURATION.by_range,
                 )
+            // Meanwhile, if `forcely_by_key` is specified and
+            // `cfg.use_delete_range` is not enabled, it should remove the
+            // range by delete keys rather than ingestion.
+            } else if forcely_by_key {
+                (
+                    DeleteStrategy::DeleteByKey,
+                    &CLEAR_OVERLAP_REGION_DURATION.by_key,
+                )
             } else {
+                // Deprecated method for clearing stale ranges due to potential latency
+                // jitters. It's still applicable when clearing overlapped regions
+                // before applying the newly added snapshot.
                 (
                     DeleteStrategy::DeleteByWriter {
                         sst_path: self.mgr.get_temp_path_for_ingest(),

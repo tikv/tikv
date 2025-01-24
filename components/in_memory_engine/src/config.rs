@@ -212,7 +212,7 @@ impl InMemoryEngineConfig {
 }
 
 #[derive(Clone)]
-pub struct InMemoryEngineConfigManager(pub Arc<VersionTrack<InMemoryEngineConfig>>);
+pub struct InMemoryEngineConfigManager(Arc<VersionTrack<InMemoryEngineConfig>>);
 
 impl InMemoryEngineConfigManager {
     pub fn new(config: Arc<VersionTrack<InMemoryEngineConfig>>) -> Self {
