@@ -89,40 +89,11 @@ pub fn configure_endpoint(loader: ConfigLoader, endpoint: &str) -> ConfigLoader 
     }
 }
 
-pub fn configure_region(
-    loader: ConfigLoader,
-    region: &str,
-    custom: bool,
-) -> io::Result<ConfigLoader> {
+pub fn configure_region(loader: ConfigLoader, region: &str) -> io::Result<ConfigLoader> {
     if !region.is_empty() {
-        validate_region(region, custom)?;
         Ok(loader.region(Region::new(region.to_owned())))
     } else {
         Ok(loader.region(DefaultRegionProvider::new()))
-    }
-}
-
-fn validate_region(region: &str, custom: bool) -> io::Result<()> {
-    if custom {
-        return Ok(());
-    }
-    let v: &str = &region.to_lowercase();
-
-    match v {
-        "ap-east-1" | "apeast1" | "ap-northeast-1" | "apnortheast1" | "ap-northeast-2"
-        | "apnortheast2" | "ap-northeast-3" | "apnortheast3" | "ap-south-1" | "apsouth1"
-        | "ap-southeast-1" | "apsoutheast1" | "ap-southeast-2" | "apsoutheast2"
-        | "ca-central-1" | "cacentral1" | "eu-central-1" | "eucentral1" | "eu-west-1"
-        | "euwest1" | "eu-west-2" | "euwest2" | "eu-west-3" | "euwest3" | "eu-north-1"
-        | "eunorth1" | "eu-south-1" | "eusouth1" | "me-south-1" | "mesouth1" | "us-east-1"
-        | "useast1" | "sa-east-1" | "saeast1" | "us-east-2" | "useast2" | "us-west-1"
-        | "uswest1" | "us-west-2" | "uswest2" | "us-gov-east-1" | "usgoveast1"
-        | "us-gov-west-1" | "usgovwest1" | "cn-north-1" | "cnnorth1" | "cn-northwest-1"
-        | "cnnorthwest1" | "af-south-1" | "afsouth1" => Ok(()),
-        _ => Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("invalid aws region format {}", region),
-        )),
     }
 }
 

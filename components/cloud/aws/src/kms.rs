@@ -58,11 +58,7 @@ impl AwsKms {
             .credentials_provider(credentials_provider)
             .http_client(client);
 
-        loader = util::configure_region(
-            loader,
-            &config.location.region,
-            !config.location.endpoint.is_empty(),
-        )?;
+        loader = util::configure_region(loader, &config.location.region)?;
 
         loader = util::configure_endpoint(loader, &config.location.endpoint);
 
