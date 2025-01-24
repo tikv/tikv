@@ -111,7 +111,7 @@ impl LoadEvictionObserver {
             debug!(
                 "ime handle region split";
                 "region_id" => ctx.region().get_id(),
-                "admin_command" => ?cmd_type
+                "admin_command" => ?cmd_type,
                 "region" => ?state.modified_region.as_ref().unwrap(),
                 "new_regions" => ?state.new_regions,
             );
