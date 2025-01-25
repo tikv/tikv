@@ -4,7 +4,7 @@
 
 use std::{borrow::ToOwned, cmp::max, error::Error, path::Path};
 
-use engine_rocks::raw::{Cache, LRUCacheOptions, MemoryAllocator};
+use engine_rocks::raw::{Cache, HyperClockCacheOptions, LRUCacheOptions, MemoryAllocator};
 use file_system::{IoPriority, IoRateLimitMode, IoRateLimiter, IoType};
 use kvproto::kvrpcpb::ApiVersion;
 use libc::c_int;
@@ -296,6 +296,8 @@ pub struct BlockCacheConfig {
     pub low_pri_pool_ratio: f64,
     #[online_config(skip)]
     pub memory_allocator: Option<String>,
+    #[online_config(skip)]
+    pub hyper_clock_cache: Option<usize>,
 }
 
 impl Default for BlockCacheConfig {
@@ -308,6 +310,7 @@ impl Default for BlockCacheConfig {
             high_pri_pool_ratio: 0.8,
             low_pri_pool_ratio: 0.2,
             memory_allocator: Some(String::from("nodump")),
+            hyper_clock_cache: None,
         }
     }
 }
@@ -327,6 +330,10 @@ impl BlockCacheConfig {
             warn!("storage.block-cache.shared is deprecated, cache is always shared.");
         }
         let capacity = self.capacity.unwrap_or(FALLBACK_BLOCK_CACHE_CAPACITY).0 as usize;
+        if let Some(estimated_entry_charge) = self.hyper_clock_cache {
+            let cache_opts = HyperClockCacheOptions::new(capacity, estimated_entry_charge);
+            return cache_opts.make_shared_cache();
+        }
         let mut cache_opts = LRUCacheOptions::new();
         cache_opts.set_capacity(capacity);
         cache_opts.set_num_shard_bits(self.adjust_shard_bits(capacity) as c_int);

@@ -13,7 +13,7 @@ pub use rocksdb::{
     ConcurrentTaskLimiter, DBBottommostLevelCompaction, DBCompactionFilter, DBCompactionStyle,
     DBCompressionType, DBEntryType, DBRateLimiterMode, DBRecoveryMode, DBStatisticsTickerType,
     DBTableFileCreationReason, DBTitanDBBlobRunMode, Env, EventListener, FlushOptions,
-    IngestExternalFileOptions, LRUCacheOptions, MemoryAllocator, PerfContext,
-    PrepopulateBlockCache, Range, RateLimiter, SliceTransform, Statistics,
+    HyperClockCacheOptions, IngestExternalFileOptions, LRUCacheOptions, MemoryAllocator,
+    PerfContext, PrepopulateBlockCache, Range, RateLimiter, SliceTransform, Statistics,
     TablePropertiesCollector, TablePropertiesCollectorFactory, WriteBufferManager,
 };
