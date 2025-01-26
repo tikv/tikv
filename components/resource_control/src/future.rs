@@ -242,11 +242,9 @@ mod tests {
     #[allow(clippy::unused_async)]
     async fn empty() {}
 
+    #[cfg(feature = "failpoints")]
     #[test]
     fn test_limited_future() {
-        #[cfg(not(feature = "failpoints"))]
-        return;
-
         let pool = YatpPoolBuilder::new(DefaultTicker::default())
             .thread_count(1, 1, 1)
             .name_prefix("test")
