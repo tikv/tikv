@@ -42,8 +42,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         assert_eq!(m.get_msg_type(), MessageType::MsgReadIndex);
 
         fail::fail_point!("on_step_read_index_msg");
-        ctx.coprocessor_host
-            .on_step_read_index(m, self.state_role());
+        ctx.coprocessor_host.on_step_read_index(
+            m,
+            self.state_role(),
+            Some(self.region().get_start_key()),
+            Some(self.region().get_end_key()),
+        );
         // Must use the commit index of `PeerStorage` instead of the commit index
         // in raft-rs which may be greater than the former one.
         // For more details, see the annotations above `on_leader_commit_idx_changed`.
