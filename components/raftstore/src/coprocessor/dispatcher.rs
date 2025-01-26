@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath] called by Fsm on_ready_compute_hash
-use std::{borrow::Cow, marker::PhantomData, mem, ops::Deref};
+use std::{borrow::Cow, marker::PhantomData, mem, ops::Deref, option::Option::Some};
 
 use engine_traits::{CfName, KvEngine, WriteBatch};
 use kvproto::{
@@ -978,9 +978,18 @@ impl<E: KvEngine> CoprocessorHost<E> {
         }
     }
 
-    pub fn on_step_read_index(&self, msg: &mut eraftpb::Message, role: StateRole) {
+    pub fn on_step_read_index(
+        &self,
+        msg: &mut eraftpb::Message,
+        role: StateRole,
+        region_start_key: Option<&[u8]>,
+        region_end_key: Option<&[u8]>,
+    ) {
         for step_ob in &self.registry.read_index_observers {
-            step_ob.observer.inner().on_step(msg, role);
+            step_ob
+                .observer
+                .inner()
+                .on_step(msg, role, region_start_key, region_end_key);
         }
     }
 

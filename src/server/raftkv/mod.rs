@@ -58,7 +58,7 @@ use tikv_util::{
     time::Instant,
 };
 use tracker::{get_tls_tracker_token, GLOBAL_TRACKERS};
-use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, WriteBatchFlags};
+use txn_types::{ErrorInner, Key, TimeStamp, TxnExtra, TxnExtraScheduler, WriteBatchFlags};
 
 use super::metrics::*;
 use crate::storage::{
@@ -823,7 +823,13 @@ impl ReplicaReadLockChecker {
 impl Coprocessor for ReplicaReadLockChecker {}
 
 impl ReadIndexObserver for ReplicaReadLockChecker {
-    fn on_step(&self, msg: &mut eraftpb::Message, role: StateRole) {
+    fn on_step(
+        &self,
+        msg: &mut eraftpb::Message,
+        role: StateRole,
+        region_start_key: Option<&[u8]>,
+        region_end_key: Option<&[u8]>,
+    ) {
         // Only check and return result if the current peer is a leader.
         // If it's not a leader, the read index request will be redirected to the leader
         // later.
@@ -840,16 +846,16 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                 .concurrency_manager
                 .update_max_ts(start_ts, || format!("read_index-{}", start_ts))
             {
-                error!("failed to update max_ts in concurrency manager"; "err" => ?e);
+                error!("failed to update max ts in concurrency manager"; "err" => ?e);
             }
+            let key_bound = |key: Vec<u8>| {
+                if key.is_empty() {
+                    None
+                } else {
+                    Some(txn_types::Key::from_encoded(key))
+                }
+            };
             for range in request.mut_key_ranges().iter_mut() {
-                let key_bound = |key: Vec<u8>| {
-                    if key.is_empty() {
-                        None
-                    } else {
-                        Some(txn_types::Key::from_encoded(key))
-                    }
-                };
                 let start_key = key_bound(range.take_start_key());
                 let end_key = key_bound(range.take_end_key());
                 // The replica read is not compatible with `RcCheckTs` isolation level yet.
@@ -868,7 +874,7 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                         )
                     },
                 );
-                if let Err(txn_types::Error(box txn_types::ErrorInner::KeyIsLocked(lock))) = res {
+                if let Err(txn_types::Error(box ErrorInner::KeyIsLocked(lock))) = res {
                     rctx.locked = Some(lock);
                     REPLICA_READ_LOCK_CHECK_HISTOGRAM_VEC_STATIC
                         .locked
@@ -877,6 +883,32 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                     REPLICA_READ_LOCK_CHECK_HISTOGRAM_VEC_STATIC
                         .unlocked
                         .observe(begin_instant.saturating_elapsed().as_secs_f64());
+                }
+            }
+            if rctx.locked.is_none() {
+                if let (Some(region_start_key), Some(region_end_key)) =
+                    (region_start_key, region_end_key)
+                {
+                    // check if there is a memory lock on a region
+                    let start_key = key_bound(region_start_key.to_vec());
+                    let end_key = key_bound(region_end_key.to_vec());
+
+                    let res = self.concurrency_manager.read_range_check(
+                        start_key.as_ref(),
+                        end_key.as_ref(),
+                        |key, lock| {
+                            txn_types::Lock::check_ts_conflict_for_replica_read(
+                                Cow::Borrowed(lock),
+                                key,
+                                start_ts,
+                                &Default::default(),
+                                IsolationLevel::Si,
+                            )
+                        },
+                    );
+                    if !matches!(res, Err(txn_types::Error(box ErrorInner::KeyIsLocked(_)))) {
+                        rctx.memory_lock = Some(start_ts.into_inner());
+                    }
                 }
             }
             msg.mut_entries()[0].set_data(rctx.to_bytes().into());
@@ -904,7 +936,7 @@ mod tests {
         e.set_data(uuid.as_bytes().to_vec().into());
         m.mut_entries().push(e);
 
-        checker.on_step(&mut m, StateRole::Leader);
+        checker.on_step(&mut m, StateRole::Leader, None, None);
         assert_eq!(m.get_entries()[0].get_data(), uuid.as_bytes());
     }
 
@@ -920,12 +952,13 @@ mod tests {
             id: Uuid::new_v4(),
             request: Some(request),
             locked: None,
+            memory_lock: None,
         };
         let mut e = eraftpb::Entry::default();
         e.set_data(rctx.to_bytes().into());
         m.mut_entries().push(e);
 
-        checker.on_step(&mut m, StateRole::Follower);
+        checker.on_step(&mut m, StateRole::Follower, None, None);
         assert_eq!(m.get_entries()[0].get_data(), rctx.to_bytes());
     }
 }

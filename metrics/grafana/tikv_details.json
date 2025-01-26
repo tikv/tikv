@@ -10705,7 +10705,7 @@
           },
           "gridPos": {
             "h": 7,
-            "w": 24,
+            "w": 12,
             "x": 0,
             "y": 0
           },
@@ -10747,17 +10747,7 @@
           "renderer": "flot",
           "repeat": null,
           "repeatDirection": null,
-          "seriesOverrides": [
-            {
-              "alias": "/.*-total/",
-              "bars": false,
-              "fill": 1,
-              "fillBelowTo": null,
-              "lines": true,
-              "yaxis": 2,
-              "zindex": 0
-            }
-          ],
+          "seriesOverrides": [],
           "span": null,
           "stack": false,
           "steppedLine": false,
@@ -10776,33 +10766,211 @@
               "refId": "",
               "step": 10,
               "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Local reader reject requests",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "none",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
             },
             {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": null,
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 12,
+            "y": 0
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 80,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_raftstore_local_read_executed_requests\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance) ",
+              "expr": "sum(rate(\n    tikv_raftstore_local_read_executed_requests\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by ($additional_groupby) ",
               "format": "time_series",
               "hide": false,
               "instant": false,
               "interval": "",
               "intervalFactor": 1,
-              "legendFormat": "{{instance}}-total",
+              "legendFormat": "tikv_raftstore_local_read_executed_requests {{$additional_groupby}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_raftstore_local_read_executed_requests\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance) ",
+              "query": "sum(rate(\n    tikv_raftstore_local_read_executed_requests\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by ($additional_groupby) ",
               "refId": "",
               "step": 10,
               "target": ""
             },
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_raftstore_local_read_executed_stale_read_requests\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance) ",
+              "expr": "sum(rate(\n    tikv_raftstore_local_read_executed_stale_read_requests\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by ($additional_groupby) ",
               "format": "time_series",
               "hide": false,
               "instant": false,
               "interval": "",
               "intervalFactor": 1,
-              "legendFormat": "{{instance}}-stale-read",
+              "legendFormat": "tikv_raftstore_local_read_executed_stale_read_requests {{$additional_groupby}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_raftstore_local_read_executed_stale_read_requests\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance) ",
+              "query": "sum(rate(\n    tikv_raftstore_local_read_executed_stale_read_requests\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by ($additional_groupby) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(rate(\n    tikv_raftstore_local_read_executed_follower_read_requests\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by ($additional_groupby) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "tikv_raftstore_local_read_executed_follower_read_requests {{$additional_groupby}}",
+              "metric": "",
+              "query": "sum(rate(\n    tikv_raftstore_local_read_executed_follower_read_requests\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by ($additional_groupby) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(rate(\n    tikv_raftstore_local_read_received_requests\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by ($additional_groupby) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "tikv_raftstore_local_read_received_requests {{$additional_groupby}}",
+              "metric": "",
+              "query": "sum(rate(\n    tikv_raftstore_local_read_received_requests\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by ($additional_groupby) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(rate(\n    tikv_raftstore_local_read_received_stale_read_requests\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by ($additional_groupby) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "tikv_raftstore_local_read_received_stale_read_requests {{$additional_groupby}}",
+              "metric": "",
+              "query": "sum(rate(\n    tikv_raftstore_local_read_received_stale_read_requests\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by ($additional_groupby) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(rate(\n    tikv_raftstore_local_read_received_follower_read_requests\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by ($additional_groupby) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "tikv_raftstore_local_read_received_follower_read_requests {{$additional_groupby}}",
+              "metric": "",
+              "query": "sum(rate(\n    tikv_raftstore_local_read_received_follower_read_requests\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by ($additional_groupby) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -10811,7 +10979,7 @@
           "thresholds": [],
           "timeFrom": null,
           "timeShift": null,
-          "title": "Local reader requests",
+          "title": "Local reader read requests",
           "tooltip": {
             "msResolution": true,
             "shared": true,
@@ -10887,7 +11055,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 80,
+      "id": 81,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -10926,7 +11094,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 81,
+          "id": 82,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -11059,7 +11227,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 82,
+          "id": 83,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -11201,7 +11369,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 83,
+          "id": 84,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -11343,7 +11511,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 84,
+          "id": 85,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -11485,7 +11653,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 85,
+          "id": 86,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -11636,7 +11804,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 86,
+          "id": 87,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -11778,7 +11946,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 87,
+          "id": 88,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -11911,7 +12079,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 88,
+          "id": 89,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -12044,7 +12212,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 89,
+          "id": 90,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -12177,7 +12345,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 90,
+          "id": 91,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -12310,7 +12478,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 91,
+          "id": 92,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -12443,7 +12611,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 92,
+          "id": 93,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -12576,7 +12744,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 93,
+          "id": 94,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -12619,7 +12787,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_thread_cpu_seconds_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"(sst_|impwkr_).*\"}\n    [$__rate_interval]\n)) by (instance) ",
+              "expr": "sum(rate(\n    tikv_thread_cpu_seconds_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sst_.*\"}\n    [$__rate_interval]\n)) by (instance) ",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -12627,7 +12795,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{instance}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_thread_cpu_seconds_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"(sst_|impwkr_).*\"}\n    [$__rate_interval]\n)) by (instance) ",
+              "query": "sum(rate(\n    tikv_thread_cpu_seconds_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",name=~\"sst_.*\"}\n    [$__rate_interval]\n)) by (instance) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -12709,7 +12877,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 94,
+          "id": 95,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -12842,7 +13010,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 95,
+          "id": 96,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -13005,7 +13173,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 96,
+          "id": 97,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -13147,7 +13315,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 97,
+          "id": 98,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -13328,7 +13496,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 98,
+          "id": 99,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -13500,7 +13668,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 99,
+          "id": 100,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -13648,7 +13816,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 100,
+          "id": 101,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -13784,7 +13952,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 101,
+      "id": 102,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -13823,7 +13991,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 102,
+          "id": 103,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -13971,7 +14139,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 103,
+          "id": 104,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -14119,7 +14287,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 104,
+          "id": 105,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -14252,7 +14420,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 105,
+          "id": 106,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -14403,7 +14571,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 106,
+      "id": 107,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -14442,7 +14610,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 107,
+          "id": 108,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -14643,7 +14811,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 108,
+          "id": 109,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -14844,7 +15012,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 109,
+          "id": 110,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -15045,7 +15213,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 110,
+          "id": 111,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -15246,7 +15414,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 111,
+          "id": 112,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -15447,7 +15615,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 112,
+          "id": 113,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -15648,7 +15816,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 113,
+          "id": 114,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -15849,7 +16017,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 114,
+          "id": 115,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -16050,7 +16218,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 115,
+          "id": 116,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -16251,7 +16419,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 116,
+          "id": 117,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -16452,7 +16620,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 117,
+          "id": 118,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -16653,7 +16821,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 118,
+          "id": 119,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -16854,7 +17022,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 119,
+          "id": 120,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -17058,7 +17226,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 120,
+      "id": 121,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -17104,7 +17272,7 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 121,
+          "id": 122,
           "interval": null,
           "legend": {
             "show": false
@@ -20916,7 +21084,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 147,
+=======
+          "id": 123,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -21124,7 +21296,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 148,
+=======
+          "id": 124,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "legend": {
             "show": false
@@ -21222,7 +21398,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 149,
+=======
+          "id": 125,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -21430,7 +21610,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 150,
+=======
+          "id": 126,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "legend": {
             "show": false
@@ -21528,7 +21712,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 151,
+=======
+          "id": 127,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -21736,7 +21924,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 152,
+=======
+          "id": 128,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "legend": {
             "show": false
@@ -21834,7 +22026,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 153,
+=======
+          "id": 129,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -22042,7 +22238,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 154,
+=======
+          "id": 130,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "legend": {
             "show": false
@@ -22140,7 +22340,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 155,
+=======
+          "id": 131,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -22348,7 +22552,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 156,
+=======
+          "id": 132,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "legend": {
             "show": false
@@ -22446,7 +22654,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 157,
+=======
+          "id": 133,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -22647,7 +22859,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 158,
+=======
+          "id": 134,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -22795,7 +23011,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 159,
+=======
+          "id": 135,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -22931,7 +23151,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 160,
+=======
+      "id": 136,
+>>>>>>> 16354ff9f (follower read cache)
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -22970,7 +23194,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 161,
+=======
+          "id": 137,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -23103,7 +23331,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 162,
+=======
+          "id": 138,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -23236,7 +23468,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 163,
+=======
+          "id": 139,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -23369,7 +23605,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 164,
+=======
+          "id": 140,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -23509,7 +23749,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 165,
+=======
+          "id": 141,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "legend": {
             "show": false
@@ -23607,7 +23851,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 166,
+=======
+          "id": 142,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -23815,7 +24063,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 167,
+=======
+          "id": 143,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "legend": {
             "show": false
@@ -23913,7 +24165,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 168,
+=======
+          "id": 144,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -24121,7 +24377,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 169,
+=======
+          "id": 145,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "legend": {
             "show": false
@@ -24219,7 +24479,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 170,
+=======
+          "id": 146,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -24427,7 +24691,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 171,
+=======
+          "id": 147,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "legend": {
             "show": false
@@ -24532,7 +24800,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 172,
+=======
+          "id": 148,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "legend": {
             "show": false
@@ -24630,7 +24902,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 173,
+=======
+          "id": 149,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -24763,7 +25039,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 174,
+=======
+          "id": 150,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -24914,7 +25194,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 175,
+=======
+      "id": 151,
+>>>>>>> 16354ff9f (follower read cache)
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -24953,7 +25237,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 176,
+=======
+          "id": 152,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -25101,7 +25389,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 177,
+=======
+          "id": 153,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -25256,7 +25548,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 178,
+=======
+          "id": 154,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "legend": {
             "show": false
@@ -25354,7 +25650,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 179,
+=======
+          "id": 155,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -25494,7 +25794,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 180,
+=======
+          "id": 156,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "legend": {
             "show": false
@@ -25599,7 +25903,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 181,
+=======
+          "id": 157,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "legend": {
             "show": false
@@ -25704,7 +26012,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 182,
+=======
+          "id": 158,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "legend": {
             "show": false
@@ -25809,7 +26121,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 183,
+=======
+          "id": 159,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "legend": {
             "show": false
@@ -25914,7 +26230,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 184,
+=======
+          "id": 160,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "legend": {
             "show": false
@@ -26019,7 +26339,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 185,
+=======
+          "id": 161,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "legend": {
             "show": false
@@ -26124,7 +26448,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 186,
+=======
+          "id": 162,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "legend": {
             "show": false
@@ -26229,7 +26557,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 187,
+=======
+          "id": 163,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "legend": {
             "show": false
@@ -26334,7 +26666,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 188,
+=======
+          "id": 164,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "legend": {
             "show": false
@@ -26439,7 +26775,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 189,
+=======
+          "id": 165,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "legend": {
             "show": false
@@ -26537,7 +26877,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 190,
+=======
+          "id": 166,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -26670,7 +27014,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 191,
+=======
+          "id": 167,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -26821,7 +27169,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 192,
+=======
+      "id": 168,
+>>>>>>> 16354ff9f (follower read cache)
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -26860,7 +27212,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 193,
+=======
+          "id": 169,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -26993,7 +27349,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 194,
+=======
+          "id": 170,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -27126,7 +27486,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 195,
+=======
+          "id": 171,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -27259,7 +27623,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 196,
+=======
+          "id": 172,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -27392,7 +27760,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 197,
+=======
+          "id": 173,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -27525,7 +27897,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 198,
+=======
+          "id": 174,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -27680,7 +28056,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 199,
+=======
+          "id": 175,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "legend": {
             "show": false
@@ -27778,7 +28158,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 200,
+=======
+          "id": 176,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -27986,7 +28370,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 201,
+=======
+          "id": 177,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "legend": {
             "show": false
@@ -28084,7 +28472,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 202,
+=======
+          "id": 178,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -28288,7 +28680,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 203,
+=======
+      "id": 179,
+>>>>>>> 16354ff9f (follower read cache)
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -28327,7 +28723,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 204,
+=======
+          "id": 180,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -28460,7 +28860,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 205,
+=======
+          "id": 181,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -28593,7 +28997,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 206,
+=======
+          "id": 182,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -28726,7 +29134,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 207,
+=======
+          "id": 183,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -28859,7 +29271,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 208,
+=======
+          "id": 184,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -28992,7 +29408,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 209,
+=======
+          "id": 185,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -29155,7 +29575,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 210,
+=======
+          "id": 186,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -29291,7 +29715,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 211,
+=======
+      "id": 187,
+>>>>>>> 16354ff9f (follower read cache)
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -29330,7 +29758,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 212,
+=======
+          "id": 188,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -29478,7 +29910,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 213,
+=======
+          "id": 189,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -29626,7 +30062,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 214,
+=======
+          "id": 190,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -29759,7 +30199,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 215,
+=======
+          "id": 191,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -29892,7 +30336,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 216,
+=======
+          "id": 192,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -30025,7 +30473,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 217,
+=======
+          "id": 193,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -30158,7 +30610,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 218,
+=======
+          "id": 194,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -30291,7 +30747,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 219,
+=======
+          "id": 195,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -30424,7 +30884,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 220,
+=======
+          "id": 196,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -30601,7 +31065,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 221,
+=======
+      "id": 197,
+>>>>>>> 16354ff9f (follower read cache)
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -30640,7 +31108,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 222,
+=======
+          "id": 198,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -30803,7 +31275,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 223,
+=======
+          "id": 199,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -31004,7 +31480,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 224,
+=======
+          "id": 200,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -31152,7 +31632,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 225,
+=======
+          "id": 201,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -31315,7 +31799,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 226,
+=======
+          "id": 202,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -31516,7 +32004,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 227,
+=======
+          "id": 203,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -31694,7 +32186,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 228,
+=======
+          "id": 204,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -31857,7 +32353,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 229,
+=======
+          "id": 205,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -32020,7 +32520,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 230,
+=======
+          "id": 206,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -32153,7 +32657,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 231,
+=======
+          "id": 207,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -32357,7 +32865,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 232,
+=======
+      "id": 208,
+>>>>>>> 16354ff9f (follower read cache)
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -32396,7 +32908,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 233,
+=======
+          "id": 209,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -32589,7 +33105,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 234,
+=======
+          "id": 210,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -32767,7 +33287,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 235,
+=======
+          "id": 211,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -32975,7 +33499,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 236,
+=======
+          "id": 212,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -33153,7 +33681,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 237,
+=======
+          "id": 213,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -33316,7 +33848,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 238,
+=======
+          "id": 214,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -33494,7 +34030,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 239,
+=======
+          "id": 215,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -33627,7 +34167,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 240,
+=======
+          "id": 216,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -33805,7 +34349,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 241,
+=======
+          "id": 217,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -33978,7 +34526,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 242,
+=======
+          "id": 218,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -34156,7 +34708,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 243,
+=======
+          "id": 219,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -34289,7 +34845,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 244,
+=======
+          "id": 220,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -34467,7 +35027,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 245,
+=======
+          "id": 221,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -34645,7 +35209,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 246,
+=======
+          "id": 222,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -34823,7 +35391,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 247,
+=======
+          "id": 223,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -34956,7 +35528,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 248,
+=======
+          "id": 224,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -35089,7 +35665,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 249,
+=======
+          "id": 225,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -35222,7 +35802,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 250,
+=======
+          "id": 226,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -35445,7 +36029,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 251,
+=======
+          "id": 227,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -35638,7 +36226,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 252,
+=======
+          "id": 228,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -35801,7 +36393,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 253,
+=======
+          "id": 229,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -35994,7 +36590,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 254,
+=======
+          "id": 230,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -36142,7 +36742,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 255,
+=======
+          "id": 231,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -36275,7 +36879,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 256,
+=======
+          "id": 232,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -36423,7 +37031,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 257,
+=======
+          "id": 233,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -36601,7 +37213,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 258,
+=======
+          "id": 234,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -36764,7 +37380,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 259,
+=======
+          "id": 235,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -36942,7 +37562,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 260,
+=======
+          "id": 236,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -37075,7 +37699,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 261,
+=======
+          "id": 237,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -37208,7 +37836,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 262,
+=======
+          "id": 238,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -37341,7 +37973,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 263,
+=======
+          "id": 239,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -37474,7 +38110,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 264,
+=======
+          "id": 240,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -37607,7 +38247,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 265,
+=======
+          "id": 241,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -37747,7 +38391,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 266,
+=======
+          "id": 242,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "legend": {
             "show": false
@@ -37845,7 +38493,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 267,
+=======
+          "id": 243,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {
@@ -38046,7 +38698,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 268,
+=======
+          "id": 244,
+>>>>>>> 16354ff9f (follower read cache)
           "interval": null,
           "isNew": true,
           "legend": {

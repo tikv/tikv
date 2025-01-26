@@ -585,10 +585,16 @@ impl ReadDelegate {
 
     pub fn check_stale_read_safe(&self, read_ts: u64) -> std::result::Result<(), RaftCmdResponse> {
         let safe_ts = self.read_progress.safe_ts();
+        let safe_read_indx_ts = self.read_progress.safe_read_indx_ts();
         fail_point!("skip_check_stale_read_safe", |_| Ok(()));
         if safe_ts >= read_ts {
             return Ok(());
         }
+
+        if (safe_read_indx_ts > 0) && (safe_read_indx_ts >= read_ts) {
+            return Ok(());
+        }
+
         // Advancing resolved ts may be expensive, only notify if read_ts - safe_ts >
         // 200ms.
         if TimeStamp::from(read_ts).physical() > TimeStamp::from(safe_ts).physical() + 200 {
@@ -958,6 +964,7 @@ where
             match inspector.inspect(req) {
                 Ok(RequestPolicy::ReadLocal) => Ok(Some((delegate, RequestPolicy::ReadLocal))),
                 Ok(RequestPolicy::StaleRead) => Ok(Some((delegate, RequestPolicy::StaleRead))),
+                Ok(RequestPolicy::ReadIndex) => Ok(Some((delegate, RequestPolicy::ReadIndex))),
                 // It can not handle other policies.
                 Ok(_) => Ok(None),
                 Err(e) => Err(e),
@@ -1060,7 +1067,6 @@ where
         // getting snapshot
         delegate.check_stale_read_safe(read_ts)?;
 
-        TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_executed_stale_read_requests.inc());
         Ok(response)
     }
 
@@ -1070,6 +1076,7 @@ where
         mut req: RaftCmdRequest,
         cb: Callback<E::Snapshot>,
     ) {
+        TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_received_requests.inc());
         match self.pre_propose_raft_command(&req) {
             Ok(Some((mut delegate, policy))) => {
                 let mut snap_updated = false;
@@ -1094,6 +1101,7 @@ where
                     }
                     // Replica can serve stale read if and only if its `safe_ts` >= `read_ts`
                     RequestPolicy::StaleRead => {
+                        TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_received_stale_read_requests.inc());
                         match self.try_local_stale_read(
                             ctx,
                             &req,
@@ -1101,7 +1109,10 @@ where
                             &mut snap_updated,
                             last_valid_ts,
                         ) {
-                            Ok(read_resp) => read_resp,
+                            Ok(read_resp) => {
+                                TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_executed_stale_read_requests.inc());
+                                read_resp
+                            }
                             Err(err_resp) => {
                                 // It's safe to change the header of the `RaftCmdRequest`, as it
                                 // would not affect the `SnapCtx` used in upper layer like.
@@ -1150,6 +1161,31 @@ where
                                     });
                                     return;
                                 }
+                            }
+                        }
+                    }
+                    RequestPolicy::ReadIndex => {
+                        // Forward to raftstore.
+                        TLS_LOCAL_READ_METRICS
+                            .with(|m| m.borrow_mut().local_received_follower_read_requests.inc());
+                        match self.try_local_stale_read(
+                            ctx,
+                            &req,
+                            &mut delegate,
+                            &mut snap_updated,
+                            last_valid_ts,
+                        ) {
+                            Ok(read_resp) => {
+                                TLS_LOCAL_READ_METRICS.with(|m| {
+                                    m.borrow_mut()
+                                        .local_executed_follower_read_requests
+                                        .inc()
+                                });
+                                read_resp
+                            }
+                            Err(_err_resp) => {
+                                self.redirect(RaftCommand::new(req, cb));
+                                return;
                             }
                         }
                     }
@@ -2291,6 +2327,78 @@ mod tests {
         thread::sleep(std::time::Duration::from_millis(500)); // Prevent lost notify.
         must_not_redirect(&mut reader, &rx, task);
         notify_rx.recv().unwrap();
+    }
+
+    #[test]
+    fn test_follower_read_cache_notify() {
+        let store_id = 2;
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
+        let (_tmp, mut reader, rx) = new_reader("test-local-reader", store_id, store_meta.clone());
+        reader.kv_engine.put(b"key", b"value").unwrap();
+
+        let epoch13 = {
+            let mut ep = metapb::RegionEpoch::default();
+            ep.set_conf_ver(1);
+            ep.set_version(3);
+            ep
+        };
+        let term6 = 6;
+
+        // Register region1
+        let pr_ids1 = vec![2, 3, 4];
+        let prs1 = new_peers(store_id, pr_ids1.clone());
+        prepare_read_delegate(
+            store_id,
+            1,
+            term6,
+            pr_ids1,
+            epoch13.clone(),
+            store_meta.clone(),
+        );
+        let leader1 = prs1[0].clone();
+
+        // Local read
+        let mut cmd = RaftCmdRequest::default();
+        let mut header = RaftRequestHeader::default();
+        header.set_region_id(1);
+        header.set_peer(leader1);
+        header.set_region_epoch(epoch13);
+        header.set_term(term6);
+        header.set_read_quorum(true);
+        cmd.set_header(header.clone());
+        let mut req = Request::default();
+        req.set_cmd_type(CmdType::Snap);
+        cmd.set_requests(vec![req].into());
+
+        let read_index_safe_ts =TimeStamp::compose(2, 0);
+        {
+            let mut meta = store_meta.lock().unwrap();
+            let delegate = meta.readers.get_mut(&1).unwrap();
+            delegate.read_progress.read_indx_safe_ts.store(read_index_safe_ts.into_inner(), Ordering::SeqCst); 
+        } 
+        let read_ts_1 = TimeStamp::compose(1, 0);
+
+        let mut data = [0u8; 8];
+        (&mut data[..]).encode_u64(read_ts_1.into_inner()).unwrap();
+        header.set_flag_data(data.into());
+        cmd.set_header(header.clone());
+        let (snap_tx, snap_rx) = channel();
+        let task = RaftCommand::<KvTestSnapshot>::new(
+            cmd.clone(),
+            Callback::read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
+                snap_tx.send(resp).unwrap();
+            })),
+        );
+        must_not_redirect(&mut reader, &rx, task);
+        snap_rx.recv().unwrap().snapshot.unwrap();
+
+        // 201ms larger than read_index_safe_ts.
+        let read_ts_2 = TimeStamp::compose(read_index_safe_ts.physical() + 201, 0);
+        let mut data = [0u8; 8];
+        (&mut data[..]).encode_u64(read_ts_2.into_inner()).unwrap();
+        header.set_flag_data(data.into());
+        cmd.set_header(header.clone());
+        must_redirect(&mut reader, &rx, cmd);
     }
 
     #[test]

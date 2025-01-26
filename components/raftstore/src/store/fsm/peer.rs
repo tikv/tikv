@@ -7027,6 +7027,7 @@ where
             id: uuid::Uuid::new_v4(),
             request: None,
             locked: None,
+            memory_lock: None,
         };
         self.fsm.peer.raft_group.read_index(rctx.to_bytes());
         debug!(
