@@ -1,7 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use chrono::{self, Offset};
 use tidb_query_codegen::rpn_fn;
-use tidb_query_common::{Result, error::EvaluateError};
+use tidb_query_common::{error::EvaluateError, Result};
 use tidb_query_datatype::{
     codec::{
         data_type::*,
@@ -15,14 +16,13 @@ use tidb_query_datatype::{
                 extension::DateTimeExtension, interval::*, weekmode::WeekMode, WeekdayExtension,
                 MONTH_NAMES,
             },
-            Duration, Time, TimeType, MAX_FSP, Res, RoundMode, Tz,
+            Duration, Res, RoundMode, Time, TimeType, Tz, MAX_FSP,
         },
         Error, Result as CodecResult,
     },
     expr::{EvalContext, SqlMode},
     FieldTypeAccessor, FieldTypeFlag,
 };
-use chrono::{self, Offset};
 use tipb::{Expr, ExprType};
 
 use crate::RpnFnCallExtra;
@@ -1667,36 +1667,37 @@ pub fn eval_from_unixtime(
     Ok(Some(tmp))
 }
 
-// unix_timestamp_to_mysql_unix_timestamp converts micto timestamp into MySQL's Unix timestamp.
-// MySQL's Unix timestamp ranges from '1970-01-01 00:00:01.000000' UTC to '3001-01-18 23:59:59.999999' UTC. Values out of range should be rewritten to 0.
-// https://dev.mysql.com/doc/refman/8.0/en/date-and-time-functions.html#function_unix-timestamp
+// unix_timestamp_to_mysql_unix_timestamp converts micto timestamp into MySQL's
+// Unix timestamp. MySQL's Unix timestamp ranges from '1970-01-01
+// 00:00:01.000000' UTC to '3001-01-18 23:59:59.999999' UTC. Values out of range
+// should be rewritten to 0. https://dev.mysql.com/doc/refman/8.0/en/date-and-time-functions.html#function_unix-timestamp
 fn unix_timestamp_to_mysql_unix_timestamp(micro_time: i64, frac: i8) -> Result<Decimal> {
-	if micro_time < 1000000 || micro_time > 32536771199999999 {
-		return Ok(Decimal::zero());
-	}
+    if micro_time < 1000000 || micro_time > 32536771199999999 {
+        return Ok(Decimal::zero());
+    }
 
     let time_in_decimal = Decimal::from_i64(micro_time)?;
     let res = time_in_decimal.shift(-6);
     let value = match res {
         Res::Ok(value) => value,
-        Res::Truncated(_) => return Err(EvaluateError::Other("Decimal is truncated".to_string()).into()),
-        Res::Overflow(_) => return Err(EvaluateError::Other("Decimal is overflowed".to_string()).into()),
+        Res::Truncated(_) => {
+            return Err(EvaluateError::Other("Decimal is truncated".to_string()).into());
+        }
+        Res::Overflow(_) => {
+            return Err(EvaluateError::Other("Decimal is overflowed".to_string()).into());
+        }
     };
 
     match value.round(frac, RoundMode::Truncate) {
         Res::Ok(ret) => Ok(ret),
-        Res::Truncated(_) => return Err(EvaluateError::Other("Decimal is truncated".to_string()).into()),
-        Res::Overflow(_) => return Err(EvaluateError::Other("Decimal is overflowed".to_string()).into()),
+        Res::Truncated(_) => {
+            return Err(EvaluateError::Other("Decimal is truncated".to_string()).into());
+        }
+        Res::Overflow(_) => {
+            return Err(EvaluateError::Other("Decimal is overflowed".to_string()).into());
+        }
     }
 }
-
-// fn get_micro_timestamp(time: &DateTime, tz: &Tz) -> i64 {
-//     let naive_date = chrono::NaiveDate::from_ymd(time.year() as i32, time.month(), time.day());
-//     let naive_time = chrono::NaiveTime::from_hms_micro(time.hour(), time.minute(), time.second(), time.micro());
-//     let naive_datetime = chrono::NaiveDateTime::new(naive_date, naive_time);
-//     println!("get_micro: {}, {}, {}", time.to_string(), naive_datetime.timestamp_micros(), ((tz.get_offset(time.year() as i32, time.month(), time.day(), time.hour(), time.minute(), time.second()).fix().local_minus_utc() as i64) * 1_000_000));
-//     return naive_datetime.timestamp_micros() - ((tz.get_offset(time.year() as i32, time.month(), time.day(), time.hour(), time.minute(), time.second()).fix().local_minus_utc() as i64) * 1_000_000);
-// }
 
 fn get_micro_timestamp(time: &DateTime, tz: &Tz) -> i64 {
     let year = time.year() as i32;
@@ -1708,8 +1709,12 @@ fn get_micro_timestamp(time: &DateTime, tz: &Tz) -> i64 {
     let naive_date = chrono::NaiveDate::from_ymd(year, month, day);
     let naive_time = chrono::NaiveTime::from_hms_micro(hour, minute, second, time.micro());
     let naive_datetime = chrono::NaiveDateTime::new(naive_date, naive_time);
-    println!("get_micro: {}, {}, {}, {}", time.to_string(), naive_datetime.to_string(), naive_datetime.timestamp_micros(), ((tz.get_offset(year, month, day, hour, minute, second).fix().local_minus_utc() as i64) * 1_000_000));
-    return naive_datetime.timestamp_micros() - ((tz.get_offset(year, month, day, hour, minute, second).fix().local_minus_utc() as i64) * 1_000_000);
+    return naive_datetime.timestamp_micros()
+        - ((tz
+            .get_offset(year, month, day, hour, minute, second)
+            .fix()
+            .local_minus_utc() as i64)
+            * 1_000_000);
 }
 
 #[rpn_fn]
@@ -1722,8 +1727,12 @@ pub fn unix_timestamp_current() -> Result<Option<i64>> {
             let i64_value_res = value.as_i64();
             match i64_value_res {
                 Res::Ok(ret) => Ok(Some(ret)),
-                Res::Truncated(_) => Err(EvaluateError::Other("Decimal is truncated".to_string()).into()),
-                Res::Overflow(_) => Err(EvaluateError::Other("Decimal is overflowed".to_string()).into()),
+                Res::Truncated(_) => {
+                    Err(EvaluateError::Other("Decimal is truncated".to_string()).into())
+                }
+                Res::Overflow(_) => {
+                    Err(EvaluateError::Other("Decimal is overflowed".to_string()).into())
+                }
             }
         }
         Err(err) => Result::Err(err),
@@ -1743,8 +1752,15 @@ pub fn unix_timestamp_int(ctx: &mut EvalContext, time: &DateTime) -> Result<Opti
 
 #[rpn_fn(capture = [ctx, extra])]
 #[inline]
-pub fn unix_timestamp_decimal(ctx: &mut EvalContext, extra: &RpnFnCallExtra, time: &DateTime) -> Result<Option<Decimal>> {
-    let res = unix_timestamp_to_mysql_unix_timestamp(get_micro_timestamp(time, &ctx.cfg.tz), extra.ret_field_type.get_decimal() as i8)?;
+pub fn unix_timestamp_decimal(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    time: &DateTime,
+) -> Result<Option<Decimal>> {
+    let res = unix_timestamp_to_mysql_unix_timestamp(
+        get_micro_timestamp(time, &ctx.cfg.tz),
+        extra.ret_field_type.get_decimal() as i8,
+    )?;
     return Ok(Some(res));
 }
 
@@ -1752,7 +1768,7 @@ pub fn unix_timestamp_decimal(ctx: &mut EvalContext, extra: &RpnFnCallExtra, tim
 mod tests {
     use std::{str::FromStr, sync::Arc};
 
-    use chrono::{Utc, offset};
+    use chrono::{offset, Utc};
     use tidb_query_datatype::{
         builder::FieldTypeBuilder,
         codec::{
@@ -4191,17 +4207,83 @@ mod tests {
     #[test]
     fn test_unixtime_decimal() {
         let cases = vec![
-            (Some("2016-01-01 00:00:00.123"), 0, "", 3, Decimal::from_str("1451606400.123").unwrap()),
-            (Some("2015-11-13 10:20:19.342"), 0, "", 3, Decimal::from_str("1447410019.342").unwrap()),
-            (Some("2015-11-13 10:20:19.522"), 3, "", 3, Decimal::from_str("1447410016.522").unwrap()),
-            (Some("2015-11-13 10:20:19.223"), -3, "", 3, Decimal::from_str("1447410022.223").unwrap()),
-            (Some("2015-11-13 10:20:19.2"), -3, "", 1, Decimal::from_str("1447410022.2").unwrap()),
-            (Some("1970-01-01 00:00:00.234"), 0, "", 3, Decimal::from_str("0").unwrap()),
-            (Some("1969-12-31 23:59:59.432"), 0, "", 3, Decimal::from_str("0").unwrap()),
-            (Some("3001-01-19 00:00:00.432"), 0, "", 3, Decimal::from_str("0").unwrap()),
-            (Some("4001-01-19 00:00:00.533"), 0, "", 3, Decimal::from_str("0").unwrap()),
-            (Some("2015-11-13 10:20:19"), 0, "US/Eastern", 0, Decimal::from_str("1447428019").unwrap()),
-            (Some("2009-09-20 07:32:39"), 0, "US/Eastern", 0, Decimal::from_str("1253446359").unwrap()),
+            (
+                Some("2016-01-01 00:00:00.123"),
+                0,
+                "",
+                3,
+                Decimal::from_str("1451606400.123").unwrap(),
+            ),
+            (
+                Some("2015-11-13 10:20:19.342"),
+                0,
+                "",
+                3,
+                Decimal::from_str("1447410019.342").unwrap(),
+            ),
+            (
+                Some("2015-11-13 10:20:19.522"),
+                3,
+                "",
+                3,
+                Decimal::from_str("1447410016.522").unwrap(),
+            ),
+            (
+                Some("2015-11-13 10:20:19.223"),
+                -3,
+                "",
+                3,
+                Decimal::from_str("1447410022.223").unwrap(),
+            ),
+            (
+                Some("2015-11-13 10:20:19.2"),
+                -3,
+                "",
+                1,
+                Decimal::from_str("1447410022.2").unwrap(),
+            ),
+            (
+                Some("1970-01-01 00:00:00.234"),
+                0,
+                "",
+                3,
+                Decimal::from_str("0").unwrap(),
+            ),
+            (
+                Some("1969-12-31 23:59:59.432"),
+                0,
+                "",
+                3,
+                Decimal::from_str("0").unwrap(),
+            ),
+            (
+                Some("3001-01-19 00:00:00.432"),
+                0,
+                "",
+                3,
+                Decimal::from_str("0").unwrap(),
+            ),
+            (
+                Some("4001-01-19 00:00:00.533"),
+                0,
+                "",
+                3,
+                Decimal::from_str("0").unwrap(),
+            ),
+            (
+                Some("2015-11-13 10:20:19"),
+                0,
+                "US/Eastern",
+                0,
+                Decimal::from_str("1447428019").unwrap(),
+            ),
+            (
+                Some("2009-09-20 07:32:39"),
+                0,
+                "US/Eastern",
+                0,
+                Decimal::from_str("1253446359").unwrap(),
+            ),
         ];
 
         let mut i = 0;
