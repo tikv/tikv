@@ -124,7 +124,7 @@ pub fn maybe_tls_local_read_metrics_flush() {
         let mut m = m.borrow_mut();
 
         if m.last_flush_time.saturating_elapsed() >= Duration::from_millis(METRICS_FLUSH_INTERVAL) {
-            m.local_received_requests.flush(); 
+            m.local_received_requests.flush();
             m.local_executed_requests.flush();
             m.local_received_stale_read_requests.flush();
             m.local_executed_stale_read_requests.flush();

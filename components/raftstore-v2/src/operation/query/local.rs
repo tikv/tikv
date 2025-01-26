@@ -234,7 +234,8 @@ where
                         snap
                     }
                     ReadRequestPolicy::StaleRead => {
-                        TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_received_stale_read_requests.inc());
+                        TLS_LOCAL_READ_METRICS
+                            .with(|m| m.borrow_mut().local_received_stale_read_requests.inc());
                         let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
                         if let Err(e) = delegate.check_stale_read_safe(read_ts) {
                             return ReadResult::Err(e);

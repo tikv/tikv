@@ -1101,7 +1101,8 @@ where
                     }
                     // Replica can serve stale read if and only if its `safe_ts` >= `read_ts`
                     RequestPolicy::StaleRead => {
-                        TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_received_stale_read_requests.inc());
+                        TLS_LOCAL_READ_METRICS
+                            .with(|m| m.borrow_mut().local_received_stale_read_requests.inc());
                         match self.try_local_stale_read(
                             ctx,
                             &req,
@@ -1110,7 +1111,9 @@ where
                             last_valid_ts,
                         ) {
                             Ok(read_resp) => {
-                                TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_executed_stale_read_requests.inc());
+                                TLS_LOCAL_READ_METRICS.with(|m| {
+                                    m.borrow_mut().local_executed_stale_read_requests.inc()
+                                });
                                 read_resp
                             }
                             Err(err_resp) => {
@@ -1177,9 +1180,7 @@ where
                         ) {
                             Ok(read_resp) => {
                                 TLS_LOCAL_READ_METRICS.with(|m| {
-                                    m.borrow_mut()
-                                        .local_executed_follower_read_requests
-                                        .inc()
+                                    m.borrow_mut().local_executed_follower_read_requests.inc()
                                 });
                                 read_resp
                             }
@@ -2370,12 +2371,15 @@ mod tests {
         req.set_cmd_type(CmdType::Snap);
         cmd.set_requests(vec![req].into());
 
-        let read_index_safe_ts =TimeStamp::compose(2, 0);
+        let read_index_safe_ts = TimeStamp::compose(2, 0);
         {
             let mut meta = store_meta.lock().unwrap();
             let delegate = meta.readers.get_mut(&1).unwrap();
-            delegate.read_progress.read_indx_safe_ts.store(read_index_safe_ts.into_inner(), Ordering::SeqCst); 
-        } 
+            delegate
+                .read_progress
+                .read_indx_safe_ts
+                .store(read_index_safe_ts.into_inner(), Ordering::SeqCst);
+        }
         let read_ts_1 = TimeStamp::compose(1, 0);
 
         let mut data = [0u8; 8];
