@@ -61,7 +61,7 @@ const DEFAULT_TXN_STATUS_CACHE_CAPACITY: usize = 40_000 * 128;
 // occur in tests.
 const FALLBACK_BLOCK_CACHE_CAPACITY: ReadableSize = ReadableSize::mb(128);
 
-const DEFAULT_ACTION_ON_INVALID_MAX_TS: &str = "panic";
+const DEFAULT_ACTION_ON_INVALID_MAX_TS_UPDATE: &str = "panic";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
@@ -107,18 +107,14 @@ pub struct Config {
     #[online_config(skip)]
     pub txn_status_cache_capacity: usize,
     pub memory_quota: ReadableSize,
-    /// Maximum max_ts deviation allowed from PD timestamp
-    pub max_ts_drift_allowance: ReadableDuration,
-    /// How often to refresh the max_ts limit from PD
-    #[online_config(skip)]
-    pub max_ts_sync_interval: ReadableDuration,
-    pub action_on_invalid_max_ts: String,
     #[online_config(submodule)]
     pub flow_control: FlowControlConfig,
     #[online_config(submodule)]
     pub block_cache: BlockCacheConfig,
     #[online_config(submodule)]
     pub io_rate_limit: IoRateLimitConfig,
+    #[online_config(submodule)]
+    pub max_ts: MaxTsConfig,
 }
 
 impl Default for Config {
@@ -148,9 +144,7 @@ impl Default for Config {
             io_rate_limit: IoRateLimitConfig::default(),
             background_error_recovery_window: ReadableDuration::hours(1),
             memory_quota: DEFAULT_TXN_MEMORY_QUOTA_CAPACITY,
-            max_ts_drift_allowance: ReadableDuration::secs(60),
-            max_ts_sync_interval: ReadableDuration::secs(15),
-            action_on_invalid_max_ts: DEFAULT_ACTION_ON_INVALID_MAX_TS.into(),
+            max_ts: MaxTsConfig::default(),
         }
     }
 }
@@ -230,25 +224,7 @@ impl Config {
             self.memory_quota = self.scheduler_pending_write_threshold;
         }
 
-        if self.max_ts_drift_allowance <= self.max_ts_sync_interval {
-            let msg = format!(
-                "storage.max-ts-drift-allowance {:?} is smaller than or equal to storage.max-ts-sync-interval {:?}",
-                self.max_ts_drift_allowance, self.max_ts_sync_interval,
-            );
-            error!("{}", msg);
-            return Err(msg.into());
-        }
-
-        if let Err(e) = concurrency_manager::ActionOnInvalidMaxTs::try_from(
-            self.action_on_invalid_max_ts.as_str(),
-        ) {
-            error!(
-                "storage.action-on-invalid-max-ts is set to an invalid value {}, \
-                change to action panic",
-                self.action_on_invalid_max_ts,
-            );
-            return Err(e.into());
-        }
+        self.max_ts.validate()?;
 
         Ok(())
     }
@@ -485,6 +461,54 @@ impl IoRateLimitConfig {
                 "storage.io-rate-limit.mode other than write-only is not supported.".into(),
             );
         }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct MaxTsConfig {
+    /// Maximum max_ts deviation allowed from PD TSO
+    pub max_drift: ReadableDuration,
+    /// How often to refresh the max_ts limit from PD
+    #[online_config(skip)]
+    pub cache_sync_interval: ReadableDuration,
+    pub action_on_invalid_update: String,
+}
+
+impl Default for MaxTsConfig {
+    fn default() -> Self {
+        Self {
+            max_drift: ReadableDuration::secs(60),
+            cache_sync_interval: ReadableDuration::secs(15),
+            action_on_invalid_update: DEFAULT_ACTION_ON_INVALID_MAX_TS_UPDATE.to_owned(),
+        }
+    }
+}
+
+impl MaxTsConfig {
+    fn validate(&mut self) -> Result<(), Box<dyn Error>> {
+        if self.max_drift <= self.cache_sync_interval {
+            let msg = format!(
+                "storage.max-ts.max-drift {:?} is smaller than or equal to storage.max-ts.cache-sync-interval {:?}",
+                self.max_drift, self.cache_sync_interval,
+            );
+            error!("{}", msg);
+            return Err(msg.into());
+        }
+
+        if let Err(e) = concurrency_manager::ActionOnInvalidMaxTs::try_from(
+            self.action_on_invalid_update.as_str(),
+        ) {
+            error!(
+                "storage.max-ts.action-on-invalid-update is set to an invalid value {}, \
+                change to action panic",
+                self.action_on_invalid_update,
+            );
+            return Err(e.into());
+        }
+
         Ok(())
     }
 }

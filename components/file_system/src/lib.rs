@@ -206,6 +206,8 @@ pub struct IoBytesTracker {
     initialized: bool,
     // Stores the previous successfully fetched I/O bytes. Used to calculate deltas.
     prev_io_bytes: IoBytes,
+    // Stores the initial successfully fetched I/O bytes.
+    initial_io_bytes: IoBytes,
 }
 impl IoBytesTracker {
     /// Creates a new `IoBytesTracker` and attempts to initialize it.
@@ -218,6 +220,7 @@ impl IoBytesTracker {
         let mut tracker = IoBytesTracker {
             initialized: false,
             prev_io_bytes: IoBytes::default(),
+            initial_io_bytes: IoBytes::default(),
         };
         tracker.update(); // Attempt to initialize immediately
         tracker
@@ -242,6 +245,7 @@ impl IoBytesTracker {
                     // Initialize on the first successful fetch
                     self.prev_io_bytes = current_io_bytes;
                     self.initialized = true;
+                    self.initial_io_bytes = current_io_bytes;
                     None // No delta to report yet
                 }
             }
@@ -249,6 +253,14 @@ impl IoBytesTracker {
                 // Skip updates if the current fetch fails
                 None
             }
+        }
+    }
+
+    /// Returns the total accumulated I/O bytes.
+    pub fn get_total_io_bytes(&self) -> IoBytes {
+        IoBytes {
+            read: self.prev_io_bytes.read - self.initial_io_bytes.read,
+            write: self.prev_io_bytes.write - self.initial_io_bytes.write,
         }
     }
 }
@@ -773,11 +785,9 @@ mod tests {
         assert!(!file.exists());
     }
 
+    #[cfg(feature = "failpoints")]
     #[test]
     fn test_io_bytes_tracker_normal() {
-        #[cfg(not(feature = "failpoints"))]
-        return;
-
         fail::cfg("delta_read_io_bytes", "return(100)").unwrap();
         fail::cfg("delta_write_io_bytes", "return(50)").unwrap();
         let mut io_tracker = IoBytesTracker::new();
@@ -789,13 +799,19 @@ mod tests {
         assert_eq!(io_bytes.unwrap().write, 50);
         assert_eq!(io_tracker.prev_io_bytes.read, 200);
         assert_eq!(io_tracker.prev_io_bytes.write, 100);
+
+        let total_io_bytes = io_tracker.get_total_io_bytes();
+        assert_eq!(total_io_bytes.read, 100);
+        assert_eq!(total_io_bytes.write, 50);
+        let _ = io_tracker.update();
+        let total_io_bytes = io_tracker.get_total_io_bytes();
+        assert_eq!(total_io_bytes.read, 200);
+        assert_eq!(total_io_bytes.write, 100);
     }
 
+    #[cfg(feature = "failpoints")]
     #[test]
     fn test_io_bytes_tracker_initialization_failure() {
-        #[cfg(not(feature = "failpoints"))]
-        return;
-
         fail::cfg("failed_to_get_thread_io_bytes_stats", "1*return").unwrap();
         fail::cfg("delta_read_io_bytes", "return(100)").unwrap();
         fail::cfg("delta_write_io_bytes", "return(50)").unwrap();
