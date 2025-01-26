@@ -74,7 +74,10 @@ use super::{
     cmd_resp,
     local_metrics::{RaftMetrics, TimeTracker},
     metrics::*,
-    peer_storage::{write_peer_state, CheckApplyingSnapStatus, HandleReadyResult, PeerStorage},
+    peer_storage::{
+        write_peer_state, CheckApplyingSnapStatus, HandleReadyResult, PeerStorage,
+        RAFT_INIT_LOG_TERM,
+    },
     read_queue::{ReadIndexQueue, ReadIndexRequest},
     transport::Transport,
     util::{
@@ -99,7 +102,7 @@ use crate::{
         },
         hibernate_state::GroupState,
         memory::{needs_evict_entry_cache, MEMTRACE_RAFT_ENTRIES},
-        msg::{CasualMessage, ErrorCallback, PeerMsg, RaftCommand, SignificantMsg, StoreMsg},
+        msg::{CampaignType, CasualMessage, ErrorCallback, RaftCommand, SignificantMsg, StoreMsg},
         peer_storage::HandleSnapshotResult,
         snapshot_backup::{AbortReason, SnapshotBrState},
         txn_ext::LocksStatus,
@@ -108,7 +111,7 @@ use crate::{
             CleanupTask, CompactTask, HeartbeatTask, RaftlogGcTask, ReadDelegate, ReadExecutor,
             ReadProgress, RegionTask, SplitCheckTask,
         },
-        Callback, Config, GlobalReplicationState, PdTask, ReadCallback, ReadIndexContext,
+        Callback, Config, GlobalReplicationState, PdTask, PeerMsg, ReadCallback, ReadIndexContext,
         ReadResponse, TxnExt, WriteCallback, RAFT_INIT_LOG_INDEX,
     },
     Error, Result,
@@ -1075,6 +1078,12 @@ where
     pub snapshot_recovery_state: Option<SnapshotBrState>,
 
     last_record_safe_point: u64,
+
+    /// Used to record uncampaigned regions, which are the new regions
+    /// created when a follower applies a split. If the follower becomes a
+    /// leader, a campaign is triggered for those regions.
+    /// Once the parent region has valid leader, this list will be cleared.
+    pub uncampaigned_new_regions: Option<Vec<u64>>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -1213,6 +1222,7 @@ where
             lead_transferee: raft::INVALID_ID,
             unsafe_recovery_state: None,
             snapshot_recovery_state: None,
+            uncampaigned_new_regions: None,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -1752,6 +1762,11 @@ where
     #[inline]
     pub fn is_leader(&self) -> bool {
         self.raft_group.raft.state == StateRole::Leader
+    }
+
+    #[inline]
+    pub fn is_follower(&self) -> bool {
+        self.raft_group.raft.state == StateRole::Follower && self.peer.role != PeerRole::Learner
     }
 
     #[inline]
@@ -2358,12 +2373,30 @@ where
                             "region_id" => self.region_id,
                         );
                     }
+                    // After the leadership changed, send `CasualMessage::Campaign
+                    // {notify_by_parent: true}` to the target peer to campaign
+                    // leader if there exists uncampaigned regions. It's used to
+                    // ensure that a leader is elected promptly for the newly
+                    // created Raft group, minimizing availability impact (e.g.
+                    // #12410 and #17602.).
+                    if let Some(new_regions) = self.uncampaigned_new_regions.take() {
+                        for new_region in new_regions {
+                            let _ = ctx.router.send(
+                                new_region,
+                                PeerMsg::CasualMessage(CasualMessage::Campaign(
+                                    CampaignType::UnsafeSplitCampaign,
+                                )),
+                            );
+                        }
+                    }
                 }
                 StateRole::Follower => {
                     self.leader_lease.expire();
                     self.mut_store().cancel_generating_snap(None);
                     self.clear_disk_full_peers(ctx);
                     self.clear_in_memory_pessimistic_locks();
+                    // Clear the uncampaigned list.
+                    self.uncampaigned_new_regions = None;
                 }
                 _ => {}
             }
@@ -3674,6 +3707,12 @@ where
         }
 
         if !parent_is_leader {
+            return false;
+        }
+
+        // And only if the split region does not enter election state, will it be
+        // safe to campaign.
+        if self.term() > RAFT_INIT_LOG_TERM {
             return false;
         }
 
