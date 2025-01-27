@@ -1,6 +1,6 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{
-    collections::VecDeque,
+    collections::{BTreeSet, HashMap, HashSet, VecDeque},
     future::Future,
     ops::Not,
     path::Path,
@@ -17,12 +17,13 @@ use futures::{
     stream::{Fuse, FusedStream, StreamExt, TryStreamExt},
 };
 use kvproto::{
-    brpb::{self, FileType, Migration},
+    brpb::{self, FileType, MetaEdit, Migration},
     metapb::RegionEpoch,
 };
 use prometheus::core::{Atomic, AtomicU64};
+use protobuf::ProtobufEnum;
 use tikv_util::{
-    retry_expr,
+    info, retry_expr,
     stream::{JustRetry, RetryExt},
     time::Instant,
 };
@@ -34,7 +35,7 @@ use super::{
     errors::{Error, Result},
     statistic::LoadMetaStatistic,
 };
-use crate::{compaction::EpochHint, errors::ErrorKind, util};
+use crate::{compaction::EpochHint, errors::ErrorKind, util, OtherErrExt};
 
 pub const METADATA_PREFIX: &str = "v1/backupmeta";
 pub const DEFAULT_COMPACTION_OUT_PREFIX: &str = "v1/compaction_out";
@@ -177,7 +178,7 @@ impl LogFile {
 
 /// The identity of a log file.
 /// A log file can be located in the storage with this.
-#[derive(Clone, Display, Eq, PartialEq)]
+#[derive(Clone, Display, Eq, PartialEq, Hash)]
 #[display(fmt = "{}@{}+{}", name, offset, length)]
 pub struct LogFileId {
     pub name: Arc<str>,
@@ -238,6 +239,8 @@ pub struct StreamMetaStorage<'a> {
     stat: LoadMetaStatistic,
 
     files: Fuse<Pin<Box<dyn Stream<Item = std::io::Result<BlobObject>> + 'a>>>,
+
+    skip_map: MetaEditFilters,
 }
 
 /// A future that stores its result for future use when completed.
@@ -307,7 +310,12 @@ impl<'a> Stream for StreamMetaStorage<'a> {
 
         let first_result = self.poll_first_prefetch(cx);
         match first_result {
-            Poll::Ready(item) => Some(item).into(),
+            Poll::Ready(item) => Poll::Ready(Some(item.map(|mut meta| {
+                let sm = &self.skip_map;
+                let skipped = sm.apply_to(&mut meta);
+                self.stat.log_filtered_out_by_migration += skipped as u64;
+                meta
+            }))),
             Poll::Pending => self.poll_fetch_or_finish(cx),
         }
     }
@@ -335,8 +343,15 @@ impl<'a> StreamMetaStorage<'a> {
             };
             match res {
                 Poll::Ready(Some(load)) => {
+                    let load = load?;
+                    if self.skip_map.should_fully_skip(&load.key) {
+                        info!("Skipping a metadata by migration."; "name" => %load.key);
+                        self.stat.meta_filtered_out_by_migration += 1;
+                        continue;
+                    }
+
                     let mut fut =
-                        Prefetch::new(MetaFile::load_from(self.ext_storage, load?).boxed_local());
+                        Prefetch::new(MetaFile::load_from(self.ext_storage, load).boxed_local());
                     // start the execution of this future.
                     let poll = fut.poll_unpin(cx);
                     if poll.is_ready() {
@@ -381,15 +396,18 @@ impl<'a> StreamMetaStorage<'a> {
     /// Streaming metadata from an external storage.
     /// Defaultly this will fetch metadata from `v1/backupmeta`, you may
     /// override this in `ext`.
-    pub fn load_from_ext(s: &'a dyn ExternalStorage, ext: LoadFromExt<'a>) -> Self {
+    pub async fn load_from_ext(s: &'a dyn ExternalStorage, ext: LoadFromExt<'a>) -> Result<Self> {
         let files = s.iter_prefix(ext.meta_prefix).fuse();
-        Self {
+        let mig_ext = MigrationStorageWrapper::new(s);
+        let skip_map = MetaEditFilters::from_migrations(mig_ext.load().await?);
+        Ok(Self {
             prefetch: VecDeque::new(),
             files,
             ext_storage: s,
             ext,
             stat: LoadMetaStatistic::default(),
-        }
+            skip_map,
+        })
     }
 
     /// Count the number of the metadata prefix.
@@ -542,7 +560,8 @@ pub struct VersionedMigration(Migration);
 
 impl From<Migration> for VersionedMigration {
     fn from(mut mig: Migration) -> Self {
-        mig.set_version(brpb::MigrationVersion::M1);
+        // The last version we know.
+        mig.set_version(*brpb::MigrationVersion::values().last().unwrap());
         mig.set_creator(format!(
             "tikv;commit={};branch={}",
             option_env!("TIKV_BUILD_GIT_HASH").unwrap_or("UNKNOWN"),
@@ -558,6 +577,91 @@ impl Default for VersionedMigration {
     }
 }
 
+#[derive(Debug)]
+struct MetaEditFilters(HashMap<String, MetaEditFilter>);
+
+impl MetaEditFilters {
+    fn from_migrations(migs: impl IntoIterator<Item = Migration>) -> Self {
+        Self(
+            migs.into_iter()
+                .flat_map(|mut m| m.take_edit_meta().into_iter())
+                .map(|em| (em.path.clone(), MetaEditFilter::from_meta_edit(em)))
+                .collect(),
+        )
+    }
+
+    fn should_fully_skip(&self, meta: &str) -> bool {
+        self.0.get(meta).map(|v| v.destructed_self).unwrap_or(false)
+    }
+
+    /// Apply the meta edition to a meta file and returns how many log files are
+    /// deleted.
+    fn apply_to(&self, meta: &mut MetaFile) -> usize {
+        let mut deleted = 0;
+        if let Some(meta_edit) = self.0.get(meta.name.as_ref()) {
+            info!("Applying meta edition to a meta file."; "edition" => ?meta_edit, "meta" => %meta.name);
+            meta.physical_files.retain_mut(|v| {
+                let before = v.files.len();
+                v.files.retain(|f| meta_edit.should_retain(&f.id));
+                deleted += before - v.files.len();
+                !v.files.is_empty()
+            })
+        }
+        deleted
+    }
+}
+
+/// The same content as [`kvproto::brpb::MetaEdit`], but provides some utility
+/// to apply directly in the memory content.
+#[derive(Debug)]
+struct MetaEditFilter {
+    // Full deleted files
+    full_files: HashSet<String>,
+    // FileName -> Offset
+    segments: HashMap<String, BTreeSet<u64>>,
+    destructed_self: bool,
+}
+
+impl MetaEditFilter {
+    fn from_meta_edit(mut em: MetaEdit) -> Self {
+        let mut this = Self {
+            full_files: Default::default(),
+            segments: Default::default(),
+            destructed_self: em.destruct_self,
+        };
+        this.full_files
+            .extend(em.take_delete_physical_files().into_iter());
+        for deletion in em.get_delete_logical_files() {
+            if !this.segments.contains_key(deletion.get_path()) {
+                this.segments
+                    .insert(deletion.get_path().to_owned(), Default::default());
+            }
+
+            this.segments
+                .get_mut(deletion.get_path())
+                .unwrap()
+                .extend(deletion.get_spans().iter().map(|span| span.offset));
+        }
+
+        this
+    }
+
+    fn should_retain(&self, file: &LogFileId) -> bool {
+        if self.full_files.contains(file.name.as_ref()) {
+            return false;
+        }
+        if self
+            .segments
+            .get(file.name.as_ref())
+            .is_some_and(|map| map.contains(&file.offset))
+        {
+            return false;
+        }
+
+        true
+    }
+}
+
 pub struct MigrationStorageWrapper<'a> {
     storage: &'a dyn ExternalStorage,
     migrations_prefix: &'a str,
@@ -569,6 +673,22 @@ impl<'a> MigrationStorageWrapper<'a> {
             storage,
             migrations_prefix: MIGRATION_PREFIX,
         }
+    }
+
+    pub async fn load(&self) -> Result<Vec<Migration>> {
+        self.storage
+            .iter_prefix(self.migrations_prefix)
+            .err_into()
+            .and_then(|item| async move {
+                let mut content = vec![];
+                self.storage
+                    .read(&item.key)
+                    .read_to_end(&mut content)
+                    .await?;
+                protobuf::parse_from_bytes(&content).adapt_err()
+            })
+            .try_collect()
+            .await
     }
 
     pub async fn write(&self, migration: VersionedMigration) -> Result<()> {
@@ -663,9 +783,13 @@ pub fn hash_meta_edit(meta_edit: &brpb::MetaEdit) -> u64 {
 #[cfg(test)]
 mod test {
     use futures::stream::TryStreamExt;
+    use kvproto::brpb::{DeleteSpansOfFile, MetaEdit, Migration, Span};
 
     use super::{LoadFromExt, MetaFile, StreamMetaStorage};
-    use crate::test_util::{gen_step, KvGen, LogFileBuilder, TmpStorage};
+    use crate::{
+        storage::MigrationStorageWrapper,
+        test_util::{gen_step, KvGen, LogFileBuilder, TmpStorage},
+    };
 
     async fn construct_storage(
         st: &TmpStorage,
@@ -713,7 +837,9 @@ mod test {
         let test_for_concurrency = |n| async move {
             let mut ext = LoadFromExt::default();
             ext.max_concurrent_fetch = n;
-            let sst = StreamMetaStorage::load_from_ext(st.storage().as_ref(), ext);
+            let sst = StreamMetaStorage::load_from_ext(st.storage().as_ref(), ext)
+                .await
+                .unwrap();
             let mut result = sst.try_collect::<Vec<_>>().await.unwrap();
             result.sort_by(|a, b| a.name.cmp(&b.name));
             assert_eq!(&result, mfs);
@@ -736,9 +862,85 @@ mod test {
 
         let mut ext = LoadFromExt::default();
         ext.meta_prefix = "my-fantastic-meta-dir";
-        let sst = StreamMetaStorage::load_from_ext(st.storage().as_ref(), ext);
+        let sst = StreamMetaStorage::load_from_ext(st.storage().as_ref(), ext)
+            .await
+            .unwrap();
         let mut result = sst.try_collect::<Vec<_>>().await.unwrap();
         result.sort_by(|a, b| a.name.cmp(&b.name));
         assert_eq!(result, mfs);
+    }
+
+    #[tokio::test]
+    async fn test_filter_out_by_migs() {
+        let st = TmpStorage::create();
+        let meta = |i| format!("v1/backupmeta/{}.meta", i);
+        let log = |i| format!("{}.log", i);
+        let mut mfs = construct_storage(&st, meta, log).await;
+        let mig = {
+            let mut mig = Migration::new();
+
+            mig.mut_edit_meta().push({
+                let mut me = MetaEdit::new();
+                me.path = meta(1);
+                me.destruct_self = true;
+                me
+            });
+            mig.mut_edit_meta().push({
+                let mut me = MetaEdit::new();
+                me.path = meta(0);
+                me.mut_delete_logical_files().push({
+                    let mut ds = DeleteSpansOfFile::new();
+                    ds.set_path(log(0));
+                    ds.mut_spans().push({
+                        let mut span = Span::new();
+                        span.offset = 51;
+                        span.length = 52;
+                        span
+                    });
+                    ds.mut_spans().push({
+                        let mut span = Span::new();
+                        span.offset = 155;
+                        span.length = 52;
+                        span
+                    });
+                    ds
+                });
+                me
+            });
+
+            mig
+        };
+        let mig2 = {
+            let mut mig = Migration::new();
+
+            mig.mut_edit_meta().push({
+                let mut me = MetaEdit::new();
+                me.path = meta(2);
+                me.mut_delete_physical_files().push(log(2));
+                me
+            });
+            mig
+        };
+
+        let s = MigrationStorageWrapper::new(st.storage().as_ref());
+        s.write(mig.into()).await.unwrap();
+        s.write(mig2.into()).await.unwrap();
+        let mut sst = StreamMetaStorage::load_from_ext(st.storage().as_ref(), Default::default())
+            .await
+            .unwrap();
+
+        // Manually apply the meta edits...
+        mfs[0].physical_files[0].files.remove(3);
+        mfs[0].physical_files[0].files.remove(1);
+        mfs[2].physical_files.clear();
+        mfs.remove(1);
+
+        let mut result = (&mut sst).try_collect::<Vec<_>>().await.unwrap();
+        result.sort_by(|a, b| a.name.cmp(&b.name));
+        assert_eq!(result, mfs);
+
+        let stat = sst.take_statistic();
+        assert_eq!(stat.log_filtered_out_by_migration, 12);
+        assert_eq!(stat.meta_filtered_out_by_migration, 1);
     }
 }
