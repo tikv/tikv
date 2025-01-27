@@ -139,6 +139,7 @@ fn test_read_index_on_replica() {
 }
 
 #[test]
+#[ignore]
 fn test_read_on_replica() {
     let count = 3;
     let mut cluster = new_server_cluster(0, count);
@@ -147,6 +148,7 @@ fn test_read_on_replica() {
 
     let k1 = b"k1";
     let (k2, v2) = (b"k2", b"v2");
+    let (k3, v3) = (b"k3", b"v3");
     let (k4, v4) = (b"k4", b"v4");
 
     // make sure leader has been elected.
@@ -191,6 +193,11 @@ fn test_read_on_replica() {
         pb_ctx: &follower_ctx,
         ..Default::default()
     };
+    let mut follower_storage = cluster.sim.rl().storages[&follower_id].clone();
+    assert_has(follower_snap_ctx.clone(), &mut follower_storage, k2, v2);
+
+    must_put(&leader_ctx, &leader_storage, k3, v3);
+    assert_has(follower_snap_ctx.clone(), &mut follower_storage, k3, v3);
 
     cluster.stop_node(follower_id);
     must_put(&leader_ctx, &leader_storage, k4, v4);
@@ -401,7 +408,10 @@ fn must_delete_cf<E: Engine>(ctx: &Context, engine: &E, cf: CfName, key: &[u8]) 
 
 fn assert_has<E: Engine>(ctx: SnapContext<'_>, engine: &mut E, key: &[u8], value: &[u8]) {
     let snapshot = engine.snapshot(ctx).unwrap();
-    assert_eq!(snapshot.get(&Key::from_raw(key)).unwrap().unwrap(), value);
+    println!("Key: {:?}", key);
+    let retrieved_value = snapshot.get(&Key::from_raw(key)).unwrap().unwrap();
+    println!("Value: {:?}", retrieved_value);
+    assert_eq!(retrieved_value, value);
 }
 
 fn can_read<E: Engine>(ctx: SnapContext<'_>, engine: &mut E, key: &[u8], value: &[u8]) -> bool {

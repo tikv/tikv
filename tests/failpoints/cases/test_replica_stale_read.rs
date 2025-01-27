@@ -200,7 +200,6 @@ fn test_stale_read_basic_flow_lock() {
 // `(apply_index, safe_ts)` item to other replica, the `apply_index` in the
 // `(apply_index, safe_ts)` item should not be updated
 #[test]
-#[ignore]
 fn test_update_apply_index_before_sync_read_state() {
     let (mut cluster, pd_client, mut leader_client) = prepare_for_stale_read(new_peer(1, 1));
     let mut follower_client2 = PeerClient::new(&cluster, 1, new_peer(2, 2));
