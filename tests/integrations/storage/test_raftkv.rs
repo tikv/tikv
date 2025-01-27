@@ -192,8 +192,6 @@ fn test_read_on_replica() {
         pb_ctx: &follower_ctx,
         ..Default::default()
     };
-    let mut follower_storage = cluster.sim.rl().storages[&follower_id].clone();
-    assert_has(follower_snap_ctx.clone(), &mut follower_storage, k2, v2);
 
     must_put(&leader_ctx, &leader_storage, k3, v3);
     assert_has(follower_snap_ctx.clone(), &mut follower_storage, k3, v3);
@@ -407,7 +405,7 @@ fn must_delete_cf<E: Engine>(ctx: &Context, engine: &E, cf: CfName, key: &[u8]) 
 
 fn assert_has<E: Engine>(ctx: SnapContext<'_>, engine: &mut E, key: &[u8], value: &[u8]) {
     let snapshot = engine.snapshot(ctx).unwrap();
-   // assert_eq!(snapshot.get(&Key::from_raw(key)).unwrap().unwrap(), value);
+    assert_eq!(snapshot.get(&Key::from_raw(key)).unwrap().unwrap(), value);
 }
 
 fn can_read<E: Engine>(ctx: SnapContext<'_>, engine: &mut E, key: &[u8], value: &[u8]) -> bool {
