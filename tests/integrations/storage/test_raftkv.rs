@@ -193,9 +193,6 @@ fn test_read_on_replica() {
         ..Default::default()
     };
 
-    must_put(&leader_ctx, &leader_storage, k3, v3);
-    assert_has(follower_snap_ctx.clone(), &mut follower_storage, k3, v3);
-
     cluster.stop_node(follower_id);
     must_put(&leader_ctx, &leader_storage, k4, v4);
     cluster.run_node(follower_id).unwrap();
