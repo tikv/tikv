@@ -147,7 +147,6 @@ fn test_read_on_replica() {
 
     let k1 = b"k1";
     let (k2, v2) = (b"k2", b"v2");
-    let (k3, v3) = (b"k3", b"v3");
     let (k4, v4) = (b"k4", b"v4");
 
     // make sure leader has been elected.
