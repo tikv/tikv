@@ -1171,6 +1171,10 @@ where
                         // Forward to raftstore.
                         TLS_LOCAL_READ_METRICS
                             .with(|m| m.borrow_mut().local_received_follower_read_requests.inc());
+                        if (req.get_header().get_flag_data().is_empty()) {
+                            self.redirect(RaftCommand::new(req, cb));
+                            return;
+                        }
                         match self.try_local_stale_read(
                             ctx,
                             &req,
