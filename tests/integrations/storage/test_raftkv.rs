@@ -138,6 +138,7 @@ fn test_read_index_on_replica() {
     );
 }
 
+// TODO : this test case is failing. mittalrishabh is debugging it
 #[test]
 #[ignore]
 fn test_read_on_replica() {
