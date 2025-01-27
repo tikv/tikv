@@ -279,7 +279,7 @@ impl CompactionRunInfoBuilder {
         s: &dyn ExternalStorage,
     ) -> Result<Vec<ExpiringFilesOfMeta>> {
         let ext = LoadFromExt::default();
-        let mut storage = StreamMetaStorage::load_from_ext(s, ext);
+        let mut storage = StreamMetaStorage::load_from_ext(s, ext).await?;
 
         let mut result = vec![];
         while let Some(item) = storage.try_next().await? {
