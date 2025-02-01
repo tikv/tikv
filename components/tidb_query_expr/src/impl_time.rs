@@ -1600,6 +1600,52 @@ pub fn eval_from_unixtime(
     Ok(Some(tmp))
 }
 
+fn build_timestamp_diff_meta(expr: &mut Expr) -> Result<IntervalUnit> {
+    let children = expr.mut_children();
+    if children.len() != 3 {
+        return Err(box_err!(
+            "wrong timestamp_diff expr size {}",
+            children.len()
+        ));
+    }
+    let unit_str = match children[0].get_tp() {
+        ExprType::Bytes | ExprType::String => {
+            std::str::from_utf8(children[0].get_val()).map_err(Error::Encoding)?
+        }
+        _ => return Err(box_err!("unknown unit type {:?}", children[0].get_tp())),
+    };
+    let unit = IntervalUnit::from_str(unit_str)?;
+    if !unit.is_valid_for_timestamp() {
+        return Err(box_err!("wrong unit {:?} for timestamp_diff", unit));
+    }
+    Ok(unit)
+}
+
+#[rpn_fn(capture = [ctx, metadata], metadata_mapper = build_timestamp_diff_meta)]
+#[inline]
+pub fn timestamp_diff(
+    ctx: &mut EvalContext,
+    metadata: &IntervalUnit,
+    _unit: BytesRef,
+    time1: &DateTime,
+    time2: &DateTime,
+) -> Result<Option<i64>> {
+    if time1.invalid_zero() {
+        return ctx
+            .handle_invalid_time_error(Error::incorrect_datetime_value(time1))
+            .map(|_| Ok(None))?;
+    }
+    if time2.invalid_zero() {
+        return ctx
+            .handle_invalid_time_error(Error::incorrect_datetime_value(time2))
+            .map(|_| Ok(None))?;
+    }
+    time1
+        .timestamp_diff(time2, *metadata)
+        .map(Some)
+        .or_else(|e| ctx.handle_invalid_time_error(e).map(|_| Ok(None))?)
+}
+
 #[cfg(test)]
 mod tests {
     use std::{str::FromStr, sync::Arc};
