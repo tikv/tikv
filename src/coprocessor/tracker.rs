@@ -272,7 +272,7 @@ impl<E: Engine> Tracker<E> {
 
         let total_storage_stats = std::mem::take(&mut self.total_storage_stats);
 
-        if self.total_process_time > self.slow_log_threshold {
+        if (self.total_process_time + self.total_suspend_time) > self.slow_log_threshold {
             let first_range = self.req_ctx.ranges.first();
             let some_table_id = first_range.as_ref().map(|range| {
                 tidb_query_datatype::codec::table::decode_table_id(range.get_start())
