@@ -1677,16 +1677,11 @@ fn unix_timestamp_to_mysql_unix_timestamp(ctx: &mut EvalContext, micro_time: i64
     }
 
     let time_in_decimal = Decimal::from(micro_time);
-    let value = time_in_decimal.shift(-6).into_result(ctx)?;
-
-    match value.round(frac, RoundMode::Truncate) {
-        Res::Ok(ret) => Ok(ret),
-        Res::Truncated(_) => {
-            return Err(EvaluateError::Other("Decimal is truncated".to_string()).into());
-        }
-        Res::Overflow(_) => {
-            return Err(EvaluateError::Other("Decimal is overflowed".to_string()).into());
-        }
+    // let value = time_in_decimal.shift(-6).into_result(ctx)?.round(frac, RoundMode::Truncate);
+    let value = time_in_decimal.shift(-6).into_result(ctx)?.round(frac, RoundMode::Truncate);
+    match From::<Res<Decimal>>::from(value) {
+        Ok(ret) => Ok(ret),
+        Err(err) => Err(err.into()),
     }
 }
 
@@ -1711,11 +1706,10 @@ fn get_micro_timestamp(time: &DateTime, tz: &Tz) -> i64 {
 #[rpn_fn(capture = [ctx])]
 #[inline]
 pub fn unix_timestamp_int(ctx: &mut EvalContext, time: &DateTime) -> Result<Option<i64>> {
-    let res = unix_timestamp_to_mysql_unix_timestamp(ctx, get_micro_timestamp(time, &ctx.cfg.tz), 1)?;
-    match res.as_i64() {
-        Res::Ok(value) => Ok(Some(value)),
-        Res::Truncated(_) => Err(EvaluateError::Other("Decimal is truncated".to_string()).into()),
-        Res::Overflow(_) => Err(EvaluateError::Other("Decimal is overflowed".to_string()).into()),
+    let res = unix_timestamp_to_mysql_unix_timestamp(ctx, get_micro_timestamp(time, &ctx.cfg.tz), 1)?.as_i64();
+    match From::<Res<i64>>::from(res) {
+        Ok(ret) => Ok(Some(ret)),
+        Err(err) => Err(err.into()),
     }
 }
 
