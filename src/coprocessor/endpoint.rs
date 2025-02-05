@@ -713,7 +713,7 @@ impl<E: Engine> Endpoint<E> {
                         last_handle = Some(handle);
                         ranges_index_pointers.push(i);
                     } else {
-                        // info!("index lookup not locate key"; "key" => ?key, "handle" => handle);
+                        info!("index lookup not locate key"; "key" => ?key, "handle" => handle);
                         index_not_located_task.index_pointers.push(i);
                     }
                 }
@@ -958,8 +958,8 @@ impl<E: Engine> Endpoint<E> {
                 sel.clear_chunks();
             } else {
                 keep_index.sort();
-                // info!("some index data have no extra task, need keep"; "keep_index_idxs" =>
-                // ?keep_index);
+                info!("some index data have no extra task, need keep"; "keep_index_idxs" =>
+                ?keep_index);
                 let mut new_index_columns = Vec::new();
                 for ft in &schema {
                     let tp =
@@ -982,13 +982,13 @@ impl<E: Engine> Endpoint<E> {
                             }
                         }
                         _ => {
-                            // info!("keep index out range"; "idx" => i,
-                            // "index_datas.len" => index_datas.len());
+                            info!("keep index out range"; "idx" => i,
+                            "index_datas.len" => index_datas.len());
                         }
                     };
                 }
-                // info!("some index data have no extra task, need keep"; "keep_index_data"=>
-                // ?idx_strs);
+                info!("some index data have no extra task, need keep"; "keep_index_data"=>
+                ?idx_strs);
                 let mut index_chunk = Chunk::default();
                 for col in new_index_columns {
                     index_chunk
