@@ -930,8 +930,8 @@ impl<E: Engine> Endpoint<E> {
                 // info!("no extra task need to do"; "keep_index.len" => keep_index.len());
                 return Ok(resp);
             }
+            let begin = std::time::Instant::now();
             let mut total_chunks = sel.take_extra_chunks();
-            // let mut wait_extra_task_resp_cost: f64 = 0.0;
             let batch_res: Vec<Option<MemoryTraceGuard<coppb::Response>>> =
                 futures::future::join_all(result_futures).await;
             for (i, extra_resp) in batch_res.iter().enumerate() {
@@ -949,9 +949,12 @@ impl<E: Engine> Endpoint<E> {
                     keep_index.extend_from_slice(&extra_tasks[i].index_pointers);
                 }
             }
-            // info!("handle_extra_requests cost"; "handle_extra_request_cost" =>
-            // handle_extra_request_cost, "wait_extra_task_resp_cost" =>
-            // wait_extra_task_resp_cost);
+            let wait_extra_task_resp_cost: f64 = begin.elapsed().as_secs_f64();
+            info!("handle all extra_requests cost";
+                "start_ts" => start_ts,
+                "handle_extra_request_cost" => handle_extra_request_cost,
+                "wait_extra_task_resp_cost" => wait_extra_task_resp_cost,
+            );
             sel.set_extra_chunks(total_chunks);
             if keep_index.len() == 0 {
                 // info!("no need keep index data since all have extra task");
@@ -1017,6 +1020,7 @@ impl<E: Engine> Endpoint<E> {
         term: u64,
         start_ts: TimeStamp,
     ) -> impl Future<Output = Option<MemoryTraceGuard<coppb::Response>>> {
+        let begin = std::time::Instant::now();
         let mut req = req.clone();
         req.set_ranges(ranges.into());
         let new_context = req.mut_context();
@@ -1048,6 +1052,8 @@ impl<E: Engine> Endpoint<E> {
             .map(|(handler_builder, req_ctx)| self.handle_unary_request(req_ctx, handler_builder));
 
         async move {
+            let build_cost = begin.elapsed().as_secs_f64();
+            let begin = std::time::Instant::now();
             let handle_fut = match result_of_future {
                 Err(e) => return None,
                 Ok(handle_fut) => handle_fut,
@@ -1056,6 +1062,13 @@ impl<E: Engine> Endpoint<E> {
                 Err(e) => return None,
                 Ok(response) => response,
             };
+            let wait_resp_cost = begin.elapsed().as_secs_f64();
+            info!("handle_extra_request cost";
+                "start_ts" => start_ts,
+                "build_cost" => build_cost,
+                "wait_resp_cost" => wait_resp_cost,
+            );
+
             // print resp value for debug
             // let mut extra_schema = Vec::new();
             // if let Some((schema, _)) = index_lookup {
