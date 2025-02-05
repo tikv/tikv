@@ -2,26 +2,20 @@
 
 use std::sync::Arc;
 
-use codec::prelude::NumberEncoder;
 use engine_traits::{CacheRegion, EvictReason, KvEngine, RegionCacheEngineExt, RegionEvent};
 use kvproto::{
     metapb::{Peer, Region},
     raft_cmdpb::AdminCmdType,
     raft_serverpb::{ExtraMessage, ExtraMessageType, RaftApplyState},
 };
-use protobuf::ProtobufEnum as _;
 use raft::StateRole;
-use raftstore::{
-    coprocessor::{
-        dispatcher::{BoxDestroyPeerObserver, BoxExtraMessageObserver, BoxTransferLeaderObserver},
-        AdminObserver, ApplyCtxInfo, ApplySnapshotObserver, BoxAdminObserver,
-        BoxApplySnapshotObserver, BoxQueryObserver, BoxRoleObserver, Cmd, Coprocessor,
-        CoprocessorHost, DestroyPeerObserver, ExtraMessageObserver, ObserverContext, QueryObserver,
-        RegionState, RoleObserver, TransferLeaderCustomContext, TransferLeaderObserver,
-    },
-    store::TransferLeaderContext,
+use raftstore::coprocessor::{
+    dispatcher::{BoxDestroyPeerObserver, BoxExtraMessageObserver},
+    AdminObserver, ApplyCtxInfo, ApplySnapshotObserver, BoxAdminObserver, BoxApplySnapshotObserver,
+    BoxQueryObserver, BoxRoleObserver, Cmd, Coprocessor, CoprocessorHost, DestroyPeerObserver,
+    ExtraMessageObserver, ObserverContext, QueryObserver, RegionState, RoleObserver,
 };
-use tikv_util::{codec::number::decode_var_i64, debug, info, warn};
+use tikv_util::{debug, warn};
 
 #[derive(Clone)]
 pub struct LoadEvictionObserver {
@@ -63,10 +57,6 @@ impl LoadEvictionObserver {
         coprocessor_host
             .registry
             .register_destroy_peer_observer(priority, BoxDestroyPeerObserver::new(self.clone()));
-        coprocessor_host.registry.register_transfer_leader_observer(
-            priority,
-            BoxTransferLeaderObserver::new(self.clone()),
-        );
     }
 
     fn post_exec_cmd(
@@ -252,79 +242,18 @@ impl AdminObserver for LoadEvictionObserver {
         // immediately, so return false.
         false
     }
-}
 
-const TRANSFER_LEADER_CONTEXT_KEY: &[u8] = b"ime";
-
-impl TransferLeaderObserver for LoadEvictionObserver {
     fn pre_transfer_leader(
         &self,
         ctx: &mut ObserverContext<'_>,
         _tr: &kvproto::raft_cmdpb::TransferLeaderRequest,
-    ) -> raftstore::coprocessor::Result<Option<TransferLeaderCustomContext>> {
-        // Warm up transferee's cache when a region is in active or in loading.
-        let include_loading = true;
-        if !self
-            .cache_engine
-            .region_cached(ctx.region(), include_loading)
-        {
+    ) -> raftstore::coprocessor::Result<Option<kvproto::raft_serverpb::ExtraMessage>> {
+        if !self.cache_engine.region_cached(ctx.region()) {
             return Ok(None);
         }
-        let mut value = vec![];
-        value
-            .write_var_i64(ExtraMessageType::MsgPreLoadRegionRequest.value() as i64)
-            .unwrap();
-        Ok(Some(TransferLeaderCustomContext {
-            key: TRANSFER_LEADER_CONTEXT_KEY.to_vec(),
-            value,
-        }))
-    }
-
-    fn pre_ack_transfer_leader(
-        &self,
-        r: &mut ObserverContext<'_>,
-        msg: &raft::eraftpb::Message,
-    ) -> bool {
-        fn get_value(ctx: &[u8]) -> raftstore::Result<Option<ExtraMessageType>> {
-            let ctx = TransferLeaderContext::from_bytes(ctx)?;
-            let Some(mut value) = ctx.get_custom_ctx(TRANSFER_LEADER_CONTEXT_KEY) else {
-                return Ok(None);
-            };
-            let value = decode_var_i64(&mut value)?;
-            Ok(ExtraMessageType::from_i32(value as i32))
-        }
-
-        let region = r.region();
-        let context = msg.get_context();
-        let ty = match get_value(context) {
-            Ok(Some(ty)) => ty,
-            other => {
-                // For compatibility, return ready if the context is not found
-                // or invalid.
-                info!("ime transfer leader context not found";
-                    "region_id" => ?region.get_id(),
-                    "from" => ?msg.get_from(),
-                    "error" => ?other.err());
-                return true;
-            }
-        };
-
-        let need_cached = ty == ExtraMessageType::MsgPreLoadRegionRequest;
-        if need_cached {
-            // Exclude loading states to make sure the region is cached and active.
-            let include_loading = false;
-            let has_cached = self.cache_engine.region_cached(r.region(), include_loading);
-            info!("ime dbg pre_ack_transfer_leader region"; "region" => ?region, "has_cached" => has_cached);
-            if !has_cached {
-                info!("ime dbg pre_ack_transfer_leader region"; "region" => ?region, "has_cached" => has_cached);
-                self.cache_engine.load_region(r.region());
-            }
-            has_cached
-        } else {
-            info!("ime dbg pre_ack_transfer_leader region"; "region" => ?region, "need_cached" => need_cached);
-            // Ready to ack.
-            true
-        }
+        let mut msg = ExtraMessage::new();
+        msg.set_type(ExtraMessageType::MsgPreLoadRegionRequest);
+        Ok(Some(msg))
     }
 }
 
@@ -427,7 +356,7 @@ mod tests {
             self.region_events.lock().unwrap().push(event);
         }
 
-        fn region_cached(&self, _: &Region, _: bool) -> bool {
+        fn region_cached(&self, _: &Region) -> bool {
             unreachable!()
         }
 

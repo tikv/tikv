@@ -10,15 +10,17 @@ use std::{
 
 use engine_traits::{KvEngine, RaftEngine};
 use futures::channel::mpsc::UnboundedSender;
-use kvproto::{brpb::CheckAdminResponse, metapb::RegionEpoch, raft_cmdpb::AdminCmdType};
+use kvproto::{
+    brpb::CheckAdminResponse, metapb::RegionEpoch, raft_cmdpb::AdminCmdType,
+    raft_serverpb::ExtraMessage,
+};
 use tikv_util::{info, warn};
 use tokio::sync::oneshot;
 
 use super::{metrics, PeerMsg, RaftRouter, SignificantMsg, SignificantRouter};
 use crate::coprocessor::{
-    dispatcher::BoxTransferLeaderObserver, AdminObserver, BoxAdminObserver, BoxQueryObserver,
-    Coprocessor, CoprocessorHost, Error as CopError, QueryObserver, TransferLeaderCustomContext,
-    TransferLeaderObserver,
+    AdminObserver, BoxAdminObserver, BoxQueryObserver, Coprocessor, CoprocessorHost,
+    Error as CopError, QueryObserver,
 };
 
 fn epoch_second_coarse() -> u64 {
@@ -104,7 +106,6 @@ impl PrepareDiskSnapObserver {
         let reg = &mut coprocessor_host.registry;
         reg.register_query_observer(0, BoxQueryObserver::new(Arc::clone(self)));
         reg.register_admin_observer(0, BoxAdminObserver::new(Arc::clone(self)));
-        reg.register_transfer_leader_observer(0, BoxTransferLeaderObserver::new(Arc::clone(self)));
         info!("registered reject ingest and admin coprocessor to TiKV.");
     }
 
@@ -242,7 +243,7 @@ impl AdminObserver for Arc<PrepareDiskSnapObserver> {
             admin.get_cmd_type(),
             AdminCmdType::Split |
             AdminCmdType::BatchSplit |
-            // We will allow `Commit/RollbackMerge` here because the
+            // We will allow `Commit/RollbackMerge` here because the 
             // `wait_pending_admin` will wait until the merge get finished.
             // If we reject them, they won't be able to see the merge get finished.
             // And will finally time out.
@@ -260,14 +261,12 @@ impl AdminObserver for Arc<PrepareDiskSnapObserver> {
         }
         Ok(())
     }
-}
 
-impl TransferLeaderObserver for Arc<PrepareDiskSnapObserver> {
     fn pre_transfer_leader(
         &self,
         _ctx: &mut crate::coprocessor::ObserverContext<'_>,
         _tr: &kvproto::raft_cmdpb::TransferLeaderRequest,
-    ) -> crate::coprocessor::Result<Option<TransferLeaderCustomContext>> {
+    ) -> crate::coprocessor::Result<Option<ExtraMessage>> {
         if self.allowed() {
             return Ok(None);
         }
