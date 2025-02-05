@@ -1671,22 +1671,13 @@ pub fn eval_from_unixtime(
 // Unix timestamp. MySQL's Unix timestamp ranges from '1970-01-01
 // 00:00:01.000000' UTC to '3001-01-18 23:59:59.999999' UTC. Values out of range
 // should be rewritten to 0. https://dev.mysql.com/doc/refman/8.0/en/date-and-time-functions.html#function_unix-timestamp
-fn unix_timestamp_to_mysql_unix_timestamp(micro_time: i64, frac: i8) -> Result<Decimal> {
+fn unix_timestamp_to_mysql_unix_timestamp(ctx: &mut EvalContext, micro_time: i64, frac: i8) -> Result<Decimal> {
     if micro_time < 1000000 || micro_time > 32536771199999999 {
         return Ok(Decimal::zero());
     }
 
-    let time_in_decimal = Decimal::from_i64(micro_time)?;
-    let res = time_in_decimal.shift(-6);
-    let value = match res {
-        Res::Ok(value) => value,
-        Res::Truncated(_) => {
-            return Err(EvaluateError::Other("Decimal is truncated".to_string()).into());
-        }
-        Res::Overflow(_) => {
-            return Err(EvaluateError::Other("Decimal is overflowed".to_string()).into());
-        }
-    };
+    let time_in_decimal = Decimal::from(micro_time);
+    let value = time_in_decimal.shift(-6).into_result(ctx)?;
 
     match value.round(frac, RoundMode::Truncate) {
         Res::Ok(ret) => Ok(ret),
@@ -1720,7 +1711,7 @@ fn get_micro_timestamp(time: &DateTime, tz: &Tz) -> i64 {
 #[rpn_fn(capture = [ctx])]
 #[inline]
 pub fn unix_timestamp_int(ctx: &mut EvalContext, time: &DateTime) -> Result<Option<i64>> {
-    let res = unix_timestamp_to_mysql_unix_timestamp(get_micro_timestamp(time, &ctx.cfg.tz), 1)?;
+    let res = unix_timestamp_to_mysql_unix_timestamp(ctx, get_micro_timestamp(time, &ctx.cfg.tz), 1)?;
     match res.as_i64() {
         Res::Ok(value) => Ok(Some(value)),
         Res::Truncated(_) => Err(EvaluateError::Other("Decimal is truncated".to_string()).into()),
@@ -1736,6 +1727,7 @@ pub fn unix_timestamp_decimal(
     time: &DateTime,
 ) -> Result<Option<Decimal>> {
     let res = unix_timestamp_to_mysql_unix_timestamp(
+        ctx,
         get_micro_timestamp(time, &ctx.cfg.tz),
         extra.ret_field_type.get_decimal() as i8,
     )?;

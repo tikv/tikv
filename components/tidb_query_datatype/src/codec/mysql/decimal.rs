@@ -1582,10 +1582,6 @@ impl Decimal {
         }
     }
 
-    pub fn from_i64(val: i64) -> Result<Decimal> {
-        Decimal::from_str(val.to_string().as_str())
-    }
-
     /// Returns a `Decimal` from a given bytes slice
     ///
     /// # Notes
