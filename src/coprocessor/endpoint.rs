@@ -925,6 +925,7 @@ impl<E: Engine> Endpoint<E> {
         }
 
         async move {
+            let total_extra_task = result_futures.len();
             if result_futures.len() == 0 {
                 // this may print many log
                 // info!("no extra task need to do"; "keep_index.len" => keep_index.len());
@@ -954,6 +955,7 @@ impl<E: Engine> Endpoint<E> {
                 "start_ts" => start_ts,
                 "handle_extra_request_cost" => handle_extra_request_cost,
                 "wait_extra_task_resp_cost" => wait_extra_task_resp_cost,
+                "total_extra_task" => total_extra_task,
             );
             sel.set_extra_chunks(total_chunks);
             if keep_index.len() == 0 {
@@ -1063,10 +1065,20 @@ impl<E: Engine> Endpoint<E> {
                 Ok(response) => response,
             };
             let wait_resp_cost = begin.elapsed().as_secs_f64();
+            let td = resp.get_exec_details_v2().get_time_detail_v2();
+            let process_wall_time = (td.process_wall_time_ns as f64) / 1_000_000_000.0;
+            let wait_wall_time = (td.wait_wall_time_ns as f64) / 1_000_000_000.0;
+            let process_suspend_wall_time =
+                (td.process_suspend_wall_time_ns as f64) / 1_000_000_000.0;
+            let kv_read_wall_time = (td.kv_read_wall_time_ns as f64) / 1_000_000_000.0;
             info!("handle_extra_request cost";
                 "start_ts" => start_ts,
                 "build_cost" => build_cost,
                 "wait_resp_cost" => wait_resp_cost,
+                "process_wall_time" => process_wall_time,
+                "wait_wall_time" => wait_wall_time,
+                "process_suspend_wall_time" => process_suspend_wall_time,
+                "kv_read_wall_time" => kv_read_wall_time,
             );
 
             // print resp value for debug
