@@ -3823,7 +3823,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_daynr() -> Result<()> {
+    fn test_get_daynr() {
         let test_cases = [
             (0, 0, 0, 0),
             (0, 1, 1, 1),
@@ -3839,6 +3839,137 @@ mod tests {
             let result = Time::get_daynr(year, month, day);
             assert_eq!(result, expected);
         }
-        Ok(())
+    }
+
+    #[test]
+    fn test_timestamp_diff() {
+        let test_cases = vec![
+            (
+                "2025-02-05 12:00:00",
+                "2025-02-05 12:00:00",
+                IntervalUnit::Microsecond,
+                0,
+            ),
+            (
+                "2025-02-05 12:00:00",
+                "2025-02-05 12:00:00.000001",
+                IntervalUnit::Microsecond,
+                1,
+            ),
+            (
+                "2025-02-05 12:00:00",
+                "2025-02-05 12:00:10",
+                IntervalUnit::Second,
+                10,
+            ),
+            (
+                "2025-02-05 12:00:00",
+                "2025-02-05 12:10:00",
+                IntervalUnit::Minute,
+                10,
+            ),
+            (
+                "2025-02-05 12:00:00",
+                "2025-02-05 14:00:00",
+                IntervalUnit::Hour,
+                2,
+            ),
+            (
+                "2025-02-05 12:00:00",
+                "2025-02-07 12:00:00",
+                IntervalUnit::Day,
+                2,
+            ),
+            (
+                "2025-02-05 12:00:00",
+                "2025-03-05 12:00:00",
+                IntervalUnit::Month,
+                1,
+            ),
+            (
+                "2025-02-05 12:00:00",
+                "2025-08-05 12:00:00",
+                IntervalUnit::Quarter,
+                2,
+            ),
+            (
+                "2025-02-05 12:00:00",
+                "2027-02-05 12:00:00",
+                IntervalUnit::Year,
+                2,
+            ),
+            (
+                "2024-02-29 12:00:00",
+                "2025-02-28 12:00:00",
+                IntervalUnit::Year,
+                0,
+            ),
+            (
+                "2024-12-31 23:59:59",
+                "2025-01-01 00:00:00",
+                IntervalUnit::Second,
+                1,
+            ),
+            (
+                "2024-03-31 23:59:59",
+                "2024-04-01 00:00:00",
+                IntervalUnit::Second,
+                1,
+            ),
+            (
+                "2024-02-28 12:00:00",
+                "2024-02-29 12:00:00",
+                IntervalUnit::Day,
+                1,
+            ),
+            (
+                "2024-02-28 12:00:00",
+                "2024-03-01 12:00:00",
+                IntervalUnit::Day,
+                2,
+            ),
+            (
+                "2025-02-05 12:00:00",
+                "2028-02-05 12:00:00",
+                IntervalUnit::Year,
+                3,
+            ),
+            (
+                "2025-02-05 12:00:00",
+                "2025-12-05 12:00:00",
+                IntervalUnit::Month,
+                10,
+            ),
+            (
+                "2025-02-05 12:00:00",
+                "2025-02-19 12:00:00",
+                IntervalUnit::Week,
+                2,
+            ),
+            (
+                "2025-02-05 12:00:00",
+                "2025-02-05 16:00:00",
+                IntervalUnit::Hour,
+                4,
+            ),
+            (
+                "2025-02-05 12:00:00",
+                "2025-02-06 00:00:00",
+                IntervalUnit::Hour,
+                12,
+            ),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (start, end, unit, expected) in test_cases {
+            let start_dt = Time::parse_timestamp(&mut ctx, start, MAX_FSP, false).unwrap();
+            let end_dt = Time::parse_timestamp(&mut ctx, end, MAX_FSP, false).unwrap();
+            let result = start_dt.timestamp_diff(&end_dt, unit).unwrap();
+            assert_eq!(
+                result, expected,
+                "Failed for {} -> {} in {:?}",
+                start, end, unit
+            );
+        }
     }
 }
