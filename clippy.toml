@@ -51,6 +51,14 @@ reason = """
 X509StoreRef::objects is unsound, see RUSTSEC-2020-0071
 """
 
+# See more about RUSTSEC-2025-0004 in deny.toml.
+[[disallowed-methods]]
+path = "openssl::ssl::select_next_proto"
+reason = """
+openssl::ssl::select_next_proto may return a buffer use after free, \
+see RUSTSEC-2025-0004
+"""
+
 # See more about RUSTSEC-2024-0357 in deny.toml.
 [[disallowed-types]]
 path = "openssl::bio::MemBio"
