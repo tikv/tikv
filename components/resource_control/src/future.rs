@@ -239,6 +239,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::unused_async)]
     async fn empty() {}
 
     #[test]
