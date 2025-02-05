@@ -454,7 +454,7 @@ mod all {
 
         assert!(
             safepoints.iter().any(|sp| {
-                sp.service.contains(&format!("{}", victim))
+                sp.serivce.contains(&format!("{}", victim))
                     && sp.ttl >= Duration::from_secs(60 * 60 * 24)
                     && sp.safepoint.into_inner() == checkpoint - 1
             }),

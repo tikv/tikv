@@ -10,18 +10,11 @@ pub use suite::*;
 mod all {
     use std::time::{Duration, Instant};
 
-    use backup_stream::{
-        router::TaskSelector, GetCheckpointResult, RegionCheckpointOperation, RegionSet, Task,
-    };
+    use backup_stream::{GetCheckpointResult, RegionCheckpointOperation, RegionSet, Task};
     use futures::{Stream, StreamExt};
     use pd_client::PdClient;
     use test_raftstore::IsolationFilterFactory;
-<<<<<<< HEAD
-    use tikv_util::{box_err, defer, info, HandyRwLock};
-=======
-    use tikv::config::BackupStreamConfig;
     use tikv_util::defer;
->>>>>>> fcf4b967c3 (upload pause state before unloading a task (#18131))
     use tokio::time::timeout;
     use txn_types::{Key, TimeStamp};
 
@@ -146,57 +139,6 @@ mod all {
     }
 
     #[test]
-<<<<<<< HEAD
-    fn fatal_error() {
-        let mut suite = super::SuiteBuilder::new_named("fatal_error")
-            .nodes(3)
-            .build();
-        suite.must_register_task(1, "test_fatal_error");
-        suite.sync();
-        run_async_test(suite.write_records(0, 1, 1));
-        suite.force_flush_files("test_fatal_error");
-        suite.wait_for_flush();
-        run_async_test(suite.advance_global_checkpoint("test_fatal_error")).unwrap();
-        let (victim, endpoint) = suite.endpoints.iter().next().unwrap();
-        endpoint
-            .scheduler()
-            .schedule(Task::FatalError(
-                TaskSelector::ByName("test_fatal_error".to_owned()),
-                Box::new(Error::Other(box_err!("everything is alright"))),
-            ))
-            .unwrap();
-        suite.sync();
-        let err = run_async_test(
-            suite
-                .get_meta_cli()
-                .get_last_error_of("test_fatal_error", *victim),
-        )
-        .unwrap()
-        .unwrap();
-        info!("err"; "err" => ?err);
-        assert_eq!(err.error_code, error_code::backup_stream::OTHER.code);
-        assert!(err.error_message.contains("everything is alright"));
-        assert_eq!(err.store_id, *victim);
-        let paused =
-            run_async_test(suite.get_meta_cli().check_task_paused("test_fatal_error")).unwrap();
-        assert!(paused);
-        let safepoints = suite.cluster.pd_client.gc_safepoints.rl();
-        let checkpoint = suite.global_checkpoint();
-
-        assert!(
-            safepoints.iter().any(|sp| {
-                sp.serivce.contains(&format!("{}", victim))
-                    && sp.ttl >= Duration::from_secs(60 * 60 * 24)
-                    && sp.safepoint.into_inner() == checkpoint - 1
-            }),
-            "{:?}",
-            safepoints
-        );
-    }
-
-    #[test]
-=======
->>>>>>> fcf4b967c3 (upload pause state before unloading a task (#18131))
     fn region_checkpoint_info() {
         let mut suite = super::SuiteBuilder::new_named("checkpoint_info")
             .nodes(1)
