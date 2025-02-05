@@ -899,8 +899,10 @@ impl<E: Engine> Endpoint<E> {
     ) -> impl Future<Output = Result<coppb::Response>> {
         let mut sel = SelectResponse::default();
         let mut result_futures = Vec::new();
+        let mut result_futures_batch = Vec::new();
         let mut keep_index = Vec::new();
         let mut handle_extra_request_cost: f64 = 0.0;
+        let mut total_extra_task = 0;
         if sel.merge_from_bytes(resp.get_data()).is_ok() {
             for (i, task) in extra_tasks.iter().enumerate() {
                 if task.ranges.len() == 0 {
@@ -920,12 +922,19 @@ impl<E: Engine> Endpoint<E> {
                     start_ts,
                 );
                 handle_extra_request_cost += begin.elapsed().as_secs_f64();
-                result_futures.push(range_result);
+                total_extra_task += 1;
+                result_futures_batch.push(range_result);
+                if result_futures_batch.len() > 100 {
+                    result_futures.push(result_futures_batch);
+                    result_futures_batch = Vec::new();
+                }
             }
+        }
+        if result_futures_batch.len() > 0 {
+            result_futures.push(result_futures_batch);
         }
 
         async move {
-            let total_extra_task = result_futures.len();
             if result_futures.len() == 0 {
                 // this may print many log
                 // info!("no extra task need to do"; "keep_index.len" => keep_index.len());
@@ -933,8 +942,14 @@ impl<E: Engine> Endpoint<E> {
             }
             let begin = std::time::Instant::now();
             let mut total_chunks = sel.take_extra_chunks();
-            let batch_res: Vec<Option<MemoryTraceGuard<coppb::Response>>> =
-                futures::future::join_all(result_futures).await;
+
+            let mut batch_res: Vec<Option<MemoryTraceGuard<coppb::Response>>> = vec![];
+            for furs in result_futures {
+                let group_res: Vec<Option<MemoryTraceGuard<coppb::Response>>> =
+                    futures::future::join_all(furs).await;
+                batch_res.extend(group_res);
+            }
+
             for (i, extra_resp) in batch_res.iter().enumerate() {
                 let mut extra_sel = SelectResponse::default();
                 if let Some(extra_resp) = extra_resp {
@@ -1026,6 +1041,7 @@ impl<E: Engine> Endpoint<E> {
         let mut req = req.clone();
         req.set_ranges(ranges.into());
         let new_context = req.mut_context();
+        let old_region_id = new_context.get_region_id();
         new_context.set_region_id(region.id);
         new_context.set_region_epoch(region.get_region_epoch().clone());
         new_context.set_term(term);
@@ -1073,8 +1089,10 @@ impl<E: Engine> Endpoint<E> {
             let kv_read_wall_time = (td.kv_read_wall_time_ns as f64) / 1_000_000_000.0;
             info!("handle_extra_request cost";
                 "start_ts" => start_ts,
+                "index_region" => old_region_id,
                 "build_cost" => build_cost,
                 "wait_resp_cost" => wait_resp_cost,
+                "total_cost" => build_cost + wait_resp_cost,
                 "process_wall_time" => process_wall_time,
                 "wait_wall_time" => wait_wall_time,
                 "process_suspend_wall_time" => process_suspend_wall_time,
