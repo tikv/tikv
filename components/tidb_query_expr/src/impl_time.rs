@@ -1738,7 +1738,6 @@ pub fn unix_timestamp_decimal(
 mod tests {
     use std::{str::FromStr, sync::Arc};
 
-    use chrono::{offset, Utc};
     use tidb_query_datatype::{
         builder::FieldTypeBuilder,
         codec::{
@@ -4256,10 +4255,7 @@ mod tests {
             ),
         ];
 
-        let mut i = 0;
         for (datetime, offset, time_zone_name, fsp, expected) in cases {
-            println!("test case idx: {i}");
-            i += 1;
             let mut cfg = EvalConfig::new();
             if time_zone_name.len() == 0 {
                 cfg.set_time_zone_by_offset(offset).unwrap();
