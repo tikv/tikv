@@ -73,12 +73,10 @@ ignore = [
     #
     # TODO: Upgrade clap to v4.x.
     "RUSTSEC-2021-0145",
-<<<<<<< HEAD
     # Ignore RUSTSEC-2024-0006 as it only included by "rusoto_credential" crate.
     #
     # TODO: Upgrade shlex@0.1.1 to v1.3.x.
     "RUSTSEC-2024-0006",
-=======
     # Ignore RUSTSEC-2025-0004, as it will trigger a recursive upgrade of OpenSSL
     # to version 3.x.
     #
@@ -86,7 +84,6 @@ ignore = [
     # also upgrade the OpenSSL to v3.x which causes performance degradation.
     # See https://github.com/openssl/openssl/issues/17064
     "RUSTSEC-2025-0004",
->>>>>>> 25e1c88a5d (cargo-deny: ignore RUSTSEC-2025-0004 check. (#18181))
 ]
 
 # TiKV is licensed under Apache 2.0, according to ASF 3RD PARTY LICENSE POLICY,
