@@ -511,11 +511,14 @@ impl<E: Engine> Endpoint<E> {
         };
 
         let index_lookup = handler.index_lookup();
-        if index_lookup.is_some() {
-            info!("handle index lookup begin";
-                "start_ts" => tracker.req_ctx.txn_start_ts,
-                "region" => tracker.req_ctx.context.region_id,
-            );
+        if let Some((_, tid)) = index_lookup {
+            if tid == 107 {
+                info!("handle index lookup begin";
+                    "start_ts" => tracker.req_ctx.txn_start_ts,
+                    "region" => tracker.req_ctx.context.region_id,
+                    "tid" => tid,
+                );
+            }
         }
         tracker.on_begin_all_items();
 
@@ -556,8 +559,13 @@ impl<E: Engine> Endpoint<E> {
         if let Some((schema, extra_table_id)) = index_lookup {
             let mut sel = SelectResponse::default();
             if sel.merge_from_bytes(resp.get_data()).is_ok() {
-                let extra_task_range =
-                    Self::build_extra_executor_range(&mut sel, schema.clone(), extra_table_id);
+                let start_ts = tracker.req_ctx.txn_start_ts;
+                let extra_task_range = Self::build_extra_executor_range(
+                    &mut sel,
+                    schema.clone(),
+                    extra_table_id,
+                    start_ts,
+                );
                 return Ok((resp, extra_task_range));
             }
         }
@@ -568,8 +576,10 @@ impl<E: Engine> Endpoint<E> {
         mut sel: &SelectResponse,
         schema: Vec<FieldType>,
         table_id: i64,
+        start_ts: TimeStamp,
     ) -> Option<(Vec<ExtraExecutorTask>, Vec<Vec<Datum>>, Vec<FieldType>)> {
         if sel.get_encode_type() == EncodeType::TypeChunk && schema.len() == 1 {
+            let begin = std::time::Instant::now();
             let schema_types: Vec<_> = schema
                 .iter()
                 .map(|ft| {
@@ -735,6 +745,12 @@ impl<E: Engine> Endpoint<E> {
                     }
                 }
                 extra_tasks.push(index_not_located_task);
+                let build_cost = begin.elapsed().as_secs_f64();
+                info!("build extra task range cost";
+                    "start_ts" => start_ts,
+                    "build_cost" => build_cost,
+                    "extra_task_count" => extra_tasks.len(),
+                );
                 return Some((extra_tasks, all_data, schema));
             }
         }
@@ -1076,6 +1092,7 @@ impl<E: Engine> Endpoint<E> {
         let extra_output_offset = dag.take_extra_output_offsets();
         dag.set_output_offsets(extra_output_offset);
         dag.set_executors(extra_executor);
+        // dag.clear_extra_table_id();
         req.set_data(dag.write_to_bytes().expect("dag write to byte failed"));
         let request_info = RequestInfo::new(req.get_context(), RequestType::Unknown, req.start_ts);
         let cur_tracker = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(request_info));
