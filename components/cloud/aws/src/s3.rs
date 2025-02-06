@@ -258,7 +258,7 @@ impl S3Storage {
         let mut loader =
             aws_config::defaults(BehaviorVersion::latest()).credentials_provider(creds);
 
-        loader = util::configure_region(loader, &bucket_region, !bucket_endpoint.is_empty())?;
+        loader = util::configure_region(loader, &bucket_region)?;
         loader = util::configure_endpoint(loader, &bucket_endpoint);
         loader = loader.http_client(client);
         Ok(loader.load().await)
@@ -878,7 +878,8 @@ mod tests {
         assert_eq!(s.config.multi_part_size, 5 * 1024 * 1024);
 
         config.bucket.region = StringNonEmpty::opt("foo".to_string());
-        assert!(S3Storage::new(config).is_err());
+        // should not panic even if region is invalid
+        S3Storage::new(config).unwrap();
     }
 
     #[tokio::test]
