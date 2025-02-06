@@ -511,6 +511,12 @@ impl<E: Engine> Endpoint<E> {
         };
 
         let index_lookup = handler.index_lookup();
+        if index_lookup.is_some() {
+            info!("handle index lookup begin";
+                "start_ts" => tracker.req_ctx.txn_start_ts,
+                "region" => tracker.req_ctx.context.region_id,
+            );
+        }
         tracker.on_begin_all_items();
 
         let deadline = tracker.req_ctx.deadline;
@@ -944,10 +950,19 @@ impl<E: Engine> Endpoint<E> {
             let mut total_chunks = sel.take_extra_chunks();
 
             let mut batch_res: Vec<Option<MemoryTraceGuard<coppb::Response>>> = vec![];
+            let mut handled_count = 0;
             for furs in result_futures {
                 let group_res: Vec<Option<MemoryTraceGuard<coppb::Response>>> =
                     futures::future::join_all(furs).await;
+                handled_count += group_res.len();
                 batch_res.extend(group_res);
+                let wait_cost: f64 = begin.elapsed().as_secs_f64();
+                info!("handle all extra_requests cost";
+                    "start_ts" => start_ts,
+                    "wait_group_tasks_cost" => wait_cost,
+                    "total_extra_task" => total_extra_task,
+                    "handled_count" => handled_count,
+                );
             }
 
             for (i, extra_resp) in batch_res.iter().enumerate() {
@@ -1082,14 +1097,19 @@ impl<E: Engine> Endpoint<E> {
             };
             let wait_resp_cost = begin.elapsed().as_secs_f64();
             let td = resp.get_exec_details_v2().get_time_detail_v2();
+            let sd = resp.get_exec_details_v2().get_scan_detail_v2();
             let process_wall_time = (td.process_wall_time_ns as f64) / 1_000_000_000.0;
             let wait_wall_time = (td.wait_wall_time_ns as f64) / 1_000_000_000.0;
             let process_suspend_wall_time =
                 (td.process_suspend_wall_time_ns as f64) / 1_000_000_000.0;
             let kv_read_wall_time = (td.kv_read_wall_time_ns as f64) / 1_000_000_000.0;
+            let get_snapshot_time = (sd.get_get_snapshot_nanos() as f64) / 1_000_000_000.0;
+            let rocksdb_block_read_time =
+                (sd.get_rocksdb_block_read_nanos() as f64) / 1_000_000_000.0;
             info!("handle_extra_request cost";
                 "start_ts" => start_ts,
                 "index_region" => old_region_id,
+                "row_region" => region.id,
                 "build_cost" => build_cost,
                 "wait_resp_cost" => wait_resp_cost,
                 "total_cost" => build_cost + wait_resp_cost,
@@ -1097,6 +1117,8 @@ impl<E: Engine> Endpoint<E> {
                 "wait_wall_time" => wait_wall_time,
                 "process_suspend_wall_time" => process_suspend_wall_time,
                 "kv_read_wall_time" => kv_read_wall_time,
+                "get_snapshot_time" => get_snapshot_time,
+                "rocksdb_block_read" => rocksdb_block_read_time,
             );
 
             // print resp value for debug
