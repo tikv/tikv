@@ -957,7 +957,7 @@ impl<E: Engine> Endpoint<E> {
                 handled_count += group_res.len();
                 batch_res.extend(group_res);
                 let wait_cost: f64 = begin.elapsed().as_secs_f64();
-                info!("handle all extra_requests cost";
+                info!("handle groups extra_requests cost";
                     "start_ts" => start_ts,
                     "wait_group_tasks_cost" => wait_cost,
                     "total_extra_task" => total_extra_task,
