@@ -1,12 +1,14 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::path::Path;
+use std::{ops::Bound, path::Path};
 
 use encryption::DataKeyManager;
 use external_storage::ExternalStorage;
 use file_system::File;
+use kvproto::import_sstpb::RewriteRule;
+use tikv_util::Either;
 
-use super::Result;
+use crate::{Error, Result};
 
 /// Prepares the SST file for ingestion.
 /// The purpose is to make the ingestion retryable when using the `move_files`
@@ -117,6 +119,172 @@ pub fn url_for<E: ExternalStorage>(storage: &E) -> String {
         .unwrap_or_else(|err| format!("ErrUrl({})", err))
 }
 
+fn key_to_bound(key: &[u8]) -> Bound<&[u8]> {
+    if key.is_empty() {
+        Bound::Unbounded
+    } else {
+        Bound::Included(key)
+    }
+}
+
+fn key_to_exclusive_bound(key: &[u8]) -> Bound<&[u8]> {
+    if key.is_empty() {
+        Bound::Unbounded
+    } else {
+        Bound::Excluded(key)
+    }
+}
+
+pub struct PrefixReplacer<'a> {
+    rewrite_rules: &'a [RewriteRule],
+    next_index: usize,
+    last_index: usize,
+
+    user_key: Vec<u8>,
+    new_timestamp: u64,
+    ignore_after_timestamp: u64,
+    ignore_before_timestamp: u64,
+    new_prefix_len: usize,
+    old_prefix_len: usize,
+}
+
+impl<'a> PrefixReplacer<'a> {
+    pub fn new(rewrite_rules: &'a [RewriteRule]) -> Result<Self> {
+        let mut prefix_replacer = PrefixReplacer {
+            rewrite_rules,
+            next_index: 0,
+            last_index: usize::MAX,
+            user_key: vec![],
+            new_timestamp: 0,
+            ignore_after_timestamp: 0,
+            ignore_before_timestamp: 0,
+            new_prefix_len: 0,
+            old_prefix_len: 0,
+        };
+        prefix_replacer.try_update_rewrite_rule_internal()?;
+        Ok(prefix_replacer)
+    }
+
+    pub fn rewrite_start(&self, new_range_start: &[u8]) -> Result<Bound<Vec<u8>>> {
+        let rewrite_rule =
+            self.rewrite_rules
+                .first()
+                .ok_or(Error::WrongRewriteRules(String::from(
+                    "Rewrite rules is empty",
+                )))?;
+        let range_start_bound = key_to_bound(new_range_start);
+        let old_prefix = rewrite_rule.get_old_key_prefix();
+        let new_prefix = rewrite_rule.get_new_key_prefix();
+        let range_start =
+            keys::rewrite::rewrite_prefix_of_start_bound(new_prefix, old_prefix, range_start_bound)
+                .map_err(|_| Error::WrongKeyPrefix {
+                    what: "SST start range",
+                    key: new_range_start.to_vec(),
+                    prefix: new_prefix.to_vec(),
+                })?;
+        Ok(range_start)
+    }
+
+    pub fn rewrite_end(
+        &self,
+        new_range_end: &[u8],
+        end_key_exclusive: bool,
+    ) -> Result<Bound<Vec<u8>>> {
+        let rewrite_rule =
+            self.rewrite_rules
+                .last()
+                .ok_or(Error::WrongRewriteRules(String::from(
+                    "Rewrite rules is empty",
+                )))?;
+        let range_end_bound = if end_key_exclusive {
+            key_to_exclusive_bound(new_range_end)
+        } else {
+            key_to_bound(new_range_end)
+        };
+        let old_prefix = rewrite_rule.get_old_key_prefix();
+        let new_prefix = rewrite_rule.get_new_key_prefix();
+        let range_end =
+            keys::rewrite::rewrite_prefix_of_end_bound(new_prefix, old_prefix, range_end_bound)
+                .map_err(|_| Error::WrongKeyPrefix {
+                    what: "SST end range",
+                    key: new_range_end.to_vec(),
+                    prefix: new_prefix.to_vec(),
+                })?;
+        Ok(range_end)
+    }
+
+    pub fn need_to_replace(&self) -> bool {
+        for rewrite_rule in self.rewrite_rules {
+            if rewrite_rule.old_key_prefix != rewrite_rule.new_key_prefix
+                || rewrite_rule.new_timestamp != 0
+                || rewrite_rule.ignore_after_timestamp != 0
+                || rewrite_rule.ignore_before_timestamp != 0
+            {
+                return true;
+            }
+        }
+        false
+    }
+
+    // The SST reader iterator reads the key-value pairs in the range
+    // [to_old_prefix(range_start), to_old_prefix(range_end)), so any key starts
+    // with the prefix that is from first_old_prefix to last_old_prefix. In the
+    // former version, that first_old_prefix equals to last_old_prefix, any key
+    // starts with the old_prefix.
+    pub fn try_update_rewrite_rule(
+        &mut self,
+        old_key: &[u8],
+    ) -> Result<Either<(&[u8], u64, u64, u64), Option<&[u8]>>> {
+        while self.next_index < self.rewrite_rules.len() {
+            let rewrite_rule = &self.rewrite_rules[self.next_index];
+            let old_key_prefix = rewrite_rule.get_old_key_prefix();
+            if old_key.starts_with(old_key_prefix) {
+                self.try_update_rewrite_rule_internal()?;
+                self.update_user_key(old_key);
+                return Ok(Either::Left((
+                    &self.user_key,
+                    self.new_timestamp,
+                    self.ignore_after_timestamp,
+                    self.ignore_before_timestamp,
+                )));
+            } else if old_key < old_key_prefix {
+                return Ok(Either::Right(Some(old_key_prefix)));
+            }
+            self.next_index += 1;
+        }
+        Ok(Either::Right(None))
+    }
+
+    fn try_update_rewrite_rule_internal(&mut self) -> Result<()> {
+        if self.last_index == self.next_index {
+            return Ok(());
+        }
+        let rewrite_rule = self.rewrite_rules
+            .get(self.next_index)
+            .ok_or(Error::WrongRewriteRules(
+                format!(
+                    "Rewrite rule index is out of bound. The size of rewrite rules is {}, but the index is {}", 
+                    self.rewrite_rules.len(), self.next_index,
+                ),
+            ))?;
+        let new_prefix = rewrite_rule.get_new_key_prefix();
+        self.user_key = new_prefix.to_vec();
+        self.new_timestamp = rewrite_rule.new_timestamp;
+        self.ignore_after_timestamp = rewrite_rule.ignore_after_timestamp;
+        self.ignore_before_timestamp = rewrite_rule.ignore_before_timestamp;
+        self.new_prefix_len = new_prefix.len();
+        self.old_prefix_len = rewrite_rule.get_old_key_prefix().len();
+        self.last_index = self.next_index;
+        Ok(())
+    }
+
+    fn update_user_key(&mut self, old_key: &[u8]) {
+        self.user_key.truncate(self.new_prefix_len);
+        self.user_key
+            .extend_from_slice(&old_key[self.old_prefix_len..]);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{path::Path, sync::Arc};
@@ -130,10 +298,11 @@ mod tests {
         CfName, CfOptions, DbOptions, ImportExt, Peekable, SstWriter, SstWriterBuilder,
         TitanCfOptions, CF_DEFAULT,
     };
+    use kvproto::import_sstpb::RewriteRule;
     use tempfile::Builder;
     use test_util::encryption::new_test_key_manager;
 
-    use super::{copy_sst_for_ingestion, prepare_sst_for_ingestion};
+    use super::{copy_sst_for_ingestion, prepare_sst_for_ingestion, PrefixReplacer};
 
     #[cfg(unix)]
     fn check_hard_link<P: AsRef<Path>>(path: P, nlink: u64) {
@@ -309,5 +478,177 @@ mod tests {
             .unwrap();
         check_db_with_kvs(&db, CF_DEFAULT, &kvs);
         assert!(!sst_clone.exists());
+    }
+
+    fn new_rewrite_rule(old_prefix: &[u8], new_prefix: &[u8], new_timestamp: u64) -> RewriteRule {
+        let mut rewrite_rule = RewriteRule::default();
+        rewrite_rule.set_old_key_prefix(old_prefix.to_vec());
+        rewrite_rule.set_new_key_prefix(new_prefix.to_vec());
+        rewrite_rule.set_new_timestamp(new_timestamp);
+        rewrite_rule
+    }
+
+    fn new_rewrite_rule2(
+        old_prefix: &[u8],
+        new_prefix: &[u8],
+        new_timestamp: u64,
+        after: u64,
+        before: u64,
+    ) -> RewriteRule {
+        let mut rewrite_rule = RewriteRule::default();
+        rewrite_rule.set_old_key_prefix(old_prefix.to_vec());
+        rewrite_rule.set_new_key_prefix(new_prefix.to_vec());
+        rewrite_rule.set_new_timestamp(new_timestamp);
+        rewrite_rule.set_ignore_after_timestamp(after);
+        rewrite_rule.set_ignore_before_timestamp(before);
+        rewrite_rule
+    }
+
+    #[test]
+    fn test_prefix_replacer() {
+        assert!(PrefixReplacer::new(&[]).is_err());
+        let rewrite_rules = vec![new_rewrite_rule(b"aa", b"A", 1)];
+        let prefix_replacer = PrefixReplacer::new(&rewrite_rules).unwrap();
+        assert!(prefix_replacer.need_to_replace());
+        let rewrite_rules = vec![new_rewrite_rule(b"aa", b"aa", 1)];
+        let prefix_replacer = PrefixReplacer::new(&rewrite_rules).unwrap();
+        assert!(prefix_replacer.need_to_replace());
+        let rewrite_rules = vec![new_rewrite_rule(b"aa", b"aa", 0)];
+        let prefix_replacer = PrefixReplacer::new(&rewrite_rules).unwrap();
+        assert!(!prefix_replacer.need_to_replace());
+        let rewrite_rules = vec![new_rewrite_rule(b"aa", b"AA", 0)];
+        let prefix_replacer = PrefixReplacer::new(&rewrite_rules).unwrap();
+        assert!(prefix_replacer.need_to_replace());
+        let rewrite_rules = vec![
+            new_rewrite_rule2(b"aa", b"A", 1, 11, 111),
+            new_rewrite_rule2(b"bb", b"BB", 2, 22, 222),
+            new_rewrite_rule2(b"cc", b"CCC", 3, 33, 333),
+        ];
+        let mut prefix_replacer = PrefixReplacer::new(&rewrite_rules).unwrap();
+        assert!(prefix_replacer.need_to_replace());
+        prefix_replacer.rewrite_start(b"1").unwrap_err();
+        prefix_replacer.rewrite_start(b"aa").unwrap_err();
+        let std::ops::Bound::Included(range_start) = prefix_replacer.rewrite_start(b"A").unwrap()
+        else {
+            panic!("Can't rewrite the range start key");
+        };
+        assert_eq!(&range_start, b"aa");
+        let std::ops::Bound::Included(range_start) = prefix_replacer.rewrite_start(b"Aa").unwrap()
+        else {
+            panic!("Can't rewrite the range start key");
+        };
+        assert_eq!(&range_start, b"aaa");
+        let std::ops::Bound::Included(range_start) = prefix_replacer.rewrite_start(b"AAa").unwrap()
+        else {
+            panic!("Can't rewrite the range start key");
+        };
+        assert_eq!(&range_start, b"aaAa");
+        prefix_replacer.rewrite_end(b"1", false).unwrap_err();
+        prefix_replacer.rewrite_end(b"aa", false).unwrap_err();
+        let std::ops::Bound::Included(range_start) =
+            prefix_replacer.rewrite_end(b"CCC", false).unwrap()
+        else {
+            panic!("Can't rewrite the range start key");
+        };
+        assert_eq!(&range_start, b"cc");
+        let std::ops::Bound::Excluded(range_start) =
+            prefix_replacer.rewrite_end(b"CCC", true).unwrap()
+        else {
+            panic!("Can't rewrite the range start key");
+        };
+        assert_eq!(&range_start, b"cc");
+        let std::ops::Bound::Included(range_start) =
+            prefix_replacer.rewrite_end(b"CCCCc", false).unwrap()
+        else {
+            panic!("Can't rewrite the range start key");
+        };
+        assert_eq!(&range_start, b"ccCc");
+        let std::ops::Bound::Excluded(range_start) =
+            prefix_replacer.rewrite_end(b"CCCCc", true).unwrap()
+        else {
+            panic!("Can't rewrite the range start key");
+        };
+        assert_eq!(&range_start, b"ccCc");
+
+        let cases = vec![
+            (b"aa".to_vec(), b"A".to_vec(), 1, 11, 111),
+            (b"aaa".to_vec(), b"Aa".to_vec(), 1, 11, 111),
+            (b"aabc".to_vec(), b"Abc".to_vec(), 1, 11, 111),
+            (b"bbcd".to_vec(), b"BBcd".to_vec(), 2, 22, 222),
+            (b"ccde".to_vec(), b"CCCde".to_vec(), 3, 33, 333),
+            (b"dddd".to_vec(), vec![], 0, 0, 0),
+        ];
+        for (old_key, expect_user_key, expect_new_timestamp, expect_after, expect_before) in cases {
+            let res = prefix_replacer.try_update_rewrite_rule(&old_key);
+            if expect_user_key.is_empty() {
+                assert!(res.unwrap().right().unwrap().is_none());
+            } else {
+                let (user_key, new_timestamp, after, before) = res.unwrap().left().unwrap();
+                assert_eq!(new_timestamp, expect_new_timestamp);
+                assert_eq!(after, expect_after);
+                assert_eq!(before, expect_before);
+                assert_eq!(user_key, expect_user_key);
+            }
+        }
+    }
+
+    #[test]
+    fn test_prefix_replacer2() {
+        let rewrite_rules = vec![
+            new_rewrite_rule2(b"aa", b"A", 1, 11, 111),
+            new_rewrite_rule2(b"bb", b"BB", 2, 22, 222),
+            new_rewrite_rule2(b"cc", b"CCC", 3, 33, 333),
+            new_rewrite_rule2(b"dd", b"DDDD", 4, 44, 444),
+        ];
+        let mut prefix_replacer = PrefixReplacer::new(&rewrite_rules).unwrap();
+        assert!(prefix_replacer.need_to_replace());
+
+        let cases = vec![
+            (b"aa".to_vec(), Some(b"A".to_vec()), false, 1, 11, 111),
+            (b"aaa".to_vec(), Some(b"Aa".to_vec()), false, 1, 11, 111),
+            (b"aabc".to_vec(), Some(b"Abc".to_vec()), false, 1, 11, 111),
+            (b"abc".to_vec(), Some(b"bb".to_vec()), true, 0, 0, 0),
+            (b"abcd".to_vec(), Some(b"bb".to_vec()), true, 0, 0, 0),
+            // skip rewrite rule bb -> BB
+            (b"bccd".to_vec(), Some(b"cc".to_vec()), true, 0, 0, 0),
+            (b"ccde".to_vec(), Some(b"CCCde".to_vec()), false, 3, 33, 333),
+            (b"cdcd".to_vec(), Some(b"dd".to_vec()), true, 0, 0, 0),
+            (
+                b"dddd".to_vec(),
+                Some(b"DDDDdd".to_vec()),
+                false,
+                4,
+                44,
+                444,
+            ),
+            (b"eeee".to_vec(), None, true, 0, 0, 0),
+        ];
+        for (
+            old_key,
+            expect_user_key_op,
+            is_right,
+            expect_new_timestamp,
+            expect_after,
+            expect_before,
+        ) in cases
+        {
+            let res = prefix_replacer.try_update_rewrite_rule(&old_key);
+            if is_right {
+                let seek_key_op = res.unwrap().right().unwrap();
+                if let Some(expect_user_key) = expect_user_key_op {
+                    let seek_key = seek_key_op.unwrap();
+                    assert_eq!(expect_user_key, seek_key);
+                } else {
+                    assert!(seek_key_op.is_none());
+                }
+            } else {
+                let expect_user_key = expect_user_key_op.unwrap();
+                let (user_key, new_timestamp, after, before) = res.unwrap().left().unwrap();
+                assert_eq!(new_timestamp, expect_new_timestamp);
+                assert_eq!(after, expect_after);
+                assert_eq!(before, expect_before);
+                assert_eq!(user_key, expect_user_key);
+            }
+        }
     }
 }

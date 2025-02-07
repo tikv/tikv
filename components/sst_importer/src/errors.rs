@@ -29,6 +29,7 @@ pub fn error_inc(type_: &str, err: &Error) {
         Error::Engine(..) => "engine",
         Error::CannotReadExternalStorage { .. } => "read_external_storage",
         Error::WrongKeyPrefix { .. } => "wrong_prefix",
+        Error::WrongRewriteRules(..) => "wrong_rewrite_rules",
         Error::BadFormat(..) => "bad_format",
         Error::Encryption(..) => "encryption",
         Error::CodecError(..) => "codec",
@@ -96,6 +97,9 @@ pub enum Error {
         key: Vec<u8>,
         prefix: Vec<u8>,
     },
+
+    #[error("wrong rewrite rules: {0}")]
+    WrongRewriteRules(String),
 
     #[error("bad format {0}")]
     BadFormat(String),
@@ -213,6 +217,7 @@ impl ErrorCodeExt for Error {
                 error_code::sst_importer::CANNOT_READ_EXTERNAL_STORAGE
             }
             Error::WrongKeyPrefix { .. } => error_code::sst_importer::WRONG_KEY_PREFIX,
+            Error::WrongRewriteRules(_) => error_code::sst_importer::WRONG_REWRITE_RULES,
             Error::BadFormat(_) => error_code::sst_importer::BAD_FORMAT,
             Error::Encryption(e) => e.error_code(),
             Error::CodecError(e) => e.error_code(),

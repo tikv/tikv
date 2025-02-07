@@ -24,18 +24,21 @@ use online_config::OnlineConfig;
 use raft::StateRole;
 use raftstore::coprocessor::RegionInfoProvider;
 use resource_control::{with_resource_limiter, ResourceGroupManager, ResourceLimiter};
+use tidb_query_datatype::codec::table as table_codec;
 use tikv::{
     config::BackupConfig,
     storage::{
         kv::{CursorBuilder, Engine, LocalTablets, ScanMode, SnapContext},
-        mvcc::Error as MvccError,
+        mvcc::{EntryScanner, Error as MvccError},
         raw::raw_mvcc::RawMvccSnapshot,
         txn::{EntryBatch, Error as TxnError, SnapshotStore, TxnEntryScanner, TxnEntryStore},
         Snapshot, Statistics,
     },
 };
 use tikv_util::{
-    box_err, debug, error, error_unknown,
+    box_err,
+    codec::bytes::encode_bytes,
+    debug, error, error_unknown,
     future::RescheduleChecker,
     impl_display_as_debug, info,
     resizable_threadpool::ResizableRuntime,
@@ -64,6 +67,7 @@ struct Request {
     start_key: Vec<u8>,
     end_key: Vec<u8>,
     sub_ranges: Vec<KeyRange>,
+    sub_ranges_groups: Vec<SortedSubRanges>,
     start_ts: TimeStamp,
     end_ts: TimeStamp,
     // cloning on Limiter will share the same underlying token bucket thus can be used as
@@ -134,6 +138,7 @@ impl Task {
                 start_key: req.get_start_key().to_owned(),
                 end_key: req.get_end_key().to_owned(),
                 sub_ranges: req.get_sub_ranges().to_owned(),
+                sub_ranges_groups: req.get_sorted_sub_ranges_groups().to_owned(),
                 start_ts: req.get_start_version().into(),
                 end_ts: req.get_end_version().into(),
                 backend: req.get_storage_backend().clone(),
@@ -170,8 +175,7 @@ impl Task {
 
 #[derive(Debug)]
 pub struct BackupRange {
-    start_key: Option<Key>,
-    end_key: Option<Key>,
+    ranges: Vec<(Option<Key>, Option<Key>)>,
     region: Region,
     peer: Peer,
     codec: KeyValueCodec,
@@ -312,20 +316,15 @@ async fn send_to_worker_with_metrics<EK: KvEngine>(
 }
 
 impl BackupRange {
-    /// Get entries from the scanner and save them to storage
-    async fn backup<E: Engine>(
+    fn backup_scanner<E: Engine>(
         &self,
-        writer_builder: BackupWriterBuilder<E::Local>,
         mut engine: E,
         concurrency_manager: ConcurrencyManager,
+        start_key: Option<Key>,
+        end_key: Option<Key>,
         backup_ts: TimeStamp,
         begin_ts: TimeStamp,
-        saver: async_channel::Sender<InMemBackupFiles<E::Local>>,
-        storage_name: &str,
-        resource_limiter: Option<Arc<ResourceLimiter>>,
-    ) -> Result<Statistics> {
-        assert!(!self.codec.is_raw_kv);
-
+    ) -> Result<EntryScanner<<E as Engine>::Snap>> {
         let mut ctx = Context::default();
         ctx.set_region_id(self.region.get_id());
         ctx.set_region_epoch(self.region.get_region_epoch().to_owned());
@@ -341,10 +340,10 @@ impl BackupRange {
         if self.uses_replica_read {
             snap_ctx.start_ts = Some(backup_ts);
             let mut key_range = KeyRange::default();
-            if let Some(start_key) = self.start_key.as_ref() {
+            if let Some(start_key) = start_key.as_ref() {
                 key_range.set_start_key(start_key.clone().into_encoded());
             }
-            if let Some(end_key) = self.end_key.as_ref() {
+            if let Some(end_key) = end_key.as_ref() {
                 key_range.set_end_key(end_key.clone().into_encoded());
             }
             snap_ctx.key_ranges = vec![key_range];
@@ -354,25 +353,21 @@ impl BackupRange {
                 .update_max_ts(backup_ts, "backup_range")
                 .map_err(TxnError::from)?;
             concurrency_manager
-                .read_range_check(
-                    self.start_key.as_ref(),
-                    self.end_key.as_ref(),
-                    |key, lock| {
-                        Lock::check_ts_conflict(
-                            Cow::Borrowed(lock),
-                            key,
-                            backup_ts,
-                            &Default::default(),
-                            IsolationLevel::Si,
-                        )
-                    },
-                )
+                .read_range_check(start_key.as_ref(), end_key.as_ref(), |key, lock| {
+                    Lock::check_ts_conflict(
+                        Cow::Borrowed(lock),
+                        key,
+                        backup_ts,
+                        &Default::default(),
+                        IsolationLevel::Si,
+                    )
+                })
                 .map_err(MvccError::from)
                 .map_err(TxnError::from)?;
         }
 
         let start_snapshot = Instant::now();
-        let snapshot = match engine.snapshot(snap_ctx) {
+        let snapshot = match Engine::snapshot(&mut engine, snap_ctx) {
             Ok(s) => s,
             Err(e) => {
                 error!(?e; "backup snapshot failed");
@@ -382,6 +377,7 @@ impl BackupRange {
         BACKUP_RANGE_HISTOGRAM_VEC
             .with_label_values(&["snapshot"])
             .observe(start_snapshot.saturating_elapsed().as_secs_f64());
+
         let snap_store = SnapshotStore::new(
             snapshot,
             backup_ts,
@@ -391,96 +387,145 @@ impl BackupRange {
             Default::default(),
             false,
         );
-        let start_key = self.start_key.clone();
-        let end_key = self.end_key.clone();
         // Incremental backup needs to output delete records.
         let incremental = !begin_ts.is_zero();
-        let mut scanner = snap_store
+        let scanner = snap_store
             .entry_scanner(start_key, end_key, begin_ts, incremental)
             .unwrap();
+        Ok(scanner)
+    }
 
-        let start_scan = Instant::now();
-        let mut batch = EntryBatch::with_capacity(BACKUP_BATCH_LIMIT);
-        let mut next_file_start_key = self
-            .start_key
-            .clone()
+    /// Get entries from the scanner and save them to storage
+    async fn backup<E: Engine>(
+        &self,
+        writer_builder: BackupWriterBuilder<E::Local>,
+        engine: E,
+        concurrency_manager: ConcurrencyManager,
+        backup_ts: TimeStamp,
+        begin_ts: TimeStamp,
+        saver: async_channel::Sender<InMemBackupFiles<E::Local>>,
+        storage_name: &str,
+        resource_limiter: Option<Arc<ResourceLimiter>>,
+    ) -> Result<Statistics> {
+        assert!(!self.codec.is_raw_kv);
+
+        let mut next_file_start_key = <[_]>::first(&self.ranges)
+            .and_then(|(start_key, _)| start_key.clone())
             .map_or_else(Vec::new, |k| k.into_raw().unwrap());
-        let mut writer = writer_builder.build(next_file_start_key.clone(), storage_name)?;
-        let mut reschedule_checker =
-            RescheduleChecker::new(tokio::task::yield_now, TASK_YIELD_DURATION);
-        loop {
-            if let Err(e) = scanner.scan_entries(&mut batch) {
-                error!(?e; "backup scan entries failed");
-                return Err(e.into());
-            };
-            if batch.is_empty() {
-                break;
-            }
-            debug!("backup scan entries"; "len" => batch.len());
-
-            let entries = batch.drain();
-            if writer.need_split_keys() {
-                let this_end_key = entries.as_slice().first().map_or_else(
-                    || Err(Error::Other(box_err!("get entry error: nothing in batch"))),
-                    |x| {
-                        x.to_key().map(|k| k.into_raw().unwrap()).map_err(|e| {
-                            error!(?e; "backup save file failed");
-                            Error::Other(box_err!("Decode error: {:?}", e))
-                        })
-                    },
-                )?;
-                let this_start_key = next_file_start_key.clone();
-                let msg = InMemBackupFiles {
-                    files: KvWriter::Txn(writer),
-                    start_key: this_start_key,
-                    end_key: this_end_key.clone(),
-                    start_version: begin_ts,
-                    end_version: backup_ts,
-                    region: self.region.clone(),
-                    resource_limiter: resource_limiter.clone(),
+        // Notice that make sure the last key of each SST and the end key of the range
+        // from the same table, so that sst importer can rewrite the range end
+        // key correctly.
+        let mut last_brange_end_key: &Option<Key> = &None;
+        let mut writer = writer_builder
+            .build(next_file_start_key.clone(), storage_name)
+            .map_err(|e| {
+                error_unknown!(?e; "backup writer failed");
+                e
+            })?;
+        let mut batch = EntryBatch::with_capacity(BACKUP_BATCH_LIMIT);
+        let mut total_stat = Statistics::default();
+        for (start_key, end_key) in &self.ranges {
+            let mut scanner = self.backup_scanner(
+                engine.clone(),
+                concurrency_manager.clone(),
+                start_key.clone(),
+                end_key.clone(),
+                backup_ts,
+                begin_ts,
+            )?;
+            let mut first_scan = true;
+            let start_key_raw_vec = start_key
+                .as_ref()
+                .map_or_else(Vec::new, |k| k.to_raw().unwrap());
+            let physical_id = table_codec::decode_table_id(&start_key_raw_vec).unwrap_or_default();
+            let start_scan = Instant::now();
+            let mut reschedule_checker =
+                RescheduleChecker::new(tokio::task::yield_now, TASK_YIELD_DURATION);
+            loop {
+                if let Err(e) = scanner.scan_entries(&mut batch) {
+                    error!(?e; "backup scan entries failed");
+                    return Err(e.into());
                 };
-                send_to_worker_with_metrics(&saver, msg).await?;
-                next_file_start_key = this_end_key;
-                writer = writer_builder
-                    .build(next_file_start_key.clone(), storage_name)
-                    .map_err(|e| {
-                        error_unknown!(?e; "backup writer failed");
-                        e
-                    })?;
-            }
+                if batch.is_empty() {
+                    // nothing to scan, but also archive the file metadata
+                    if first_scan {
+                        writer.try_archive_meta(physical_id);
+                    }
+                    break;
+                }
+                debug!("backup scan entries"; "len" => batch.len());
 
-            // Build sst files.
-            if let Err(e) = writer.write(entries, true) {
-                error_unknown!(?e; "backup build sst failed");
-                return Err(e);
+                let entries = batch.drain();
+                if writer.need_split_keys() {
+                    let this_start_key = next_file_start_key;
+                    let this_end_key = if first_scan {
+                        next_file_start_key = start_key_raw_vec.clone();
+                        // the last_key can not be empty.
+                        last_brange_end_key.as_ref().unwrap().to_raw().unwrap()
+                    } else {
+                        next_file_start_key = entries.as_slice().first().map_or_else(
+                            || Err(Error::Other(box_err!("get entry error: nothing in batch"))),
+                            |x| {
+                                x.to_key().map(|k| k.into_raw().unwrap()).map_err(|e| {
+                                    error!(?e; "backup save file failed");
+                                    Error::Other(box_err!("Decode error: {:?}", e))
+                                })
+                            },
+                        )?;
+                        next_file_start_key.clone()
+                    };
+                    let msg = InMemBackupFiles {
+                        files: KvWriter::Txn(writer),
+                        start_key: this_start_key,
+                        end_key: this_end_key,
+                        start_version: begin_ts,
+                        end_version: backup_ts,
+                        region: self.region.clone(),
+                        resource_limiter: resource_limiter.clone(),
+                    };
+                    send_to_worker_with_metrics(&saver, msg).await?;
+                    writer = writer_builder
+                        .build(next_file_start_key.clone(), storage_name)
+                        .map_err(|e| {
+                            error_unknown!(?e; "backup writer failed");
+                            e
+                        })?;
+                }
+
+                // Build sst files.
+                if let Err(e) = writer.write(physical_id, entries, true) {
+                    error_unknown!(?e; "backup build sst failed");
+                    return Err(e);
+                }
+                if resource_limiter.is_some() {
+                    reschedule_checker.check().await;
+                }
+                first_scan = false;
             }
-            if resource_limiter.is_some() {
-                reschedule_checker.check().await;
+            let stat = scanner.take_statistics();
+            let take = start_scan.saturating_elapsed_secs();
+            if take > 30.0 {
+                warn!("backup scan takes long time.";
+                    "take(s)" => %take,
+                    "region" => ?self.region,
+                    "start_key" => %redact_option_key(start_key),
+                    "end_key" => %redact_option_key(end_key),
+                    "stat" => ?stat,
+                );
             }
+            BACKUP_RANGE_HISTOGRAM_VEC
+                .with_label_values(&["scan"])
+                .observe(take);
+            total_stat.add(&stat);
+            last_brange_end_key = end_key;
         }
-        drop(snap_store);
-        let stat = scanner.take_statistics();
-        let take = start_scan.saturating_elapsed_secs();
-        if take > 30.0 {
-            warn!("backup scan takes long time.";
-                "take(s)" => %take,
-                "region" => ?self.region,
-                "start_key" => %redact_option_key(&self.start_key),
-                "end_key" => %redact_option_key(&self.end_key),
-                "stat" => ?stat,
-            );
-        }
-        BACKUP_RANGE_HISTOGRAM_VEC
-            .with_label_values(&["scan"])
-            .observe(take);
 
         let msg = InMemBackupFiles {
             files: KvWriter::Txn(writer),
             start_key: next_file_start_key,
-            end_key: self
-                .end_key
-                .clone()
-                .map_or_else(Vec::new, |k| k.into_raw().unwrap()),
+            end_key: last_brange_end_key
+                .as_ref()
+                .map_or_else(Vec::new, |k| k.to_raw().unwrap()),
             start_version: begin_ts,
             end_version: backup_ts,
             region: self.region.clone(),
@@ -488,11 +533,13 @@ impl BackupRange {
         };
         send_to_worker_with_metrics(&saver, msg).await?;
 
-        Ok(stat)
+        Ok(total_stat)
     }
 
     fn backup_raw<EK: KvEngine, S: Snapshot>(
         &self,
+        start_key: Option<Key>,
+        end_key: Option<Key>,
         writer: &mut BackupRawKvWriter<EK>,
         snapshot: &S,
     ) -> Result<Statistics> {
@@ -501,11 +548,11 @@ impl BackupRange {
         let mut statistics = Statistics::default();
         let cfstatistics = statistics.mut_cf_statistics(self.cf);
         let mut cursor = CursorBuilder::new(snapshot, self.cf)
-            .range(None, self.end_key.clone())
+            .range(None, end_key)
             .scan_mode(ScanMode::Forward)
             .fill_cache(false)
             .build()?;
-        if let Some(begin) = self.start_key.clone() {
+        if let Some(begin) = start_key {
             if !cursor.seek(&begin, cfstatistics)? {
                 return Ok(statistics);
             }
@@ -554,16 +601,27 @@ impl BackupRange {
 
     async fn backup_raw_kv_to_file<E: Engine>(
         &self,
+        store_id: u64,
         mut engine: E,
         db: E::Local,
         rate_limiter: &Limiter,
-        file_name: String,
+        storage_name: &str,
         cf: CfNameWrap,
         compression_type: Option<SstCompressionType>,
         compression_level: i32,
         cipher: CipherInfo,
         saver_tx: async_channel::Sender<InMemBackupFiles<E::Local>>,
     ) -> Result<Statistics> {
+        assert!(self.ranges.len() == 1);
+        let (start_key, end_key) = self.ranges.last().unwrap().clone();
+        // TODO: make file_name unique and short
+        let key = start_key.clone().and_then(|k| {
+            // use start_key sha256 instead of start_key to avoid file name too long os
+            // error
+            let input = self.codec.decode_backup_key(Some(k)).unwrap_or_default();
+            file_system::sha256(&input).ok().map(hex::encode)
+        });
+        let file_name = backup_file_name(store_id, &self.region, key, storage_name);
         let mut writer = match BackupRawKvWriter::new(
             db,
             &file_name,
@@ -590,7 +648,7 @@ impl BackupRange {
             pb_ctx: &ctx,
             ..Default::default()
         };
-        let engine_snapshot = match engine.snapshot(snap_ctx) {
+        let engine_snapshot = match Engine::snapshot(&mut engine, snap_ctx) {
             Ok(s) => s,
             Err(e) => {
                 error!(?e; "backup raw kv snapshot failed");
@@ -599,18 +657,25 @@ impl BackupRange {
         };
         let backup_ret = if self.codec.use_raw_mvcc_snapshot() {
             self.backup_raw(
+                start_key.clone(),
+                end_key.clone(),
                 &mut writer,
                 &RawMvccSnapshot::from_snapshot(engine_snapshot),
             )
         } else {
-            self.backup_raw(&mut writer, &engine_snapshot)
+            self.backup_raw(
+                start_key.clone(),
+                end_key.clone(),
+                &mut writer,
+                &engine_snapshot,
+            )
         };
         let stat = match backup_ret {
             Ok(s) => s,
             Err(e) => return Err(e),
         };
-        let start_key = self.codec.decode_backup_key(self.start_key.clone())?;
-        let end_key = self.codec.decode_backup_key(self.end_key.clone())?;
+        let start_key = self.codec.decode_backup_key(start_key)?;
+        let end_key = self.codec.decode_backup_key(end_key)?;
         let msg = InMemBackupFiles {
             files: KvWriter::Raw(writer),
             start_key,
@@ -727,6 +792,91 @@ pub struct Endpoint<E: Engine, R: RegionInfoProvider + Clone + 'static> {
     pub(crate) region_info: R,
 }
 
+pub struct ProgressGroup<R: RegionInfoProvider> {
+    ranges_groups_desc: Vec<Vec<(Option<Key>, Option<Key>)>>,
+    progress: Progress<R>,
+}
+
+// check whether ranges in each group are ordered
+fn check_ranges_groups_desc(
+    ranges_groups_desc: &Vec<Vec<(Option<Key>, Option<Key>)>>,
+) -> Result<()> {
+    for ranges in ranges_groups_desc {
+        let (first_start_key, first_end_key) = ranges.first().ok_or(crate::Error::Other(
+            box_err!(format!("given ranges is empty")),
+        ))?;
+        if first_end_key.is_some() && first_start_key >= first_end_key {
+            return Err(crate::Error::Other(box_err!(format!(
+                "the given range is not valid: start_key: {:?}, end_key: {:?}",
+                first_start_key, first_end_key
+            ))));
+        }
+        let mut last_end_key = first_end_key;
+        for (start_key, end_key) in &ranges[1..] {
+            if last_end_key.is_none() {
+                return Err(crate::Error::Other(box_err!(format!(
+                    "given ranges are not ordered: last_end_key: +inf, this_start_key: {:?}",
+                    start_key
+                ))));
+            }
+            if last_end_key > start_key {
+                return Err(crate::Error::Other(box_err!(format!(
+                    "given ranges are not ordered: last_end_key: {:?}, this_start_key: {:?}",
+                    last_end_key, start_key
+                ))));
+            }
+            if end_key.is_some() && start_key > end_key {
+                return Err(crate::Error::Other(box_err!(format!(
+                    "the given range is not valid: start_key: {:?}, end_key: {:?}",
+                    start_key, end_key
+                ))));
+            }
+            last_end_key = end_key;
+        }
+    }
+    Ok(())
+}
+
+impl<R: RegionInfoProvider> ProgressGroup<R> {
+    fn new(
+        store_id: u64,
+        ranges_groups_desc: Vec<Vec<(Option<Key>, Option<Key>)>>,
+        region_info: R,
+        codec: KeyValueCodec,
+        cf: CfName,
+    ) -> Result<Self> {
+        check_ranges_groups_desc(&ranges_groups_desc)?;
+        Ok(ProgressGroup {
+            ranges_groups_desc,
+            progress: Progress::new(store_id, region_info, codec, cf),
+        })
+    }
+
+    // try the next ranges group if the currnet progress is finished.
+    // and return false if it cannot advance next group anymore.
+    fn try_next_group(&mut self) -> bool {
+        loop {
+            if !self.progress.finished {
+                return true;
+            }
+            let next_ranges_group = match self.ranges_groups_desc.pop() {
+                Some(next_ranges_group) => next_ranges_group,
+                None => {
+                    return false;
+                }
+            };
+            self.progress.reset(next_ranges_group);
+        }
+    }
+
+    fn forward(&mut self, limit: usize, replica_read: bool) -> Option<Vec<BackupRange>> {
+        if !self.try_next_group() {
+            return None;
+        }
+        self.progress.forward(limit, replica_read)
+    }
+}
+
 /// The progress of a backup task
 pub struct Progress<R: RegionInfoProvider> {
     store_id: u64,
@@ -737,54 +887,145 @@ pub struct Progress<R: RegionInfoProvider> {
     region_info: R,
     finished: bool,
     codec: KeyValueCodec,
+    // only backup the specified column family, which is used for raw backup
     cf: CfName,
 }
 
 impl<R: RegionInfoProvider> Progress<R> {
-    fn new_with_range(
-        store_id: u64,
-        next_start: Option<Key>,
-        end_key: Option<Key>,
-        region_info: R,
-        codec: KeyValueCodec,
-        cf: CfName,
-    ) -> Self {
-        let ranges = vec![(next_start, end_key)];
-        Self::new_with_ranges(store_id, ranges, region_info, codec, cf)
-    }
-
-    fn new_with_ranges(
-        store_id: u64,
-        ranges: Vec<(Option<Key>, Option<Key>)>,
-        region_info: R,
-        codec: KeyValueCodec,
-        cf: CfName,
-    ) -> Self {
-        let mut prs = Progress {
+    fn new(store_id: u64, region_info: R, codec: KeyValueCodec, cf: CfName) -> Self {
+        Progress {
             store_id,
-            ranges,
+            ranges: vec![],
             next_index: 0,
             next_start: None,
             end_key: None,
             region_info,
-            finished: false,
+            finished: true,
             codec,
             cf,
-        };
-        prs.try_next();
-        prs
+        }
+    }
+
+    fn reset(&mut self, ranges: Vec<(Option<Key>, Option<Key>)>) {
+        self.ranges = ranges;
+        self.next_index = 0;
+        self.next_start = None;
+        self.end_key = None;
+        self.finished = false;
+        self.try_next_range();
+    }
+
+    fn next_range(&mut self) {
+        (self.next_start, self.end_key) = self.ranges[self.next_index].clone();
+        self.next_index += 1;
     }
 
     /// try the next range. If all the ranges are consumed,
     /// set self.finish true.
-    fn try_next(&mut self) {
+    fn try_next_range(&mut self) {
         if self.ranges.len() > self.next_index {
-            (self.next_start, self.end_key) = self.ranges[self.next_index].clone();
-
-            self.next_index += 1;
+            self.next_range();
         } else {
             self.finished = true;
         }
+    }
+
+    const RAW_TABLE_TABLE_PREFIX: usize = table_codec::TABLE_PREFIX_KEY_LEN + 1;
+    fn try_next_range_over_this_region(&mut self, brange: &mut BackupRange) {
+        if self.codec.is_raw_kv {
+            self.try_next_range();
+            return;
+        }
+        // get the current range's table prefix key
+        let table_prefix_key = match &self.end_key {
+            Some(encode_key) => {
+                let mut key = match encode_key.to_raw() {
+                    Ok(raw_key) => raw_key,
+                    Err(e) => {
+                        error!(?e; "failed to decode range key");
+                        self.try_next_range();
+                        return;
+                    }
+                };
+                if !key.starts_with(table_codec::TABLE_PREFIX)
+                    || key.len() < Self::RAW_TABLE_TABLE_PREFIX
+                {
+                    self.try_next_range();
+                    return;
+                }
+                key.truncate(Self::RAW_TABLE_TABLE_PREFIX);
+                key
+            }
+            None => {
+                self.try_next_range();
+                return;
+            }
+        };
+        let region_end_key = brange.region.get_end_key();
+        while self.ranges.len() > self.next_index {
+            self.next_range();
+            // collect until the range is not in the region
+            match &self.next_start {
+                Some(this_start_key)
+                    if !region_end_key.is_empty()
+                        && region_end_key <= this_start_key.as_encoded().as_slice() =>
+                {
+                    return;
+                }
+                _ => {}
+            }
+            // collect the current range when all the data of the table is in the region
+            let range_end_key = match &self.end_key {
+                Some(range_end_key) => range_end_key,
+                None => return,
+            };
+            let mut range_raw_end_key = match range_end_key.to_raw() {
+                Ok(raw_end_key) => raw_end_key,
+                Err(e) => {
+                    error!(?e; "failed to decode range key");
+                    return;
+                }
+            };
+            // if the range is encoded by table/index, the range end key must start
+            // with "t{table_id}_r" or "t{table_id}_i{index_id}".
+            //
+            // so we can use "t{table_id}\xFF" as the table end key
+            if !range_raw_end_key.starts_with(table_codec::TABLE_PREFIX)
+                || range_raw_end_key.len() < Self::RAW_TABLE_TABLE_PREFIX
+            {
+                return;
+            }
+            // collect the remaining ranges when it is the last region
+            if region_end_key.is_empty() {
+                brange
+                    .ranges
+                    .push((self.next_start.clone(), self.end_key.clone()));
+                continue;
+            }
+            // collect the range if they are from the same table
+            if table_prefix_key.as_slice() != &range_raw_end_key[..Self::RAW_TABLE_TABLE_PREFIX] {
+                range_raw_end_key.truncate(table_codec::TABLE_PREFIX_KEY_LEN);
+                range_raw_end_key.push(u8::MAX);
+                let table_end_key = encode_bytes(&range_raw_end_key);
+                let table_end_key_ref = table_end_key.as_slice();
+                if table_end_key_ref > region_end_key {
+                    return;
+                }
+            }
+            // now both region end key and range end key is not empty
+            if range_end_key.as_encoded().as_slice() > region_end_key {
+                let next_end_key = Some(Key::from_encoded_slice(region_end_key));
+                brange
+                    .ranges
+                    .push((self.next_start.clone(), next_end_key.clone()));
+                self.next_start = next_end_key;
+                return;
+            }
+            brange
+                .ranges
+                .push((self.next_start.clone(), self.end_key.clone()));
+        }
+        self.finished = true;
     }
 
     /// Forward the progress by `ranges` BackupRanges
@@ -837,8 +1078,7 @@ impl<R: RegionInfoProvider> Progress<R> {
                         let skey = get_max_start_key(start_key.as_ref(), region);
                         assert!(!(skey == ekey && ekey.is_some()), "{:?} {:?}", skey, ekey);
                         let backup_range = BackupRange {
-                            start_key: skey,
-                            end_key: ekey,
+                            ranges: vec![(skey, ekey)],
                             region: region.clone(),
                             peer,
                             codec,
@@ -859,18 +1099,20 @@ impl<R: RegionInfoProvider> Progress<R> {
             error!(?e; "backup seek region failed");
         }
 
-        let branges: Vec<_> = rx.iter().collect();
-        if let Some(b) = branges.last() {
+        let mut branges: Vec<_> = rx.iter().collect();
+        if let Some(b) = branges.last_mut() {
+            assert!(b.ranges.len() == 1);
+            let (_, brange_end_key) = &b.ranges.last().unwrap();
             // The region's end key is empty means it is the last
             // region, we need to set the `finished` flag here in case
             // we run with `next_start` set to None
-            if b.region.get_end_key().is_empty() || b.end_key == self.end_key {
-                self.try_next();
+            if b.region.get_end_key().is_empty() || brange_end_key.eq(&self.end_key) {
+                self.try_next_range_over_this_region(b);
             } else {
-                self.next_start = b.end_key.clone();
+                self.next_start = brange_end_key.clone();
             }
         } else {
-            self.try_next();
+            self.try_next_range();
         }
         Some(branges)
     }
@@ -937,7 +1179,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
 
     fn spawn_backup_worker(
         &self,
-        prs: Arc<Mutex<Progress<R>>>,
+        prs: Arc<Mutex<ProgressGroup<R>>>,
         request: Request,
         saver_tx: async_channel::Sender<InMemBackupFiles<E::Local>>,
         resp_tx: UnboundedSender<BackupResponse>,
@@ -982,9 +1224,9 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                     // Anyway, even tokio itself doesn't recommend to use it unless the lock guard needs to be `Send`.
                     // (See https://tokio.rs/tokio/tutorial/shared-state)
                     // Use &mut and mark the type for making rust-analyzer happy.
-                    let progress: &mut Progress<_> = &mut prs.lock().unwrap();
+                    let progress: &mut ProgressGroup<_> = &mut prs.lock().unwrap();
                     match progress.forward(batch_size, request.replica_read) {
-                        Some(batch) => (batch, progress.codec.is_raw_kv, progress.cf),
+                        Some(batch) => (batch, progress.progress.codec.is_raw_kv, request.cf),
                         None => return,
                     }
                 };
@@ -998,13 +1240,6 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                         warn!("backup task has canceled"; "range" => ?brange);
                         return;
                     }
-                    // TODO: make file_name unique and short
-                    let key = brange.start_key.clone().and_then(|k| {
-                        // use start_key sha256 instead of start_key to avoid file name too long os error
-                        let input = brange.codec.decode_backup_key(Some(k)).unwrap_or_default();
-                        file_system::sha256(&input).ok().map(hex::encode)
-                    });
-                    let name = backup_file_name(store_id, &brange.region, key, _backend.name());
                     let ct = to_sst_compression_type(request.compression_type);
                     let db = match tablets.get(brange.region.id) {
                         Some(t) => t,
@@ -1017,10 +1252,11 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                     let stat = if is_raw_kv {
                         brange
                             .backup_raw_kv_to_file(
+                                store_id,
                                 engine,
                                 db.into_owned(),
                                 &request.rate_limiter,
-                                name,
+                                _backend.name(),
                                 cf.into(),
                                 ct,
                                 request.compression_level,
@@ -1077,32 +1313,49 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
         &self,
         request: &Request,
         codec: KeyValueCodec,
-    ) -> Arc<Mutex<Progress<R>>> {
-        if request.sub_ranges.is_empty() {
+    ) -> Result<Arc<Mutex<ProgressGroup<R>>>> {
+        if request.sub_ranges.is_empty() && request.sub_ranges_groups.is_empty() {
             let start_key = codec.encode_backup_key(request.start_key.clone());
             let end_key = codec.encode_backup_key(request.end_key.clone());
-            Arc::new(Mutex::new(Progress::new_with_range(
+            Ok(Arc::new(Mutex::new(ProgressGroup::new(
                 self.store_id,
-                start_key,
-                end_key,
+                vec![vec![(start_key, end_key)]],
                 self.region_info.clone(),
                 codec,
                 request.cf,
-            )))
-        } else {
-            let mut ranges = Vec::with_capacity(request.sub_ranges.len());
-            for k in &request.sub_ranges {
+            )?)))
+        } else if request.sub_ranges_groups.is_empty() {
+            let mut ranges_groups = Vec::with_capacity(request.sub_ranges.len());
+            for k in <[KeyRange]>::iter(&request.sub_ranges).rev() {
                 let start_key = codec.encode_backup_key(k.start_key.clone());
                 let end_key = codec.encode_backup_key(k.end_key.clone());
-                ranges.push((start_key, end_key));
+                ranges_groups.push(vec![(start_key, end_key)]);
             }
-            Arc::new(Mutex::new(Progress::new_with_ranges(
+            Ok(Arc::new(Mutex::new(ProgressGroup::new(
                 self.store_id,
-                ranges,
+                ranges_groups,
                 self.region_info.clone(),
                 codec,
                 request.cf,
-            )))
+            )?)))
+        } else {
+            let mut ranges_groups = Vec::with_capacity(request.sub_ranges_groups.len());
+            for groups in <[SortedSubRanges]>::iter(&request.sub_ranges_groups).rev() {
+                let mut ranges = Vec::with_capacity(groups.sub_ranges.len());
+                for rg in &groups.sub_ranges {
+                    let start_key = codec.encode_backup_key(rg.start_key.clone());
+                    let end_key = codec.encode_backup_key(rg.end_key.clone());
+                    ranges.push((start_key, end_key));
+                }
+                ranges_groups.push(ranges);
+            }
+            Ok(Arc::new(Mutex::new(ProgressGroup::new(
+                self.store_id,
+                ranges_groups,
+                self.region_info.clone(),
+                codec,
+                request.cf,
+            )?)))
         }
     }
 
@@ -1145,7 +1398,17 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
             }
         }
 
-        let prs = self.get_progress_by_req(&request, codec);
+        let prs = match self.get_progress_by_req(&request, codec) {
+            Ok(prs) => prs,
+            Err(err) => {
+                let mut response = BackupResponse::default();
+                response.set_error(err.into());
+                if let Err(err) = resp.unbounded_send(response) {
+                    error_unknown!(?err; "backup failed to send response");
+                }
+                return;
+            }
+        };
 
         let backend = match create_storage(&request.backend, self.get_config()) {
             Ok(backend) => backend,
@@ -1332,7 +1595,7 @@ pub mod tests {
 
     use api_version::{api_v2::RAW_KEY_PREFIX, dispatch_api_version, KvFormat, RawValue};
     use collections::HashSet;
-    use engine_traits::MiscExt;
+    use engine_traits::{MiscExt, CF_WRITE};
     use external_storage::{make_local_backend, make_noop_backend};
     use file_system::{IoOp, IoRateLimiter, IoType};
     use futures::{executor::block_on, stream::StreamExt};
@@ -1340,6 +1603,7 @@ pub mod tests {
     use raftstore::coprocessor::{RegionCollector, Result as CopResult, SeekRegionCallback};
     use rand::Rng;
     use tempfile::TempDir;
+    use tidb_query_datatype::codec::table;
     use tikv::{
         coprocessor::checksum_crc64_xor,
         storage::{
@@ -1350,7 +1614,7 @@ pub mod tests {
     };
     use tikv_util::{config::ReadableSize, store::new_peer};
     use tokio::time;
-    use txn_types::SHORT_VALUE_MAX_LEN;
+    use txn_types::{Write, WriteType, SHORT_VALUE_MAX_LEN};
 
     use super::*;
 
@@ -1571,14 +1835,14 @@ pub mod tests {
             |start_key: &[u8], end_key: &[u8], expect: Vec<(&[u8], &[u8])>| {
                 let start_key = (!start_key.is_empty()).then_some(Key::from_raw(start_key));
                 let end_key = (!end_key.is_empty()).then_some(Key::from_raw(end_key));
-                let mut prs = Progress::new_with_range(
+                let mut prs = ProgressGroup::new(
                     endpoint.store_id,
-                    start_key,
-                    end_key,
+                    vec![vec![(start_key, end_key)]],
                     endpoint.region_info.clone(),
                     KeyValueCodec::new(false, ApiVersion::V1, ApiVersion::V1),
                     engine_traits::CF_DEFAULT,
-                );
+                )
+                .unwrap();
 
                 let mut ranges = Vec::with_capacity(expect.len());
                 while ranges.len() != expect.len() {
@@ -1601,12 +1865,18 @@ pub mod tests {
                 }
 
                 for (a, b) in ranges.into_iter().zip(expect) {
+                    assert_eq!(a.ranges.len(), 1);
+                    let (start_key, end_key) = a.ranges.last().unwrap();
                     assert_eq!(
-                        a.start_key.map_or_else(Vec::new, |k| k.into_raw().unwrap()),
+                        start_key
+                            .clone()
+                            .map_or_else(Vec::new, |k| k.into_raw().unwrap()),
                         b.0
                     );
                     assert_eq!(
-                        a.end_key.map_or_else(Vec::new, |k| k.into_raw().unwrap()),
+                        end_key
+                            .clone()
+                            .map_or_else(Vec::new, |k| k.into_raw().unwrap()),
                         b.1
                     );
                 }
@@ -1624,6 +1894,7 @@ pub mod tests {
                         start_key: start_key.to_vec(),
                         end_key: end_key.to_vec(),
                         sub_ranges: Vec::new(),
+                        sub_ranges_groups: Vec::new(),
                         start_ts: 1.into(),
                         end_ts: 1.into(),
                         backend,
@@ -1735,6 +2006,7 @@ pub mod tests {
                 start_key: b"1".to_vec(),
                 end_key: b"2".to_vec(),
                 sub_ranges: ranges.clone(),
+                sub_ranges_groups: Vec::new(),
                 start_ts: 1.into(),
                 end_ts: 1.into(),
                 backend: backend.clone(),
@@ -1766,6 +2038,7 @@ pub mod tests {
                 start_key: b"".to_vec(),
                 end_key: b"3".to_vec(),
                 sub_ranges: ranges.clone(),
+                sub_ranges_groups: Vec::new(),
                 start_ts: 1.into(),
                 end_ts: 1.into(),
                 backend,
@@ -1814,18 +2087,19 @@ pub mod tests {
         let test_seek_backup_ranges =
             |sub_ranges: Vec<(&[u8], &[u8])>, expect: Vec<(&[u8], &[u8])>| {
                 let mut ranges = Vec::with_capacity(sub_ranges.len());
-                for &(start_key, end_key) in &sub_ranges {
+                for (start_key, end_key) in sub_ranges.iter().rev() {
                     let start_key = (!start_key.is_empty()).then_some(Key::from_raw(start_key));
                     let end_key = (!end_key.is_empty()).then_some(Key::from_raw(end_key));
-                    ranges.push((start_key, end_key));
+                    ranges.push(vec![(start_key, end_key)]);
                 }
-                let mut prs = Progress::new_with_ranges(
+                let mut prs = ProgressGroup::new(
                     endpoint.store_id,
                     ranges,
                     endpoint.region_info.clone(),
                     KeyValueCodec::new(false, ApiVersion::V1, ApiVersion::V1),
                     engine_traits::CF_DEFAULT,
-                );
+                )
+                .unwrap();
 
                 let mut ranges = Vec::with_capacity(expect.len());
                 loop {
@@ -1843,12 +2117,18 @@ pub mod tests {
                 }
 
                 for (a, b) in ranges.into_iter().zip(expect) {
+                    assert_eq!(a.ranges.len(), 1);
+                    let (start_key, end_key) = a.ranges.last().unwrap();
                     assert_eq!(
-                        a.start_key.map_or_else(Vec::new, |k| k.into_raw().unwrap()),
+                        start_key
+                            .clone()
+                            .map_or_else(Vec::new, |k| k.into_raw().unwrap()),
                         b.0
                     );
                     assert_eq!(
-                        a.end_key.map_or_else(Vec::new, |k| k.into_raw().unwrap()),
+                        end_key
+                            .clone()
+                            .map_or_else(Vec::new, |k| k.into_raw().unwrap()),
                         b.1
                     );
                 }
@@ -1876,6 +2156,7 @@ pub mod tests {
                         start_key: b"1".to_vec(),
                         end_key: b"2".to_vec(),
                         sub_ranges: ranges,
+                        sub_ranges_groups: Vec::new(),
                         start_ts: 1.into(),
                         end_ts: 1.into(),
                         backend,
@@ -1982,8 +2263,7 @@ pub mod tests {
 
     fn fake_empty_marker() -> Vec<super::BackupRange> {
         vec![super::BackupRange {
-            start_key: None,
-            end_key: None,
+            ranges: Vec::new(),
             region: Region::new(),
             peer: Peer::new(),
             codec: KeyValueCodec::new(false, ApiVersion::V1, ApiVersion::V1),
@@ -2004,18 +2284,19 @@ pub mod tests {
         let expect: Vec<(&[u8], &[u8])> = vec![(b"", b""), (b"3", b"4"), (b"6", b"7"), (b"", b"")];
 
         let mut ranges = Vec::with_capacity(sub_ranges.len());
-        for &(start_key, end_key) in &sub_ranges {
+        for &(start_key, end_key) in sub_ranges.iter().rev() {
             let start_key = (!start_key.is_empty()).then_some(Key::from_raw(start_key));
             let end_key = (!end_key.is_empty()).then_some(Key::from_raw(end_key));
-            ranges.push((start_key, end_key));
+            ranges.push(vec![(start_key, end_key)]);
         }
-        let mut prs = Progress::new_with_ranges(
+        let mut prs = ProgressGroup::new(
             endpoint.store_id,
             ranges,
             endpoint.region_info.clone(),
             KeyValueCodec::new(false, ApiVersion::V1, ApiVersion::V1),
             engine_traits::CF_DEFAULT,
-        );
+        )
+        .unwrap();
 
         let mut ranges = Vec::with_capacity(expect.len());
         loop {
@@ -2037,15 +2318,740 @@ pub mod tests {
 
         assert!(ranges.len() == expect.len());
         for (a, b) in ranges.into_iter().zip(expect) {
+            if b.0.len() + b.1.len() == 0 {
+                assert_eq!(a.ranges.len(), 0);
+            } else {
+                assert_eq!(a.ranges.len(), 1);
+            }
+            let (start_key, end_key) = a.ranges.last().unwrap_or(&(None, None));
             assert_eq!(
-                a.start_key.map_or_else(Vec::new, |k| k.into_raw().unwrap()),
+                start_key
+                    .clone()
+                    .map_or_else(Vec::new, |k| k.into_raw().unwrap()),
                 b.0
             );
             assert_eq!(
-                a.end_key.map_or_else(Vec::new, |k| k.into_raw().unwrap()),
+                end_key
+                    .clone()
+                    .map_or_else(Vec::new, |k| k.into_raw().unwrap()),
                 b.1
             );
         }
+    }
+
+    #[test]
+    fn test_seek_ranges_3() {
+        use tidb_query_datatype::codec::table;
+        let (_tmp, endpoint) = new_endpoint();
+
+        // [t1_i1, t1_i1, t1_r] means that the table with id 1 has index with id 1 and 2
+        // and row data on the region. {[t1_r]} means that the table with id 1
+        // has row data on the region, but the region is not in this TiKV.
+        //
+        // [t1_i1, t1_i2, t1_r], {[t1_r]}, [t1_r, t2_i1, t2_i2, t2_r, t3_i1, t3_r, t4_r,
+        // t5_i1, t5_i2], [t5_r], [t5_r, \xFF\xFF], [+inf]
+        endpoint.region_info.set_regions(vec![
+            (
+                table::encode_index_seek_key(1, 1, b"1"),
+                table::encode_row_key(1, 100),
+                1,
+            ),
+            (
+                table::encode_row_key(1, 300),
+                table::encode_index_seek_key(5, 2, b"2"),
+                2,
+            ),
+            (
+                table::encode_row_key(5, 100),
+                table::encode_row_key(5, 300),
+                3,
+            ),
+            (table::encode_row_key(5, 500), vec![u8::MAX, u8::MAX], 4),
+            (vec![u8::MAX, u8::MAX, u8::MAX], vec![], 5),
+        ]);
+        let request_ranges: Vec<(Vec<u8>, Vec<u8>)> = vec![
+            (
+                table::encode_index_seek_key(1, 1, b""),
+                table::encode_index_seek_key(1, 1, &[u8::MAX]),
+            ),
+            (
+                table::encode_index_seek_key(1, 2, b""),
+                table::encode_index_seek_key(1, 2, &[u8::MAX]),
+            ),
+            (
+                table::encode_row_key(1, 0),
+                table::encode_row_key(1, i64::MAX),
+            ),
+            (
+                table::encode_index_seek_key(2, 1, b""),
+                table::encode_index_seek_key(2, 1, &[u8::MAX]),
+            ),
+            (
+                table::encode_index_seek_key(2, 2, b""),
+                table::encode_index_seek_key(2, 2, &[u8::MAX]),
+            ),
+            (
+                table::encode_row_key(2, 0),
+                table::encode_row_key(2, i64::MAX),
+            ),
+            (
+                table::encode_index_seek_key(3, 1, b""),
+                table::encode_index_seek_key(3, 1, &[u8::MAX]),
+            ),
+            (
+                table::encode_row_key(3, 0),
+                table::encode_row_key(3, i64::MAX),
+            ),
+            (
+                table::encode_row_key(4, 0),
+                table::encode_row_key(4, i64::MAX),
+            ),
+            (
+                table::encode_index_seek_key(5, 1, b""),
+                table::encode_index_seek_key(5, 1, &[u8::MAX]),
+            ),
+            (
+                table::encode_index_seek_key(5, 2, b""),
+                table::encode_index_seek_key(5, 2, &[u8::MAX]),
+            ),
+            (
+                table::encode_row_key(5, 0),
+                table::encode_row_key(5, i64::MAX),
+            ),
+            (vec![u8::MAX, 0], vec![u8::MAX, 2]),
+            (vec![u8::MAX, 3], vec![u8::MAX, u8::MAX, u8::MAX, 1]),
+        ];
+        let expect: Vec<(Vec<u8>, Vec<u8>)> = vec![
+            (
+                table::encode_index_seek_key(1, 1, b"1"),
+                table::encode_row_key(1, 100),
+            ),
+            (
+                table::encode_row_key(1, 300),
+                table::encode_row_key(4, i64::MAX),
+            ),
+            (
+                table::encode_index_seek_key(5, 1, b""),
+                table::encode_index_seek_key(5, 2, b"2"),
+            ),
+            (table::encode_row_key(5, 100), table::encode_row_key(5, 300)),
+            (
+                table::encode_row_key(5, 500),
+                table::encode_row_key(5, i64::MAX),
+            ),
+            (vec![u8::MAX, 0], vec![u8::MAX, 2]),
+            (vec![u8::MAX, 3], vec![u8::MAX, u8::MAX]),
+            (
+                vec![u8::MAX, u8::MAX, u8::MAX],
+                vec![u8::MAX, u8::MAX, u8::MAX, 1],
+            ),
+        ];
+
+        let tmp = TempDir::new().unwrap();
+        let backend = make_local_backend(tmp.path());
+        let (tx, rx) = unbounded();
+
+        let mut ranges = SortedSubRanges::default();
+        let mut sub_ranges = Vec::with_capacity(request_ranges.len());
+        for (start_key, end_key) in request_ranges {
+            let mut key_range = KeyRange::default();
+            key_range.set_start_key(start_key);
+            key_range.set_end_key(end_key);
+            sub_ranges.push(key_range);
+        }
+        ranges.set_sub_ranges(sub_ranges.into());
+        let task = Task {
+            request: Request {
+                start_key: Vec::new(),
+                end_key: Vec::new(),
+                sub_ranges: Vec::new(),
+                sub_ranges_groups: vec![ranges],
+                start_ts: 1.into(),
+                end_ts: 1.into(),
+                backend,
+                rate_limiter: Limiter::new(f64::INFINITY),
+                cancel: Arc::default(),
+                is_raw_kv: false,
+                dst_api_ver: ApiVersion::V1,
+                cf: engine_traits::CF_DEFAULT,
+                compression_type: CompressionType::Unknown,
+                compression_level: 0,
+                cipher: CipherInfo::default(),
+                replica_read: false,
+                resource_group_name: "".into(),
+                source_tag: "br".into(),
+            },
+            resp: tx,
+        };
+        endpoint.handle_backup_task(task);
+        let resps: Vec<_> = block_on(rx.collect());
+        for a in &resps {
+            assert!(
+                expect
+                    .iter()
+                    .any(|b| { a.get_start_key() == b.0 && a.get_end_key() == b.1 }),
+                "{:?} {:?}",
+                resps,
+                expect
+            );
+        }
+        assert_eq!(resps.len(), expect.len());
+    }
+
+    fn write_kv(engine: &RocksEngine, key: Vec<u8>) -> (u64, u64) {
+        let ctx = Context::default();
+        let encoded_key = Key::from_raw(&key).append_ts(TimeStamp::from(1));
+        let write = Write::new(
+            WriteType::Put,
+            TimeStamp::from(1),
+            Some(b"short_value".to_vec()),
+        );
+        engine
+            .put_cf(&ctx, CF_WRITE, encoded_key, write.as_ref().to_bytes())
+            .unwrap();
+
+        // return (kvs, bytes)
+        (1, (key.len() + b"short_value".len()) as u64)
+    }
+
+    fn write_rows(engine: &RocksEngine, table_id: i64, handle_offset: i64) -> (u64, u64) {
+        let ctx = Context::default();
+        let mut kvs = 0;
+        let mut bytes = 0;
+        for handle in handle_offset + 1..handle_offset + 2 * (BACKUP_BATCH_LIMIT as i64) {
+            let raw_key = table::encode_row_key(table_id, handle);
+            kvs += 1;
+            bytes += (raw_key.len() + b"short_value".len()) as u64;
+            let encoded_key = Key::from_raw(&raw_key).append_ts(TimeStamp::from(1));
+            let write = Write::new(
+                WriteType::Put,
+                TimeStamp::from(1),
+                Some(b"short_value".to_vec()),
+            );
+            engine
+                .put_cf(&ctx, CF_WRITE, encoded_key, write.as_ref().to_bytes())
+                .unwrap();
+        }
+        (kvs, bytes)
+    }
+
+    #[test]
+    fn test_seek_ranges_4() {
+        use std::collections::HashMap;
+        let (_tmp, endpoint) = new_endpoint();
+
+        // modify the sst_max_size to trigger writer split
+        let config_manager = endpoint.get_config_manager();
+        config_manager.0.write().unwrap().sst_max_size = ReadableSize(1);
+
+        // [t1_i1, t1_i1, t1_r] means that the table with id 1 has index with id 1 and 2
+        // and row data on the region. {[t1_r]} means that the table with id 1
+        // has row data on the region, but the region is not in this TiKV.
+        //
+        // [t1_i1, t1_i2, t1_r], {[t1_r]}, [t1_r, t2_i1, t2_i2, t2_r, t3_i1, t3_r, t4_r,
+        // t5_i1, t5_i2], [t5_r], [t5_r, \xFF\xFF], [+inf]
+        let mut expect_table_meta: HashMap<i64, (u64, u64)> = HashMap::new();
+        let (kvs, bytes) = write_kv(&endpoint.engine, table::encode_index_seek_key(1, 1, b"11"));
+        expect_table_meta
+            .entry(1)
+            .and_modify(|e| {
+                e.0 += kvs;
+                e.1 += bytes;
+            })
+            .or_insert((kvs, bytes));
+        let (kvs, bytes) = write_kv(&endpoint.engine, table::encode_index_seek_key(1, 2, b"11"));
+        expect_table_meta
+            .entry(1)
+            .and_modify(|e| {
+                e.0 += kvs;
+                e.1 += bytes;
+            })
+            .or_insert((kvs, bytes));
+        let (kvs, bytes) = write_kv(&endpoint.engine, table::encode_row_key(1, 10));
+        expect_table_meta
+            .entry(1)
+            .and_modify(|e| {
+                e.0 += kvs;
+                e.1 += bytes;
+            })
+            .or_insert((kvs, bytes));
+        let (kvs, bytes) = write_kv(&endpoint.engine, table::encode_row_key(1, 400));
+        expect_table_meta
+            .entry(1)
+            .and_modify(|e| {
+                e.0 += kvs;
+                e.1 += bytes;
+            })
+            .or_insert((kvs, bytes));
+        let (kvs, bytes) = write_kv(&endpoint.engine, table::encode_index_seek_key(2, 1, b"11"));
+        expect_table_meta
+            .entry(2)
+            .and_modify(|e| {
+                e.0 += kvs;
+                e.1 += bytes;
+            })
+            .or_insert((kvs, bytes));
+        let (kvs, bytes) = write_kv(&endpoint.engine, table::encode_index_seek_key(2, 2, b"11"));
+        expect_table_meta
+            .entry(2)
+            .and_modify(|e| {
+                e.0 += kvs;
+                e.1 += bytes;
+            })
+            .or_insert((kvs, bytes));
+        let (kvs, bytes) = write_rows(&endpoint.engine, 2, 10);
+        expect_table_meta
+            .entry(2)
+            .and_modify(|e| {
+                e.0 += kvs;
+                e.1 += bytes;
+            })
+            .or_insert((kvs, bytes));
+        let (kvs, bytes) = write_kv(&endpoint.engine, table::encode_index_seek_key(3, 1, b"11"));
+        expect_table_meta
+            .entry(3)
+            .and_modify(|e| {
+                e.0 += kvs;
+                e.1 += bytes;
+            })
+            .or_insert((kvs, bytes));
+        let (kvs, bytes) = write_kv(&endpoint.engine, table::encode_row_key(3, 10));
+        expect_table_meta
+            .entry(3)
+            .and_modify(|e| {
+                e.0 += kvs;
+                e.1 += bytes;
+            })
+            .or_insert((kvs, bytes));
+        // empty table 4
+        expect_table_meta.entry(4).or_insert((0, 0));
+        let (kvs, bytes) = write_kv(&endpoint.engine, table::encode_index_seek_key(5, 1, b"11"));
+        expect_table_meta
+            .entry(5)
+            .and_modify(|e| {
+                e.0 += kvs;
+                e.1 += bytes;
+            })
+            .or_insert((kvs, bytes));
+        let (kvs, bytes) = write_kv(&endpoint.engine, table::encode_index_seek_key(5, 2, b"11"));
+        expect_table_meta
+            .entry(5)
+            .and_modify(|e| {
+                e.0 += kvs;
+                e.1 += bytes;
+            })
+            .or_insert((kvs, bytes));
+        let (kvs, bytes) = write_kv(&endpoint.engine, table::encode_row_key(5, 200));
+        expect_table_meta
+            .entry(5)
+            .and_modify(|e| {
+                e.0 += kvs;
+                e.1 += bytes;
+            })
+            .or_insert((kvs, bytes));
+        let (kvs, bytes) = write_kv(&endpoint.engine, table::encode_row_key(5, 600));
+        expect_table_meta
+            .entry(5)
+            .and_modify(|e| {
+                e.0 += kvs;
+                e.1 += bytes;
+            })
+            .or_insert((kvs, bytes));
+        write_kv(&endpoint.engine, vec![u8::MAX, 1]);
+        write_kv(&endpoint.engine, vec![u8::MAX, u8::MAX, u8::MAX, 0]);
+        endpoint.region_info.set_regions(vec![
+            (
+                table::encode_index_seek_key(1, 1, b"1"),
+                table::encode_row_key(1, 100),
+                1,
+            ),
+            (
+                table::encode_row_key(1, 300),
+                table::encode_index_seek_key(5, 2, b"2"),
+                2,
+            ),
+            (
+                table::encode_row_key(5, 100),
+                table::encode_row_key(5, 300),
+                3,
+            ),
+            (table::encode_row_key(5, 500), vec![u8::MAX, u8::MAX], 4),
+            (vec![u8::MAX, u8::MAX, u8::MAX], vec![], 5),
+        ]);
+        let request_ranges: Vec<(Vec<u8>, Vec<u8>)> = vec![
+            (
+                table::encode_index_seek_key(1, 1, b""),
+                table::encode_index_seek_key(1, 1, &[u8::MAX]),
+            ),
+            (
+                table::encode_index_seek_key(1, 2, b""),
+                table::encode_index_seek_key(1, 2, &[u8::MAX]),
+            ),
+            (
+                table::encode_row_key(1, 0),
+                table::encode_row_key(1, i64::MAX),
+            ),
+            (
+                table::encode_index_seek_key(2, 1, b""),
+                table::encode_index_seek_key(2, 1, &[u8::MAX]),
+            ),
+            (
+                table::encode_index_seek_key(2, 2, b""),
+                table::encode_index_seek_key(2, 2, &[u8::MAX]),
+            ),
+            (
+                table::encode_row_key(2, 0),
+                table::encode_row_key(2, i64::MAX),
+            ),
+            (
+                table::encode_index_seek_key(3, 1, b""),
+                table::encode_index_seek_key(3, 1, &[u8::MAX]),
+            ),
+            (
+                table::encode_row_key(3, 0),
+                table::encode_row_key(3, i64::MAX),
+            ),
+            (
+                table::encode_row_key(4, 0),
+                table::encode_row_key(4, i64::MAX),
+            ),
+            (
+                table::encode_index_seek_key(5, 1, b""),
+                table::encode_index_seek_key(5, 1, &[u8::MAX]),
+            ),
+            (
+                table::encode_index_seek_key(5, 2, b""),
+                table::encode_index_seek_key(5, 2, &[u8::MAX]),
+            ),
+            (
+                table::encode_row_key(5, 0),
+                table::encode_row_key(5, i64::MAX),
+            ),
+            (vec![u8::MAX, 0], vec![u8::MAX, 2]),
+            (vec![u8::MAX, 3], vec![u8::MAX, u8::MAX, u8::MAX, 1]),
+        ];
+        let expect: Vec<(Vec<u8>, Vec<u8>)> = vec![
+            (
+                table::encode_index_seek_key(1, 1, b"1"),
+                table::encode_index_seek_key(1, 1, &[u8::MAX]),
+            ),
+            (
+                table::encode_index_seek_key(1, 2, b""),
+                table::encode_index_seek_key(1, 2, &[u8::MAX]),
+            ),
+            (table::encode_row_key(1, 0), table::encode_row_key(1, 100)),
+            (
+                table::encode_row_key(1, 300),
+                table::encode_row_key(1, i64::MAX),
+            ),
+            (
+                table::encode_index_seek_key(2, 1, b""),
+                table::encode_index_seek_key(2, 1, &[u8::MAX]),
+            ),
+            (
+                table::encode_index_seek_key(2, 2, b""),
+                table::encode_index_seek_key(2, 2, &[u8::MAX]),
+            ),
+            (table::encode_row_key(2, 0), table::encode_row_key(2, 1035)),
+            (
+                table::encode_row_key(2, 1035),
+                table::encode_row_key(2, i64::MAX),
+            ),
+            (
+                table::encode_index_seek_key(3, 1, b""),
+                table::encode_index_seek_key(3, 1, &[u8::MAX]),
+            ),
+            (
+                table::encode_row_key(3, 0),
+                table::encode_row_key(4, i64::MAX),
+            ),
+            (
+                table::encode_index_seek_key(5, 1, b""),
+                table::encode_index_seek_key(5, 1, &[u8::MAX]),
+            ),
+            (
+                table::encode_index_seek_key(5, 2, b""),
+                table::encode_index_seek_key(5, 2, b"2"),
+            ),
+            (table::encode_row_key(5, 100), table::encode_row_key(5, 300)),
+            (
+                table::encode_row_key(5, 500),
+                table::encode_row_key(5, i64::MAX),
+            ),
+            (vec![u8::MAX, 0], vec![u8::MAX, 2]),
+            (vec![u8::MAX, 3], vec![u8::MAX, u8::MAX]),
+            (
+                vec![u8::MAX, u8::MAX, u8::MAX],
+                vec![u8::MAX, u8::MAX, u8::MAX, 1],
+            ),
+        ];
+
+        let tmp = TempDir::new().unwrap();
+        let backend = make_local_backend(tmp.path());
+        let (tx, rx) = unbounded();
+
+        let mut ranges = SortedSubRanges::default();
+        let mut sub_ranges = Vec::with_capacity(request_ranges.len());
+        for (start_key, end_key) in request_ranges {
+            let mut key_range = KeyRange::default();
+            key_range.set_start_key(start_key);
+            key_range.set_end_key(end_key);
+            sub_ranges.push(key_range);
+        }
+        ranges.set_sub_ranges(sub_ranges.into());
+        let mut cipher = CipherInfo::default();
+        cipher.set_cipher_type(EncryptionMethod::Plaintext);
+        let task = Task {
+            request: Request {
+                start_key: Vec::new(),
+                end_key: Vec::new(),
+                sub_ranges: Vec::new(),
+                sub_ranges_groups: vec![ranges],
+                start_ts: 0.into(),
+                end_ts: 100.into(),
+                backend,
+                rate_limiter: Limiter::new(f64::INFINITY),
+                cancel: Arc::default(),
+                is_raw_kv: false,
+                dst_api_ver: ApiVersion::V1,
+                cf: engine_traits::CF_DEFAULT,
+                compression_type: CompressionType::Unknown,
+                compression_level: 0,
+                cipher,
+                replica_read: false,
+                resource_group_name: "".into(),
+                source_tag: "br".into(),
+            },
+            resp: tx,
+        };
+        endpoint.handle_backup_task(task);
+        let resps: Vec<_> = block_on(rx.collect());
+        let mut actual_table_meta: HashMap<i64, (u64, u64)> = HashMap::new();
+        for a in &resps {
+            for f in a.get_files() {
+                let mut total_table_meta_kvs = 0;
+                let mut total_table_meta_bytes = 0;
+                let mut table_meta_checksum = 0;
+                for meta in f.get_table_metas() {
+                    total_table_meta_kvs += meta.total_kvs;
+                    total_table_meta_bytes += meta.total_bytes;
+                    table_meta_checksum ^= meta.crc64xor;
+                    actual_table_meta
+                        .entry(meta.physical_id)
+                        .and_modify(|e| {
+                            e.0 += meta.total_kvs;
+                            e.1 += meta.total_bytes;
+                        })
+                        .or_insert((meta.total_kvs, meta.total_bytes));
+                }
+                if !f.get_table_metas().is_empty() {
+                    assert_eq!(f.total_kvs, total_table_meta_kvs);
+                    assert_eq!(f.total_bytes, total_table_meta_bytes);
+                    assert_eq!(f.crc64xor, table_meta_checksum);
+                }
+            }
+            assert!(
+                expect
+                    .iter()
+                    .any(|b| { a.get_start_key() == b.0 && a.get_end_key() == b.1 }),
+                "{:?} {:?}",
+                a,
+                expect
+            );
+        }
+        assert_eq!(resps.len(), expect.len());
+        assert_eq!(
+            expect_table_meta.len(),
+            actual_table_meta.len(),
+            "{:?}",
+            actual_table_meta
+        );
+        for (id, (kvs, bytes)) in expect_table_meta {
+            let (actual_kvs, actual_bytes) = *actual_table_meta.get(&id).unwrap();
+            assert_eq!(kvs, actual_kvs);
+            assert_eq!(bytes, actual_bytes);
+        }
+    }
+
+    #[test]
+    fn test_seek_ranges_5() {
+        use tidb_query_datatype::codec::table;
+        let (_tmp, endpoint) = new_endpoint();
+
+        // [t1_i1, t1_i1, t1_r] means that the table with id 1 has index with id 1 and 2
+        // and row data on the region. {[t1_r]} means that the table with id 1
+        // has row data on the region, but the region is not in this TiKV.
+        //
+        // [t1_r, t2_i1, t2_i2, t2_r, t3_i1, t3_r, t4_r, t5_i1, t5_i2]
+        endpoint.region_info.set_regions(vec![(
+            table::encode_row_key(1, 300),
+            table::encode_index_seek_key(5, 2, b"2"),
+            1,
+        )]);
+        let request_ranges_groups: Vec<Vec<(Vec<u8>, Vec<u8>)>> = vec![
+            vec![
+                (
+                    table::encode_row_key(1, 0),
+                    table::encode_row_key(1, i64::MAX),
+                ),
+                (
+                    table::encode_index_seek_key(2, 1, b""),
+                    table::encode_index_seek_key(2, 1, &[u8::MAX]),
+                ),
+                (
+                    table::encode_index_seek_key(2, 2, b""),
+                    table::encode_index_seek_key(2, 2, &[u8::MAX]),
+                ),
+            ],
+            vec![
+                (
+                    table::encode_row_key(2, 0),
+                    table::encode_row_key(2, i64::MAX),
+                ),
+                (
+                    table::encode_index_seek_key(3, 1, b""),
+                    table::encode_index_seek_key(3, 1, &[u8::MAX]),
+                ),
+                (
+                    table::encode_row_key(3, 0),
+                    table::encode_row_key(3, i64::MAX),
+                ),
+            ],
+            vec![
+                (
+                    table::encode_row_key(4, 0),
+                    table::encode_row_key(4, i64::MAX),
+                ),
+                (
+                    table::encode_index_seek_key(5, 1, b""),
+                    table::encode_index_seek_key(5, 1, &[u8::MAX]),
+                ),
+                (
+                    table::encode_index_seek_key(5, 2, b""),
+                    table::encode_index_seek_key(5, 2, &[u8::MAX]),
+                ),
+            ],
+        ];
+        let expect: Vec<(Vec<u8>, Vec<u8>)> = vec![
+            (
+                table::encode_row_key(1, 300),
+                table::encode_index_seek_key(2, 2, &[u8::MAX]),
+            ),
+            (
+                table::encode_row_key(2, 0),
+                table::encode_row_key(3, i64::MAX),
+            ),
+            (
+                table::encode_row_key(4, 0),
+                table::encode_row_key(4, i64::MAX),
+            ),
+            (
+                table::encode_index_seek_key(5, 1, b""),
+                table::encode_index_seek_key(5, 2, b"2"),
+            ),
+        ];
+
+        let tmp = TempDir::new().unwrap();
+        let backend = make_local_backend(tmp.path());
+        let (tx, rx) = unbounded();
+
+        let mut ranges_groups = Vec::new();
+        for request_ranges in request_ranges_groups {
+            let mut ranges = SortedSubRanges::default();
+            let mut sub_ranges = Vec::with_capacity(request_ranges.len());
+            for (start_key, end_key) in request_ranges {
+                let mut key_range = KeyRange::default();
+                key_range.set_start_key(start_key);
+                key_range.set_end_key(end_key);
+                sub_ranges.push(key_range);
+            }
+            ranges.set_sub_ranges(sub_ranges.into());
+            ranges_groups.push(ranges);
+        }
+        let task = Task {
+            request: Request {
+                start_key: Vec::new(),
+                end_key: Vec::new(),
+                sub_ranges: Vec::new(),
+                sub_ranges_groups: ranges_groups,
+                start_ts: 1.into(),
+                end_ts: 1.into(),
+                backend,
+                rate_limiter: Limiter::new(f64::INFINITY),
+                cancel: Arc::default(),
+                is_raw_kv: false,
+                dst_api_ver: ApiVersion::V1,
+                cf: engine_traits::CF_DEFAULT,
+                compression_type: CompressionType::Unknown,
+                compression_level: 0,
+                cipher: CipherInfo::default(),
+                replica_read: false,
+                resource_group_name: "".into(),
+                source_tag: "br".into(),
+            },
+            resp: tx,
+        };
+        endpoint.handle_backup_task(task);
+        let resps: Vec<_> = block_on(rx.collect());
+        for a in &resps {
+            assert!(
+                expect
+                    .iter()
+                    .any(|b| { a.get_start_key() == b.0 && a.get_end_key() == b.1 }),
+                "{:?} {:?}",
+                resps,
+                expect
+            );
+        }
+        assert_eq!(resps.len(), expect.len());
+    }
+
+    #[test]
+    fn test_check_ranges_groups_desc() {
+        let a: &Option<Key> = &None;
+        let b: &Option<Key> = &Some(Key::from_raw(b"aa"));
+        assert!(a < b);
+        let ok_ranges_groups_desc = vec![
+            vec![(None, None)],
+            vec![(None, Some(Key::from_raw(b"aa")))],
+            vec![
+                (None, Some(Key::from_raw(b"aa"))),
+                (Some(Key::from_raw(b"bb")), Some(Key::from_raw(b"cc"))),
+            ],
+            vec![
+                (None, Some(Key::from_raw(b"aa"))),
+                (Some(Key::from_raw(b"bb")), Some(Key::from_raw(b"cc"))),
+                (Some(Key::from_raw(b"cc")), None),
+            ],
+            vec![(Some(Key::from_raw(b"aa")), None)],
+            vec![
+                (Some(Key::from_raw(b"aa")), Some(Key::from_raw(b"bb"))),
+                (Some(Key::from_raw(b"cc")), None),
+            ],
+        ];
+        check_ranges_groups_desc(&ok_ranges_groups_desc).unwrap();
+
+        let err_ranges_groups_desc = vec![vec![
+            (None, Some(Key::from_raw(b"aa"))),
+            (Some(Key::from_raw(b"bb")), Some(Key::from_raw(b"aa"))),
+        ]];
+        assert!(check_ranges_groups_desc(&err_ranges_groups_desc).is_err());
+        let err_ranges_groups_desc = vec![vec![
+            (None, Some(Key::from_raw(b"aa"))),
+            (Some(Key::from_raw(b"a")), Some(Key::from_raw(b"bb"))),
+        ]];
+        assert!(check_ranges_groups_desc(&err_ranges_groups_desc).is_err());
+        let err_ranges_groups_desc = vec![vec![
+            (None, Some(Key::from_raw(b"aa"))),
+            (None, Some(Key::from_raw(b"bb"))),
+        ]];
+        assert!(check_ranges_groups_desc(&err_ranges_groups_desc).is_err());
+        let err_ranges_groups_desc = vec![vec![
+            (None, Some(Key::from_raw(b"aa"))),
+            (Some(Key::from_raw(b"bb")), None),
+            (Some(Key::from_raw(b"cc")), Some(Key::from_raw(b"dd"))),
+        ]];
+        assert!(check_ranges_groups_desc(&err_ranges_groups_desc).is_err());
     }
 
     #[test]

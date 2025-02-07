@@ -384,7 +384,7 @@ impl<E: KvEngine> SstImporter<E> {
         meta: &SstMeta,
         backend: &StorageBackend,
         name: &str,
-        rewrite_rule: &RewriteRule,
+        rewrite_rules: &[RewriteRule],
         crypter: Option<CipherInfo>,
         speed_limiter: Limiter,
         engine: E,
@@ -394,14 +394,14 @@ impl<E: KvEngine> SstImporter<E> {
             "meta" => ?meta,
             "url" => ?backend,
             "name" => name,
-            "rewrite_rule" => ?rewrite_rule,
+            "rewrite_rule" => ?rewrite_rules,
             "speed_limit" => speed_limiter.speed_limit(),
         );
         let r = self.do_download_ext(
             meta,
             backend,
             name,
-            rewrite_rule,
+            rewrite_rules,
             crypter,
             &speed_limiter,
             engine,
@@ -1124,20 +1124,21 @@ impl<E: KvEngine> SstImporter<E> {
         meta: &SstMeta,
         backend: &StorageBackend,
         name: &str,
-        rewrite_rule: &RewriteRule,
+        rewrite_rules: &[RewriteRule],
         crypter: Option<CipherInfo>,
         speed_limiter: Limiter,
         engine: E,
+        ext: DownloadExt<'_>,
     ) -> Result<Option<Range>> {
         self._download_rt.block_on(self.download_ext(
             meta,
             backend,
             name,
-            rewrite_rule,
+            rewrite_rules,
             crypter,
             speed_limiter,
             engine,
-            DownloadExt::default(),
+            ext,
         ))
     }
 
@@ -1146,7 +1147,7 @@ impl<E: KvEngine> SstImporter<E> {
         meta: &SstMeta,
         backend: &StorageBackend,
         name: &str,
-        rewrite_rule: &RewriteRule,
+        rewrite_rules: &[RewriteRule],
         crypter: Option<CipherInfo>,
         speed_limiter: &Limiter,
         engine: E,
@@ -1182,58 +1183,32 @@ impl<E: KvEngine> SstImporter<E> {
         sst_reader.verify_checksum()?;
 
         // undo key rewrite so we could compare with the keys inside SST
-        let old_prefix = rewrite_rule.get_old_key_prefix();
-        let new_prefix = rewrite_rule.get_new_key_prefix();
         let req_type = ext.req_type;
-
-        debug!("downloaded file and verified";
-            "meta" => ?meta,
-            "name" => name,
-            "path" => dst_file_name,
-            "old_prefix" => log_wrappers::Value::key(old_prefix),
-            "new_prefix" => log_wrappers::Value::key(new_prefix),
-            "req_type" => ?req_type,
-        );
-
-        let range_start = meta.get_range().get_start();
-        let range_end = meta.get_range().get_end();
-        let range_start_bound = key_to_bound(range_start);
-        let range_end_bound = if meta.get_end_key_exclusive() {
-            key_to_exclusive_bound(range_end)
-        } else {
-            key_to_bound(range_end)
-        };
-
-        let mut range_start =
-            keys::rewrite::rewrite_prefix_of_start_bound(new_prefix, old_prefix, range_start_bound)
-                .map_err(|_| Error::WrongKeyPrefix {
-                    what: "SST start range",
-                    key: range_start.to_vec(),
-                    prefix: new_prefix.to_vec(),
-                })?;
-        let mut range_end =
-            keys::rewrite::rewrite_prefix_of_end_bound(new_prefix, old_prefix, range_end_bound)
-                .map_err(|_| Error::WrongKeyPrefix {
-                    what: "SST end range",
-                    key: range_end.to_vec(),
-                    prefix: new_prefix.to_vec(),
-                })?;
+        let mut prefix_replacer = util::PrefixReplacer::new(rewrite_rules)?;
+        let mut range_start = prefix_replacer.rewrite_start(meta.get_range().get_start())?;
+        let mut range_end = prefix_replacer
+            .rewrite_end(meta.get_range().get_end(), meta.get_end_key_exclusive())?;
 
         if req_type == DownloadRequestType::Keyspace {
             range_start = keys::rewrite::encode_bound(range_start);
             range_end = keys::rewrite::encode_bound(range_end);
         }
 
+        debug!("downloaded file and verified";
+            "meta" => ?meta,
+            "name" => name,
+            "path" => dst_file_name,
+            "old_range_start" => ?range_start,
+            "old_range_end" => ?range_end,
+            "req_type" => ?req_type,
+        );
+
         let start_rename_rewrite = Instant::now();
         // read the first and last keys from the SST, determine if we could
         // simply move the entire SST instead of iterating and generate a new one.
         let mut iter = sst_reader.iter(IterOptions::default())?;
         let direct_retval = (|| -> Result<Option<_>> {
-            if rewrite_rule.old_key_prefix != rewrite_rule.new_key_prefix
-                || rewrite_rule.new_timestamp != 0
-                || rewrite_rule.ignore_after_timestamp != 0
-                || rewrite_rule.ignore_before_timestamp != 0
-            {
+            if prefix_replacer.need_to_replace() {
                 // must iterate if we perform key rewrite
                 return Ok(None);
             }
@@ -1299,8 +1274,6 @@ impl<E: KvEngine> SstImporter<E> {
         // perform iteration and key rewrite.
         let mut data_key = keys::DATA_PREFIX_KEY.to_vec();
         let data_key_prefix_len = keys::DATA_PREFIX_KEY.len();
-        let mut user_key = new_prefix.to_vec();
-        let user_key_prefix_len = new_prefix.len();
         let mut first_key = None;
 
         match range_start {
@@ -1339,29 +1312,39 @@ impl<E: KvEngine> SstImporter<E> {
                 };
             }
 
-            if !old_key.starts_with(old_prefix) {
-                return Err(Error::WrongKeyPrefix {
-                    what: "Key in SST",
-                    key: keys::origin_key(iter.key()).to_vec(),
-                    prefix: old_prefix.to_vec(),
-                });
-            }
-
+            let (user_key, new_timestamp, ignore_after_timestamp, ignore_before_timestamp) =
+                match prefix_replacer.try_update_rewrite_rule(old_key.as_ref())? {
+                    Either::Left((
+                        user_key,
+                        new_timestamp,
+                        ignore_after_timestamp,
+                        ignore_before_timestamp,
+                    )) => (
+                        user_key,
+                        new_timestamp,
+                        ignore_after_timestamp,
+                        ignore_before_timestamp,
+                    ),
+                    Either::Right(seek_key_op) => match seek_key_op {
+                        Some(seek_key) => {
+                            // skip some kvs that may be filtered
+                            iter.seek(&keys::data_key(seek_key))?;
+                            continue;
+                        }
+                        None => break,
+                    },
+                };
             data_key.truncate(data_key_prefix_len);
-            user_key.truncate(user_key_prefix_len);
-            user_key.extend_from_slice(&old_key[old_prefix.len()..]);
             if req_type == DownloadRequestType::Keyspace {
-                data_key.extend(encode_bytes(&user_key));
+                data_key.extend(encode_bytes(user_key));
                 data_key.extend(ts.unwrap());
             } else {
-                data_key.extend_from_slice(&user_key);
+                data_key.extend_from_slice(user_key);
             }
 
-            let mut value = Cow::Borrowed(iter.value());
-
-            if rewrite_rule.ignore_after_timestamp != 0 {
+            if ignore_after_timestamp != 0 {
                 let ts = Key::decode_ts_from(iter.key())?;
-                if ts > TimeStamp::new(rewrite_rule.ignore_after_timestamp) {
+                if ts > TimeStamp::new(ignore_after_timestamp) {
                     iter.next()?;
                     INPORTER_DOWNLOAD_COMPACT_KEYS_COUNT
                         .with_label_values(&["after"])
@@ -1369,11 +1352,11 @@ impl<E: KvEngine> SstImporter<E> {
                     continue;
                 }
             }
-            if rewrite_rule.ignore_before_timestamp != 0 {
+            if ignore_before_timestamp != 0 {
                 // Let the client decide the ts here for default/write CF.
                 // Normally the ts in default CF is less than the ts in write CF.
                 let ts = Key::decode_ts_from(iter.key())?;
-                if ts < TimeStamp::new(rewrite_rule.ignore_before_timestamp) {
+                if ts < TimeStamp::new(ignore_before_timestamp) {
                     iter.next()?;
                     INPORTER_DOWNLOAD_COMPACT_KEYS_COUNT
                         .with_label_values(&["before"])
@@ -1382,7 +1365,9 @@ impl<E: KvEngine> SstImporter<E> {
                 }
             }
 
-            if rewrite_rule.new_timestamp != 0 {
+            let mut value = Cow::Borrowed(iter.value());
+
+            if new_timestamp != 0 {
                 data_key = Key::from_encoded(data_key)
                     .truncate_ts()
                     .map_err(|e| {
@@ -1392,7 +1377,7 @@ impl<E: KvEngine> SstImporter<E> {
                             e
                         ))
                     })?
-                    .append_ts(TimeStamp::new(rewrite_rule.new_timestamp))
+                    .append_ts(TimeStamp::new(new_timestamp))
                     .into_encoded();
                 if cf_name == CF_WRITE {
                     let mut write = WriteRef::parse(iter.value()).map_err(|e| {
@@ -1402,7 +1387,7 @@ impl<E: KvEngine> SstImporter<E> {
                             e
                         ))
                     })?;
-                    write.start_ts = TimeStamp::new(rewrite_rule.new_timestamp);
+                    write.start_ts = TimeStamp::new(new_timestamp);
                     value = Cow::Owned(write.to_bytes());
                 }
             }
@@ -1607,22 +1592,6 @@ fn extract_checksum_info(kv_meta: &KvMeta) -> Option<Vec<u8>> {
         }
     } else {
         None
-    }
-}
-
-fn key_to_bound(key: &[u8]) -> Bound<&[u8]> {
-    if key.is_empty() {
-        Bound::Unbounded
-    } else {
-        Bound::Included(key)
-    }
-}
-
-fn key_to_exclusive_bound(key: &[u8]) -> Bound<&[u8]> {
-    if key.is_empty() {
-        Bound::Unbounded
-    } else {
-        Bound::Excluded(key)
     }
 }
 
@@ -2696,10 +2665,11 @@ mod tests {
                 &meta,
                 &backend,
                 "sample.sst",
-                &RewriteRule::default(),
+                &[RewriteRule::default()],
                 None,
                 Limiter::new(f64::INFINITY),
                 db,
+                DownloadExt::default(),
             )
             .unwrap()
             .unwrap();
@@ -2756,10 +2726,11 @@ mod tests {
                 &meta,
                 &backend,
                 "sample.sst",
-                &RewriteRule::default(),
+                &[RewriteRule::default()],
                 None,
                 Limiter::new(f64::INFINITY),
                 db,
+                DownloadExt::default(),
             )
             .unwrap()
             .unwrap();
@@ -2813,10 +2784,11 @@ mod tests {
                 &meta,
                 &backend,
                 "sample.sst",
-                &new_rewrite_rule(b"t123", b"t567", 0),
+                &[new_rewrite_rule(b"t123", b"t567", 0)],
                 None,
                 Limiter::new(f64::INFINITY),
                 db,
+                DownloadExt::default(),
             )
             .unwrap()
             .unwrap();
@@ -2863,10 +2835,11 @@ mod tests {
                 &meta,
                 &backend,
                 "sample_default.sst",
-                &new_rewrite_rule(b"", b"", 16),
+                &[new_rewrite_rule(b"", b"", 16)],
                 None,
                 Limiter::new(f64::INFINITY),
                 db,
+                DownloadExt::default(),
             )
             .unwrap()
             .unwrap();
@@ -2929,10 +2902,11 @@ mod tests {
                     &meta,
                     &backend,
                     "sample_default.sst",
-                    &case.0,
+                    &[case.0],
                     None,
                     Limiter::new(f64::INFINITY),
                     db.clone(),
+                    DownloadExt::default(),
                 )
                 .unwrap()
                 .unwrap();
@@ -3069,10 +3043,11 @@ mod tests {
                     &meta,
                     &backend,
                     "sample_write.sst",
-                    &case.0,
+                    &[case.0],
                     None,
                     Limiter::new(f64::INFINITY),
                     db.clone(),
+                    DownloadExt::default(),
                 )
                 .unwrap()
                 .unwrap();
@@ -3109,10 +3084,11 @@ mod tests {
                 &meta,
                 &backend,
                 "sample_write.sst",
-                &new_rewrite_rule(b"", b"", 16),
+                &[new_rewrite_rule(b"", b"", 16)],
                 None,
                 Limiter::new(f64::INFINITY),
                 db,
+                DownloadExt::default(),
             )
             .unwrap()
             .unwrap();
@@ -3174,10 +3150,11 @@ mod tests {
                     &meta,
                     &backend,
                     "sample.sst",
-                    &new_rewrite_rule(b"t123", b"t9102", 0),
+                    &[new_rewrite_rule(b"t123", b"t9102", 0)],
                     None,
                     Limiter::new(f64::INFINITY),
                     db,
+                    DownloadExt::default(),
                 )
                 .unwrap()
                 .unwrap();
@@ -3251,10 +3228,11 @@ mod tests {
                 &meta,
                 &backend,
                 "sample.sst",
-                &RewriteRule::default(),
+                &[RewriteRule::default()],
                 None,
                 Limiter::new(f64::INFINITY),
                 db,
+                DownloadExt::default(),
             )
             .unwrap()
             .unwrap();
@@ -3298,10 +3276,11 @@ mod tests {
                 &meta,
                 &backend,
                 "sample.sst",
-                &new_rewrite_rule(b"t123", b"t5", 0),
+                &[new_rewrite_rule(b"t123", b"t5", 0)],
                 None,
                 Limiter::new(f64::INFINITY),
                 db,
+                DownloadExt::default(),
             )
             .unwrap()
             .unwrap();
@@ -3345,10 +3324,11 @@ mod tests {
             &meta,
             &backend,
             "sample.sst",
-            &RewriteRule::default(),
+            &[RewriteRule::default()],
             None,
             Limiter::new(f64::INFINITY),
             db,
+            DownloadExt::default(),
         );
         match &result {
             Err(Error::EngineTraits(TraitError::Engine(s)))
@@ -3373,10 +3353,11 @@ mod tests {
             &meta,
             &backend,
             "sample.sst",
-            &RewriteRule::default(),
+            &[RewriteRule::default()],
             None,
             Limiter::new(f64::INFINITY),
             db,
+            DownloadExt::default(),
         );
 
         let path = importer.dir.join_for_write(&meta).unwrap();
@@ -3402,19 +3383,195 @@ mod tests {
             &meta,
             &backend,
             "sample.sst",
-            &new_rewrite_rule(b"xxx", b"yyy", 0),
+            &[new_rewrite_rule(b"xxx", b"yyy", 0)],
             None,
             Limiter::new(f64::INFINITY),
             db,
+            DownloadExt::default(),
+        );
+
+        result.unwrap();
+    }
+
+    #[test]
+    fn test_download_sst_wrong_key_prefix_2() {
+        let (_ext_sst_dir, backend, mut meta) = create_sample_external_sst_file().unwrap();
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let importer =
+            SstImporter::<TestEngine>::new(&cfg, &importer_dir, None, ApiVersion::V1, false)
+                .unwrap();
+        let db = create_sst_test_engine().unwrap();
+
+        let mut range = Range::default();
+        range.set_start(b"zt123_r01".to_vec());
+        range.set_end(b"zt123_r13".to_vec());
+        meta.set_range(range);
+
+        let result = importer.download(
+            &meta,
+            &backend,
+            "sample.sst",
+            &[new_rewrite_rule(b"xxx", b"yyy", 0)],
+            None,
+            Limiter::new(f64::INFINITY),
+            db,
+            DownloadExt::default(),
         );
 
         match &result {
-            Err(Error::WrongKeyPrefix { key, prefix, .. }) => {
-                assert_eq!(key, b"t123_r01");
-                assert_eq!(prefix, b"xxx");
+            Err(Error::WrongKeyPrefix { what, key, prefix }) => {
+                assert_eq!(what.as_bytes(), b"SST start range");
+                assert_eq!(key, b"zt123_r01");
+                assert_eq!(prefix, b"yyy");
             }
             _ => panic!("unexpected download result: {:?}", result),
         }
+    }
+
+    #[test]
+    fn test_download_sst_wrong_key_prefix_3() {
+        let (_ext_sst_dir, backend, meta) = create_sample_external_sst_file().unwrap();
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let importer =
+            SstImporter::<TestEngine>::new(&cfg, &importer_dir, None, ApiVersion::V1, false)
+                .unwrap();
+        let db = create_sst_test_engine().unwrap();
+
+        let result = importer.download(
+            &meta,
+            &backend,
+            "sample.sst",
+            &[new_rewrite_rule(b"aaa", b"bbb", 0)],
+            None,
+            Limiter::new(f64::INFINITY),
+            db,
+            DownloadExt::default(),
+        );
+
+        result.unwrap();
+    }
+
+    fn table_prefix(table_id: i64) -> Vec<u8> {
+        use tidb_query_datatype::codec::table;
+        let key = table::encode_row_key(table_id, 0);
+        let prefix = table::extract_table_prefix(&key).unwrap();
+        prefix.to_vec()
+    }
+
+    fn table_range(first_table_id: i64, end_table_id: i64) -> Range {
+        let mut range_start = table_prefix(first_table_id);
+        range_start.push(0);
+        let mut range_end = table_prefix(end_table_id);
+        range_end.push(u8::MAX);
+        let mut range = Range::default();
+        range.set_start(range_start);
+        range.set_end(range_end);
+        range
+    }
+
+    #[test]
+    fn test_download_sst_with_key_rewrite_rules() {
+        use tidb_query_datatype::codec::table;
+        use txn_types::{Write, WriteType};
+        let new_table_id_fn = |table_id: i64| -> i64 { table_id + 1000 };
+        // 100 -> 1000
+        let new_timestamp_fn = |table_id: i64| -> u64 { if table_id % 2 == 0 { 0 } else { 1000 } };
+        let mut rewrite_rules = vec![];
+        let (_ext_sst_dir, backend, mut meta) = create_external_sst_file_with_write_fn(|writer| {
+            for table_id in 0..8 {
+                let old_key_prefix = table_prefix(table_id);
+                let new_key_prefix = table_prefix(new_table_id_fn(table_id));
+                rewrite_rules.push(new_rewrite_rule(
+                    &old_key_prefix,
+                    &new_key_prefix,
+                    new_timestamp_fn(table_id),
+                ));
+                for handle in 100..110 {
+                    let raw_key = table::encode_row_key(table_id, handle);
+                    let encoded_key = Key::from_raw(&raw_key).append_ts(TimeStamp::from(100));
+                    let write = Write::new(
+                        WriteType::Put,
+                        TimeStamp::from(100),
+                        Some(b"short_value".to_vec()),
+                    );
+                    let data_key = keys::data_key(encoded_key.as_encoded().as_slice());
+                    let data_val = write.as_ref().to_bytes();
+                    writer
+                        .put(data_key.as_slice(), data_val.as_slice())
+                        .unwrap();
+                }
+            }
+            Ok(())
+        })
+        .unwrap();
+        meta.set_range(table_range(new_table_id_fn(0), new_table_id_fn(7)));
+        meta.set_cf_name(CF_WRITE.to_owned());
+
+        // performs the download.
+        let importer_dir = tempfile::tempdir().unwrap();
+        let cfg = Config::default();
+        let importer =
+            SstImporter::<TestEngine>::new(&cfg, &importer_dir, None, ApiVersion::V1, false)
+                .unwrap();
+        let db = create_sst_test_engine().unwrap();
+
+        let mut ext = DownloadExt::default();
+        ext.req_type = DownloadRequestType::Keyspace;
+        let range = importer
+            .download(
+                &meta,
+                &backend,
+                "sample.sst",
+                &rewrite_rules,
+                None,
+                Limiter::new(f64::INFINITY),
+                db,
+                ext,
+            )
+            .unwrap()
+            .unwrap();
+
+        let raw_key = table::encode_row_key(new_table_id_fn(0), 100);
+        let encoded_key = Key::from_raw(&raw_key).append_ts(TimeStamp::from(100));
+        assert_eq!(range.get_start(), encoded_key.as_encoded().as_slice());
+        let raw_key = table::encode_row_key(new_table_id_fn(7), 109);
+        let encoded_key = Key::from_raw(&raw_key).append_ts(TimeStamp::from(1000));
+        assert_eq!(range.get_end(), encoded_key.as_encoded().as_slice());
+
+        // verifies that the file is saved to the correct place.
+        let sst_file_path = importer.dir.join_for_read(&meta).unwrap().save;
+        let sst_file_metadata = sst_file_path.metadata().unwrap();
+        assert!(sst_file_metadata.is_file());
+
+        // verifies the SST content is correct.
+        let sst_reader = new_sst_reader(sst_file_path.to_str().unwrap(), None);
+        sst_reader.verify_checksum().unwrap();
+        let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
+        iter.seek_to_first().unwrap();
+        for table_id in 0..8 {
+            let new_table_id = new_table_id_fn(table_id);
+            let new_timestamp = if table_id % 2 == 0 { 100 } else { 1000 };
+            for handle in 100..110 {
+                assert!(iter.valid().unwrap());
+                let key = iter.key();
+                let val = iter.value();
+                let raw_key = table::encode_row_key(new_table_id, handle);
+                let encoded_key = Key::from_raw(&raw_key).append_ts(TimeStamp::from(new_timestamp));
+                let write = Write::new(
+                    WriteType::Put,
+                    TimeStamp::from(new_timestamp),
+                    Some(b"short_value".to_vec()),
+                );
+                let data_key = keys::data_key(encoded_key.as_encoded().as_slice());
+                let data_val = write.as_ref().to_bytes();
+                assert_eq!(key, data_key.as_slice());
+                assert_eq!(val, data_val.as_slice());
+                iter.next().unwrap();
+            }
+        }
+        assert!(!iter.valid().unwrap());
     }
 
     #[test]
@@ -3441,10 +3598,11 @@ mod tests {
                 &meta,
                 &backend,
                 "sample.sst",
-                &RewriteRule::default(),
+                &[RewriteRule::default()],
                 None,
                 Limiter::new(f64::INFINITY),
                 db,
+                DownloadExt::default(),
             )
             .unwrap()
             .unwrap();
@@ -3501,10 +3659,11 @@ mod tests {
                 &meta,
                 &backend,
                 "sample.sst",
-                &RewriteRule::default(),
+                &[RewriteRule::default()],
                 None,
                 Limiter::new(f64::INFINITY),
                 db,
+                DownloadExt::default(),
             )
             .unwrap()
             .unwrap();
@@ -3557,10 +3716,11 @@ mod tests {
                 &meta,
                 &backend,
                 "sample.sst",
-                &RewriteRule::default(),
+                &[RewriteRule::default()],
                 None,
                 Limiter::new(f64::INFINITY),
                 db,
+                DownloadExt::default(),
             )
             .unwrap()
             .unwrap();
@@ -3607,10 +3767,11 @@ mod tests {
                 &meta,
                 &backend,
                 "sample.sst",
-                &new_rewrite_rule(b"t123", b"t789", 0),
+                &[new_rewrite_rule(b"t123", b"t789", 0)],
                 None,
                 Limiter::new(f64::INFINITY),
                 db,
+                DownloadExt::default(),
             )
             .unwrap()
             .unwrap();
