@@ -820,6 +820,9 @@ mod parser {
     }
 }
 
+/// The MySQL time_format rules used in TiDB differ slightly from chrono (e.g.,
+/// %c, %f). Therefore, we need to implement our own parser function instead of
+/// directly using chrono::Datetime's implementation.
 mod date_format_parser {
     use std::collections::HashMap;
 
