@@ -2027,7 +2027,7 @@ impl Time {
 
         let days_diff = days1 as i64 - days2 as i64;
 
-        let tmp = (days_diff * SECS_PER_DAY
+        let diff = (days_diff * SECS_PER_DAY
             + self.hour() as i64 * SECS_PER_HOUR
             + self.minute() as i64 * SECS_PER_MINUTE
             + self.second() as i64
@@ -2038,11 +2038,12 @@ impl Time {
             + self.micro() as i64
             - other.micro() as i64;
 
-        if tmp < 0 {
-            (-tmp / MICROS_PER_SEC, (-tmp) % MICROS_PER_SEC, true)
-        } else {
-            (tmp / MICROS_PER_SEC, tmp % MICROS_PER_SEC, false)
-        }
+        let diff_abs = diff.abs();
+        (
+            diff_abs / MICROS_PER_SEC,
+            diff_abs % MICROS_PER_SEC,
+            diff < 0,
+        )
     }
 
     pub fn timestamp_diff(&self, other: &Self, unit: IntervalUnit) -> Result<i64> {
@@ -2054,61 +2055,61 @@ impl Time {
             unit,
             IntervalUnit::Year | IntervalUnit::Quarter | IntervalUnit::Month
         ) {
-            let (year_beg, year_end, month_beg, month_end, day_beg, day_end);
-            let (second_beg, second_end, microsecond_beg, microsecond_end);
+            let (year_start, year_end, month_start, month_end, day_start, day_end);
+            let (second_start, second_end, microsecond_start, microsecond_end);
 
             // Swap values if the difference is negative
             if neg {
-                year_beg = other.year();
+                year_start = other.year();
                 year_end = self.year();
-                month_beg = other.month();
+                month_start = other.month();
                 month_end = self.month();
-                day_beg = other.day();
+                day_start = other.day();
                 day_end = self.day();
-                second_beg = other.hour() * SECS_PER_HOUR as u32
+                second_start = other.hour() * SECS_PER_HOUR as u32
                     + other.minute() * SECS_PER_MINUTE as u32
                     + other.second();
                 second_end = self.hour() * SECS_PER_HOUR as u32
                     + self.minute() * SECS_PER_MINUTE as u32
                     + self.second();
-                microsecond_beg = other.micro();
+                microsecond_start = other.micro();
                 microsecond_end = self.micro();
             } else {
-                year_beg = self.year();
+                year_start = self.year();
                 year_end = other.year();
-                month_beg = self.month();
+                month_start = self.month();
                 month_end = other.month();
-                day_beg = self.day();
+                day_start = self.day();
                 day_end = other.day();
-                second_beg = self.hour() * SECS_PER_HOUR as u32
+                second_start = self.hour() * SECS_PER_HOUR as u32
                     + self.minute() * SECS_PER_MINUTE as u32
                     + self.second();
                 second_end = other.hour() * SECS_PER_HOUR as u32
                     + other.minute() * SECS_PER_MINUTE as u32
                     + other.second();
-                microsecond_beg = self.micro();
+                microsecond_start = self.micro();
                 microsecond_end = other.micro();
             }
 
             // Calculate the number of full years
-            let mut years = year_end - year_beg;
-            if month_end < month_beg || (month_end == month_beg && day_end < day_beg) {
+            let mut years = year_end - year_start;
+            if month_end < month_start || (month_end == month_start && day_end < day_start) {
                 years -= 1;
             }
 
             // Calculate the total number of months
             months = 12 * years as i64;
-            if month_end < month_beg || (month_end == month_beg && day_end < day_beg) {
-                months += 12 - (month_beg as i64 - month_end as i64);
+            if month_end < month_start || (month_end == month_start && day_end < day_start) {
+                months += 12 - (month_start as i64 - month_end as i64);
             } else {
-                months += month_end as i64 - month_beg as i64;
+                months += month_end as i64 - month_start as i64;
             }
 
             // Adjust if the day or time within the month is earlier
-            if day_end < day_beg
-                || (day_end == day_beg
-                    && (second_end < second_beg
-                        || (second_end == second_beg && microsecond_end < microsecond_beg)))
+            if day_end < day_start
+                || (day_end == day_start
+                    && (second_end < second_start
+                        || (second_end == second_start && microsecond_end < microsecond_start)))
             {
                 months -= 1;
             }
