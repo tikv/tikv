@@ -3,7 +3,6 @@
 use std::{sync::*, time::Duration};
 
 use collections::HashMap;
-use engine_rocks::RocksEngine;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{import_sstpb_grpc::ImportSstClient, kvrpcpb::*, tikvpb::TikvClient};
 use online_config::ConfigValue;
@@ -19,7 +18,7 @@ pub fn init() {
 }
 
 pub struct TestSuite {
-    pub cluster: Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    pub cluster: Cluster<ServerCluster>,
     tikv_cli: HashMap<u64, TikvClient>,
     import_cli: HashMap<u64, ImportSstClient>,
 

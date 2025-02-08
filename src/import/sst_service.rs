@@ -11,7 +11,8 @@ use engine_traits::{CompactExt, CF_DEFAULT, CF_WRITE};
 use file_system::{set_io_type, IoType};
 use futures::{sink::SinkExt, stream::TryStreamExt, FutureExt, TryFutureExt};
 use grpcio::{
-    ClientStreamingSink, RequestStream, RpcContext, ServerStreamingSink, UnarySink, WriteFlags,
+    ClientStreamingSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink,
+    UnarySink, WriteFlags,
 };
 use kvproto::{
     encryptionpb::EncryptionMethod,
@@ -37,14 +38,12 @@ use tikv_kv::{Engine, LocalTablets, Modify, WriteData};
 use tikv_util::{
     config::ReadableSize,
     future::{create_stream_with_buffer, paired_future_callback},
-    sys::{
-        disk::{get_disk_status, DiskUsage},
-        thread::ThreadBuildWrapper,
-    },
+    resizable_threadpool::{DeamonRuntimeHandle, ResizableRuntime},
+    sys::disk::{get_disk_status, DiskUsage},
     time::{Instant, Limiter},
     HandyRwLock,
 };
-use tokio::{runtime::Runtime, time::sleep};
+use tokio::time::sleep;
 use txn_types::{Key, WriteRef, WriteType};
 
 use super::{
@@ -56,6 +55,7 @@ use crate::{
     send_rpc_response,
     server::CONFIG_ROCKSDB_GAUGE,
     storage::{self, errors::extract_region_error_from_error},
+    tikv_util::sys::thread::ThreadBuildWrapper,
 };
 
 /// The concurrency of sending raft request for every `apply` requests.
@@ -119,7 +119,10 @@ pub struct ImportSstService<E: Engine> {
     cfg: ConfigManager,
     tablets: LocalTablets<E::Local>,
     engine: E,
-    threads: Arc<Runtime>,
+    threads: DeamonRuntimeHandle,
+    // threads_ref is for safely cleanning
+    #[allow(dead_code)]
+    threads_ref: Arc<Mutex<ResizableRuntime>>,
     importer: Arc<SstImporter<E::Local>>,
     limiter: Limiter,
     ingest_latch: Arc<IngestLatch>,
@@ -321,47 +324,60 @@ impl<E: Engine> ImportSstService<E> {
         resource_manager: Option<Arc<ResourceGroupManager>>,
         region_info_accessor: Arc<RegionInfoAccessor>,
     ) -> Self {
-        let props = tikv_util::thread_group::current_properties();
-        let eng = Mutex::new(engine.clone());
-        let threads = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(cfg.num_threads)
-            .enable_all()
-            .thread_name("sst-importer")
-            .with_sys_and_custom_hooks(
-                move || {
-                    tikv_util::thread_group::set_properties(props.clone());
+        let eng = Arc::new(Mutex::new(engine.clone()));
+        let create_tokio_runtime = move |thread_count: usize, thread_name: &str| {
+            let props = tikv_util::thread_group::current_properties();
+            let eng = eng.clone();
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(thread_count)
+                .enable_all()
+                .thread_name(thread_name)
+                .with_sys_and_custom_hooks(
+                    move || {
+                        tikv_util::thread_group::set_properties(props.clone());
+                        set_io_type(IoType::Import);
+                        tikv_kv::set_tls_engine(eng.lock().unwrap().clone());
+                    },
+                    move || {
+                        // SAFETY: we have set the engine at some lines above with type `E`.
+                        unsafe { tikv_kv::destroy_tls_engine::<E>() };
+                    },
+                )
+                .build()
+        };
 
-                    set_io_type(IoType::Import);
-                    tikv_kv::set_tls_engine(eng.lock().unwrap().clone());
-                },
-                move || {
-                    // SAFETY: we have set the engine at some lines above with type `E`.
-                    unsafe { tikv_kv::destroy_tls_engine::<E>() };
-                },
-            )
-            .build()
-            .unwrap();
+        let threads = ResizableRuntime::new(
+            4,
+            "impwkr",
+            Box::new(create_tokio_runtime),
+            Box::new(|_| ()),
+        );
+
+        let handle = threads.handle();
+        let threads_clone = Arc::new(Mutex::new(threads));
         if let LocalTablets::Singleton(tablet) = &tablets {
-            importer.start_switch_mode_check(threads.handle(), Some(tablet.clone()));
+            importer.start_switch_mode_check(&handle.clone(), Some(tablet.clone()));
         } else {
-            importer.start_switch_mode_check(threads.handle(), None);
+            importer.start_switch_mode_check(&handle.clone(), None);
         }
-
         let writer = raft_writer::ThrottledTlsEngineWriter::default();
         let gc_handle = writer.clone();
-        threads.spawn(async move {
+        handle.spawn(async move {
             while gc_handle.try_gc() {
                 tokio::time::sleep(WRITER_GC_INTERVAL).await;
             }
         });
-
-        let cfg_mgr = ConfigManager::new(cfg);
-        threads.spawn(Self::tick(importer.clone(), cfg_mgr.clone()));
+        let num_threads = cfg.num_threads;
+        let cfg_mgr = ConfigManager::new(cfg, Arc::downgrade(&threads_clone));
+        handle.spawn(Self::tick(importer.clone(), cfg_mgr.clone()));
+        // Drop the initial pool to accept new tasks
+        threads_clone.lock().unwrap().adjust_with(num_threads);
 
         ImportSstService {
             cfg: cfg_mgr,
             tablets,
-            threads: Arc::new(threads),
+            threads: handle.clone(),
+            threads_ref: threads_clone,
             engine,
             importer,
             limiter: Limiter::new(f64::INFINITY),
@@ -388,7 +404,7 @@ impl<E: Engine> ImportSstService<E> {
         }
     }
 
-    async fn apply_imp(
+    async fn do_apply(
         mut req: ApplyRequest,
         importer: Arc<SstImporter<E::Local>>,
         writer: raft_writer::ThrottledTlsEngineWriter,
@@ -406,10 +422,9 @@ impl<E: Engine> ImportSstService<E> {
             metas.push(req.take_meta());
             rules.push(req.take_rewrite_rule());
         }
-        let ext_storage = importer.wrap_kms(
+        let ext_storage = importer.auto_encrypt_local_file_if_needed(
             importer
                 .external_storage_or_cache(req.get_storage_backend(), req.get_storage_cache_id())?,
-            false,
         );
 
         let mut inflight_futures = VecDeque::new();
@@ -417,11 +432,13 @@ impl<E: Engine> ImportSstService<E> {
         let mut tasks = metas.iter().zip(rules.iter()).peekable();
         while let Some((meta, rule)) = tasks.next() {
             let buff = importer
-                .read_from_kv_file(
+                .download_kv_file(
                     meta,
                     ext_storage.clone(),
                     req.get_storage_backend(),
                     &limiter,
+                    req.cipher_info.clone().take(),
+                    req.master_keys.clone().to_vec(),
                 )
                 .await?;
             if let Some(mut r) = importer.do_apply_kv_file(
@@ -534,7 +551,7 @@ macro_rules! impl_write {
                         Ok(r) => r,
                         Err(e) => return (Err(e), Some(rx)),
                     };
-                    let (meta, resource_limiter) = match first_req {
+                    let (meta, resource_limiter, txn_source) = match first_req {
                         Some(r) => {
                             let limiter = resource_manager.as_ref().and_then(|m| {
                                 m.get_background_resource_limiter(
@@ -544,8 +561,9 @@ macro_rules! impl_write {
                                     r.get_context().get_request_source(),
                                 )
                             });
+                            let txn_source = r.get_context().get_txn_source();
                             match r.chunk {
-                                Some($chunk_ty::Meta(m)) => (m, limiter),
+                                Some($chunk_ty::Meta(m)) => (m, limiter, txn_source),
                                 _ => return (Err(Error::InvalidChunk), Some(rx)),
                             }
                         }
@@ -592,7 +610,7 @@ macro_rules! impl_write {
                         }
                     };
 
-                    let writer = match import.$writer_fn(&*tablet, meta) {
+                    let writer = match import.$writer_fn(&*tablet, meta, txn_source) {
                         Ok(w) => w,
                         Err(e) => {
                             error!("build writer failed {:?}", e);
@@ -834,17 +852,17 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             let mut resp = ApplyResponse::default();
             if get_disk_status(0) != DiskUsage::Normal {
                 resp.set_error(Error::DiskSpaceNotEnough.into());
-                return crate::send_rpc_response!(Ok(resp), sink, label, start);
+                return send_rpc_response!(Ok(resp), sink, label, start);
             }
 
-            match Self::apply_imp(req, importer, applier, limiter, max_raft_size).await {
+            match Self::do_apply(req, importer, applier, limiter, max_raft_size).await {
                 Ok(Some(r)) => resp.set_range(r),
                 Err(e) => resp.set_error(e),
                 _ => {}
             }
 
             debug!("finished apply kv file with {:?}", resp);
-            crate::send_rpc_response!(Ok(resp), sink, label, start);
+            send_rpc_response!(Ok(resp), sink, label, start);
         };
         self.threads.spawn(handle_task);
     }
@@ -1135,15 +1153,18 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                             IMPORT_RPC_DURATION
                                 .with_label_values(&[label, "ok"])
                                 .observe(timer.saturating_elapsed_secs());
+                            let _ = sink.close().await;
                         }
                         Err(e) => {
                             warn!(
                                 "connection send message fail";
                                 "err" => %e
                             );
+                            let status =
+                                RpcStatus::with_message(RpcStatusCode::UNKNOWN, format!("{:?}", e));
+                            let _ = sink.fail(status).await;
                         }
                     }
-                    let _ = sink.close().await;
                     return;
                 }
             };
@@ -1159,7 +1180,10 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                         "connection send message fail";
                         "err" => %e
                     );
-                    break;
+                    let status =
+                        RpcStatus::with_message(RpcStatusCode::UNKNOWN, format!("{:?}", e));
+                    let _ = sink.fail(status).await;
+                    return;
                 }
             }
             let _ = sink.close().await;

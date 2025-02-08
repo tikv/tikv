@@ -51,3 +51,23 @@ fn create_file_info(id: u64, method: EncryptionMethod) -> FileInfo {
         ..Default::default()
     }
 }
+
+#[test]
+fn test_kms_provider_temporary_unavailable() {
+    #[cfg(any(test, feature = "testexport"))]
+    use encryption::fake::*;
+
+    // Simulate temporary unavailable with a timeout error during encryption.
+    // Expect the backend to handle the timeout gracefully and succeed on the
+    // subsequent retry.
+    fail::cfg("kms_api_timeout_encrypt", "1*return(true)").unwrap();
+    let (iv, pt, plainkey, ..) = prepare_data_for_encrypt();
+    let mut backend = prepare_kms_backend(plainkey, false);
+    let encrypted_content = backend.encrypt_content(&pt, iv).unwrap();
+
+    backend.clear_state();
+    // Same as above.
+    fail::cfg("kms_api_timeout_decrypt", "1*return(true)").unwrap();
+    let pt_decrypt = backend.decrypt_content(&encrypted_content).unwrap();
+    assert_eq!(pt_decrypt, pt);
+}

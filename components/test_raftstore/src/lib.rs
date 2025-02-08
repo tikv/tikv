@@ -11,7 +11,6 @@ extern crate tikv_util;
 mod cluster;
 mod config;
 mod node;
-pub mod range_cache_engine;
 mod router;
 mod server;
 mod transport_simulate;

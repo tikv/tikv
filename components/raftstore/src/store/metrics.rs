@@ -144,6 +144,7 @@ make_static_metric! {
         snapshot,
         pending_region,
         has_ready_region,
+        propose_delay,
     }
 
     pub label_enum RaftSentMessageCounterType {
@@ -270,6 +271,13 @@ make_static_metric! {
         finished,
     }
 
+    pub label_enum SnapshotGenerateBytesType {
+        kv,
+        sst,
+        plain,
+        io,
+    }
+
     pub struct SnapshotBrWaitApplyEvent : IntCounter {
         "event" => SnapshotBrWaitApplyEventType
     }
@@ -337,6 +345,10 @@ make_static_metric! {
             raftstore_busy,
             applystore_busy,
         },
+    }
+
+    pub struct SnapshotGenerateBytesTypeVec: IntCounter {
+        "type" => SnapshotGenerateBytesType,
     }
 }
 
@@ -516,6 +528,13 @@ lazy_static! {
             "tikv_raftstore_apply_wait_time_duration_secs",
             "Bucketed histogram of apply task wait time duration.",
             exponential_buckets(0.00001, 2.0, 26).unwrap()
+        ).unwrap();
+
+    pub static ref APPLY_MSG_LEN: Histogram =
+        register_histogram!(
+            "tikv_raftstore_apply_msg_len",
+            "Length of apply msg.",
+            exponential_buckets(1.0, 2.0, 20).unwrap() // max 1024 * 1024
         ).unwrap();
 
     pub static ref STORE_RAFT_READY_COUNTER_VEC: IntCounterVec =
@@ -738,7 +757,7 @@ lazy_static! {
         register_histogram!(
             "tikv_raftstore_peer_msg_len",
             "Length of peer msg.",
-            exponential_buckets(1.0, 2.0, 20).unwrap() // max 1000s
+            exponential_buckets(1.0, 2.0, 20).unwrap() // max 1024 * 1024
         ).unwrap();
 
     pub static ref RAFT_READ_INDEX_PENDING_DURATION: Histogram =
@@ -850,8 +869,11 @@ lazy_static! {
             exponential_buckets(0.00001, 2.0, 26).unwrap()
         ).unwrap();
 
-    pub static ref STORE_SLOW_SCORE_GAUGE: Gauge =
-    register_gauge!("tikv_raftstore_slow_score", "Slow score of the store.").unwrap();
+    pub static ref STORE_SLOW_SCORE_GAUGE: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_raftstore_slow_score",
+        "Slow score of the store.",
+        &["type"]
+    ).unwrap();
 
     pub static ref STORE_SLOW_TREND_GAUGE: Gauge =
     register_gauge!("tikv_raftstore_slow_trend", "Slow trend changing rate.").unwrap();
@@ -936,9 +958,11 @@ lazy_static! {
         &["type"]
     ).unwrap();
 
-    pub static ref SNAPSHOT_LIMIT_GENERATE_BYTES: IntCounter = register_int_counter!(
+    pub static ref SNAPSHOT_LIMIT_GENERATE_BYTES_VEC: SnapshotGenerateBytesTypeVec = register_static_int_counter_vec!(
+        SnapshotGenerateBytesTypeVec,
         "tikv_snapshot_limit_generate_bytes",
         "Total snapshot generate limit used",
+        &["type"],
     )
     .unwrap();
 

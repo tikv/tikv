@@ -870,4 +870,43 @@ mod tests {
             .unwrap();
         assert_eq!(stats.num_entries - stats.num_versions, 0);
     }
+
+    #[test]
+    fn test_need_compact() {
+        // many tombstone case
+        let range_stats = RangeStats {
+            num_entries: 1000,
+            num_versions: 200,
+            num_deletes: 0,
+            num_rows: 200,
+        };
+        assert!(need_compact(
+            &range_stats,
+            &CompactThreshold::new(10, 30, 100, 100)
+        ));
+
+        // many mvcc put case
+        let range_stats = RangeStats {
+            num_entries: 1000,
+            num_versions: 1000,
+            num_deletes: 0,
+            num_rows: 200,
+        };
+        assert!(need_compact(
+            &range_stats,
+            &CompactThreshold::new(100, 100, 100, 30)
+        ));
+
+        // many mvcc delete case
+        let range_stats = RangeStats {
+            num_entries: 1000,
+            num_versions: 1000,
+            num_deletes: 800,
+            num_rows: 1000,
+        };
+        assert!(need_compact(
+            &range_stats,
+            &CompactThreshold::new(100, 100, 100, 30)
+        ));
+    }
 }

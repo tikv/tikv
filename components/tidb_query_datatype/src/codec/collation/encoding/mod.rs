@@ -1,6 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod ascii;
+mod gb18030;
+mod gb18030_data;
 mod gbk;
 mod unicode_letter;
 mod utf8;
@@ -8,6 +10,7 @@ mod utf8;
 use std::str;
 
 pub use ascii::*;
+pub use gb18030::*;
 pub use gbk::*;
 pub use unicode_letter::*;
 pub use utf8::*;

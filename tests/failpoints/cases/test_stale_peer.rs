@@ -1,12 +1,14 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    fs,
+    path::Path,
     sync::{atomic::AtomicBool, mpsc, Arc},
     thread,
     time::Duration,
 };
 
-use engine_traits::{RaftEngineDebug, RaftEngineReadOnly};
+use engine_traits::{RaftEngine, RaftEngineDebug, RaftEngineReadOnly};
 use futures::executor::block_on;
 use kvproto::raft_serverpb::{PeerState, RaftLocalState, RaftMessage};
 use pd_client::PdClient;
@@ -43,6 +45,65 @@ fn test_one_node_leader_missing() {
     // Check stale state 3 times,
     thread::sleep(cluster.cfg.raft_store.peer_stale_state_check_interval.0 * 3);
     fail::remove(check_stale_state);
+}
+
+#[test]
+fn test_clean_stale_peer() {
+    let validate_data_files = |dir: &std::path::Path| -> bool {
+        let mut data_file = 0_usize;
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_file() && path.to_str().unwrap().ends_with(".log") {
+                data_file += 1;
+            }
+        }
+        data_file > 0
+    };
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
+    // Disable raft log gc in this test case.
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    // Disable default max peer count check.
+    pd_client.disable_default_operator();
+
+    let region_id = cluster.run_conf_change();
+
+    // Manually set store 3 is offlined.
+    fail::cfg("manually_set_store_offline", "return").unwrap();
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+
+    (0..10).for_each(|_| cluster.must_put(b"k1", b"v1"));
+    // Send heartbeats to pd to ensure that heartbeat responses have been received
+    // by node 3.
+    cluster.must_send_store_heartbeat(3);
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    pd_client.must_remove_peer(region_id, new_peer(3, 3));
+    // Since the node 3 is marked with NodeState::Removing, its `offlined == true`
+    // in SnapManager, and no need to clear the corresponding data.
+    sleep_ms(500);
+    let engine = cluster.get_engine(3);
+    let engine_path = Path::new(engine.get_engine_path());
+    assert!(validate_data_files(engine_path));
+    fail::remove("manually_set_store_offline");
+    // After the state is cleared, the store should be marked with
+    // NodeState::Serving. And after adding a new peer to store 3,
+    // all previous data should be synced to it.
+    cluster.must_send_store_heartbeat(3);
+    cluster.must_put(b"k10", b"v10");
+    let engine = cluster.get_engine(3);
+    let (key, value) = (b"k10", b"v10");
+    must_get_none(&engine, key);
+    pd_client.must_add_peer(region_id, new_peer(3, 4));
+    must_get_equal(&engine, key, value);
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    // Remove the peer 4.
+    pd_client.must_remove_peer(region_id, new_peer(3, 4));
+    sleep_ms(500);
+    must_get_none(&engine, key);
 }
 
 #[test_case(test_raftstore::new_node_cluster)]
@@ -136,7 +197,6 @@ fn test_stale_learner_restart() {
     must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
 }
 
-/// pass
 /// Test if a peer can be destroyed through tombstone msg when applying
 /// snapshot.
 //#[test_case(test_raftstore_v2::new_node_cluster)] // unstable test case
@@ -216,7 +276,6 @@ fn test_stale_peer_destroy_when_apply_snapshot() {
     must_get_none(&cluster.get_engine(3), b"k1");
 }
 
-/// pass
 /// Test if destroy a uninitialized peer through tombstone msg would allow a
 /// staled peer be created again.
 #[test_case(test_raftstore::new_node_cluster)]

@@ -1047,6 +1047,11 @@ impl Decimal {
         }
     }
 
+    /// `frac_cnt` returns fraction count.
+    pub fn frac_cnt(&self) -> u8 {
+        self.frac_cnt
+    }
+
     /// `digit_bounds` returns bounds of decimal digits in the number.
     fn digit_bounds(&self) -> (u8, u8) {
         let mut buf_beg = 0;
@@ -1740,11 +1745,6 @@ impl Decimal {
     #[cfg(test)]
     pub fn result_frac_cnt(&self) -> u8 {
         self.result_frac_cnt
-    }
-
-    #[cfg(test)]
-    pub fn frac_cnt(&self) -> u8 {
-        self.frac_cnt
     }
 }
 

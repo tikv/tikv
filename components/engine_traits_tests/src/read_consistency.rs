@@ -12,7 +12,7 @@ fn snapshot_with_writes() {
 
     db.engine.put(b"a", b"aa").unwrap();
 
-    let snapshot = db.engine.snapshot(None);
+    let snapshot = db.engine.snapshot();
 
     assert_eq!(snapshot.get_value(b"a").unwrap().unwrap(), b"aa");
 
@@ -77,7 +77,5 @@ fn iterator_with_writes_engine() {
 #[test]
 fn iterator_with_writes_snapshot() {
     let db = default_engine();
-    iterator_with_writes(&db.engine, |e| {
-        e.snapshot(None).iterator(CF_DEFAULT).unwrap()
-    });
+    iterator_with_writes(&db.engine, |e| e.snapshot().iterator(CF_DEFAULT).unwrap());
 }

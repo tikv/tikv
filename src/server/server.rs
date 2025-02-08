@@ -166,6 +166,7 @@ where
         debug_thread_pool: Arc<Runtime>,
         health_controller: HealthController,
         resource_manager: Option<Arc<ResourceGroupManager>>,
+        raft_message_filter: Arc<dyn RaftGrpcMessageFilter>,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
         let stats_pool = if cfg.value().stats_concurrency > 0 {
@@ -211,6 +212,7 @@ where
             resource_manager,
             health_controller.clone(),
             health_feedback_interval,
+            raft_message_filter,
         );
         let builder_factory = Box::new(BuilderFactory::new(
             kv_service,
@@ -534,7 +536,7 @@ mod tests {
     use grpcio::EnvBuilder;
     use kvproto::raft_serverpb::RaftMessage;
     use raftstore::{
-        coprocessor::region_info_accessor::MockRegionInfoProvider,
+        coprocessor::{region_info_accessor::MockRegionInfoProvider, CoprocessorHost},
         router::RaftStoreRouter,
         store::{transport::Transport, *},
     };
@@ -633,7 +635,8 @@ mod tests {
             Default::default(),
             Arc::new(MockRegionInfoProvider::new(Vec::new())),
         );
-        gc_worker.start(mock_store_id).unwrap();
+        let coprocessor_host = CoprocessorHost::default();
+        gc_worker.start(mock_store_id, coprocessor_host).unwrap();
 
         let quick_fail = Arc::new(AtomicBool::new(false));
         let cfg = Arc::new(VersionTrack::new(cfg));
@@ -682,6 +685,7 @@ mod tests {
             debug_thread_pool,
             HealthController::new(),
             None,
+            Arc::new(DefaultGrpcMessageFilter::new(0.2)),
         )
         .unwrap();
 

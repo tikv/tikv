@@ -147,7 +147,6 @@ impl CompactionFilter for RawCompactionFilter {
         &mut self,
         level: usize,
         key: &[u8],
-        sequence: u64,
         value: &[u8],
         value_type: CompactionFilterValueType,
     ) -> CompactionFilterDecision {
@@ -156,7 +155,7 @@ impl CompactionFilter for RawCompactionFilter {
             return CompactionFilterDecision::Keep;
         }
 
-        match self.do_filter(level, key, sequence, value, value_type) {
+        match self.do_filter(level, key, value, value_type) {
             Ok(decision) => decision,
             Err(e) => {
                 warn!("compaction filter meet error: {}", e);
@@ -206,7 +205,6 @@ impl RawCompactionFilter {
         &mut self,
         _start_level: usize,
         key: &[u8],
-        _sequence: u64,
         value: &[u8],
         value_type: CompactionFilterValueType,
     ) -> Result<CompactionFilterDecision, String> {

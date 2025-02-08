@@ -324,7 +324,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
             let Err(cmd) = SimpleWriteReqDecoder::new(
                 |buf, index, term| parse_at(&self.logger, buf, index, term),
-                &self.logger,
+                Some(&self.logger),
                 entry.get_data(),
                 entry.get_index(),
                 entry.get_term(),

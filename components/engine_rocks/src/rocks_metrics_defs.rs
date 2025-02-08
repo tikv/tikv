@@ -7,6 +7,8 @@ pub const ROCKSDB_TABLE_READERS_MEM: &str = "rocksdb.estimate-table-readers-mem"
 pub const ROCKSDB_CUR_SIZE_ALL_MEM_TABLES: &str = "rocksdb.cur-size-all-mem-tables";
 pub const ROCKSDB_SIZE_ALL_MEM_TABLES: &str = "rocksdb.size-all-mem-tables";
 pub const ROCKSDB_ESTIMATE_NUM_KEYS: &str = "rocksdb.estimate-num-keys";
+pub const ROCKSDB_NUM_RUNNING_FLUSHES: &str = "rocksdb.num-running-flushes";
+pub const ROCKSDB_NUM_RUNNING_COMPACTIONS: &str = "rocksdb.num-running-compactions";
 pub const ROCKSDB_PENDING_COMPACTION_BYTES: &str = "rocksdb.\
                                                     estimate-pending-compaction-bytes";
 pub const ROCKSDB_COMPRESSION_RATIO_AT_LEVEL: &str = "rocksdb.compression-ratio-at-level";
@@ -64,12 +66,10 @@ pub const ENGINE_TICKER_TYPES: &[TickerType] = &[
     TickerType::BlockCacheIndexHit,
     TickerType::BlockCacheIndexAdd,
     TickerType::BlockCacheIndexBytesInsert,
-    TickerType::BlockCacheIndexBytesEvict,
     TickerType::BlockCacheFilterMiss,
     TickerType::BlockCacheFilterHit,
     TickerType::BlockCacheFilterAdd,
     TickerType::BlockCacheFilterBytesInsert,
-    TickerType::BlockCacheFilterBytesEvict,
     TickerType::BlockCacheDataMiss,
     TickerType::BlockCacheDataHit,
     TickerType::BlockCacheDataAdd,
@@ -97,7 +97,6 @@ pub const ENGINE_TICKER_TYPES: &[TickerType] = &[
     TickerType::NumberDbNextFound,
     TickerType::NumberDbPrevFound,
     TickerType::IterBytesRead,
-    TickerType::NoFileCloses,
     TickerType::NoFileOpens,
     TickerType::NoFileErrors,
     TickerType::StallMicros,
@@ -107,13 +106,16 @@ pub const ENGINE_TICKER_TYPES: &[TickerType] = &[
     TickerType::WalFileBytes,
     TickerType::WriteDoneBySelf,
     TickerType::WriteDoneByOther,
-    TickerType::WriteTimedout,
     TickerType::WriteWithWal,
     TickerType::CompactReadBytes,
     TickerType::CompactWriteBytes,
     TickerType::FlushWriteBytes,
     TickerType::ReadAmpEstimateUsefulBytes,
     TickerType::ReadAmpTotalReadBytes,
+    TickerType::LastLevelSeekFiltered,
+    TickerType::LastLevelSeekFilterMatch,
+    TickerType::NonLastLevelSeekFiltered,
+    TickerType::NonLastLevelSeekFilterMatch,
 ];
 
 pub const TITAN_ENGINE_TICKER_TYPES: &[TickerType] = &[
@@ -157,11 +159,6 @@ pub const ENGINE_HIST_TYPES: &[HistType] = &[
     HistType::CompactionOutfileSyncMicros,
     HistType::WalFileSyncMicros,
     HistType::ManifestFileSyncMicros,
-    HistType::StallL0SlowdownCount,
-    HistType::StallMemtableCompactionCount,
-    HistType::StallL0NumFilesCount,
-    HistType::HardRateLimitDelayCount,
-    HistType::SoftRateLimitDelayCount,
     HistType::NumFilesInSingleCompaction,
     HistType::DbSeek,
     HistType::WriteStall,

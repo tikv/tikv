@@ -9,12 +9,10 @@ license = "Apache-2.0"
 api_version = { workspace = true }
 backup = { workspace = true }
 collections = { workspace = true }
-concurrency_manager = { workspace = true }
 crc64fast = "0.1"
 engine_rocks = { workspace = true }
 engine_traits = { workspace = true }
 external_storage ={ workspace = true }
-file_system = { workspace = true }
 futures = "0.3"
 futures-executor = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
@@ -23,7 +21,6 @@ kvproto = { workspace = true }
 protobuf = "2"
 raftstore = { workspace = true }
 rand = "0.8"
-tempfile = "3.0"
 test_raftstore = { workspace = true }
 tidb_query_common = { workspace = true }
 tikv = { workspace = true }

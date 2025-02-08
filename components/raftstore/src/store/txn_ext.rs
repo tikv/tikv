@@ -49,18 +49,12 @@ impl fmt::Debug for TxnExt {
 }
 
 lazy_static! {
-    pub static ref GLOBAL_MEM_SIZE: IntGauge = register_int_gauge!(
+    pub static ref INSTANCE_MEM_SIZE: IntGauge = register_int_gauge!(
         "tikv_pessimistic_lock_memory_size",
         "Total memory size of pessimistic locks in bytes."
     )
     .unwrap();
 }
-
-const GLOBAL_MEM_SIZE_LIMIT: usize = 100 << 20; // 100 MiB
-
-// 512 KiB, so pessimistic locks in one region can be proposed in a single
-// command.
-const PEER_MEM_SIZE_LIMIT: usize = 512 << 10;
 
 /// Pessimistic locks of a region peer.
 #[derive(PartialEq)]
@@ -156,7 +150,12 @@ impl PeerPessimisticLocks {
     /// Inserts pessimistic locks into the map.
     ///
     /// Returns whether the operation succeeds.
-    pub fn insert<P: PessimisticLockPair>(&mut self, pairs: Vec<P>) -> Result<(), Vec<P>> {
+    pub fn insert<P: PessimisticLockPair>(
+        &mut self,
+        pairs: Vec<P>,
+        peer_mem_size_limit: usize,
+        instance_mem_size_limit: usize,
+    ) -> Result<(), Vec<P>> {
         let mut incr = 0;
         // Pre-check the memory limit of pessimistic locks.
         for pair in &pairs {
@@ -168,8 +167,8 @@ impl PeerPessimisticLocks {
                 incr += key.len() + lock.memory_size();
             }
         }
-        if self.memory_size + incr > PEER_MEM_SIZE_LIMIT
-            || GLOBAL_MEM_SIZE.get() as usize + incr > GLOBAL_MEM_SIZE_LIMIT
+        if self.memory_size + incr > peer_mem_size_limit
+            || INSTANCE_MEM_SIZE.get() as usize + incr > instance_mem_size_limit
         {
             return Err(pairs);
         }
@@ -179,7 +178,7 @@ impl PeerPessimisticLocks {
             self.map.insert(key, (lock, false));
         }
         self.memory_size += incr;
-        GLOBAL_MEM_SIZE.add(incr as i64);
+        INSTANCE_MEM_SIZE.add(incr as i64);
         Ok(())
     }
 
@@ -187,13 +186,13 @@ impl PeerPessimisticLocks {
         if let Some((lock, _)) = self.map.remove(key) {
             let desc = key.len() + lock.memory_size();
             self.memory_size -= desc;
-            GLOBAL_MEM_SIZE.sub(desc as i64);
+            INSTANCE_MEM_SIZE.sub(desc as i64);
         }
     }
 
     pub fn clear(&mut self) {
         self.map = BTreeMap::default();
-        GLOBAL_MEM_SIZE.sub(self.memory_size as i64);
+        INSTANCE_MEM_SIZE.sub(self.memory_size as i64);
         self.memory_size = 0;
     }
 
@@ -322,7 +321,7 @@ impl<'a> IntoIterator for &'a PeerPessimisticLocks {
 
 impl Drop for PeerPessimisticLocks {
     fn drop(&mut self) {
-        GLOBAL_MEM_SIZE.sub(self.memory_size as i64);
+        INSTANCE_MEM_SIZE.sub(self.memory_size as i64);
     }
 }
 
@@ -394,12 +393,26 @@ mod tests {
         let k1 = Key::from_raw(b"k1");
         let k2 = Key::from_raw(b"k22");
         let k3 = Key::from_raw(b"k333");
+        let peer_mem_size_limit = 512 << 10;
+        let instance_mem_size_limit = 100 << 20;
 
         // Test the memory size of peer pessimistic locks after inserting.
-        locks1.insert(vec![(k1.clone(), lock(b"k1"))]).unwrap();
+        locks1
+            .insert(
+                vec![(k1.clone(), lock(b"k1"))],
+                peer_mem_size_limit,
+                instance_mem_size_limit,
+            )
+            .unwrap();
         assert_eq!(locks1.get(&k1), Some(&(lock(b"k1"), false)));
         assert_eq!(locks1.memory_size, k1.len() + lock(b"k1").memory_size());
-        locks1.insert(vec![(k2.clone(), lock(b"k1"))]).unwrap();
+        locks1
+            .insert(
+                vec![(k2.clone(), lock(b"k1"))],
+                peer_mem_size_limit,
+                instance_mem_size_limit,
+            )
+            .unwrap();
         assert_eq!(locks1.get(&k2), Some(&(lock(b"k1"), false)));
         assert_eq!(
             locks1.memory_size,
@@ -407,22 +420,34 @@ mod tests {
         );
 
         // Test the global memory size after inserting.
-        locks2.insert(vec![(k3.clone(), lock(b"k1"))]).unwrap();
+        locks2
+            .insert(
+                vec![(k3.clone(), lock(b"k1"))],
+                peer_mem_size_limit,
+                instance_mem_size_limit,
+            )
+            .unwrap();
         assert_eq!(locks2.get(&k3), Some(&(lock(b"k1"), false)));
         assert_eq!(
-            GLOBAL_MEM_SIZE.get() as usize,
+            INSTANCE_MEM_SIZE.get() as usize,
             locks1.memory_size + locks2.memory_size
         );
 
         // Test the memory size after replacing, it should not change.
-        locks1.insert(vec![(k2.clone(), lock(b"k2"))]).unwrap();
+        locks1
+            .insert(
+                vec![(k2.clone(), lock(b"k2"))],
+                peer_mem_size_limit,
+                instance_mem_size_limit,
+            )
+            .unwrap();
         assert_eq!(locks1.get(&k2), Some(&(lock(b"k2"), false)));
         assert_eq!(
             locks1.memory_size,
             k1.len() + k2.len() + 2 * lock(b"k1").memory_size()
         );
         assert_eq!(
-            GLOBAL_MEM_SIZE.get() as usize,
+            INSTANCE_MEM_SIZE.get() as usize,
             locks1.memory_size + locks2.memory_size
         );
 
@@ -431,7 +456,7 @@ mod tests {
         assert!(locks1.get(&k1).is_none());
         assert_eq!(locks1.memory_size, k2.len() + lock(b"k2").memory_size());
         assert_eq!(
-            GLOBAL_MEM_SIZE.get() as usize,
+            INSTANCE_MEM_SIZE.get() as usize,
             locks1.memory_size + locks2.memory_size
         );
 
@@ -439,33 +464,47 @@ mod tests {
         locks2.clear();
         assert!(locks2.is_empty());
         assert_eq!(locks2.memory_size, 0);
-        assert_eq!(GLOBAL_MEM_SIZE.get() as usize, locks1.memory_size);
+        assert_eq!(INSTANCE_MEM_SIZE.get() as usize, locks1.memory_size);
 
         // Test the global memory size after dropping.
         drop(locks1);
         drop(locks2);
-        assert_eq!(GLOBAL_MEM_SIZE.get(), 0);
+        assert_eq!(INSTANCE_MEM_SIZE.get(), 0);
     }
 
     #[test]
     fn test_insert_checking_memory_limit() {
         let _guard = TEST_MUTEX.lock().unwrap();
-        defer!(GLOBAL_MEM_SIZE.set(0));
+        defer!(INSTANCE_MEM_SIZE.set(0));
+        let peer_mem_size_limit = 512 << 10;
+        let instance_mem_size_limit = 100 << 20;
 
         let mut locks = PeerPessimisticLocks::default();
         locks
-            .insert(vec![(Key::from_raw(b"k1"), lock(&[0; 512000]))])
+            .insert(
+                vec![(Key::from_raw(b"k1"), lock(&[0; 512000]))],
+                peer_mem_size_limit,
+                instance_mem_size_limit,
+            )
             .unwrap();
 
         // Exceeding the region limit
         locks
-            .insert(vec![(Key::from_raw(b"k2"), lock(&[0; 32000]))])
+            .insert(
+                vec![(Key::from_raw(b"k2"), lock(&[0; 32000]))],
+                peer_mem_size_limit,
+                instance_mem_size_limit,
+            )
             .unwrap_err();
         assert!(locks.get(&Key::from_raw(b"k2")).is_none());
 
         // Not exceeding the region limit, but exceeding the global limit
-        GLOBAL_MEM_SIZE.set(101 << 20);
-        let res = locks.insert(vec![(Key::from_raw(b"k2"), lock(b"abc"))]);
+        INSTANCE_MEM_SIZE.set(101 << 20);
+        let res = locks.insert(
+            vec![(Key::from_raw(b"k2"), lock(b"abc"))],
+            peer_mem_size_limit,
+            instance_mem_size_limit,
+        );
         res.unwrap_err();
         assert!(locks.get(&Key::from_raw(b"k2")).is_none());
     }
@@ -479,7 +518,7 @@ mod tests {
             region
         }
         let _guard = TEST_MUTEX.lock().unwrap();
-        defer!(GLOBAL_MEM_SIZE.set(0));
+        defer!(INSTANCE_MEM_SIZE.set(0));
 
         let mut original = PeerPessimisticLocks::from_locks(vec![
             lock_with_key(b"a", true),

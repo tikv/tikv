@@ -10,7 +10,10 @@ use std::{
 
 use engine_traits::{KvEngine, RaftEngine};
 use futures::channel::mpsc::UnboundedSender;
-use kvproto::{brpb::CheckAdminResponse, metapb::RegionEpoch, raft_cmdpb::AdminCmdType};
+use kvproto::{
+    brpb::CheckAdminResponse, metapb::RegionEpoch, raft_cmdpb::AdminCmdType,
+    raft_serverpb::ExtraMessage,
+};
 use tikv_util::{info, warn};
 use tokio::sync::oneshot;
 
@@ -263,9 +266,9 @@ impl AdminObserver for Arc<PrepareDiskSnapObserver> {
         &self,
         _ctx: &mut crate::coprocessor::ObserverContext<'_>,
         _tr: &kvproto::raft_cmdpb::TransferLeaderRequest,
-    ) -> crate::coprocessor::Result<()> {
+    ) -> crate::coprocessor::Result<Option<ExtraMessage>> {
         if self.allowed() {
-            return Ok(());
+            return Ok(None);
         }
         metrics::SNAP_BR_SUSPEND_COMMAND_TYPE
             .with_label_values(&["TransferLeader"])

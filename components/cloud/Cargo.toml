@@ -9,16 +9,15 @@ license = "Apache-2.0"
 async-trait = "0.1"
 derive_more = "0.99.3"
 error_code = { workspace = true }
+futures = "0.3"
 futures-io = "0.3"
 kvproto = { workspace = true }
 lazy_static = "1.3"
-openssl = { workspace = true }
 prometheus = { version = "0.13", default-features = false, features = ["nightly"] }
 protobuf = { version = "2.8", features = ["bytes"] }
-rusoto_core = "0.46.0"
 thiserror = "1.0"
 tikv_util = { workspace = true }
 url = "2.0"
+uuid = { version = "0.8", features = ["v4"] }
 
 [dev-dependencies]
-fail = "0.5"

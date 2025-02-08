@@ -24,12 +24,4 @@ impl IngestExternalFileOptions for PanicIngestExternalFileOptions {
     fn move_files(&mut self, f: bool) {
         panic!()
     }
-
-    fn get_write_global_seqno(&self) -> bool {
-        panic!()
-    }
-
-    fn set_write_global_seqno(&mut self, f: bool) {
-        panic!()
-    }
 }

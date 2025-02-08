@@ -406,6 +406,11 @@ where
     }
 
     #[inline]
+    pub fn contains_key(&self, key: &K) -> bool {
+        self.get_no_promote(key).is_some()
+    }
+
+    #[inline]
     pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
         match self.map.get_mut(key) {
             Some(v) => {

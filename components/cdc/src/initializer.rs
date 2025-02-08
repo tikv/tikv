@@ -128,13 +128,24 @@ impl<E: KvEngine> Initializer<E> {
         let concurrency_semaphore = self.concurrency_semaphore.clone();
         let _permit = concurrency_semaphore.acquire().await;
 
+        let region_id = self.region_id;
+        let downstream_id = self.downstream_id;
+        let observe_id = self.observe_handle.id;
+        // when there are a lot of pending incremental scan tasks, they may be stopped,
+        // check the state here to accelerate tasks cancel process.
+        if self.downstream_state.load() == DownstreamState::Stopped {
+            info!("cdc async incremental scan canceled before start";
+                "region_id" => region_id,
+                "downstream_id" => ?downstream_id,
+                "observe_id" => ?observe_id,
+                "conn_id" => ?self.conn_id);
+            return Err(Error::Other(box_err!("scan canceled")));
+        }
+
         // To avoid holding too many snapshots and holding them too long,
         // we need to acquire scan concurrency permit before taking snapshot.
         let sched = self.sched.clone();
-        let region_id = self.region_id;
         let region_epoch = self.region_epoch.clone();
-        let observe_id = self.observe_handle.id;
-        let downstream_id = self.downstream_id;
         let downstream_state = self.downstream_state.clone();
         let (cb, fut) = tikv_util::future::paired_future_callback();
         let sink = self.sink.clone();
@@ -277,7 +288,8 @@ impl<E: KvEngine> Initializer<E> {
             for (key, lock) in key_locks {
                 // When `decode_lock`, only consider `Put` and `Delete`
                 if matches!(lock.lock_type, LockType::Put | LockType::Delete) {
-                    locks.insert(key, MiniLock::new(lock.ts, lock.txn_source));
+                    let mini_lock = MiniLock::new(lock.ts, lock.txn_source, lock.generation);
+                    locks.insert(key, mini_lock);
                 }
             }
             self.finish_scan_locks(region, locks);
@@ -895,6 +907,13 @@ mod tests {
         let mut txn_source = TxnSource::default();
         txn_source.set_cdc_write_source(1);
         test_initializer_txn_source_filter(txn_source, true);
+    }
+
+    #[test]
+    fn test_initializer_lightning_physical_import_filter() {
+        let mut txn_source = TxnSource::default();
+        txn_source.set_lightning_physical_import();
+        test_initializer_txn_source_filter(txn_source, false);
     }
 
     #[test]

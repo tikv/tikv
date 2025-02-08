@@ -358,6 +358,7 @@ mod tests {
                 gcp: Some(SubConfigGcp {
                     credential_file_path: None,
                 }),
+                aws: None,
             };
 
             _ = GcpKms::new(cfg).unwrap_err();
@@ -378,6 +379,7 @@ mod tests {
                 gcp: Some(SubConfigGcp {
                     credential_file_path: None,
                 }),
+                aws: None,
             };
 
             let res = GcpKms::new(cfg).unwrap();

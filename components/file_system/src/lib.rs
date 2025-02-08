@@ -5,19 +5,13 @@
 
 #[macro_use]
 extern crate lazy_static;
-
 #[cfg(test)]
 extern crate test;
-
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
 
-mod file;
-mod io_stats;
-mod metrics;
-mod metrics_manager;
-mod rate_limiter;
-
+#[cfg(any(test, feature = "testexport"))]
+use std::cell::Cell;
 pub use std::{
     convert::TryFrom,
     fs::{
@@ -29,8 +23,10 @@ pub use std::{
 use std::{
     io::{self, ErrorKind, Read, Write},
     path::Path,
+    pin::Pin,
     str::FromStr,
     sync::{Arc, Mutex},
+    task::{ready, Context, Poll},
 };
 
 pub use file::{File, OpenOptions};
@@ -50,6 +46,13 @@ pub use rate_limiter::{
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use strum::{EnumCount, EnumIter};
+use tokio::io::{AsyncRead, ReadBuf};
+
+mod file;
+mod io_stats;
+mod metrics;
+mod metrics_manager;
+mod rate_limiter;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum IoOp {
@@ -137,6 +140,134 @@ impl std::ops::AddAssign for IoBytes {
     fn add_assign(&mut self, rhs: Self) {
         self.read += rhs.read;
         self.write += rhs.write;
+    }
+}
+
+#[cfg(not(any(test, feature = "testexport")))]
+fn get_thread_io_bytes_stats() -> Result<IoBytes, String> {
+    get_thread_io_bytes_total()
+}
+
+/// Simulates getting the IO bytes stats for the current thread in test
+/// scenarios.
+///
+/// This function retrieves the thread-local IO stats and adds the current
+/// mock delta values (both read and write) to it. The mock delta is updated
+/// on each invocation, simulating incremental IO operations. This is useful
+/// for testing scenarios where the IO stats change over time.
+#[cfg(any(test, feature = "testexport"))]
+fn get_thread_io_bytes_stats() -> Result<IoBytes, String> {
+    fail::fail_point!("failed_to_get_thread_io_bytes_stats", |_| {
+        Err("get_thread_io_bytes_total failed".into())
+    });
+    thread_local! {
+        static TOTAL_BYTES: Cell<IoBytes> = Cell::new(IoBytes::default());
+    }
+    TOTAL_BYTES.with(|stats| {
+        let mut current_stats = stats.get();
+
+        // Add the mock IO bytes to the stats.
+        current_stats.read += (|| {
+            fail::fail_point!("delta_read_io_bytes", |d| d
+                .unwrap()
+                .parse::<u64>()
+                .unwrap());
+            0
+        })();
+        current_stats.write += (|| {
+            fail::fail_point!("delta_write_io_bytes", |d| d
+                .unwrap()
+                .parse::<u64>()
+                .unwrap());
+            0
+        })();
+
+        stats.set(current_stats);
+        Ok(current_stats)
+    })
+}
+
+/// A utility struct to track I/O bytes with error-tolerant initialization.
+///
+/// This struct is used to compute the delta (difference) of I/O bytes between
+/// successive calls to `get_thread_io_bytes_total`. It handles cases where the
+/// first call to `get_thread_io_bytes_total` may fail by ignoring I/O bytes
+/// until a successful value is obtained.
+///
+/// Detail explanation:
+/// 1. On the first successful call to `get_thread_io_bytes_total`, the value is
+///    treated as the initial baseline.
+/// 2. If `get_thread_io_bytes_total` fails initially, all I/O bytes before a
+///    successful call are ignored.
+/// 3. Once initialized, this struct calculates the delta between successive
+///    values from `get_thread_io_bytes_total`.
+pub struct IoBytesTracker {
+    // A flag indicating whether the tracker has been successfully initialized.
+    initialized: bool,
+    // Stores the previous successfully fetched I/O bytes. Used to calculate deltas.
+    prev_io_bytes: IoBytes,
+    // Stores the initial successfully fetched I/O bytes.
+    initial_io_bytes: IoBytes,
+}
+impl IoBytesTracker {
+    /// Creates a new `IoBytesTracker` and attempts to initialize it.
+    ///
+    /// If `get_thread_io_bytes_total` succeeds during initialization,
+    /// the tracker is marked as initialized and ready to compute deltas.
+    /// Otherwise, it will defer initialization until the next successful
+    /// `update`.
+    pub fn new() -> Self {
+        let mut tracker = IoBytesTracker {
+            initialized: false,
+            prev_io_bytes: IoBytes::default(),
+            initial_io_bytes: IoBytes::default(),
+        };
+        tracker.update(); // Attempt to initialize immediately
+        tracker
+    }
+
+    /// Update the tracker with the current I/O bytes.
+    /// If initialization failed previously, it will initialize on the first
+    /// successful fetch. Returns the delta of I/O bytes if initialized,
+    /// otherwise returns None.
+    pub fn update(&mut self) -> Option<IoBytes> {
+        match get_thread_io_bytes_stats() {
+            Ok(current_io_bytes) => {
+                if self.initialized {
+                    let read_delta = current_io_bytes.read - self.prev_io_bytes.read;
+                    let write_delta = current_io_bytes.write - self.prev_io_bytes.write;
+                    self.prev_io_bytes = current_io_bytes;
+                    Some(IoBytes {
+                        read: read_delta,
+                        write: write_delta,
+                    })
+                } else {
+                    // Initialize on the first successful fetch
+                    self.prev_io_bytes = current_io_bytes;
+                    self.initialized = true;
+                    self.initial_io_bytes = current_io_bytes;
+                    None // No delta to report yet
+                }
+            }
+            Err(_) => {
+                // Skip updates if the current fetch fails
+                None
+            }
+        }
+    }
+
+    /// Returns the total accumulated I/O bytes.
+    pub fn get_total_io_bytes(&self) -> IoBytes {
+        IoBytes {
+            read: self.prev_io_bytes.read - self.initial_io_bytes.read,
+            write: self.prev_io_bytes.write - self.initial_io_bytes.write,
+        }
+    }
+}
+
+impl Default for IoBytesTracker {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -431,6 +562,34 @@ impl<R: Read> Read for Sha256Reader<R> {
     }
 }
 
+impl<R: AsyncRead + Unpin> AsyncRead for Sha256Reader<R> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let initial_filled_len = buf.filled().len();
+        ready!(Pin::new(&mut self.reader).poll_read(cx, buf))?;
+
+        let filled_len = buf.filled().len();
+        if initial_filled_len == filled_len {
+            return Poll::Ready(Ok(()));
+        }
+        let new_data = &buf.filled()[initial_filled_len..filled_len];
+
+        // Update the hasher with the read data
+        let mut hasher = self
+            .hasher
+            .lock()
+            .expect("failed to lock hasher in Sha256Reader async read");
+        if let Err(e) = hasher.update(new_data) {
+            return Poll::Ready(Err(io::Error::new(ErrorKind::Other, e)));
+        }
+
+        Poll::Ready(Ok(()))
+    }
+}
+
 pub const SPACE_PLACEHOLDER_FILE: &str = "space_placeholder_file";
 
 /// Create a file with hole, to reserve space for TiKV.
@@ -624,5 +783,51 @@ mod tests {
         assert_eq!(meta.len(), reserve_size);
         reserve_space_for_recover(data_path, 0).unwrap();
         assert!(!file.exists());
+    }
+
+    #[cfg(feature = "failpoints")]
+    #[test]
+    fn test_io_bytes_tracker_normal() {
+        fail::cfg("delta_read_io_bytes", "return(100)").unwrap();
+        fail::cfg("delta_write_io_bytes", "return(50)").unwrap();
+        let mut io_tracker = IoBytesTracker::new();
+        assert_eq!(io_tracker.prev_io_bytes.read, 100);
+        assert_eq!(io_tracker.prev_io_bytes.write, 50);
+        assert_eq!(io_tracker.initialized, true);
+        let io_bytes = io_tracker.update();
+        assert_eq!(io_bytes.unwrap().read, 100);
+        assert_eq!(io_bytes.unwrap().write, 50);
+        assert_eq!(io_tracker.prev_io_bytes.read, 200);
+        assert_eq!(io_tracker.prev_io_bytes.write, 100);
+
+        let total_io_bytes = io_tracker.get_total_io_bytes();
+        assert_eq!(total_io_bytes.read, 100);
+        assert_eq!(total_io_bytes.write, 50);
+        let _ = io_tracker.update();
+        let total_io_bytes = io_tracker.get_total_io_bytes();
+        assert_eq!(total_io_bytes.read, 200);
+        assert_eq!(total_io_bytes.write, 100);
+    }
+
+    #[cfg(feature = "failpoints")]
+    #[test]
+    fn test_io_bytes_tracker_initialization_failure() {
+        fail::cfg("failed_to_get_thread_io_bytes_stats", "1*return").unwrap();
+        fail::cfg("delta_read_io_bytes", "return(100)").unwrap();
+        fail::cfg("delta_write_io_bytes", "return(50)").unwrap();
+
+        let mut io_tracker = IoBytesTracker::new();
+        assert_eq!(io_tracker.initialized, false);
+        assert_eq!(io_tracker.prev_io_bytes.read, 0);
+        assert_eq!(io_tracker.prev_io_bytes.write, 0);
+        let io_bytes = io_tracker.update();
+        assert!(io_bytes.is_none());
+        assert_eq!(io_tracker.prev_io_bytes.read, 100);
+        assert_eq!(io_tracker.prev_io_bytes.write, 50);
+        let io_bytes = io_tracker.update();
+        assert_eq!(io_bytes.unwrap().read, 100);
+        assert_eq!(io_bytes.unwrap().write, 50);
+        assert_eq!(io_tracker.prev_io_bytes.read, 200);
+        assert_eq!(io_tracker.prev_io_bytes.write, 100);
     }
 }

@@ -10,7 +10,7 @@ use std::{
 
 use online_config::{ConfigChange, ConfigManager, OnlineConfig};
 use serde::de::{Deserialize, Deserializer, IntoDeserializer};
-use tikv_util::config::ReadableDuration;
+use tikv_util::config::{ReadableDuration, ReadableSize};
 
 use super::{
     deadlock::Scheduler as DeadlockScheduler, waiter_manager::Scheduler as WaiterMgrScheduler,
@@ -31,6 +31,11 @@ pub struct Config {
     /// assume that the success rate of pessimistic transactions is important
     /// to people who disable the pipelined pessimistic lock feature.
     pub in_memory: bool,
+    /// The maximum size of the in-memory pessimistic locks of one region peer.
+    pub in_memory_peer_size_limit: ReadableSize,
+    /// The maximum size of the in-memory pessimistic locks in the TiKV
+    /// instance.
+    pub in_memory_instance_size_limit: ReadableSize,
 }
 
 // u64 is for backward compatibility since v3.x uses it.
@@ -62,6 +67,8 @@ impl Default for Config {
             wake_up_delay_duration: ReadableDuration::millis(20),
             pipelined: true,
             in_memory: true,
+            in_memory_peer_size_limit: ReadableSize::kb(512),
+            in_memory_instance_size_limit: ReadableSize::mb(100),
         }
     }
 }
@@ -81,6 +88,8 @@ pub struct LockManagerConfigManager {
     pub pipelined: Arc<AtomicBool>,
     pub in_memory: Arc<AtomicBool>,
     pub wake_up_delay_duration_ms: Arc<AtomicU64>,
+    pub in_memory_peer_size_limit: Arc<AtomicU64>,
+    pub in_memory_instance_size_limit: Arc<AtomicU64>,
 }
 
 impl LockManagerConfigManager {
@@ -90,6 +99,8 @@ impl LockManagerConfigManager {
         pipelined: Arc<AtomicBool>,
         in_memory: Arc<AtomicBool>,
         wake_up_delay_duration_ms: Arc<AtomicU64>,
+        in_memory_peer_size_limit: Arc<AtomicU64>,
+        in_memory_instance_size_limit: Arc<AtomicU64>,
     ) -> Self {
         LockManagerConfigManager {
             waiter_mgr_scheduler,
@@ -97,6 +108,8 @@ impl LockManagerConfigManager {
             pipelined,
             in_memory,
             wake_up_delay_duration_ms,
+            in_memory_peer_size_limit,
+            in_memory_instance_size_limit,
         }
     }
 }
@@ -124,6 +137,19 @@ impl ConfigManager for LockManagerConfigManager {
         if let Some(p) = change.remove("in_memory").map(Into::into) {
             self.in_memory.store(p, Ordering::Relaxed);
         }
+        if let Some(p) = change
+            .remove("in_memory_peer_size_limit")
+            .map(ReadableSize::from)
+        {
+            self.in_memory_peer_size_limit.store(p.0, Ordering::Relaxed);
+        }
+        if let Some(p) = change
+            .remove("in_memory_instance_size_limit")
+            .map(ReadableSize::from)
+        {
+            self.in_memory_instance_size_limit
+                .store(p.0, Ordering::Relaxed);
+        }
         Ok(())
     }
 }
@@ -140,6 +166,8 @@ mod tests {
         wake-up-delay-duration = 100
         pipelined = false
         in-memory = false
+        in-memory-peer-size-limit = "512KiB"
+        in-memory-instance-size-limit = "100MiB"
         "#;
 
         let config: Config = toml::from_str(conf).unwrap();
@@ -147,5 +175,7 @@ mod tests {
         assert_eq!(config.wake_up_delay_duration.as_millis(), 100);
         assert_eq!(config.pipelined, false);
         assert_eq!(config.in_memory, false);
+        assert_eq!(config.in_memory_peer_size_limit.0, 512 << 10);
+        assert_eq!(config.in_memory_instance_size_limit.0, 100 << 20);
     }
 }

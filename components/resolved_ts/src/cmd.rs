@@ -20,6 +20,7 @@ pub enum ChangeRow {
         start_ts: TimeStamp,
         lock_type: LockType,
         value: Option<Value>,
+        generation: u64,
     },
     Commit {
         key: Key,
@@ -117,6 +118,7 @@ impl ChangeLog {
                             short_value,
                             ts,
                             lock_type,
+                            generation,
                             ..
                         } = lock;
                         let value = default.map_or(short_value, |v| Some(v.into_put().1));
@@ -125,6 +127,7 @@ impl ChangeLog {
                             start_ts: ts,
                             lock_type,
                             value,
+                            generation,
                         }
                     }),
                 (None, Some(KeyOp::Delete), _) => Some(ChangeRow::Commit {
@@ -395,6 +398,7 @@ mod tests {
                 start_ts: 1.into(),
                 value: Some(b"v1".to_vec()),
                 lock_type: LockType::Put,
+                generation: 0,
             },
             ChangeRow::Commit {
                 key: k1.clone(),
@@ -407,6 +411,7 @@ mod tests {
                 start_ts: 3.into(),
                 value: Some(b"v2".to_vec()),
                 lock_type: LockType::Put,
+                generation: 0,
             },
             ChangeRow::Commit {
                 key: k1.clone(),
@@ -419,6 +424,7 @@ mod tests {
                 start_ts: 4.into(),
                 value: Some(vec![b'v'; 512]),
                 lock_type: LockType::Put,
+                generation: 0,
             },
             ChangeRow::Commit {
                 key: k1.clone(),
@@ -431,6 +437,7 @@ mod tests {
                 start_ts: 5.into(),
                 value: Some(b"v3".to_vec()),
                 lock_type: LockType::Put,
+                generation: 0,
             },
             ChangeRow::Commit {
                 key: k1.clone(),
@@ -443,6 +450,7 @@ mod tests {
                 start_ts: 6.into(),
                 value: Some(b"v4".to_vec()),
                 lock_type: LockType::Put,
+                generation: 0,
             },
             ChangeRow::Commit {
                 key: k1.clone(),
@@ -455,6 +463,7 @@ mod tests {
                 start_ts: 7.into(),
                 value: Some(b"v5".to_vec()),
                 lock_type: LockType::Put,
+                generation: 0,
             },
             // Rollback of the txn@start_ts=7 will be missing as overlapped rollback is not
             // hanlded.

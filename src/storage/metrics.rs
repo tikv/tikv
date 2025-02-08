@@ -153,6 +153,7 @@ make_auto_flush_static_metric! {
         flashback_to_version_rollback_lock,
         flashback_to_version_write,
         flush,
+        update_txn_status_cache,
         raw_get,
         raw_batch_get,
         raw_scan,

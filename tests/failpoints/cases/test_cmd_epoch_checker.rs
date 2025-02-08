@@ -76,10 +76,7 @@ fn make_cb(cmd: &RaftCmdRequest) -> (Callback<RocksSnapshot>, CbReceivers) {
     )
 }
 
-fn make_write_req(
-    cluster: &mut Cluster<RocksEngine, NodeCluster<RocksEngine>>,
-    k: &[u8],
-) -> RaftCmdRequest {
+fn make_write_req(cluster: &mut Cluster<NodeCluster>, k: &[u8]) -> RaftCmdRequest {
     let r = cluster.get_region(k);
     let mut req = new_request(
         r.get_id(),

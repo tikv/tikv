@@ -1,7 +1,10 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use codec::prelude::NumberEncoder;
-use tidb_query_datatype::{FieldTypeAccessor, FieldTypeFlag, FieldTypeTp};
+use tidb_query_datatype::{
+    codec::mysql::{Decimal, DecimalEncoder, Duration, TimeType},
+    FieldTypeAccessor, FieldTypeFlag, FieldTypeTp,
+};
 use tipb::{Expr, ExprType, FieldType, ScalarFuncSig};
 
 /// A helper utility to build `tipb::Expr` (a.k.a. expression definition)
@@ -37,6 +40,7 @@ impl ExprDefBuilder {
         expr.mut_field_type()
             .as_mut_accessor()
             .set_tp(FieldTypeTp::Double);
+        expr.mut_field_type().set_decimal(-1);
         Self(expr)
     }
 
@@ -47,6 +51,40 @@ impl ExprDefBuilder {
         expr.mut_field_type()
             .as_mut_accessor()
             .set_tp(FieldTypeTp::VarChar);
+        Self(expr)
+    }
+
+    pub fn constant_decimal(v: Decimal) -> Self {
+        let mut expr = Expr::default();
+        expr.set_tp(ExprType::MysqlDecimal);
+        let (prec, frac) = v.prec_and_frac();
+        expr.mut_val().write_decimal(&v, prec, frac).unwrap();
+        expr.mut_field_type()
+            .as_mut_accessor()
+            .set_tp(FieldTypeTp::NewDecimal);
+        Self(expr)
+    }
+
+    pub fn constant_time(v: u64, time_type: TimeType) -> Self {
+        let mut expr = Expr::default();
+        expr.set_tp(ExprType::MysqlTime);
+        expr.mut_val().write_u64(v).unwrap();
+        let tp = match time_type {
+            TimeType::Date => FieldTypeTp::Date,
+            TimeType::DateTime => FieldTypeTp::DateTime,
+            TimeType::Timestamp => FieldTypeTp::Timestamp,
+        };
+        expr.mut_field_type().as_mut_accessor().set_tp(tp);
+        Self(expr)
+    }
+
+    pub fn constant_duration(v: Duration) -> Self {
+        let mut expr = Expr::default();
+        expr.set_tp(ExprType::MysqlDuration);
+        expr.mut_val().write_i64(v.to_nanos()).unwrap();
+        expr.mut_field_type()
+            .as_mut_accessor()
+            .set_tp(FieldTypeTp::Duration);
         Self(expr)
     }
 

@@ -257,3 +257,9 @@ pub mod set;
 #[cfg(feature = "std")]
 #[doc(inline)]
 pub use crate::{map::SkipMap, set::SkipSet};
+
+// Prevent cargo machete warnings.
+mod seal {
+    pub trait Sealed {}
+    impl Sealed for crossbeam_skiplist_offical::SkipList<(), ()> {}
+}

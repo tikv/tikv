@@ -109,6 +109,7 @@ struct PriorityQueue {
 impl PriorityQueue {
     fn spawn(
         &self,
+        request_source: &str,
         metadata: TaskMetadata<'_>,
         priority_level: CommandPri,
         f: impl futures::Future<Output = ()> + Send + 'static,
@@ -123,7 +124,7 @@ impl PriorityQueue {
         let group_name = metadata.group_name().to_owned();
         let resource_limiter = self.resource_mgr.get_resource_limiter(
             unsafe { std::str::from_utf8_unchecked(&group_name) },
-            "",
+            request_source,
             metadata.override_priority() as u64,
         );
         let mut extras = Extras::new_multilevel(task_id, fixed_level);
@@ -215,6 +216,7 @@ impl SchedPool {
 
     pub fn spawn(
         &self,
+        request_source: &str,
         metadata: TaskMetadata<'_>,
         priority_level: CommandPri,
         f: impl futures::Future<Output = ()> + Send + 'static,
@@ -224,10 +226,12 @@ impl SchedPool {
             QueueType::Dynamic => {
                 if self.can_use_priority() {
                     fail_point!("priority_pool_task");
-                    self.priority
-                        .as_ref()
-                        .unwrap()
-                        .spawn(metadata, priority_level, f)
+                    self.priority.as_ref().unwrap().spawn(
+                        request_source,
+                        metadata,
+                        priority_level,
+                        f,
+                    )
                 } else {
                     fail_point!("single_queue_pool_task");
                     self.vanilla.spawn(priority_level, f)

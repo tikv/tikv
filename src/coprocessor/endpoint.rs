@@ -137,7 +137,8 @@ impl<E: Engine> Endpoint<E> {
     fn check_memory_locks(&self, req_ctx: &ReqContext) -> Result<()> {
         let start_ts = req_ctx.txn_start_ts;
         if !req_ctx.context.get_stale_read() {
-            self.concurrency_manager.update_max_ts(start_ts);
+            self.concurrency_manager
+                .update_max_ts(start_ts, || format!("coprocessor-{}", start_ts))?;
         }
         if need_check_locks(req_ctx.context.get_isolation_level()) {
             let begin_instant = Instant::now();
@@ -177,7 +178,7 @@ impl<E: Engine> Endpoint<E> {
         req: coppb::Request,
         peer: Option<String>,
         is_streaming: bool,
-    ) -> Result<(RequestHandlerBuilder<E::Snap>, ReqContext)> {
+    ) -> Result<(RequestHandlerBuilder<E::IMSnap>, ReqContext)> {
         dispatch_api_version!(req.get_context().get_api_version(), {
             self.parse_request_and_check_memory_locks_impl::<API>(req, peer, is_streaming)
         })
@@ -192,7 +193,7 @@ impl<E: Engine> Endpoint<E> {
         mut req: coppb::Request,
         peer: Option<String>,
         is_streaming: bool,
-    ) -> Result<(RequestHandlerBuilder<E::Snap>, ReqContext)> {
+    ) -> Result<(RequestHandlerBuilder<E::IMSnap>, ReqContext)> {
         fail_point!("coprocessor_parse_request", |_| Err(box_err!(
             "unsupported tp (failpoint)"
         )));
@@ -213,7 +214,7 @@ impl<E: Engine> Endpoint<E> {
         input.set_recursion_limit(self.recursion_limit);
 
         let mut req_ctx: ReqContext;
-        let builder: RequestHandlerBuilder<E::Snap>;
+        let builder: RequestHandlerBuilder<E::IMSnap>;
         match req.get_tp() {
             REQ_TYPE_DAG => {
                 let mut dag = DagRequest::default();
@@ -394,10 +395,10 @@ impl<E: Engine> Endpoint<E> {
     }
 
     #[inline]
-    fn async_snapshot(
+    fn async_in_memory_snapshot(
         engine: &mut E,
         ctx: &ReqContext,
-    ) -> impl std::future::Future<Output = Result<E::Snap>> {
+    ) -> impl std::future::Future<Output = Result<E::IMSnap>> {
         let mut snap_ctx = SnapContext {
             pb_ctx: &ctx.context,
             start_ts: Some(ctx.txn_start_ts),
@@ -415,7 +416,7 @@ impl<E: Engine> Endpoint<E> {
                 snap_ctx.key_ranges.push(key_range);
             }
         }
-        kv::snapshot(engine, snap_ctx).map_err(Error::from)
+        kv::in_memory_snapshot(engine, snap_ctx).map_err(Error::from)
     }
 
     /// The real implementation of handling a unary request.
@@ -427,7 +428,7 @@ impl<E: Engine> Endpoint<E> {
     async fn handle_unary_request_impl(
         semaphore: Option<Arc<Semaphore>>,
         mut tracker: Box<Tracker<E>>,
-        handler_builder: RequestHandlerBuilder<E::Snap>,
+        handler_builder: RequestHandlerBuilder<E::IMSnap>,
     ) -> Result<MemoryTraceGuard<coppb::Response>> {
         // When this function is being executed, it may be queued for a long time, so
         // that deadline may exceed.
@@ -436,13 +437,14 @@ impl<E: Engine> Endpoint<E> {
 
         // Safety: spawning this function using a `FuturePool` ensures that a TLS engine
         // exists.
-        let snapshot =
-            unsafe { with_tls_engine(|engine| Self::async_snapshot(engine, &tracker.req_ctx)) }
-                .await?;
+        let snapshot = unsafe {
+            with_tls_engine(|engine| Self::async_in_memory_snapshot(engine, &tracker.req_ctx))
+        }
+        .await?;
         let latest_buckets = snapshot.ext().get_buckets();
 
-        let range_cache_snap = snapshot.ext().range_cache_engine_hit();
-        tracker.adjust_snapshot_type(range_cache_snap);
+        let region_cache_snap = snapshot.ext().in_memory_engine_hit();
+        tracker.adjust_snapshot_type(region_cache_snap);
 
         // Check if the buckets version is latest.
         // skip if request don't carry this bucket version.
@@ -501,7 +503,15 @@ impl<E: Engine> Endpoint<E> {
                 COPR_RESP_SIZE.inc_by(resp.data.len() as u64);
                 resp
             }
-            Err(e) => make_error_response(e).into(),
+            Err(e) => {
+                if let Error::DefaultNotFound(errmsg) = &e {
+                    error!("default not found in coprocessor request processing";
+                        "err" => errmsg,
+                        "reqCtx" => ?&tracker.req_ctx,
+                    );
+                }
+                make_error_response(e).into()
+            }
         };
         resp.set_exec_details(exec_details);
         resp.set_exec_details_v2(exec_details_v2);
@@ -516,7 +526,7 @@ impl<E: Engine> Endpoint<E> {
     fn handle_unary_request(
         &self,
         req_ctx: ReqContext,
-        handler_builder: RequestHandlerBuilder<E::Snap>,
+        handler_builder: RequestHandlerBuilder<E::IMSnap>,
     ) -> impl Future<Output = Result<MemoryTraceGuard<coppb::Response>>> {
         let priority = req_ctx.context.get_priority();
         let task_id = req_ctx.build_task_id();
@@ -716,7 +726,7 @@ impl<E: Engine> Endpoint<E> {
     fn handle_stream_request_impl(
         semaphore: Option<Arc<Semaphore>>,
         mut tracker: Box<Tracker<E>>,
-        handler_builder: RequestHandlerBuilder<E::Snap>,
+        handler_builder: RequestHandlerBuilder<E::IMSnap>,
     ) -> impl futures::stream::Stream<Item = Result<coppb::Response>> {
         try_stream! {
             let _permit = if let Some(semaphore) = semaphore.as_ref() {
@@ -733,7 +743,7 @@ impl<E: Engine> Endpoint<E> {
             // Safety: spawning this function using a `FuturePool` ensures that a TLS engine
             // exists.
             let snapshot = unsafe {
-                with_tls_engine(|engine| Self::async_snapshot(engine, &tracker.req_ctx))
+                with_tls_engine(|engine| Self::async_in_memory_snapshot(engine, &tracker.req_ctx))
             }
             .await?;
             // When snapshot is retrieved, deadline may exceed.
@@ -790,7 +800,7 @@ impl<E: Engine> Endpoint<E> {
     fn handle_stream_request(
         &self,
         req_ctx: ReqContext,
-        handler_builder: RequestHandlerBuilder<E::Snap>,
+        handler_builder: RequestHandlerBuilder<E::IMSnap>,
     ) -> Result<impl futures::stream::Stream<Item = Result<coppb::Response>>> {
         let (tx, rx) = mpsc::channel::<Result<coppb::Response>>(self.stream_channel_size);
         let priority = req_ctx.context.get_priority();
@@ -924,6 +934,16 @@ macro_rules! make_error_response_common {
                 errorpb.set_message($e.to_string());
                 errorpb.set_server_is_busy(server_is_busy_err);
                 $resp.set_region_error(errorpb);
+            }
+            Error::InvalidMaxTsUpdate(e) => {
+                $tag = "invalid_max_ts_update";
+                let mut err = errorpb::Error::default();
+                err.set_message(e.to_string());
+                $resp.set_region_error(err);
+            }
+            Error::DefaultNotFound(_) => {
+                $tag = "default_not_found";
+                $resp.set_other_error($e.to_string());
             }
             Error::Other(_) => {
                 $tag = "other";

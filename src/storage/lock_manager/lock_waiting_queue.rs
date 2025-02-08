@@ -618,6 +618,7 @@ impl<L: LockManager> LockWaitQueues<L> {
                                 hash: entry.lock_hash,
                             },
                             lock_info: key_state.current_lock.clone(),
+                            allow_lock_with_conflict: entry.parameters.allow_lock_with_conflict,
                         },
                     };
                     update_wait_for_events.push(event);

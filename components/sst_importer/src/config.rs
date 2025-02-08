@@ -1,19 +1,17 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
-
 use std::{
     error::Error,
     result::Result,
-    sync::{Arc, RwLock},
+    sync::{Arc, Mutex, RwLock, Weak},
 };
 
 use online_config::{self, OnlineConfig};
-use tikv_util::{config::ReadableDuration, HandyRwLock};
+use tikv_util::{config::ReadableDuration, resizable_threadpool::ResizableRuntime, HandyRwLock};
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    #[online_config(skip)]
     pub num_threads: usize,
     #[online_config(skip)]
     pub stream_channel_window: usize,
@@ -62,11 +60,17 @@ impl Config {
 }
 
 #[derive(Clone)]
-pub struct ConfigManager(pub Arc<RwLock<Config>>);
+pub struct ConfigManager {
+    pub config: Arc<RwLock<Config>>,
+    pool: Weak<Mutex<ResizableRuntime>>,
+}
 
 impl ConfigManager {
-    pub fn new(cfg: Config) -> Self {
-        ConfigManager(Arc::new(RwLock::new(cfg)))
+    pub fn new(cfg: Config, pool: Weak<Mutex<ResizableRuntime>>) -> Self {
+        ConfigManager {
+            config: Arc::new(RwLock::new(cfg)),
+            pool,
+        }
     }
 }
 
@@ -88,6 +92,11 @@ impl online_config::ConfigManager for ConfigManager {
             return Err(e);
         }
 
+        if let Some(pool) = self.pool.upgrade() {
+            let mut pool = pool.lock().unwrap();
+            pool.adjust_with(cfg.num_threads);
+        }
+
         *self.wl() = cfg;
         Ok(())
     }
@@ -97,6 +106,6 @@ impl std::ops::Deref for ConfigManager {
     type Target = RwLock<Config>;
 
     fn deref(&self) -> &Self::Target {
-        self.0.as_ref()
+        self.config.as_ref()
     }
 }

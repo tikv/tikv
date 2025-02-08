@@ -2,9 +2,7 @@
 
 use std::{any::Any, sync::Arc};
 
-use engine_traits::{
-    IterOptions, Iterable, KvEngine, Peekable, ReadOptions, Result, SnapshotContext, SyncMutable,
-};
+use engine_traits::{IterOptions, Iterable, KvEngine, Peekable, ReadOptions, Result, SyncMutable};
 use rocksdb::{DBIterator, Writable, DB};
 
 use crate::{
@@ -184,7 +182,7 @@ impl RocksEngine {
 impl KvEngine for RocksEngine {
     type Snapshot = RocksSnapshot;
 
-    fn snapshot(&self, _: Option<SnapshotContext>) -> RocksSnapshot {
+    fn snapshot(&self) -> RocksSnapshot {
         RocksSnapshot::new(self.db.clone())
     }
 
@@ -297,7 +295,7 @@ mod tests {
         engine.put_msg(key, &r).unwrap();
         engine.put_msg_cf(cf, key, &r).unwrap();
 
-        let snap = engine.snapshot(None);
+        let snap = engine.snapshot();
 
         let mut r1: Region = engine.get_msg(key).unwrap().unwrap();
         assert_eq!(r, r1);

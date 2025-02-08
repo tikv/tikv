@@ -41,6 +41,12 @@ pub struct SubConfigGcp {
     pub credential_file_path: Option<String>,
 }
 
+#[derive(Debug, Default, Clone)]
+pub struct SubConfigAws {
+    pub access_key: Option<String>,
+    pub secret_access_key: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub key_id: KeyId,
@@ -48,6 +54,7 @@ pub struct Config {
     pub vendor: String,
     pub azure: Option<SubConfigAzure>,
     pub gcp: Option<SubConfigGcp>,
+    pub aws: Option<SubConfigAws>,
 }
 
 impl Config {
@@ -61,6 +68,7 @@ impl Config {
             vendor: mk.vendor,
             azure: None,
             gcp: None,
+            aws: None,
         })
     }
 

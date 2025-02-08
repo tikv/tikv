@@ -7,6 +7,8 @@
 #![feature(test)]
 #![allow(internal_features)]
 #![feature(str_internals)]
+#![feature(core_intrinsics)]
+#![feature(round_ties_even)]
 
 #[macro_use]
 extern crate num_derive;

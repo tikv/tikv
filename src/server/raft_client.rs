@@ -4,14 +4,13 @@ use std::{
     collections::VecDeque,
     ffi::CString,
     marker::Unpin,
-    mem,
     pin::Pin,
     result,
     sync::{
         atomic::{AtomicI32, AtomicU8, Ordering},
         Arc, Mutex,
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use collections::{HashMap, HashSet};
@@ -40,7 +39,7 @@ use tikv_kv::RaftExtension;
 use tikv_util::{
     config::{Tracker, VersionTrack},
     lru::LruCache,
-    time::duration_to_sec,
+    time::{duration_to_sec, InstantExt},
     timer::GLOBAL_TIMER_HANDLE,
     worker::Scheduler,
 };
@@ -95,7 +94,7 @@ impl From<u8> for ConnState {
 
 /// A quick queue for sending raft messages.
 struct Queue {
-    buf: ArrayQueue<RaftMessage>,
+    buf: ArrayQueue<(RaftMessage, Instant)>,
     conn_state: AtomicU8,
     waker: Mutex<Option<Waker>>,
 }
@@ -116,9 +115,9 @@ impl Queue {
     /// finally.
     ///
     /// True when the message is pushed into queue otherwise false.
-    fn push(&self, msg: RaftMessage) -> Result<(), DiscardReason> {
+    fn push(&self, msg_with_time: (RaftMessage, Instant)) -> Result<(), DiscardReason> {
         match self.conn_state.load(Ordering::SeqCst).into() {
-            ConnState::Established => match self.buf.push(msg) {
+            ConnState::Established => match self.buf.push(msg_with_time) {
                 Ok(()) => Ok(()),
                 Err(_) => Err(DiscardReason::Full),
             },
@@ -148,7 +147,7 @@ impl Queue {
     }
 
     /// Gets message from the head of the queue.
-    fn try_pop(&self) -> Option<RaftMessage> {
+    fn try_pop(&self) -> Option<(RaftMessage, Instant)> {
         self.buf.pop()
     }
 
@@ -158,7 +157,7 @@ impl Queue {
     /// The method should be called in polling context. If the queue is empty,
     /// it will register current polling task for notifications.
     #[inline]
-    fn pop(&self, ctx: &Context<'_>) -> Option<RaftMessage> {
+    fn pop(&self, ctx: &Context<'_>) -> Option<(RaftMessage, Instant)> {
         self.buf.pop().or_else(|| {
             {
                 let mut waker = self.waker.lock().unwrap();
@@ -177,7 +176,7 @@ trait Buffer {
     /// A full buffer should be flushed successfully before calling `push`.
     fn full(&self) -> bool;
     /// Pushes the message into buffer.
-    fn push(&mut self, msg: RaftMessage);
+    fn push(&mut self, msg_with_time: (RaftMessage, Instant));
     /// Checks if the batch is empty.
     fn empty(&self) -> bool;
     /// Flushes the message to grpc.
@@ -197,8 +196,8 @@ trait Buffer {
 
 /// A buffer for BatchRaftMessage.
 struct BatchMessageBuffer {
-    batch: BatchRaftMessage,
-    overflowing: Option<RaftMessage>,
+    batch: Vec<(RaftMessage, Instant)>,
+    overflowing: Option<(RaftMessage, Instant)>,
     size: usize,
     cfg: Config,
     cfg_tracker: Tracker<Config>,
@@ -213,7 +212,7 @@ impl BatchMessageBuffer {
         let cfg_tracker = Arc::clone(global_cfg_track).tracker("raft-client-buffer".into());
         let cfg = global_cfg_track.value().clone();
         BatchMessageBuffer {
-            batch: BatchRaftMessage::default(),
+            batch: Vec::with_capacity(cfg.raft_msg_max_batch_size),
             overflowing: None,
             size: 0,
             cfg,
@@ -245,7 +244,7 @@ impl BatchMessageBuffer {
 
     #[cfg(test)]
     fn clear(&mut self) {
-        self.batch = BatchRaftMessage::default();
+        self.batch.clear();
         self.size = 0;
         self.overflowing = None;
         // try refresh config
@@ -262,32 +261,44 @@ impl Buffer for BatchMessageBuffer {
     }
 
     #[inline]
-    fn push(&mut self, msg: RaftMessage) {
-        let msg_size = Self::message_size(&msg);
+    fn push(&mut self, msg_with_time: (RaftMessage, Instant)) {
+        let msg_size = Self::message_size(&msg_with_time.0);
         // To avoid building too large batch, we limit each batch's size. Since
         // `msg_size` is estimated, `GRPC_SEND_MSG_BUF` is reserved for errors.
         if self.size > 0
             && (self.size + msg_size + self.cfg.raft_client_grpc_send_msg_buffer
                 >= self.cfg.max_grpc_send_msg_len as usize
-                || self.batch.get_msgs().len() >= self.cfg.raft_msg_max_batch_size)
+                || self.batch.len() >= self.cfg.raft_msg_max_batch_size)
         {
-            self.overflowing = Some(msg);
+            self.overflowing = Some(msg_with_time);
             return;
         }
         self.size += msg_size;
-        self.batch.mut_msgs().push(msg);
+        self.batch.push(msg_with_time);
     }
 
     #[inline]
     fn empty(&self) -> bool {
-        self.batch.get_msgs().is_empty()
+        self.batch.is_empty()
     }
 
     #[inline]
     fn flush(&mut self, sender: &mut ClientCStreamSender<BatchRaftMessage>) -> grpcio::Result<()> {
-        let batch = mem::take(&mut self.batch);
+        let mut batch_msgs = BatchRaftMessage::default();
+        self.batch.drain(..).for_each(|(msg, time)| {
+            RAFT_MESSAGE_DURATION
+                .send_wait
+                .observe(time.saturating_elapsed().as_secs_f64());
+            batch_msgs.msgs.push(msg);
+        });
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64;
+        batch_msgs.last_observed_time = now;
+
         let res = Pin::new(sender).start_send((
-            batch,
+            batch_msgs,
             WriteFlags::default().buffer_hint(self.overflowing.is_some()),
         ));
 
@@ -342,8 +353,8 @@ impl Buffer for MessageBuffer {
     }
 
     #[inline]
-    fn push(&mut self, msg: RaftMessage) {
-        self.batch.push_back(msg);
+    fn push(&mut self, msg_with_time: (RaftMessage, Instant)) {
+        self.batch.push_back(msg_with_time.0);
     }
 
     #[inline]
@@ -471,26 +482,26 @@ where
 
     fn fill_msg(&mut self, ctx: &Context<'_>) {
         while !self.buffer.full() {
-            let msg = match self.queue.pop(ctx) {
-                Some(msg) => msg,
+            let msg_with_time = match self.queue.pop(ctx) {
+                Some(msg_with_time) => msg_with_time,
                 None => return,
             };
-            if msg.get_message().has_snapshot() {
+            if msg_with_time.0.get_message().has_snapshot() {
                 let mut snapshot = RaftSnapshotData::default();
                 snapshot
-                    .merge_from_bytes(msg.get_message().get_snapshot().get_data())
+                    .merge_from_bytes(msg_with_time.0.get_message().get_snapshot().get_data())
                     .unwrap();
                 // Witness's snapshot must be empty, no need to send snapshot files, report
                 // immediately
                 if !snapshot.get_meta().get_for_witness() {
-                    self.send_snapshot_sock(msg);
+                    self.send_snapshot_sock(msg_with_time.0);
                     continue;
                 } else {
-                    let rep = self.new_snapshot_reporter(&msg);
+                    let rep = self.new_snapshot_reporter(&msg_with_time.0);
                     rep.report(SnapshotStatus::Finish);
                 }
             }
-            self.buffer.push(msg);
+            self.buffer.push(msg_with_time);
         }
     }
 }
@@ -687,8 +698,8 @@ where
     fn clear_pending_message(&self, reason: &str) {
         let len = self.queue.len();
         for _ in 0..len {
-            let msg = self.queue.try_pop().unwrap();
-            report_unreachable(&self.builder.router, &msg)
+            let msg_with_time = self.queue.try_pop().unwrap();
+            report_unreachable(&self.builder.router, &msg_with_time.0)
         }
         REPORT_FAILURE_MSG_COUNTER
             .with_label_values(&[reason, &self.store_id.to_string()])
@@ -1055,6 +1066,7 @@ where
     /// the message is enqueued to buffer. Caller is expected to call `flush` to
     /// ensure all buffered messages are sent out.
     pub fn send(&mut self, msg: RaftMessage) -> result::Result<(), DiscardReason> {
+        let wait_send_start = Instant::now();
         let store_id = msg.get_to_peer().store_id;
         let grpc_raft_conn_num = self.builder.cfg.value().grpc_raft_conn_num as u64;
         let conn_id = if grpc_raft_conn_num == 1 {
@@ -1092,7 +1104,7 @@ where
         transport_on_send_store_fp();
         loop {
             if let Some(s) = self.cache.get_mut(&(store_id, conn_id)) {
-                match s.queue.push(msg) {
+                match s.queue.push((msg, wait_send_start)) {
                     Ok(_) => {
                         if !s.dirty {
                             s.dirty = true;
@@ -1231,7 +1243,7 @@ mod tests {
             if i != 0 {
                 msg.mut_message().set_context(context.into());
             }
-            msg_buf.push(msg);
+            msg_buf.push((msg, Instant::now()));
         }
         assert!(msg_buf.full());
     }
@@ -1259,7 +1271,7 @@ mod tests {
             if i != 0 {
                 msg.set_extra_ctx(ctx);
             }
-            msg_buf.push(msg);
+            msg_buf.push((msg, Instant::now()));
         }
         assert!(msg_buf.full());
     }
@@ -1289,9 +1301,9 @@ mod tests {
 
         let default_grpc_msg_len = msg_buf.cfg.max_grpc_send_msg_len as usize;
         let max_msg_len = default_grpc_msg_len - msg_buf.cfg.raft_client_grpc_send_msg_buffer;
-        msg_buf.push(new_test_msg(max_msg_len));
+        msg_buf.push((new_test_msg(max_msg_len), Instant::now()));
         assert!(!msg_buf.full());
-        msg_buf.push(new_test_msg(1));
+        msg_buf.push((new_test_msg(1), Instant::now()));
         assert!(msg_buf.full());
 
         // update config
@@ -1304,10 +1316,10 @@ mod tests {
         let new_max_msg_len =
             default_grpc_msg_len * 2 - msg_buf.cfg.raft_client_grpc_send_msg_buffer;
         for _i in 0..2 {
-            msg_buf.push(new_test_msg(new_max_msg_len / 2 - 1));
+            msg_buf.push((new_test_msg(new_max_msg_len / 2 - 1), Instant::now()));
             assert!(!msg_buf.full());
         }
-        msg_buf.push(new_test_msg(2));
+        msg_buf.push((new_test_msg(2), Instant::now()));
         assert!(msg_buf.full());
     }
 
@@ -1321,7 +1333,7 @@ mod tests {
 
         b.iter(|| {
             for _i in 0..10 {
-                msg_buf.push(test::black_box(new_test_msg(1024)));
+                msg_buf.push(test::black_box((new_test_msg(1024), Instant::now())));
             }
             // run clear to mock flush.
             msg_buf.clear();

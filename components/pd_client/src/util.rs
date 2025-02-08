@@ -732,10 +732,11 @@ impl PdConnector {
 
     // There are 3 kinds of situations we will return the new client:
     // 1. the force is true which represents the client is newly created or the
-    // original connection has some problem 2. the previous forwarded host is
-    // not empty and it can connect the leader now which represents the network
-    // partition problem to leader may be recovered 3. the member information of
-    // PD has been changed
+    // original connection has some problem.
+    // 2. the previous forwarded host is not empty and it can connect the leader
+    // now which represents the network partition problem to leader may be
+    // recovered.
+    // 3. the member information of PD has been changed.
     pub async fn reconnect_pd(
         &self,
         members_resp: GetMembersResponse,
@@ -952,6 +953,8 @@ pub fn check_resp_header(header: &ResponseHeader) -> Result<()> {
         ErrorType::Unknown => Err(box_err!(err.get_message())),
         ErrorType::InvalidValue => Err(box_err!(err.get_message())),
         ErrorType::GlobalConfigNotFound => panic!("unexpected error {:?}", err),
+        // It will not happen, because we don't call `batch_scan_regions` in TiKV.
+        ErrorType::RegionsNotContainAllKeyRange => Err(box_err!(err.get_message())),
     }
 }
 

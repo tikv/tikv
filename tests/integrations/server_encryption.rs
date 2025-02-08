@@ -1,9 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_rocks::RocksEngine;
 use test_raftstore::*;
 
-fn test_snapshot_encryption<T: Simulator<RocksEngine>>(cluster: &mut Cluster<RocksEngine, T>) {
+fn test_snapshot_encryption<T: Simulator>(cluster: &mut Cluster<T>) {
     configure_for_encryption(cluster);
     cluster.pd_client.disable_default_operator();
     let r1 = cluster.run_conf_change();

@@ -26,6 +26,8 @@ const TEST_VALUE: &[u8] = b"v1";
 #[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_flashback_with_in_memory_pessimistic_locks() {
     let mut cluster = new_cluster(0, 3);
+    let peer_size_limit = 512 << 10;
+    let instance_size_limit = 100 << 20;
     cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(1, 1));
@@ -38,18 +40,22 @@ fn test_flashback_with_in_memory_pessimistic_locks() {
         let mut pessimistic_locks = txn_ext.pessimistic_locks.write();
         assert!(pessimistic_locks.is_writable());
         pessimistic_locks
-            .insert(vec![(
-                Key::from_raw(TEST_KEY),
-                PessimisticLock {
-                    primary: TEST_KEY.to_vec().into_boxed_slice(),
-                    start_ts: 10.into(),
-                    ttl: 3000,
-                    for_update_ts: 20.into(),
-                    min_commit_ts: 30.into(),
-                    last_change: LastChange::make_exist(5.into(), 3),
-                    is_locked_with_conflict: false,
-                },
-            )])
+            .insert(
+                vec![(
+                    Key::from_raw(TEST_KEY),
+                    PessimisticLock {
+                        primary: TEST_KEY.to_vec().into_boxed_slice(),
+                        start_ts: 10.into(),
+                        ttl: 3000,
+                        for_update_ts: 20.into(),
+                        min_commit_ts: 30.into(),
+                        last_change: LastChange::make_exist(5.into(), 3),
+                        is_locked_with_conflict: false,
+                    },
+                )],
+                peer_size_limit,
+                instance_size_limit,
+            )
             .unwrap();
         assert_eq!(pessimistic_locks.len(), 1);
     }
@@ -555,11 +561,9 @@ trait ClusterI {
     ) -> raftstore::Result<RaftCmdResponse>;
 }
 
-impl ClusterI for Cluster<RocksEngine, NodeCluster<RocksEngine>> {
+impl ClusterI for Cluster<NodeCluster> {
     fn region_local_state(&self, region_id: u64, store_id: u64) -> RegionLocalState {
-        Cluster::<RocksEngine, NodeCluster<RocksEngine>>::region_local_state(
-            self, region_id, store_id,
-        )
+        Cluster::<NodeCluster>::region_local_state(self, region_id, store_id)
     }
     fn query_leader(
         &self,
@@ -567,16 +571,14 @@ impl ClusterI for Cluster<RocksEngine, NodeCluster<RocksEngine>> {
         region_id: u64,
         timeout: Duration,
     ) -> Option<metapb::Peer> {
-        Cluster::<RocksEngine, NodeCluster<RocksEngine>>::query_leader(
-            self, store_id, region_id, timeout,
-        )
+        Cluster::<NodeCluster>::query_leader(self, store_id, region_id, timeout)
     }
     fn call_command(
         &self,
         request: RaftCmdRequest,
         timeout: Duration,
     ) -> raftstore::Result<RaftCmdResponse> {
-        Cluster::<RocksEngine, NodeCluster<RocksEngine>>::call_command(self, request, timeout)
+        Cluster::<NodeCluster>::call_command(self, request, timeout)
     }
 }
 

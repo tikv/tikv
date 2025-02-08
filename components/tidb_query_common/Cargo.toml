@@ -9,7 +9,6 @@ license = "Apache-2.0"
 [dependencies]
 anyhow = "1.0"
 api_version = { workspace = true }
-async-trait = "0.1"
 derive_more = "0.99.3"
 error_code = { workspace = true }
 futures = "0.3"

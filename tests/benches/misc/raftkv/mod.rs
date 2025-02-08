@@ -5,7 +5,7 @@ use std::sync::{Arc, RwLock};
 use collections::HashSet;
 use crossbeam::channel::TrySendError;
 use engine_rocks::{RocksEngine, RocksSnapshot};
-use engine_traits::{KvEngine, SnapshotContext, ALL_CFS, CF_DEFAULT};
+use engine_traits::{KvEngine, ALL_CFS, CF_DEFAULT};
 use futures::future::FutureExt;
 use kvproto::{
     kvrpcpb::{Context, ExtraOp as TxnExtraOp},
@@ -14,7 +14,7 @@ use kvproto::{
     raft_serverpb::RaftMessage,
 };
 use raftstore::{
-    router::{LocalReadRouter, RaftStoreRouter},
+    router::{LocalReadRouter, RaftStoreRouter, ReadContext},
     store::{
         cmd_resp, Callback, CasualMessage, CasualRouter, PeerMsg, ProposalRouter, RaftCmdExtraOpts,
         RaftCommand, ReadResponse, RegionSnapshot, SignificantMsg, SignificantRouter, StoreMsg,
@@ -30,7 +30,7 @@ use tikv::{
         Engine,
     },
 };
-use tikv_util::{store::new_peer, time::ThreadReadId};
+use tikv_util::store::new_peer;
 use txn_types::Key;
 
 use crate::test;
@@ -53,7 +53,7 @@ impl SyncBenchRouter {
         cmd_resp::bind_term(&mut response, 1);
         match cmd.callback {
             Callback::Read { cb, .. } => {
-                let snapshot = self.db.snapshot(None);
+                let snapshot = self.db.snapshot();
                 let region = Arc::new(self.region.to_owned());
                 cb(ReadResponse {
                     response,
@@ -121,8 +121,7 @@ impl RaftStoreRouter<RocksEngine> for SyncBenchRouter {
 impl LocalReadRouter<RocksEngine> for SyncBenchRouter {
     fn read(
         &mut self,
-        _: Option<SnapshotContext>,
-        _: Option<ThreadReadId>,
+        _: ReadContext,
         req: RaftCmdRequest,
         cb: Callback<RocksSnapshot>,
     ) -> Result<()> {
@@ -143,7 +142,7 @@ fn new_engine() -> (TempDir, RocksEngine) {
 #[bench]
 fn bench_async_snapshots_noop(b: &mut test::Bencher) {
     let (_dir, db) = new_engine();
-    let snapshot = db.snapshot(None);
+    let snapshot = db.snapshot();
     let resp = ReadResponse {
         response: RaftCmdResponse::default(),
         snapshot: Some(RegionSnapshot::from_snapshot(

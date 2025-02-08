@@ -3,24 +3,29 @@
 use std::ops::Deref;
 
 use async_trait::async_trait;
+use aws_config::BehaviorVersion;
+use aws_credential_types::provider::{error::CredentialsError, ProvideCredentials};
+use aws_sdk_kms::{
+    operation::{decrypt::DecryptError, generate_data_key::GenerateDataKeyError},
+    primitives::Blob,
+    types::DataKeySpec,
+    Client,
+};
+use aws_sdk_s3::config::HttpClient;
 use cloud::{
     error::{Error, KmsError, OtherError, Result},
     kms::{Config, CryptographyType, DataKeyPair, EncryptedKey, KeyId, KmsProvider, PlainKey},
 };
-use rusoto_core::{request::DispatchSignedRequest, RusotoError};
-use rusoto_credential::ProvideAwsCredentials;
-use rusoto_kms::{
-    DecryptError, DecryptRequest, GenerateDataKeyError, GenerateDataKeyRequest, Kms, KmsClient,
-};
-use tikv_util::stream::RetryError;
+use futures::executor::block_on;
 
-use crate::util;
+use crate::util::{self, is_retryable, SdkError};
 
-const AWS_KMS_DATA_KEY_SPEC: &str = "AES_256";
+const AWS_KMS_DATA_KEY_SPEC: DataKeySpec = DataKeySpec::Aes256;
+
 pub const ENCRYPTION_VENDOR_NAME_AWS_KMS: &str = "AWS";
 
 pub struct AwsKms {
-    client: KmsClient,
+    client: Client,
     current_key_id: KeyId,
     region: String,
     endpoint: String,
@@ -40,20 +45,26 @@ impl std::fmt::Debug for AwsKms {
 }
 
 impl AwsKms {
-    fn new_with_creds_dispatcher<Creds, Dispatcher>(
+    fn new_with_creds_client<Creds, Http>(
         config: Config,
-        dispatcher: Dispatcher,
+        client: Http,
         credentials_provider: Creds,
     ) -> Result<AwsKms>
     where
-        Creds: ProvideAwsCredentials + Send + Sync + 'static,
-        Dispatcher: DispatchSignedRequest + Send + Sync + 'static,
+        Http: HttpClient + 'static,
+        Creds: ProvideCredentials + 'static,
     {
-        let region = util::get_region(
-            config.location.region.as_ref(),
-            config.location.endpoint.as_ref(),
-        )?;
-        let client = KmsClient::new_with(dispatcher, credentials_provider, region);
+        let mut loader = aws_config::defaults(BehaviorVersion::latest())
+            .credentials_provider(credentials_provider)
+            .http_client(client);
+
+        loader = util::configure_region(loader, &config.location.region)?;
+
+        loader = util::configure_endpoint(loader, &config.location.endpoint);
+
+        let sdk_config = block_on(loader.load());
+        let client = Client::new(&sdk_config);
+
         Ok(AwsKms {
             client,
             current_key_id: config.key_id,
@@ -62,17 +73,36 @@ impl AwsKms {
         })
     }
 
-    fn new_with_dispatcher<D>(config: Config, dispatcher: D) -> Result<AwsKms>
-    where
-        D: DispatchSignedRequest + Send + Sync + 'static,
-    {
-        let credentials_provider = util::CredentialsProvider::new()?;
-        Self::new_with_creds_dispatcher(config, dispatcher, credentials_provider)
-    }
-
     pub fn new(config: Config) -> Result<AwsKms> {
-        let dispatcher = util::new_http_client()?;
-        Self::new_with_dispatcher(config, dispatcher)
+        let client = util::new_http_client();
+        let creds = util::new_credentials_provider(client.clone());
+        match config.aws.as_ref() {
+            Some(aws_config) => {
+                if let (Some(access_key), Some(secret_access_key)) = (
+                    aws_config.access_key.clone(),
+                    aws_config.secret_access_key.clone(),
+                ) {
+                    // Use provided AWS credentials
+                    let credentials = aws_credential_types::Credentials::new(
+                        access_key,
+                        secret_access_key,
+                        None, // session token
+                        None, // expiration
+                        "user-provided",
+                    );
+                    let static_provider =
+                        aws_credential_types::provider::SharedCredentialsProvider::new(credentials);
+                    Self::new_with_creds_client(config, client, static_provider)
+                } else {
+                    // Fall back to default credentials provider
+                    Self::new_with_creds_client(config, client, creds)
+                }
+            }
+            None => {
+                // No AWS config provided, use default credentials provider
+                Self::new_with_creds_client(config, client, creds)
+            }
+        }
     }
 }
 
@@ -85,38 +115,27 @@ impl KmsProvider for AwsKms {
     // On decrypt failure, the rule is to return WrongMasterKey error in case it is
     // possible that a wrong master key has been used, or other error otherwise.
     async fn decrypt_data_key(&self, data_key: &EncryptedKey) -> Result<Vec<u8>> {
-        let decrypt_request = DecryptRequest {
-            ciphertext_blob: bytes::Bytes::copy_from_slice(data_key),
-            // Use default algorithm SYMMETRIC_DEFAULT.
-            encryption_algorithm: None,
-            // Use key_id encoded in ciphertext.
-            key_id: Some(self.current_key_id.deref().clone()),
-            // Encryption context and grant tokens are not used.
-            encryption_context: None,
-            grant_tokens: None,
-        };
         self.client
-            .decrypt(decrypt_request.clone())
+            .decrypt()
+            .ciphertext_blob(Blob::new(data_key.clone().into_inner()))
+            .key_id(self.current_key_id.deref().clone())
+            .send()
             .await
             .map_err(classify_decrypt_error)
-            .map(|response| response.plaintext.unwrap().as_ref().to_vec())
+            .map(|response| response.plaintext().unwrap().as_ref().to_vec())
     }
 
     async fn generate_data_key(&self) -> Result<DataKeyPair> {
-        let generate_request = GenerateDataKeyRequest {
-            encryption_context: None,
-            grant_tokens: None,
-            key_id: self.current_key_id.deref().clone(),
-            key_spec: Some(AWS_KMS_DATA_KEY_SPEC.to_owned()),
-            number_of_bytes: None,
-        };
         self.client
-            .generate_data_key(generate_request)
+            .generate_data_key()
+            .key_id(self.current_key_id.deref().clone())
+            .key_spec(AWS_KMS_DATA_KEY_SPEC)
+            .send()
             .await
             .map_err(classify_generate_data_key_error)
             .and_then(|response| {
-                let ciphertext_key = response.ciphertext_blob.unwrap().as_ref().to_vec();
-                let plaintext_key = response.plaintext.unwrap().as_ref().to_vec();
+                let ciphertext_key = response.ciphertext_blob().unwrap().as_ref().to_vec();
+                let plaintext_key = response.plaintext().unwrap().as_ref().to_vec();
                 Ok(DataKeyPair {
                     encrypted: EncryptedKey::new(ciphertext_key)?,
                     plaintext: PlainKey::new(plaintext_key, CryptographyType::AesGcm256)?,
@@ -125,67 +144,52 @@ impl KmsProvider for AwsKms {
     }
 }
 
-// Rusoto errors Display implementation just gives the cause message and
-// discards the type. This is really bad when the cause message is empty!
-// Use Debug instead: this will show both
-pub struct FixRusotoErrorDisplay<E: std::fmt::Debug + std::error::Error + Send + Sync + 'static>(
-    RusotoError<E>,
-);
-impl<E: std::error::Error + Send + Sync + 'static> std::fmt::Debug for FixRusotoErrorDisplay<E> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self.0)
-    }
-}
-impl<E: std::error::Error + Send + Sync + 'static> std::fmt::Display for FixRusotoErrorDisplay<E> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self.0)
-    }
-}
-impl<E: std::error::Error + Send + Sync + 'static> std::error::Error for FixRusotoErrorDisplay<E> {}
-
-fn classify_generate_data_key_error(err: RusotoError<GenerateDataKeyError>) -> Error {
-    if let RusotoError::Service(e) = &err {
-        match &e {
-            GenerateDataKeyError::NotFound(_) => Error::ApiNotFound(err.into()),
-            GenerateDataKeyError::InvalidKeyUsage(_) => {
+fn classify_generate_data_key_error(err: SdkError<GenerateDataKeyError>) -> Error {
+    if let SdkError::ServiceError(service_err) = &err {
+        match &service_err.err() {
+            GenerateDataKeyError::NotFoundException(_) => Error::ApiNotFound(err.into()),
+            GenerateDataKeyError::InvalidKeyUsageException(_) => {
                 Error::KmsError(KmsError::Other(OtherError::from_box(err.into())))
             }
-            GenerateDataKeyError::DependencyTimeout(_) => Error::ApiTimeout(err.into()),
-            GenerateDataKeyError::KMSInternal(_) => Error::ApiInternal(err.into()),
-            _ => Error::KmsError(KmsError::Other(OtherError::from_box(
-                FixRusotoErrorDisplay(err).into(),
-            ))),
+            GenerateDataKeyError::DependencyTimeoutException(_) => Error::ApiTimeout(err.into()),
+            GenerateDataKeyError::KmsInternalException(_) => Error::ApiInternal(err.into()),
+            _ => Error::KmsError(KmsError::Other(OtherError::from_box(err.into()))),
         }
     } else {
         classify_error(err)
     }
 }
 
-fn classify_decrypt_error(err: RusotoError<DecryptError>) -> Error {
-    if let RusotoError::Service(e) = &err {
-        match &e {
-            DecryptError::IncorrectKey(_) | DecryptError::NotFound(_) => {
+fn classify_decrypt_error(err: SdkError<DecryptError>) -> Error {
+    if let SdkError::ServiceError(service_err) = &err {
+        match &service_err.err() {
+            DecryptError::IncorrectKeyException(_) | DecryptError::NotFoundException(_) => {
                 Error::KmsError(KmsError::WrongMasterKey(err.into()))
             }
-            DecryptError::DependencyTimeout(_) => Error::ApiTimeout(err.into()),
-            DecryptError::KMSInternal(_) => Error::ApiInternal(err.into()),
-            _ => Error::KmsError(KmsError::Other(OtherError::from_box(
-                FixRusotoErrorDisplay(err).into(),
-            ))),
+            DecryptError::DependencyTimeoutException(_) => Error::ApiTimeout(err.into()),
+            DecryptError::KmsInternalException(_) => Error::ApiInternal(err.into()),
+            _ => Error::KmsError(KmsError::Other(OtherError::from_box(err.into()))),
         }
     } else {
         classify_error(err)
     }
 }
 
-fn classify_error<E: std::error::Error + Send + Sync + 'static>(err: RusotoError<E>) -> Error {
+fn classify_error<E: std::error::Error + Send + Sync + 'static>(err: SdkError<E>) -> Error {
     match &err {
-        RusotoError::HttpDispatch(_) => Error::ApiTimeout(err.into()),
-        RusotoError::Credentials(_) => Error::ApiAuthentication(err.into()),
-        e if e.is_retryable() => Error::ApiInternal(err.into()),
-        _ => Error::KmsError(KmsError::Other(OtherError::from_box(
-            FixRusotoErrorDisplay(err).into(),
-        ))),
+        SdkError::DispatchFailure(dispatch_failure) => {
+            let maybe_credentials_err = dispatch_failure
+                .as_connector_error()
+                .and_then(|connector_err| std::error::Error::source(connector_err))
+                .filter(|src_err| src_err.is::<CredentialsError>());
+            if maybe_credentials_err.is_some() {
+                Error::ApiAuthentication(err.into())
+            } else {
+                Error::ApiTimeout(err.into())
+            }
+        }
+        e if is_retryable(e) => Error::ApiInternal(err.into()),
+        _ => Error::KmsError(KmsError::Other(OtherError::from_box(err.into()))),
     }
 }
 
@@ -205,11 +209,11 @@ impl std::fmt::Debug for KmsClientDebug {
 
 #[cfg(test)]
 mod tests {
-    // use rusoto_mock::MockRequestDispatcher;
+    use aws_sdk_kms::config::Credentials;
+    use aws_smithy_runtime::client::http::test_util::{ReplayEvent, StaticReplayClient};
+    use aws_smithy_types::body::SdkBody;
     use cloud::kms::Location;
-    use rusoto_credential::StaticProvider;
-    use rusoto_kms::{DecryptResponse, GenerateDataKeyResponse};
-    use rusoto_mock::MockRequestDispatcher;
+    use http::Uri;
 
     use super::*;
 
@@ -221,43 +225,76 @@ mod tests {
             key_id: KeyId::new("test_key_id".to_string()).unwrap(),
             vendor: String::new(),
             location: Location {
-                region: "ap-southeast-2".to_string(),
+                region: "cn-north-1".to_string(),
                 endpoint: String::new(),
             },
             azure: None,
             gcp: None,
+            aws: None,
         };
 
-        let dispatcher =
-            MockRequestDispatcher::with_status(200).with_json_body(GenerateDataKeyResponse {
-                ciphertext_blob: Some(magic_contents.as_ref().into()),
-                key_id: Some("test_key_id".to_string()),
-                plaintext: Some(key_contents.clone().into()),
-            });
-        let credentials_provider =
-            StaticProvider::new_minimal("abc".to_string(), "xyz".to_string());
-        let aws_kms = AwsKms::new_with_creds_dispatcher(
-            config.clone(),
-            dispatcher,
-            credentials_provider.clone(),
-        )
-        .unwrap();
+        let resp = format!(
+            "{{\"KeyId\": \"test_key_id\", \"Plaintext\": \"{}\", \"CiphertextBlob\": \"{}\" }}",
+            base64::encode(key_contents.clone()),
+            base64::encode(magic_contents)
+        );
+
+        let client = StaticReplayClient::new(vec![ReplayEvent::new(
+            http::Request::builder()
+                .method("POST")
+                .uri(Uri::from_static("https://kms.cn-north-1.amazonaws.com.cn/"))
+                .body(SdkBody::from(
+                    "{\"KeyId\":\"test_key_id\",\"KeySpec\":\"AES_256\"}",
+                ))
+                .unwrap(),
+            http::Response::builder()
+                .status(200)
+                .body(SdkBody::from(resp))
+                .unwrap(),
+        )]);
+
+        let creds = Credentials::from_keys("abc", "xyz", None);
+
+        let aws_kms =
+            AwsKms::new_with_creds_client(config.clone(), client.clone(), creds.clone()).unwrap();
+
         let data_key = aws_kms.generate_data_key().await.unwrap();
+
         assert_eq!(
             data_key.encrypted,
             EncryptedKey::new(magic_contents.to_vec()).unwrap()
         );
         assert_eq!(*data_key.plaintext, key_contents);
 
-        let dispatcher = MockRequestDispatcher::with_status(200).with_json_body(DecryptResponse {
-            plaintext: Some(key_contents.clone().into()),
-            key_id: Some("test_key_id".to_string()),
-            encryption_algorithm: None,
-        });
-        let aws_kms =
-            AwsKms::new_with_creds_dispatcher(config, dispatcher, credentials_provider).unwrap();
+        client.assert_requests_match(&[]);
+
+        let req = format!(
+            "{{\"KeyId\":\"test_key_id\",\"CiphertextBlob\":\"{}\"}}",
+            base64::encode(data_key.encrypted.clone().into_inner())
+        );
+
+        let resp = format!(
+            "{{\"KeyId\": \"test_key_id\", \"Plaintext\": \"{}\", \"EncryptionAlgorithm\": \"SYMMETRIC_DEFAULT\" }}",
+            base64::encode(key_contents.clone()),
+        );
+
+        let client = StaticReplayClient::new(vec![ReplayEvent::new(
+            http::Request::builder()
+                .uri(Uri::from_static("https://kms.cn-north-1.amazonaws.com.cn/"))
+                .body(SdkBody::from(req))
+                .unwrap(),
+            http::Response::builder()
+                .status(200)
+                .body(SdkBody::from(resp))
+                .unwrap(),
+        )]);
+
+        let aws_kms = AwsKms::new_with_creds_client(config, client.clone(), creds).unwrap();
+
         let plaintext = aws_kms.decrypt_data_key(&data_key.encrypted).await.unwrap();
         assert_eq!(plaintext, key_contents);
+
+        client.assert_requests_match(&[]);
     }
 
     #[tokio::test]
@@ -266,35 +303,78 @@ mod tests {
             key_id: KeyId::new("test_key_id".to_string()).unwrap(),
             vendor: String::new(),
             location: Location {
-                region: "ap-southeast-2".to_string(),
+                region: "cn-north-1".to_string(),
                 endpoint: String::new(),
             },
             azure: None,
             gcp: None,
+            aws: None,
         };
+
+        let enc_key = EncryptedKey::new(b"invalid".to_vec()).unwrap();
+
+        let req = format!(
+            "{{\"KeyId\":\"test_key_id\",\"CiphertextBlob\":\"{}\"}}",
+            base64::encode(enc_key.clone().into_inner())
+        );
 
         // IncorrectKeyException
         //
         // HTTP Status Code: 400
         // Json, see:
-        // https://github.com/rusoto/rusoto/blob/mock-v0.43.0/rusoto/services/kms/src/generated.rs#L1970
-        // https://github.com/rusoto/rusoto/blob/mock-v0.43.0/rusoto/core/src/proto/json/error.rs#L7
         // https://docs.aws.amazon.com/kms/latest/APIReference/API_Decrypt.html#API_Decrypt_Errors
-        let dispatcher = MockRequestDispatcher::with_status(400).with_body(
-            r#"{
-                "__type": "IncorrectKeyException",
-                "Message": "mock"
-            }"#,
-        );
-        let credentials_provider =
-            StaticProvider::new_minimal("abc".to_string(), "xyz".to_string());
-        let aws_kms =
-            AwsKms::new_with_creds_dispatcher(config, dispatcher, credentials_provider).unwrap();
-        let enc_key = EncryptedKey::new(b"invalid".to_vec()).unwrap();
+        let client = StaticReplayClient::new(vec![ReplayEvent::new(
+            http::Request::builder()
+                .uri(Uri::from_static("https://kms.cn-north-1.amazonaws.com.cn/"))
+                .body(SdkBody::from(req))
+                .unwrap(),
+            http::Response::builder()
+                .status(400)
+                .body(SdkBody::from(
+                    r#"{
+                        "__type": "IncorrectKeyException",
+                        "Message": "mock"
+                    }"#,
+                ))
+                .unwrap(),
+        )]);
+
+        let creds = Credentials::from_keys("abc", "xyz", None);
+
+        let aws_kms = AwsKms::new_with_creds_client(config, client.clone(), creds).unwrap();
         let fut = aws_kms.decrypt_data_key(&enc_key);
+
         match fut.await {
             Err(Error::KmsError(KmsError::WrongMasterKey(_))) => (),
             other => panic!("{:?}", other),
         }
+
+        client.assert_requests_match(&[]);
+    }
+
+    #[tokio::test]
+    #[cfg(FALSE)]
+    // FIXME: enable this (or move this to an integration test)
+    async fn test_aws_kms_localstack() {
+        let config = Config {
+            key_id: KeyId::new("cbf4ef24-982d-4fd3-a75b-b95aaec84860".to_string()).unwrap(),
+            vendor: String::new(),
+            location: Location {
+                region: "us-east-1".to_string(),
+                endpoint: "http://localhost:4566".to_string(),
+            },
+            azure: None,
+            gcp: None,
+        };
+
+        let creds =
+            Credentials::from_keys("testUser".to_string(), "testAccessKey".to_string(), None);
+        let aws_kms =
+            AwsKms::new_with_creds_client(config, util::new_http_client(), creds).unwrap();
+
+        let data_key = aws_kms.generate_data_key().await.unwrap();
+        let plaintext = aws_kms.decrypt_data_key(&data_key.encrypted).await.unwrap();
+
+        assert_eq!(plaintext, data_key.plaintext.clone());
     }
 }

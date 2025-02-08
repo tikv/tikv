@@ -94,6 +94,10 @@ make_auto_flush_static_metric! {
         failure,
         success,
         trigger_next,
+        last_level_seek_filtered,
+        last_level_seek_filter_match,
+        non_last_level_seek_filtered,
+        non_last_level_seek_filter_match,
     }
 
     pub struct EngineTickerMetrics : LocalIntCounter {
@@ -162,12 +166,6 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
                 .block_cache_index_bytes_insert
                 .inc_by(value);
         }
-        TickerType::BlockCacheIndexBytesEvict => {
-            STORE_ENGINE_CACHE_EFFICIENCY
-                .get(name_enum)
-                .block_cache_index_bytes_evict
-                .inc_by(value);
-        }
         TickerType::BlockCacheFilterMiss => {
             STORE_ENGINE_CACHE_EFFICIENCY
                 .get(name_enum)
@@ -190,12 +188,6 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
             STORE_ENGINE_CACHE_EFFICIENCY
                 .get(name_enum)
                 .block_cache_filter_bytes_insert
-                .inc_by(value);
-        }
-        TickerType::BlockCacheFilterBytesEvict => {
-            STORE_ENGINE_CACHE_EFFICIENCY
-                .get(name_enum)
-                .block_cache_filter_bytes_evict
                 .inc_by(value);
         }
         TickerType::BlockCacheDataMiss => {
@@ -238,6 +230,30 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
             STORE_ENGINE_BLOOM_EFFICIENCY
                 .get(name_enum)
                 .bloom_useful
+                .inc_by(value);
+        }
+        TickerType::LastLevelSeekFiltered => {
+            STORE_ENGINE_BLOOM_EFFICIENCY
+                .get(name_enum)
+                .last_level_seek_filtered
+                .inc_by(value);
+        }
+        TickerType::LastLevelSeekFilterMatch => {
+            STORE_ENGINE_BLOOM_EFFICIENCY
+                .get(name_enum)
+                .last_level_seek_filter_match
+                .inc_by(value);
+        }
+        TickerType::NonLastLevelSeekFiltered => {
+            STORE_ENGINE_BLOOM_EFFICIENCY
+                .get(name_enum)
+                .non_last_level_seek_filtered
+                .inc_by(value);
+        }
+        TickerType::NonLastLevelSeekFilterMatch => {
+            STORE_ENGINE_BLOOM_EFFICIENCY
+                .get(name_enum)
+                .non_last_level_seek_filter_match
                 .inc_by(value);
         }
         TickerType::MemtableHit => {
@@ -357,12 +373,6 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
                 .iter_bytes_read
                 .inc_by(value);
         }
-        TickerType::NoFileCloses => {
-            STORE_ENGINE_FILE_STATUS
-                .get(name_enum)
-                .no_file_closes
-                .inc_by(value);
-        }
         TickerType::NoFileOpens => {
             STORE_ENGINE_FILE_STATUS
                 .get(name_enum)
@@ -409,12 +419,6 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
             STORE_ENGINE_WRITE_SERVED
                 .get(name_enum)
                 .write_done_by_other
-                .inc_by(value);
-        }
-        TickerType::WriteTimedout => {
-            STORE_ENGINE_WRITE_SERVED
-                .get(name_enum)
-                .write_timeout
                 .inc_by(value);
         }
         TickerType::WriteWithWal => {
@@ -677,46 +681,6 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
                 value
             );
         }
-        HistType::StallL0SlowdownCount => {
-            engine_histogram_metrics!(
-                STORE_ENGINE_STALL_L0_SLOWDOWN_COUNT_VEC,
-                "stall_l0_slowdown_count",
-                name,
-                value
-            );
-        }
-        HistType::StallMemtableCompactionCount => {
-            engine_histogram_metrics!(
-                STORE_ENGINE_STALL_MEMTABLE_COMPACTION_COUNT_VEC,
-                "stall_memtable_compaction_count",
-                name,
-                value
-            );
-        }
-        HistType::StallL0NumFilesCount => {
-            engine_histogram_metrics!(
-                STORE_ENGINE_STALL_L0_NUM_FILES_COUNT_VEC,
-                "stall_l0_num_files_count",
-                name,
-                value
-            );
-        }
-        HistType::HardRateLimitDelayCount => {
-            engine_histogram_metrics!(
-                STORE_ENGINE_HARD_RATE_LIMIT_DELAY_VEC,
-                "hard_rate_limit_delay",
-                name,
-                value
-            );
-        }
-        HistType::SoftRateLimitDelayCount => {
-            engine_histogram_metrics!(
-                STORE_ENGINE_SOFT_RATE_LIMIT_DELAY_VEC,
-                "soft_rate_limit_delay",
-                name,
-                value
-            );
-        }
         HistType::NumFilesInSingleCompaction => {
             engine_histogram_metrics!(
                 STORE_ENGINE_NUM_FILES_IN_SINGLE_COMPACTION_VEC,
@@ -942,6 +906,8 @@ struct DbStats {
     block_cache_size: Option<u64>,
     blob_cache_size: Option<u64>,
     stall_num: Option<[u64; ROCKSDB_IOSTALL_KEY.len()]>,
+    num_running_compactions: Option<u64>,
+    num_running_flushes: Option<u64>,
 }
 
 pub struct RocksStatisticsReporter {
@@ -1071,6 +1037,17 @@ impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
                     *val += info.get_property_int_value(key);
                 }
             }
+        }
+
+        // For compaction and flushes.
+        if let Some(v) = db.get_property_int(ROCKSDB_NUM_RUNNING_COMPACTIONS) {
+            *self
+                .db_stats
+                .num_running_compactions
+                .get_or_insert_default() += v;
+        }
+        if let Some(v) = db.get_property_int(ROCKSDB_NUM_RUNNING_FLUSHES) {
+            *self.db_stats.num_running_flushes.get_or_insert_default() += v;
         }
 
         // For snapshot
@@ -1206,6 +1183,17 @@ impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
             }
         }
 
+        if let Some(v) = self.db_stats.num_running_compactions {
+            STORE_ENGINE_NUM_RUNNING_COMPACTIONS_GAUGE_VEC
+                .with_label_values(&[&self.name])
+                .set(v as i64);
+        }
+        if let Some(v) = self.db_stats.num_running_flushes {
+            STORE_ENGINE_NUM_RUNNING_FLUSHES_GAUGE_VEC
+                .with_label_values(&[&self.name])
+                .set(v as i64);
+        }
+
         if let Some(v) = self.db_stats.num_snapshots {
             STORE_ENGINE_NUM_SNAPSHOTS_GAUGE_VEC
                 .with_label_values(&[&self.name])
@@ -1301,6 +1289,16 @@ lazy_static! {
         "tikv_engine_num_files_at_level",
         "Number of files at each level",
         &["db", "cf", "level"]
+    ).unwrap();
+    pub static ref STORE_ENGINE_NUM_RUNNING_COMPACTIONS_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_engine_num_running_compactions",
+        "Number of currently running compactions",
+        &["db"]
+    ).unwrap();
+    pub static ref STORE_ENGINE_NUM_RUNNING_FLUSHES_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_engine_num_running_flushes",
+        "Number of currently running flushes",
+        &["db"]
     ).unwrap();
     pub static ref STORE_ENGINE_NUM_SNAPSHOTS_GAUGE_VEC: IntGaugeVec = register_int_gauge_vec!(
         "tikv_engine_num_snapshots",
@@ -1586,31 +1584,6 @@ lazy_static! {
     pub static ref STORE_ENGINE_WAL_FILE_SYNC_MICROS_VEC: GaugeVec = register_gauge_vec!(
         "tikv_engine_wal_file_sync_micro_seconds",
         "Histogram of WAL file sync micros",
-        &["db", "type"]
-    ).unwrap();
-    pub static ref STORE_ENGINE_STALL_L0_SLOWDOWN_COUNT_VEC: GaugeVec = register_gauge_vec!(
-        "tikv_engine_stall_l0_slowdown_count",
-        "Histogram of stall l0 slowdown count",
-        &["db", "type"]
-    ).unwrap();
-    pub static ref STORE_ENGINE_STALL_MEMTABLE_COMPACTION_COUNT_VEC: GaugeVec = register_gauge_vec!(
-        "tikv_engine_stall_memtable_compaction_count",
-        "Histogram of stall memtable compaction count",
-        &["db", "type"]
-    ).unwrap();
-    pub static ref STORE_ENGINE_STALL_L0_NUM_FILES_COUNT_VEC: GaugeVec = register_gauge_vec!(
-        "tikv_engine_stall_l0_num_files_count",
-        "Histogram of stall l0 num files count",
-        &["db", "type"]
-    ).unwrap();
-    pub static ref STORE_ENGINE_HARD_RATE_LIMIT_DELAY_VEC: GaugeVec = register_gauge_vec!(
-        "tikv_engine_hard_rate_limit_delay_count",
-        "Histogram of hard rate limit delay count",
-        &["db", "type"]
-    ).unwrap();
-    pub static ref STORE_ENGINE_SOFT_RATE_LIMIT_DELAY_VEC: GaugeVec = register_gauge_vec!(
-        "tikv_engine_soft_rate_limit_delay_count",
-        "Histogram of soft rate limit delay count",
         &["db", "type"]
     ).unwrap();
     pub static ref STORE_ENGINE_NUM_FILES_IN_SINGLE_COMPACTION_VEC: GaugeVec = register_gauge_vec!(

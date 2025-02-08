@@ -90,7 +90,12 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
         if !self.caller_start_ts.is_max() && self.caller_start_ts > new_max_ts {
             new_max_ts = self.caller_start_ts;
         }
-        context.concurrency_manager.update_max_ts(new_max_ts);
+        context.concurrency_manager.update_max_ts(new_max_ts, || {
+            format!(
+                "check_txn_status-{}-{}-{}",
+                self.lock_ts, self.current_ts, self.caller_start_ts
+            )
+        })?;
 
         let mut txn = MvccTxn::new(self.lock_ts, context.concurrency_manager);
         let mut reader = ReaderWithStats::new(
@@ -163,6 +168,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
 
 #[cfg(test)]
 pub mod tests {
+    use std::sync::Arc;
+
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::{
         self, Context, LockInfo, PrewriteRequestPessimisticAction::*, WriteConflictReason,
@@ -226,7 +233,7 @@ pub mod tests {
                     statistics: &mut Default::default(),
                     async_apply_prewrite: false,
                     raw_ext: None,
-                    txn_status_cache: &TxnStatusCache::new_for_test(),
+                    txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
                 },
             )
             .unwrap();
@@ -280,7 +287,7 @@ pub mod tests {
                     statistics: &mut Default::default(),
                     async_apply_prewrite: false,
                     raw_ext: None,
-                    txn_status_cache: &TxnStatusCache::new_for_test(),
+                    txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
                 },
             )
             .map(|r| {

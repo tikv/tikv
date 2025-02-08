@@ -145,7 +145,11 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
         // It is not allowed for commit to overwrite a protected rollback. So we update
         // max_ts to prevent this case from happening.
         let region_id = self.ctx.get_region_id();
-        context.concurrency_manager.update_max_ts(self.start_ts);
+        context
+            .concurrency_manager
+            .update_max_ts(self.start_ts, || {
+                format!("check_secondary_locks-{}", self.start_ts)
+            })?;
 
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
         let mut reader = ReaderWithStats::new(
@@ -236,6 +240,8 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
 
 #[cfg(test)]
 pub mod tests {
+    use std::sync::Arc;
+
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::Context;
     use tikv_util::deadline::Deadline;
@@ -278,7 +284,7 @@ pub mod tests {
                     statistics: &mut Default::default(),
                     async_apply_prewrite: false,
                     raw_ext: None,
-                    txn_status_cache: &TxnStatusCache::new_for_test(),
+                    txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
                 },
             )
             .unwrap();
@@ -317,7 +323,7 @@ pub mod tests {
                         statistics: &mut Default::default(),
                         async_apply_prewrite: false,
                         raw_ext: None,
-                        txn_status_cache: &TxnStatusCache::new_for_test(),
+                        txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
                     },
                 )
                 .unwrap();

@@ -10,7 +10,6 @@ use std::{
     time::Duration,
 };
 
-use engine_rocks::RocksEngine;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
     kvrpcpb::*,
@@ -70,10 +69,7 @@ fn deadlock(client: &TikvClient, ctx: Context, key1: &[u8], ts: u64) -> bool {
     resp.errors[0].has_deadlock()
 }
 
-fn build_leader_client(
-    cluster: &mut Cluster<RocksEngine, ServerCluster<RocksEngine>>,
-    key: &[u8],
-) -> (TikvClient, Context) {
+fn build_leader_client(cluster: &mut Cluster<ServerCluster>, key: &[u8]) -> (TikvClient, Context) {
     let region_id = cluster.get_region_id(key);
     let leader = cluster.leader_of_region(region_id).unwrap();
     let epoch = cluster.get_region_epoch(region_id);
@@ -92,11 +88,7 @@ fn build_leader_client(
 }
 
 /// Creates a deadlock on the store containing key.
-fn must_detect_deadlock(
-    cluster: &mut Cluster<RocksEngine, ServerCluster<RocksEngine>>,
-    key: &[u8],
-    ts: u64,
-) {
+fn must_detect_deadlock(cluster: &mut Cluster<ServerCluster>, key: &[u8], ts: u64) {
     // Sometimes, deadlocks can't be detected at once due to leader change, but it
     // will be detected.
     for _ in 0..5 {
@@ -108,10 +100,7 @@ fn must_detect_deadlock(
     panic!("failed to detect deadlock");
 }
 
-fn deadlock_detector_leader_must_be(
-    cluster: &mut Cluster<RocksEngine, ServerCluster<RocksEngine>>,
-    store_id: u64,
-) {
+fn deadlock_detector_leader_must_be(cluster: &mut Cluster<ServerCluster>, store_id: u64) {
     let leader_region = cluster.get_region(b"");
     assert_eq!(
         cluster
@@ -126,11 +115,7 @@ fn deadlock_detector_leader_must_be(
         .region_leader_must_be(leader_region.get_id(), leader_peer);
 }
 
-fn must_transfer_leader(
-    cluster: &mut Cluster<RocksEngine, ServerCluster<RocksEngine>>,
-    region_key: &[u8],
-    store_id: u64,
-) {
+fn must_transfer_leader(cluster: &mut Cluster<ServerCluster>, region_key: &[u8], store_id: u64) {
     let region = cluster.get_region(region_key);
     let target_peer = find_peer_of_store(&region, store_id);
     cluster.must_transfer_leader(region.get_id(), target_peer.clone());
@@ -145,7 +130,7 @@ fn must_transfer_leader(
 /// REQUIRE: The source store must be the leader the region and the target store
 /// must not have this region.
 fn must_transfer_region(
-    cluster: &mut Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    cluster: &mut Cluster<ServerCluster>,
     region_key: &[u8],
     source_store_id: u64,
     target_store_id: u64,
@@ -164,18 +149,14 @@ fn must_transfer_region(
     cluster.must_put(region_key, b"v");
 }
 
-fn must_split_region(
-    cluster: &mut Cluster<RocksEngine, ServerCluster<RocksEngine>>,
-    region_key: &[u8],
-    split_key: &[u8],
-) {
+fn must_split_region(cluster: &mut Cluster<ServerCluster>, region_key: &[u8], split_key: &[u8]) {
     let region = cluster.get_region(region_key);
     cluster.must_split(&region, split_key);
     cluster.must_put(split_key, b"v");
 }
 
 fn must_merge_region(
-    cluster: &mut Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    cluster: &mut Cluster<ServerCluster>,
     source_region_key: &[u8],
     target_region_key: &[u8],
 ) {
@@ -198,7 +179,7 @@ fn find_peer_of_store(region: &Region, store_id: u64) -> Peer {
 
 /// Creates a cluster with only one region and store(1) is the leader of the
 /// region.
-fn new_cluster_for_deadlock_test(count: usize) -> Cluster<RocksEngine, ServerCluster<RocksEngine>> {
+fn new_cluster_for_deadlock_test(count: usize) -> Cluster<ServerCluster> {
     let mut cluster = new_server_cluster(0, count);
     cluster.cfg.pessimistic_txn.wait_for_lock_timeout = ReadableDuration::millis(500);
     cluster.cfg.pessimistic_txn.pipelined = false;

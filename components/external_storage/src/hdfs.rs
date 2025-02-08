@@ -3,6 +3,11 @@
 use std::{io, path, process::Stdio};
 
 use async_trait::async_trait;
+use cloud::blob::BlobObject;
+use futures_util::{
+    future::{FutureExt, LocalBoxFuture},
+    stream::LocalBoxStream,
+};
 use tokio::{io as async_io, process::Command};
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use url::Url;
@@ -76,7 +81,12 @@ impl ExternalStorage for HdfsStorage {
         Ok(self.remote.clone())
     }
 
-    async fn write(&self, name: &str, reader: UnpinReader, _content_length: u64) -> io::Result<()> {
+    async fn write(
+        &self,
+        name: &str,
+        reader: UnpinReader<'_>,
+        _content_length: u64,
+    ) -> io::Result<()> {
         if name.contains(path::MAIN_SEPARATOR) {
             return Err(io::Error::new(
                 io::ErrorKind::Other,
@@ -137,6 +147,19 @@ impl ExternalStorage for HdfsStorage {
 
     fn read_part(&self, _name: &str, _off: u64, _len: u64) -> ExternalData<'_> {
         unimplemented!("currently only HDFS export is implemented")
+    }
+
+    /// Walk the prefix of the blob storage.
+    /// It returns the stream of items.
+    fn iter_prefix(
+        &self,
+        _prefix: &str,
+    ) -> LocalBoxStream<'_, std::result::Result<BlobObject, io::Error>> {
+        Box::pin(futures::future::err(crate::unimplemented()).into_stream())
+    }
+
+    fn delete(&self, _name: &str) -> LocalBoxFuture<'_, io::Result<()>> {
+        Box::pin(futures::future::err(crate::unimplemented()))
     }
 }
 

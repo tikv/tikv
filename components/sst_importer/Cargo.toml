@@ -27,6 +27,7 @@ collections = { workspace = true }
 crc32fast = "1.2"
 dashmap = "5"
 encryption = { workspace = true }
+encryption_export = { workspace = true }
 engine_rocks = { workspace = true }
 engine_traits = { workspace = true }
 error_code = { workspace = true }
@@ -56,7 +57,9 @@ txn_types = { workspace = true }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 
 [dev-dependencies]
+async-compression = { version = "0.4.12", features = ["tokio", "zstd"] }
 engine_test = { workspace = true }
 tempfile = "3.0"
 test_sst_importer = { workspace = true }
 test_util = { workspace = true }
+tokio-util = { version = "0.7", features = ["compat"] }

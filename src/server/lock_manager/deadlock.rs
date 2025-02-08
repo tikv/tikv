@@ -1561,19 +1561,19 @@ pub mod tests {
         host.on_region_changed(&region, RegionChangeEvent::Create, StateRole::Follower);
         check_role(Role::Follower);
         for &follower_role in &follower_roles {
-            host.on_role_change(&region, RoleChange::new(follower_role));
+            host.on_role_change(&region, RoleChange::new_for_test(follower_role));
             check_role(Role::Follower);
-            host.on_role_change(&invalid, RoleChange::new(StateRole::Leader));
+            host.on_role_change(&invalid, RoleChange::new_for_test(StateRole::Leader));
             check_role(Role::Follower);
-            host.on_role_change(&other, RoleChange::new(StateRole::Leader));
+            host.on_role_change(&other, RoleChange::new_for_test(StateRole::Leader));
             check_role(Role::Follower);
-            host.on_role_change(&region, RoleChange::new(StateRole::Leader));
+            host.on_role_change(&region, RoleChange::new_for_test(StateRole::Leader));
             check_role(Role::Leader);
-            host.on_role_change(&invalid, RoleChange::new(follower_role));
+            host.on_role_change(&invalid, RoleChange::new_for_test(follower_role));
             check_role(Role::Leader);
-            host.on_role_change(&other, RoleChange::new(follower_role));
+            host.on_role_change(&other, RoleChange::new_for_test(follower_role));
             check_role(Role::Leader);
-            host.on_role_change(&region, RoleChange::new(follower_role));
+            host.on_role_change(&region, RoleChange::new_for_test(follower_role));
             check_role(Role::Follower);
         }
 

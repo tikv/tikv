@@ -104,7 +104,12 @@ lazy_static! {
     .unwrap();
     pub static ref INPORTER_APPLY_COUNT: IntCounterVec = register_int_counter_vec!(
         "tikv_import_apply_count",
-        "Bucketed histogram of importer apply count",
+        "The operations of importer apply keys",
+        &["type"]
+    ).unwrap();
+    pub static ref INPORTER_DOWNLOAD_COMPACT_KEYS_COUNT: IntCounterVec = register_int_counter_vec!(
+        "tikv_import_download_compact_keys_count",
+        "The operations of importer download keys from compacted SST files",
         &["type"]
     ).unwrap();
     pub static ref EXT_STORAGE_CACHE_COUNT: IntCounterVec = register_int_counter_vec!(

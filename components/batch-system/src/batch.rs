@@ -30,35 +30,61 @@ use crate::{
     config::Config,
     fsm::{Fsm, FsmScheduler, Priority},
     mailbox::BasicMailbox,
+    metrics::*,
     router::Router,
     scheduler::{ControlScheduler, NormalScheduler},
 };
 
 /// A unify type for FSMs so that they can be sent to channel easily.
 pub enum FsmTypes<N, C> {
-    Normal(Box<N>),
-    Control(Box<C>),
+    Normal((Box<N>, Instant)),
+    Control((Box<C>, Instant)),
     // Used as a signal that scheduler should be shutdown.
     Empty,
 }
-pub struct NormalFsm<N> {
-    fsm: Box<N>,
-    timer: Instant,
-    policy: Option<ReschedulePolicy>,
+
+struct MetricsCollector<N: Fsm> {
+    timer: Instant, // time since polled
+    round: usize,   // how many round the fsm has been continuously polled
+    _phantom: std::marker::PhantomData<N>,
 }
 
-impl<N> NormalFsm<N> {
-    #[inline]
-    fn new(fsm: Box<N>) -> NormalFsm<N> {
-        NormalFsm {
-            fsm,
+impl<N: Fsm> MetricsCollector<N> {
+    fn new() -> MetricsCollector<N> {
+        MetricsCollector {
             timer: Instant::now_coarse(),
-            policy: None,
+            round: 0,
+            _phantom: std::marker::PhantomData,
         }
     }
 }
 
-impl<N> Deref for NormalFsm<N> {
+impl<N: Fsm> Drop for MetricsCollector<N> {
+    fn drop(&mut self) {
+        FSM_POLL_ROUND.get(N::FSM_TYPE).observe(self.round as f64);
+        FSM_POLL_DURATION
+            .get(N::FSM_TYPE)
+            .observe(self.timer.saturating_elapsed_secs());
+    }
+}
+
+pub struct NormalFsm<N: Fsm> {
+    fsm: Box<N>,
+    metrics: MetricsCollector<N>,
+    policy: Option<ReschedulePolicy>,
+}
+
+impl<N: Fsm> NormalFsm<N> {
+    #[inline]
+    fn new(fsm: Box<N>) -> NormalFsm<N> {
+        NormalFsm {
+            fsm,
+            metrics: MetricsCollector::<N>::new(),
+            policy: None,
+        }
+    }
+}
+impl<N: Fsm> Deref for NormalFsm<N> {
     type Target = N;
 
     #[inline]
@@ -67,7 +93,7 @@ impl<N> Deref for NormalFsm<N> {
     }
 }
 
-impl<N> DerefMut for NormalFsm<N> {
+impl<N: Fsm> DerefMut for NormalFsm<N> {
     #[inline]
     fn deref_mut(&mut self) -> &mut N {
         &mut self.fsm
@@ -76,7 +102,7 @@ impl<N> DerefMut for NormalFsm<N> {
 
 /// A basic struct for a round of polling.
 #[allow(clippy::vec_box)]
-pub struct Batch<N, C> {
+pub struct Batch<N: Fsm, C: Fsm> {
     normals: Vec<Option<NormalFsm<N>>>,
     control: Option<Box<C>>,
 }
@@ -90,12 +116,27 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
         }
     }
 
+    fn tick_round(&mut self) {
+        FSM_COUNT_PER_POLL
+            .get(N::FSM_TYPE)
+            .observe(self.normals.len() as f64);
+        for f in self.normals.iter_mut().filter_map(Option::as_mut) {
+            f.metrics.round += 1;
+        }
+    }
+
     fn push(&mut self, fsm: FsmTypes<N, C>) -> bool {
         match fsm {
-            FsmTypes::Normal(n) => {
+            FsmTypes::Normal((n, schedule_time)) => {
+                FSM_SCHEDULE_WAIT_DURATION
+                    .get(N::FSM_TYPE)
+                    .observe(schedule_time.saturating_elapsed_secs());
                 self.normals.push(Some(NormalFsm::new(n)));
             }
-            FsmTypes::Control(c) => {
+            FsmTypes::Control((c, schedule_time)) => {
+                FSM_SCHEDULE_WAIT_DURATION
+                    .get(C::FSM_TYPE)
+                    .observe(schedule_time.saturating_elapsed_secs());
                 assert!(self.control.is_none());
                 self.control = Some(c);
             }
@@ -167,6 +208,7 @@ impl<N: Fsm, C: Fsm> Batch<N, C> {
             Some(ReschedulePolicy::Release(l)) => self.release(to_schedule, l),
             Some(ReschedulePolicy::Remove) => self.remove(to_schedule),
             Some(ReschedulePolicy::Schedule) => {
+                FSM_RESCHEDULE_COUNTER.get(N::FSM_TYPE).inc();
                 router.normal_scheduler.schedule(to_schedule.fsm);
                 None
             }
@@ -354,15 +396,9 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
             // hungry if some regions are hot points.
             let mut max_batch_size = std::cmp::max(self.max_batch_size, batch.normals.len());
             // Update some online config if needed.
-            {
-                // TODO: rust 2018 does not support capture disjoint field within a closure.
-                // See https://github.com/rust-lang/rust/issues/53488 for more details.
-                // We can remove this once we upgrade to rust 2021 or later edition.
-                let batch_size = &mut self.max_batch_size;
-                self.handler.begin(max_batch_size, |cfg| {
-                    *batch_size = cfg.max_batch_size();
-                });
-            }
+            self.handler.begin(max_batch_size, |cfg| {
+                self.max_batch_size = cfg.max_batch_size();
+            });
             max_batch_size = std::cmp::max(self.max_batch_size, batch.normals.len());
 
             if batch.control.is_some() {
@@ -385,7 +421,7 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                     p.policy = Some(ReschedulePolicy::Schedule);
                     reschedule_fsms.push(i);
                 } else {
-                    if p.timer.saturating_elapsed() >= self.reschedule_duration {
+                    if p.metrics.timer.saturating_elapsed() >= self.reschedule_duration {
                         hot_fsm_count += 1;
                         // We should only reschedule a half of the hot regions, otherwise,
                         // it's possible all the hot regions are fetched in a batch the
@@ -439,6 +475,8 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
             to_skip_end.clear();
             self.handler.end(&mut batch.normals);
 
+            // Update round times for metrics.
+            batch.tick_round();
             // Iterate larger index first, so that `swap_reclaim` won't affect other FSMs
             // in the list.
             for index in reschedule_fsms.iter().rev() {
@@ -545,7 +583,6 @@ where
         let t = thread::Builder::new()
             .name(name)
             .spawn_wrapper(move || {
-                tikv_alloc::thread_allocate_exclusive_arena().unwrap();
                 tikv_util::thread_group::set_properties(props);
                 set_io_type(IoType::ForegroundWrite);
                 poller.poll();

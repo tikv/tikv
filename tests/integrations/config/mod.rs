@@ -24,7 +24,7 @@ use raftstore::{
     coprocessor::{Config as CopConfig, ConsistencyCheckMethod},
     store::Config as RaftstoreConfig,
 };
-use resource_control::Config as ResourceControlConfig;
+use resource_control::config::{Config as ResourceControlConfig, PriorityCtlStrategy};
 use security::SecurityConfig;
 use slog::Level;
 use test_util::assert_eq_debug;
@@ -36,7 +36,8 @@ use tikv::{
         lock_manager::Config as PessimisticTxnConfig, Config as ServerConfig,
     },
     storage::config::{
-        BlockCacheConfig, Config as StorageConfig, EngineType, FlowControlConfig, IoRateLimitConfig,
+        BlockCacheConfig, Config as StorageConfig, EngineType, FlowControlConfig,
+        IoRateLimitConfig, MaxTsConfig,
     },
 };
 use tikv_util::config::{LogFormat, ReadableDuration, ReadableSchedule, ReadableSize};
@@ -780,6 +781,11 @@ fn test_serde_custom_tikv_config() {
         background_error_recovery_window: ReadableDuration::hours(1),
         txn_status_cache_capacity: 1000,
         memory_quota: ReadableSize::kb(123),
+        max_ts: MaxTsConfig {
+            max_drift: ReadableDuration::secs(333),
+            cache_sync_interval: ReadableDuration::secs(44),
+            action_on_invalid_update: "error".to_owned(),
+        },
     };
     value.coprocessor = CopConfig {
         split_region_on_table: false,
@@ -860,6 +866,8 @@ fn test_serde_custom_tikv_config() {
         wake_up_delay_duration: ReadableDuration::millis(100),
         pipelined: false,
         in_memory: false,
+        in_memory_peer_size_limit: ReadableSize::kb(512),
+        in_memory_instance_size_limit: ReadableSize::mb(100),
     };
     value.cdc = CdcConfig {
         min_ts_interval: ReadableDuration::secs(4),
@@ -891,7 +899,10 @@ fn test_serde_custom_tikv_config() {
     value
         .split
         .optimize_for(value.coprocessor.region_max_size());
-    value.resource_control = ResourceControlConfig { enabled: false };
+    value.resource_control = ResourceControlConfig {
+        enabled: false,
+        priority_ctl_strategy: PriorityCtlStrategy::Aggressive,
+    };
 
     let custom = read_file_in_project_dir("integrations/config/test-custom.toml");
     let mut load: TikvConfig = toml::from_str(&custom).unwrap();

@@ -73,6 +73,7 @@ pub struct EvalConfig {
 
     pub paging_size: Option<u64>,
     pub div_precision_increment: u8,
+    pub is_test: bool,
 }
 
 impl Default for EvalConfig {
@@ -113,6 +114,7 @@ impl EvalConfig {
             sql_mode: SqlMode::empty(),
             paging_size: None,
             div_precision_increment: DEFAULT_DIV_FRAC_INCR,
+            is_test: false,
         }
     }
 

@@ -5,15 +5,21 @@ use std::{borrow::ToOwned, error::Error, str, str::FromStr, u64};
 use kvproto::kvrpcpb::KeyRange;
 use server::setup::initial_logger;
 use tikv::config::TikvConfig;
+use tikv_util::config::LogFormat;
 
 const LOG_DIR: &str = "./ctl-engine-info-log";
 
 #[allow(clippy::field_reassign_with_default)]
-pub fn init_ctl_logger(level: &str) {
+pub fn init_ctl_logger(level: &str, format: &str) {
     let mut cfg = TikvConfig::default();
     cfg.log.level = slog::Level::from_str(level).unwrap().into();
     cfg.rocksdb.info_log_dir = LOG_DIR.to_owned();
     cfg.raftdb.info_log_dir = LOG_DIR.to_owned();
+    cfg.log.format = match format {
+        "json" => LogFormat::Json,
+        "text" => LogFormat::Text,
+        fmt => panic!("unknown log format {}", fmt),
+    };
     initial_logger(&cfg);
 }
 

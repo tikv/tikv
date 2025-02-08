@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, str::FromStr, sync::Arc};
 
 use encryption::DataKeyManager;
 use kvproto::import_sstpb::SstMeta;
@@ -30,7 +30,7 @@ pub trait SstReader: RefIterable + Sized + Send {
 /// SstWriter is used to create sst files that can be added to database later.
 pub trait SstWriter: Send {
     type ExternalSstFileInfo: ExternalSstFileInfo;
-    type ExternalSstFileReader: std::io::Read + Send;
+    type ExternalSstFileReader: ExternalSstFileReader;
 
     /// Add key, value to currently opened file
     /// REQUIRES: key is after any previously added key according to comparator.
@@ -50,12 +50,29 @@ pub trait SstWriter: Send {
     fn finish_read(self) -> Result<(Self::ExternalSstFileInfo, Self::ExternalSstFileReader)>;
 }
 
+pub trait ExternalSstFileReader: std::io::Read + Send {
+    fn reset(&mut self) -> Result<()>;
+}
+
 // compression type used for write sst file
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub enum SstCompressionType {
     Lz4,
     Snappy,
     Zstd,
+}
+
+impl FromStr for SstCompressionType {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "lz4" => Ok(Self::Lz4),
+            "snappy" => Ok(Self::Snappy),
+            "zstd" => Ok(Self::Zstd),
+            otherwise => Err(format!("{} isn't a valid compression method", otherwise)),
+        }
+    }
 }
 
 /// A builder builds a SstWriter.

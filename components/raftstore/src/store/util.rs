@@ -240,7 +240,7 @@ pub fn admin_cmd_epoch_lookup(admin_cmp_type: AdminCmdType) -> AdminCmdEpochStat
         AdminCmdType::CommitMerge => AdminCmdEpochState::new(true, true, true, false),
         AdminCmdType::RollbackMerge => AdminCmdEpochState::new(true, true, true, false),
         // Transfer leader
-        AdminCmdType::TransferLeader => AdminCmdEpochState::new(true, true, false, false),
+        AdminCmdType::TransferLeader => AdminCmdEpochState::new(false, false, false, false),
         // PrepareFlashback could be committed successfully before a split being applied, so we need
         // to check the epoch to make sure it's sent to a correct key range.
         // NOTICE: FinishFlashback will never meet the epoch not match error since any scheduling
@@ -765,10 +765,9 @@ pub fn get_entry_header(entry: &Entry) -> RaftRequestHeader {
     if entry.get_entry_type() != EntryType::EntryNormal {
         return RaftRequestHeader::default();
     }
-    let logger = slog_global::get_global().new(slog::o!());
     match SimpleWriteReqDecoder::new(
         |_, _, _| RaftCmdRequest::default(),
-        &logger,
+        None,
         entry.get_data(),
         entry.get_index(),
         entry.get_term(),
@@ -818,10 +817,9 @@ pub enum RaftCmd<'a> {
 }
 
 pub fn parse_raft_cmd_request<'a>(data: &'a [u8], index: u64, term: u64, tag: &str) -> RaftCmd<'a> {
-    let logger = slog_global::get_global().new(slog::o!());
     match SimpleWriteReqDecoder::new(
         |_, _, _| parse_data_at(data, index, tag),
-        &logger,
+        None,
         data,
         index,
         term,
@@ -2327,6 +2325,7 @@ mod tests {
             AdminCmdType::InvalidAdmin,
             AdminCmdType::ComputeHash,
             AdminCmdType::VerifyHash,
+            AdminCmdType::TransferLeader,
         ] {
             let mut admin = AdminRequest::default();
             admin.set_cmd_type(*ty);
@@ -2348,7 +2347,6 @@ mod tests {
             AdminCmdType::PrepareMerge,
             AdminCmdType::CommitMerge,
             AdminCmdType::RollbackMerge,
-            AdminCmdType::TransferLeader,
         ] {
             let mut admin = AdminRequest::default();
             admin.set_cmd_type(*ty);
@@ -2384,7 +2382,6 @@ mod tests {
             AdminCmdType::PrepareMerge,
             AdminCmdType::CommitMerge,
             AdminCmdType::RollbackMerge,
-            AdminCmdType::TransferLeader,
         ] {
             let mut admin = AdminRequest::default();
             admin.set_cmd_type(*ty);

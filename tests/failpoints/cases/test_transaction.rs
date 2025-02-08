@@ -344,7 +344,7 @@ fn test_max_commit_ts_error() {
     thread::sleep(Duration::from_millis(200));
     cm.read_key_check(&Key::from_raw(b"k1"), |_| Err(()))
         .unwrap_err();
-    cm.update_max_ts(200.into());
+    cm.update_max_ts(200.into(), "").unwrap();
 
     let res = prewrite_rx.recv().unwrap().unwrap();
     assert!(res.min_commit_ts.is_zero());
@@ -372,7 +372,7 @@ fn test_exceed_max_commit_ts_in_the_middle_of_prewrite() {
     // Pause between getting max ts and store the lock in memory
     fail::cfg("before-set-lock-in-memory", "pause").unwrap();
 
-    cm.update_max_ts(40.into());
+    cm.update_max_ts(40.into(), "").unwrap();
     let mutations = vec![
         Mutation::make_put(Key::from_raw(b"k1"), b"v".to_vec()),
         Mutation::make_put(Key::from_raw(b"k2"), b"v".to_vec()),
@@ -401,7 +401,7 @@ fn test_exceed_max_commit_ts_in_the_middle_of_prewrite() {
     // sleep a while so the first key gets max ts.
     thread::sleep(Duration::from_millis(200));
 
-    cm.update_max_ts(51.into());
+    cm.update_max_ts(51.into(), "").unwrap();
     fail::remove("before-set-lock-in-memory");
     let res = prewrite_rx.recv().unwrap().unwrap();
     assert!(res.min_commit_ts.is_zero());
@@ -563,6 +563,8 @@ fn test_pessimistic_lock_check_valid() {
 
 #[test]
 fn test_concurrent_write_after_transfer_leader_invalidates_locks() {
+    let peer_size_limit = 512 << 10;
+    let instance_size_limit = 100 << 20;
     let mut cluster = new_server_cluster(0, 1);
     cluster.cfg.pessimistic_txn.pipelined = true;
     cluster.cfg.pessimistic_txn.in_memory = true;
@@ -588,7 +590,11 @@ fn test_concurrent_write_after_transfer_leader_invalidates_locks() {
     txn_ext
         .pessimistic_locks
         .write()
-        .insert(vec![(Key::from_raw(b"key"), lock.clone())])
+        .insert(
+            vec![(Key::from_raw(b"key"), lock.clone())],
+            peer_size_limit,
+            instance_size_limit,
+        )
         .unwrap();
 
     let region = cluster.get_region(b"");

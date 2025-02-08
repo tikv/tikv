@@ -1925,9 +1925,9 @@ mod tests {
         let cs = vec![
             // (origin, result, overflow)
             (-10.4, -10i64, false),
-            (-10.5, -11, false),
+            (-10.5, -10, false),
             (10.4, 10, false),
-            (10.5, 11, false),
+            (10.5, 10, false),
             (i64::MAX as f64, i64::MAX, false),
             ((1u64 << 63) as f64, i64::MAX, false),
             (i64::MIN as f64, i64::MIN, false),
@@ -2950,11 +2950,13 @@ mod tests {
 
     #[test]
     fn test_cast_duration_as_time() {
-        use chrono::Datelike;
+        let cases = vec![
+            ("11:30:45.123456", "2020-02-02 11:30:45.123456"),
+            ("-35:30:46", "2020-01-31 12:29:14.000000"),
+            ("25:59:59.999999", "2020-02-03 01:59:59.999999"),
+        ];
 
-        let cases = vec!["11:30:45.123456", "-35:30:46", "25:59:59.999999"];
-
-        for case in cases {
+        for (case, expected) in cases {
             let mut cfg = EvalConfig::default();
             cfg.tz = Tz::from_tz_name("America/New_York").unwrap();
             let mut ctx = EvalContext::new(Arc::new(cfg));
@@ -2962,6 +2964,7 @@ mod tests {
 
             let mut cfg2 = EvalConfig::default();
             cfg2.tz = Tz::from_tz_name("Asia/Tokyo").unwrap();
+            cfg2.is_test = true;
             let ctx2 = EvalContext::new(Arc::new(cfg2));
 
             let now = RpnFnScalarEvaluator::new()
@@ -2976,16 +2979,7 @@ mod tests {
                 .evaluate::<Time>(ScalarFuncSig::CastDurationAsTime)
                 .unwrap()
                 .unwrap();
-            let chrono_today = chrono::Utc::now();
-            let today = now.checked_sub(&mut ctx, duration).unwrap();
-
-            assert_eq!(today.year(), chrono_today.year() as u32);
-            assert_eq!(today.month(), chrono_today.month());
-            assert_eq!(today.day(), chrono_today.day());
-            assert_eq!(today.hour(), 0);
-            assert_eq!(today.minute(), 0);
-            assert_eq!(today.second(), 0);
-            assert_eq!(today.micro(), 0);
+            assert_eq!(now.to_string(), expected);
         }
     }
 
@@ -3130,10 +3124,10 @@ mod tests {
                 false,
                 false,
             ),
-            (Json::from_f64(10.5).unwrap(), 11, false, false),
+            (Json::from_f64(10.5).unwrap(), 10, false, false),
             (Json::from_f64(10.4).unwrap(), 10, false, false),
             (Json::from_f64(-10.4).unwrap(), -10, false, false),
-            (Json::from_f64(-10.5).unwrap(), -11, false, false),
+            (Json::from_f64(-10.5).unwrap(), -10, false, false),
             (
                 Json::from_string(String::from("10.0")).unwrap(),
                 10,
@@ -4487,6 +4481,8 @@ mod tests {
                 Some(vec![0xe4, 0xb8, 0x80]),
             ),
             ("一".as_bytes().to_vec(), "gbk", Some(vec![0xd2, 0xbb])),
+            ("一".as_bytes().to_vec(), "gb18030", Some(vec![0xd2, 0xbb])),
+            ("€".as_bytes().to_vec(), "gb18030", Some(vec![0xa2, 0xe3])),
         ];
 
         for (v, charset, expected) in cases {
@@ -4515,6 +4511,8 @@ mod tests {
                 Some("一".as_bytes().to_vec()),
             ),
             (vec![0xd2, 0xbb], "gbk", Some("一".as_bytes().to_vec())),
+            (vec![0xd2, 0xbb], "gb18030", Some("一".as_bytes().to_vec())),
+            (vec![0xa2, 0xe3], "gb18030", Some("€".as_bytes().to_vec())),
         ];
 
         for (v, charset, expected) in cases {

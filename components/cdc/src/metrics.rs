@@ -102,6 +102,12 @@ lazy_static! {
         "Total fetched bytes of CDC incremental scan"
     )
     .unwrap();
+
+    pub static ref CDC_DROP_TXN_EXTRA_TASKS_COUNT:IntCounter = register_int_counter!(
+        "tikv_cdc_drop_txn_extra_task_count",
+        "Total count of dropped txn extra tasks"
+    ).unwrap();
+
     pub static ref CDC_SCAN_TASKS: IntGaugeVec = register_int_gauge_vec!(
         "tikv_cdc_scan_tasks",
         "Total number of CDC incremental scan tasks",

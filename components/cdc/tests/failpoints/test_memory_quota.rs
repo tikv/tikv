@@ -78,7 +78,7 @@ fn test_resolver_track_lock_memory_quota_exceeded() {
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Error(e) => {
             // Unknown errors are translated into region_not_found.
-            assert!(e.has_region_not_found(), "{:?}", e);
+            assert!(e.has_congested(), "{:?}", e);
         }
         other => panic!("unknown event {:?}", other),
     }
@@ -130,7 +130,7 @@ fn test_pending_on_region_ready_memory_quota_exceeded() {
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Error(e) => {
             // Unknown errors are translated into region_not_found.
-            assert!(e.has_region_not_found(), "{:?}", e);
+            assert!(e.has_congested(), "{:?}", e);
         }
         other => panic!("unknown event {:?}", other),
     }
@@ -194,7 +194,7 @@ fn test_pending_push_lock_memory_quota_exceeded() {
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Error(e) => {
             // Unknown errors are translated into region_not_found.
-            assert!(e.has_region_not_found(), "{:?}", e);
+            assert!(e.has_congested(), "{:?}", e);
         }
         other => panic!("unknown event {:?}", other),
     }
@@ -255,7 +255,7 @@ fn test_scan_lock_memory_quota_exceeded() {
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Error(e) => {
             // Unknown errors are translated into region_not_found.
-            assert!(e.has_region_not_found(), "{:?}", e);
+            assert!(e.has_congested(), "{:?}", e);
         }
         other => panic!("unknown event {:?}", other),
     }

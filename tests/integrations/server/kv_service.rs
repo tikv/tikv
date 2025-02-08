@@ -11,7 +11,6 @@ use std::{
 
 use api_version::{ApiV1, ApiV1Ttl, ApiV2, KvFormat};
 use concurrency_manager::ConcurrencyManager;
-use engine_rocks::RocksEngine;
 use engine_traits::{
     MiscExt, Peekable, RaftEngine, RaftEngineReadOnly, RaftLogBatch, SyncMutable, CF_DEFAULT,
     CF_LOCK, CF_RAFT, CF_WRITE,
@@ -31,7 +30,7 @@ use pd_client::PdClient;
 use raft::eraftpb;
 use raftstore::{
     coprocessor::CoprocessorHost,
-    store::{fsm::store::StoreMeta, AutoSplitController, SnapManager},
+    store::{fsm::store::StoreMeta, AutoSplitController, DiskCheckRunner, SnapManager},
 };
 use resource_metering::CollectorRegHandle;
 use service::service_manager::GrpcServiceManager;
@@ -1385,8 +1384,7 @@ fn test_double_run_node() {
     let mut sim = cluster.sim.wl();
     let node = sim.get_node(id).unwrap();
     let pd_worker = LazyWorker::new("test-pd-worker");
-    let simulate_trans =
-        SimulateTransport::<_, RocksEngine>::new(ChannelTransport::<RocksEngine>::new());
+    let simulate_trans = SimulateTransport::new(ChannelTransport::new());
     let tmp = Builder::new().prefix("test_cluster").tempdir().unwrap();
     let snap_mgr = SnapManager::new(tmp.path().to_str().unwrap());
     let coprocessor_host = CoprocessorHost::new(router, raftstore::coprocessor::Config::default());
@@ -1413,6 +1411,7 @@ fn test_double_run_node() {
             ConcurrencyManager::new(1.into()),
             CollectorRegHandle::new_for_test(),
             None,
+            DiskCheckRunner::dummy(),
             GrpcServiceManager::dummy(),
             Arc::new(AtomicU64::new(0)),
         )
@@ -1931,7 +1930,7 @@ fn test_prewrite_check_max_commit_ts() {
     let (cluster, client, ctx) = new_cluster();
 
     let cm = cluster.sim.read().unwrap().get_concurrency_manager(1);
-    cm.update_max_ts(100.into());
+    cm.update_max_ts(100.into(), "").unwrap();
 
     let mut req = PrewriteRequest::default();
     req.set_context(ctx.clone());

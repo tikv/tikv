@@ -61,6 +61,7 @@ mod read_pool;
 mod types;
 
 use std::{
+    assert_matches::assert_matches,
     borrow::Cow,
     iter,
     marker::PhantomData,
@@ -69,7 +70,7 @@ use std::{
         atomic::{self, AtomicBool, AtomicU64, Ordering},
         Arc,
     },
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 use api_version::{ApiV1, ApiV2, KeyMode, KvFormat, RawValue};
@@ -81,6 +82,7 @@ use engine_traits::{
 };
 use futures::{future::Either, prelude::*};
 use kvproto::{
+    kvrpcpb,
     kvrpcpb::{
         ApiVersion, ChecksumAlgorithm, CommandPri, Context, GetRequest, IsolationLevel, KeyRange,
         LockInfo, RawGetRequest,
@@ -104,6 +106,7 @@ use tracker::{
 };
 use txn_types::{Key, KvPair, Lock, LockType, TimeStamp, TsSet, Value};
 
+use self::kv::SnapContext;
 pub use self::{
     errors::{get_error_kind_from_header, get_tag_from_header, Error, ErrorHeaderKind, ErrorInner},
     kv::{
@@ -118,7 +121,6 @@ pub use self::{
         StorageCallback, TxnStatus,
     },
 };
-use self::{kv::SnapContext, test_util::latest_feature_gate};
 use crate::{
     read_pool::{ReadPool, ReadPoolHandle},
     server::{lock_manager::waiter_manager, metrics::ResourcePriority},
@@ -128,10 +130,12 @@ use crate::{
         lock_manager::{LockManager, MockLockManager},
         metrics::{CommandKind, *},
         mvcc::{metrics::ScanLockReadTimeSource::resolve_lock, MvccReader, PointGetterBuilder},
+        test_util::latest_feature_gate,
         txn::{
             commands::{RawAtomicStore, RawCompareAndSwap, TypedCommand},
             flow_controller::{EngineFlowController, FlowController},
             scheduler::TxnScheduler,
+            txn_status_cache::{TxnState, TxnStatusCache},
             Command, Error as TxnError, ErrorInner as TxnErrorInner,
         },
         types::StorageCallbackType,
@@ -219,7 +223,7 @@ pub struct Storage<E: Engine, L: LockManager, F: KvFormat> {
 impl<E: Engine, L: LockManager, F: KvFormat> Clone for Storage<E, L, F> {
     #[inline]
     fn clone(&self) -> Self {
-        let refs = self.refs.fetch_add(1, atomic::Ordering::SeqCst);
+        let refs = self.refs.fetch_add(1, Ordering::SeqCst);
 
         trace!(
             "Storage referenced"; "original_ref" => refs
@@ -245,7 +249,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Clone for Storage<E, L, F> {
 impl<E: Engine, L: LockManager, F: KvFormat> Drop for Storage<E, L, F> {
     #[inline]
     fn drop(&mut self) {
-        let refs = self.refs.fetch_sub(1, atomic::Ordering::SeqCst);
+        let refs = self.refs.fetch_sub(1, Ordering::SeqCst);
 
         trace!(
             "Storage de-referenced"; "original_ref" => refs
@@ -276,6 +280,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
         resource_ctl: Option<Arc<ResourceController>>,
         resource_manager: Option<Arc<ResourceGroupManager>>,
+        txn_status_cache: Arc<TxnStatusCache>,
     ) -> Result<Self> {
         assert_eq!(config.api_version(), F::TAG, "Api version not match");
 
@@ -293,6 +298,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             feature_gate,
             resource_ctl,
             resource_manager.clone(),
+            txn_status_cache,
         );
 
         info!("Storage started.");
@@ -694,6 +700,17 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                                 r
                             })
                     });
+                    if let Err(
+                        e @ Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
+                            mvcc::Error(box mvcc::ErrorInner::DefaultNotFound { .. }),
+                        )))),
+                    ) = &result
+                    {
+                        error!("default not found in storage get";
+                            "err" => ?e,
+                            "RpcContext" => ?&ctx,
+                        );
+                    }
                     metrics::tls_collect_scan_details(CMD, &statistics);
                     metrics::tls_collect_read_flow(
                         ctx.get_region_id(),
@@ -1306,6 +1323,17 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             });
                         (result, stats)
                     });
+                    if let Err(
+                        e @ Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(
+                            mvcc::Error(box mvcc::ErrorInner::DefaultNotFound { .. }),
+                        )))),
+                    ) = &result
+                    {
+                        error!("default not found in storage batch_get";
+                            "err" => ?e,
+                            "RpcContext" => ?&ctx,
+                        );
+                    }
                     metrics::tls_collect_scan_details(CMD, &stats);
                     let now = Instant::now();
                     SCHED_PROCESSING_READ_HISTOGRAM_STATIC
@@ -1449,7 +1477,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
                 // Update max_ts and check the in-memory lock table before getting the snapshot
                 if !ctx.get_stale_read() {
-                    concurrency_manager.update_max_ts(start_ts);
+                    concurrency_manager
+                        .update_max_ts(start_ts, "scan")
+                        .map_err(txn::Error::from)?;
                 }
                 if need_check_locks(ctx.get_isolation_level()) {
                     let begin_instant = Instant::now();
@@ -1614,7 +1644,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
                 let command_duration = Instant::now();
 
-                concurrency_manager.update_max_ts(max_ts);
+                concurrency_manager
+                    .update_max_ts(max_ts, "scan_lock")
+                    .map_err(txn::Error::from)?;
                 let begin_instant = Instant::now();
                 // TODO: Though it's very unlikely to find a conflicting memory lock here, it's
                 // not a good idea to return an error to the client, making the GC fail. A
@@ -1815,7 +1847,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         SCHED_STAGE_COUNTER_VEC.get(tag).new.inc();
         self.sched
             .get_sched_pool()
-            .spawn(metadata, pri, future)
+            // NOTE: we don't support background resource control for raw api.
+            .spawn("", metadata, pri, future)
             .map_err(|_| Error::from(ErrorInner::SchedTooBusy))
     }
 
@@ -3245,6 +3278,38 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 .and_then(|res| future::ready(res)),
         )
     }
+
+    pub fn update_txn_status_cache(
+        &self,
+        ctx: Context,
+        txn_statuses: Vec<kvrpcpb::TxnStatus>,
+        callback: Callback<()>,
+    ) -> Result<()> {
+        const CMD: CommandKind = CommandKind::update_txn_status_cache;
+        let priority = ctx.get_priority();
+        let metadata = TaskMetadata::from_ctx(ctx.get_resource_control_context());
+        let cache = self.get_scheduler().get_txn_status_cache();
+        let f = async move {
+            let now = SystemTime::now();
+            for txn_status in txn_statuses {
+                let txn_state = TxnState::from_ts(
+                    txn_status.start_ts.into(),
+                    txn_status.min_commit_ts.into(),
+                    txn_status.commit_ts.into(),
+                    txn_status.rolled_back,
+                );
+                if txn_status.is_completed {
+                    // large_txn_cache is only for **ongoing** large txns, so remove it when
+                    // completed.
+                    assert_matches!(txn_state, TxnState::Committed { .. } | TxnState::RolledBack);
+                    cache.remove_large_txn(txn_status.start_ts.into());
+                }
+                cache.upsert(txn_status.start_ts.into(), txn_state, now);
+            }
+            callback(Ok(()));
+        };
+        self.sched_raw_command(metadata, priority, CMD, f)
+    }
 }
 
 pub async fn get_raw_key_guard(
@@ -3290,6 +3355,8 @@ pub struct DynamicConfigs {
     pub pipelined_pessimistic_lock: Arc<AtomicBool>,
     pub in_memory_pessimistic_lock: Arc<AtomicBool>,
     pub wake_up_delay_duration_ms: Arc<AtomicU64>,
+    pub in_memory_peer_size_limit: Arc<AtomicU64>,
+    pub in_memory_instance_size_limit: Arc<AtomicU64>,
 }
 
 fn get_priority_tag(priority: CommandPri) -> CommandPriority {
@@ -3310,7 +3377,11 @@ fn prepare_snap_ctx<'a>(
 ) -> Result<SnapContext<'a>> {
     // Update max_ts and check the in-memory lock table before getting the snapshot
     if !pb_ctx.get_stale_read() {
-        concurrency_manager.update_max_ts(start_ts);
+        concurrency_manager
+            .update_max_ts(start_ts, || {
+                format!("prepare_snap_ctx-{}-{}", cmd, start_ts)
+            })
+            .map_err(txn::Error::from)?;
     }
     fail_point!("before-storage-check-memory-locks");
     let isolation_level = pb_ctx.get_isolation_level();
@@ -3389,6 +3460,8 @@ pub struct TestStorageBuilder<E: Engine, L: LockManager, F: KvFormat> {
     lock_mgr: L,
     resource_tag_factory: ResourceTagFactory,
     _phantom: PhantomData<F>,
+    in_memory_peer_size_limit: Arc<AtomicU64>,
+    in_memory_instance_size_limit: Arc<AtomicU64>,
 }
 
 /// TestStorageBuilder for Api V1
@@ -3437,6 +3510,12 @@ impl<E: Engine> Engine for TxnTestEngine<E> {
             let snapshot = f.await?;
             Ok(TxnTestSnapshot { snapshot, txn_ext })
         }
+    }
+
+    type IMSnap = Self::Snap;
+    type IMSnapshotRes = Self::SnapshotRes;
+    fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes {
+        self.async_snapshot(ctx)
     }
 
     type WriteRes = E::WriteRes;
@@ -3521,6 +3600,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             lock_mgr,
             resource_tag_factory: ResourceTagFactory::new_for_test(),
             _phantom: PhantomData,
+            in_memory_peer_size_limit: Arc::new(AtomicU64::new(512 << 10)),
+            in_memory_instance_size_limit: Arc::new(AtomicU64::new(100 << 20)),
         }
     }
 
@@ -3534,7 +3615,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
 
     pub fn pipelined_pessimistic_lock(self, enabled: bool) -> Self {
         self.pipelined_pessimistic_lock
-            .store(enabled, atomic::Ordering::Relaxed);
+            .store(enabled, Ordering::Relaxed);
         self
     }
 
@@ -3545,7 +3626,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
 
     pub fn in_memory_pessimistic_lock(self, enabled: bool) -> Self {
         self.in_memory_pessimistic_lock
-            .store(enabled, atomic::Ordering::Relaxed);
+            .store(enabled, Ordering::Relaxed);
         self
     }
 
@@ -3590,6 +3671,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
                 pipelined_pessimistic_lock: self.pipelined_pessimistic_lock,
                 in_memory_pessimistic_lock: self.in_memory_pessimistic_lock,
                 wake_up_delay_duration_ms: self.wake_up_delay_duration_ms,
+                in_memory_peer_size_limit: self.in_memory_peer_size_limit,
+                in_memory_instance_size_limit: self.in_memory_instance_size_limit,
             },
             Arc::new(FlowController::Singleton(EngineFlowController::empty())),
             DummyReporter,
@@ -3599,6 +3682,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             ts_provider,
             Some(resource_ctl),
             Some(manager),
+            Arc::new(TxnStatusCache::new_for_test()),
         )
     }
 
@@ -3623,6 +3707,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
                 pipelined_pessimistic_lock: self.pipelined_pessimistic_lock,
                 in_memory_pessimistic_lock: self.in_memory_pessimistic_lock,
                 wake_up_delay_duration_ms: self.wake_up_delay_duration_ms,
+                in_memory_peer_size_limit: self.in_memory_peer_size_limit,
+                in_memory_instance_size_limit: self.in_memory_instance_size_limit,
             },
             Arc::new(FlowController::Singleton(EngineFlowController::empty())),
             DummyReporter,
@@ -3632,6 +3718,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             None,
             Some(resource_ctl),
             Some(manager),
+            Arc::new(TxnStatusCache::new_for_test()),
         )
     }
 
@@ -3659,6 +3746,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
                 pipelined_pessimistic_lock: self.pipelined_pessimistic_lock,
                 in_memory_pessimistic_lock: self.in_memory_pessimistic_lock,
                 wake_up_delay_duration_ms: self.wake_up_delay_duration_ms,
+                in_memory_peer_size_limit: self.in_memory_peer_size_limit,
+                in_memory_instance_size_limit: self.in_memory_instance_size_limit,
             },
             Arc::new(FlowController::Singleton(EngineFlowController::empty())),
             DummyReporter,
@@ -3668,6 +3757,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> TestStorageBuilder<E, L, F> {
             None,
             Some(resource_controller),
             Some(resource_manager),
+            Arc::new(TxnStatusCache::new_for_test()),
         )
     }
 }
@@ -4237,7 +4327,7 @@ mod tests {
                     statistics: &mut Statistics::default(),
                     async_apply_prewrite: false,
                     raw_ext: None,
-                    txn_status_cache: &TxnStatusCache::new_for_test(),
+                    txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
                 },
             )
             .unwrap();
@@ -8358,7 +8448,7 @@ mod tests {
         // No lock.
         storage
             .sched_txn_command(
-                commands::TxnHeartBeat::new(k.clone(), 10.into(), 100, Context::default()),
+                commands::TxnHeartBeat::new(k.clone(), 10.into(), 100, 0, Context::default()),
                 expect_fail_callback(tx.clone(), 0, |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
                         box mvcc::ErrorInner::TxnNotFound { .. },
@@ -8400,7 +8490,7 @@ mod tests {
         // remains 100.
         storage
             .sched_txn_command(
-                commands::TxnHeartBeat::new(k.clone(), 10.into(), 90, Context::default()),
+                commands::TxnHeartBeat::new(k.clone(), 10.into(), 90, 0, Context::default()),
                 expect_value_callback(tx.clone(), 0, uncommitted(lock_with_ttl(100), false)),
             )
             .unwrap();
@@ -8410,7 +8500,7 @@ mod tests {
         // updated to 110.
         storage
             .sched_txn_command(
-                commands::TxnHeartBeat::new(k.clone(), 10.into(), 110, Context::default()),
+                commands::TxnHeartBeat::new(k.clone(), 10.into(), 110, 0, Context::default()),
                 expect_value_callback(tx.clone(), 0, uncommitted(lock_with_ttl(110), false)),
             )
             .unwrap();
@@ -8419,7 +8509,7 @@ mod tests {
         // Lock not match. Nothing happens except throwing an error.
         storage
             .sched_txn_command(
-                commands::TxnHeartBeat::new(k, 11.into(), 150, Context::default()),
+                commands::TxnHeartBeat::new(k, 11.into(), 150, 0, Context::default()),
                 expect_fail_callback(tx, 0, |e| match e {
                     Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(mvcc::Error(
                         box mvcc::ErrorInner::TxnNotFound { .. },
@@ -10206,7 +10296,7 @@ mod tests {
             .build()
             .unwrap();
         let cm = storage.concurrency_manager.clone();
-        cm.update_max_ts(10.into());
+        cm.update_max_ts(10.into(), "").unwrap();
 
         // Optimistic prewrite
         let (tx, rx) = channel();
@@ -10254,7 +10344,7 @@ mod tests {
             .unwrap();
         rx.recv().unwrap();
 
-        cm.update_max_ts(1000.into());
+        cm.update_max_ts(1000.into(), "").unwrap();
 
         let (tx, rx) = channel();
         storage
@@ -11361,7 +11451,7 @@ mod tests {
         // commit enabled, and max_ts changes when the second request arrives.
 
         // A retrying prewrite request arrives.
-        cm.update_max_ts(20.into());
+        cm.update_max_ts(20.into(), "").unwrap();
         let mut ctx = Context::default();
         ctx.set_is_retry_request(true);
         let (tx, rx) = channel();
@@ -11409,7 +11499,7 @@ mod tests {
             storage
                 .sched
                 .get_txn_status_cache()
-                .get_no_promote(10.into())
+                .get_committed_no_promote(10.into())
                 .unwrap(),
             21.into()
         );
@@ -11497,7 +11587,7 @@ mod tests {
             storage
                 .sched
                 .get_txn_status_cache()
-                .get_no_promote(10.into())
+                .get_committed_no_promote(10.into())
                 .is_none()
         );
 
@@ -11517,7 +11607,7 @@ mod tests {
             storage
                 .sched
                 .get_txn_status_cache()
-                .get_no_promote(10.into())
+                .get_committed_no_promote(10.into())
                 .unwrap(),
             20.into()
         );
@@ -11539,13 +11629,13 @@ mod tests {
             storage
                 .sched
                 .get_txn_status_cache()
-                .get_no_promote(30.into())
+                .get_committed_no_promote(30.into())
                 .is_none()
         );
 
         // 1PC update
         let (tx, rx) = channel();
-        cm.update_max_ts(59.into());
+        cm.update_max_ts(59.into(), "").unwrap();
         storage
             .sched_txn_command(
                 Prewrite::new(
@@ -11573,7 +11663,7 @@ mod tests {
             storage
                 .sched
                 .get_txn_status_cache()
-                .get_no_promote(50.into())
+                .get_committed_no_promote(50.into())
                 .unwrap(),
             60.into()
         );
@@ -11618,7 +11708,7 @@ mod tests {
             storage
                 .sched
                 .get_txn_status_cache()
-                .get_no_promote(70.into())
+                .get_committed_no_promote(70.into())
                 .unwrap(),
             80.into()
         );
@@ -11661,7 +11751,7 @@ mod tests {
             storage
                 .sched
                 .get_txn_status_cache()
-                .get_no_promote(90.into())
+                .get_committed_no_promote(90.into())
                 .unwrap(),
             100.into()
         );
@@ -11688,12 +11778,15 @@ mod tests {
             storage
                 .sched
                 .get_txn_status_cache()
-                .get_no_promote(9.into())
+                .get_committed_no_promote(9.into())
                 .is_none()
         );
 
         // CheckTxnStatus: committed transaction
-        storage.sched.get_txn_status_cache().remove(10.into());
+        storage
+            .sched
+            .get_txn_status_cache()
+            .remove_normal(10.into());
         storage
             .sched_txn_command(
                 commands::CheckTxnStatus::new(
@@ -11715,7 +11808,7 @@ mod tests {
             storage
                 .sched
                 .get_txn_status_cache()
-                .get_no_promote(10.into())
+                .get_committed_no_promote(10.into())
                 .unwrap(),
             20.into()
         );
@@ -11758,7 +11851,7 @@ mod tests {
             storage
                 .sched
                 .get_txn_status_cache()
-                .get_no_promote(120.into())
+                .get_committed_no_promote(120.into())
                 .is_none()
         );
 
@@ -11778,7 +11871,7 @@ mod tests {
             storage
                 .sched
                 .get_txn_status_cache()
-                .get_no_promote(120.into())
+                .get_committed_no_promote(120.into())
                 .is_none()
         );
 
@@ -11823,7 +11916,7 @@ mod tests {
             storage
                 .sched
                 .get_txn_status_cache()
-                .remove(130.into())
+                .remove_normal(130.into())
                 .unwrap(),
             140.into()
         );
@@ -11843,7 +11936,7 @@ mod tests {
             storage
                 .sched
                 .get_txn_status_cache()
-                .get_no_promote(130.into())
+                .get_committed_no_promote(130.into())
                 .unwrap(),
             140.into()
         );

@@ -2,7 +2,6 @@
 
 use std::{cmp, thread, time::Duration};
 
-use engine_rocks::RocksEngine;
 use engine_traits::CF_LOCK;
 use kvproto::{
     coprocessor::{Request, Response, StoreBatchTask, StoreBatchTaskResponse},
@@ -2214,44 +2213,43 @@ fn test_batch_request() {
             true,
         ),
     ];
-    let prepare_req = |cluster: &mut Cluster<RocksEngine, ServerCluster<RocksEngine>>,
-                       ranges: &Vec<HandleRange>|
-     -> Request {
-        let original_range = ranges.first().unwrap();
-        let key_range = product.get_record_range(original_range.start, original_range.end);
-        let region_key = Key::from_raw(&key_range.start);
-        let mut req = DagSelect::from(&product)
-            .key_ranges(vec![key_range])
-            .build_with(ctx.clone(), &[0]);
-        let mut new_ctx = Context::default();
-        let new_region = cluster.get_region(region_key.as_encoded());
-        let leader = cluster.leader_of_region(new_region.get_id()).unwrap();
-        new_ctx.set_region_id(new_region.get_id());
-        new_ctx.set_region_epoch(new_region.get_region_epoch().clone());
-        new_ctx.set_peer(leader);
-        req.set_context(new_ctx);
-        req.set_start_ts(100);
+    let prepare_req =
+        |cluster: &mut Cluster<ServerCluster>, ranges: &Vec<HandleRange>| -> Request {
+            let original_range = ranges.first().unwrap();
+            let key_range = product.get_record_range(original_range.start, original_range.end);
+            let region_key = Key::from_raw(&key_range.start);
+            let mut req = DagSelect::from(&product)
+                .key_ranges(vec![key_range])
+                .build_with(ctx.clone(), &[0]);
+            let mut new_ctx = Context::default();
+            let new_region = cluster.get_region(region_key.as_encoded());
+            let leader = cluster.leader_of_region(new_region.get_id()).unwrap();
+            new_ctx.set_region_id(new_region.get_id());
+            new_ctx.set_region_epoch(new_region.get_region_epoch().clone());
+            new_ctx.set_peer(leader);
+            req.set_context(new_ctx);
+            req.set_start_ts(100);
 
-        let batch_handle_ranges = &ranges.as_slice()[1..];
-        for handle_range in batch_handle_ranges.iter() {
-            let range_start_key = Key::from_raw(
-                &product
-                    .get_record_range(handle_range.start, handle_range.end)
-                    .start,
-            );
-            let batch_region = cluster.get_region(range_start_key.as_encoded());
-            let batch_leader = cluster.leader_of_region(batch_region.get_id()).unwrap();
-            let batch_key_ranges =
-                vec![product.get_record_range(handle_range.start, handle_range.end)];
-            let mut store_batch_task = StoreBatchTask::new();
-            store_batch_task.set_region_id(batch_region.get_id());
-            store_batch_task.set_region_epoch(batch_region.get_region_epoch().clone());
-            store_batch_task.set_peer(batch_leader);
-            store_batch_task.set_ranges(batch_key_ranges.into());
-            req.tasks.push(store_batch_task);
-        }
-        req
-    };
+            let batch_handle_ranges = &ranges.as_slice()[1..];
+            for handle_range in batch_handle_ranges.iter() {
+                let range_start_key = Key::from_raw(
+                    &product
+                        .get_record_range(handle_range.start, handle_range.end)
+                        .start,
+                );
+                let batch_region = cluster.get_region(range_start_key.as_encoded());
+                let batch_leader = cluster.leader_of_region(batch_region.get_id()).unwrap();
+                let batch_key_ranges =
+                    vec![product.get_record_range(handle_range.start, handle_range.end)];
+                let mut store_batch_task = StoreBatchTask::new();
+                store_batch_task.set_region_id(batch_region.get_id());
+                store_batch_task.set_region_epoch(batch_region.get_region_epoch().clone());
+                store_batch_task.set_peer(batch_leader);
+                store_batch_task.set_ranges(batch_key_ranges.into());
+                req.tasks.push(store_batch_task);
+            }
+            req
+        };
     let verify_response = |result: &QueryResult, resp: &Response| {
         let (data, details, region_err, locked, other_err) = (
             resp.get_data(),

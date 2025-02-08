@@ -129,6 +129,13 @@ impl Div<ReadableSize> for ReadableSize {
     }
 }
 
+impl Sub<ReadableSize> for ReadableSize {
+    type Output = ReadableSize;
+    fn sub(self, rhs: ReadableSize) -> Self::Output {
+        ReadableSize(self.0 - rhs.0)
+    }
+}
+
 impl Mul<u64> for ReadableSize {
     type Output = ReadableSize;
 

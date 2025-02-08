@@ -179,11 +179,8 @@ fn compact_files_to_target_level(
     engine.compact_files_cf(CF_DEFAULT, file_names, Some(level), 1, false)
 }
 
-fn create_tikv_cluster_with_one_node_damaged() -> (
-    Cluster<RocksEngine, ServerCluster<RocksEngine>>,
-    Arc<TestPdClient>,
-    RocksEngine,
-) {
+fn create_tikv_cluster_with_one_node_damaged()
+-> (Cluster<ServerCluster>, Arc<TestPdClient>, RocksEngine) {
     let mut cluster = new_server_cluster(0, 3);
     let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();

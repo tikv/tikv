@@ -2,19 +2,18 @@
 
 use std::{sync::Arc, thread, time};
 
-use engine_rocks::RocksEngine;
 use engine_traits::MiscExt;
 use pd_client::PdClient;
 use test_raftstore::*;
 use tikv_util::config::*;
 
-fn flush<T: Simulator<RocksEngine>>(cluster: &mut Cluster<RocksEngine, T>) {
+fn flush<T: Simulator>(cluster: &mut Cluster<T>) {
     for engines in cluster.engines.values() {
         engines.kv.flush_cfs(&[], true).unwrap();
     }
 }
 
-fn test_update_region_size<T: Simulator<RocksEngine>>(cluster: &mut Cluster<RocksEngine, T>) {
+fn test_update_region_size<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(50);
     cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(50);
     cluster.cfg.raft_store.region_split_check_diff = Some(ReadableSize::kb(1));
@@ -25,7 +24,7 @@ fn test_update_region_size<T: Simulator<RocksEngine>>(cluster: &mut Cluster<Rock
         .level0_file_num_compaction_trigger = 10;
     cluster.start().unwrap();
 
-    let batch_put = |cluster: &mut Cluster<RocksEngine, T>, mut start, end| {
+    let batch_put = |cluster: &mut Cluster<T>, mut start, end| {
         while start < end {
             let next = std::cmp::min(end, start + 50);
             let requests = (start..next)

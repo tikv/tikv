@@ -222,7 +222,7 @@ mod tests {
             statistics: &mut statistic,
             async_apply_prewrite: false,
             raw_ext,
-            txn_status_cache: &TxnStatusCache::new_for_test(),
+            txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
         };
         let ret = cmd.cmd.process_write(snap, context)?;
         match ret.pr {
@@ -277,7 +277,7 @@ mod tests {
             statistics: &mut statistic,
             async_apply_prewrite: false,
             raw_ext,
-            txn_status_cache: &TxnStatusCache::new_for_test(),
+            txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
         };
         let cmd: Command = cmd.into();
         let write_result = cmd.process_write(snap, context).unwrap();

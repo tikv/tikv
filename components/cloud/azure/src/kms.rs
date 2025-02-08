@@ -282,6 +282,7 @@ mod tests {
             },
             azure: Some(err_azure_cfg.clone()),
             gcp: None,
+            aws: None,
         };
         AzureKms::new(err_config.clone()).unwrap_err();
         let azure_cfg = SubConfigAzure {
@@ -326,6 +327,7 @@ mod tests {
             },
             azure: Some(azure_cfg),
             gcp: None,
+            aws: None,
         };
         if config.vendor != STORAGE_VENDOR_NAME_AZURE {
             AzureKms::new(config).unwrap();

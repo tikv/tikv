@@ -502,7 +502,10 @@ impl<K: PrewriteKind> Prewriter<K> {
         // Handle special cases about retried prewrite requests for pessimistic
         // transactions.
         if let TransactionKind::Pessimistic(_) = self.kind.txn_kind() {
-            if let Some(commit_ts) = context.txn_status_cache.get_no_promote(self.start_ts) {
+            if let Some(commit_ts) = context
+                .txn_status_cache
+                .get_committed_no_promote(self.start_ts)
+            {
                 fail_point!("before_prewrite_txn_status_cache_hit");
                 if self.ctx.is_retry_request {
                     MVCC_PREWRITE_REQUEST_AFTER_COMMIT_COUNTER_VEC
@@ -985,7 +988,8 @@ fn handle_1pc_locks(txn: &mut MvccTxn, commit_ts: TimeStamp) -> ReleasedLocks {
 
 /// Change all 1pc locks in txn to 2pc locks.
 pub(in crate::storage::txn) fn fallback_1pc_locks(txn: &mut MvccTxn) {
-    for (key, lock, remove_pessimistic_lock) in std::mem::take(&mut txn.locks_for_1pc) {
+    for (key, mut lock, remove_pessimistic_lock) in std::mem::take(&mut txn.locks_for_1pc) {
+        lock.use_one_pc = false;
         let is_new_lock = !remove_pessimistic_lock;
         txn.put_lock(key, &lock, is_new_lock);
     }
@@ -993,6 +997,8 @@ pub(in crate::storage::txn) fn fallback_1pc_locks(txn: &mut MvccTxn) {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use concurrency_manager::ConcurrencyManager;
     use engine_rocks::ReadPerfInstant;
     use engine_traits::CF_WRITE;
@@ -1259,7 +1265,7 @@ mod tests {
         must_get(&mut engine, key, 12, value);
         must_get_commit_ts(&mut engine, key, 10, 11);
 
-        cm.update_max_ts(50.into());
+        cm.update_max_ts(50.into(), "").unwrap();
 
         let mutations = vec![Mutation::make_put(Key::from_raw(key), value.to_vec())];
 
@@ -1401,7 +1407,7 @@ mod tests {
         must_get_commit_ts(&mut engine, k1, 8, 13);
         must_get_commit_ts(&mut engine, k2, 8, 13);
 
-        cm.update_max_ts(50.into());
+        cm.update_max_ts(50.into(), "").unwrap();
         must_acquire_pessimistic_lock(&mut engine, k1, k1, 20, 20);
 
         let mutations = vec![(
@@ -1501,7 +1507,7 @@ mod tests {
         assert_eq!(res.one_pc_commit_ts, TimeStamp::zero());
         must_locked(&mut engine, key, 10);
 
-        cm.update_max_ts(50.into());
+        cm.update_max_ts(50.into(), "").unwrap();
 
         let (k1, v1) = (b"k1", b"v1");
         let (k2, v2) = (b"k2", b"v2");
@@ -1573,7 +1579,7 @@ mod tests {
         assert_eq!(res.one_pc_commit_ts, TimeStamp::zero());
         must_locked(&mut engine, key, 10);
 
-        cm.update_max_ts(50.into());
+        cm.update_max_ts(50.into(), "").unwrap();
 
         let (k1, v1) = (b"k1", b"v1");
         let (k2, v2) = (b"k2", b"v2");
@@ -1667,7 +1673,7 @@ mod tests {
                     statistics: &mut Statistics::default(),
                     async_apply_prewrite: false,
                     raw_ext: None,
-                    txn_status_cache: &TxnStatusCache::new_for_test(),
+                    txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
                 }
             };
         }
@@ -1839,7 +1845,7 @@ mod tests {
                 statistics: &mut statistics,
                 async_apply_prewrite: case.async_apply_prewrite,
                 raw_ext: None,
-                txn_status_cache: &TxnStatusCache::new_for_test(),
+                txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
             };
             let mut engine = TestEngineBuilder::new().build().unwrap();
             let snap = engine.snapshot(Default::default()).unwrap();
@@ -1950,7 +1956,7 @@ mod tests {
             statistics: &mut statistics,
             async_apply_prewrite: false,
             raw_ext: None,
-            txn_status_cache: &TxnStatusCache::new_for_test(),
+            txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         let result = cmd.cmd.process_write(snap, context).unwrap();
@@ -1979,7 +1985,7 @@ mod tests {
             statistics: &mut statistics,
             async_apply_prewrite: false,
             raw_ext: None,
-            txn_status_cache: &TxnStatusCache::new_for_test(),
+            txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         let result = cmd.cmd.process_write(snap, context).unwrap();
@@ -2063,7 +2069,7 @@ mod tests {
             statistics: &mut statistics,
             async_apply_prewrite: false,
             raw_ext: None,
-            txn_status_cache: &TxnStatusCache::new_for_test(),
+            txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         let result = cmd.cmd.process_write(snap, context).unwrap();
@@ -2096,7 +2102,7 @@ mod tests {
             statistics: &mut statistics,
             async_apply_prewrite: false,
             raw_ext: None,
-            txn_status_cache: &TxnStatusCache::new_for_test(),
+            txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         let result = cmd.cmd.process_write(snap, context).unwrap();
@@ -2142,7 +2148,7 @@ mod tests {
         )
         .unwrap();
         let commit_ts = res.one_pc_commit_ts;
-        cm.update_max_ts(commit_ts.next());
+        cm.update_max_ts(commit_ts.next(), "").unwrap();
         // repeate the prewrite
         let res = pessimistic_prewrite_with_cm(
             &mut engine,
@@ -2367,7 +2373,7 @@ mod tests {
             statistics: &mut statistics,
             async_apply_prewrite: false,
             raw_ext: None,
-            txn_status_cache: &TxnStatusCache::new_for_test(),
+            txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         assert!(prewrite_cmd.cmd.process_write(snap, context).is_err());
@@ -2392,7 +2398,7 @@ mod tests {
             statistics: &mut statistics,
             async_apply_prewrite: false,
             raw_ext: None,
-            txn_status_cache: &TxnStatusCache::new_for_test(),
+            txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         assert!(prewrite_cmd.cmd.process_write(snap, context).is_err());
@@ -2599,7 +2605,7 @@ mod tests {
             statistics: &mut statistics,
             async_apply_prewrite: false,
             raw_ext: None,
-            txn_status_cache: &TxnStatusCache::new_for_test(),
+            txn_status_cache: Arc::new(TxnStatusCache::new_for_test()),
         };
         let snap = engine.snapshot(Default::default()).unwrap();
         let res = prewrite_cmd.cmd.process_write(snap, context).unwrap();
@@ -2652,7 +2658,7 @@ mod tests {
         must_commit(&mut engine, b"k2", 5, 18);
 
         // Update max_ts to be larger than the max_commit_ts.
-        cm.update_max_ts(50.into());
+        cm.update_max_ts(50.into(), "").unwrap();
 
         // Retry the prewrite on non-pessimistic key.
         // (is_retry_request flag is not set, here we don't rely on it.)

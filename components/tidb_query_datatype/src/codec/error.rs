@@ -21,6 +21,7 @@ pub const ERR_TRUNCATE_WRONG_VALUE: i32 = 1292;
 pub const ERR_UNKNOWN_TIMEZONE: i32 = 1298;
 pub const ERR_DIVISION_BY_ZERO: i32 = 1365;
 pub const ERR_DATA_TOO_LONG: i32 = 1406;
+pub const ERR_DATETIME_FUNCTION_OVERFLOW: i32 = 1441;
 pub const ERR_INCORRECT_PARAMETERS: i32 = 1583;
 pub const ERR_DATA_OUT_OF_RANGE: i32 = 1690;
 pub const ERR_CANNOT_CONVERT_STRING: i32 = 3854;
@@ -98,6 +99,11 @@ impl Error {
     pub fn cannot_convert_string(s: &str, charset: &str) -> Error {
         let msg = format!("Cannot convert string {} from binary to {}", s, charset);
         Error::Eval(msg, ERR_CANNOT_CONVERT_STRING)
+    }
+
+    pub fn datetime_function_overflow() -> Error {
+        let msg = "Datetime function field overflow";
+        Error::Eval(msg.into(), ERR_DATETIME_FUNCTION_OVERFLOW)
     }
 
     pub fn code(&self) -> i32 {

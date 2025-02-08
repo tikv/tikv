@@ -26,12 +26,10 @@ test-engines-panic = ["tikv/test-engines-panic"]
 [dependencies]
 collections = { workspace = true }
 concurrency_manager = { workspace = true }
-crossbeam = { workspace = true }
 engine_traits = { workspace = true }
 fail = "0.5"
 futures = "0.3"
 grpcio = { workspace = true }
-hex = "0.4"
 kvproto = { workspace = true }
 lazy_static = "1.3"
 log_wrappers = { workspace = true }
@@ -52,7 +50,6 @@ txn_types = { workspace = true }
 
 [dev-dependencies]
 engine_rocks = { workspace = true }
-panic_hook = { workspace = true }
 tempfile = "3.0"
 test_raftstore = { workspace = true }
 test_sst_importer = { workspace = true }

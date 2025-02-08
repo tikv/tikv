@@ -6,18 +6,18 @@ mod cleanup_snapshot;
 mod cleanup_sst;
 mod compact;
 mod consistency_check;
+mod disk_check;
 pub mod metrics;
 mod pd;
 mod raftlog_gc;
 mod read;
 mod refresh_config;
 mod region;
+mod snap_gen;
 mod split_check;
 mod split_config;
 mod split_controller;
 
-#[cfg(test)]
-pub use self::region::tests::make_raftstore_cfg as make_region_worker_raftstore_cfg;
 pub use self::{
     check_leader::{Runner as CheckLeaderRunner, Task as CheckLeaderTask},
     cleanup::{Runner as CleanupRunner, Task as CleanupTask},
@@ -28,6 +28,7 @@ pub use self::{
         Task as CompactTask,
     },
     consistency_check::{Runner as ConsistencyCheckRunner, Task as ConsistencyCheckTask},
+    disk_check::{Runner as DiskCheckRunner, Task as DiskCheckTask},
     pd::{
         new_change_peer_v2_request, FlowStatistics, FlowStatsReporter, HeartbeatTask,
         Runner as PdRunner, StatsMonitor as PdStatsMonitor, StoreStatsReporter, Task as PdTask,
@@ -44,6 +45,7 @@ pub use self::{
         Task as RefreshConfigTask, WriterContoller,
     },
     region::{Runner as RegionRunner, Task as RegionTask},
+    snap_gen::{Runner as SnapGenRunner, Task as SnapGenTask, SNAP_GENERATOR_MAX_POOL_SIZE},
     split_check::{
         Bucket, BucketRange, BucketStatsInfo, KeyEntry, Runner as SplitCheckRunner,
         Task as SplitCheckTask,

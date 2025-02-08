@@ -7,7 +7,6 @@ use std::{
 };
 
 use backup::disk_snap::Env as BEnv;
-use engine_rocks::RocksEngine as KTE;
 use futures_executor::block_on;
 use futures_util::{
     sink::SinkExt,
@@ -40,7 +39,7 @@ pub struct Node {
 }
 
 pub struct Suite {
-    pub cluster: Cluster<KTE, ServerCluster<KTE>>,
+    pub cluster: Cluster<ServerCluster>,
     pub nodes: HashMap<u64, Node>,
     grpc_env: Arc<Environment>,
 }
@@ -50,7 +49,7 @@ impl Suite {
         let rej = Arc::new(PrepareDiskSnapObserver::default());
         let rej2 = rej.clone();
         let mut w = self.cluster.sim.wl();
-        w.coprocessor_hooks
+        w.coprocessor_hosts
             .entry(id)
             .or_default()
             .push(Box::new(move |host| {

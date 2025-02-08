@@ -97,6 +97,7 @@ pub struct KeyLockWaitInfo {
     pub key: Key,
     pub lock_digest: LockDigest,
     pub lock_info: LockInfo,
+    pub allow_lock_with_conflict: bool,
 }
 
 /// Uniquely identifies a lock-waiting request in a `LockManager`.

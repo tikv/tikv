@@ -949,6 +949,19 @@ impl DataKeyManager {
         }
         Ok(())
     }
+
+    // same logic in raft_log_engine/src/engine#rename
+    pub fn rename_file(&self, src_name: &PathBuf, dst_name: &PathBuf) -> IoResult<()> {
+        let src_str = src_name.to_str().unwrap();
+        let dst_str = dst_name.to_str().unwrap();
+        self.link_file(src_str, dst_str)?;
+        let r = file_system::rename(src_name, dst_name);
+        let del_file = if r.is_ok() { src_str } else { dst_str };
+        if let Err(e) = self.delete_file(del_file, None) {
+            warn!("fail to remove encryption metadata after renaming file"; "err" => ?e);
+        }
+        r
+    }
 }
 
 /// An RAII-style importer of data keys. It automatically creates data key that
