@@ -4,24 +4,6 @@ use std::{fmt, str::FromStr};
 
 use chrono::*;
 
-pub fn get_offset_for_chrono_tz(
-    tz: &chrono_tz::Tz,
-    year: i32,
-    month: u32,
-    day: u32,
-    hour: u32,
-    minute: u32,
-    second: u32,
-) -> offset::FixedOffset {
-    let utc_time = Utc.ymd(year, month, day).and_hms(hour, minute, second);
-
-    // Convert the utc time with tz
-    let local_time = utc_time.with_timezone(tz);
-
-    // Calculate the offset of tz
-    local_time.offset().fix()
-}
-
 /// A time zone represented by either offset (i.e. +8) or name (i.e.
 /// Asia/Shanghai). In addition, local time zone is also valid.
 #[derive(Clone)]
@@ -39,29 +21,6 @@ pub enum Tz {
 }
 
 impl Tz {
-    pub fn get_chrono_tz(&self) -> Option<chrono_tz::Tz> {
-        match self {
-            Tz::Name(tz) => return Some(*tz),
-            _ => None,
-        }
-    }
-
-    pub fn get_offset(
-        &self,
-        year: i32,
-        month: u32,
-        day: u32,
-        hour: u32,
-        minute: u32,
-        second: u32,
-    ) -> offset::FixedOffset {
-        match self {
-            Tz::Offset(offset_val) => *offset_val,
-            Tz::Name(tz) => get_offset_for_chrono_tz(tz, year, month, day, hour, minute, second),
-            Tz::Local(_) => *Local::now().offset(),
-        }
-    }
-
     /// Constructs a time zone from the offset in seconds.
     pub fn from_offset(secs: i64) -> Option<Self> {
         FixedOffset::east_opt(secs as i32).map(Tz::Offset)
