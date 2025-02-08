@@ -13,6 +13,7 @@ RUN dnf install -y \
       git \
       findutils \
       curl \
+      dwz \
       python3 --allowerasing && \
     dnf --enablerepo=crb install -y \
       libstdc++-static && \

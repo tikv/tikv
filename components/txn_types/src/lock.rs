@@ -84,6 +84,10 @@ pub struct Lock {
     pub txn_size: u64,
     pub min_commit_ts: TimeStamp,
     pub use_async_commit: bool,
+    // This field is only valid for in-memory locks and does not need to be persisted because:
+    //   1. the lock should be converted to a write directly when 1pc succeeds.
+    //   2. the field should be reverted to false (default value) when 1pc fails.
+    pub use_one_pc: bool,
     // Only valid when `use_async_commit` is true, and the lock is primary. Do not set
     // `secondaries` for secondaries.
     pub secondaries: Vec<Vec<u8>>,
@@ -171,6 +175,7 @@ impl Lock {
             txn_size,
             min_commit_ts,
             use_async_commit: false,
+            use_one_pc: false,
             secondaries: Vec::default(),
             rollback_ts: Vec::default(),
             last_change: LastChange::default(),
@@ -489,7 +494,11 @@ impl Lock {
             )));
         }
 
-        if ts == TimeStamp::max() && raw_key == lock.primary && !lock.use_async_commit {
+        if ts == TimeStamp::max()
+            && raw_key == lock.primary
+            && !lock.use_async_commit
+            && !lock.use_one_pc
+        {
             // When `ts == TimeStamp::max()` (which means to get latest committed version
             // for primary key), and current key is the primary key, we ignore
             // this lock.
@@ -1326,6 +1335,7 @@ mod tests {
             txn_size: 0,
             min_commit_ts: 20.into(),
             use_async_commit: false,
+            use_one_pc: false,
             secondaries: vec![],
             rollback_ts: vec![],
             last_change: LastChange::make_exist(8.into(), 2),
