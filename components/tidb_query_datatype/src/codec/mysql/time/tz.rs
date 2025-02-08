@@ -39,6 +39,13 @@ pub enum Tz {
 }
 
 impl Tz {
+    pub fn get_chrono_tz(&self) -> Option<chrono_tz::Tz> {
+        match self {
+            Tz::Name(tz) => return Some(*tz),
+            _ => None,
+        }
+    }
+
     pub fn get_offset(
         &self,
         year: i32,
