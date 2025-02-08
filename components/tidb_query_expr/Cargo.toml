@@ -12,6 +12,8 @@ bstr = "0.2.8"
 byteorder = "1.2"
 codec = { workspace = true }
 crypto = { workspace = true }
+chrono = { workspace = true }
+chrono-tz = "0.5.1"
 file_system = { workspace = true }
 flate2 = { version = "=1.0.11", default-features = false, features = ["zlib"] }
 hex = "0.4"

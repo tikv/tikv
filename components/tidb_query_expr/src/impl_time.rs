@@ -1,5 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use chrono::{self, DurationRound, Offset, TimeZone};
 use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
 use tidb_query_datatype::{
@@ -15,7 +16,7 @@ use tidb_query_datatype::{
                 extension::DateTimeExtension, interval::*, weekmode::WeekMode, WeekdayExtension,
                 MONTH_NAMES,
             },
-            Duration, Time, TimeType, MAX_FSP,
+            Duration, RoundMode, Time, TimeType, Tz, MAX_FSP,
         },
         Error, Result as CodecResult,
     },
@@ -1598,6 +1599,142 @@ pub fn eval_from_unixtime(
         fsp,
     )?;
     Ok(Some(tmp))
+}
+
+fn find_zone_transition(
+    t: chrono::DateTime<chrono_tz::Tz>,
+) -> Result<chrono::DateTime<chrono_tz::Tz>> {
+    let mut t1 = t - chrono::Duration::hours(12);
+    let mut t2 = t + chrono::Duration::hours(12);
+
+    let offset1 = t1.offset().fix();
+    let offset2 = t2.offset().fix();
+    if offset1 == offset2 {
+        return Err(
+            Error::incorrect_datetime_value("offset1 == offset2 in find_zone_transition").into(),
+        );
+    }
+
+    let mut i = 0;
+    while t1 + chrono::Duration::seconds(1) < t2 {
+        if i > 1000000 {
+            // Just avoid infinity loop because of potential bug, maybe we can remove it in
+            // the future
+            return Err(
+                Error::incorrect_datetime_value("Encounter infinity loop caused by bug").into(),
+            );
+        }
+        i += 1;
+
+        let t3_res = (t1 + ((t2 - t1) / 2)).duration_round(chrono::Duration::seconds(1));
+        let t3 = match t3_res {
+            Ok(val) => val,
+            Err(err) => return Err(Error::incorrect_datetime_value(err).into()),
+        };
+        let offset = t3.offset().fix();
+        if offset == offset1 {
+            t1 = t3;
+        } else {
+            t2 = t3;
+        }
+    }
+    return Ok(t2);
+}
+
+// unix_timestamp_to_mysql_unix_timestamp converts micto timestamp into MySQL's
+// Unix timestamp. MySQL's Unix timestamp ranges from '1970-01-01
+// 00:00:01.000000' UTC to '3001-01-18 23:59:59.999999' UTC. Values out of range
+// should be rewritten to 0. https://dev.mysql.com/doc/refman/8.0/en/date-and-time-functions.html#function_unix-timestamp
+fn unix_timestamp_to_mysql_unix_timestamp(
+    ctx: &mut EvalContext,
+    micro_time: i64,
+    frac: i8,
+) -> Result<Decimal> {
+    if micro_time < 1000000 || micro_time > 32536771199999999 {
+        return Ok(Decimal::zero());
+    }
+
+    let time_in_decimal = Decimal::from(micro_time);
+    let value: std::result::Result<Decimal, Error> = time_in_decimal
+        .shift(-6)
+        .into_result(ctx)?
+        .round(frac, RoundMode::Truncate)
+        .into();
+    Ok(value?)
+}
+
+fn get_micro_timestamp(time: &DateTime, tz: &Tz) -> Result<i64> {
+    let year = time.year() as i32;
+    let month = time.month();
+    let day = time.day();
+    let hour = time.hour();
+    let minute = time.minute();
+    let second = time.second();
+    let naive_date = chrono::NaiveDate::from_ymd(year, month, day);
+    let naive_time = chrono::NaiveTime::from_hms_micro(hour, minute, second, time.micro());
+    let naive_datetime = chrono::NaiveDateTime::new(naive_date, naive_time);
+
+    // MySQL chooses earliest time when there are multi mapped time
+    let res_opt = tz.from_local_datetime(&naive_datetime).earliest();
+    let res = match res_opt {
+        Some(val) => val,
+        None => {
+            let tz_opt = tz.get_chrono_tz();
+            let chrono_tz = match tz_opt {
+                Some(val) => val,
+                None => return Err(Error::incorrect_parameters("Can't get chrono tz").into()),
+            };
+
+            // year, month, day, hour, minute and second is enough
+            let time_with_tz = chrono::Utc
+                .ymd(year, month, day)
+                .and_hms(hour, minute, second)
+                .with_timezone(&chrono_tz);
+            let ret_res = find_zone_transition(time_with_tz);
+            match ret_res {
+                Ok(val) => return Ok(val.naive_utc().timestamp_micros()),
+                Err(err) => return Err(err),
+            }
+        }
+    };
+    return Ok(res.naive_utc().timestamp_micros());
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn unix_timestamp_int(ctx: &mut EvalContext, time: &DateTime) -> Result<Option<i64>> {
+    let timestamp_res = get_micro_timestamp(time, &ctx.cfg.tz);
+    let timestamp = match timestamp_res {
+        Ok(val) => val,
+        Err(err) => return Err(err),
+    };
+
+    let res: std::result::Result<i64, Error> =
+        unix_timestamp_to_mysql_unix_timestamp(ctx, timestamp, 1)?
+            .as_i64()
+            .into();
+    Ok(Some(res?))
+}
+
+#[rpn_fn(capture = [ctx, extra])]
+#[inline]
+pub fn unix_timestamp_decimal(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    time: &DateTime,
+) -> Result<Option<Decimal>> {
+    let timestamp_res = get_micro_timestamp(time, &ctx.cfg.tz);
+    let timestamp = match timestamp_res {
+        Ok(val) => val,
+        Err(err) => return Err(err),
+    };
+
+    let res = unix_timestamp_to_mysql_unix_timestamp(
+        ctx,
+        timestamp,
+        extra.ret_field_type.get_decimal() as i8,
+    )?;
+    return Ok(Some(res));
 }
 
 #[cfg(test)]
@@ -3999,6 +4136,155 @@ mod tests {
 
             let expected = expected.map(|str| str.as_bytes().to_vec());
             assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_unixtime_int() {
+        let cases = vec![
+            ("2016-01-01 00:00:00", 0, "", 1451606400),
+            ("2015-11-13 10:20:19", 0, "", 1447410019),
+            ("2015-11-13 10:20:19", 3, "", 1447410016),
+            ("2015-11-13 10:20:19", -3, "", 1447410022),
+            ("1970-01-01 00:00:00", 0, "", 0),
+            ("1969-12-31 23:59:59", 0, "", 0),
+            ("3001-01-19 00:00:00", 0, "", 0),
+            ("4001-01-19 00:00:00", 0, "", 0),
+            ("2015-11-13 10:20:19", 0, "US/Eastern", 1447428019),
+            ("2009-09-20 07:32:39", 0, "US/Eastern", 1253446359),
+            ("2020-03-29 03:45:00", 0, "Europe/Vilnius", 1585443600),
+            ("2020-10-25 03:45:00", 0, "Europe/Vilnius", 1603586700),
+        ];
+
+        for (datetime, offset, time_zone_name, expected) in cases {
+            let mut cfg = EvalConfig::new();
+            if time_zone_name.len() == 0 {
+                cfg.set_time_zone_by_offset(offset).unwrap();
+            } else {
+                cfg.set_time_zone_by_name(time_zone_name).unwrap();
+            }
+
+            let mut ctx = EvalContext::new(Arc::<EvalConfig>::new(cfg));
+            let result_field_type: FieldType = FieldTypeTp::LongLong.into();
+            let arg = DateTime::parse_datetime(&mut ctx, datetime, 0, false).unwrap();
+            let (result, _) = RpnFnScalarEvaluator::new()
+                .context(ctx)
+                .push_param(arg)
+                .evaluate_raw(result_field_type, ScalarFuncSig::UnixTimestampInt);
+            let output: Option<i64> = result.unwrap().into();
+
+            assert_eq!(output.unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn test_unixtime_decimal() {
+        let cases = vec![
+            (
+                "2016-01-01 00:00:00.123",
+                0,
+                "",
+                3,
+                Decimal::from_str("1451606400.123").unwrap(),
+            ),
+            (
+                "2015-11-13 10:20:19.342",
+                0,
+                "",
+                3,
+                Decimal::from_str("1447410019.342").unwrap(),
+            ),
+            (
+                "2015-11-13 10:20:19.522",
+                3,
+                "",
+                3,
+                Decimal::from_str("1447410016.522").unwrap(),
+            ),
+            (
+                "2015-11-13 10:20:19.223",
+                -3,
+                "",
+                3,
+                Decimal::from_str("1447410022.223").unwrap(),
+            ),
+            (
+                "2015-11-13 10:20:19.2",
+                -3,
+                "",
+                1,
+                Decimal::from_str("1447410022.2").unwrap(),
+            ),
+            (
+                "1970-01-01 00:00:00.234",
+                0,
+                "",
+                3,
+                Decimal::from_str("0").unwrap(),
+            ),
+            (
+                "1969-12-31 23:59:59.432",
+                0,
+                "",
+                3,
+                Decimal::from_str("0").unwrap(),
+            ),
+            (
+                "3001-01-19 00:00:00.432",
+                0,
+                "",
+                3,
+                Decimal::from_str("0").unwrap(),
+            ),
+            (
+                "4001-01-19 00:00:00.533",
+                0,
+                "",
+                3,
+                Decimal::from_str("0").unwrap(),
+            ),
+            (
+                "2015-11-13 10:20:19",
+                0,
+                "US/Eastern",
+                0,
+                Decimal::from_str("1447428019").unwrap(),
+            ),
+            (
+                "2009-09-20 07:32:39",
+                0,
+                "US/Eastern",
+                0,
+                Decimal::from_str("1253446359").unwrap(),
+            ),
+            (
+                "2020-03-29 03:45:03.123",
+                0,
+                "Europe/Vilnius",
+                0,
+                Decimal::from_str("1585443600").unwrap(),
+            ),
+        ];
+
+        for (datetime, offset, time_zone_name, fsp, expected) in cases {
+            let mut cfg = EvalConfig::new();
+            if time_zone_name.len() == 0 {
+                cfg.set_time_zone_by_offset(offset).unwrap();
+            } else {
+                cfg.set_time_zone_by_name(time_zone_name).unwrap();
+            }
+            let mut ctx = EvalContext::new(Arc::<EvalConfig>::new(cfg));
+            let mut result_field_type: FieldType = FieldTypeTp::NewDecimal.into();
+            result_field_type.set_decimal(fsp);
+
+            let arg = DateTime::parse_datetime(&mut ctx, datetime, 3, false).unwrap();
+            let (result, _) = RpnFnScalarEvaluator::new()
+                .context(ctx)
+                .push_param(arg)
+                .evaluate_raw(result_field_type, ScalarFuncSig::UnixTimestampDec);
+            let output: Option<Decimal> = result.unwrap().into();
+
+            assert_eq!(output.unwrap(), expected);
         }
     }
 }

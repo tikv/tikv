@@ -7278,6 +7278,7 @@ dependencies = [
  "bstr",
  "byteorder",
  "chrono",
+ "chrono-tz",
  "codec",
  "crypto",
  "file_system",
