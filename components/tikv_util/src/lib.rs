@@ -54,6 +54,7 @@ pub mod memory;
 pub mod metrics;
 pub mod mpsc;
 pub mod quota_limiter;
+pub mod range_latch;
 pub mod resizable_threadpool;
 pub mod resource_control;
 pub mod smoother;
