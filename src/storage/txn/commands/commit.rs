@@ -55,15 +55,28 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Commit {
             }));
         }
         let mut txn = MvccTxn::new(self.lock_ts, context.concurrency_manager);
-        let mut reader = ReaderWithStats::new(
-            SnapshotReader::new_with_ctx(self.lock_ts, snapshot, &self.ctx),
-            context.statistics,
-        );
+        let mut keys = self.keys;
+        let snapshot_reader = if keys.len() <= 1 {
+            SnapshotReader::new_with_ctx(self.lock_ts, snapshot, &self.ctx)
+        } else {
+            let mut snapshot_reader = SnapshotReader::new_scan_mode_with_ctx(
+                self.lock_ts,
+                snapshot,
+                tikv_kv::ScanMode::Forward,
+                &self.ctx,
+            );
+            keys.sort();
+            snapshot_reader
+                .reader
+                .set_range(keys.first().cloned(), None);
+            snapshot_reader
+        };
+        let mut reader = ReaderWithStats::new(snapshot_reader, context.statistics);
 
-        let rows = self.keys.len();
+        let rows = keys.len();
         // Pessimistic txn needs key_hashes to wake up waiters
         let mut released_locks = ReleasedLocks::new();
-        for k in self.keys {
+        for k in keys {
             released_locks.push(commit(&mut txn, &mut reader, k, self.commit_ts)?);
         }
 
