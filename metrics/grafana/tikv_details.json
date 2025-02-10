@@ -59829,7 +59829,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_snapshot_limit_transport_bytes\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance, type) ",
+              "expr": "sum(rate(\n    tikv_snapshot_limit_transport_bytes\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type!~\"send\"}\n    [$__rate_interval]\n)) by (instance, type) ",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -59837,14 +59837,14 @@
               "intervalFactor": 1,
               "legendFormat": "{{instance}}-{{type}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_snapshot_limit_transport_bytes\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance, type) ",
+              "query": "sum(rate(\n    tikv_snapshot_limit_transport_bytes\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type!~\"send\"}\n    [$__rate_interval]\n)) by (instance, type) ",
               "refId": "",
               "step": 10,
               "target": ""
             },
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_snapshot_limit_generate_bytes\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance, type) ",
+              "expr": "sum(rate(\n    tikv_snapshot_limit_generate_bytes\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=~\"io\"}\n    [$__rate_interval]\n)) by (instance, type) ",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -59852,7 +59852,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{instance}}-generate-{{type}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_snapshot_limit_generate_bytes\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance, type) ",
+              "query": "sum(rate(\n    tikv_snapshot_limit_generate_bytes\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=~\"io\"}\n    [$__rate_interval]\n)) by (instance, type) ",
               "refId": "",
               "step": 10,
               "target": ""
