@@ -1603,6 +1603,53 @@ pub fn eval_from_unixtime(
     Ok(Some(tmp))
 }
 
+fn build_timestamp_diff_meta(expr: &mut Expr) -> Result<IntervalUnit> {
+    let children = expr.mut_children();
+    if children.len() != 3 {
+        return Err(box_err!(
+            "wrong timestamp_diff expr size {}",
+            children.len()
+        ));
+    }
+    let unit_str = match children[0].get_tp() {
+        ExprType::Bytes | ExprType::String => {
+            std::str::from_utf8(children[0].get_val()).map_err(Error::Encoding)?
+        }
+        _ => return Err(box_err!("unknown unit type {:?}", children[0].get_tp())),
+    };
+    let unit = IntervalUnit::from_str(unit_str)?;
+    if !unit.is_valid_for_timestamp() {
+        return Err(box_err!("wrong unit {:?} for timestamp_diff", unit));
+    }
+    Ok(unit)
+}
+
+/// See https://dev.mysql.com/doc/refman/5.7/en/date-and-time-functions.html#function_timestampdiff
+#[rpn_fn(capture = [ctx, metadata], metadata_mapper = build_timestamp_diff_meta)]
+#[inline]
+pub fn timestamp_diff(
+    ctx: &mut EvalContext,
+    metadata: &IntervalUnit,
+    _unit: BytesRef,
+    time1: &DateTime,
+    time2: &DateTime,
+) -> Result<Option<i64>> {
+    if time1.invalid_zero() {
+        return ctx
+            .handle_invalid_time_error(Error::incorrect_datetime_value(time1))
+            .map(|_| Ok(None))?;
+    }
+    if time2.invalid_zero() {
+        return ctx
+            .handle_invalid_time_error(Error::incorrect_datetime_value(time2))
+            .map(|_| Ok(None))?;
+    }
+    time1
+        .timestamp_diff(time2, *metadata)
+        .map(Some)
+        .or_else(|e| ctx.handle_invalid_time_error(e).map(|_| Ok(None))?)
+}
+
 #[rpn_fn(capture = [ctx])]
 #[inline]
 pub fn str_to_date_date(
@@ -4070,6 +4117,168 @@ mod tests {
 
             let expected = expected.map(|str| str.as_bytes().to_vec());
             assert_eq!(output, expected);
+        }
+    }
+
+    #[test]
+    fn test_timestamp_diff() {
+        let test_cases = vec![
+            (
+                Some("2025-02-05 12:00:00"),
+                Some("2025-02-05 12:00:00"),
+                "MicroseCond",
+                Some(0),
+            ),
+            (
+                Some("2025-02-05 12:00:00"),
+                Some("2025-02-05 12:00:00.000001"),
+                "microsecond",
+                Some(1),
+            ),
+            (
+                Some("2025-02-05 12:00:00"),
+                Some("2025-02-05 12:00:10"),
+                "Second",
+                Some(10),
+            ),
+            (
+                Some("2025-02-05 12:00:00"),
+                Some("2025-02-05 12:10:00"),
+                "Minute",
+                Some(10),
+            ),
+            (
+                Some("2025-02-05 12:00:00"),
+                Some("2025-02-05 14:00:00"),
+                "Hour",
+                Some(2),
+            ),
+            (
+                Some("2025-02-05 12:00:00"),
+                Some("2025-02-07 12:00:00"),
+                "Day",
+                Some(2),
+            ),
+            (
+                Some("2025-02-05 12:00:00"),
+                Some("2025-03-05 12:00:00"),
+                "Month",
+                Some(1),
+            ),
+            (
+                Some("2025-02-05 12:00:00"),
+                Some("2025-08-05 12:00:00"),
+                "Quarter",
+                Some(2),
+            ),
+            (
+                Some("2025-02-05 12:00:00"),
+                Some("2027-02-05 12:00:00"),
+                "Year",
+                Some(2),
+            ),
+            (
+                Some("2024-02-29 12:00:00"),
+                Some("2025-02-28 12:00:00"),
+                "Year",
+                Some(0),
+            ),
+            (
+                Some("2024-12-31 23:59:59"),
+                Some("2025-01-01 00:00:00"),
+                "Second",
+                Some(1),
+            ),
+            (
+                Some("2024-03-31 23:59:59"),
+                Some("2024-04-01 00:00:00"),
+                "Second",
+                Some(1),
+            ),
+            (
+                Some("2024-02-28 12:00:00"),
+                Some("2024-02-29 12:00:00"),
+                "Day",
+                Some(1),
+            ),
+            (
+                Some("2024-02-28 12:00:00"),
+                Some("2024-03-01 12:00:00"),
+                "DAY",
+                Some(2),
+            ),
+            (
+                Some("2025-02-05 12:00:00"),
+                Some("2028-02-05 12:00:00"),
+                "Year",
+                Some(3),
+            ),
+            (
+                Some("2025-02-05 12:00:00"),
+                Some("2025-12-05 12:00:00"),
+                "Month",
+                Some(10),
+            ),
+            (
+                Some("2025-02-05 12:00:00"),
+                Some("2025-02-19 12:00:00"),
+                "Week",
+                Some(2),
+            ),
+            (
+                Some("2025-02-05 12:00:00"),
+                Some("2025-02-05 16:00:00"),
+                "hour",
+                Some(4),
+            ),
+            (
+                Some("2025-02-05 12:00:00"),
+                Some("2025-02-06 00:00:00"),
+                "HOUR",
+                Some(12),
+            ),
+            (None, Some("2025-02-06 00:00:00"), "DAY", None),
+            (Some("2025-02-06 00:00:00"), None, "YEAR", None),
+            (None, None, "MONTH", None),
+        ];
+        let mut ctx = EvalContext::default();
+        for (t1, t2, unit, expected) in test_cases {
+            let mut builder =
+                ExprDefBuilder::scalar_func(ScalarFuncSig::TimestampDiff, FieldTypeTp::LongLong);
+            builder = builder.push_child(ExprDefBuilder::constant_bytes(unit.as_bytes().to_vec()));
+            if let Some(t) = t1 {
+                let time = DateTime::parse_timestamp(&mut ctx, t, MAX_FSP, true).unwrap();
+                builder = builder.push_child(ExprDefBuilder::constant_time(
+                    time.to_packed_u64(&mut ctx).unwrap(),
+                    TimeType::Timestamp,
+                ));
+            } else {
+                builder = builder.push_child(ExprDefBuilder::constant_null(FieldTypeTp::DateTime));
+            }
+            if let Some(t) = t2 {
+                let time = DateTime::parse_timestamp(&mut ctx, t, MAX_FSP, true).unwrap();
+                builder = builder.push_child(ExprDefBuilder::constant_time(
+                    time.to_packed_u64(&mut ctx).unwrap(),
+                    TimeType::Timestamp,
+                ));
+            } else {
+                builder = builder.push_child(ExprDefBuilder::constant_null(FieldTypeTp::DateTime));
+            }
+            let node = builder.build();
+            let exp = RpnExpressionBuilder::build_from_expr_tree(node, &mut ctx, 1).unwrap();
+
+            let schema = &[];
+            let mut columns = LazyBatchColumnVec::empty();
+            let val = exp.eval(&mut ctx, schema, &mut columns, &[0], 1).unwrap();
+
+            assert!(val.is_vector());
+            let value = val.vector_value().unwrap().as_ref().to_int_vec();
+            assert_eq!(value.len(), 1);
+            assert_eq!(
+                value[0], expected,
+                "expected {:?}, got {:?}",
+                expected, value[0]
+            );
         }
     }
 

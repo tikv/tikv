@@ -936,6 +936,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::StrToDateDate => str_to_date_date_fn_meta(),
         ScalarFuncSig::StrToDateDatetime => str_to_date_datetime_fn_meta(),
         ScalarFuncSig::StrToDateDuration => str_to_date_duration_fn_meta(),
+        ScalarFuncSig::TimestampDiff => timestamp_diff_fn_meta(),
         _ => return Err(other_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value

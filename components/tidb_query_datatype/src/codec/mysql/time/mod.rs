@@ -19,12 +19,12 @@ use chrono::prelude::*;
 use codec::prelude::*;
 use tipb::FieldType;
 
-pub use self::{extension::*, tz::Tz, weekmode::WeekMode};
+pub use self::{extension::*, interval::IntervalUnit, tz::Tz, weekmode::WeekMode};
 use crate::{
     codec::{
         convert::ConvertTo,
         data_type::Real,
-        mysql::{check_fsp, duration::SECS_PER_DAY, Decimal, Duration, Res, DEFAULT_FSP, MAX_FSP},
+        mysql::{check_fsp, duration::*, Decimal, Duration, Res, DEFAULT_FSP, MAX_FSP},
         Error, Result, TEN_POW,
     },
     expr::{EvalContext, Flag, SqlMode},
@@ -2608,6 +2608,135 @@ impl Time {
 
         (year, month, day)
     }
+
+    /// Calculates days since 0000-00-00.
+    pub fn get_daynr(year: u32, month: u32, day: u32) -> u32 {
+        if year == 0 && month == 0 {
+            return 0;
+        }
+
+        let mut delsum = 365 * year as i64 + 31 * (month as i64 - 1) + day as i64;
+        let mut year = year as i64;
+
+        if month <= 2 {
+            year -= 1;
+        } else {
+            delsum -= (month as i64 * 4 + 23) / 10;
+        }
+
+        let temp = ((year / 100 + 1) * 3) / 4;
+        (delsum + year / 4 - temp) as u32
+    }
+
+    fn timestamp_diff_internal(&self, other: &Self) -> (i64, i64, bool) {
+        let days1 = Time::get_daynr(self.year(), self.month(), self.day());
+        let days2 = Time::get_daynr(other.year(), other.month(), other.day());
+
+        let days_diff = days1 as i64 - days2 as i64;
+
+        let diff = (days_diff * SECS_PER_DAY
+            + self.hour() as i64 * SECS_PER_HOUR
+            + self.minute() as i64 * SECS_PER_MINUTE
+            + self.second() as i64
+            - (other.hour() as i64 * SECS_PER_HOUR
+                + other.minute() as i64 * SECS_PER_MINUTE
+                + other.second() as i64))
+            * MICROS_PER_SEC
+            + self.micro() as i64
+            - other.micro() as i64;
+
+        let diff_abs = diff.abs();
+        (
+            diff_abs / MICROS_PER_SEC,
+            diff_abs % MICROS_PER_SEC,
+            diff < 0,
+        )
+    }
+
+    pub fn timestamp_diff(&self, other: &Self, unit: IntervalUnit) -> Result<i64> {
+        let (seconds, microseconds, neg) = other.timestamp_diff_internal(self);
+
+        let mut months = 0;
+
+        if matches!(
+            unit,
+            IntervalUnit::Year | IntervalUnit::Quarter | IntervalUnit::Month
+        ) {
+            let (year_start, year_end, month_start, month_end, day_start, day_end);
+            let (second_start, second_end, microsecond_start, microsecond_end);
+
+            // Swap values if the difference is negative
+            if neg {
+                year_start = other.year();
+                year_end = self.year();
+                month_start = other.month();
+                month_end = self.month();
+                day_start = other.day();
+                day_end = self.day();
+                second_start = other.hour() * SECS_PER_HOUR as u32
+                    + other.minute() * SECS_PER_MINUTE as u32
+                    + other.second();
+                second_end = self.hour() * SECS_PER_HOUR as u32
+                    + self.minute() * SECS_PER_MINUTE as u32
+                    + self.second();
+                microsecond_start = other.micro();
+                microsecond_end = self.micro();
+            } else {
+                year_start = self.year();
+                year_end = other.year();
+                month_start = self.month();
+                month_end = other.month();
+                day_start = self.day();
+                day_end = other.day();
+                second_start = self.hour() * SECS_PER_HOUR as u32
+                    + self.minute() * SECS_PER_MINUTE as u32
+                    + self.second();
+                second_end = other.hour() * SECS_PER_HOUR as u32
+                    + other.minute() * SECS_PER_MINUTE as u32
+                    + other.second();
+                microsecond_start = self.micro();
+                microsecond_end = other.micro();
+            }
+
+            // Calculate the number of full years
+            let mut years = year_end - year_start;
+            if month_end < month_start || (month_end == month_start && day_end < day_start) {
+                years -= 1;
+            }
+
+            // Calculate the total number of months
+            months = 12 * years as i64;
+            if month_end < month_start || (month_end == month_start && day_end < day_start) {
+                months += 12 - (month_start as i64 - month_end as i64);
+            } else {
+                months += month_end as i64 - month_start as i64;
+            }
+
+            // Adjust if the day or time within the month is earlier
+            if day_end < day_start
+                || (day_end == day_start
+                    && (second_end < second_start
+                        || (second_end == second_start && microsecond_end < microsecond_start)))
+            {
+                months -= 1;
+            }
+        }
+
+        let neg_v = if neg { -1 } else { 1 };
+
+        Ok(match unit {
+            IntervalUnit::Year => (months / 12) * neg_v,
+            IntervalUnit::Quarter => (months / 3) * neg_v,
+            IntervalUnit::Month => months * neg_v,
+            IntervalUnit::Week => (seconds / SECS_PER_DAY / 7) * neg_v,
+            IntervalUnit::Day => (seconds / SECS_PER_DAY) * neg_v,
+            IntervalUnit::Hour => (seconds / SECS_PER_HOUR) * neg_v,
+            IntervalUnit::Minute => (seconds / SECS_PER_MINUTE) * neg_v,
+            IntervalUnit::Second => seconds * neg_v,
+            IntervalUnit::Microsecond => (seconds * MICROS_PER_SEC + microseconds) * neg_v,
+            _ => return Err(box_err!("wrong unit {:?} for timestamp_diff", unit)),
+        })
+    }
 }
 
 impl ConvertTo<f64> for Time {
@@ -4299,5 +4428,156 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn test_get_daynr() {
+        let test_cases = [
+            (0, 0, 0, 0),
+            (0, 1, 1, 1),
+            (1, 1, 1, 366),
+            (2023, 10, 7, 739165),
+            (9999, 12, 31, 3652424),
+            (1970, 1, 1, 719528),
+            (2006, 12, 16, 733026),
+            (10, 1, 2, 3654),
+            (2008, 2, 20, 733457),
+        ];
+        for (year, month, day, expected) in test_cases {
+            let result = Time::get_daynr(year, month, day);
+            assert_eq!(result, expected);
+        }
+    }
+
+    #[test]
+    fn test_timestamp_diff() {
+        let test_cases = vec![
+            (
+                "2025-02-05 12:00:00",
+                "2025-02-05 12:00:00",
+                IntervalUnit::Microsecond,
+                0,
+            ),
+            (
+                "2025-02-05 12:00:00",
+                "2025-02-05 12:00:00.000001",
+                IntervalUnit::Microsecond,
+                1,
+            ),
+            (
+                "2025-02-05 12:00:00",
+                "2025-02-05 12:00:10",
+                IntervalUnit::Second,
+                10,
+            ),
+            (
+                "2025-02-05 12:00:00",
+                "2025-02-05 12:10:00",
+                IntervalUnit::Minute,
+                10,
+            ),
+            (
+                "2025-02-05 12:00:00",
+                "2025-02-05 14:00:00",
+                IntervalUnit::Hour,
+                2,
+            ),
+            (
+                "2025-02-05 12:00:00",
+                "2025-02-07 12:00:00",
+                IntervalUnit::Day,
+                2,
+            ),
+            (
+                "2025-02-05 12:00:00",
+                "2025-03-05 12:00:00",
+                IntervalUnit::Month,
+                1,
+            ),
+            (
+                "2025-02-05 12:00:00",
+                "2025-08-05 12:00:00",
+                IntervalUnit::Quarter,
+                2,
+            ),
+            (
+                "2025-02-05 12:00:00",
+                "2027-02-05 12:00:00",
+                IntervalUnit::Year,
+                2,
+            ),
+            (
+                "2024-02-29 12:00:00",
+                "2025-02-28 12:00:00",
+                IntervalUnit::Year,
+                0,
+            ),
+            (
+                "2024-12-31 23:59:59",
+                "2025-01-01 00:00:00",
+                IntervalUnit::Second,
+                1,
+            ),
+            (
+                "2024-03-31 23:59:59",
+                "2024-04-01 00:00:00",
+                IntervalUnit::Second,
+                1,
+            ),
+            (
+                "2024-02-28 12:00:00",
+                "2024-02-29 12:00:00",
+                IntervalUnit::Day,
+                1,
+            ),
+            (
+                "2024-02-28 12:00:00",
+                "2024-03-01 12:00:00",
+                IntervalUnit::Day,
+                2,
+            ),
+            (
+                "2025-02-05 12:00:00",
+                "2028-02-05 12:00:00",
+                IntervalUnit::Year,
+                3,
+            ),
+            (
+                "2025-02-05 12:00:00",
+                "2025-12-05 12:00:00",
+                IntervalUnit::Month,
+                10,
+            ),
+            (
+                "2025-02-05 12:00:00",
+                "2025-02-19 12:00:00",
+                IntervalUnit::Week,
+                2,
+            ),
+            (
+                "2025-02-05 12:00:00",
+                "2025-02-05 16:00:00",
+                IntervalUnit::Hour,
+                4,
+            ),
+            (
+                "2025-02-05 12:00:00",
+                "2025-02-06 00:00:00",
+                IntervalUnit::Hour,
+                12,
+            ),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (start, end, unit, expected) in test_cases {
+            let start_dt = Time::parse_timestamp(&mut ctx, start, MAX_FSP, false).unwrap();
+            let end_dt = Time::parse_timestamp(&mut ctx, end, MAX_FSP, false).unwrap();
+            let result = start_dt.timestamp_diff(&end_dt, unit).unwrap();
+            assert_eq!(
+                result, expected,
+                "Failed for {} -> {} in {:?}",
+                start, end, unit
+            );
+        }
     }
 }
