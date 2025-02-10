@@ -14,8 +14,11 @@ engine_traits = { workspace = true }
 kvproto = { workspace = true }
 encryption = { workspace = true }
 raft = { workspace = true }
+<<<<<<< HEAD
 tikv_alloc = { workspace = true }
 # FIXME: Remove this dep from the engine_traits interface
+=======
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
 tikv_util = { workspace = true }
 tracker = { workspace = true }
 txn_types = { workspace = true }
