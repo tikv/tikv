@@ -4,6 +4,7 @@ use std::{any::Any, sync::Arc};
 
 use engine_traits::{IterOptions, Iterable, KvEngine, Peekable, ReadOptions, Result, SyncMutable};
 use rocksdb::{DBIterator, Writable, DB};
+use tikv_util::range_latch::RangeLatch;
 
 use crate::{
     db_vector::RocksDbVector, options::RocksReadOptions, r2e, util::get_cf_handle,
@@ -148,6 +149,9 @@ pub struct RocksEngine {
     support_multi_batch_write: bool,
     #[cfg(feature = "trace-lifetime")]
     _id: trace::TabletTraceId,
+    // Used to ensure mutual exclusivity between compaction filter writes and the SST ingestion
+    // operation.
+    pub ingest_latch: Arc<RangeLatch>,
 }
 
 impl RocksEngine {
@@ -158,6 +162,7 @@ impl RocksEngine {
             #[cfg(feature = "trace-lifetime")]
             _id: trace::TabletTraceId::new(db.path(), &db),
             db,
+            ingest_latch: Arc::new(RangeLatch::new()),
         }
     }
 

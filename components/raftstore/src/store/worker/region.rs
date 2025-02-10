@@ -466,7 +466,7 @@ where
         check_abort(&abort)?;
         self.clean_overlap_ranges(start_key, end_key)?;
         check_abort(&abort)?;
-        fail_point!("apply_snap_cleanup_range");
+        fail_point!("apply_snap_cleanup_range", |_| { Ok(()) });
 
         // apply snapshot
         let apply_state = self.apply_state(region_id)?;
@@ -508,6 +508,7 @@ where
             "region_id" => region_id,
             "time_takes" => ?timer.saturating_elapsed(),
         );
+        fail_point!("apply_snapshot_finished");
         Ok(())
     }
 
@@ -624,8 +625,22 @@ where
     /// Cleans up data in the given range and all pending ranges overlapping
     /// with it.
     fn clean_overlap_ranges(&mut self, start_key: Vec<u8>, end_key: Vec<u8>) -> Result<()> {
+        fail_point!("before_clean_overlap_ranges", |_| { Ok(()) });
         let (start_key, end_key) = self.clean_overlap_ranges_roughly(start_key, end_key);
+<<<<<<< HEAD
         self.delete_all_in_range(&[Range::new(&start_key, &end_key)])
+=======
+        // We enable the `allow_write_during_ingestion` to enable RocksDB
+        // IngestExternalFileOptions.allow_write = true, minimizing the impact on
+        // foreground performance.
+        // This is safe because no overlapping writes occur during ingestion; for the
+        // reason, refer to the comments in `apply_sst_cf_files_by_ingest`.
+        self.delete_all_in_range(
+            &[Range::new(&start_key, &end_key)],
+            false,
+            true, // allow_write_during_ingestion
+        )
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
     }
 
     /// Inserts a new pending range, and it will be cleaned up with some delay.
@@ -648,6 +663,14 @@ where
 
     /// Cleans up stale ranges.
     fn clean_stale_ranges(&mut self) {
+<<<<<<< HEAD
+=======
+        fail_point!("before_clean_stale_ranges", |_| {});
+        if self.mgr.is_offlined() {
+            info!("no need to clear stale range as store is marked offlined");
+            return;
+        }
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
         STALE_PEER_PENDING_DELETE_RANGE_GAUGE.set(self.pending_delete_ranges.len() as f64);
         if self.ingest_maybe_stall() {
             return;
@@ -687,7 +710,12 @@ where
                 error!("failed to delete files in range"; "err" => %e);
             })
             .unwrap();
+<<<<<<< HEAD
         if let Err(e) = self.delete_all_in_range(&ranges) {
+=======
+        // Remove all overlapped ranges directly without ingesting.
+        if let Err(e) = self.delete_all_in_range(&ranges, true, false) {
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
             error!("failed to cleanup stale range"; "err" => %e);
             return;
         }
@@ -726,7 +754,16 @@ where
         false
     }
 
+<<<<<<< HEAD
     fn delete_all_in_range(&self, ranges: &[Range<'_>]) -> Result<()> {
+=======
+    fn delete_all_in_range(
+        &self,
+        ranges: &[Range<'_>],
+        forcely_by_key: bool,
+        allow_write_during_ingestion: bool,
+    ) -> Result<()> {
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
         let wopts = WriteOptions::default();
         for cf in self.engine.cf_names() {
             // CF_LOCK usually contains fewer keys than other CFs, so we delete them by key.
@@ -735,9 +772,22 @@ where
             } else if self.use_delete_range {
                 DeleteStrategy::DeleteByRange
             } else {
+<<<<<<< HEAD
                 DeleteStrategy::DeleteByWriter {
                     sst_path: self.mgr.get_temp_path_for_ingest(),
                 }
+=======
+                // Deprecated method for clearing stale ranges due to potential latency
+                // jitters. It's still applicable when clearing overlapped regions
+                // before applying the newly added snapshot.
+                (
+                    DeleteStrategy::DeleteByWriter {
+                        sst_path: self.mgr.get_temp_path_for_ingest(),
+                        allow_write_during_ingestion,
+                    },
+                    &CLEAR_OVERLAP_REGION_DURATION.by_ingest_files,
+                )
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
             };
             box_try!(self.engine.delete_ranges_cf(&wopts, cf, strategy, ranges));
         }
