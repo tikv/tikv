@@ -1,10 +1,13 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use chrono::{self, DurationRound, Offset, TimeZone};
+use std::str::from_utf8;
+
 use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
 use tidb_query_datatype::{
     codec::{
+        convert::ConvertTo,
         data_type::*,
         mysql::{
             check_fsp,
@@ -1777,6 +1780,74 @@ pub fn timestamp_diff(
         .timestamp_diff(time2, *metadata)
         .map(Some)
         .or_else(|e| ctx.handle_invalid_time_error(e).map(|_| Ok(None))?)
+}
+
+#[rpn_fn(capture = [ctx])]
+#[inline]
+pub fn str_to_date_date(
+    ctx: &mut EvalContext,
+    date: BytesRef,
+    format: BytesRef,
+) -> Result<Option<DateTime>> {
+    let (succ, mut t) =
+        Time::parse_from_string_with_format(ctx, from_utf8(date)?, from_utf8(format)?);
+    if !succ {
+        ctx.handle_invalid_time_error(Error::truncated_wrong_val("DATETIME", t))?;
+        return Ok(None);
+    }
+    if ctx.cfg.sql_mode.contains(SqlMode::NO_ZERO_DATE)
+        && (t.year() == 0 || t.month() == 0 || t.day() == 0)
+    {
+        ctx.handle_invalid_time_error(Error::truncated_wrong_val("DATETIME", t))?;
+        return Ok(None);
+    }
+    t.set_time_type(TimeType::Date)?;
+    t.set_fsp(0);
+    Ok(Some(t))
+}
+
+#[rpn_fn(capture = [ctx, extra])]
+#[inline]
+pub fn str_to_date_datetime(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    date: BytesRef,
+    format: BytesRef,
+) -> Result<Option<DateTime>> {
+    let (succ, mut t) =
+        Time::parse_from_string_with_format(ctx, from_utf8(date)?, from_utf8(format)?);
+    if !succ {
+        ctx.handle_invalid_time_error(Error::truncated_wrong_val("DATETIME", t))?;
+        return Ok(None);
+    }
+    if ctx.cfg.sql_mode.contains(SqlMode::NO_ZERO_DATE)
+        && (t.year() == 0 || t.month() == 0 || t.day() == 0)
+    {
+        ctx.handle_invalid_time_error(Error::truncated_wrong_val("DATETIME", t))?;
+        return Ok(None);
+    }
+    t.set_time_type(TimeType::DateTime)?;
+    t.set_fsp(extra.ret_field_type.get_decimal() as u8);
+    Ok(Some(t))
+}
+
+#[rpn_fn(capture = [ctx, extra])]
+#[inline]
+pub fn str_to_date_duration(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    date: BytesRef,
+    format: BytesRef,
+) -> Result<Option<Duration>> {
+    let (succ, mut t) =
+        Time::parse_from_string_with_format(ctx, from_utf8(date)?, from_utf8(format)?);
+    if !succ {
+        ctx.handle_invalid_time_error(Error::truncated_wrong_val("DATETIME", t))?;
+        return Ok(None);
+    }
+    t.set_fsp(extra.ret_field_type.get_decimal() as u8);
+    let duration: Duration = t.convert(ctx)?;
+    Ok(Some(duration))
 }
 
 #[cfg(test)]
@@ -4488,6 +4559,973 @@ mod tests {
                 "expected {:?}, got {:?}",
                 expected, value[0]
             );
+        }
+    }
+
+    #[test]
+    fn test_str_to_date() {
+        use tidb_query_datatype::codec::mysql::TimeType;
+        let mut ctx = EvalContext::default();
+        let cases = vec![
+            (
+                Some("10/28/2011 9:46:29 pm"),
+                Some("%m/%d/%Y %l:%i:%s %p"),
+                Time::from_slice(
+                    &mut ctx,
+                    &[2011, 10, 28, 21, 46, 29, 0],
+                    TimeType::DateTime,
+                    0,
+                ),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("10/28/2011 9:46:29 Pm"),
+                Some("%m/%d/%Y %l:%i:%s %p"),
+                Time::from_slice(
+                    &mut ctx,
+                    &[2011, 10, 28, 21, 46, 29, 0],
+                    TimeType::DateTime,
+                    0,
+                ),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("2011/10/28 9:46:29 am"),
+                Some("%Y/%m/%d %l:%i:%s %p"),
+                Time::from_slice(
+                    &mut ctx,
+                    &[2011, 10, 28, 9, 46, 29, 0],
+                    TimeType::DateTime,
+                    0,
+                ),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("20161122165022"),
+                Some("%Y%m%d%H%i%s"),
+                Time::from_slice(
+                    &mut ctx,
+                    &[2016, 11, 22, 16, 50, 22, 0],
+                    TimeType::DateTime,
+                    0,
+                ),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("2016 11 22 16 50 22"),
+                Some("%Y%m%d%H%i%s"),
+                Time::from_slice(
+                    &mut ctx,
+                    &[2016, 11, 22, 16, 50, 22, 0],
+                    TimeType::DateTime,
+                    0,
+                ),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("16-50-22 2016 11 22"),
+                Some("%H-%i-%s%Y%m%d"),
+                Time::from_slice(
+                    &mut ctx,
+                    &[2016, 11, 22, 16, 50, 22, 0],
+                    TimeType::DateTime,
+                    0,
+                ),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("16-50 2016 11 22"),
+                Some("%H-%i-%s%Y%m%d"),
+                None,
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("15-01-2001 1:59:58.999"),
+                Some("%d-%m-%Y %I:%i:%s.%f"),
+                Time::from_slice(
+                    &mut ctx,
+                    &[2001, 1, 15, 1, 59, 58, 999000],
+                    TimeType::DateTime,
+                    6,
+                ),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("15-01-2001 1:59:58.1"),
+                Some("%d-%m-%Y %H:%i:%s.%f"),
+                Time::from_slice(
+                    &mut ctx,
+                    &[2001, 1, 15, 1, 59, 58, 100000],
+                    TimeType::DateTime,
+                    6,
+                ),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("15-01-2001 1:59:58."),
+                Some("%d-%m-%Y %H:%i:%s.%f"),
+                Time::from_slice(
+                    &mut ctx,
+                    &[2001, 1, 15, 1, 59, 58, 0],
+                    TimeType::DateTime,
+                    6,
+                ),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("15-01-2001 1:9:8.999"),
+                Some("%d-%m-%Y %H:%i:%s.%f"),
+                Time::from_slice(
+                    &mut ctx,
+                    &[2001, 1, 15, 1, 9, 8, 999000],
+                    TimeType::DateTime,
+                    6,
+                ),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("15-01-2001 1:9:8.999"),
+                Some("%d-%m-%Y %H:%i:%S.%f"),
+                Time::from_slice(
+                    &mut ctx,
+                    &[2001, 1, 15, 1, 9, 8, 999000],
+                    TimeType::DateTime,
+                    6,
+                ),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("2003-01-02 10:11:12.0012"),
+                Some("%Y-%m-%d %H:%i:%S.%f"),
+                Time::from_slice(
+                    &mut ctx,
+                    &[2003, 1, 2, 10, 11, 12, 1200],
+                    TimeType::DateTime,
+                    6,
+                ),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("2003-01-02 10:11:12 PM"),
+                Some("%Y-%m-%d %H:%i:%S %p"),
+                None,
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("10:20:10AM"),
+                Some("%H:%i:%S%p"),
+                None,
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            // test %@(skip alpha), %#(skip number), %.(skip punct)
+            (
+                Some("2020-10-10ABCD"),
+                Some("%Y-%m-%d%@"),
+                Time::from_slice(&mut ctx, &[2020, 10, 10, 0, 0, 0, 0], TimeType::Date, 6),
+                None,
+                ScalarFuncSig::StrToDateDate,
+            ),
+            (
+                Some("2020-10-101234"),
+                Some("%Y-%m-%d%#"),
+                Time::from_slice(&mut ctx, &[2020, 10, 10, 0, 0, 0, 0], TimeType::Date, 6),
+                None,
+                ScalarFuncSig::StrToDateDate,
+            ),
+            (
+                Some("2020-10-10...."),
+                Some("%Y-%m-%d%."),
+                Time::from_slice(&mut ctx, &[2020, 10, 10, 0, 0, 0, 0], TimeType::Date, 6),
+                None,
+                ScalarFuncSig::StrToDateDate,
+            ),
+            (
+                Some("2020-10-10.1"),
+                Some("%Y-%m-%d%.%#%@"),
+                Time::from_slice(&mut ctx, &[2020, 10, 10, 0, 0, 0, 0], TimeType::Date, 6),
+                None,
+                ScalarFuncSig::StrToDateDate,
+            ),
+            (
+                Some("abcd2020-10-10.1"),
+                Some("%@%Y-%m-%d%.%#%@"),
+                Time::from_slice(&mut ctx, &[2020, 10, 10, 0, 0, 0, 0], TimeType::Date, 6),
+                None,
+                ScalarFuncSig::StrToDateDate,
+            ),
+            (
+                Some("abcd-2020-10-10.1"),
+                Some("%@-%Y-%m-%d%.%#%@"),
+                Time::from_slice(&mut ctx, &[2020, 10, 10, 0, 0, 0, 0], TimeType::Date, 6),
+                None,
+                ScalarFuncSig::StrToDateDate,
+            ),
+            (
+                Some("2020-10-10"),
+                Some("%Y-%m-%d%@"),
+                Time::from_slice(&mut ctx, &[2020, 10, 10, 0, 0, 0, 0], TimeType::Date, 6),
+                None,
+                ScalarFuncSig::StrToDateDate,
+            ),
+            (
+                Some("2020-10-10abcde123abcdef"),
+                Some("%Y-%m-%d%@%#"),
+                Time::from_slice(&mut ctx, &[2020, 10, 10, 0, 0, 0, 0], TimeType::Date, 6),
+                None,
+                ScalarFuncSig::StrToDateDate,
+            ),
+            // some input for '%r'
+            (
+                Some("12:3:56pm  13/05/2019"),
+                Some("%r %d/%c/%Y"),
+                Time::from_slice(
+                    &mut ctx,
+                    &[2019, 5, 13, 12, 3, 56, 0],
+                    TimeType::DateTime,
+                    6,
+                ),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("11:13:56 am"),
+                Some("%r"),
+                None,
+                Some(Duration::new_from_parts(false, 11, 13, 56, 0, 6).unwrap()),
+                ScalarFuncSig::StrToDateDuration,
+            ),
+            // some input for '%T'
+            (
+                Some("12:13:56 13/05/2019"),
+                Some("%T %d/%c/%Y"),
+                Time::from_slice(
+                    &mut ctx,
+                    &[2019, 5, 13, 12, 13, 56, 0],
+                    TimeType::DateTime,
+                    6,
+                ),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("19:3:56  13/05/2019"),
+                Some("%T %d/%c/%Y"),
+                Time::from_slice(
+                    &mut ctx,
+                    &[2019, 5, 13, 19, 3, 56, 0],
+                    TimeType::DateTime,
+                    6,
+                ),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("21:13:24"),
+                Some("%T"),
+                None,
+                Some(Duration::new_from_parts(false, 21, 13, 24, 0, 6).unwrap()),
+                ScalarFuncSig::StrToDateDuration,
+            ),
+            // More test cases
+            (
+                Some("01,05,2013"),
+                Some("%d,%m,%Y"),
+                Time::from_slice(&mut ctx, &[2013, 5, 1, 0, 0, 0, 0], TimeType::Date, 6),
+                None,
+                ScalarFuncSig::StrToDateDate,
+            ),
+            (
+                Some("5 12 2021"),
+                Some("%m%d%Y"),
+                Time::from_slice(&mut ctx, &[2021, 5, 12, 0, 0, 0, 0], TimeType::Date, 6),
+                None,
+                ScalarFuncSig::StrToDateDate,
+            ),
+            (
+                Some("May 01, 2013"),
+                Some("%M %d,%Y"),
+                Time::from_slice(&mut ctx, &[2013, 5, 1, 0, 0, 0, 0], TimeType::Date, 6),
+                None,
+                ScalarFuncSig::StrToDateDate,
+            ),
+            (
+                Some("a09:30:17"),
+                Some("a%h:%i:%s"),
+                None,
+                Some(Duration::new_from_parts(false, 9, 30, 17, 0, 6).unwrap()),
+                ScalarFuncSig::StrToDateDuration,
+            ),
+            (
+                Some("09:30:17a"),
+                Some("%h:%i:%s"),
+                None,
+                Some(Duration::new_from_parts(false, 9, 30, 17, 0, 6).unwrap()),
+                ScalarFuncSig::StrToDateDuration,
+            ),
+            (
+                Some("12:43:24"),
+                Some("%h:%i:%s"),
+                None,
+                Some(Duration::new_from_parts(false, 0, 43, 24, 0, 6).unwrap()),
+                ScalarFuncSig::StrToDateDuration,
+            ),
+            (
+                Some("abc"),
+                Some("abc"),
+                Time::from_slice(&mut ctx, &[0, 0, 0, 0, 0, 0, 0], TimeType::DateTime, 6),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("09"),
+                Some("%m"),
+                Time::from_slice(&mut ctx, &[0, 9, 0, 0, 0, 0, 0], TimeType::DateTime, 6),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("09"),
+                Some("%s"),
+                Time::from_slice(&mut ctx, &[0, 0, 0, 0, 0, 9, 0], TimeType::DateTime, 6),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("12:43:24 AM"),
+                Some("%r"),
+                Time::from_slice(&mut ctx, &[0, 0, 0, 0, 43, 24, 0], TimeType::DateTime, 6),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("12:43:24 PM"),
+                Some("%r"),
+                Time::from_slice(&mut ctx, &[0, 0, 0, 12, 43, 24, 0], TimeType::DateTime, 6),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("11:43:24 PM"),
+                Some("%r"),
+                Time::from_slice(&mut ctx, &[0, 0, 0, 23, 43, 24, 0], TimeType::DateTime, 6),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("00:12:13"),
+                Some("%T"),
+                Time::from_slice(&mut ctx, &[0, 0, 0, 0, 12, 13, 0], TimeType::DateTime, 6),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("23:59:59"),
+                Some("%T"),
+                Time::from_slice(&mut ctx, &[0, 0, 0, 23, 59, 59, 0], TimeType::DateTime, 6),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("00/00/0000"),
+                Some("%m/%d/%Y"),
+                Time::from_slice(&mut ctx, &[0, 0, 0, 0, 0, 0, 0], TimeType::DateTime, 6),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("04/30/2004"),
+                Some("%m/%d/%Y"),
+                Time::from_slice(&mut ctx, &[2004, 4, 30, 0, 0, 0, 0], TimeType::DateTime, 6),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("15:35:00"),
+                Some("%H:%i:%s"),
+                Time::from_slice(&mut ctx, &[0, 0, 0, 15, 35, 0, 0], TimeType::DateTime, 6),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("Jul 17 33"),
+                Some("%b %k %S"),
+                Time::from_slice(&mut ctx, &[0, 7, 0, 17, 0, 33, 0], TimeType::DateTime, 6),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("2016-January:7 432101"),
+                Some("%Y-%M:%l %f"),
+                Time::from_slice(
+                    &mut ctx,
+                    &[2016, 1, 0, 7, 0, 0, 432101],
+                    TimeType::DateTime,
+                    6,
+                ),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("10:13 PM"),
+                Some("%l:%i %p"),
+                Time::from_slice(&mut ctx, &[0, 0, 0, 22, 13, 0, 0], TimeType::DateTime, 6),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("12:00:00 AM"),
+                Some("%h:%i:%s %p"),
+                Time::from_slice(&mut ctx, &[0, 0, 0, 0, 0, 0, 0], TimeType::DateTime, 6),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("12:00:00 PM"),
+                Some("%h:%i:%s %p"),
+                Time::from_slice(&mut ctx, &[0, 0, 0, 12, 0, 0, 0], TimeType::DateTime, 6),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("12:00:00 PM"),
+                Some("%I:%i:%s %p"),
+                Time::from_slice(&mut ctx, &[0, 0, 0, 12, 0, 0, 0], TimeType::DateTime, 6),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("1:00:00 PM"),
+                Some("%h:%i:%s %p"),
+                Time::from_slice(&mut ctx, &[0, 0, 0, 13, 0, 0, 0], TimeType::DateTime, 6),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("18/10/22"),
+                Some("%y/%m/%d"),
+                Time::from_slice(&mut ctx, &[2018, 10, 22, 0, 0, 0, 0], TimeType::Date, 6),
+                None,
+                ScalarFuncSig::StrToDateDate,
+            ),
+            (
+                Some("8/10/22"),
+                Some("%y/%m/%d"),
+                Time::from_slice(&mut ctx, &[2008, 10, 22, 0, 0, 0, 0], TimeType::Date, 6),
+                None,
+                ScalarFuncSig::StrToDateDate,
+            ),
+            (
+                Some("69/10/22"),
+                Some("%y/%m/%d"),
+                Time::from_slice(&mut ctx, &[2069, 10, 22, 0, 0, 0, 0], TimeType::Date, 6),
+                None,
+                ScalarFuncSig::StrToDateDate,
+            ),
+            (
+                Some("70/10/22"),
+                Some("%y/%m/%d"),
+                Time::from_slice(&mut ctx, &[1970, 10, 22, 0, 0, 0, 0], TimeType::Date, 6),
+                None,
+                ScalarFuncSig::StrToDateDate,
+            ),
+            (
+                Some("18/10/22"),
+                Some("%Y/%m/%d"),
+                Time::from_slice(&mut ctx, &[2018, 10, 22, 0, 0, 0, 0], TimeType::Date, 6),
+                None,
+                ScalarFuncSig::StrToDateDate,
+            ),
+            (
+                Some("2018/10/22"),
+                Some("%Y/%m/%d"),
+                Time::from_slice(&mut ctx, &[2018, 10, 22, 0, 0, 0, 0], TimeType::Date, 6),
+                None,
+                ScalarFuncSig::StrToDateDate,
+            ),
+            (
+                Some("8/10/22"),
+                Some("%Y/%m/%d"),
+                Time::from_slice(&mut ctx, &[2008, 10, 22, 0, 0, 0, 0], TimeType::Date, 6),
+                None,
+                ScalarFuncSig::StrToDateDate,
+            ),
+            (
+                Some("69/10/22"),
+                Some("%Y/%m/%d"),
+                Time::from_slice(&mut ctx, &[2069, 10, 22, 0, 0, 0, 0], TimeType::Date, 6),
+                None,
+                ScalarFuncSig::StrToDateDate,
+            ),
+            (
+                Some("70/10/22"),
+                Some("%Y/%m/%d"),
+                Time::from_slice(&mut ctx, &[1970, 10, 22, 0, 0, 0, 0], TimeType::Date, 6),
+                None,
+                ScalarFuncSig::StrToDateDate,
+            ),
+            (
+                Some("18/10/22"),
+                Some("%Y/%m/%d"),
+                Time::from_slice(&mut ctx, &[2018, 10, 22, 0, 0, 0, 0], TimeType::Date, 6),
+                None,
+                ScalarFuncSig::StrToDateDate,
+            ),
+            (
+                Some("100/10/22"),
+                Some("%Y/%m/%d"),
+                Time::from_slice(&mut ctx, &[100, 10, 22, 0, 0, 0, 0], TimeType::Date, 6),
+                None,
+                ScalarFuncSig::StrToDateDate,
+            ),
+            (
+                Some("09/10/1021"),
+                Some("%d/%m/%y"),
+                Time::from_slice(&mut ctx, &[2010, 10, 9, 0, 0, 0, 0], TimeType::Date, 6),
+                None,
+                ScalarFuncSig::StrToDateDate,
+            ),
+            (
+                Some("09/10/1021"),
+                Some("%d/%m/%Y"),
+                Time::from_slice(&mut ctx, &[1021, 10, 9, 0, 0, 0, 0], TimeType::Date, 6),
+                None,
+                ScalarFuncSig::StrToDateDate,
+            ),
+            (
+                Some("09/10/10"),
+                Some("%d/%m/%Y"),
+                Time::from_slice(&mut ctx, &[2010, 10, 9, 0, 0, 0, 0], TimeType::Date, 6),
+                None,
+                ScalarFuncSig::StrToDateDate,
+            ),
+            //'%b'/'%M' should be case insensitive
+            (
+                Some("31/may/2016 12:34:56.1234"),
+                Some("%d/%b/%Y %H:%i:%S.%f"),
+                Time::from_slice(
+                    &mut ctx,
+                    &[2016, 5, 31, 12, 34, 56, 123400],
+                    TimeType::DateTime,
+                    6,
+                ),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("30/april/2016 12:34:56."),
+                Some("%d/%M/%Y %H:%i:%s.%f"),
+                Time::from_slice(
+                    &mut ctx,
+                    &[2016, 4, 30, 12, 34, 56, 0],
+                    TimeType::DateTime,
+                    6,
+                ),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("31/mAy/2016 12:34:56.1234"),
+                Some("%d/%b/%Y %H:%i:%S.%f"),
+                Time::from_slice(
+                    &mut ctx,
+                    &[2016, 5, 31, 12, 34, 56, 123400],
+                    TimeType::DateTime,
+                    6,
+                ),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("30/apRil/2016 12:34:56."),
+                Some("%d/%M/%Y %H:%i:%s.%f"),
+                Time::from_slice(
+                    &mut ctx,
+                    &[2016, 4, 30, 12, 34, 56, 0],
+                    TimeType::DateTime,
+                    6,
+                ),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            // '%r'
+            (
+                Some(" 04 :13:56 AM13/05/2019"),
+                Some("%r %d/%c/%Y"),
+                Time::from_slice(
+                    &mut ctx,
+                    &[2019, 5, 13, 4, 13, 56, 0],
+                    TimeType::DateTime,
+                    0,
+                ),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("12: 13:56 AM 13/05/2019"),
+                Some("%r%d/%c/%Y"),
+                Time::from_slice(
+                    &mut ctx,
+                    &[2019, 5, 13, 0, 13, 56, 0],
+                    TimeType::DateTime,
+                    0,
+                ),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("12:13 :56 pm 13/05/2019"),
+                Some("%r %d/%c/%Y"),
+                Time::from_slice(
+                    &mut ctx,
+                    &[2019, 5, 13, 12, 13, 56, 0],
+                    TimeType::DateTime,
+                    0,
+                ),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("12:3: 56pm  13/05/2019"),
+                Some("%r %d/%c/%Y"),
+                Time::from_slice(
+                    &mut ctx,
+                    &[2019, 5, 13, 12, 3, 56, 0],
+                    TimeType::DateTime,
+                    0,
+                ),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("11:13:56"),
+                Some("%r"),
+                Time::from_slice(&mut ctx, &[0, 0, 0, 11, 13, 56, 0], TimeType::DateTime, 0),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("11:13"),
+                Some("%r"),
+                Time::from_slice(&mut ctx, &[0, 0, 0, 11, 13, 0, 0], TimeType::DateTime, 0),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("11:"),
+                Some("%r"),
+                Time::from_slice(&mut ctx, &[0, 0, 0, 11, 0, 0, 0], TimeType::DateTime, 0),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("11"),
+                Some("%r"),
+                Time::from_slice(&mut ctx, &[0, 0, 0, 11, 0, 0, 0], TimeType::DateTime, 0),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("12"),
+                Some("%r"),
+                Time::from_slice(&mut ctx, &[0, 0, 0, 0, 0, 0, 0], TimeType::DateTime, 0),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            // "%T"
+            (
+                Some(" 4 :13:56 13/05/2019"),
+                Some("%T %d/%c/%Y"),
+                Time::from_slice(
+                    &mut ctx,
+                    &[2019, 5, 13, 4, 13, 56, 0],
+                    TimeType::DateTime,
+                    0,
+                ),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("23: 13:56  13/05/2019"),
+                Some("%T%d/%c/%Y"),
+                Time::from_slice(
+                    &mut ctx,
+                    &[2019, 5, 13, 23, 13, 56, 0],
+                    TimeType::DateTime,
+                    0,
+                ),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("12:13 :56 13/05/2019"),
+                Some("%T %d/%c/%Y"),
+                Time::from_slice(
+                    &mut ctx,
+                    &[2019, 5, 13, 12, 13, 56, 0],
+                    TimeType::DateTime,
+                    0,
+                ),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("19:3: 56  13/05/2019"),
+                Some("%T %d/%c/%Y"),
+                Time::from_slice(
+                    &mut ctx,
+                    &[2019, 5, 13, 19, 3, 56, 0],
+                    TimeType::DateTime,
+                    0,
+                ),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("21:13"),
+                Some("%T"),
+                Time::from_slice(&mut ctx, &[0, 0, 0, 21, 13, 0, 0], TimeType::DateTime, 0),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("21:"),
+                Some("%T"),
+                Time::from_slice(&mut ctx, &[0, 0, 0, 21, 0, 0, 0], TimeType::DateTime, 0),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            // More patterns than input string
+            (
+                Some(" 2/Jun"),
+                Some("%d/%b/%Y"),
+                Time::from_slice(&mut ctx, &[0, 6, 2, 0, 0, 0, 0], TimeType::DateTime, 0),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some(" liter"),
+                Some("lit era l"),
+                Time::from_slice(&mut ctx, &[0, 0, 0, 0, 0, 0, 0], TimeType::DateTime, 0),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            // Feb 29 in leap-year
+            (
+                Some("29/Feb/2020 12:34:56."),
+                Some("%d/%b/%Y %H:%i:%s.%f"),
+                Time::from_slice(
+                    &mut ctx,
+                    &[2020, 2, 29, 12, 34, 56, 0],
+                    TimeType::DateTime,
+                    0,
+                ),
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            // When `AllowInvalidDate` is true, check only that the month is in the range from 1 to
+            // 12 and the day is in the range from 1 to 31
+            // TODO: Now tikv don't support this flag `AllowInvalidDate` , so we don't test it.
+            //(
+            //    Some("31/April/2016 12:34:56."),
+            //    Some("%d/%M/%Y %H:%i:%s.%f"),
+            //    Time::from_slice(
+            //        &mut ctx,
+            //        &[2016, 4, 31, 12, 34, 56, 0],
+            //        TimeType::DateTime,
+            //        0,
+            //    ),
+            //    None,
+            //    ScalarFuncSig::StrToDateDatetime,
+            //),
+            //(
+            //    Some("29/Feb/2021 12:34:56."),
+            //    Some("%d/%b/%Y %H:%i:%s.%f"),
+            //    Time::from_slice(
+            //        &mut ctx,
+            //        &[2021, 2, 29, 12, 34, 56, 0],
+            //        TimeType::DateTime,
+            //        0,
+            //    ),
+            //    None,
+            //    ScalarFuncSig::StrToDateDatetime,
+            //),
+            //(
+            //    Some("30/Feb/2016 12:34:56.1234"),
+            //    Some("%d/%b/%Y %H:%i:%S.%f"),
+            //    Time::from_slice(
+            //        &mut ctx,
+            //        &[2016, 2, 30, 12, 34, 56, 123400],
+            //        TimeType::DateTime,
+            //        0,
+            //    ),
+            //    None,
+            //    ScalarFuncSig::StrToDateDatetime,
+            //),
+            // Test Failed Case
+            // invalid days when `AllowInvalidDate` is false
+            (
+                Some("04/31/2004"),
+                Some("%m/%d/%Y"),
+                None,
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ), // not exists in the real world
+            (
+                Some("29/Feb/2021 12:34:56."),
+                Some("%d/%b/%Y %H:%i:%s.%f"),
+                None,
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ), // Feb 29 in non-leap-year
+            // MySQL will try to parse '51' for '%m', fail
+            (
+                Some("512 2021"),
+                Some("%m%d %Y"),
+                None,
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            // format mismatch
+            (
+                Some("a09:30:17"),
+                Some("%h:%i:%s"),
+                None,
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            // followed by incomplete 'AM'/'PM'
+            (
+                Some("12:43:24 a"),
+                Some("%r"),
+                None,
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            // invalid minute
+            (
+                Some("23:60:12"),
+                Some("%T"),
+                None,
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("18"),
+                Some("%l"),
+                None,
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("00:21:22 AM"),
+                Some("%h:%i:%s %p"),
+                None,
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("100/10/22"),
+                Some("%y/%m/%d"),
+                None,
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("2010-11-12 11 am"),
+                Some("%Y-%m-%d %H %p"),
+                None,
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("2010-11-12 13 am"),
+                Some("%Y-%m-%d %h %p"),
+                None,
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            (
+                Some("2010-11-12 0 am"),
+                Some("%Y-%m-%d %h %p"),
+                None,
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            // MySQL accept `SEPTEMB` as `SEPTEMBER`, but we don't want this "feature" in TiDB
+            // unless we have to.
+            (
+                Some("15 SEPTEMB 2001"),
+                Some("%d %M %Y"),
+                None,
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            // '%r' tests
+            // hh = 13 with am is invalid
+            (
+                Some("13:13:56 AM13/5/2019"),
+                Some("%r"),
+                None,
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            // hh = 0 with am is invalid
+            (
+                Some("00:13:56 AM13/05/2019"),
+                Some("%r"),
+                None,
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            // hh = 0 with pm is invalid
+            (
+                Some("00:13:56 pM13/05/2019"),
+                Some("%r"),
+                None,
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+            // EOF while parsing "AM"/"PM"
+            (
+                Some("11:13:56a"),
+                Some("%r"),
+                None,
+                None,
+                ScalarFuncSig::StrToDateDatetime,
+            ),
+        ];
+        for (date, format, expected_time, expected_duration, func_sig) in cases {
+            let date = date.map(|str| str.as_bytes().to_vec());
+            let format = format.map(|str| str.as_bytes().to_vec());
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(date)
+                .push_param(format);
+            match func_sig {
+                ScalarFuncSig::StrToDateDatetime | ScalarFuncSig::StrToDateDate => {
+                    let output = output.evaluate::<Time>(func_sig).unwrap();
+                    assert_eq!(output, expected_time, "got {}", output.unwrap());
+                }
+                ScalarFuncSig::StrToDateDuration => {
+                    let output = output.evaluate::<Duration>(func_sig).unwrap();
+                    assert_eq!(output, expected_duration, "got {}", output.unwrap());
+                }
+                _ => {}
+            }
         }
     }
 }
