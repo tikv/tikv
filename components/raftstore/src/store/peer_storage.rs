@@ -633,7 +633,7 @@ where
         *gen_snap_task = Some(task);
     }
 
-    pub fn on_compact_raftlog(&mut self, idx: u64, state: &mut Option<CacheWarmupState>) {
+    pub fn on_compact_raftlog(&mut self, idx: u64, state: Option<&mut CacheWarmupState>) {
         self.entry_storage.compact_entry_cache(idx, state);
         self.cancel_generating_snap(Some(idx));
     }
@@ -1591,7 +1591,7 @@ pub mod tests {
                 new_storage_from_ents(region_scheduler, raftlog_fetch_scheduler, &td, &ents);
             raftlog_fetch_worker.start(ReadRunner::new(router, store.engines.raft.clone()));
             let mut cache_warmup_state = None;
-            store.compact_entry_cache(5, &mut cache_warmup_state);
+            store.compact_entry_cache(5, cache_warmup_state.as_mut());
             let mut e = store.entries(lo, hi, maxsize, GetEntriesContext::empty(true));
             if e == Err(raft::Error::Store(
                 raft::StorageError::LogTemporarilyUnavailable,

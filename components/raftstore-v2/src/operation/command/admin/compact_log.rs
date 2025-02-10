@@ -26,9 +26,8 @@ use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, RaftCmdRequ
 use protobuf::Message;
 use raftstore::{
     store::{
-        entry_storage::MAX_WARMED_UP_CACHE_KEEP_TIME, fsm::new_admin_request,
-        metrics::REGION_MAX_LOG_LAG, needs_evict_entry_cache, Transport, WriteTask,
-        RAFT_INIT_LOG_INDEX,
+        fsm::new_admin_request, metrics::REGION_MAX_LOG_LAG, needs_evict_entry_cache, Transport,
+        WriteTask, RAFT_INIT_LOG_INDEX,
     },
     Result,
 };
@@ -205,7 +204,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let mut cache_warmup_state = self.transfer_leader_state_mut().cache_warmup_state.take();
         self.entry_storage_mut().compact_entry_cache(
             std::cmp::min(alive_cache_idx, applied_idx + 1),
-            &mut cache_warmup_state,
+            cache_warmup_state.as_mut(),
         );
         self.transfer_leader_state_mut().cache_warmup_state = cache_warmup_state;
 
@@ -500,14 +499,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // Since this peer may be warming up the entry cache, log compaction should be
         // temporarily skipped. Otherwise, the warmup task may fail.
         if let Some(state) = &mut self.transfer_leader_state_mut().cache_warmup_state {
-            if !state.check_stale(MAX_WARMED_UP_CACHE_KEEP_TIME) {
+            if !state.check_stale() {
                 return;
             }
         }
 
         let mut cache_warmup_state = self.transfer_leader_state_mut().cache_warmup_state.take();
         self.entry_storage_mut()
-            .compact_entry_cache(res.compact_index, &mut cache_warmup_state);
+            .compact_entry_cache(res.compact_index, cache_warmup_state.as_mut());
         self.transfer_leader_state_mut().cache_warmup_state = cache_warmup_state;
 
         self.storage_mut()

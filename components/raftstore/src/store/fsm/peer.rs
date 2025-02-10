@@ -77,7 +77,6 @@ use crate::{
     store::{
         cmd_resp::{bind_term, new_error},
         demote_failed_voters_request,
-        entry_storage::MAX_WARMED_UP_CACHE_KEEP_TIME,
         fsm::{
             apply,
             store::{PollContext, StoreMeta},
@@ -2099,13 +2098,8 @@ where
         let low = res.low;
         // If the peer is not the leader anymore and it's not in entry cache warmup
         // state, or it is being destroyed, ignore the result.
-        if !self.fsm.peer.is_leader()
-            && self
-                .fsm
-                .peer
-                .transfer_leader_state
-                .cache_warmup_state
-                .is_none()
+        let cache_warmup_state = &self.fsm.peer.transfer_leader_state.cache_warmup_state;
+        if !self.fsm.peer.is_leader() && cache_warmup_state.is_none()
             || self.fsm.peer.pending_remove
         {
             self.fsm.peer.mut_store().clean_async_fetch_res(low);
@@ -2120,7 +2114,7 @@ where
                 .peer
                 .raft_group
                 .mut_store()
-                .on_async_warm_up_entry_cache_fetched(*res, state);
+                .on_async_warm_up_entry_cache_fetched(*res, state.range());
             self.fsm.peer.mut_store().clean_async_fetch_res(low);
             return;
         } else {
@@ -4477,7 +4471,7 @@ where
         // Since this peer may be warming up the entry cache, log compaction should be
         // temporarily skipped. Otherwise, the warmup task may fail.
         if let Some(state) = &mut self.fsm.peer.transfer_leader_state.cache_warmup_state {
-            if !state.check_stale(MAX_WARMED_UP_CACHE_KEEP_TIME) {
+            if !state.check_stale() {
                 return;
             }
         }
@@ -4490,9 +4484,10 @@ where
         let compact_to = state.get_index() + 1;
         self.fsm.peer.schedule_raftlog_gc(self.ctx, compact_to);
         self.fsm.peer.last_compacted_idx = compact_to;
+        let transfer_leader_state = &mut self.fsm.peer.transfer_leader_state;
         self.fsm.peer.raft_group.mut_store().on_compact_raftlog(
             compact_to,
-            &mut self.fsm.peer.transfer_leader_state.cache_warmup_state,
+            transfer_leader_state.cache_warmup_state.as_mut(),
         );
         if self.fsm.peer.is_witness() {
             self.fsm.peer.last_compacted_time = Instant::now();
@@ -5609,12 +5604,11 @@ where
 
                     {
                         self.fsm.peer.transfer_leader_state.cache_warmup_state = None;
+                        let cache_warmup_state =
+                            &mut self.fsm.peer.transfer_leader_state.cache_warmup_state;
                         let peer_store = self.fsm.peer.raft_group.mut_store();
                         peer_store.set_apply_state(apply_state);
-                        peer_store.compact_entry_cache(
-                            last_index + 1,
-                            &mut self.fsm.peer.transfer_leader_state.cache_warmup_state,
-                        );
+                        peer_store.compact_entry_cache(last_index + 1, cache_warmup_state.as_mut());
                         peer_store.raft_state_mut().mut_hard_state().commit = last_index;
                         peer_store.raft_state_mut().last_index = last_index;
                     }
@@ -6147,9 +6141,10 @@ where
 
         // leader may call `get_term()` on the latest replicated index, so compact
         // entries before `alive_cache_idx` instead of `alive_cache_idx + 1`.
-        self.fsm.peer.raft_group.mut_store().compact_entry_cache(
+        let transfer_leader_state = &mut self.fsm.peer.transfer_leader_state;
+        self.fsm.peer.raft_group.mut_store().on_compact_raftlog(
             std::cmp::min(alive_cache_idx, applied_idx + 1),
-            &mut self.fsm.peer.transfer_leader_state.cache_warmup_state,
+            transfer_leader_state.cache_warmup_state.as_mut(),
         );
         if needs_evict_entry_cache(self.ctx.cfg.evict_cache_on_memory_ratio) {
             self.fsm.peer.mut_store().evict_entry_cache(true);

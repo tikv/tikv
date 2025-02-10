@@ -495,13 +495,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if self.term() != logs.term {
             self.entry_storage_mut().clean_async_fetch_res(low);
         } else if let Some(state) = self.transfer_leader_state().cache_warmup_state.clone() {
-            if self
-                .entry_storage_mut()
-                .on_async_warm_up_entry_cache_fetched(*logs, &state)
-            {
-                self.ack_transfer_leader_msg(false);
-                self.set_has_ready();
-            }
+            self.entry_storage_mut()
+                .on_async_warm_up_entry_cache_fetched(*logs, state.range());
             self.entry_storage_mut().clean_async_fetch_res(low);
             return;
         } else {

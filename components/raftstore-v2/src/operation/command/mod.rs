@@ -455,7 +455,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .set_applied_index(apply_res.applied_index);
         entry_storage.set_applied_term(apply_res.applied_term);
         if !is_leader {
-            entry_storage.compact_entry_cache(apply_res.applied_index + 1, &mut cache_warmup_state);
+            entry_storage
+                .compact_entry_cache(apply_res.applied_index + 1, cache_warmup_state.as_mut());
         }
         self.transfer_leader_state_mut().cache_warmup_state = cache_warmup_state;
 

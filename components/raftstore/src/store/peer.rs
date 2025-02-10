@@ -3672,7 +3672,7 @@ where
         if !self.is_leader() {
             self.raft_group.mut_store().compact_entry_cache(
                 apply_state.applied_index + 1,
-                &mut self.transfer_leader_state.cache_warmup_state,
+                self.transfer_leader_state.cache_warmup_state.as_mut(),
             );
         }
 
@@ -4769,21 +4769,34 @@ where
         false
     }
 
+    pub fn set_pending_transfer_leader_msg(&mut self, msg: &eraftpb::Message) {
+        // log_term is set by original leader in pre transfer leader stage.
+        // Callers must guarantee that the message is a valid transfer leader
+        // message.
+        //
+        // See more in `Peer::pre_transfer_leader`.
+        assert!(
+            msg.get_msg_type() == eraftpb::MessageType::MsgTransferLeader
+                && msg.get_log_term() == self.term(),
+            "{} unexpected message type {:?}",
+            self.tag,
+            msg.get_msg_type(),
+        );
+        self.transfer_leader_state.transfer_leader_msg = Some(msg.clone());
+    }
+
     pub fn maybe_ack_transfer_leader_msg<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) -> bool {
-        if self
-            .transfer_leader_state
-            .pending_transfer_leader_msg
-            .is_none()
-        {
-            return false;
-        }
         if self.is_leader() {
-            self.transfer_leader_state.pending_transfer_leader_msg = None;
+            self.transfer_leader_state.transfer_leader_msg = None;
             return false;
         }
-        if self.is_ready_ack_transfer_leader_msg(ctx) {
+        let Some(msg) = &self.transfer_leader_state.transfer_leader_msg else {
+            return false;
+        };
+        let low_index = msg.get_index();
+        if self.is_ready_ack_transfer_leader_msg(ctx, low_index) {
             self.ack_transfer_leader_msg(false);
-            self.transfer_leader_state.pending_transfer_leader_msg = None;
+            self.transfer_leader_state.transfer_leader_msg = None;
             true
         } else {
             false
@@ -4795,22 +4808,18 @@ where
     ///
     /// This return whether the msg should be acked. When cache is warmed up
     /// or the warmup operation is timeout, it is true.
-    fn is_ready_ack_transfer_leader_msg<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) -> bool {
+    fn is_ready_ack_transfer_leader_msg<T>(
+        &mut self,
+        ctx: &mut PollContext<EK, ER, T>,
+        low_index: u64,
+    ) -> bool {
         if !ctx.cfg.warmup_entry_cache_enabled() {
-            self.transfer_leader_state.pending_transfer_leader_msg = None;
             return true;
         }
-        let Some(msg) = self
-            .transfer_leader_state
-            .pending_transfer_leader_msg
-            .as_ref()
-        else {
-            return false;
-        };
 
         // The start index of warmup range. It is leader's entry_cache_first_index,
         // which in general is equal to the lowest matched index.
-        let mut low = msg.get_index();
+        let mut low = low_index;
         let last_index = self.get_store().last_index();
         let mut should_ack_now = false;
 
@@ -4841,33 +4850,39 @@ where
             return true;
         }
 
+        // Reset cache warmup state if an election timeout has passed since the
+        // previous warmup, because cache may have been invalidated by
+        // `compact_entry_cache` and a new leader may have been elected.
+        // The reset allows it to initiate a new warmup operation.
+        let cache_warmup_state = &mut self.transfer_leader_state.cache_warmup_state;
+        if cache_warmup_state.as_mut().is_some_and(|s| s.check_stale()) {
+            info!("reset stale cache warmup state";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer_id(),
+                "range" => ?self.transfer_leader_state.cache_warmup_state.as_ref().unwrap().range(),
+            );
+            self.transfer_leader_state.cache_warmup_state = None;
+        }
+
         // Check if the warmup operation is timeout if warmup is already started.
         if let Some(state) = &mut self.transfer_leader_state.cache_warmup_state {
             // If it is timeout, this peer should ack the message so that
             // the leadership transfer process can continue.
-            state.check_task_timeout(ctx.cfg.max_entry_cache_warmup_duration.0)
+            state.check_task_timeout()
+        } else if let Some((low, high)) = self.raft_group.mut_store().async_warm_up_entry_cache(low)
+        {
+            self.transfer_leader_state.cache_warmup_state = Some(CacheWarmupState::new(
+                low,
+                high,
+                ctx.cfg.max_entry_cache_warmup_duration.0,
+                ctx.cfg.raft_base_tick_interval.0 * ctx.cfg.raft_election_timeout_ticks as u32,
+            ));
+            false
         } else {
-            let (warmup_high_index, state) =
-                self.raft_group.mut_store().async_warm_up_entry_cache(low);
-            self.transfer_leader_state.cache_warmup_state = state;
-            warmup_high_index.is_none()
+            // Ack transfer leader immediately if async entry cache fails or
+            // have been warmed up already.
+            true
         }
-    }
-
-    pub fn set_pending_transfer_leader_msg(&mut self, msg: &eraftpb::Message) {
-        // log_term is set by original leader in pre transfer leader stage.
-        // Callers must guarantee that the message is a valid transfer leader
-        // message.
-        //
-        // See more in `Peer::pre_transfer_leader`.
-        assert!(
-            msg.get_msg_type() == eraftpb::MessageType::MsgTransferLeader
-                && msg.get_log_term() == self.term(),
-            "{} unexpected message type {:?}",
-            self.tag,
-            msg.get_msg_type(),
-        );
-        self.transfer_leader_state.pending_transfer_leader_msg = Some(msg.clone());
     }
 
     pub fn ack_transfer_leader_msg(
@@ -6299,7 +6314,7 @@ pub struct TransferLeaderState {
     /// A pre transfer leader message sent from leader.
     /// Only leader transferee can update this field and it is meaningful only
     /// when a peer is a leader transferee.
-    pub pending_transfer_leader_msg: Option<eraftpb::Message>,
+    pub transfer_leader_msg: Option<eraftpb::Message>,
     /// The entry cache async warm up state that is issued by a pre transfer
     /// leader message.
     pub cache_warmup_state: Option<CacheWarmupState>,
