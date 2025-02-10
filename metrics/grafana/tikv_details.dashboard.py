@@ -6640,6 +6640,24 @@ def RocksDB() -> RowPanel:
     layout.row(
         [
             graph_panel(
+                title="Ingest SST allow_write",
+                description=None,
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_storage_ingest_external_file_allow_write_counter",
+                            by_labels=["type"],
+                        ),
+                        additional_groupby=True,
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
                 title="Write Stall Reason",
                 description=None,
                 yaxes=yaxes(left_format=UNITS.SHORT),

@@ -17,8 +17,8 @@ use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::{FlowInfo, RocksEngine};
 use engine_traits::{
-    raw_ttl::ttl_current_ts, DeleteStrategy, Error as EngineError, KvEngine, MiscExt, Range,
-    WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
+    raw_ttl::ttl_current_ts, DeleteStrategy, Error as EngineError, ImportExt, KvEngine, MiscExt,
+    Range, WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use file_system::{IoType, WithIoType};
 use futures::executor::block_on;
@@ -1054,6 +1054,19 @@ impl<E: Engine> GcRunnerCore<E> {
                 id,
                 region_info_provider,
             } => {
+                let smallest_key = wb.smallest_key.as_ref().unwrap().as_encoded().as_slice();
+                let largest_key = wb.largest_key.as_ref().unwrap().as_encoded().as_slice();
+                // unwrap() is safe as None only occurs in multi-rocksdb version.
+                let kv_engine = self.engine.kv_engine().unwrap();
+                // Acquire latch to prevent concurrency with ingestion operations
+                // using RocksDB IngestExternalFileOptions.allow_write = true.
+                let _ingest_latch_guard = kv_engine.acquire_ingest_latch(Range {
+                    start_key: smallest_key,
+                    end_key: keys::next_key(largest_key).as_slice(),
+                });
+
+                fail_point!("after_gc_orphan_versions_ingest_latch_acquired");
+
                 let count = wb.count();
                 match wb.batch {
                     Either::Left(mut wb) => {
@@ -1570,11 +1583,10 @@ pub mod test_gc_worker {
 
 #[cfg(test)]
 mod tests {
-
     use std::{
         collections::{BTreeMap, BTreeSet},
         path::Path,
-        sync::mpsc,
+        sync::{atomic::AtomicBool, mpsc},
         thread,
         time::Duration,
     };
@@ -2909,5 +2921,129 @@ mod tests {
         cfg_manager.dispatch(config_change).unwrap();
 
         assert_eq!(gc_worker.get_worker_thread_count(), 2);
+    }
+
+    // This test verifies that the GcOrphanVersions task is blocked by concurrent
+    // ingest operations.
+    #[test]
+    fn test_gc_orphan_version_blocked_by_ingest() {
+        let store_id = 1;
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let prefixed_engine = PrefixedEngine(engine.clone());
+        let (tx, _rx) = mpsc::channel();
+        let cfg = GcConfig::default();
+        let coprocessor_host = CoprocessorHost::default();
+        let mut runner = GcRunnerCore::new(
+            store_id,
+            prefixed_engine.clone(),
+            tx,
+            GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())), None)
+                .0
+                .tracker("gc-worker".to_owned()),
+            cfg,
+            coprocessor_host,
+        );
+
+        let kv_engine = engine.kv_engine().unwrap();
+        let _ingest_latch_guard = kv_engine.acquire_ingest_latch(Range {
+            start_key: b"a",
+            end_key: b"b",
+        });
+
+        let gc_task_completed = Arc::new(AtomicBool::new(false));
+        let gc_task_completed_clone = gc_task_completed.clone();
+        let gc_handle = thread::spawn(move || {
+            let mut wb = DeleteBatch::new(&Some(engine.kv_engine().unwrap()));
+            wb.delete(b"a", 100_u64.into()).unwrap();
+            wb.delete(b"b", 101_u64.into()).unwrap();
+            let region_info_provider = Arc::new(MockRegionInfoProvider::new(vec![]));
+            let task = GcTask::OrphanVersions {
+                wb,
+                region_info_provider,
+                id: 0,
+            };
+            runner.run(task);
+            gc_task_completed_clone.store(true, Ordering::SeqCst);
+        });
+
+        thread::sleep(Duration::from_millis(500));
+        // The GC task must remain pending as _ingest_latch_guard is holding the latch.
+        assert!(
+            !gc_task_completed.load(Ordering::SeqCst),
+            "GC task completed before dropping the guard"
+        );
+        drop(_ingest_latch_guard);
+        gc_handle.join().expect("Gc thread panicked");
+        // The GC task must have finished as _ingest_latch_guard has released the latch.
+        assert!(
+            gc_task_completed.load(Ordering::SeqCst),
+            "GC task did not complete as expected"
+        );
+    }
+
+    // This test verifies that the GcOrphanVersions task blocks the ingest
+    // operation.
+    #[cfg(feature = "failpoints")]
+    #[test]
+    fn test_gc_orphan_version_blocks_ingest() {
+        let store_id = 1;
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let prefixed_engine = PrefixedEngine(engine.clone());
+        let (tx, _rx) = mpsc::channel();
+        let cfg = GcConfig::default();
+        let coprocessor_host = CoprocessorHost::default();
+        let mut runner = GcRunnerCore::new(
+            store_id,
+            prefixed_engine.clone(),
+            tx,
+            GcWorkerConfigManager(Arc::new(VersionTrack::new(cfg.clone())), None)
+                .0
+                .tracker("gc-worker".to_owned()),
+            cfg,
+            coprocessor_host,
+        );
+
+        let engine_clone = engine.clone();
+        let gc_handle = thread::spawn(move || {
+            fail::cfg("after_gc_orphan_versions_ingest_latch_acquired", "pause").unwrap();
+            let mut wb = DeleteBatch::new(&Some(engine_clone.kv_engine().unwrap()));
+            wb.delete(b"a", 100_u64.into()).unwrap();
+            wb.delete(b"b", 101_u64.into()).unwrap();
+            let region_info_provider = Arc::new(MockRegionInfoProvider::new(vec![]));
+            let task = GcTask::OrphanVersions {
+                wb,
+                region_info_provider,
+                id: 0,
+            };
+            runner.run(task);
+        });
+
+        // Wait gc_handle to start.
+        thread::sleep(Duration::from_millis(500));
+        let ingest_task_completed = Arc::new(AtomicBool::new(false));
+        let ingest_task_completed_clone = ingest_task_completed.clone();
+        let ingest_handle = thread::spawn(move || {
+            let kv_engine = engine.kv_engine().unwrap();
+            let _ingest_latch_guard = kv_engine.acquire_ingest_latch(Range {
+                start_key: b"a",
+                end_key: b"b",
+            });
+            ingest_task_completed_clone.store(true, Ordering::SeqCst);
+        });
+        thread::sleep(Duration::from_millis(500));
+        // The ingest task must remain pending as _gc_latch_guard is holding the latch.
+        assert!(
+            !ingest_task_completed.load(Ordering::SeqCst),
+            "Ingest task completed before dropping the GC latch guard"
+        );
+        fail::remove("after_gc_orphan_versions_ingest_latch_acquired");
+        thread::sleep(Duration::from_millis(500));
+        gc_handle.join().expect("Gc thread panicked");
+        ingest_handle.join().expect("Ingest thread panicked");
+        // The ingest task must have finished as _gc_latch_guard has released the latch.
+        assert!(
+            ingest_task_completed.load(Ordering::SeqCst),
+            "Ingest task did not complete as expected"
+        );
     }
 }
