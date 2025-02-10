@@ -1675,12 +1675,10 @@ fn get_micro_timestamp(time: &DateTime, tz: &Tz) -> Result<i64> {
     let naive_datetime = chrono::NaiveDateTime::new(naive_date, naive_time);
 
     // MySQL chooses earliest time when there are multi mapped time
-    let res_opt = tz.from_local_datetime(&naive_datetime).earliest();
-    let res = match res_opt {
+    let res = match tz.from_local_datetime(&naive_datetime).earliest() {
         Some(val) => val,
         None => {
-            let tz_opt = tz.get_chrono_tz();
-            let chrono_tz = match tz_opt {
+            let chrono_tz = match tz.get_chrono_tz() {
                 Some(val) => val,
                 None => return Err(Error::incorrect_parameters("Can't get chrono tz").into()),
             };
@@ -1690,8 +1688,7 @@ fn get_micro_timestamp(time: &DateTime, tz: &Tz) -> Result<i64> {
                 .ymd(year, month, day)
                 .and_hms(hour, minute, second)
                 .with_timezone(&chrono_tz);
-            let ret_res = find_zone_transition(time_with_tz);
-            match ret_res {
+            match find_zone_transition(time_with_tz) {
                 Ok(val) => return Ok(val.naive_utc().timestamp_micros()),
                 Err(err) => return Err(err),
             }
@@ -1703,8 +1700,7 @@ fn get_micro_timestamp(time: &DateTime, tz: &Tz) -> Result<i64> {
 #[rpn_fn(capture = [ctx])]
 #[inline]
 pub fn unix_timestamp_int(ctx: &mut EvalContext, time: &DateTime) -> Result<Option<i64>> {
-    let timestamp_res = get_micro_timestamp(time, &ctx.cfg.tz);
-    let timestamp = match timestamp_res {
+    let timestamp = match get_micro_timestamp(time, &ctx.cfg.tz) {
         Ok(val) => val,
         Err(err) => return Err(err),
     };
@@ -1723,8 +1719,7 @@ pub fn unix_timestamp_decimal(
     extra: &RpnFnCallExtra,
     time: &DateTime,
 ) -> Result<Option<Decimal>> {
-    let timestamp_res = get_micro_timestamp(time, &ctx.cfg.tz);
-    let timestamp = match timestamp_res {
+    let timestamp = match get_micro_timestamp(time, &ctx.cfg.tz) {
         Ok(val) => val,
         Err(err) => return Err(err),
     };

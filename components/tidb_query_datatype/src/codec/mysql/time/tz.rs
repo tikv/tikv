@@ -27,7 +27,7 @@ impl Tz {
             _ => None,
         }
     }
-    
+
     /// Constructs a time zone from the offset in seconds.
     pub fn from_offset(secs: i64) -> Option<Self> {
         FixedOffset::east_opt(secs as i32).map(Tz::Offset)
