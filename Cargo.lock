@@ -3756,7 +3756,11 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git#19eeae6dc7734af12475fbcf9d368168a0314085"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#56f3a91154d91a37eb4508976f8288c1fdec46b2"
+>>>>>>> a0a0ccf3ba (RocksDB: Update RocksDB to include fix for deprecated option (#18195))
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -3775,7 +3779,11 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git#19eeae6dc7734af12475fbcf9d368168a0314085"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#56f3a91154d91a37eb4508976f8288c1fdec46b2"
+>>>>>>> a0a0ccf3ba (RocksDB: Update RocksDB to include fix for deprecated option (#18195))
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -5733,7 +5741,11 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git#19eeae6dc7734af12475fbcf9d368168a0314085"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#56f3a91154d91a37eb4508976f8288c1fdec46b2"
+>>>>>>> a0a0ccf3ba (RocksDB: Update RocksDB to include fix for deprecated option (#18195))
 dependencies = [
  "libc 0.2.151",
  "librocksdb_sys",
