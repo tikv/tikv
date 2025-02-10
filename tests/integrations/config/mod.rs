@@ -761,6 +761,7 @@ fn test_serde_custom_tikv_config() {
             high_pri_pool_ratio: 0.8,
             low_pri_pool_ratio: 0.2,
             memory_allocator: Some(String::from("nodump")),
+            hyper_clock_cache: None,
         },
         io_rate_limit: IoRateLimitConfig {
             max_bytes_per_sec: ReadableSize::mb(1000),
