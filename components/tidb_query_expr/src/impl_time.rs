@@ -1,8 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use chrono::{self, DurationRound, Offset, TimeZone};
 use std::str::from_utf8;
 
+use chrono::{self, DurationRound, Offset, TimeZone};
 use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
 use tidb_query_datatype::{
