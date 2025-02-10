@@ -33674,13 +33674,146 @@
           },
           "gridPos": {
             "h": 7,
-            "w": 12,
+            "w": 24,
             "x": 0,
             "y": 119
           },
           "height": null,
           "hideTimeOverride": false,
           "id": 239,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(rate(\n    tikv_storage_ingest_external_file_allow_write_counter\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, $additional_groupby) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{type}} {{$additional_groupby}}",
+              "metric": "",
+              "query": "sum(rate(\n    tikv_storage_ingest_external_file_allow_write_counter\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type, $additional_groupby) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Ingest SST allow_write",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": null,
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 0,
+            "y": 126
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 244,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -33809,11 +33942,15 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 119
+            "y": 126
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 240,
+=======
+          "id": 245,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -33987,11 +34124,15 @@
             "h": 7,
             "w": 12,
             "x": 0,
-            "y": 126
+            "y": 133
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 241,
+=======
+          "id": 246,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -34120,11 +34261,15 @@
             "h": 7,
             "w": 12,
             "x": 12,
-            "y": 126
+            "y": 133
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 242,
+=======
+          "id": 247,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -34260,7 +34405,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 243,
+=======
+      "id": 248,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -34299,7 +34448,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 244,
+=======
+          "id": 249,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -34447,7 +34600,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 245,
+=======
+          "id": 250,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -34595,7 +34752,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 246,
+=======
+          "id": 251,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -34728,7 +34889,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 247,
+=======
+          "id": 252,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -34861,7 +35026,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 248,
+=======
+          "id": 253,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -35039,7 +35208,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 249,
+=======
+          "id": 254,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -35217,7 +35390,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 250,
+=======
+          "id": 255,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -35395,7 +35572,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 251,
+=======
+          "id": 256,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -35528,7 +35709,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 252,
+=======
+          "id": 257,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -35706,7 +35891,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 253,
+=======
+          "id": 258,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -35839,7 +36028,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 254,
+=======
+          "id": 259,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -36002,7 +36195,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 255,
+=======
+          "id": 260,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -36180,7 +36377,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 256,
+=======
+          "id": 261,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -36358,7 +36559,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 257,
+=======
+          "id": 262,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -36536,7 +36741,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 258,
+=======
+          "id": 263,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -36669,7 +36878,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 259,
+=======
+          "id": 264,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -36847,7 +37060,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 260,
+=======
+          "id": 265,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -36980,7 +37197,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 261,
+=======
+          "id": 266,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -37158,7 +37379,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 262,
+=======
+          "id": 267,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -37291,7 +37516,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 263,
+=======
+          "id": 268,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -37424,7 +37653,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 264,
+=======
+          "id": 269,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -37602,7 +37835,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 265,
+=======
+          "id": 270,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -37780,7 +38017,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 266,
+=======
+          "id": 271,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -37913,7 +38154,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 267,
+=======
+          "id": 272,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -38091,7 +38336,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 268,
+=======
+          "id": 273,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -38224,7 +38473,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 269,
+=======
+          "id": 274,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -38402,7 +38655,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 270,
+=======
+          "id": 275,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -38538,7 +38795,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 271,
+=======
+      "id": 276,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -38577,7 +38838,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 272,
+=======
+          "id": 277,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -38710,7 +38975,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 273,
+=======
+          "id": 278,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -38858,7 +39127,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 274,
+=======
+          "id": 279,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -39059,7 +39332,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 275,
+=======
+          "id": 280,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -39192,7 +39469,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 276,
+=======
+          "id": 281,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -39325,7 +39606,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 277,
+=======
+          "id": 282,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -39458,7 +39743,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 278,
+=======
+          "id": 283,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -39591,7 +39880,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 279,
+=======
+          "id": 284,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -39724,7 +40017,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 280,
+=======
+          "id": 285,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -39864,7 +40161,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 281,
+=======
+          "id": 286,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "legend": {
             "show": false
@@ -39969,7 +40270,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 282,
+=======
+          "id": 287,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "legend": {
             "show": false
@@ -40067,7 +40372,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 283,
+=======
+          "id": 288,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -40207,7 +40516,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 284,
+=======
+          "id": 289,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "legend": {
             "show": false
@@ -40305,7 +40618,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 285,
+=======
+          "id": 290,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -40578,7 +40895,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 287,
+=======
+          "id": 291,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "legend": {
             "show": false
@@ -40676,7 +40997,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 288,
+=======
+          "id": 292,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -40884,7 +41209,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 289,
+=======
+          "id": 293,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "legend": {
             "show": false
@@ -40982,7 +41311,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 290,
+=======
+          "id": 294,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -41183,7 +41516,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 291,
+=======
+          "id": 295,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -41391,7 +41728,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 292,
+=======
+          "id": 296,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -41569,7 +41910,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 293,
+=======
+          "id": 297,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -41702,7 +42047,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 294,
+=======
+          "id": 298,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -41835,7 +42184,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 295,
+=======
+          "id": 299,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -41968,7 +42321,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 296,
+=======
+          "id": 300,
+>>>>>>> 5a4166e29d (raftstore: support rocksdb writes during ingestion (#18096))
           "interval": null,
           "isNew": true,
           "legend": {
