@@ -133,7 +133,7 @@ impl Runnable for Runner {
 impl Drop for Runner {
     fn drop(&mut self) {
         if let Err(e) = std::fs::remove_file(&self.target) {
-            warn!("remove disk latency inspection file failed"; "err" => ?e);
+            warn!("remove disk latency inspector file failed"; "err" => ?e);
         }
     }
 }
