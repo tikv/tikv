@@ -1641,7 +1641,7 @@ fn find_zone_transition(
             t2 = t3;
         }
     }
-    return Ok(t2);
+    Ok(t2)
 }
 
 // unix_timestamp_to_mysql_unix_timestamp converts micto timestamp into MySQL's
@@ -1653,7 +1653,7 @@ fn unix_timestamp_to_mysql_unix_timestamp(
     micro_time: i64,
     frac: i8,
 ) -> Result<Decimal> {
-    if micro_time < 1000000 || micro_time > 32536771199999999 {
+    if !(1000000..=32536771199999999).contains(&micro_time) {
         return Ok(Decimal::zero());
     }
 
@@ -1697,7 +1697,7 @@ fn get_micro_timestamp(time: &DateTime, tz: &Tz) -> Result<i64> {
             }
         }
     };
-    return Ok(res.naive_utc().timestamp_micros());
+    Ok(res.naive_utc().timestamp_micros())
 }
 
 #[rpn_fn(capture = [ctx])]
@@ -1732,7 +1732,7 @@ pub fn unix_timestamp_decimal(
         timestamp,
         extra.ret_field_type.get_decimal() as i8,
     )?;
-    return Ok(Some(res));
+    Ok(Some(res))
 }
 
 fn build_timestamp_diff_meta(expr: &mut Expr) -> Result<IntervalUnit> {
@@ -4271,7 +4271,7 @@ mod tests {
 
         for (datetime, offset, time_zone_name, expected) in cases {
             let mut cfg = EvalConfig::new();
-            if time_zone_name.len() == 0 {
+            if time_zone_name.is_empty() {
                 cfg.set_time_zone_by_offset(offset).unwrap();
             } else {
                 cfg.set_time_zone_by_name(time_zone_name).unwrap();
@@ -4381,7 +4381,7 @@ mod tests {
 
         for (datetime, offset, time_zone_name, fsp, expected) in cases {
             let mut cfg = EvalConfig::new();
-            if time_zone_name.len() == 0 {
+            if time_zone_name.is_empty() {
                 cfg.set_time_zone_by_offset(offset).unwrap();
             } else {
                 cfg.set_time_zone_by_name(time_zone_name).unwrap();
@@ -4401,6 +4401,7 @@ mod tests {
         }
     }
 
+    #[test]
     fn test_timestamp_diff() {
         let test_cases = vec![
             (
