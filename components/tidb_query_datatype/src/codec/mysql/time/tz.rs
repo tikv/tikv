@@ -23,7 +23,7 @@ pub enum Tz {
 impl Tz {
     pub fn get_chrono_tz(&self) -> Option<chrono_tz::Tz> {
         match self {
-            Tz::Name(tz) => return Some(*tz),
+            Tz::Name(tz) => Some(*tz),
             _ => None,
         }
     }
