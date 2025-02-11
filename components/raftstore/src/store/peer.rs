@@ -4254,19 +4254,20 @@ where
                 }
             }
         }
-        let (mut min_m, min_c) = (min_m.unwrap_or(0), min_c.unwrap_or(0));
+        let (min_m, min_c) = (min_m.unwrap_or(0), min_c.unwrap_or(0));
         if min_m < min_c {
             warn!(
-                "min_matched < min_committed, raft progress is inaccurate";
+                "min_matched < min_committed, this is likely due to unpersisted raft log loss after restart";
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
                 "min_matched" => min_m,
                 "min_committed" => min_c,
             );
-            // Reset `min_matched` to `min_committed`, since the raft log at `min_committed`
-            // is known to be committed in all peers, all of the peers should also have
-            // replicated it
-            min_m = min_c;
+            // Do NOT override `min_matched` to `min_committed` here because
+            // some logs maybe not be persisted after restart when
+            // `max_apply_unpersisted_log_limit > 0`.
+            // The CatchUpLogs phase should use the real min matched log index
+            // to recover raft state.
         }
         Ok((min_m, min_c))
     }
