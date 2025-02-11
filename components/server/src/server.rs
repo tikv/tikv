@@ -313,10 +313,7 @@ where
 
                     // SAFETY: we will call `remove_thread_memory_accessor` at before_stop.
                     unsafe { add_thread_memory_accessor() };
-<<<<<<< HEAD
-=======
                     thread_allocate_exclusive_arena().unwrap();
->>>>>>> 18f44195c6 (*: Fix incorrect mapped allocation per thread metric (#18126))
                 })
                 .before_stop(|| {
                     remove_thread_memory_accessor();
