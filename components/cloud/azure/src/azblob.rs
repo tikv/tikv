@@ -11,7 +11,10 @@ use azure_core::{
     auth::{TokenCredential, TokenResponse},
     new_http_client,
 };
-use azure_identity::{ClientSecretCredential, DefaultAzureCredential, TokenCredentialOptions};
+use azure_identity::{
+    AutoRefreshingTokenCredential, ClientSecretCredential, DefaultAzureCredential,
+    TokenCredentialOptions,
+};
 use azure_storage::{prelude::*, ConnectionString, ConnectionStringBuilder};
 use azure_storage_blobs::{blob::operations::PutBlockBlobBuilder, prelude::*};
 use cloud::blob::{
@@ -386,6 +389,16 @@ trait ContainerBuilder: 'static + Send + Sync {
 /// Also see [`DefaultAzureCredential`].
 struct DefaultContainerBuilder {
     config: Config,
+    cred: AutoRefreshingTokenCredential,
+}
+
+impl DefaultContainerBuilder {
+    fn new(config: Config) -> Self {
+        Self {
+            config,
+            cred: AutoRefreshingTokenCredential::new(Arc::<DefaultAzureCredential>::default()),
+        }
+    }
 }
 
 #[async_trait]
@@ -394,9 +407,9 @@ impl ContainerBuilder for DefaultContainerBuilder {
         let account_name = self.config.get_account_name()?;
         let bucket = (*self.config.bucket.bucket).to_owned();
 
-        let cred = DefaultAzureCredential::default();
         let token_resource = format!("https://{}.blob.core.windows.net", &account_name);
-        let token = cred
+        let token = self
+            .cred
             .get_token(&token_resource)
             .await
             .map_err(|e| {
@@ -672,7 +685,7 @@ impl AzureStorage {
             // default.
             Ok(AzureStorage {
                 config: config.clone(),
-                client_builder: Arc::new(DefaultContainerBuilder { config }),
+                client_builder: Arc::new(DefaultContainerBuilder::new(config)),
             })
         }
     }
