@@ -59,13 +59,13 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Commit {
         let snapshot_reader = if keys.len() <= 1 {
             SnapshotReader::new_with_ctx(self.lock_ts, snapshot, &self.ctx)
         } else {
+            keys.sort();
             let mut snapshot_reader = SnapshotReader::new_scan_mode_with_ctx(
                 self.lock_ts,
                 snapshot,
                 tikv_kv::ScanMode::Forward,
                 &self.ctx,
             );
-            keys.sort();
             snapshot_reader
                 .reader
                 .set_range(keys.first().cloned(), None);

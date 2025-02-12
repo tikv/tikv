@@ -9,7 +9,6 @@
 use std::mem;
 
 use engine_traits::CF_WRITE;
-use itertools::Itertools;
 use kvproto::kvrpcpb::{
     AssertionLevel, ExtraOp, PrewriteRequestForUpdateTsConstraint,
     PrewriteRequestPessimisticAction::{self, *},
@@ -541,13 +540,16 @@ impl<K: PrewriteKind> Prewriter<K> {
         let snapshot_reader = if self.mutations.len() <= 1 {
             SnapshotReader::new_with_ctx(self.start_ts, snapshot, &self.ctx)
         } else {
-            let snapshot_reader = SnapshotReader::new_scan_mode_with_ctx(
+            self.mutations.sort_by(|a, b| a.key().cmp(b.key()));
+            let mut snapshot_reader = SnapshotReader::new_scan_mode_with_ctx(
                 self.start_ts,
                 snapshot,
                 tikv_kv::ScanMode::Forward,
                 &self.ctx,
             );
-            self.mutations.sort_by(|a, b| a.key().cmp(&b.key()));
+            snapshot_reader
+                .reader
+                .set_range(self.mutations.first().map(|m| m.key().clone()), None);
             snapshot_reader
         };
         let mut reader = ReaderWithStats::new(snapshot_reader, context.statistics);
