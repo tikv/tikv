@@ -519,6 +519,17 @@ where
     CheckPendingAdmin(UnboundedSender<CheckAdminResponse>),
 }
 
+/// Campaign type for triggering a Raft campaign.
+#[derive(Debug, Clone, Copy)]
+pub enum CampaignType {
+    /// Forcely campaign to be the leader.
+    ForceLeader,
+    /// Campaign triggered by the leader of a parent region. It's used to make
+    /// the new splitted peer campaign to get votes.
+    /// Only if the parent region has valid leader, will it be safe to do that.
+    UnsafeSplitCampaign,
+}
+
 /// Message that will be sent to a peer.
 ///
 /// These messages are not significant and can be dropped occasionally.
@@ -611,7 +622,8 @@ pub enum CasualMessage<EK: KvEngine> {
     },
 
     // Trigger raft to campaign which is used after exiting force leader
-    Campaign,
+    // or make new splitted peers campaign to get votes.
+    Campaign(CampaignType),
 }
 
 impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
@@ -674,7 +686,9 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
                 "SnapshotApplied, peer_id={}, tombstone={}",
                 peer_id, tombstone
             ),
-            CasualMessage::Campaign => write!(fmt, "Campaign"),
+            CasualMessage::Campaign(_) => {
+                write!(fmt, "Campaign")
+            }
         }
     }
 }
