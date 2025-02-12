@@ -2143,6 +2143,7 @@ dependencies = [
  "engine_traits",
  "kvproto",
  "raft",
+ "tikv_util",
  "tracker",
  "txn_types",
 ]
@@ -2230,6 +2231,7 @@ dependencies = [
  "log_wrappers",
  "protobuf",
  "raft",
+ "rand 0.8.5",
  "serde",
  "slog",
  "slog-global",
@@ -3814,7 +3816,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#19eeae6dc7734af12475fbcf9d368168a0314085"
+source = "git+https://github.com/tikv/rust-rocksdb.git#56f3a91154d91a37eb4508976f8288c1fdec46b2"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -3833,7 +3835,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#19eeae6dc7734af12475fbcf9d368168a0314085"
+source = "git+https://github.com/tikv/rust-rocksdb.git#56f3a91154d91a37eb4508976f8288c1fdec46b2"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -5791,7 +5793,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#19eeae6dc7734af12475fbcf9d368168a0314085"
+source = "git+https://github.com/tikv/rust-rocksdb.git#56f3a91154d91a37eb4508976f8288c1fdec46b2"
 dependencies = [
  "libc 0.2.151",
  "librocksdb_sys",
@@ -7278,6 +7280,7 @@ dependencies = [
  "bstr",
  "byteorder",
  "chrono",
+ "chrono-tz",
  "codec",
  "crypto",
  "file_system",

@@ -4133,12 +4133,14 @@ def Snapshot() -> RowPanel:
                     target(
                         expr=expr_sum_rate(
                             "tikv_snapshot_limit_transport_bytes",
+                            label_selectors=['type!~"send"'],
                             by_labels=["instance", "type"],
                         )
                     ),
                     target(
                         expr=expr_sum_rate(
                             "tikv_snapshot_limit_generate_bytes",
+                            label_selectors=['type=~"io"'],
                             by_labels=["instance", "type"],
                         ),
                         legend_format="{{instance}}-generate-{{type}}",
@@ -6634,6 +6636,24 @@ def RocksDB() -> RowPanel:
                 metric="tikv_storage_ingest_external_file_duration_secs",
                 by_labels=["cf", "type"],
                 hide_count=True,
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Ingest SST allow_write",
+                description=None,
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_storage_ingest_external_file_allow_write_counter",
+                            by_labels=["type"],
+                        ),
+                        additional_groupby=True,
+                    ),
+                ],
             ),
         ]
     )
