@@ -908,7 +908,7 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                         },
                     );
                     if !matches!(res, Err(txn_types::Error(box ErrorInner::KeyIsLocked(_)))) {
-                        rctx.memory_lock = Some(start_ts.into_inner());
+                        rctx.read_index_safe_ts = Some(start_ts.into_inner());
                     }
                 }
             }
@@ -953,7 +953,7 @@ mod tests {
             id: Uuid::new_v4(),
             request: Some(request),
             locked: None,
-            memory_lock: None,
+            read_index_safe_ts: None,
         };
         let mut e = eraftpb::Entry::default();
         e.set_data(rctx.to_bytes().into());
