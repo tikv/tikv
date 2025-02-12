@@ -427,7 +427,8 @@ impl ReadIndexContext {
         }
         if let Some(read_index_safe_ts) = read_index_safe_ts {
             b.push(READ_INDEX_SAFE_TS_FLAG);
-            b.encode_var_u64(read_index_safe_ts_size.unwrap() as u64).unwrap();
+            b.encode_var_u64(read_index_safe_ts_size.unwrap() as u64)
+                .unwrap();
             b.extend_from_slice(&read_index_safe_ts.to_le_bytes());
         }
         b
