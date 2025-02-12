@@ -10,6 +10,8 @@ license = "Apache-2.0"
 base64 = "0.13"
 bstr = "0.2.8"
 byteorder = "1.2"
+chrono = { workspace = true }
+chrono-tz = "0.5.1"
 codec = { workspace = true }
 crypto = { workspace = true }
 file_system = { workspace = true }
