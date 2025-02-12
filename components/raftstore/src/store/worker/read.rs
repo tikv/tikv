@@ -2385,7 +2385,7 @@ mod tests {
             let delegate = meta.readers.get_mut(&1).unwrap();
             delegate
                 .read_progress
-                .read_indx_safe_ts
+                .read_index_safe_ts
                 .store(read_index_safe_ts.into_inner(), Ordering::SeqCst);
         }
         let read_ts_1 = TimeStamp::compose(1, 0);

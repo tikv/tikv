@@ -3668,10 +3668,10 @@ where
                     // there are no pending proposals in leader
                     let start_ts: u64 = memory_lock;
                     if self.ready_to_handle_unsafe_replica_read(state.index)
-                        && self.read_progress.read_indx_safe_ts.load(Ordering::SeqCst) < start_ts
+                        && self.read_progress.read_index_safe_ts.load(Ordering::SeqCst) < start_ts
                     {
                         self.read_progress
-                            .read_indx_safe_ts
+                            .read_index_safe_ts
                             .store(start_ts, Ordering::SeqCst);
                     }
                 }
