@@ -2347,8 +2347,6 @@ fn test_raft_log_gc_after_merge() {
 // logs. For more details, see: https://github.com/tikv/tikv/issues/18129
 #[test]
 fn test_node_merge_with_apply_ahead_of_persist() {
-    test_util::init_log_for_test();
-
     let mut cluster = new_node_cluster(0, 3);
     configure_for_merge(&mut cluster.cfg);
     cluster.cfg.raft_store.cmd_batch_concurrent_ready_max_count = 32;
