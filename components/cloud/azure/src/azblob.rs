@@ -11,7 +11,10 @@ use azure_core::{
     auth::{TokenCredential, TokenResponse},
     new_http_client,
 };
-use azure_identity::{ClientSecretCredential, TokenCredentialOptions};
+use azure_identity::{
+    AutoRefreshingTokenCredential, ClientSecretCredential, DefaultAzureCredential,
+    TokenCredentialOptions,
+};
 use azure_storage::{prelude::*, ConnectionString, ConnectionStringBuilder};
 use azure_storage_blobs::{blob::operations::PutBlockBlobBuilder, prelude::*};
 use cloud::blob::{
@@ -381,6 +384,51 @@ trait ContainerBuilder: 'static + Send + Sync {
     async fn get_client(&self) -> io::Result<Arc<ContainerClient>>;
 }
 
+/// Load the container client by the default behavior of the Azure SDK.
+///
+/// Also see [`DefaultAzureCredential`].
+struct DefaultContainerBuilder {
+    config: Config,
+    cred: AutoRefreshingTokenCredential,
+}
+
+impl DefaultContainerBuilder {
+    fn new(config: Config) -> Self {
+        Self {
+            config,
+            cred: AutoRefreshingTokenCredential::new(Arc::<DefaultAzureCredential>::default()),
+        }
+    }
+}
+
+#[async_trait]
+impl ContainerBuilder for DefaultContainerBuilder {
+    async fn get_client(&self) -> io::Result<Arc<ContainerClient>> {
+        let account_name = self.config.get_account_name()?;
+        let bucket = (*self.config.bucket.bucket).to_owned();
+
+        let token_resource = format!("https://{}.blob.core.windows.net", &account_name);
+        let token = self
+            .cred
+            .get_token(&token_resource)
+            .await
+            .map_err(|e| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("failed to get token from Azure AD, err: {:?}", e),
+                )
+            })?
+            .token;
+
+        let client = BlobServiceClient::new(
+            account_name,
+            StorageCredentials::bearer_token(token.secret()),
+        )
+        .container_client(bucket);
+        Ok(Arc::new(client))
+    }
+}
+
 struct SharedKeyContainerBuilder {
     container_client: Arc<ContainerClient>,
 }
@@ -633,10 +681,12 @@ impl AzureStorage {
                 client_builder,
             })
         } else {
-            Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "credential info not found".to_owned(),
-            ))
+            // When we cannot detect any user-specified configuration, fall back to the SDK
+            // default.
+            Ok(AzureStorage {
+                config: config.clone(),
+                client_builder: Arc::new(DefaultContainerBuilder::new(config)),
+            })
         }
     }
 
