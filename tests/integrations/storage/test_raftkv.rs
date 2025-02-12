@@ -138,7 +138,6 @@ fn test_read_index_on_replica() {
     );
 }
 
-// TODO : this test case is failing. mittalrishabh is debugging it
 #[test]
 fn test_read_on_replica() {
     let count = 3;

@@ -585,7 +585,7 @@ impl ReadDelegate {
 
     pub fn check_stale_read_safe(&self, read_ts: u64) -> std::result::Result<(), RaftCmdResponse> {
         let safe_ts = self.read_progress.safe_ts();
-        let safe_read_indx_ts = self.read_progress.safe_read_indx_ts();
+        let read_index_safe_ts = self.read_progress.read_index_safe_ts();
         fail_point!("skip_check_stale_read_safe", |_| Ok(()));
         if safe_ts >= read_ts {
             return Ok(());
@@ -593,7 +593,7 @@ impl ReadDelegate {
 
         // it is updated by read index message. detailed design is
         // https://github.com/tikv/rfcs/blob/master/text/0113-follower-read-cache.md
-        if (safe_read_indx_ts > 0) && (safe_read_indx_ts >= read_ts) {
+        if (read_index_safe_ts > 0) && (read_index_safe_ts >= read_ts) {
             return Ok(());
         }
 
