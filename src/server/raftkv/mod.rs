@@ -714,7 +714,8 @@ where
 
     let mut header = new_request_header(ctx.pb_ctx);
     let mut flags = 0;
-    let need_encoded_start_ts = ctx.start_ts.map_or(true, |ts| !ts.is_zero());
+    // need_encoded_start_ts should be set to false if start_ts is none or zero
+    let need_encoded_start_ts = ctx.start_ts.map_or(false, |ts| !ts.is_zero());
     if ctx.pb_ctx.get_stale_read() && need_encoded_start_ts {
         flags |= WriteBatchFlags::STALE_READ.bits();
     }
@@ -846,7 +847,7 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                 .concurrency_manager
                 .update_max_ts(start_ts, || format!("read_index-{}", start_ts))
             {
-                error!("failed to update max ts in concurrency manager"; "err" => ?e);
+                error!("failed to update max_ts in concurrency manager"; "err" => ?e);
             }
             let key_bound = |key: Vec<u8>| {
                 if key.is_empty() {
@@ -874,7 +875,7 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                         )
                     },
                 );
-                if let Err(txn_types::Error(box ErrorInner::KeyIsLocked(lock))) = res {
+                if let Err(txn_types::Error(box txn_types::ErrorInner::KeyIsLocked(lock))) = res {
                     rctx.locked = Some(lock);
                     REPLICA_READ_LOCK_CHECK_HISTOGRAM_VEC_STATIC
                         .locked

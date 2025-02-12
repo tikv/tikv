@@ -140,7 +140,6 @@ fn test_read_index_on_replica() {
 
 // TODO : this test case is failing. mittalrishabh is debugging it
 #[test]
-#[ignore]
 fn test_read_on_replica() {
     let count = 3;
     let mut cluster = new_server_cluster(0, count);
@@ -409,10 +408,7 @@ fn must_delete_cf<E: Engine>(ctx: &Context, engine: &E, cf: CfName, key: &[u8]) 
 
 fn assert_has<E: Engine>(ctx: SnapContext<'_>, engine: &mut E, key: &[u8], value: &[u8]) {
     let snapshot = engine.snapshot(ctx).unwrap();
-    println!("Key: {:?}", key);
-    let retrieved_value = snapshot.get(&Key::from_raw(key)).unwrap().unwrap();
-    println!("Value: {:?}", retrieved_value);
-    assert_eq!(retrieved_value, value);
+    assert_eq!(snapshot.get(&Key::from_raw(key)).unwrap().unwrap(), value);
 }
 
 fn can_read<E: Engine>(ctx: SnapContext<'_>, engine: &mut E, key: &[u8], value: &[u8]) -> bool {
