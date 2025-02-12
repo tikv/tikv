@@ -591,7 +591,7 @@ impl ReadDelegate {
             return Ok(());
         }
 
-        // it is updated by read index message. detailed design is 
+        // it is updated by read index message. detailed design is
         // https://github.com/tikv/rfcs/blob/master/text/0113-follower-read-cache.md
         if (safe_read_indx_ts > 0) && (safe_read_indx_ts >= read_ts) {
             return Ok(());
@@ -1176,8 +1176,8 @@ where
                             self.redirect(RaftCommand::new(req, cb));
                             return;
                         }
-                        // check first if it can be served locally wihout sending read index message to leader.
-                        // (https://github.com/tikv/rfcs/blob/master/text/0113-follower-read-cache.md) 
+                        // check first if it can be served locally wihout sending read index message
+                        // to leader. (https://github.com/tikv/rfcs/blob/master/text/0113-follower-read-cache.md)
                         match self.try_local_stale_read(
                             ctx,
                             &req,
