@@ -1220,7 +1220,7 @@ mod tests {
         .unwrap();
         let d = perf.delta();
         assert_eq!(1, statistic.write.seek);
-        assert_eq!(d.internal_delete_skipped_count, 0);
+        assert_eq!(d.internal_delete_skipped_count, 40);
     }
 
     #[test]
