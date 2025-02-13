@@ -1970,8 +1970,6 @@ where
                     resp.to = m.from;
 
                     resp.index = index;
-                    resp.commit = self.next_proposal_index() - 1; // proposal index
-                    resp.commit_term = self.get_store().applied_index(); // applied index
                     resp.set_entries(m.take_entries());
 
                     self.raft_group.raft.msgs.push(resp);
