@@ -269,11 +269,13 @@ build_dist_release: export TIKV_PROFILE=dist_release
 build_dist_release:
 	make x-build-dist
 ifeq ($(shell uname),Linux) # Macs don't have objcopy
+	# Reduce binary size by running DWARF optimization and duplicate removal tool
+	# Set max die limit with -L to 100M (default 50M)
+	# otherwise this happens:
+	#   dwz: tikv-server: Too many DIEs, not optimizing
+	dwz -L 100000000 ${CARGO_TARGET_DIR}/release/tikv-server
+	dwz -L 100000000 ${CARGO_TARGET_DIR}/release/tikv-ctl
 	# Reduce binary size by compressing binaries.
-	# FIXME: Currently errors with `Couldn't find DIE referenced by DW_AT_abstract_origin`
-	# dwz ${CARGO_TARGET_DIR}/release/tikv-server
-	# FIXME: https://sourceware.org/bugzilla/show_bug.cgi?id=24764
-	# dwz ${CARGO_TARGET_DIR}/release/tikv-ctl
 	objcopy --compress-debug-sections=zlib-gnu ${CARGO_TARGET_DIR}/release/tikv-server
 	objcopy --compress-debug-sections=zlib-gnu ${CARGO_TARGET_DIR}/release/tikv-ctl
 endif
@@ -427,7 +429,7 @@ docker_shell:
 		.
 	docker run -it -v $(shell pwd):/tikv \
 		${DEV_DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} \
-		/bin/bash
+		bash
 
 ## The driver for script/run-cargo.sh
 ## ----------------------------------

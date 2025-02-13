@@ -205,7 +205,7 @@ pub async fn with_resource_limiter<F: Future>(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "failpoints"))]
 mod tests {
     use std::sync::mpsc::{channel, Sender};
 
@@ -244,9 +244,6 @@ mod tests {
 
     #[test]
     fn test_limited_future() {
-        #[cfg(not(feature = "failpoints"))]
-        return;
-
         let pool = YatpPoolBuilder::new(DefaultTicker::default())
             .thread_count(1, 1, 1)
             .name_prefix("test")

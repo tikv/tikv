@@ -171,7 +171,7 @@ impl Execution {
         };
         hooks.before_execution_started(cx).await?;
 
-        let meta = StreamMetaStorage::load_from_ext(storage.as_ref(), ext);
+        let meta = StreamMetaStorage::load_from_ext(storage.as_ref(), ext).await?;
         let stream = meta.flat_map(|file| match file {
             Ok(file) => stream::iter(file.into_logs()).map(Ok).left_stream(),
             Err(err) => stream::once(futures::future::err(err)).right_stream(),

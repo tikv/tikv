@@ -52,7 +52,6 @@ use tikv_util::{
     warn,
     worker::{Runnable, ScheduleError, Scheduler},
 };
-use txn_types::TimeStamp;
 use yatp::Remote;
 
 use super::split_controller::AutoSplitControllerContext;
@@ -1275,6 +1274,7 @@ where
 
         let scheduler = self.scheduler.clone();
         let router = self.router.clone();
+        let mut snap_mgr = self.snap_mgr.clone();
         let resp = self
             .pd_client
             .store_heartbeat(stats, store_report, dr_autosync_status);
@@ -1345,6 +1345,36 @@ where
                             scheduler.schedule(Task::ControlGrpcServer(op.get_ctrl_event()))
                         {
                             warn!("fail to schedule control grpc task"; "err" => ?e);
+                        }
+                    }
+                    // NodeState for this store.
+                    {
+                        let state = (|| {
+                            #[cfg(feature = "failpoints")]
+                            fail_point!("manually_set_store_offline", |_| {
+                                metapb::NodeState::Removing
+                            });
+                            resp.get_state()
+                        })();
+                        match state {
+                            metapb::NodeState::Removing | metapb::NodeState::Removed => {
+                                let is_offlined = snap_mgr.is_offlined();
+                                if !is_offlined {
+                                    snap_mgr.set_offline(true);
+                                    info!("store is offlined by pd");
+                                }
+                            }
+                            // As for NodeState::Preparing | Serving, if `is_offlined == true`,
+                            // it means the store has been re-added into the cluster and
+                            // the offline operation is terminated. Therefore, the state
+                            // `is_offlined` should be reset with `false`.
+                            _ => {
+                                let is_offlined = snap_mgr.is_offlined();
+                                if is_offlined {
+                                    snap_mgr.set_offline(false);
+                                    info!("store is remarked with serving state by pd");
+                                }
+                            }
                         }
                     }
                 }
@@ -1676,7 +1706,7 @@ where
                 // And it won't break correctness of transaction commands, as
                 // causal_ts_provider.flush() is implemented as pd_client.get_tso() + renew TSO
                 // cached.
-                let res: crate::Result<TimeStamp> =
+                let res: crate::Result<()> =
                     if let Some(causal_ts_provider) = &causal_ts_provider {
                         causal_ts_provider
                             .async_flush()
@@ -1684,11 +1714,15 @@ where
                             .map_err(|e| box_err!(e))
                     } else {
                         pd_client.get_tso().await.map_err(Into::into)
-                    };
+                    }
+                    .and_then(|ts| {
+                        concurrency_manager
+                            .update_max_ts(ts, "raftstore")
+                            .map_err(|e| crate::Error::Other(box_err!(e)))
+                    });
 
                 match res {
-                    Ok(ts) => {
-                        concurrency_manager.update_max_ts(ts);
+                    Ok(()) => {
                         // Set the least significant bit to 1 to mark it as synced.
                         success = txn_ext
                             .max_ts_sync_status

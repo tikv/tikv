@@ -31,6 +31,12 @@ pub enum Error {
     MemoryQuotaExceeded,
 
     #[error("{0}")]
+    InvalidMaxTsUpdate(#[from] concurrency_manager::InvalidMaxTsUpdate),
+
+    #[error("{0}")]
+    DefaultNotFound(String),
+
+    #[error("{0}")]
     Other(String),
 }
 
@@ -88,6 +94,9 @@ impl From<MvccError> for Error {
         match err {
             MvccError(box MvccErrorInner::KeyIsLocked(info)) => Error::Locked(info),
             MvccError(box MvccErrorInner::Kv(kv_error)) => Error::from(kv_error),
+            e @ MvccError(box MvccErrorInner::DefaultNotFound { .. }) => {
+                Error::DefaultNotFound(e.to_string())
+            }
             e => Error::Other(e.to_string()),
         }
     }
@@ -137,6 +146,8 @@ impl ErrorCodeExt for Error {
             Error::DeadlineExceeded => error_code::coprocessor::DEADLINE_EXCEEDED,
             Error::MaxPendingTasksExceeded => error_code::coprocessor::MAX_PENDING_TASKS_EXCEEDED,
             Error::MemoryQuotaExceeded => error_code::coprocessor::MEMORY_QUOTA_EXCEEDED,
+            Error::InvalidMaxTsUpdate(_) => error_code::coprocessor::INVALID_MAX_TS_UPDATE,
+            Error::DefaultNotFound { .. } => error_code::coprocessor::DEFAULT_NOT_FOUND,
             Error::Other(_) => error_code::UNKNOWN,
         }
     }
