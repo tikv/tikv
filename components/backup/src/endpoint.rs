@@ -45,7 +45,7 @@ use tikv_util::{
     worker::Runnable,
 };
 use tokio::runtime::{Handle, Runtime};
-use txn_types::{Key, Lock, TimeStamp};
+use txn_types::{Key, Lock, TimeStamp, TsSet};
 
 use crate::{
     metrics::*,
@@ -80,6 +80,8 @@ struct Request {
     replica_read: bool,
     resource_group_name: String,
     source_tag: String,
+    bypass_locks: Vec<u64>,
+    access_locks: Vec<u64>,
 }
 
 /// Backup Task.
@@ -151,6 +153,8 @@ impl Task {
                     .get_resource_group_name()
                     .to_owned(),
                 source_tag,
+                bypass_locks: req.get_context().get_resolved_locks().to_owned(),
+                access_locks: req.get_context().get_committed_locks().to_owned(),
                 cipher: req.cipher_info.unwrap_or_else(|| {
                     let mut cipher = CipherInfo::default();
                     cipher.set_cipher_type(EncryptionMethod::Plaintext);
@@ -320,6 +324,8 @@ impl BackupRange {
         concurrency_manager: ConcurrencyManager,
         backup_ts: TimeStamp,
         begin_ts: TimeStamp,
+        bypass_locks: Vec<u64>,
+        access_locks: Vec<u64>,
         saver: async_channel::Sender<InMemBackupFiles<E::Local>>,
         storage_name: &str,
         resource_limiter: Option<Arc<ResourceLimiter>>,
@@ -382,13 +388,14 @@ impl BackupRange {
         BACKUP_RANGE_HISTOGRAM_VEC
             .with_label_values(&["snapshot"])
             .observe(start_snapshot.saturating_elapsed().as_secs_f64());
+
         let snap_store = SnapshotStore::new(
             snapshot,
             backup_ts,
             IsolationLevel::Si,
             false, // fill_cache
-            Default::default(),
-            Default::default(),
+            TsSet::vec_from_u64s(bypass_locks),
+            TsSet::vec_from_u64s(access_locks),
             false,
         );
         let start_key = self.start_key.clone();
@@ -1045,6 +1052,8 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                                 concurrency_manager.clone(),
                                 backup_ts,
                                 start_ts,
+                                request.bypass_locks.clone(),
+                                request.access_locks.clone(),
                                 saver_tx.clone(),
                                 _backend.name(),
                                 resource_limiter.clone(),
@@ -1332,11 +1341,13 @@ pub mod tests {
 
     use api_version::{api_v2::RAW_KEY_PREFIX, dispatch_api_version, KvFormat, RawValue};
     use collections::HashSet;
-    use engine_traits::MiscExt;
+    use engine_rocks::RocksSstReader;
+    use engine_traits::{IterOptions, Iterator, MiscExt, RefIterable, SstReader};
     use external_storage::{make_local_backend, make_noop_backend};
     use file_system::{IoOp, IoRateLimiter, IoType};
     use futures::{executor::block_on, stream::StreamExt};
-    use kvproto::metapb;
+    use keys::data_key;
+    use kvproto::{kvrpcpb::Context, metapb};
     use raftstore::coprocessor::{RegionCollector, Result as CopResult, SeekRegionCallback};
     use rand::Rng;
     use tempfile::TempDir;
@@ -1348,7 +1359,7 @@ pub mod tests {
             RocksEngine, TestEngineBuilder,
         },
     };
-    use tikv_util::{config::ReadableSize, store::new_peer};
+    use tikv_util::{config::ReadableSize, info, store::new_peer};
     use tokio::time;
     use txn_types::SHORT_VALUE_MAX_LEN;
 
@@ -1638,6 +1649,8 @@ pub mod tests {
                         replica_read: false,
                         resource_group_name: "".into(),
                         source_tag: "br".into(),
+                        bypass_locks: vec![],
+                        access_locks: vec![],
                     },
                     resp: tx,
                 };
@@ -1749,6 +1762,8 @@ pub mod tests {
                 replica_read: false,
                 resource_group_name: "".into(),
                 source_tag: "br".into(),
+                bypass_locks: vec![],
+                access_locks: vec![],
             },
             resp: tx,
         };
@@ -1780,6 +1795,8 @@ pub mod tests {
                 replica_read: true,
                 resource_group_name: "".into(),
                 source_tag: "br".into(),
+                bypass_locks: vec![],
+                access_locks: vec![],
             },
             resp: tx,
         };
@@ -1890,6 +1907,8 @@ pub mod tests {
                         replica_read: false,
                         resource_group_name: "".into(),
                         source_tag: "br".into(),
+                        bypass_locks: vec![],
+                        access_locks: vec![],
                     },
                     resp: tx,
                 };
@@ -2045,6 +2064,158 @@ pub mod tests {
                 a.end_key.map_or_else(Vec::new, |k| k.into_raw().unwrap()),
                 b.1
             );
+        }
+    }
+
+    #[test]
+    fn test_handle_backup_task_bypass_locks() {
+        // consider both short and long value
+        for &len in &[SHORT_VALUE_MAX_LEN - 1, SHORT_VALUE_MAX_LEN * 2] {
+            let (tmp, endpoint) = new_endpoint();
+            let mut engine = endpoint.engine.clone();
+            endpoint
+                .region_info
+                .set_regions(vec![(b"".to_vec(), b"".to_vec(), 1)]);
+
+            let mut ts = TimeStamp::new(1);
+            let mut alloc_ts = || *ts.incr();
+            let lock_key = 9;
+
+            // Prepare data: 10 keys, with key 9 locked
+            let prewrite_keys: Vec<_> = (0..10u8)
+                .map(|i| {
+                    let start = alloc_ts();
+                    let commit = alloc_ts();
+                    let key = i.to_string();
+                    must_prewrite_put(
+                        &mut engine,
+                        key.as_bytes(),
+                        &vec![i; len],
+                        key.as_bytes(),
+                        start,
+                    );
+                    if i == lock_key {
+                        (key, start, commit)
+                    } else {
+                        must_commit(&mut engine, key.as_bytes(), start, commit);
+                        (key, start, commit)
+                    }
+                })
+                .collect();
+
+            let test_cases = vec![
+                (
+                    "No bypass locks",
+                    TimeStamp::new(3),
+                    vec![],
+                    b"0".to_vec(),
+                    false,
+                ),
+                (
+                    "With bypass locks, lock ts > backup ts",
+                    TimeStamp::new(12),
+                    prewrite_keys.clone(),
+                    b"4".to_vec(),
+                    false,
+                ),
+                (
+                    "No bypass locks, lock ts > backup ts",
+                    TimeStamp::new(12),
+                    vec![],
+                    b"4".to_vec(),
+                    false,
+                ),
+                (
+                    "No bypass locks, lock ts < backup ts",
+                    TimeStamp::new(22),
+                    vec![],
+                    vec![],
+                    true,
+                ),
+                (
+                    "With bypass locks, lock ts < backup ts",
+                    TimeStamp::new(22),
+                    prewrite_keys.clone(),
+                    // lock key is 9, so the key (8) should be included
+                    (lock_key - 1).to_string().into_bytes(),
+                    // the error can be ignored. because the lock key should commit after backup
+                    // ts.
+                    false,
+                ),
+            ];
+
+            for (case_name, backup_ts, bypass_locks, expect_end_key, expect_error) in test_cases {
+                let mut req = BackupRequest::default();
+                req.set_start_key(vec![]);
+                req.set_end_key(vec![]);
+                req.set_start_version(0);
+                req.set_end_version(backup_ts.into_inner());
+
+                let mut context = Context::default();
+                context.set_resolved_locks(
+                    bypass_locks
+                        .iter()
+                        .map(|(_, s, _)| s.into_inner())
+                        .collect(),
+                );
+                req.set_context(context);
+
+                let (tx, rx) = unbounded();
+                let tmp_dir = make_unique_dir(tmp.path());
+                req.set_storage_backend(make_local_backend(&tmp_dir));
+                let (task, _) = Task::new(req, tx).unwrap();
+                endpoint.handle_backup_task(task);
+
+                let (resp, _) = block_on(rx.into_future());
+                let resp = resp.unwrap();
+
+                if expect_error {
+                    assert!(
+                        resp.has_error(),
+                        "Case '{}' should have an error",
+                        case_name
+                    );
+                } else {
+                    assert!(
+                        !resp.has_error(),
+                        "Case '{}' should not have an error: {:?}",
+                        case_name,
+                        resp
+                    );
+
+                    let expected_file_count = if len <= SHORT_VALUE_MAX_LEN { 1 } else { 2 };
+                    let files = resp.get_files();
+
+                    assert_eq!(
+                        files.len(),
+                        expected_file_count,
+                        "Case '{}' failed: expected {} files, got {} files. {:?}",
+                        case_name,
+                        expected_file_count,
+                        files.len(),
+                        resp
+                    );
+
+                    for file in files {
+                        let sst_path = tmp_dir.join(&file.name);
+                        let sst_reader = RocksSstReader::open_with_env(
+                            sst_path.as_os_str().to_str().unwrap(),
+                            None,
+                        )
+                        .unwrap();
+                        sst_reader.verify_checksum().unwrap();
+                        let mut iter = sst_reader.iter(IterOptions::default()).unwrap();
+                        iter.seek_to_last().unwrap();
+                        let end_key = Key::truncate_ts_for(iter.key()).unwrap();
+                        assert_eq!(
+                            end_key,
+                            data_key(Key::from_raw(&expect_end_key).as_encoded()),
+                            "Case '{}' failed: unexpected end key",
+                            case_name
+                        );
+                    }
+                }
+            }
         }
     }
 
@@ -2622,5 +2793,11 @@ pub mod tests {
             let filename = backup_file_name(store_id, &region, key, storage_name);
             assert_eq!(target.to_string(), filename);
         }
+    }
+
+    #[test]
+    fn test_transmute_locks() {
+        let locks = vec![];
+        assert_eq!(TsSet::vec_from_u64s(locks), TsSet::Empty);
     }
 }
