@@ -19,12 +19,12 @@ use chrono::prelude::*;
 use codec::prelude::*;
 use tipb::FieldType;
 
-pub use self::{extension::*, tz::Tz, weekmode::WeekMode};
+pub use self::{extension::*, interval::IntervalUnit, tz::Tz, weekmode::WeekMode};
 use crate::{
     codec::{
         convert::ConvertTo,
         data_type::Real,
-        mysql::{check_fsp, duration::SECS_PER_DAY, Decimal, Duration, Res, DEFAULT_FSP, MAX_FSP},
+        mysql::{check_fsp, duration::*, Decimal, Duration, Res, DEFAULT_FSP, MAX_FSP},
         Error, Result, TEN_POW,
     },
     expr::{EvalContext, Flag, SqlMode},
@@ -820,6 +820,605 @@ mod parser {
     }
 }
 
+/// The MySQL time_format rules used in TiDB differ slightly from chrono (e.g.,
+/// %c, %f). Therefore, we need to implement our own parser function instead of
+/// directly using the implementation of `chrono::Datetime`.
+mod date_format_parser {
+    use std::collections::HashMap;
+
+    use super::*;
+    type DateFormatParser<'a> =
+        fn(&mut Time, &'a str, &mut HashMap<String, i64>) -> (&'a str, bool);
+
+    const MONTH_NAMES: [&str; 12] = [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    ];
+
+    const CONST_FOR_AM: i64 = 1;
+    const CONST_FOR_PM: i64 = 2;
+
+    fn parse_n_digits(input: &str, limit: i32) -> (u32, usize) {
+        if limit <= 0 {
+            return (0, 0);
+        }
+        let mut num: u32 = 0;
+        let mut step: usize = 0;
+        for c in input.chars() {
+            if step < limit as usize && c.is_ascii_digit() {
+                num = num * 10 + c.to_digit(10).unwrap();
+            } else {
+                break;
+            }
+            step += 1;
+        }
+        (num, step)
+    }
+
+    fn has_case_insensitive_prefix(input: &str, prefix: &str) -> bool {
+        input.len() >= prefix.len() && input[..prefix.len()].eq_ignore_ascii_case(prefix)
+    }
+
+    fn abbreviated_month<'a>(
+        time: &mut Time,
+        input: &'a str,
+        _: &mut HashMap<String, i64>,
+    ) -> (&'a str, bool) {
+        let month_mapper = |month_name: &str| -> Option<u32> {
+            match month_name {
+                "jan" => Some(1),
+                "feb" => Some(2),
+                "mar" => Some(3),
+                "apr" => Some(4),
+                "may" => Some(5),
+                "jun" => Some(6),
+                "jul" => Some(7),
+                "aug" => Some(8),
+                "sep" => Some(9),
+                "oct" => Some(10),
+                "nov" => Some(11),
+                "dec" => Some(12),
+                _ => None,
+            }
+        };
+        if input.len() >= 3 {
+            let month_name = &input[..3].to_lowercase();
+            if let Some(month) = month_mapper(month_name) {
+                time.set_month(month);
+                return (&input[3..], true);
+            }
+        }
+        (input, false)
+    }
+
+    fn month_numeric<'a>(
+        time: &mut Time,
+        input: &'a str,
+        _: &mut HashMap<String, i64>,
+    ) -> (&'a str, bool) {
+        let (month, step) = parse_n_digits(input, 2);
+        if step == 0 || month > 12 {
+            return (input, false);
+        }
+        time.set_month(month);
+        (&input[step..], true)
+    }
+
+    fn day_of_month_numeric<'a>(
+        time: &mut Time,
+        input: &'a str,
+        _: &mut HashMap<String, i64>,
+    ) -> (&'a str, bool) {
+        let (day, step) = parse_n_digits(input, 2);
+        if step == 0 || day > 31 {
+            return (input, false);
+        }
+        time.set_day(day);
+        (&input[step..], true)
+    }
+
+    fn micro_second<'a>(
+        time: &mut Time,
+        input: &'a str,
+        _: &mut HashMap<String, i64>,
+    ) -> (&'a str, bool) {
+        let (mut micro, step) = parse_n_digits(input, 6);
+        if step == 0 {
+            time.set_micro(0);
+            return (input, true);
+        }
+        for _ in step..6 {
+            micro *= 10;
+        }
+        time.set_micro(micro);
+        (&input[step..], true)
+    }
+
+    fn hour_12_numeric<'a>(
+        time: &mut Time,
+        input: &'a str,
+        ctx: &mut HashMap<String, i64>,
+    ) -> (&'a str, bool) {
+        let (hour, step) = parse_n_digits(input, 2);
+        if step == 0 || hour > 12 || hour == 0 {
+            return (input, false);
+        }
+        time.set_hour(hour);
+        ctx.insert("%h".into(), hour as i64);
+        (&input[step..], true)
+    }
+
+    fn hour_24_numeric<'a>(
+        time: &mut Time,
+        input: &'a str,
+        ctx: &mut HashMap<String, i64>,
+    ) -> (&'a str, bool) {
+        let (hour, step) = parse_n_digits(input, 2);
+        if step == 0 || hour > 23 {
+            return (input, false);
+        }
+        time.set_hour(hour);
+        ctx.insert("%H".into(), hour as i64);
+        (&input[step..], true)
+    }
+
+    fn minute_numeric<'a>(
+        time: &mut Time,
+        input: &'a str,
+        _: &mut HashMap<String, i64>,
+    ) -> (&'a str, bool) {
+        let (minute, step) = parse_n_digits(input, 2);
+        if step == 0 || minute >= 60 {
+            return (input, false);
+        }
+        time.set_minute(minute);
+        (&input[step..], true)
+    }
+
+    fn day_of_year_numeric<'a>(
+        _time: &mut Time,
+        input: &'a str,
+        ctx: &mut HashMap<String, i64>,
+    ) -> (&'a str, bool) {
+        // MySQL declares that "%j" should be "Day of year (001..366)". But actually,
+        // it accepts a number that is up to three digits, which range is [1, 999].
+        let (day, step) = parse_n_digits(input, 3);
+        if step == 0 || day == 0 {
+            return (input, false);
+        }
+        ctx.insert("%j".into(), day as i64);
+        (&input[step..], true)
+    }
+
+    fn full_name_month<'a>(
+        time: &mut Time,
+        input: &'a str,
+        _: &mut HashMap<String, i64>,
+    ) -> (&'a str, bool) {
+        for (i, month_name) in MONTH_NAMES.iter().enumerate() {
+            if has_case_insensitive_prefix(input, month_name) {
+                time.set_month(i as u32 + 1);
+                return (&input[month_name.len()..], true);
+            }
+        }
+        (input, false)
+    }
+
+    fn is_am_or_pm<'a>(
+        _time: &mut Time,
+        input: &'a str,
+        ctx: &mut HashMap<String, i64>,
+    ) -> (&'a str, bool) {
+        if input.len() < 2 {
+            return (input, false);
+        }
+        match input[..2].to_lowercase().as_str() {
+            "am" => {
+                ctx.insert("%p".into(), CONST_FOR_AM);
+                (&input[2..], true)
+            }
+            "pm" => {
+                ctx.insert("%p".into(), CONST_FOR_PM);
+                (&input[2..], true)
+            }
+            _ => (input, false),
+        }
+    }
+
+    fn seconds_numeric<'a>(
+        time: &mut Time,
+        input: &'a str,
+        _: &mut HashMap<String, i64>,
+    ) -> (&'a str, bool) {
+        let (second, step) = parse_n_digits(input, 2);
+        if step == 0 || second >= 60 {
+            return (input, false);
+        }
+        time.set_second(second);
+        (&input[step..], true)
+    }
+
+    // adjustYear adjusts year according to y.
+    // See https://dev.mysql.com/doc/refman/5.7/en/two-digit-years.html
+    fn adjust_year(y: u32) -> u32 {
+        if y <= 69 {
+            return y + 2000;
+        } else if (70..=99).contains(&y) {
+            return y + 1900;
+        }
+        y
+    }
+
+    fn year_numeric_n_digits<'a>(
+        time: &mut Time,
+        input: &'a str,
+        _: &mut HashMap<String, i64>,
+        n: i32,
+    ) -> (&'a str, bool) {
+        let (mut year, step) = parse_n_digits(input, n);
+        if step == 0 {
+            return (input, false);
+        } else if step <= 2 {
+            year = adjust_year(year)
+        }
+        time.set_year(year);
+        (&input[step..], true)
+    }
+
+    fn year_numeric_two_digits<'a>(
+        time: &mut Time,
+        input: &'a str,
+        ctx: &mut HashMap<String, i64>,
+    ) -> (&'a str, bool) {
+        year_numeric_n_digits(time, input, ctx, 2)
+    }
+
+    fn year_numeric_four_digits<'a>(
+        time: &mut Time,
+        input: &'a str,
+        ctx: &mut HashMap<String, i64>,
+    ) -> (&'a str, bool) {
+        year_numeric_n_digits(time, input, ctx, 4)
+    }
+
+    fn skip_all_nums<'a>(
+        _: &mut Time,
+        input: &'a str,
+        _: &mut HashMap<String, i64>,
+    ) -> (&'a str, bool) {
+        let mut step = 0;
+        for c in input.chars() {
+            if c.is_ascii_digit() {
+                step += 1;
+            } else {
+                break;
+            }
+        }
+        (&input[step..], true)
+    }
+
+    fn skip_all_punct<'a>(
+        _: &mut Time,
+        input: &'a str,
+        _: &mut HashMap<String, i64>,
+    ) -> (&'a str, bool) {
+        let mut step = 0;
+        for c in input.chars() {
+            if c.is_ascii_punctuation() {
+                step += 1;
+            } else {
+                break;
+            }
+        }
+        (&input[step..], true)
+    }
+
+    fn skip_all_alpha<'a>(
+        _: &mut Time,
+        input: &'a str,
+        _: &mut HashMap<String, i64>,
+    ) -> (&'a str, bool) {
+        let mut step = 0;
+        for c in input.chars() {
+            if c.is_alphabetic() {
+                step += 1;
+            } else {
+                break;
+            }
+        }
+        (&input[step..], true)
+    }
+
+    enum ParseState {
+        ParseStateNormal,
+        ParseStateFail,
+        ParseStateEndOfLine,
+    }
+
+    fn parse_sep(input: &str) -> (&str, ParseState) {
+        let input = input.trim();
+        if input.is_empty() {
+            return (input, ParseState::ParseStateEndOfLine);
+        }
+        if !input.starts_with(':') {
+            return (input, ParseState::ParseStateFail);
+        }
+        let input = (input[1..]).trim();
+        if input.is_empty() {
+            return (input, ParseState::ParseStateEndOfLine);
+        }
+        (input, ParseState::ParseStateNormal)
+    }
+
+    fn time_12_hour<'a>(
+        time: &mut Time,
+        input: &'a str,
+        _: &mut HashMap<String, i64>,
+    ) -> (&'a str, bool) {
+        let mut try_parse = |input: &'a str| -> (&'a str, ParseState) {
+            // hh:mm:ss AM
+            // Note that we should update `t` as soon as possible, or we
+            // can not get correct result for incomplete input like "12:13"
+            // that is shorter than "hh:mm:ss"
+            let (mut hour, step) = parse_n_digits(input, 2);
+            if step == 0 || hour > 12 || hour == 0 {
+                return (input, ParseState::ParseStateFail);
+            }
+            // Handle special case: 12:34:56 AM -> 00:34:56
+            // For PM, we will add 12 it later
+            if hour == 12 {
+                hour = 0
+            }
+            time.set_hour(hour);
+            // ":"
+            let (input, state) = parse_sep(&input[step..]);
+            if let ParseState::ParseStateFail | ParseState::ParseStateEndOfLine = state {
+                return (input, state);
+            }
+            let (minute, step) = parse_n_digits(input, 2);
+            if step == 0 || minute > 59 {
+                return (input, ParseState::ParseStateFail);
+            }
+            time.set_minute(minute);
+            // ":"
+            let (input, state) = parse_sep(&input[step..]);
+            if let ParseState::ParseStateFail | ParseState::ParseStateEndOfLine = state {
+                return (input, state);
+            }
+            let (second, step) = parse_n_digits(input, 2);
+            if step == 0 || second > 59 {
+                return (input, ParseState::ParseStateFail);
+            }
+            time.set_second(second);
+
+            let input = (input[step..]).trim();
+            match input.len() {
+                0 => return (input, ParseState::ParseStateEndOfLine), // No "AM"/"PM" suffix
+                1 => return (input, ParseState::ParseStateFail),      // some broken char, fail
+                _ => {
+                    if has_case_insensitive_prefix(input, "AM") {
+                        time.set_hour(hour);
+                    } else if has_case_insensitive_prefix(input, "PM") {
+                        time.set_hour(hour + 12);
+                    } else {
+                        return (input, ParseState::ParseStateFail);
+                    }
+                }
+            }
+
+            (&input[2..], ParseState::ParseStateNormal)
+        };
+
+        let (remain, state) = try_parse(input);
+        if let ParseState::ParseStateFail = state {
+            return (input, false);
+        }
+        (remain, true)
+    }
+
+    fn time_24_hour<'a>(
+        time: &mut Time,
+        input: &'a str,
+        _: &mut HashMap<String, i64>,
+    ) -> (&'a str, bool) {
+        let mut try_parse = |input: &'a str| -> (&'a str, ParseState) {
+            // hh:mm:ss AM
+            // Note that we should update `t` as soon as possible, or we
+            // can not get correct result for incomplete input like "12:13"
+            // that is shorter than "hh:mm:ss"
+            let (hour, step) = parse_n_digits(input, 2);
+            if step == 0 || hour > 23 {
+                return (input, ParseState::ParseStateFail);
+            }
+            time.set_hour(hour);
+            // ":"
+            let (input, state) = parse_sep(&input[step..]);
+            if let ParseState::ParseStateFail | ParseState::ParseStateEndOfLine = state {
+                return (input, state);
+            }
+            let (minute, step) = parse_n_digits(input, 2);
+            if step == 0 || minute > 59 {
+                return (input, ParseState::ParseStateFail);
+            }
+            time.set_minute(minute);
+            // ":"
+            let (input, state) = parse_sep(&input[step..]);
+            if let ParseState::ParseStateFail | ParseState::ParseStateEndOfLine = state {
+                return (input, state);
+            }
+            let (second, step) = parse_n_digits(input, 2);
+            if step == 0 || second > 59 {
+                return (input, ParseState::ParseStateFail);
+            }
+            time.set_second(second);
+            (&input[step..], ParseState::ParseStateNormal)
+        };
+
+        let (remain, state) = try_parse(input);
+        if let ParseState::ParseStateFail = state {
+            return (input, false);
+        }
+        (remain, true)
+    }
+
+    fn date_format_parser_mapper(input: &str) -> Option<DateFormatParser<'_>> {
+        match input {
+            "%b" => Some(abbreviated_month),
+            "%c" => Some(month_numeric),
+            "%d" => Some(day_of_month_numeric),
+            "%e" => Some(day_of_month_numeric),
+            "%f" => Some(micro_second),
+            "%h" => Some(hour_12_numeric),
+            "%H" => Some(hour_24_numeric),
+            "%I" => Some(hour_12_numeric),
+            "%i" => Some(minute_numeric),
+            "%j" => Some(day_of_year_numeric),
+            "%k" => Some(hour_24_numeric),
+            "%l" => Some(hour_12_numeric),
+            "%M" => Some(full_name_month),
+            "%m" => Some(month_numeric),
+            "%p" => Some(is_am_or_pm),
+            "%r" => Some(time_12_hour),
+            "%s" => Some(seconds_numeric),
+            "%S" => Some(seconds_numeric),
+            "%T" => Some(time_24_hour),
+            "%Y" => Some(year_numeric_four_digits),
+            "%#" => Some(skip_all_nums),
+            "%." => Some(skip_all_punct),
+            "%@" => Some(skip_all_alpha),
+            // Deprecated since MySQL 5.7.5
+            "%y" => Some(year_numeric_two_digits),
+            _ => None,
+        }
+    }
+
+    fn get_format_token(format: &str) -> (&str, &str, bool) {
+        match format.len() {
+            0 => ("", "", true),
+            1 => match format.as_bytes()[0] {
+                b'%' => ("", "", false),
+                _ => ("", format, true),
+            },
+            _ => match format.as_bytes()[0] {
+                b'%' => (&format[..2], &format[2..], true),
+                _ => (&format[..1], &format[1..], true),
+            },
+        }
+    }
+
+    fn match_date_with_token<'a>(
+        time: &mut Time,
+        date: &'a str,
+        token: &'a str,
+        ctx: &mut HashMap<String, i64>,
+    ) -> (&'a str, bool) {
+        match date_format_parser_mapper(token) {
+            Some(parse) => parse(time, date, ctx),
+            None => match date.starts_with(token) {
+                true => (&date[token.len()..], true),
+                false => (date, false),
+            },
+        }
+    }
+
+    fn str_to_date_impl(
+        time: &mut Time,
+        date: &str,
+        format: &str,
+        ctx: &mut HashMap<String, i64>,
+    ) -> (bool, bool) {
+        let date = date.trim();
+        let format = format.trim();
+        let (token, format_remain, succ) = get_format_token(format);
+        if !succ {
+            return (false, false);
+        }
+        if token.is_empty() {
+            if !date.is_empty() {
+                return (true, true);
+            }
+            return (true, false);
+        }
+        if date.is_empty() {
+            ctx.insert(token.into(), 0);
+            return (true, false);
+        }
+        let (date_remain, succ) = match_date_with_token(time, date, token, ctx);
+        if !succ {
+            return (false, false);
+        }
+        str_to_date_impl(time, date_remain, format_remain, ctx)
+    }
+
+    fn mysql_time_fix(time: &mut Time, ctx: &mut HashMap<String, i64>) -> Result<()> {
+        if ctx.contains_key("%p") {
+            if ctx.contains_key("%H") || time.hour() == 0 {
+                return Err(Error::truncated());
+            }
+            let am_or_pm = ctx["%p"];
+            if time.hour() == 12 {
+                match am_or_pm {
+                    CONST_FOR_AM => time.set_hour(0),
+                    CONST_FOR_PM => time.set_hour(12),
+                    _ => {}
+                }
+                return Ok(());
+            }
+            if am_or_pm == CONST_FOR_PM {
+                time.set_hour(time.hour() + 12);
+            }
+        } else if ctx.contains_key("%h") {
+            let hour = ctx["%h"];
+            if hour == 12 {
+                time.set_hour(0);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn str_to_date(eval_ctx: &mut EvalContext, date: &str, format: &str) -> (bool, Time) {
+        let mut ctx = HashMap::new();
+        let mut time = Time(0);
+        let (succ, warn) = str_to_date_impl(&mut time, date, format, &mut ctx);
+        if !succ {
+            return (false, time);
+        }
+        if mysql_time_fix(&mut time, &mut ctx).is_err() {
+            return (false, time);
+        }
+
+        time.set_time_type(TimeType::DateTime).ok();
+        let time_args: TimeArgs = TimeArgs {
+            year: time.year(),
+            month: time.month(),
+            day: time.day(),
+            hour: time.hour(),
+            minute: time.minute(),
+            second: time.second(),
+            micro: time.micro(),
+            fsp: time.fsp() as i8,
+            time_type: time.get_time_type(),
+        };
+        if time_args.check(eval_ctx).is_none() {
+            return (false, time);
+        }
+        if warn {
+            eval_ctx.warnings.append_warning(Error::truncated());
+        }
+        (true, time)
+    }
+}
+
 impl Time {
     pub fn parse(
         ctx: &mut EvalContext,
@@ -900,6 +1499,14 @@ impl Time {
     pub fn parse_from_decimal_default(ctx: &mut EvalContext, input: &Decimal) -> Result<Time> {
         parser::parse_from_decimal_default(ctx, input)
             .ok_or_else(|| Error::incorrect_datetime_value(input))
+    }
+
+    pub fn parse_from_string_with_format(
+        eval_ctx: &mut EvalContext,
+        date: &str,
+        format: &str,
+    ) -> (bool, Time) {
+        date_format_parser::str_to_date(eval_ctx, date, format)
     }
 }
 
@@ -1107,7 +1714,7 @@ impl TimeArgs {
 
 // Utility
 impl Time {
-    fn from_slice(
+    pub fn from_slice(
         ctx: &mut EvalContext,
         parts: &[u32],
         time_type: TimeType,
@@ -2000,6 +2607,135 @@ impl Time {
         let day = day_of_year;
 
         (year, month, day)
+    }
+
+    /// Calculates days since 0000-00-00.
+    pub fn get_daynr(year: u32, month: u32, day: u32) -> u32 {
+        if year == 0 && month == 0 {
+            return 0;
+        }
+
+        let mut delsum = 365 * year as i64 + 31 * (month as i64 - 1) + day as i64;
+        let mut year = year as i64;
+
+        if month <= 2 {
+            year -= 1;
+        } else {
+            delsum -= (month as i64 * 4 + 23) / 10;
+        }
+
+        let temp = ((year / 100 + 1) * 3) / 4;
+        (delsum + year / 4 - temp) as u32
+    }
+
+    fn timestamp_diff_internal(&self, other: &Self) -> (i64, i64, bool) {
+        let days1 = Time::get_daynr(self.year(), self.month(), self.day());
+        let days2 = Time::get_daynr(other.year(), other.month(), other.day());
+
+        let days_diff = days1 as i64 - days2 as i64;
+
+        let diff = (days_diff * SECS_PER_DAY
+            + self.hour() as i64 * SECS_PER_HOUR
+            + self.minute() as i64 * SECS_PER_MINUTE
+            + self.second() as i64
+            - (other.hour() as i64 * SECS_PER_HOUR
+                + other.minute() as i64 * SECS_PER_MINUTE
+                + other.second() as i64))
+            * MICROS_PER_SEC
+            + self.micro() as i64
+            - other.micro() as i64;
+
+        let diff_abs = diff.abs();
+        (
+            diff_abs / MICROS_PER_SEC,
+            diff_abs % MICROS_PER_SEC,
+            diff < 0,
+        )
+    }
+
+    pub fn timestamp_diff(&self, other: &Self, unit: IntervalUnit) -> Result<i64> {
+        let (seconds, microseconds, neg) = other.timestamp_diff_internal(self);
+
+        let mut months = 0;
+
+        if matches!(
+            unit,
+            IntervalUnit::Year | IntervalUnit::Quarter | IntervalUnit::Month
+        ) {
+            let (year_start, year_end, month_start, month_end, day_start, day_end);
+            let (second_start, second_end, microsecond_start, microsecond_end);
+
+            // Swap values if the difference is negative
+            if neg {
+                year_start = other.year();
+                year_end = self.year();
+                month_start = other.month();
+                month_end = self.month();
+                day_start = other.day();
+                day_end = self.day();
+                second_start = other.hour() * SECS_PER_HOUR as u32
+                    + other.minute() * SECS_PER_MINUTE as u32
+                    + other.second();
+                second_end = self.hour() * SECS_PER_HOUR as u32
+                    + self.minute() * SECS_PER_MINUTE as u32
+                    + self.second();
+                microsecond_start = other.micro();
+                microsecond_end = self.micro();
+            } else {
+                year_start = self.year();
+                year_end = other.year();
+                month_start = self.month();
+                month_end = other.month();
+                day_start = self.day();
+                day_end = other.day();
+                second_start = self.hour() * SECS_PER_HOUR as u32
+                    + self.minute() * SECS_PER_MINUTE as u32
+                    + self.second();
+                second_end = other.hour() * SECS_PER_HOUR as u32
+                    + other.minute() * SECS_PER_MINUTE as u32
+                    + other.second();
+                microsecond_start = self.micro();
+                microsecond_end = other.micro();
+            }
+
+            // Calculate the number of full years
+            let mut years = year_end - year_start;
+            if month_end < month_start || (month_end == month_start && day_end < day_start) {
+                years -= 1;
+            }
+
+            // Calculate the total number of months
+            months = 12 * years as i64;
+            if month_end < month_start || (month_end == month_start && day_end < day_start) {
+                months += 12 - (month_start as i64 - month_end as i64);
+            } else {
+                months += month_end as i64 - month_start as i64;
+            }
+
+            // Adjust if the day or time within the month is earlier
+            if day_end < day_start
+                || (day_end == day_start
+                    && (second_end < second_start
+                        || (second_end == second_start && microsecond_end < microsecond_start)))
+            {
+                months -= 1;
+            }
+        }
+
+        let neg_v = if neg { -1 } else { 1 };
+
+        Ok(match unit {
+            IntervalUnit::Year => (months / 12) * neg_v,
+            IntervalUnit::Quarter => (months / 3) * neg_v,
+            IntervalUnit::Month => months * neg_v,
+            IntervalUnit::Week => (seconds / SECS_PER_DAY / 7) * neg_v,
+            IntervalUnit::Day => (seconds / SECS_PER_DAY) * neg_v,
+            IntervalUnit::Hour => (seconds / SECS_PER_HOUR) * neg_v,
+            IntervalUnit::Minute => (seconds / SECS_PER_MINUTE) * neg_v,
+            IntervalUnit::Second => seconds * neg_v,
+            IntervalUnit::Microsecond => (seconds * MICROS_PER_SEC + microseconds) * neg_v,
+            _ => return Err(box_err!("wrong unit {:?} for timestamp_diff", unit)),
+        })
     }
 }
 
@@ -3692,5 +4428,156 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn test_get_daynr() {
+        let test_cases = [
+            (0, 0, 0, 0),
+            (0, 1, 1, 1),
+            (1, 1, 1, 366),
+            (2023, 10, 7, 739165),
+            (9999, 12, 31, 3652424),
+            (1970, 1, 1, 719528),
+            (2006, 12, 16, 733026),
+            (10, 1, 2, 3654),
+            (2008, 2, 20, 733457),
+        ];
+        for (year, month, day, expected) in test_cases {
+            let result = Time::get_daynr(year, month, day);
+            assert_eq!(result, expected);
+        }
+    }
+
+    #[test]
+    fn test_timestamp_diff() {
+        let test_cases = vec![
+            (
+                "2025-02-05 12:00:00",
+                "2025-02-05 12:00:00",
+                IntervalUnit::Microsecond,
+                0,
+            ),
+            (
+                "2025-02-05 12:00:00",
+                "2025-02-05 12:00:00.000001",
+                IntervalUnit::Microsecond,
+                1,
+            ),
+            (
+                "2025-02-05 12:00:00",
+                "2025-02-05 12:00:10",
+                IntervalUnit::Second,
+                10,
+            ),
+            (
+                "2025-02-05 12:00:00",
+                "2025-02-05 12:10:00",
+                IntervalUnit::Minute,
+                10,
+            ),
+            (
+                "2025-02-05 12:00:00",
+                "2025-02-05 14:00:00",
+                IntervalUnit::Hour,
+                2,
+            ),
+            (
+                "2025-02-05 12:00:00",
+                "2025-02-07 12:00:00",
+                IntervalUnit::Day,
+                2,
+            ),
+            (
+                "2025-02-05 12:00:00",
+                "2025-03-05 12:00:00",
+                IntervalUnit::Month,
+                1,
+            ),
+            (
+                "2025-02-05 12:00:00",
+                "2025-08-05 12:00:00",
+                IntervalUnit::Quarter,
+                2,
+            ),
+            (
+                "2025-02-05 12:00:00",
+                "2027-02-05 12:00:00",
+                IntervalUnit::Year,
+                2,
+            ),
+            (
+                "2024-02-29 12:00:00",
+                "2025-02-28 12:00:00",
+                IntervalUnit::Year,
+                0,
+            ),
+            (
+                "2024-12-31 23:59:59",
+                "2025-01-01 00:00:00",
+                IntervalUnit::Second,
+                1,
+            ),
+            (
+                "2024-03-31 23:59:59",
+                "2024-04-01 00:00:00",
+                IntervalUnit::Second,
+                1,
+            ),
+            (
+                "2024-02-28 12:00:00",
+                "2024-02-29 12:00:00",
+                IntervalUnit::Day,
+                1,
+            ),
+            (
+                "2024-02-28 12:00:00",
+                "2024-03-01 12:00:00",
+                IntervalUnit::Day,
+                2,
+            ),
+            (
+                "2025-02-05 12:00:00",
+                "2028-02-05 12:00:00",
+                IntervalUnit::Year,
+                3,
+            ),
+            (
+                "2025-02-05 12:00:00",
+                "2025-12-05 12:00:00",
+                IntervalUnit::Month,
+                10,
+            ),
+            (
+                "2025-02-05 12:00:00",
+                "2025-02-19 12:00:00",
+                IntervalUnit::Week,
+                2,
+            ),
+            (
+                "2025-02-05 12:00:00",
+                "2025-02-05 16:00:00",
+                IntervalUnit::Hour,
+                4,
+            ),
+            (
+                "2025-02-05 12:00:00",
+                "2025-02-06 00:00:00",
+                IntervalUnit::Hour,
+                12,
+            ),
+        ];
+
+        let mut ctx = EvalContext::default();
+        for (start, end, unit, expected) in test_cases {
+            let start_dt = Time::parse_timestamp(&mut ctx, start, MAX_FSP, false).unwrap();
+            let end_dt = Time::parse_timestamp(&mut ctx, end, MAX_FSP, false).unwrap();
+            let result = start_dt.timestamp_diff(&end_dt, unit).unwrap();
+            assert_eq!(
+                result, expected,
+                "Failed for {} -> {} in {:?}",
+                start, end, unit
+            );
+        }
     }
 }
