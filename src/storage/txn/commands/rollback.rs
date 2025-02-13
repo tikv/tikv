@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use tikv_kv::ScanMode;
 // #[PerformanceCriticalPath]
 use txn_types::{Key, TimeStamp};
 
@@ -48,12 +49,16 @@ impl CommandExt for Rollback {
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Rollback {
-    fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
+    fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
-        let mut reader = ReaderWithStats::new(
-            SnapshotReader::new_with_ctx(self.start_ts, snapshot, &self.ctx),
-            context.statistics,
-        );
+
+        let mut snapshot_reader = SnapshotReader::new_with_ctx(self.start_ts, snapshot, &self.ctx);
+        if self.keys.len() > 1 {
+            self.keys.sort();
+            snapshot_reader.set_scan_mode(ScanMode::Forward);
+            snapshot_reader.set_lower_bound(self.keys.first().unwrap().clone());
+        }
+        let mut reader = ReaderWithStats::new(snapshot_reader, context.statistics);
 
         let rows = self.keys.len();
         let mut released_locks = ReleasedLocks::new();

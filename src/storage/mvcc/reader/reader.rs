@@ -58,18 +58,6 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
         }
     }
 
-    pub fn new_scan_mode_with_ctx(
-        start_ts: TimeStamp,
-        snapshot: S,
-        scan_mode: ScanMode,
-        ctx: &Context,
-    ) -> Self {
-        SnapshotReader {
-            reader: MvccReader::new_with_ctx(snapshot, Some(scan_mode), ctx),
-            start_ts,
-        }
-    }
-
     #[inline(always)]
     pub fn get_txn_commit_record(&mut self, key: &Key) -> Result<TxnCommitRecord> {
         self.reader.get_txn_commit_record(key, self.start_ts)
@@ -133,6 +121,16 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
     #[inline(always)]
     pub fn take_statistics(&mut self) -> Statistics {
         std::mem::take(&mut self.reader.statistics)
+    }
+
+    #[inline(always)]
+    pub fn set_scan_mode(&mut self, scan_mode: ScanMode) {
+        self.reader.scan_mode = Some(scan_mode);
+    }
+
+    #[inline(always)]
+    pub fn set_lower_bound(&mut self, lower: Key) {
+        self.reader.set_range(Some(lower), None);
     }
 }
 

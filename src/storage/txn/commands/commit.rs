@@ -1,5 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use tikv_kv::ScanMode;
 // #[PerformanceCriticalPath]
 use txn_types::Key;
 
@@ -56,20 +57,11 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Commit {
         }
         let mut txn = MvccTxn::new(self.lock_ts, context.concurrency_manager);
         let mut keys = self.keys;
-        let snapshot_reader = if keys.len() <= 1 {
-            SnapshotReader::new_with_ctx(self.lock_ts, snapshot, &self.ctx)
-        } else {
+        let mut snapshot_reader = SnapshotReader::new_with_ctx(self.lock_ts, snapshot, &self.ctx);
+        if keys.len() > 1 {
             keys.sort();
-            let mut snapshot_reader = SnapshotReader::new_scan_mode_with_ctx(
-                self.lock_ts,
-                snapshot,
-                tikv_kv::ScanMode::Forward,
-                &self.ctx,
-            );
-            snapshot_reader
-                .reader
-                .set_range(keys.first().cloned(), None);
-            snapshot_reader
+            snapshot_reader.set_scan_mode(ScanMode::Forward);
+            snapshot_reader.set_lower_bound(keys.first().unwrap().clone());
         };
         let mut reader = ReaderWithStats::new(snapshot_reader, context.statistics);
 

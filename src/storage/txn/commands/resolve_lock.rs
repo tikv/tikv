@@ -2,6 +2,7 @@
 
 // #[PerformanceCriticalPath]
 use collections::HashMap;
+use tikv_kv::ScanMode;
 use txn_types::{Key, Lock, TimeStamp};
 
 use crate::storage::{
@@ -80,22 +81,18 @@ impl CommandExt for ResolveLock {
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
     fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
-        let (ctx, txn_status, key_locks) = (self.ctx, self.txn_status, self.key_locks);
+        let (ctx, txn_status, mut key_locks) = (self.ctx, self.txn_status, self.key_locks);
 
         let mut txn = MvccTxn::new(TimeStamp::zero(), context.concurrency_manager);
-        let mut reader = ReaderWithStats::new(
-            SnapshotReader::new_scan_mode_with_ctx(
-                TimeStamp::zero(),
-                snapshot,
-                tikv_kv::ScanMode::Forward,
-                &ctx,
-            ),
-            context.statistics,
-        );
-        reader
-            .reader
-            .reader
-            .set_range(key_locks.first().map(|(k, _)| k.clone()), None);
+
+        let mut snapshot_reader = SnapshotReader::new_with_ctx(TimeStamp::zero(), snapshot, &ctx);
+        if key_locks.len() > 1 {
+            key_locks.sort_by(|a, b| a.0.cmp(&b.0));
+            snapshot_reader.set_scan_mode(ScanMode::Forward);
+            snapshot_reader.set_lower_bound(key_locks.first().unwrap().0.clone());
+        }
+
+        let mut reader = ReaderWithStats::new(snapshot_reader, context.statistics);
 
         let mut scan_key = self.scan_key.take();
         let rows = key_locks.len();
