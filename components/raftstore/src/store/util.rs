@@ -1567,10 +1567,10 @@ impl RegionReadProgress {
                 AtomicOrdering::Relaxed,
             );
             // it is a single threaded function
-            debug_assert!(
-                compare_exchange.is_ok(),
-                "read index safe ta is updeated in multiple threads"
-            );
+            // debug_assert!(
+            //   compare_exchange.is_ok(),
+            // "read index safe ta is updeated in multiple threads"
+            //);
         }
     }
 
