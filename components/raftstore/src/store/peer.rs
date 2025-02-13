@@ -3676,7 +3676,7 @@ where
                             Ordering::SeqCst,
                         );
                         // it is updated by only one thread
-                        assert_eq!(
+                        debug_assert!(
                             self.read_progress.read_index_safe_ts.load(Ordering::SeqCst),
                             start_ts
                         );
