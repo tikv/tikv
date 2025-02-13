@@ -4223,19 +4223,17 @@ where
                 }
             }
         }
-        let (mut min_m, min_c) = (min_m.unwrap_or(0), min_c.unwrap_or(0));
+        let (min_m, min_c) = (min_m.unwrap_or(0), min_c.unwrap_or(0));
         if min_m < min_c {
             warn!(
-                "min_matched < min_committed, raft progress is inaccurate";
+                "min_matched < min_committed, this is likely caused by disk IO jitters";
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
                 "min_matched" => min_m,
                 "min_committed" => min_c,
             );
-            // Reset `min_matched` to `min_committed`, since the raft log at `min_committed`
-            // is known to be committed in all peers, all of the peers should also have
-            // replicated it
-            min_m = min_c;
+            // For region leader, matched index can be smaller than committed
+            // index if the leader's disk IO is slow.
         }
         Ok((min_m, min_c))
     }
@@ -4285,7 +4283,9 @@ where
         }
         let mut entry_size = 0;
         for entry in self.raft_group.raft.raft_log.entries(
-            min_committed + 1,
+            // entry_size depends on min_matched but admin cmd checek
+            // depends on min_committed
+            std::cmp::min(min_matched, min_committed) + 1,
             NO_LIMIT,
             GetEntriesContext::empty(false),
         )? {
