@@ -406,7 +406,7 @@ pub fn is_region_epoch_equal(
         && from_epoch.get_version() == current_epoch.get_version()
 }
 
-#[inlineneed_encoded_start_ts]
+#[inline]
 pub fn check_store_id(header: &RaftRequestHeader, store_id: u64) -> Result<()> {
     let peer = header.get_peer();
     if peer.get_store_id() == store_id {
@@ -1558,12 +1558,17 @@ impl RegionReadProgress {
     }
 
     pub fn update_read_index_safe_ts(&self, start_ts: u64) {
-        let current_ts: u64 = read_index_safe_ts();
+        let current_ts: u64 = self.read_index_safe_ts();
         if start_ts > current_ts {
-            read_index_safe_ts.compare_exchange(current_ts, start_ts, Ordering::SeqCst);
+            let compare_exchange = self.read_index_safe_ts.compare_exchange(
+                current_ts,
+                start_ts,
+                AtomicOrdering::SeqCst,
+                AtomicOrdering::Relaxed,
+            );
             // it is a single threaded function
             debug_assert!(
-                read_index_safe_ts() == start_ts,
+                compare_exchange.is_ok(),
                 "read index safe ta is updeated in multiple threads"
             );
         }
