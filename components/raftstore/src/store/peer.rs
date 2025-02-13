@@ -1916,7 +1916,6 @@ where
         }
         let msg_type = m.get_msg_type();
         if msg_type == MessageType::MsgReadIndex {
-            fail_point!("on_step_read_index_msg");
             ctx.coprocessor_host
                 .on_step_read_index(&mut m, self.get_role());
             // Must use the commit index of `PeerStorage` instead of the commit index
@@ -4177,6 +4176,8 @@ where
                     return false;
                 }
             }
+        } else {
+            fail_point!("propose_readindex_from_follower");
         }
 
         if !self.is_leader() && self.leader_id() == INVALID_ID {
