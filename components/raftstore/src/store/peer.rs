@@ -4200,7 +4200,9 @@ where
         }
         let mut entry_size = 0;
         for entry in self.raft_group.raft.raft_log.entries(
-            min_matched + 1,
+            // entry_size depends on min_matched but admin cmd checek
+            // depends on min_committed
+            std::cmp::min(min_matched, min_committed) + 1,
             NO_LIMIT,
             GetEntriesContext::empty(false),
         )? {
