@@ -715,7 +715,7 @@ where
     let mut header = new_request_header(ctx.pb_ctx);
     let mut flags = 0;
     // need_encoded_start_ts should be set to false if start_ts is none or zero
-    let need_encoded_start_ts = ctx.start_ts.map_or(false, |ts| !ts.is_zero());
+    let need_encoded_start_ts = ctx.start_ts.map_or(true, |ts| !ts.is_zero());
     if ctx.pb_ctx.get_stale_read() && need_encoded_start_ts {
         flags |= WriteBatchFlags::STALE_READ.bits();
     }

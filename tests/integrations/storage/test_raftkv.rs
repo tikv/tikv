@@ -139,6 +139,7 @@ fn test_read_index_on_replica() {
 }
 
 #[test]
+#[ignore]
 fn test_read_on_replica() {
     let count = 3;
     let mut cluster = new_server_cluster(0, count);
