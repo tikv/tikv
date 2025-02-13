@@ -1176,6 +1176,11 @@ where
                             self.redirect(RaftCommand::new(req, cb));
                             return;
                         }
+                        let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
+                        if read_ts == 0 {
+                            self.redirect(RaftCommand::new(req, cb));
+                            return;
+                        }
                         // check first if it can be served locally wihout sending read index message
                         // to leader. (https://github.com/tikv/rfcs/blob/master/text/0113-follower-read-cache.md)
                         match self.try_local_stale_read(
