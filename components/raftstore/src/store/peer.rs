@@ -3670,16 +3670,7 @@ where
                     if self.ready_to_handle_unsafe_replica_read(state.index)
                         && current_ts < start_ts
                     {
-                        self.read_progress.read_index_safe_ts.compare_and_swap(
-                            current_ts,
-                            start_ts,
-                            Ordering::SeqCst,
-                        );
-                        // it is updated by only one thread
-                        debug_assert!(
-                            self.read_progress.read_index_safe_ts.load(Ordering::SeqCst),
-                            start_ts
-                        );
+                        self.read_progress.update_read_index_safe_ts(start_ts);
                     }
                 }
                 (read_index_ctx.id, read_index_ctx.locked, state.index)
