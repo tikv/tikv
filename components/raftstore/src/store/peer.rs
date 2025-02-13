@@ -2376,7 +2376,7 @@ where
                 RoleChange {
                     state: ss.raft_state,
                     leader_id: ss.leader_id,
-                    prev_lead_transferee: self.transfer_leader_state.lead_transferee,
+                    prev_lead_transferee: self.transfer_leader_state.leader_transferee,
                     vote: self.raft_group.raft.vote,
                     initialized: self.is_initialized(),
                     peer_id: self.peer.get_id(),
@@ -2388,7 +2388,7 @@ where
                 self.on_leader_changed(self.leader_id(), hs.get_term());
             }
         }
-        self.transfer_leader_state.lead_transferee =
+        self.transfer_leader_state.leader_transferee =
             self.raft_group.raft.lead_transferee.unwrap_or_default();
     }
 
@@ -6077,7 +6077,7 @@ where
     /// Update states of the peer which can be changed in the previous raft
     /// tick.
     pub fn post_raft_group_tick(&mut self) {
-        self.transfer_leader_state.lead_transferee =
+        self.transfer_leader_state.leader_transferee =
             self.raft_group.raft.lead_transferee.unwrap_or_default();
     }
 }
@@ -6328,7 +6328,7 @@ pub struct TransferLeaderState {
     /// lead_transferee if leader is in a leadership transferring.
     /// Only leader can update this field, and it is meaningful only when a peer
     /// is a leader or a leader is stepping down.
-    pub lead_transferee: u64,
+    pub leader_transferee: u64,
     /// A pre transfer leader message sent from leader.
     /// Only leader transferee can update this field and it is meaningful only
     /// when a peer is a leader transferee.
