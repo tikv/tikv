@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use tikv_kv::ScanMode;
 // #[PerformanceCriticalPath]
+use tikv_kv::ScanMode;
 use txn_types::{Key, Lock, WriteType};
 
 use crate::storage::{

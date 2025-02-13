@@ -2,9 +2,9 @@
 
 use std::mem;
 
+// #[PerformanceCriticalPath]
 use kvproto::kvrpcpb::{AssertionLevel, ExtraOp, PrewriteRequestPessimisticAction};
 use tikv_kv::ScanMode;
-// #[PerformanceCriticalPath]
 use txn_types::{insert_old_value_if_resolved, Mutation, OldValues, TimeStamp, TxnExtra};
 
 use crate::storage::{
