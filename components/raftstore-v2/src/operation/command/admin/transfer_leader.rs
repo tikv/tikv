@@ -218,6 +218,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
     }
 
+    /// Check if the transferee is eligible to receive the leadership. It
+    /// rejects the transfer leader request if any of the following
+    /// conditions is met:
+    /// * The peer is applying a snapshot
+    /// * The peer is a learner/witness peer.
+    /// * The message is sent by a different leader.
+    /// * Its disk is almost full.
+    ///
+    /// Called by transferee.
     fn maybe_reject_transfer_leader_msg<T>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
@@ -263,6 +272,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
     }
 
+    /// Set a pending transfer leader message to allow the transferee to
+    /// initiate raft log cache warmup.
+    /// The message will be cleaned up once the transferee has warmed up its
+    /// cache or the peer becomes leader.
+    ///
+    /// Called by transferee.
     pub fn set_pending_transfer_leader_msg(&mut self, msg: &eraftpb::Message) {
         // log_term is set by original leader in pre transfer leader stage.
         // Callers must guarantee that the message is a valid transfer leader

@@ -4735,7 +4735,15 @@ where
         Ok(Either::Left(propose_index))
     }
 
-    // Called by transferee.
+    /// Check if the transferee is eligible to receive the leadership. It
+    /// rejects the transfer leader request if any of the following
+    /// conditions is met:
+    /// * The peer is applying a snapshot
+    /// * The peer is a learner/witness peer.
+    /// * The message is sent by a different leader.
+    /// * Its disk is almost full.
+    ///
+    /// Called by transferee.
     pub fn maybe_reject_transfer_leader_msg<T>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
@@ -4769,6 +4777,12 @@ where
         false
     }
 
+    /// Set a pending transfer leader message to allow the transferee to
+    /// initiate raft log cache warmup.
+    /// The message will be cleaned up once the transferee has warmed up its
+    /// cache or the peer becomes leader.
+    ///
+    /// Called by transferee.
     pub fn set_pending_transfer_leader_msg(&mut self, msg: &eraftpb::Message) {
         // log_term is set by original leader in pre transfer leader stage.
         // Callers must guarantee that the message is a valid transfer leader
@@ -4785,6 +4799,10 @@ where
         self.transfer_leader_state.transfer_leader_msg = Some(msg.clone());
     }
 
+    /// Ack transfer leader message if there is a pending transfer leader
+    /// message and the transferee has warmed up its raft log cache.
+    ///
+    /// Called by transferee.
     pub fn maybe_ack_transfer_leader_msg<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) -> bool {
         if self.is_leader() {
             self.transfer_leader_state.transfer_leader_msg = None;
@@ -6284,7 +6302,7 @@ pub enum TransferLeaderContext {
 }
 
 impl TransferLeaderContext {
-    const TAG_COMMAND_REPLY: u8 = 1;
+    const TAG_COMMAND_REPLY: u8 = TRANSFER_LEADER_COMMAND_REPLY_CTX[0];
     pub fn from_bytes(mut ctx: &[u8]) -> Result<TransferLeaderContext> {
         if ctx.is_empty() {
             return Ok(TransferLeaderContext::None);
