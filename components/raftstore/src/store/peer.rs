@@ -3665,7 +3665,7 @@ where
             .map(|state| {
                 let read_index_ctx = ReadIndexContext::parse(state.request_ctx.as_slice()).unwrap();
                 if let Some(read_index_safe_ts) = read_index_ctx.read_index_safe_ts {
-                    // there are no pending proposals in leader
+                    // There are no pending conflict memory locks on the leader.
                     let start_ts: u64 = read_index_safe_ts;
                     if self.ready_to_handle_unsafe_replica_read(state.index)
                         && self.read_progress.read_index_safe_ts.load(Ordering::SeqCst) < start_ts
