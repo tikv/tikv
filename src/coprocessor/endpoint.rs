@@ -116,7 +116,7 @@ pub struct Endpoint<E: Engine> {
 impl<E: Engine> tikv_util::AssertSend for Endpoint<E> {}
 
 #[derive(Default, Debug)]
-struct ExtraExecutorTask {
+pub struct ExtraExecutorTask {
     ranges: Vec<coppb::KeyRange>,
     region: Arc<metapb::Region>,
     peer_id: u64,
@@ -202,7 +202,7 @@ impl<E: Engine> Endpoint<E> {
     /// `ReqContext`. Returns `Err` if fails.
     ///
     /// It also checks if there are locks in memory blocking this read request.
-    fn parse_request_and_check_memory_locks(
+    pub fn parse_request_and_check_memory_locks(
         &self,
         req: coppb::Request,
         peer: Option<String>,
@@ -761,7 +761,7 @@ impl<E: Engine> Endpoint<E> {
     ///
     /// Returns `Err(err)` if the read pool is full. Returns `Ok(future)` in
     /// other cases. The future inside may be an error however.
-    fn handle_unary_request(
+    pub fn handle_unary_request(
         &self,
         req_ctx: ReqContext,
         handler_builder: RequestHandlerBuilder<E::Snap>,
@@ -959,7 +959,7 @@ impl<E: Engine> Endpoint<E> {
         async move {
             if result_futures.len() == 0 {
                 // this may print many log
-                // info!("no extra task need to do"; "keep_index.len" => keep_index.len());
+                info!("no extra task need to do"; "keep_index.len" => keep_index.len());
                 return Ok(resp);
             }
             let begin = std::time::Instant::now();
@@ -1009,8 +1009,8 @@ impl<E: Engine> Endpoint<E> {
                 sel.clear_chunks();
             } else {
                 keep_index.sort();
-                info!("some index data have no extra task, need keep"; "keep_index_idxs" =>
-                ?keep_index);
+                info!("some index data have no extra task, need keep";
+    "keep_index_idxs" =>             ?keep_index);
                 let mut new_index_columns = Vec::new();
                 for ft in &schema {
                     let tp =
@@ -1038,8 +1038,8 @@ impl<E: Engine> Endpoint<E> {
                         }
                     };
                 }
-                info!("some index data have no extra task, need keep"; "keep_index_data"=>
-                ?idx_strs);
+                info!("some index data have no extra task, need keep";
+    "keep_index_data"=>             ?idx_strs);
                 let mut index_chunk = Chunk::default();
                 for col in new_index_columns {
                     index_chunk
@@ -1138,70 +1138,70 @@ impl<E: Engine> Endpoint<E> {
                 "rocksdb_block_read" => rocksdb_block_read_time,
             );
 
-            // print resp value for debug
-            // let mut extra_schema = Vec::new();
-            // if let Some((schema, _)) = index_lookup {
-            //     extra_schema = schema.clone();
-            //     let mut sel = SelectResponse::default();
-            //     sel.merge_from_bytes(resp.get_data())
-            //         .expect("fail to recover SelectResponse");
-            //     if sel.get_encode_type() == EncodeType::TypeChunk {
-            //         let schema_types: Vec<_> = schema
-            //             .iter()
-            //             .map(|ft| {
-            //                 FieldTypeTp::from_u8(ft.get_tp() as u8)
-            //                     .unwrap_or(FieldTypeTp::Unspecified)
-            //             })
-            //             .collect();
-            //         info!("extra req schema"; "schema" => ?schema_types, "schema.len" =>
-            // schema_types.len());         let mut all_data = Vec::new();
-            //         'outer: for chunk in sel.get_chunks() {
-            //             let mut data = chunk.get_rows_data();
-            //             if data.is_empty() {
-            //                 continue;
-            //             }
-            //             let mut columns = Vec::with_capacity(schema.len());
-            //             for ft in &schema {
-            //                 if data.is_empty() {
-            //                     continue;
-            //                 }
-            //                 let col = match Column::decode(
-            //                     &mut data,
-            //                     FieldTypeTp::from_u8(ft.get_tp() as u8)
-            //                         .unwrap_or(FieldTypeTp::Unspecified),
-            //                 ) {
-            //                     Ok(col) => col,
-            //                     Err(e) => {
-            //                         info!("decode chunk error"; "err" => ?e);
-            //                         break 'outer;
-            //                     }
-            //                 };
-            //                 columns.push(col);
-            //             }
-            //             if columns.is_empty() {
-            //                 continue;
-            //             }
-            //             let len = columns[0].len();
-            //
-            //             for i in 0..len {
-            //                 let mut dt = Vec::new();
-            //                 let mut row = Vec::new();
-            //                 for (j, ft) in schema.iter().enumerate() {
-            //                     let v = columns[j].get_datum(i, ft).expect("fail to get
-            // datum");                     if let Ok(str) = v.to_string() {
-            //                         row.push(str);
-            //                     } else {
-            //                         row.push("".to_string());
-            //                     }
-            //                     dt.push(v);
-            //                 }
-            //                 info!("extra resp"; "row" => ?row, "row.len" => row.len());
-            //                 all_data.push(dt);
-            //             }
-            //         }
-            //     }
-            // }
-            // info!("handle extra req finish"; "resp.data.len" => resp.data.len());
+            //         // print resp value for debug
+            //         // let mut extra_schema = Vec::new();
+            //         // if let Some((schema, _)) = index_lookup {
+            //         //     extra_schema = schema.clone();
+            //         //     let mut sel = SelectResponse::default();
+            //         //     sel.merge_from_bytes(resp.get_data())
+            //         //         .expect("fail to recover SelectResponse");
+            //         //     if sel.get_encode_type() == EncodeType::TypeChunk {
+            //         //         let schema_types: Vec<_> = schema
+            //         //             .iter()
+            //         //             .map(|ft| {
+            //         //                 FieldTypeTp::from_u8(ft.get_tp() as u8)
+            //         //                     .unwrap_or(FieldTypeTp::Unspecified)
+            //         //             })
+            //         //             .collect();
+            //         //         info!("extra req schema"; "schema" => ?schema_types,
+            // "schema.len" =>         // schema_types.len());         let mut all_data
+            // = Vec::new();         //         'outer: for chunk in sel.get_chunks() {
+            //         //             let mut data = chunk.get_rows_data();
+            //         //             if data.is_empty() {
+            //         //                 continue;
+            //         //             }
+            //         //             let mut columns = Vec::with_capacity(schema.len());
+            //         //             for ft in &schema {
+            //         //                 if data.is_empty() {
+            //         //                     continue;
+            //         //                 }
+            //         //                 let col = match Column::decode(
+            //         //                     &mut data,
+            //         //                     FieldTypeTp::from_u8(ft.get_tp() as u8)
+            //         //                         .unwrap_or(FieldTypeTp::Unspecified),
+            //         //                 ) {
+            //         //                     Ok(col) => col,
+            //         //                     Err(e) => {
+            //         //                         info!("decode chunk error"; "err" => ?e);
+            //         //                         break 'outer;
+            //         //                     }
+            //         //                 };
+            //         //                 columns.push(col);
+            //         //             }
+            //         //             if columns.is_empty() {
+            //         //                 continue;
+            //         //             }
+            //         //             let len = columns[0].len();
+            //         //
+            //         //             for i in 0..len {
+            //         //                 let mut dt = Vec::new();
+            //         //                 let mut row = Vec::new();
+            //         //                 for (j, ft) in schema.iter().enumerate() {
+            //         //                     let v = columns[j].get_datum(i,
+            // ft).expect("fail to get         // datum");                     if let
+            // Ok(str) = v.to_string() {         //
+            // row.push(str);         //                     } else {
+            //         //                         row.push("".to_string());
+            //         //                     }
+            //         //                     dt.push(v);
+            //         //                 }
+            //         //                 info!("extra resp"; "row" => ?row, "row.len" =>
+            // row.len());         //                 all_data.push(dt);
+            //         //             }
+            //         //         }
+            //         //     }
+            //         // }
+            info!("handle extra req finish"; "resp.data.len" =>resp.data.len());
             GLOBAL_TRACKERS.remove(cur_tracker);
             Some(resp)
         }
@@ -1426,7 +1426,7 @@ impl<E: Engine> Endpoint<E> {
     /// only stream item.
     #[inline]
     pub fn parse_and_handle_stream_request(
-        &self,
+        self: &Arc<Self>,
         req: coppb::Request,
         peer: Option<String>,
     ) -> impl futures::stream::Stream<Item = coppb::Response> {

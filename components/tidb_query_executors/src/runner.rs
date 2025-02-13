@@ -11,11 +11,12 @@ use tidb_query_common::{
     execute_stats::ExecSummary,
     metrics::*,
     storage::{IntervalRange, Storage},
+    util::convert_to_prefix_next,
     Result,
 };
 use tidb_query_datatype::{
     expr::{EvalConfig, EvalContext, EvalWarnings},
-    EvalType, FieldTypeAccessor,
+    EvalType, FieldTypeAccessor, FieldTypeTp,
 };
 use tikv_util::{
     deadline::Deadline,
@@ -28,7 +29,7 @@ use tipb::{
 };
 
 use super::{
-    interface::{BatchExecIsDrain, BatchExecutor, ExecuteStats},
+    interface::{BatchExecIsDrain, BatchExecuteResult, BatchExecutor, ExecuteStats},
     *,
 };
 
@@ -40,6 +41,7 @@ const BATCH_INITIAL_SIZE: usize = 32;
 // TODO: This value is chosen based on MonetDB/X100's research without our own
 // benchmarks.
 pub use tidb_query_expr::types::BATCH_MAX_SIZE;
+use tikv_util::codec::number::NumberEncoder;
 
 // TODO: Maybe there can be some better strategy. Needs benchmarks and tunes.
 const BATCH_GROW_FACTOR: usize = 2;
@@ -58,7 +60,7 @@ pub struct BatchExecutorsRunner<SS> {
     /// columns don't need to be encoded and returned back.
     output_offsets: Vec<u32>,
 
-    config: Arc<EvalConfig>,
+    pub config: Arc<EvalConfig>,
 
     /// Whether or not execution summary need to be collected.
     collect_exec_summary: bool,
@@ -484,6 +486,57 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             quota_limiter,
         })
     }
+    pub async fn run_request(
+        &mut self,
+    ) -> Result<(
+        Vec<BatchExecuteResult>,
+        usize,
+        EvalWarnings,
+        Option<IntervalRange>,
+    )> {
+        let mut results = vec![];
+        let mut batch_size = Self::batch_initial_size();
+        let mut warnings = self.config.new_eval_warnings();
+        let mut ctx = EvalContext::new(self.config.clone());
+        let mut record_all = 0;
+
+        loop {
+            let mut sample = self.quota_limiter.new_sample(true);
+            let (result, drained, record_len) = {
+                let (cpu_time, res) = sample
+                    .observe_cpu_async(self.internal_next_batch(batch_size, &mut warnings))
+                    .await;
+                sample.add_cpu_time(cpu_time);
+                res?
+            };
+            if record_len > 0 {
+                let size = result
+                    .physical_columns
+                    .maximum_encoded_size(&result.logical_rows, &self.output_offsets);
+                sample.add_read_bytes(size);
+            }
+
+            let quota_delay = self.quota_limiter.consume_sample(sample, true).await;
+            if !quota_delay.is_zero() {
+                NON_TXN_COMMAND_THROTTLE_TIME_COUNTER_VEC_STATIC
+                    .get(ThrottleType::dag)
+                    .inc_by(quota_delay.as_micros() as u64);
+            }
+
+            if record_len > 0 {
+                results.push(result);
+                record_all += record_len;
+            }
+
+            if self.is_drained(drained, record_all) {
+                let range = self.get_next_paging_range(drained);
+                return Ok((results, record_all, warnings, range));
+            }
+
+            // Grow batch size
+            grow_batch_size(&mut batch_size);
+        }
+    }
 
     fn batch_initial_size() -> usize {
         fail_point!("copr_batch_initial_size", |r| r
@@ -536,9 +589,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                 record_all += record_len;
             }
 
-            if drained.stop() || self.paging_size.map_or(false, |p| record_all >= p as usize) {
-                self.out_most_executor
-                    .collect_exec_stats(&mut self.exec_stats);
+            if self.is_drained(drained, record_all) {
                 let range = if drained == BatchExecIsDrain::Drain {
                     None
                 } else {
@@ -546,44 +597,72 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
                     self.paging_size
                         .map(|_| self.out_most_executor.take_scanned_range())
                 };
-
-                let mut sel_resp = SelectResponse::default();
-                sel_resp.set_chunks(chunks.into());
-                sel_resp.set_encode_type(self.encode_type);
-
-                // TODO: output_counts should not be i64. Let's fix it in Coprocessor DAG V2.
-                sel_resp.set_output_counts(
-                    self.exec_stats
-                        .scanned_rows_per_range
-                        .iter()
-                        .map(|v| *v as i64)
-                        .collect(),
-                );
-
-                if self.collect_exec_summary {
-                    let summaries = self
-                        .exec_stats
-                        .summary_per_executor
-                        .iter()
-                        .map(|summary| {
-                            let mut ret = ExecutorExecutionSummary::default();
-                            ret.set_num_iterations(summary.num_iterations as u64);
-                            ret.set_num_produced_rows(summary.num_produced_rows as u64);
-                            ret.set_time_processed_ns(summary.time_processed_ns as u64);
-                            ret
-                        })
-                        .collect::<Vec<_>>();
-                    sel_resp.set_execution_summaries(summaries.into());
-                }
-
-                sel_resp.set_warnings(warnings.warnings.into());
-                sel_resp.set_warning_count(warnings.warning_cnt as i64);
-                return Ok((sel_resp, range));
+                let resp = self.build_response(chunks, warnings)?;
+                return Ok((resp, range));
             }
 
             // Grow batch size
             grow_batch_size(&mut batch_size);
         }
+    }
+
+    #[inline]
+    pub fn is_drained(&self, drained: BatchExecIsDrain, record_all: usize) -> bool {
+        drained.stop() || self.paging_size.map_or(false, |p| record_all >= p as usize)
+    }
+
+    #[inline]
+    fn get_next_paging_range(&mut self, drained: BatchExecIsDrain) -> Option<IntervalRange> {
+        if drained == BatchExecIsDrain::Drain {
+            None
+        } else {
+            // It's not allowed to stop paging when BatchExecIsDrain::PagingDrain.
+            self.paging_size
+                .map(|_| self.out_most_executor.take_scanned_range())
+        }
+    }
+
+    #[inline]
+    pub fn build_response(
+        &mut self,
+        chunks: Vec<Chunk>,
+        warnings: EvalWarnings,
+    ) -> Result<SelectResponse> {
+        self.out_most_executor
+            .collect_exec_stats(&mut self.exec_stats);
+
+        let mut sel_resp = SelectResponse::default();
+        sel_resp.set_chunks(chunks.into());
+        sel_resp.set_encode_type(self.encode_type);
+
+        // TODO: output_counts should not be i64. Let's fix it in Coprocessor DAG V2.
+        sel_resp.set_output_counts(
+            self.exec_stats
+                .scanned_rows_per_range
+                .iter()
+                .map(|v| *v as i64)
+                .collect(),
+        );
+
+        if self.collect_exec_summary {
+            let summaries = self
+                .exec_stats
+                .summary_per_executor
+                .iter()
+                .map(|summary| {
+                    let mut ret = ExecutorExecutionSummary::default();
+                    ret.set_num_iterations(summary.num_iterations as u64);
+                    ret.set_num_produced_rows(summary.num_produced_rows as u64);
+                    ret.set_time_processed_ns(summary.time_processed_ns as u64);
+                    ret
+                })
+                .collect::<Vec<_>>();
+            sel_resp.set_execution_summaries(summaries.into());
+        }
+
+        sel_resp.set_warnings(warnings.warnings.into());
+        sel_resp.set_warning_count(warnings.warning_cnt as i64);
+        return Ok(sel_resp);
     }
 
     pub async fn handle_streaming_request(
@@ -648,14 +727,28 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         warnings: &mut EvalWarnings,
         ctx: &mut EvalContext,
     ) -> Result<(BatchExecIsDrain, usize)> {
-        let mut record_len = 0;
-
         self.deadline.check()?;
 
-        let mut result = self.out_most_executor.next_batch(batch_size).await;
+        let result = self.out_most_executor.next_batch(batch_size).await;
 
-        let is_drained = result.is_drained?;
+        let drained = match result.is_drained {
+            Err(e) => return Err(e),
+            Ok(drained) => drained,
+        };
 
+        let record_len = self.encode_to_chunk(ctx, is_streaming, result, chunk, warnings)?;
+        return Ok((drained, record_len));
+    }
+
+    pub fn encode_to_chunk(
+        &mut self,
+        ctx: &mut EvalContext,
+        is_streaming: bool,
+        mut result: BatchExecuteResult,
+        chunk: &mut Chunk,
+        warnings: &mut EvalWarnings,
+    ) -> Result<usize> {
+        let mut record_len = 0;
         if !result.logical_rows.is_empty() {
             assert_eq!(
                 result.physical_columns.columns_len(),
@@ -695,9 +788,46 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             }
             record_len += result.logical_rows.len();
         }
-
         warnings.merge(&mut result.warnings);
-        Ok((is_drained, record_len))
+        Ok(record_len)
+    }
+    pub fn encode_to_chunks(
+        &mut self,
+        ctx: &mut EvalContext,
+        is_streaming: bool,
+        results: Vec<BatchExecuteResult>,
+        warnings: &mut EvalWarnings,
+    ) -> Result<Vec<Chunk>> {
+        let mut chunks = vec![];
+        for result in results {
+            let mut chunk = Chunk::default();
+            let record_len =
+                self.encode_to_chunk(ctx, is_streaming, result, &mut chunk, warnings)?;
+            if record_len > 0 {
+                chunks.push(chunk);
+            }
+        }
+        Ok(chunks)
+    }
+
+    pub async fn internal_next_batch(
+        &mut self,
+        batch_size: usize,
+        warnings: &mut EvalWarnings,
+    ) -> Result<(BatchExecuteResult, BatchExecIsDrain, usize)> {
+        self.deadline.check()?;
+
+        let mut result = self.out_most_executor.next_batch(batch_size).await;
+        let drained = match result.is_drained {
+            Err(e) => return Err(e),
+            Ok(drained) => drained,
+        };
+        let mut record_len = 0;
+        if !result.logical_rows.is_empty() {
+            record_len += result.logical_rows.len();
+        }
+        warnings.merge(&mut result.warnings);
+        Ok((result, drained, record_len))
     }
 
     fn make_stream_response(

@@ -91,10 +91,6 @@ pub trait RequestHandler: Send {
         None
     }
 
-    fn get_schema(&self) -> Option<Vec<FieldType>> {
-        None
-    }
-
     fn into_boxed(self) -> Box<dyn RequestHandler>
     where
         Self: 'static + Sized,
