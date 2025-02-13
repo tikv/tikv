@@ -84,7 +84,7 @@ use crate::{
     store::{
         cmd_resp,
         entry_storage::{self, CachedEntries},
-        fsm::{store::PendingCreateState, RaftPollerBuilder},
+        fsm::RaftPollerBuilder,
         local_metrics::RaftMetrics,
         memory::*,
         metrics::*,
@@ -427,7 +427,7 @@ where
     /// Used for handling race between splitting and creating new peer.
     /// An uninitialized peer can be replaced to the one from splitting iff they
     /// are exactly the same peer.
-    pending_create_peers: Arc<Mutex<HashMap<u64, (u64, PendingCreateState)>>>,
+    pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
 
     /// We must delete the ingested file before calling `callback` so that any
     /// ingest-request reaching this peer could see this update if leader
@@ -489,7 +489,7 @@ where
         notifier: Box<dyn Notifier<EK>>,
         cfg: &Config,
         store_id: u64,
-        pending_create_peers: Arc<Mutex<HashMap<u64, (u64, PendingCreateState)>>>,
+        pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
         priority: Priority,
     ) -> ApplyContext<EK> {
         let kv_wb = engine.write_batch_with_cap(DEFAULT_APPLY_WB_SIZE);
@@ -2602,11 +2602,6 @@ where
             |_| { unreachable!() }
         );
         fail_point!(
-            "apply_before_split_1_2",
-            self.id() == 2 && self.region_id() == 1,
-            |_| { unreachable!() }
-        );
-        fail_point!(
             "apply_before_split_1_3",
             self.id() == 3 && self.region_id() == 1,
             |_| { unreachable!() }
@@ -2692,38 +2687,19 @@ where
         let mut replace_regions = HashSet::default();
         {
             let mut pending_create_peers = ctx.pending_create_peers.lock().unwrap();
-            // First check if any region is waiting for snapshot
-            for (region_id, new_split_peer) in &new_split_regions {
-                if let Some(current_state) = pending_create_peers.get(region_id) {
-                    if *current_state
-                        == (
-                            new_split_peer.peer_id,
-                            PendingCreateState::WillApplySnapshot,
-                        )
-                    {
-                        return Err(box_err!(
-                            "region {} peer {} will apply snapshot, split aborted",
-                            region_id,
-                            new_split_peer.peer_id
-                        ));
-                    }
-                }
-            }
             for (region_id, new_split_peer) in new_split_regions.iter_mut() {
                 match pending_create_peers.entry(*region_id) {
                     HashMapEntry::Occupied(mut v) => {
-                        if *v.get() == (new_split_peer.peer_id, PendingCreateState::None) {
-                            replace_regions.insert(*region_id);
-                            v.insert((new_split_peer.peer_id, PendingCreateState::WillSplit));
+                        if *v.get() != (new_split_peer.peer_id, false) {
+                            new_split_peer.result =
+                                Some(format!("status {:?} is not expected", v.get()));
                         } else {
-                            new_split_peer.result = Some(format!(
-                                "status {:?} from pending_create_peers is not expected",
-                                v.get()
-                            ));
+                            replace_regions.insert(*region_id);
+                            v.insert((new_split_peer.peer_id, true));
                         }
                     }
                     HashMapEntry::Vacant(v) => {
-                        v.insert((new_split_peer.peer_id, PendingCreateState::WillSplit));
+                        v.insert((new_split_peer.peer_id, true));
                     }
                 }
             }
@@ -2771,7 +2747,7 @@ where
             for (region_id, peer_id) in &already_exist_regions {
                 assert_eq!(
                     pending_create_peers.remove(region_id),
-                    Some((*peer_id, PendingCreateState::WillSplit))
+                    Some((*peer_id, true))
                 );
             }
         }
@@ -2809,11 +2785,6 @@ where
         resp.mut_splits().set_regions(regions.clone().into());
         PEER_ADMIN_CMD_COUNTER.batch_split.success.inc();
 
-        fail_point!(
-            "apply_after_split_1_2",
-            self.id() == 2 && self.region_id() == 1,
-            |_| { unreachable!() }
-        );
         fail_point!(
             "apply_after_split_1_3",
             self.id() == 3 && self.region_id() == 1,
@@ -4843,7 +4814,7 @@ pub struct Builder<EK: KvEngine> {
     sender: Box<dyn Notifier<EK>>,
     router: ApplyRouter<EK>,
     store_id: u64,
-    pending_create_peers: Arc<Mutex<HashMap<u64, (u64, PendingCreateState)>>>,
+    pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
 }
 
 impl<EK: KvEngine> Builder<EK> {

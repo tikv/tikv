@@ -1924,3 +1924,55 @@ fn test_region_split_after_new_leader_elected() {
     );
     fail::remove(skip_clear_uncampaign);
 }
+
+// Test that during a split, if a new peer hasn't been created it should always
+// be marked as a pending peer in the region heartbeat.
+#[test]
+fn test_pending_peer_in_heartbeat_during_split() {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster.cfg);
+    cluster.cfg.raft_store.store_batch_system.max_batch_size = Some(1);
+    cluster.cfg.raft_store.store_batch_system.pool_size = 1;
+    cluster.cfg.raft_store.dev_assert = false;
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+
+    let pd_client2 = pd_client.clone();
+    // Pause at the following failpoint so that peer 2 won't be able to split
+    // and thus the new peer 1002 won't be created. Peer 1002 should always be
+    // pending in the region heartbeat uploaded to PD.
+    let apply_before_split_1_2_fp = "apply_before_split_1_2";
+    fail::cfg(apply_before_split_1_2_fp, "pause").unwrap();
+    let finish_hb_fp = "test_pd_client::finish_region_heartbeat";
+    fail::cfg_callback(finish_hb_fp, move || {
+        let region_id = 1000;
+        let peer_id = 1002;
+        if pd_client2.get_region_last_report_ts(region_id).is_some() {
+            let pending_peers = pd_client2.get_pending_peers();
+            if !pending_peers.contains_key(&peer_id) {
+                panic!("peer {} should still be pending", peer_id);
+            }
+        }
+    }).unwrap();
+
+    let region = pd_client.get_region(b"k1").unwrap();
+    let peer_1 = find_peer(&region, 1).unwrap().to_owned();
+    // region 1, leader is peer 1.
+    cluster.must_transfer_leader(region.get_id(), peer_1);
+
+    let k = b"k1_for_apply_to_current_term";
+    cluster.must_put(k, b"value");
+    must_get_equal(&cluster.get_engine(1), k, b"value");
+
+    cluster.must_split(&region, b"k2");
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    fail::remove(finish_hb_fp);
+    fail::remove(apply_before_split_1_2_fp);
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k3", b"v3");
+}

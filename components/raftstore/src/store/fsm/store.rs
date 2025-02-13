@@ -547,13 +547,6 @@ impl Clone for PeerTickBatch {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum PendingCreateState {
-    None,
-    WillSplit,
-    WillApplySnapshot,
-}
-
 pub struct PollContext<EK, ER, T>
 where
     EK: KvEngine,
@@ -585,7 +578,7 @@ where
     /// `pending_create_peers` together, the lock sequence MUST BE:
     /// 1. lock the store_meta.
     /// 2. lock the pending_create_peers.
-    pub pending_create_peers: Arc<Mutex<HashMap<u64, (u64, PendingCreateState)>>>,
+    pub pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
     pub raft_metrics: RaftMetrics,
     pub snap_mgr: SnapManager,
     pub coprocessor_host: CoprocessorHost<EK>,
@@ -1289,7 +1282,7 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     pub router: RaftRouter<EK, ER>,
     pub importer: Arc<SstImporter<EK>>,
     pub store_meta: Arc<Mutex<StoreMeta>>,
-    pub pending_create_peers: Arc<Mutex<HashMap<u64, (u64, PendingCreateState)>>>,
+    pub pending_create_peers: Arc<Mutex<HashMap<u64, (u64, bool)>>>,
     snap_mgr: SnapManager,
     pub coprocessor_host: CoprocessorHost<EK>,
     trans: T,
@@ -2354,10 +2347,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             if pending_create_peers.contains_key(&region_id) {
                 return Ok(false);
             }
-            pending_create_peers.insert(
-                region_id,
-                (msg.get_to_peer().get_id(), PendingCreateState::None),
-            );
+            pending_create_peers.insert(region_id, (msg.get_to_peer().get_id(), false));
         }
 
         let res = self.maybe_create_peer_internal(region_id, msg, is_local_first);
@@ -2366,7 +2356,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         if res.as_ref().map_or(true, |b| !*b) && is_local_first {
             let mut pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
             if let Some(status) = pending_create_peers.get(&region_id) {
-                if *status == (msg.get_to_peer().get_id(), PendingCreateState::None) {
+                if *status == (msg.get_to_peer().get_id(), false) {
                     pending_create_peers.remove(&region_id);
                 }
             }
@@ -2402,11 +2392,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         if is_local_first {
             let pending_create_peers = self.ctx.pending_create_peers.lock().unwrap();
             match pending_create_peers.get(&region_id) {
-                Some(status)
-                    if *status == (msg.get_to_peer().get_id(), PendingCreateState::None) =>
-                {
-                    ()
-                }
+                Some(status) if *status == (msg.get_to_peer().get_id(), false) => (),
                 // If changed, it means this peer has been/will be replaced from the new one from
                 // splitting.
                 _ => return Ok(false),
