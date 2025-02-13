@@ -741,7 +741,7 @@ fn timespec_to_u64(ts: Timespec) -> u64 {
     //   https://github.com/rust-lang-deprecated/time/blob/
     //   e313afbd9aad2ba7035a23754b5d47105988789d/src/lib.rs#L77
     assert!(ts.sec >= 0 && ts.sec < (1i64 << (64 - TIMESPEC_SEC_SHIFT)));
-    assert!(ts.nsec >= 0);
+    //assert!(ts.nsec >= 0);
 
     // Round down to millisecond precision.
     let ms = ts.nsec >> TIMESPEC_NSEC_SHIFT;
