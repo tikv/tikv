@@ -3665,12 +3665,21 @@ where
                 if let Some(read_index_safe_ts) = read_index_ctx.read_index_safe_ts {
                     // There are no pending conflict memory locks on the leader.
                     let start_ts: u64 = read_index_safe_ts;
+                    let current_ts: u64 =
+                        self.read_progress.read_index_safe_ts.load(Ordering::SeqCst);
                     if self.ready_to_handle_unsafe_replica_read(state.index)
-                        && self.read_progress.read_index_safe_ts.load(Ordering::SeqCst) < start_ts
+                        && current_ts < start_ts
                     {
-                        self.read_progress
-                            .read_index_safe_ts
-                            .store(start_ts, Ordering::SeqCst);
+                        self.read_progress.read_index_safe_ts.compare_and_swap(
+                            current_ts,
+                            start_ts,
+                            Ordering::SeqCst,
+                        );
+                        // it is updated by only one thread
+                        assert_eq!(
+                            self.read_progress.read_index_safe_ts.load(Ordering::SeqCst),
+                            start_ts
+                        );
                     }
                 }
                 (read_index_ctx.id, read_index_ctx.locked, state.index)
