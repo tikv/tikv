@@ -981,7 +981,7 @@ fn test_msgsnapshot_before_msgappend() {
     debug!("compact at index {}", compact_index);
     let compact_log = test_raftstore::new_compact_log_request(compact_index, compact_term);
     let req = test_raftstore::new_admin_request(1, region.get_region_epoch(), compact_log);
-    let res = cluster
+    let _res = cluster
         .call_command_on_leader(req, Duration::from_secs(3))
         .unwrap();
 

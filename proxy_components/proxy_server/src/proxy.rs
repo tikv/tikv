@@ -202,22 +202,6 @@ pub unsafe fn run_proxy(
                 .long_help("Set the PD endpoints to use. Use `,` to separate multiple PDs"),
         )
         .arg(
-            Arg::with_name("labels")
-                .long("labels")
-                .alias("label")
-                .takes_value(true)
-                .value_name("KEY=VALUE")
-                .multiple(true)
-                .use_delimiter(true)
-                .require_delimiter(true)
-                .value_delimiter(",")
-                .help("Sets server labels")
-                .long_help(
-                    "Set the server labels. Uses `,` to separate kv pairs, like \
-                     `zone=cn,disk=ssd`",
-                ),
-        )
-        .arg(
             Arg::with_name("print-sample-config")
                 .long("print-sample-config")
                 .help("Print a sample config to stdout"),
@@ -264,6 +248,22 @@ pub unsafe fn run_proxy(
                 .takes_value(true),
         )
         .arg(
+            Arg::with_name("labels")
+                .long("labels")
+                .alias("label")
+                .takes_value(true)
+                .value_name("KEY=VALUE")
+                .multiple(true)
+                .use_delimiter(true)
+                .require_delimiter(true)
+                .value_delimiter(",")
+                .help("Sets server labels")
+                .long_help(
+                    "Set the server labels. Uses `,` to separate kv pairs, like \
+                     `zone=cn,disk=ssd`",
+                ),
+        )
+        .arg(
             Arg::with_name("engine-label")
                 .long("engine-label")
                 .help("Set engine label")
@@ -274,12 +274,6 @@ pub unsafe fn run_proxy(
             Arg::with_name("only-decryption")
                 .long("only-decryption")
                 .help("Only do decryption in Proxy"),
-        )
-        .arg(
-            Arg::with_name("engine-role-label")
-                .long("engine-role-label")
-                .help("Set engine role label")
-                .takes_value(true),
         )
         .arg(
             Arg::with_name("memory-limit-size")

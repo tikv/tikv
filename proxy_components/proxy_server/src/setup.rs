@@ -2,7 +2,6 @@
 use std::borrow::ToOwned;
 
 use clap::ArgMatches;
-use collections::HashMap;
 pub use server::setup::initial_logger;
 use tikv::config::{MetricConfig, TikvConfig, MEMORY_USAGE_LIMIT_RATE};
 use tikv_util::{self, config::ReadableSize, logger, sys::SysQuota};
@@ -106,7 +105,7 @@ pub fn overwrite_config_with_cmd_args(
     }
 
     if let Some(labels_vec) = matches.values_of("labels") {
-        let mut labels = HashMap::default();
+        // labels_vec is a vector of string like ["k1=v1", "k1=v2", ...]
         for label in labels_vec {
             let mut parts = label.split('=');
             let key = parts.next().unwrap().to_owned();
@@ -117,22 +116,18 @@ pub fn overwrite_config_with_cmd_args(
             if parts.next().is_some() {
                 fatal!("invalid label: {}", label);
             }
-            labels.insert(key, value);
+            if config.server.labels.contains_key(&key) {
+                warn!(
+                    "label is ignored due to duplicated key defined in `server.labels`, key={} value={}",
+                    key, value
+                );
+                continue; // ignore duplicated label
+            }
+            // only set the label when `server.labels` does not contain the label with the
+            // same key
+            config.server.labels.insert(key, value);
         }
-        config.server.labels = labels;
     }
-
-    if let Some(capacity_str) = matches.value_of("capacity") {
-        let capacity = capacity_str.parse().unwrap_or_else(|e| {
-            fatal!("invalid capacity: {}", e);
-        });
-        config.raft_store.capacity = capacity;
-    }
-
-    if matches.value_of("metrics-addr").is_some() {
-        warn!("metrics push is not supported any more.");
-    }
-
     // User can specify engine label, because we need to distinguish TiFlash role
     // (tiflash-compute or tiflash-storage) in the disaggregated architecture.
     // If no engine label is specified, we use 'ENGINE_LABEL_VALUE'(env variable
@@ -147,13 +142,18 @@ pub fn overwrite_config_with_cmd_args(
                 .unwrap(),
         ),
     );
-    const DEFAULT_ENGINE_ROLE_LABEL_KEY: &str = "engine_role";
-    if let Some(engine_role_value) = matches.value_of("engine-role-label") {
-        config.server.labels.insert(
-            DEFAULT_ENGINE_ROLE_LABEL_KEY.to_owned(),
-            String::from(engine_role_value),
-        );
+
+    if let Some(capacity_str) = matches.value_of("capacity") {
+        let capacity = capacity_str.parse().unwrap_or_else(|e| {
+            fatal!("invalid capacity: {}", e);
+        });
+        config.raft_store.capacity = capacity;
     }
+
+    if matches.value_of("metrics-addr").is_some() {
+        warn!("metrics push is not supported any more.");
+    }
+
     if let Some(unips_enabled_str) = matches.value_of("unips-enabled") {
         let enabled: u64 = unips_enabled_str.parse().unwrap_or_else(|e| {
             fatal!("invalid unips-enabled: {}", e);

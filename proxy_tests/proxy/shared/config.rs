@@ -218,17 +218,34 @@ fn test_config_proxy_engine_role_label() {
     let mut v: Vec<String> = vec![];
     let mut config = gen_tikv_config(&None, false, &mut v);
     let mut proxy_config = gen_proxy_config(&None, false, &mut v);
-    // case-1: If engine-role label not specified in arguments, it's none.
-    let args = vec!["test_config_proxy_default1", "--engine-label", "tiflash"];
-    let matches = App::new("RaftStore Proxy")
+    let app = App::new("RaftStore Proxy")
+        .arg(
+            Arg::with_name("labels")
+                .long("labels")
+                .alias("label")
+                .takes_value(true)
+                .value_name("KEY=VALUE")
+                .multiple(true)
+                .use_delimiter(true)
+                .require_delimiter(true)
+                .value_delimiter(",")
+                .help("Sets server labels")
+                .long_help(
+                    "Set the server labels. Uses `,` to separate kv pairs, like \
+                `zone=cn,disk=ssd`",
+                ),
+        )
         .arg(
             Arg::with_name("engine-label")
                 .long("engine-label")
                 .help("Set engine label")
                 .required(true)
                 .takes_value(true),
-        )
-        .get_matches_from(args);
+        );
+    // case-1: If engine-role label specified in neither the argument `--labels` nor
+    // proxy's config file, it's none.
+    let args = vec!["test_config_proxy_default1", "--engine-label", "tiflash"];
+    let matches = app.clone().get_matches_from(args);
     overwrite_config_with_cmd_args(&mut config, &mut proxy_config, &matches);
     address_proxy_config(&mut config, &proxy_config);
 
@@ -243,32 +260,16 @@ fn test_config_proxy_engine_role_label() {
         true
     );
 
-    // case-2: If engine-role label specified in arguments, use it as engine-role
-    // label.
-    const EXPECTED_ENGINE_ROLE_LABEL: &str = "write";
+    // case-2: If engine-role label specified in the argument `--label`, use it as
+    // engine-role label.
     let args = vec![
         "test_config_proxy_default1",
         "--engine-label",
         "tiflash",
-        "--engine-role-label",
-        EXPECTED_ENGINE_ROLE_LABEL,
+        "--labels",
+        "engine_role=write",
     ];
-    let matches = App::new("RaftStore Proxy")
-        .arg(
-            Arg::with_name("engine-label")
-                .long("engine-label")
-                .help("Set engine label")
-                .required(true)
-                .takes_value(true),
-        )
-        .arg(
-            Arg::with_name("engine-role-label")
-                .long("engine-role-label")
-                .help("Set engine role label")
-                .required(true)
-                .takes_value(true),
-        )
-        .get_matches_from(args);
+    let matches = app.clone().get_matches_from(args);
     overwrite_config_with_cmd_args(&mut config, &mut proxy_config, &matches);
     address_proxy_config(&mut config, &proxy_config);
     assert_eq!(
@@ -277,13 +278,13 @@ fn test_config_proxy_engine_role_label() {
             .labels
             .get(DEFAULT_ENGINE_ROLE_LABEL_KEY)
             .unwrap(),
-        EXPECTED_ENGINE_ROLE_LABEL
+        "write"
     );
 }
 
 // We test whether Proxy will overwrite TiKV's value,
 // when a config item which is both defined by ProxyConfig and TikvConfig.
-// We only nned to add tests to this function when the logic is different.
+// We only need to add tests to this function when the logic is different.
 #[test]
 fn test_overwrite() {
     let mut file = tempfile::NamedTempFile::new().unwrap();
@@ -476,5 +477,167 @@ memory-usage-limit = 42
         let mut config = bootstrap2(args);
         assert!(config.validate().is_ok());
         assert_eq!(config.memory_usage_limit, Some(ReadableSize(42)));
+    }
+}
+
+#[test]
+fn test_label_overwrite() {
+    let app = App::new("RaftStore Proxy")
+        .arg(
+            Arg::with_name("labels")
+                .long("labels")
+                .alias("label")
+                .takes_value(true)
+                .value_name("KEY=VALUE")
+                .multiple(true)
+                .use_delimiter(true)
+                .require_delimiter(true)
+                .value_delimiter(",")
+                .help("Sets server labels")
+                .long_help(
+                    "Set the server labels. Uses `,` to separate kv pairs, like \
+                `zone=cn,disk=ssd`",
+                ),
+        )
+        .arg(
+            Arg::with_name("engine-label")
+                .long("engine-label")
+                .help("Set engine label")
+                .required(true)
+                .takes_value(true),
+        );
+
+    let get_config = |args: Vec<&str>, labels: Option<&str>| {
+        let mut v: Vec<String> = vec![];
+        // args
+        let matches = app.clone().get_matches_from(args);
+        // Gen tiflash_tikv.toml
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        write!(
+            file,
+            "
+[server]
+[server.labels]
+{}
+            ",
+            labels.unwrap_or_default()
+        )
+        .unwrap();
+        let cpath = Some(file.path().as_os_str());
+        let mut config = gen_tikv_config(&cpath, false, &mut v);
+        let mut proxy_config = gen_proxy_config(&cpath, false, &mut v);
+        overwrite_config_with_cmd_args(&mut config, &mut proxy_config, &matches);
+        address_proxy_config(&mut config, &proxy_config);
+        config.compatible_adjust();
+        config
+    };
+
+    {
+        let args = vec!["test_label", "--engine-label", "tiflash"];
+        let mut config = get_config(args, None);
+        assert!(config.validate().is_ok());
+        let expected_labels = [("engine".to_owned(), "tiflash".to_owned())]
+            .iter()
+            .cloned()
+            .collect();
+        assert!(config.server.labels == expected_labels);
+    }
+    {
+        let args = vec!["test_label", "--engine-label", "tiflash_compute"];
+        let mut config = get_config(args, None);
+        assert!(config.validate().is_ok());
+        let expected_labels = [("engine".to_owned(), "tiflash_compute".to_owned())]
+            .iter()
+            .cloned()
+            .collect();
+        assert!(config.server.labels == expected_labels);
+    }
+
+    {
+        let args = vec!["test_label", "--labels", "k=v", "--engine-label", "tiflash"];
+        let mut config = get_config(args, None);
+        assert!(config.validate().is_ok());
+        let expected_labels = [
+            ("engine".to_owned(), "tiflash".to_owned()),
+            ("k".to_owned(), "v".to_owned()),
+        ]
+        .iter()
+        .cloned()
+        .collect();
+        assert!(config.server.labels == expected_labels);
+    }
+
+    {
+        let args = vec![
+            "test_label",
+            "--labels",
+            "k=v,exclusive=no-data",
+            "--engine-label",
+            "tiflash_compute",
+        ];
+        let mut config = get_config(args, None);
+        assert!(config.validate().is_ok());
+        let expected_labels = [
+            ("engine".to_owned(), "tiflash_compute".to_owned()),
+            ("k".to_owned(), "v".to_owned()),
+            ("exclusive".to_owned(), "no-data".to_owned()),
+        ]
+        .iter()
+        .cloned()
+        .collect();
+        assert!(config.server.labels == expected_labels);
+    }
+
+    {
+        let args = vec!["test_label", "--engine-label", "tiflash"];
+        // server.labels define in tiflash_tikv.toml
+        let labels = Some(
+            r#"
+        k="v2"
+        abc="def"
+        "#,
+        );
+        let mut config = get_config(args, labels);
+        assert!(config.validate().is_ok());
+        let expected_labels = [
+            ("engine".to_owned(), "tiflash".to_owned()),
+            ("k".to_owned(), "v2".to_owned()),
+            ("abc".to_owned(), "def".to_owned()),
+        ]
+        .iter()
+        .cloned()
+        .collect();
+        assert!(config.server.labels == expected_labels);
+    }
+
+    {
+        let args = vec![
+            "test_label",
+            "--labels",
+            "k=v,a=b",
+            "--engine-label",
+            "tiflash",
+        ];
+        // server.labels define in tiflash_tikv.toml
+        let labels = Some(
+            r#"
+        k="v2"
+        abc="def"
+        "#,
+        );
+        let mut config = get_config(args, labels);
+        assert!(config.validate().is_ok());
+        // merge `server.labels` in tiflash_tikv.toml and `--labels` in command line
+        // "k=v" in `--labels` should be overwritten by "k=v2" in tiflash_tikv.toml
+        let expected_labels = [
+            ("engine".to_owned(), "tiflash".to_owned()),
+            ("k".to_owned(), "v2".to_owned()),
+            ("a".to_owned(), "b".to_owned()),
+            ("abc".to_owned(), "def".to_owned()),
+        ]
+        .iter()
+        .cloned()
+        .collect();
+        assert!(config.server.labels == expected_labels);
     }
 }
