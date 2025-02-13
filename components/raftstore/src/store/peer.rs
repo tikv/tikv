@@ -2109,9 +2109,13 @@ where
         }
 
         if status.progress.is_none() {
-            // If `progress` is None, the current node is not the leader. Since
-            // we can't determine the progress of followers, we conservatively
-            // mark all other peers as pending.
+            // If `progress` is None, the current node is not the leader.
+            // Typically, `collect_pending_peers` is called only on the leader
+            // as part of the heartbeat process. However, after a split, the new
+            // peer that starts the first campaign is asked to send a heartbeat
+            // immediately, even though it may not have been elected yet. Since
+            // we can't determine the progress of followers at this point, we
+            // conservatively mark all other peers as pending.
             for peer in self.region().get_peers() {
                 if peer.get_id() == self.peer.get_id() {
                     continue;
