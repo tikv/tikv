@@ -423,6 +423,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER,
         // TODO: instead of propose pending commands immediately, we should use timeout.
         self.fsm.peer.propose_pending_writes(self.store_ctx);
         self.schedule_pending_ticks();
+        if self.fsm.peer.maybe_ack_transfer_leader_msg(self.store_ctx) {
+            self.fsm.peer.set_has_ready();
+        }
     }
 }
 
