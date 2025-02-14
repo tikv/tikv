@@ -42,7 +42,7 @@ use super::{metrics::*, worker::RegionTask, SnapEntry, SnapKey, SnapManager};
 use crate::{
     store::{
         async_io::{read::ReadTask, write::WriteTask},
-        entry_storage::EntryStorage,
+        entry_storage::{CacheWarmupState, EntryStorage},
         fsm::GenSnapTask,
         peer::PersistSnapshotResult,
         util,
@@ -633,8 +633,8 @@ where
         *gen_snap_task = Some(task);
     }
 
-    pub fn on_compact_raftlog(&mut self, idx: u64) {
-        self.entry_storage.compact_entry_cache(idx);
+    pub fn on_compact_raftlog(&mut self, idx: u64, state: Option<&mut CacheWarmupState>) {
+        self.entry_storage.compact_entry_cache(idx, state);
         self.cancel_generating_snap(Some(idx));
     }
 
@@ -1590,7 +1590,8 @@ pub mod tests {
             let mut store =
                 new_storage_from_ents(region_scheduler, raftlog_fetch_scheduler, &td, &ents);
             raftlog_fetch_worker.start(ReadRunner::new(router, store.engines.raft.clone()));
-            store.compact_entry_cache(5);
+            let mut cache_warmup_state = None;
+            store.compact_entry_cache(5, cache_warmup_state.as_mut());
             let mut e = store.entries(lo, hi, maxsize, GetEntriesContext::empty(true));
             if e == Err(raft::Error::Store(
                 raft::StorageError::LogTemporarilyUnavailable,
