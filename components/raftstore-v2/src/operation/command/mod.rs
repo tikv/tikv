@@ -447,14 +447,19 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.proposal_control_advance_apply(apply_res.applied_index);
         let is_leader = self.is_leader();
         let progress_to_be_updated = self.entry_storage().applied_term() != apply_res.applied_term;
+
+        let mut cache_warmup_state = self.transfer_leader_state_mut().cache_warmup_state.take();
         let entry_storage = self.entry_storage_mut();
         entry_storage
             .apply_state_mut()
             .set_applied_index(apply_res.applied_index);
         entry_storage.set_applied_term(apply_res.applied_term);
         if !is_leader {
-            entry_storage.compact_entry_cache(apply_res.applied_index + 1);
+            entry_storage
+                .compact_entry_cache(apply_res.applied_index + 1, cache_warmup_state.as_mut());
         }
+        self.transfer_leader_state_mut().cache_warmup_state = cache_warmup_state;
+
         if is_leader {
             self.retry_pending_prepare_merge(ctx, apply_res.applied_index);
         }

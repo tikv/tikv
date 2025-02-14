@@ -17,9 +17,9 @@ use kvproto::{
 use parking_lot::RwLockWriteGuard;
 use raft::eraftpb;
 use raftstore::store::{
-    LocksStatus, PeerPessimisticLocks, RaftCmdExtraOpts, TxnExt, TRANSFER_LEADER_COMMAND_REPLY_CTX,
+    LocksStatus, PeerPessimisticLocks, RaftCmdExtraOpts, TransferLeaderContext, TxnExt,
 };
-use slog::{error, info, Logger};
+use slog::{error, info, warn, Logger};
 
 use crate::{
     batch::StoreContext,
@@ -206,14 +206,27 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let txn_ext = self.txn_context().ext.clone();
         let mut pessimistic_locks = txn_ext.pessimistic_locks.write();
 
-        // If the message context == TRANSFER_LEADER_COMMAND_REPLY_CTX, the message
+        // If the message context == TransferLeaderContext::CommandReply, the message
         // is a reply to a transfer leader command before. If the locks status remain
         // in the TransferringLeader status, we can safely initiate transferring leader
         // now.
         // If it's not in TransferringLeader status now, it is probably because several
         // ticks have passed after proposing the locks in the last time and we
         // reactivate the memory locks. Then, we should propose the locks again.
-        if msg.get_context() == TRANSFER_LEADER_COMMAND_REPLY_CTX
+        let context = match TransferLeaderContext::from_bytes(msg.get_context()) {
+            Ok(ctx) => ctx,
+            Err(e) => {
+                warn!(
+                    self.logger,
+                    "failed to decode transfer leader context";
+                    "region_id" => self.region_id(),
+                    "peer_id" => self.peer_id(),
+                    "from" => ?msg.get_from(),
+                    "err" => ?e);
+                TransferLeaderContext::None
+            }
+        };
+        if matches!(context, TransferLeaderContext::CommandReply)
             && pessimistic_locks.status == LocksStatus::TransferringLeader
         {
             return false;
