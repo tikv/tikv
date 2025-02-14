@@ -594,12 +594,13 @@ impl CacheWarmupState {
         task_timeout_duration: Duration,
         election_timeout_duration: Duration,
     ) -> Self {
+        let now = Instant::now();
         CacheWarmupState {
             range: (low, high),
             is_task_timeout: false,
-            task_timeout_at: Instant::now() + task_timeout_duration,
+            task_timeout_at: now + task_timeout_duration,
             is_election_timeout: false,
-            election_timeout_at: Instant::now() + election_timeout_duration,
+            election_timeout_at: now + election_timeout_duration,
         }
     }
 

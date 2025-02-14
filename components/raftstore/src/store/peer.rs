@@ -4824,8 +4824,8 @@ where
     /// Before ack the transfer leader message sent by the leader.
     /// Currently, it only warms up the entry cache in this stage.
     ///
-    /// This return whether the msg should be acked. When cache is warmed up
-    /// or the warmup operation is timeout, it is true.
+    /// Returns true if the cache has warmed up (caching raft logs >= low_index)
+    /// or the warmup operation is timed out.
     fn is_ready_ack_transfer_leader_msg<T>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
