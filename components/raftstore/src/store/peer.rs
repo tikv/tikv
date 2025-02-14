@@ -3665,7 +3665,8 @@ where
                 if let Some(read_index_safe_ts) = read_index_ctx.read_index_safe_ts {
                     // There are no pending conflict memory locks on the leader.
                     if self.ready_to_handle_unsafe_replica_read(state.index) {
-                        self.read_progress.update_read_index_safe_ts(read_index_safe_ts);
+                        self.read_progress
+                            .update_read_index_safe_ts(read_index_safe_ts);
                     }
                 }
                 (read_index_ctx.id, read_index_ctx.locked, state.index)
