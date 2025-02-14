@@ -807,10 +807,10 @@ fn test_eviction_after_ingest_sst() {
 }
 
 #[test]
-fn test_pre_load_when_transfer_leader() {
+fn test_warmup_when_transfer_leader() {
     let mut cluster = new_server_cluster_with_hybrid_engine(0, 3);
     // Using a large warmup timeout to stable the test.
-    cluster.cfg.raft_store.max_entry_cache_warmup_duration.0 = Duration::from_secs(u64::MAX);
+    cluster.cfg.raft_store.max_entry_cache_warmup_duration.0 = Duration::from_secs(1000);
     cluster.run();
 
     let r = cluster.get_region(b"");
@@ -850,18 +850,15 @@ fn test_pre_load_when_transfer_leader() {
         leader == new_peer(2, 2)
     });
 
-    // put some key to trigger load
-    cluster.must_put(b"k2", b"val");
+    // The region must be loaded after transfer leader.
     let region_cache_engine = cluster.sim.rl().get_region_cache_engine(2);
-    eventually(Duration::from_millis(100), Duration::from_secs(5), || {
-        region_cache_engine
-            .snapshot(cache_region.clone(), 100, 100)
-            .is_ok()
-    });
+    region_cache_engine
+        .snapshot(cache_region.clone(), 100, 100)
+        .unwrap();
 }
 
 #[test]
-fn test_pre_load_timeout_does_not_block_transfer_leader() {
+fn test_warmup_timeout_does_not_block_transfer_leader() {
     let mut cluster = new_server_cluster_with_hybrid_engine(0, 3);
     // Using a large warmup timeout to stable the test.
     cluster.cfg.raft_store.max_entry_cache_warmup_duration.0 = Duration::from_secs(1);
@@ -1262,9 +1259,9 @@ fn test_eviction_when_destroy_uninitialized_peer() {
     cluster.must_region_exist(region.get_id(), 2);
 }
 
-// IME must not panic when pre-load an uninitialized peer.
+// IME must not panic when warmup an uninitialized peer.
 #[test]
-fn test_transfer_leader_pre_load_uninitialized_peer() {
+fn test_transfer_leader_warmup_uninitialized_peer() {
     let mut cluster = new_server_cluster_with_hybrid_engine(0, 2);
     let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();

@@ -339,7 +339,7 @@ impl ApplySnapshotObserver for LoadEvictionObserver {
         _: Option<&raftstore::store::Snapshot>,
     ) {
         // While currently, we evict cached region after leader step down.
-        // A region can may still be loaded when it's leader. E.g, to pre-load
+        // A region can may still be loaded when it's leader. E.g, to warmup
         // some hot regions before transferring leader.
         let cache_region = CacheRegion::from_region(ctx.region());
         self.evict_region(cache_region, EvictReason::ApplySnapshot)
@@ -380,7 +380,7 @@ impl ExtraMessageObserver for LoadEvictionObserver {
                 // MsgPreLoadRegionRequest is sent before leader issue a
                 // transfer leader request. It is possible that the peer
                 // is not initialized yet.
-                warn!("ime skip pre-load an uninitialized region"; "region" => ?region);
+                warn!("ime skip warmup an uninitialized region"; "region" => ?region);
                 return;
             }
             self.cache_engine.load_region(region);

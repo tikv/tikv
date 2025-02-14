@@ -4777,12 +4777,12 @@ where
     }
 
     /// Set a pending transfer leader message to allow the transferee to
-    /// initiate raft log cache warmup.
+    /// initiate raft log cache warmup and other necessary works.
     /// The message will be cleaned up once the transferee has warmed up its
     /// cache or the peer becomes leader.
     ///
     /// Called by transferee.
-    pub fn set_pending_transfer_leader_msg(&mut self, msg: &eraftpb::Message) {
+    pub fn set_pending_transfer_leader_msg(&mut self, cfg: &Config, msg: &eraftpb::Message) {
         // log_term is set by original leader in pre transfer leader stage.
         // Callers must guarantee that the message is a valid transfer leader
         // message.
@@ -4795,7 +4795,18 @@ where
             self.tag,
             msg.get_msg_type(),
         );
-        self.transfer_leader_state.transfer_leader_msg = Some(msg.clone());
+
+        // We don't want to block transfer leader indefinitely, so set a
+        // deadline for the transferee to warm up its cache and other necessary
+        // works. Half of the election timeout should be long enough.
+        let half_election_timeout = cfg.raft_base_tick_interval.0
+            * std::cmp::max(1, cfg.raft_election_timeout_ticks / 2) as u32;
+        // Cache warmup has its own timeout, so we need to wait for the longer
+        // one.
+        let max_wait_duration =
+            std::cmp::max(half_election_timeout, cfg.max_entry_cache_warmup_duration.0);
+        let deadline = Instant::now() + max_wait_duration;
+        self.transfer_leader_state.transfer_leader_msg = Some((msg.clone(), deadline));
     }
 
     /// Ack transfer leader message if there is a pending transfer leader
@@ -4816,26 +4827,32 @@ where
         }
     }
 
-    /// Before ack the transfer leader message sent by the leader.
-    /// Currently, it only warms up the entry cache in this stage.
+    /// Check if the transferee is ready to ack the transfer leader message.
+    /// It returns true if any of the following conditions is met:
     ///
-    /// Returns true if the cache has warmed up (caching raft logs >= low_index)
-    /// or the warmup operation is timed out.
+    /// * The deadline is exceeded.
+    /// * The cache has warmed up and the coprocessor is ready to ack.
     fn is_ready_ack_transfer_leader_msg<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) -> bool {
-        let Some(msg) = &self.transfer_leader_state.transfer_leader_msg else {
+        let Some((msg, deadline)) = &self.transfer_leader_state.transfer_leader_msg else {
             // There is no pending transfer leader message, do not ack.
             return false;
         };
 
+        let is_deadline_exceeded = Instant::now() >= *deadline;
         let is_cop_ready = ctx
             .coprocessor_host
             .pre_ack_transfer_leader(self.region(), msg);
-        let is_cache_ready = self.check_transfer_leader_cache_warmup(ctx, msg.get_index());
+        let is_cache_ready = self.maybe_transfer_leader_cache_warmup(ctx, msg.get_index());
 
-        is_cache_ready && is_cop_ready
+        is_deadline_exceeded || (is_cache_ready && is_cop_ready)
     }
 
-    fn check_transfer_leader_cache_warmup<T>(
+    /// Check if the cache has warmed up (caching raft logs >= low_index).
+    /// If the cache has not warmed up, it will try to warm up the cache.
+    ///
+    /// Returns true if the cache has warmed up or the warmup operation is
+    /// timed out.
+    fn maybe_transfer_leader_cache_warmup<T>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
         low_index: u64,
@@ -6373,10 +6390,10 @@ pub struct TransferLeaderState {
     /// Only leader can update this field, and it is meaningful only when a peer
     /// is a leader or a leader is stepping down.
     pub leader_transferee: u64,
-    /// A pre transfer leader message sent from leader.
-    /// Only leader transferee can update this field and it is meaningful only
-    /// when a peer is a leader transferee.
-    pub transfer_leader_msg: Option<eraftpb::Message>,
+    /// A pre transfer leader message sent from leader and a deadline for a
+    /// leader transferee to confirm the transfer leader message.
+    /// Only leader transferee can update this field.
+    pub transfer_leader_msg: Option<(eraftpb::Message, Instant)>,
     /// The entry cache async warm up state that is issued by a pre transfer
     /// leader message.
     pub cache_warmup_state: Option<CacheWarmupState>,
