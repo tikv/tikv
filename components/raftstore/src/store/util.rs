@@ -1569,7 +1569,7 @@ impl RegionReadProgress {
             // it is a single threaded function
             debug_assert!(
                 compare_exchange.is_ok(),
-                "read index safe ta is updeated in multiple threads",
+                "read index safe ts is updeated in multiple threads",
             );
         }
     }
