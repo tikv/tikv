@@ -23,6 +23,8 @@ use raftstore::{
 };
 use tikv_util::{codec::number::decode_var_i64, debug, info, warn};
 
+use crate::metrics::IN_MEMORY_ENGINE_TRANSFER_LEADER_WARMUP_COUNTER_STATIC;
+
 #[derive(Clone)]
 pub struct LoadEvictionObserver {
     cache_engine: Arc<dyn RegionCacheEngineExt + Send + Sync>,
@@ -263,13 +265,13 @@ impl TransferLeaderObserver for LoadEvictionObserver {
         _tr: &kvproto::raft_cmdpb::TransferLeaderRequest,
     ) -> raftstore::coprocessor::Result<Option<TransferLeaderCustomContext>> {
         // Warm up transferee's cache when a region is in active or in loading.
-        let include_loading = true;
-        if !self
-            .cache_engine
-            .region_cached(ctx.region(), include_loading)
-        {
+        let active_only = false;
+        if !self.cache_engine.region_cached(ctx.region(), active_only) {
             return Ok(None);
         }
+        IN_MEMORY_ENGINE_TRANSFER_LEADER_WARMUP_COUNTER_STATIC
+            .request
+            .inc();
         let mut value = vec![];
         value
             .write_var_i64(ExtraMessageType::MsgPreLoadRegionRequest.value() as i64)
@@ -309,19 +311,19 @@ impl TransferLeaderObserver for LoadEvictionObserver {
             }
         };
 
-        let need_cached = ty == ExtraMessageType::MsgPreLoadRegionRequest;
-        if need_cached {
-            // Exclude loading states to make sure the region is cached and active.
-            let include_loading = false;
-            let has_cached = self.cache_engine.region_cached(r.region(), include_loading);
-            info!("ime dbg pre_ack_transfer_leader region"; "region" => ?region, "has_cached" => has_cached);
+        let need_warmup = ty == ExtraMessageType::MsgPreLoadRegionRequest;
+        if need_warmup {
+            // Exclude loading states to make sure the region is active.
+            let active_only = true;
+            let has_cached = self.cache_engine.region_cached(r.region(), active_only);
             if !has_cached {
-                info!("ime dbg pre_ack_transfer_leader region"; "region" => ?region, "has_cached" => has_cached);
+                IN_MEMORY_ENGINE_TRANSFER_LEADER_WARMUP_COUNTER_STATIC
+                    .warmup
+                    .inc();
                 self.cache_engine.load_region(r.region());
             }
             has_cached
         } else {
-            info!("ime dbg pre_ack_transfer_leader region"; "region" => ?region, "need_cached" => need_cached);
             // Ready to ack.
             true
         }

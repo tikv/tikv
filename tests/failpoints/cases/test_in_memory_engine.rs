@@ -933,7 +933,7 @@ fn test_background_loading_pending_region() {
     .unwrap();
 
     rx.recv_timeout(Duration::from_secs(2)).unwrap();
-    assert!(region_cache_engine.region_cached(&r, true));
+    assert!(region_cache_engine.region_cached(&r, false));
 }
 
 // test delete range and unsafe destroy range
@@ -997,7 +997,7 @@ fn test_delete_range() {
         {
             let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
             let cache_range = new_region(1, "", "");
-            assert!(!region_cache_engine.region_cached(&cache_range, true));
+            assert!(!region_cache_engine.region_cached(&cache_range, false));
         }
     };
 
@@ -1223,7 +1223,7 @@ fn test_eviction_when_destroy_peer() {
 
     {
         let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
-        assert!(!region_cache_engine.region_cached(&r, true));
+        assert!(!region_cache_engine.region_cached(&r, false));
     }
 }
 
