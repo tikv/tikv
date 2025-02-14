@@ -4,7 +4,6 @@ use std::mem;
 
 use collections::HashSet;
 use engine_traits::{KvEngine, RaftEngine};
-use kvproto::metapb;
 use raft::{eraftpb::MessageType, StateRole, Storage};
 use raftstore::store::{
     util::LeaseState, ForceLeaderState, UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryState,
@@ -339,14 +338,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let region = self.region();
         let mut replicated_idx = self.raft_group().raft.raft_log.persisted;
         for (peer_id, p) in self.raft_group().raft.prs().iter() {
-            let peer = region
+            let store_id = region
                 .get_peers()
                 .iter()
                 .find(|p| p.get_id() == *peer_id)
-                .unwrap();
-            if failed_stores.contains(&peer.get_store_id())
-                || peer.get_role() != metapb::PeerRole::Voter
-            {
+                .unwrap()
+                .get_store_id();
+            if failed_stores.contains(&store_id) {
                 continue;
             }
             if replicated_idx > p.matched {

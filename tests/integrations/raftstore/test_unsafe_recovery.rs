@@ -1464,7 +1464,6 @@ fn test_unsafe_recovery_during_merge() {
 }
 
 #[test_case(test_raftstore::new_node_cluster)]
-#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_force_leader_forward_commit_idx_ignoring_learners() {
     let mut cluster = new_cluster(0, 4);
     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
