@@ -1998,7 +1998,6 @@ where
         }
         let msg_type = m.get_msg_type();
         if msg_type == MessageType::MsgReadIndex {
-            fail_point!("on_step_read_index_msg");
             ctx.coprocessor_host
                 .on_step_read_index(&mut m, self.get_role());
             // Must use the commit index of `PeerStorage` instead of the commit index
@@ -4269,6 +4268,7 @@ where
                 }
             }
         } else {
+            fail_point!("propose_readindex_from_follower");
             // reject replica_read request if tikv's disk is (near) full because the
             // read_index will be block for a long time as its raft log
             // replication is stopped.
