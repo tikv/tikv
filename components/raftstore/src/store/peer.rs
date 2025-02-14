@@ -3664,13 +3664,8 @@ where
                 let read_index_ctx = ReadIndexContext::parse(state.request_ctx.as_slice()).unwrap();
                 if let Some(read_index_safe_ts) = read_index_ctx.read_index_safe_ts {
                     // There are no pending conflict memory locks on the leader.
-                    let start_ts: u64 = read_index_safe_ts;
-                    let current_ts: u64 =
-                        self.read_progress.read_index_safe_ts.load(Ordering::SeqCst);
-                    if self.ready_to_handle_unsafe_replica_read(state.index)
-                        && current_ts < start_ts
-                    {
-                        self.read_progress.update_read_index_safe_ts(start_ts);
+                    if self.ready_to_handle_unsafe_replica_read(state.index) {
+                        self.read_progress.update_read_index_safe_ts(read_index_safe_ts);
                     }
                 }
                 (read_index_ctx.id, read_index_ctx.locked, state.index)
