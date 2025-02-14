@@ -6073,7 +6073,7 @@ where
             txn_ext: self.txn_ext.clone(),
         }) {
             error!(
-                "failed to update max ts";
+                "failed to update max_ts";
                 "err" => ?e,
             );
         }
