@@ -59,7 +59,7 @@ pub use self::{
     peer::{
         can_amend_read, get_sync_log_from_request, make_transfer_leader_response,
         propose_read_index, should_renew_lease, DiskFullPeers, Peer, PeerStat, ProposalContext,
-        ProposalQueue, RequestInspector, RequestPolicy, TRANSFER_LEADER_COMMAND_REPLY_CTX,
+        ProposalQueue, RequestInspector, RequestPolicy, TransferLeaderContext, TransferLeaderState,
     },
     peer_storage::{
         clear_meta, do_snapshot, write_initial_apply_state, write_initial_raft_state,
