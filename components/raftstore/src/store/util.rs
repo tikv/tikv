@@ -1575,7 +1575,7 @@ impl RegionReadProgress {
     }
 
     pub fn read_index_safe_ts(&self) -> u64 {
-        self.read_index_safe_ts.load(AtomicOrdering::SeqCst)
+        self.read_index_safe_ts.load(AtomicOrdering::Relaxed)
     }
 
     // `safe_ts` is calculated from the `resolved_ts`, they are the same thing
