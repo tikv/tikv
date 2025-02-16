@@ -1,7 +1,10 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{atomic::AtomicU64, Arc, Mutex},
+    sync::{
+        atomic::AtomicU64,
+        Arc, Mutex,
+    },
     thread,
     time::Duration,
 };
@@ -29,6 +32,7 @@ use service::service_manager::GrpcServiceManager;
 use tikv_util::{
     config::VersionTrack,
     worker::{LazyWorker, Scheduler, Worker},
+    ServerReadiness,
 };
 
 use super::Result;
@@ -175,6 +179,7 @@ where
         disk_check_runner: DiskCheckRunner,
         grpc_service_mgr: GrpcServiceManager,
         safe_point: Arc<AtomicU64>,
+        server_readiness: Arc<ServerReadiness>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -215,6 +220,7 @@ where
             disk_check_runner,
             grpc_service_mgr,
             safe_point,
+            server_readiness,
         )?;
 
         Ok(())
@@ -465,6 +471,7 @@ where
         disk_check_runner: DiskCheckRunner,
         grpc_service_mgr: GrpcServiceManager,
         safe_point: Arc<AtomicU64>,
+        server_readiness: Arc<ServerReadiness>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -501,6 +508,7 @@ where
             disk_check_runner,
             grpc_service_mgr,
             safe_point,
+            server_readiness,
         )?;
         Ok(())
     }

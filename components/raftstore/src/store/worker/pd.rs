@@ -51,6 +51,7 @@ use tikv_util::{
     topn::TopN,
     warn,
     worker::{Runnable, ScheduleError, Scheduler},
+    ServerReadiness,
 };
 use yatp::Remote;
 
@@ -892,6 +893,8 @@ where
 
     // Service manager for grpc service.
     grpc_service_manager: GrpcServiceManager,
+
+    server_readiness: Arc<ServerReadiness>,
 }
 
 impl<EK, ER, T> Runner<EK, ER, T>
@@ -915,6 +918,7 @@ where
         coprocessor_host: CoprocessorHost<EK>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         grpc_service_manager: GrpcServiceManager,
+        server_readiness: Arc<ServerReadiness>,
     ) -> Runner<EK, ER, T> {
         let mut store_stat = StoreStat::default();
         store_stat.set_cpu_quota(SysQuota::cpu_cores_quota(), cfg.inspect_cpu_util_thd);
@@ -979,6 +983,7 @@ where
             coprocessor_host,
             causal_ts_provider,
             grpc_service_manager,
+            server_readiness,
         }
     }
 
@@ -1278,9 +1283,13 @@ where
         let resp = self
             .pd_client
             .store_heartbeat(stats, store_report, dr_autosync_status);
+        let server_readiness = self.server_readiness.clone();
         let f = async move {
             match resp.await {
                 Ok(mut resp) => {
+                    server_readiness
+                        .connected_to_pd
+                        .store(true, Ordering::Relaxed);
                     if let Some(status) = resp.replication_status.take() {
                         let _ = router.send_control(StoreMsg::UpdateReplicationMode(status));
                     }

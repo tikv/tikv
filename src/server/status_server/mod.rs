@@ -58,6 +58,7 @@ use tikv_util::{
     logger::set_log_level,
     metrics::{dump, dump_to},
     timer::GLOBAL_TIMER_HANDLE,
+    ServerReadiness,
 };
 use tokio::{
     io::{AsyncRead, AsyncWrite},
@@ -99,6 +100,7 @@ pub struct StatusServer<R> {
     resource_manager: Option<Arc<ResourceGroupManager>>,
     grpc_service_mgr: GrpcServiceManager,
     in_memory_engine: Option<RegionCacheMemoryEngine>,
+    server_readiness: Option<Arc<ServerReadiness>>,
 }
 
 impl<R> StatusServer<R>
@@ -113,6 +115,7 @@ where
         resource_manager: Option<Arc<ResourceGroupManager>>,
         grpc_service_mgr: GrpcServiceManager,
         in_memory_engine: Option<RegionCacheMemoryEngine>,
+        server_readiness: Option<Arc<ServerReadiness>>,
     ) -> Result<Self> {
         let thread_pool = Builder::new_multi_thread()
             .enable_all()
@@ -136,6 +139,7 @@ where
             resource_manager,
             grpc_service_mgr,
             in_memory_engine,
+            server_readiness,
         })
     }
 
@@ -624,6 +628,8 @@ where
         let resource_manager = self.resource_manager.clone();
         let grpc_service_mgr = self.grpc_service_mgr.clone();
         let in_memory_engine = self.in_memory_engine.clone();
+
+        let server_readiness = self.server_readiness.clone();
         // Start to serve.
         let server = builder.serve(make_service_fn(move |conn: &C| {
             let x509 = conn.get_x509();
@@ -633,6 +639,7 @@ where
             let resource_manager = resource_manager.clone();
             let in_memory_engine = in_memory_engine.clone();
             let grpc_service_mgr = grpc_service_mgr.clone();
+            let server_readiness = server_readiness.clone();
             async move {
                 // Create a status service.
                 Ok::<_, hyper::Error>(service_fn(move |req: Request<Body>| {
@@ -642,6 +649,7 @@ where
                     let router = router.clone();
                     let resource_manager = resource_manager.clone();
                     let grpc_service_mgr = grpc_service_mgr.clone();
+                    let server_readiness = server_readiness.clone();
                     let in_memory_engine = in_memory_engine.clone();
                     async move {
                         let path = req.uri().path().to_owned();
@@ -680,6 +688,15 @@ where
                                 Self::handle_get_metrics(req, &cfg_controller)
                             }
                             (Method::GET, "/status") => Ok(Response::default()),
+                            (Method::GET, "/ready") => {
+                                if let Some(r) = server_readiness && !r.is_ready() {
+                                    return Ok(make_response(
+                                        StatusCode::SERVICE_UNAVAILABLE,
+                                        r.to_json(),
+                                    ))
+                                }
+                                Ok(Response::default())
+                            }
                             (Method::GET, "/debug/pprof/heap_list") => {
                                 Ok(make_response(
                                     StatusCode::GONE,

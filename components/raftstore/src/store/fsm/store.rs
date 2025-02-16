@@ -74,7 +74,7 @@ use tikv_util::{
     warn,
     worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
     yatp_pool::FuturePool,
-    Either, RingQueue,
+    Either, RingQueue, ServerReadiness,
 };
 use time::{self, Timespec};
 
@@ -617,6 +617,8 @@ where
     pub safe_point: Arc<AtomicU64>,
 
     pub process_stat: Option<ProcessStat>,
+
+    pub server_readiness: Arc<ServerReadiness>,
 }
 
 impl<EK, ER, T> PollContext<EK, ER, T>
@@ -1293,6 +1295,7 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     write_senders: WriteSenders<EK, ER>,
     node_start_time: Timespec, // monotonic_raw_now
     safe_point: Arc<AtomicU64>,
+    server_readiness: Arc<ServerReadiness>,
 }
 
 impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
@@ -1554,6 +1557,7 @@ where
             pending_latency_inspect: vec![],
             safe_point: self.safe_point.clone(),
             process_stat: None,
+            server_readiness: self.server_readiness.clone(),
         };
         ctx.update_ticks_timeout();
         let tag = format!("[store {}]", ctx.store.get_id());
@@ -1609,6 +1613,7 @@ where
             write_senders: self.write_senders.clone(),
             node_start_time: self.node_start_time,
             safe_point: self.safe_point.clone(),
+            server_readiness: self.server_readiness.clone(),
         }
     }
 }
@@ -1687,6 +1692,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         mut disk_check_runner: DiskCheckRunner,
         grpc_service_mgr: GrpcServiceManager,
         safe_point: Arc<AtomicU64>,
+        server_readiness: Arc<ServerReadiness>,
     ) -> Result<()> {
         assert!(self.workers.is_none());
         // TODO: we can get cluster meta regularly too later.
@@ -1836,6 +1842,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             write_senders: self.store_writers.senders(),
             node_start_time: self.node_start_time,
             safe_point,
+            server_readiness: server_readiness.clone(),
         };
         let region_peers = builder.init()?;
         self.start_system::<T, C>(
@@ -1851,6 +1858,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             causal_ts_provider,
             snap_generator_pool,
             grpc_service_mgr,
+            server_readiness,
         )?;
         Ok(())
     }
@@ -1869,6 +1877,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
         snap_generator_pool: FuturePool,
         grpc_service_mgr: GrpcServiceManager,
+        server_readiness: Arc<ServerReadiness>,
     ) -> Result<()> {
         let cfg = builder.cfg.value().clone();
         let store = builder.store.clone();
@@ -1960,6 +1969,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             coprocessor_host,
             causal_ts_provider,
             grpc_service_mgr,
+            server_readiness,
         );
         assert!(workers.pd_worker.start(pd_runner));
 
@@ -2929,6 +2939,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             busy_apply_peers_count,
             completed_apply_peers_count,
         );
+        self.ctx
+            .server_readiness
+            .no_busy_apply_peers
+            .store(!busy_on_apply, Ordering::Relaxed);
+
         // If the store already pass the check, it should clear the
         // `completed_apply_peers_count` to skip the check next time.
         if !busy_on_apply && completed_apply_peers_count.is_some() {

@@ -33,6 +33,8 @@ use nix::{
     sys::wait::{wait, WaitStatus},
     unistd::{fork, ForkResult},
 };
+use serde::Serialize; // Import the Serialize trait
+use serde_json; // Import serde_json for JSON serialization
 
 use crate::sys::thread::StdThreadBuildWrapper;
 
@@ -580,6 +582,38 @@ pub fn set_vec_capacity<T>(v: &mut Vec<T>, cap: usize) {
         cmp::Ordering::Less => v.shrink_to(cap),
         cmp::Ordering::Greater => v.reserve_exact(cap - v.len()),
         cmp::Ordering::Equal => {}
+    }
+}
+
+#[derive(Serialize)]
+pub struct ServerReadiness {
+    pub no_busy_apply_peers: AtomicBool,
+    pub connected_to_pd: AtomicBool,
+}
+
+impl ServerReadiness {
+    // Constructor to create a new ServerReadiness instance
+    pub fn new() -> Self {
+        ServerReadiness {
+            no_busy_apply_peers: AtomicBool::new(false),
+            connected_to_pd: AtomicBool::new(false),
+        }
+    }
+
+    pub fn is_ready(&self) -> bool {
+        self.no_busy_apply_peers.load(Ordering::SeqCst)
+            && self.connected_to_pd.load(Ordering::SeqCst)
+    }
+
+    // Method to serialize the struct into JSON
+    pub fn to_json(&self) -> String {
+        let json_result = serde_json::to_string_pretty(&self);
+        match json_result {
+            Ok(json) => json,
+            Err(e) => {
+                format!("failed to serialize ServerReadiness: {}", e)
+            }
+        }
     }
 }
 
