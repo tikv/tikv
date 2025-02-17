@@ -1677,7 +1677,8 @@ fn get_micro_timestamp(time: &DateTime, tz: &Tz) -> Result<i64> {
         Some(v) => v,
         None => return Ok(0),
     };
-    let naive_time = match chrono::NaiveTime::from_hms_micro_opt(hour, minute, second, time.micro()) {
+    let naive_time = match chrono::NaiveTime::from_hms_micro_opt(hour, minute, second, time.micro())
+    {
         Some(v) => v,
         None => return Ok(0),
     };
