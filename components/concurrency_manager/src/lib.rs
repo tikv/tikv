@@ -124,7 +124,7 @@ impl ConcurrencyManager {
         Self::new_with_config(
             1.into(),
             DEFAULT_LIMIT_VALID_DURATION,
-            ActionOnInvalidMaxTs::Panic,
+            ActionOnInvalidMaxTs::Log,
             None,
             DEFAULT_LIMIT_VALID_DURATION + Duration::from_secs(1),
         )
