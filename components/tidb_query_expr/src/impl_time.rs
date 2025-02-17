@@ -1620,7 +1620,7 @@ fn find_zone_transition(
 
     let mut i = 0;
     while t1 + chrono::Duration::seconds(1) < t2 {
-        if i > 1000000 {
+        if i > 100 {
             // Just avoid infinity loop because of potential bug, maybe we can remove it in
             // the future
             return Err(
@@ -1673,8 +1673,15 @@ fn get_micro_timestamp(time: &DateTime, tz: &Tz) -> Result<i64> {
     let hour = time.hour();
     let minute = time.minute();
     let second = time.second();
-    let naive_date = chrono::NaiveDate::from_ymd(year, month, day);
-    let naive_time = chrono::NaiveTime::from_hms_micro(hour, minute, second, time.micro());
+    let naive_date = match chrono::NaiveDate::from_ymd_opt(year, month, day) {
+        Some(v) => v,
+        None => return Ok(0),
+    };
+    let naive_time = match chrono::NaiveTime::from_hms_micro_opt(hour, minute, second, time.micro())
+    {
+        Some(v) => v,
+        None => return Ok(0),
+    };
     let naive_datetime = chrono::NaiveDateTime::new(naive_date, naive_time);
 
     // MySQL chooses earliest time when there are multi mapped time
@@ -4267,6 +4274,9 @@ mod tests {
             ("2009-09-20 07:32:39", 0, "US/Eastern", 1253446359),
             ("2020-03-29 03:45:00", 0, "Europe/Vilnius", 1585443600),
             ("2020-10-25 03:45:00", 0, "Europe/Vilnius", 1603586700),
+            ("0-10-25 03:45:00", 0, "", 0),
+            ("2000-0-25 03:45:00", 0, "", 0),
+            ("2000-1-0 03:45:00", 0, "", 0),
         ];
 
         for (datetime, offset, time_zone_name, expected) in cases {
