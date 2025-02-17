@@ -126,7 +126,7 @@ impl ConcurrencyManager {
             DEFAULT_LIMIT_VALID_DURATION,
             ActionOnInvalidMaxTs::Panic,
             None,
-            Duration::ZERO,
+            DEFAULT_LIMIT_VALID_DURATION + Duration::from_secs(1),
         )
     }
 
