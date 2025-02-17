@@ -507,16 +507,6 @@ impl<E: Engine> Endpoint<E> {
             handler_builder(snapshot, &tracker.req_ctx)?
         };
 
-        // let index_lookup = handler.index_lookup();
-        // if let Some((_, tid)) = index_lookup {
-        //     if tid == 107 {
-        //         info!("handle index lookup begin";
-        //             "start_ts" => tracker.req_ctx.txn_start_ts,
-        //             "region" => tracker.req_ctx.context.region_id,
-        //             "tid" => tid,
-        //         );
-        //     }
-        // }
         tracker.on_begin_all_items();
 
         let deadline = tracker.req_ctx.deadline;
@@ -566,207 +556,7 @@ impl<E: Engine> Endpoint<E> {
                 None
             }
         };
-
-        // build extra task if needed
-        // if let Some((schema, extra_table_id)) = index_lookup {
-        //     let mut sel = SelectResponse::default();
-        //     if sel.merge_from_bytes(resp.get_data()).is_ok() {
-        //         let start_ts = tracker.req_ctx.txn_start_ts;
-        //         let extra_task_range = Self::build_extra_executor_range(
-        //             &mut sel,
-        //             schema.clone(),
-        //             extra_table_id,
-        //             start_ts,
-        //         );
-        //         return Ok((resp, extra_task_range));
-        //     }
-        // }
         Ok((resp, extra_executor))
-    }
-
-    fn build_extra_executor_range(
-        mut sel: &SelectResponse,
-        schema: Vec<FieldType>,
-        table_id: i64,
-        start_ts: TimeStamp,
-    ) -> Option<(Vec<ExtraExecutorTask>, Vec<Vec<Datum>>, Vec<FieldType>)> {
-        if sel.get_encode_type() == EncodeType::TypeChunk && schema.len() == 1 {
-            let begin = std::time::Instant::now();
-            let schema_types: Vec<_> = schema
-                .iter()
-                .map(|ft| {
-                    FieldTypeTp::from_u8(ft.get_tp() as u8).unwrap_or(FieldTypeTp::Unspecified)
-                })
-                .collect();
-            let mut all_data = Vec::new();
-            let mut columns = Vec::with_capacity(schema.len());
-            'outer: for chunk in sel.get_chunks() {
-                let mut data = chunk.get_rows_data();
-                if data.is_empty() {
-                    continue;
-                }
-                columns.clear();
-                for ft in &schema {
-                    if data.is_empty() {
-                        continue;
-                    }
-                    let col = match Column::decode(
-                        &mut data,
-                        FieldTypeTp::from_u8(ft.get_tp() as u8).unwrap_or(FieldTypeTp::Unspecified),
-                    ) {
-                        Ok(col) => col,
-                        Err(e) => {
-                            info!("decode chunk error"; "err" => ?e);
-                            break 'outer;
-                        }
-                    };
-                    columns.push(col);
-                }
-                if columns.is_empty() {
-                    continue;
-                }
-                let len = columns[0].len();
-                for i in 0..len {
-                    let mut dt = Vec::new();
-                    for (j, ft) in schema.iter().enumerate() {
-                        let v = match columns[j].get_datum(i, ft) {
-                            Ok(v) => v,
-                            Err(e) => {
-                                info!("get datum error"; "err" => ?e, 
-                                    "schema" => ?schema, 
-                                    "j" =>j, 
-                                    "i" => i, 
-                                    "ft" => ?ft);
-                                return None;
-                            }
-                        };
-                        dt.push(v);
-                    }
-                    all_data.push(dt);
-                }
-            }
-
-            let mut table_prefix = vec![];
-            table_prefix.extend(TABLE_PREFIX);
-            table_prefix.encode_i64(table_id).expect("encode i64 succ");
-            table_prefix.extend(RECORD_PREFIX_SEP);
-
-            if !all_data.is_empty() {
-                let mut keys = Vec::with_capacity(all_data.len());
-                if schema_types.len() == 1
-                    && matches!(schema_types[0], FieldTypeTp::Long | FieldTypeTp::LongLong)
-                {
-                    for (row_idx, row) in all_data.iter().enumerate() {
-                        let mut key;
-                        let handle = match row[0] {
-                            Datum::I64(x) => x,
-                            Datum::U64(x) => x as i64,
-                            _ => unreachable!(),
-                        };
-                        key = table_prefix.clone();
-                        key.encode_i64(handle).expect("encode i64 succ");
-                        keys.push((key, handle, row_idx));
-                    }
-                }
-                keys.sort_by(|a, b| a.0.cmp(&b.0));
-                let mut ranges: Vec<coppb::KeyRange> = Vec::new();
-                let mut last_region: Option<(Arc<metapb::Region>, u64, u64)> = None;
-                let mut extra_tasks = Vec::new();
-                fn add_point_range(
-                    key: Vec<u8>,
-                    region: Arc<metapb::Region>,
-                    peer_id: u64,
-                    term: u64,
-                    ranges: &mut Vec<coppb::KeyRange>,
-                ) {
-                    // info!("index lookup locate key"; "key" => ?key,
-                    //                             "region" => region.id,
-                    //                             "peer" => peer_id,
-                    //                             "term" => term);
-                    let mut r = coppb::KeyRange::new();
-                    r.set_start(key);
-                    r.set_end(r.get_start().to_vec());
-                    convert_to_prefix_next(r.mut_end());
-                    ranges.push(r);
-                }
-                fn append_last_range(mut key: Vec<u8>, ranges: &mut Vec<coppb::KeyRange>) {
-                    convert_to_prefix_next(&mut key);
-                    let last_idx = ranges.len() - 1;
-                    ranges.get_mut(last_idx).unwrap().set_end(key);
-                }
-                let mut index_not_located_task = ExtraExecutorTask::default();
-                let mut ranges_index_pointers = Vec::new();
-                let mut last_handle = None;
-                for (raw_key, handle, i) in keys {
-                    let key = Key::from_raw(&raw_key);
-                    if let Some((region, peer_id, term)) = &last_region {
-                        if util::check_key_in_region(key.as_encoded(), &region).is_ok() {
-                            ranges_index_pointers.push(i);
-                            match last_handle {
-                                Some(last) if last == handle - 1 => {
-                                    append_last_range(raw_key.clone(), &mut ranges);
-                                }
-                                _ => {
-                                    add_point_range(
-                                        raw_key.clone(),
-                                        region.clone(),
-                                        *peer_id,
-                                        *term,
-                                        &mut ranges,
-                                    );
-                                }
-                            };
-                            last_handle = Some(handle);
-                            continue;
-                        } else {
-                            if ranges.len() > 0 && ranges_index_pointers.len() > 0 {
-                                extra_tasks.push(ExtraExecutorTask {
-                                    ranges: ranges.clone(),
-                                    region: region.clone(),
-                                    peer_id: *peer_id,
-                                    term: *term,
-                                    index_pointers: ranges_index_pointers.clone(),
-                                });
-                            }
-                            ranges.clear();
-                            ranges_index_pointers.clear();
-                        }
-                    }
-
-                    if let Some((region, peer_id, term)) = unsafe {
-                        with_tls_engine(|engine| Self::locate_key(engine, key.as_encoded()))
-                    } {
-                        last_region = Some((region.clone(), peer_id, term));
-                        add_point_range(raw_key.clone(), region, peer_id, term, &mut ranges);
-                        last_handle = Some(handle);
-                        ranges_index_pointers.push(i);
-                    } else {
-                        info!("index lookup not locate key"; "key" => ?key, "handle" => handle);
-                        index_not_located_task.index_pointers.push(i);
-                    }
-                }
-                if let Some((region, peer_id, term)) = &last_region {
-                    if ranges.len() > 0 {
-                        extra_tasks.push(ExtraExecutorTask {
-                            ranges: ranges.clone(),
-                            region: region.clone(),
-                            peer_id: *peer_id,
-                            term: *term,
-                            index_pointers: ranges_index_pointers.clone(),
-                        });
-                    }
-                }
-                extra_tasks.push(index_not_located_task);
-                let build_cost = begin.elapsed().as_secs_f64();
-                info!("build extra task range cost";
-                    "start_ts" => start_ts,
-                    "build_cost" => build_cost,
-                    "extra_task_count" => extra_tasks.len(),
-                );
-                return Some((extra_tasks, all_data, schema));
-            }
-        }
-        return None;
     }
 
     /// Handle a unary request and run on the read pool.
@@ -932,7 +722,7 @@ impl<E: Engine> Endpoint<E> {
                     continue;
                 }
                 let begin = std::time::Instant::now();
-                let range_result = self.handle_extra_request(
+                let range_result = self.handle_extra_task(
                     req.clone(),
                     task.ranges.clone(),
                     peer.clone(),
@@ -971,12 +761,12 @@ impl<E: Engine> Endpoint<E> {
                 handled_count += group_res.len();
                 batch_res.extend(group_res);
                 let wait_cost: f64 = begin.elapsed().as_secs_f64();
-                info!("handle groups extra_requests cost";
-                    "start_ts" => start_ts,
-                    "wait_group_tasks_cost" => wait_cost,
-                    "total_extra_task" => total_extra_task,
-                    "handled_count" => handled_count,
-                );
+                // info!("handle groups extra_requests cost";
+                //     "start_ts" => start_ts,
+                //     "wait_group_tasks_cost" => wait_cost,
+                //     "total_extra_task" => total_extra_task,
+                //     "handled_count" => handled_count,
+                // );
             }
 
             for (i, extra_resp) in batch_res.iter().enumerate() {
@@ -1003,7 +793,7 @@ impl<E: Engine> Endpoint<E> {
             );
             sel.set_extra_chunks(extra_chunks);
             if keep_index.len() == 0 {
-                // info!("no need keep index data since all have extra task");
+                info!("no need keep index data since all have extra task");
                 sel.clear_chunks();
             } else {
                 keep_index.sort();
@@ -1036,157 +826,7 @@ impl<E: Engine> Endpoint<E> {
         }
     }
 
-    #[inline]
-    fn handle_extra_requests(
-        &self,
-        req: coppb::Request,
-        peer: Option<String>,
-        mut resp: coppb::Response,
-        extra_tasks: Vec<ExtraExecutorTask>,
-        index_datas: Vec<Vec<Datum>>,
-        schema: Vec<FieldType>,
-        start_ts: TimeStamp,
-    ) -> impl Future<Output = Result<coppb::Response>> {
-        let mut sel = SelectResponse::default();
-        let mut result_futures = Vec::new();
-        let mut result_futures_batch = Vec::new();
-        let mut keep_index = Vec::new();
-        let mut handle_extra_request_cost: f64 = 0.0;
-        let mut total_extra_task = 0;
-        if sel.merge_from_bytes(resp.get_data()).is_ok() {
-            for (i, task) in extra_tasks.iter().enumerate() {
-                if task.ranges.len() == 0 {
-                    if task.index_pointers.len() > 0 {
-                        keep_index.extend_from_slice(&task.index_pointers);
-                    }
-                    continue;
-                }
-                let begin = std::time::Instant::now();
-                let range_result = self.handle_extra_request(
-                    req.clone(),
-                    task.ranges.clone(),
-                    peer.clone(),
-                    task.region.clone(),
-                    task.peer_id,
-                    task.term,
-                    start_ts,
-                );
-                handle_extra_request_cost += begin.elapsed().as_secs_f64();
-                total_extra_task += 1;
-                result_futures_batch.push(range_result);
-                if result_futures_batch.len() > 100 {
-                    result_futures.push(result_futures_batch);
-                    result_futures_batch = Vec::new();
-                }
-            }
-        }
-        if result_futures_batch.len() > 0 {
-            result_futures.push(result_futures_batch);
-        }
-
-        async move {
-            if result_futures.len() == 0 {
-                // this may print many log
-                info!("no extra task need to do"; "keep_index.len" => keep_index.len());
-                return Ok(resp);
-            }
-            let begin = std::time::Instant::now();
-            let mut total_chunks = sel.take_extra_chunks();
-
-            let mut batch_res: Vec<Option<MemoryTraceGuard<coppb::Response>>> = vec![];
-            let mut handled_count = 0;
-            for furs in result_futures {
-                let group_res: Vec<Option<MemoryTraceGuard<coppb::Response>>> =
-                    futures::future::join_all(furs).await;
-                handled_count += group_res.len();
-                batch_res.extend(group_res);
-                let wait_cost: f64 = begin.elapsed().as_secs_f64();
-                info!("handle groups extra_requests cost";
-                    "start_ts" => start_ts,
-                    "wait_group_tasks_cost" => wait_cost,
-                    "total_extra_task" => total_extra_task,
-                    "handled_count" => handled_count,
-                );
-            }
-
-            for (i, extra_resp) in batch_res.iter().enumerate() {
-                let mut extra_sel = SelectResponse::default();
-                if let Some(extra_resp) = extra_resp {
-                    if extra_sel.merge_from_bytes(extra_resp.get_data()).is_ok() {
-                        let extra_chunks = extra_sel.take_chunks().to_vec();
-                        for chk in extra_chunks {
-                            total_chunks.push(chk);
-                        }
-                    } else {
-                        keep_index.extend_from_slice(&extra_tasks[i].index_pointers);
-                    }
-                } else {
-                    keep_index.extend_from_slice(&extra_tasks[i].index_pointers);
-                }
-            }
-            let wait_extra_task_resp_cost: f64 = begin.elapsed().as_secs_f64();
-            info!("handle all extra_requests cost";
-                "start_ts" => start_ts,
-                "handle_extra_request_cost" => handle_extra_request_cost,
-                "wait_extra_task_resp_cost" => wait_extra_task_resp_cost,
-                "total_extra_task" => total_extra_task,
-            );
-            sel.set_extra_chunks(total_chunks);
-            if keep_index.len() == 0 {
-                // info!("no need keep index data since all have extra task");
-                sel.clear_chunks();
-            } else {
-                keep_index.sort();
-                info!("some index data have no extra task, need keep";
-    "keep_index_idxs" =>             ?keep_index);
-                let mut new_index_columns = Vec::new();
-                for ft in &schema {
-                    let tp =
-                        FieldTypeTp::from_u8(ft.get_tp() as u8).unwrap_or(FieldTypeTp::Unspecified);
-                    new_index_columns.push(Column::new(tp, keep_index.len()));
-                }
-                let mut idx_strs = Vec::new();
-                for i in keep_index {
-                    match index_datas.get(i) {
-                        Some(index_row) => {
-                            for (col_idx, dt) in index_row.iter().enumerate() {
-                                if let Ok(str) = dt.to_string() {
-                                    idx_strs.push(str)
-                                } else {
-                                    idx_strs.push("".into())
-                                }
-                                new_index_columns[col_idx]
-                                    .append_datum(dt)
-                                    .expect("append datum failed");
-                            }
-                        }
-                        _ => {
-                            info!("keep index out range"; "idx" => i,
-                            "index_datas.len" => index_datas.len());
-                        }
-                    };
-                }
-                info!("some index data have no extra task, need keep";
-    "keep_index_data"=>             ?idx_strs);
-                let mut index_chunk = Chunk::default();
-                for col in new_index_columns {
-                    index_chunk
-                        .mut_rows_data()
-                        .write_chunk_column(&col)
-                        .expect("write chunk column failed")
-                }
-                sel.set_chunks(vec![index_chunk].into());
-            }
-            resp.set_data(
-                sel.write_to_bytes()
-                    .expect("write select resp to byte failed"),
-            );
-            // info!("finish handle extra requests");
-            Ok(resp)
-        }
-    }
-
-    fn handle_extra_request(
+    fn handle_extra_task(
         &self,
         req: coppb::Request,
         ranges: Vec<coppb::KeyRange>,
@@ -1220,7 +860,7 @@ impl<E: Engine> Endpoint<E> {
         let extra_output_offset = dag.take_extra_output_offsets();
         dag.set_output_offsets(extra_output_offset);
         dag.set_executors(extra_executor);
-        // dag.clear_extra_table_id();
+        dag.clear_extra_table_id();
         req.set_data(dag.write_to_bytes().expect("dag write to byte failed"));
         let request_info = RequestInfo::new(req.get_context(), RequestType::Unknown, req.start_ts);
         let cur_tracker = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(request_info));
@@ -1251,7 +891,7 @@ impl<E: Engine> Endpoint<E> {
             let get_snapshot_time = (sd.get_get_snapshot_nanos() as f64) / 1_000_000_000.0;
             let rocksdb_block_read_time =
                 (sd.get_rocksdb_block_read_nanos() as f64) / 1_000_000_000.0;
-            info!("handle_extra_request cost";
+            info!("handle_extra_request finish, cost";
                 "start_ts" => start_ts,
                 "index_region" => old_region_id,
                 "row_region" => region.id,
@@ -1265,71 +905,6 @@ impl<E: Engine> Endpoint<E> {
                 "get_snapshot_time" => get_snapshot_time,
                 "rocksdb_block_read" => rocksdb_block_read_time,
             );
-
-            //         // print resp value for debug
-            //         // let mut extra_schema = Vec::new();
-            //         // if let Some((schema, _)) = index_lookup {
-            //         //     extra_schema = schema.clone();
-            //         //     let mut sel = SelectResponse::default();
-            //         //     sel.merge_from_bytes(resp.get_data())
-            //         //         .expect("fail to recover SelectResponse");
-            //         //     if sel.get_encode_type() == EncodeType::TypeChunk {
-            //         //         let schema_types: Vec<_> = schema
-            //         //             .iter()
-            //         //             .map(|ft| {
-            //         //                 FieldTypeTp::from_u8(ft.get_tp() as u8)
-            //         //                     .unwrap_or(FieldTypeTp::Unspecified)
-            //         //             })
-            //         //             .collect();
-            //         //         info!("extra req schema"; "schema" => ?schema_types,
-            // "schema.len" =>         // schema_types.len());         let mut all_data
-            // = Vec::new();         //         'outer: for chunk in sel.get_chunks() {
-            //         //             let mut data = chunk.get_rows_data();
-            //         //             if data.is_empty() {
-            //         //                 continue;
-            //         //             }
-            //         //             let mut columns = Vec::with_capacity(schema.len());
-            //         //             for ft in &schema {
-            //         //                 if data.is_empty() {
-            //         //                     continue;
-            //         //                 }
-            //         //                 let col = match Column::decode(
-            //         //                     &mut data,
-            //         //                     FieldTypeTp::from_u8(ft.get_tp() as u8)
-            //         //                         .unwrap_or(FieldTypeTp::Unspecified),
-            //         //                 ) {
-            //         //                     Ok(col) => col,
-            //         //                     Err(e) => {
-            //         //                         info!("decode chunk error"; "err" => ?e);
-            //         //                         break 'outer;
-            //         //                     }
-            //         //                 };
-            //         //                 columns.push(col);
-            //         //             }
-            //         //             if columns.is_empty() {
-            //         //                 continue;
-            //         //             }
-            //         //             let len = columns[0].len();
-            //         //
-            //         //             for i in 0..len {
-            //         //                 let mut dt = Vec::new();
-            //         //                 let mut row = Vec::new();
-            //         //                 for (j, ft) in schema.iter().enumerate() {
-            //         //                     let v = columns[j].get_datum(i,
-            // ft).expect("fail to get         // datum");                     if let
-            // Ok(str) = v.to_string() {         //
-            // row.push(str);         //                     } else {
-            //         //                         row.push("".to_string());
-            //         //                     }
-            //         //                     dt.push(v);
-            //         //                 }
-            //         //                 info!("extra resp"; "row" => ?row, "row.len" =>
-            // row.len());         //                 all_data.push(dt);
-            //         //             }
-            //         //         }
-            //         //     }
-            //         // }
-            info!("handle extra req finish"; "resp.data.len" =>resp.data.len());
             GLOBAL_TRACKERS.remove(cur_tracker);
             Some(resp)
         }

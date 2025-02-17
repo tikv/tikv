@@ -90,14 +90,6 @@ pub trait RequestHandler: Send {
         // Do nothing by default
     }
 
-    fn index_lookup(&self) -> Option<(Vec<FieldType>, i64)> {
-        None
-    }
-
-    fn has_extra_executor(&self) -> bool {
-        false
-    }
-
     fn build_extra_executor(
         mut self: Box<Self>,
         locate_key: fn(key: &[u8]) -> Option<(Arc<metapb::Region>, u64, u64)>,

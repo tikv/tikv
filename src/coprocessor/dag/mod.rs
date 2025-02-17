@@ -91,19 +91,40 @@ impl<S: Store + 'static, F: KvFormat> DagHandlerBuilder<S, F> {
 
     pub fn build(self) -> Result<Box<dyn RequestHandler>> {
         COPR_DAG_REQ_COUNT.with_label_values(&["batch"]).inc();
-        Ok(BatchDagHandler::new::<_, F>(
-            self.req,
-            self.ranges,
-            self.store,
-            self.data_version,
-            self.deadline,
-            self.is_cache_enabled,
-            self.batch_row_limit,
-            self.is_streaming,
-            self.paging_size,
-            self.quota_limiter,
-        )?
-        .into_boxed())
+        let extra_table_id = self
+            .req
+            .has_extra_table_id()
+            .then(|| self.req.get_extra_table_id());
+        if extra_table_id.is_some() {
+            Ok(IndexLookupBatchDagHandler::new::<_, F>(
+                self.req,
+                self.ranges,
+                self.store,
+                self.data_version,
+                self.deadline,
+                self.is_cache_enabled,
+                self.batch_row_limit,
+                self.is_streaming,
+                self.paging_size,
+                self.quota_limiter,
+                extra_table_id.unwrap(),
+            )?
+            .into_boxed())
+        } else {
+            Ok(BatchDagHandler::new::<_, F>(
+                self.req,
+                self.ranges,
+                self.store,
+                self.data_version,
+                self.deadline,
+                self.is_cache_enabled,
+                self.batch_row_limit,
+                self.is_streaming,
+                self.paging_size,
+                self.quota_limiter,
+            )?
+            .into_boxed())
+        }
     }
 }
 
@@ -162,11 +183,6 @@ impl RequestHandler for BatchDagHandler {
     fn collect_scan_summary(&mut self, dest: &mut ExecSummary) {
         self.runner.collect_scan_summary(dest);
     }
-
-    fn index_lookup(&self) -> Option<(Vec<FieldType>, i64)> {
-        self.extra_table_id
-            .map(|extra_table_id| (self.runner.schema().to_vec(), extra_table_id))
-    }
 }
 
 pub struct IndexLookupBatchDagHandler {
@@ -200,10 +216,6 @@ impl RequestHandler for IndexLookupBatchDagHandler {
 
     fn collect_scan_summary(&mut self, dest: &mut ExecSummary) {
         self.index_runner.collect_scan_summary(dest);
-    }
-
-    fn has_extra_executor(&self) -> bool {
-        self.index_results.is_some()
     }
 
     fn build_extra_executor(
@@ -422,116 +434,6 @@ impl IndexLookupBatchDagHandler {
         Ok(extra_tasks)
     }
 
-    // async fn handle_extra_requests(
-    //     copr: Arc<Endpoint<E>>,
-    //     req: coppb::Request,
-    //     results: &mut Vec<BatchExecuteResult>,
-    //     extra_tasks: Vec<ExtraExecutorTask>,
-    //     peer: Option<String>,
-    // ) -> tidb_query_common::Result<Vec<Chunk>> {
-    //     let mut result_futures = Vec::new();
-    //     let mut result_futures_batch = Vec::new();
-    //     let mut keep_index = Vec::new();
-    //     let mut handle_extra_request_cost: f64 = 0.0;
-    //     let mut total_extra_task = 0;
-    //     for task in extra_tasks.iter() {
-    //         if task.ranges.len() == 0 {
-    //             if task.index_pointers.len() > 0 {
-    //                 keep_index.extend_from_slice(&task.index_pointers);
-    //             }
-    //             continue;
-    //         }
-    //         let begin = std::time::Instant::now();
-    //         let range_result = Self::handle_extra_request(
-    //             copr.clone(),
-    //             req.clone(),
-    //             task.ranges.clone(),
-    //             peer.clone(),
-    //             task.region.clone(),
-    //             task.peer_id,
-    //             task.term,
-    //         );
-    //         handle_extra_request_cost += begin.elapsed().as_secs_f64();
-    //         total_extra_task += 1;
-    //         result_futures_batch.push(range_result);
-    //         if result_futures_batch.len() > 100 {
-    //             result_futures.push(result_futures_batch);
-    //             result_futures_batch = Vec::new();
-    //         }
-    //     }
-    //     if result_futures_batch.len() > 0 {
-    //         result_futures.push(result_futures_batch);
-    //     }
-    //
-    //     if result_futures.len() == 0 {
-    //         // this may print many log
-    //         info!("no extra task need to do");
-    //         // return Ok(resp);
-    //         panic!("xxxx");
-    //     }
-    //     let begin = std::time::Instant::now();
-    //     // let mut total_chunks = sel.take_extra_chunks();
-    //     let mut extra_chunks = Vec::new();
-    //
-    //     let mut batch_res: Vec<Option<MemoryTraceGuard<coppb::Response>>> =
-    // vec![];     let mut handled_count = 0;
-    //     for furs in result_futures {
-    //         let group_res: Vec<Option<MemoryTraceGuard<coppb::Response>>> =
-    //             futures::future::join_all(furs).await;
-    //         handled_count += group_res.len();
-    //         batch_res.extend(group_res);
-    //         let wait_cost: f64 = begin.elapsed().as_secs_f64();
-    //         info!("handle groups extra_requests cost";
-    //             // "start_ts" => start_ts,
-    //             "wait_group_tasks_cost" => wait_cost,
-    //             "total_extra_task" => total_extra_task,
-    //             "handled_count" => handled_count,
-    //         );
-    //     }
-    //     for (i, extra_resp) in batch_res.iter().enumerate() {
-    //         let mut extra_sel = SelectResponse::default();
-    //         if let Some(extra_resp) = extra_resp {
-    //             if extra_sel.merge_from_bytes(extra_resp.get_data()).is_ok() {
-    //                 let chunks = extra_sel.take_chunks().to_vec();
-    //                 for chk in chunks {
-    //                     extra_chunks.push(chk);
-    //                 }
-    //             } else {
-    //                 keep_index.extend_from_slice(&extra_tasks[i].index_pointers);
-    //             }
-    //         } else {
-    //             keep_index.extend_from_slice(&extra_tasks[i].index_pointers);
-    //         }
-    //     }
-    //
-    //     let wait_extra_task_resp_cost: f64 = begin.elapsed().as_secs_f64();
-    //     info!("handle all extra_requests cost";
-    //         // "start_ts" => start_ts,
-    //         "handle_extra_request_cost" => handle_extra_request_cost,
-    //         "wait_extra_task_resp_cost" => wait_extra_task_resp_cost,
-    //         "total_extra_task" => total_extra_task,
-    //     );
-    //     // sel.set_extra_chunks(total_chunks);
-    //     if keep_index.len() == 0 {
-    //         // info!("no need keep index data since all have extra task");
-    //         // sel.clear_chunks();
-    //         results.clear();
-    //     } else {
-    //         keep_index.sort();
-    //         info!("some index data need keep"; "keep_index_idxs" => ?keep_index);
-    //         for result in results.iter_mut() {
-    //             let mut new_logical_rows = Vec::new();
-    //             for (i, row) in result.logical_rows.iter().enumerate() {
-    //                 if !keep_index.contains(&i) {
-    //                     new_logical_rows.push(*row);
-    //                 }
-    //             }
-    //             result.logical_rows = new_logical_rows;
-    //         }
-    //     }
-    //     Ok(extra_chunks)
-    // }
-
     #[inline]
     pub fn build_response(
         &mut self,
@@ -549,95 +451,6 @@ impl IndexLookupBatchDagHandler {
         }
         Ok((resp, range))
     }
-
-    // fn handle_extra_request(
-    //     copr: Arc<Endpoint<E>>,
-    //     req: coppb::Request,
-    //     ranges: Vec<KeyRange>,
-    //     peer: Option<String>,
-    //     region: Arc<metapb::Region>,
-    //     peer_id: u64,
-    //     term: u64,
-    // ) -> impl Future<Output = Option<MemoryTraceGuard<Response>>> {
-    //     let begin = std::time::Instant::now();
-    //     let mut req = req.clone();
-    //     req.set_ranges(ranges.into());
-    //     let new_context = req.mut_context();
-    //     let old_region_id = new_context.get_region_id();
-    //     new_context.set_region_id(region.id);
-    //     new_context.set_region_epoch(region.get_region_epoch().clone());
-    //     new_context.set_term(term);
-    //     new_context.set_replica_read(false);
-    //     new_context.set_stale_read(false);
-    //     for p in &region.peers {
-    //         if p.id == peer_id {
-    //             new_context.set_peer(p.clone());
-    //             break;
-    //         }
-    //     }
-    //     let mut dag = DagRequest::default();
-    //     let data = req.take_data();
-    //     let mut input = CodedInputStream::from_bytes(&data);
-    //     dag.merge_from(&mut input).expect("decode dag failed");
-    //     let extra_executor = dag.take_extra_executors();
-    //     let extra_output_offset = dag.take_extra_output_offsets();
-    //     dag.set_output_offsets(extra_output_offset);
-    //     dag.set_executors(extra_executor);
-    //     dag.clear_extra_table_id();
-    //     req.set_data(dag.write_to_bytes().expect(
-    //         "dag write to byte
-    //     failed",
-    //     ));
-    //     let request_info = RequestInfo::new(req.get_context(),
-    // RequestType::Unknown, req.start_ts);     let cur_tracker =
-    // GLOBAL_TRACKERS.insert(::tracker::Tracker::new(request_info));
-    //     set_tls_tracker_token(cur_tracker);
-    //     let result_of_future = copr
-    //         .parse_request_and_check_memory_locks(req, peer.clone(), false)
-    //         .map(|(handler_builder, req_ctx)| copr.handle_unary_request(req_ctx,
-    // handler_builder));
-    //
-    //     async move {
-    //         let build_cost = begin.elapsed().as_secs_f64();
-    //         let begin = std::time::Instant::now();
-    //         let handle_fut = match result_of_future {
-    //             Err(e) => return None,
-    //             Ok(handle_fut) => handle_fut,
-    //         };
-    //         let (mut resp, extra_task) = match handle_fut.await {
-    //             Err(e) => return None,
-    //             Ok(response) => response,
-    //         };
-    //         let wait_resp_cost = begin.elapsed().as_secs_f64();
-    //         let td = resp.get_exec_details_v2().get_time_detail_v2();
-    //         let sd = resp.get_exec_details_v2().get_scan_detail_v2();
-    //         let process_wall_time = (td.process_wall_time_ns as f64) /
-    // 1_000_000_000.0;         let wait_wall_time = (td.wait_wall_time_ns as
-    // f64) / 1_000_000_000.0;         let process_suspend_wall_time =
-    //             (td.process_suspend_wall_time_ns as f64) / 1_000_000_000.0;
-    //         let kv_read_wall_time = (td.kv_read_wall_time_ns as f64) /
-    // 1_000_000_000.0;         let get_snapshot_time =
-    // (sd.get_get_snapshot_nanos() as f64) / 1_000_000_000.0;         let
-    // rocksdb_block_read_time =             (sd.get_rocksdb_block_read_nanos()
-    // as f64) / 1_000_000_000.0;         info!("handle_extra_request cost";
-    //             // "start_ts" => start_ts,
-    //             "index_region" => old_region_id,
-    //             "row_region" => region.id,
-    //             "build_cost" => build_cost,
-    //             "wait_resp_cost" => wait_resp_cost,
-    //             "total_cost" => build_cost + wait_resp_cost,
-    //             "process_wall_time" => process_wall_time,
-    //             "wait_wall_time" => wait_wall_time,
-    //             "process_suspend_wall_time" => process_suspend_wall_time,
-    //             "kv_read_wall_time" => kv_read_wall_time,
-    //             "get_snapshot_time" => get_snapshot_time,
-    //             "rocksdb_block_read" => rocksdb_block_read_time,
-    //         );
-    //
-    //         GLOBAL_TRACKERS.remove(cur_tracker);
-    //         Some(resp)
-    //     }
-    // }
 }
 
 pub struct IndexScanResults {
