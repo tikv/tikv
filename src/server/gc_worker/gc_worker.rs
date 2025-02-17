@@ -366,7 +366,10 @@ impl<E: Engine> GcRunnerCore<E> {
         Ok(())
     }
 
-    fn new_txn() -> MvccTxn {
+    /// Creates a `MvccTxn` with a dummy concurrency manager, do not use it
+    /// beside the `GCRunner`. It's better to abstract `MvccTxn` for
+    /// recording modifies only.
+    fn mvcc_txn_with_dummy_cm() -> MvccTxn {
         // TODO txn only used for GC, but this is hacky, maybe need an Option?
         let concurrency_manager = ConcurrencyManager::new(1.into());
         MvccTxn::new(TimeStamp::zero(), concurrency_manager)
@@ -463,7 +466,7 @@ impl<E: Engine> GcRunnerCore<E> {
         let mut gc_info = GcInfo::default();
         let mut keys = keys.into_iter().peekable();
         for region in regions {
-            let mut txn = Self::new_txn();
+            let mut txn = Self::mvcc_txn_with_dummy_cm();
             let mut reader = self.create_reader(
                 count,
                 &region,
@@ -516,7 +519,7 @@ impl<E: Engine> GcRunnerCore<E> {
                         range_start_key.clone(),
                         range_end_key.clone(),
                     )?;
-                    txn = Self::new_txn();
+                    txn = Self::mvcc_txn_with_dummy_cm();
                 }
             }
 

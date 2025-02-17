@@ -105,13 +105,15 @@ pub struct ConcurrencyManager {
 }
 
 impl ConcurrencyManager {
+    // This method should be used in test only. To create a new concurrency manager,
+    // please use `new_with_config` instead.
     pub fn new(latest_ts: TimeStamp) -> Self {
         Self::new_with_config(
             latest_ts,
             DEFAULT_LIMIT_VALID_DURATION,
             ActionOnInvalidMaxTs::Panic,
             None,
-            Duration::ZERO,
+            DEFAULT_LIMIT_VALID_DURATION + Duration::from_secs(1),
         )
     }
 
