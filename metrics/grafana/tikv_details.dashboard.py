@@ -4644,7 +4644,7 @@ def InMemoryEngine() -> RowPanel:
                             "tikv_in_memory_engine_cache_count",
                             by_labels=["instance", "type"],
                         ),
-                        legend_format="{{instance}}--{{type}}",
+                        legend_format="{{instance}}-{{type}}",
                     ),
                 ],
             ),
@@ -4714,6 +4714,25 @@ def InMemoryEngine() -> RowPanel:
                     target(
                         expr=expr_sum_delta(
                             "tikv_in_memory_engine_eviction_duration_secs_count",
+                            by_labels=["type"],
+                        ),
+                        legend_format="{{type}}",
+                        additional_groupby=True,
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Region Warmup Count",
+                description="The count of region warmup per seconds",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_in_memory_engine_transfer_leader_warmup_total",
                             by_labels=["type"],
                         ),
                         legend_format="{{type}}",
