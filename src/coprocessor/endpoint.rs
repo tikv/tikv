@@ -2,7 +2,6 @@
 
 use std::{
     borrow::Cow,
-    cmp::{min, Ordering},
     future::Future,
     iter::FromIterator,
     marker::PhantomData,
@@ -26,32 +25,19 @@ use futures::{
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb, kvrpcpb::CommandPri, metapb};
 use online_config::ConfigManager;
 use protobuf::{CodedInputStream, Message};
-use raftstore::store::util;
 use resource_control::{ResourceGroupManager, ResourceLimiter, TaskMetadata};
 use resource_metering::{FutureExt, ResourceTagFactory, StreamExt};
-use tidb_query_common::{execute_stats::ExecSummary, util::convert_to_prefix_next};
-use tidb_query_datatype::{
-    codec::{
-        chunk::{ChunkColumnEncoder, Column},
-        datum::DatumEncoder,
-        table::{RECORD_PREFIX_SEP, TABLE_PREFIX},
-        Datum,
-    },
-    expr::EvalContext,
-    FieldTypeTp,
-};
+use tidb_query_common::execute_stats::ExecSummary;
 use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_kv::SnapshotExt;
 use tikv_util::{
-    codec::number::NumberEncoder,
     deadline::set_deadline_exceeded_busy_error,
     memory::{MemoryQuota, OwnedAllocated},
     quota_limiter::QuotaLimiter,
     time::Instant,
 };
 use tipb::{
-    AnalyzeReq, AnalyzeType, ChecksumRequest, ChecksumScanOn, Chunk, DagRequest, EncodeType,
-    ExecType, FieldType, SelectResponse, TableScan,
+    AnalyzeReq, AnalyzeType, ChecksumRequest, ChecksumScanOn, DagRequest, ExecType, SelectResponse,
 };
 use tokio::sync::Semaphore;
 use txn_types::{Key, Lock};
@@ -115,15 +101,6 @@ pub struct Endpoint<E: Engine> {
 
 impl<E: Engine> tikv_util::AssertSend for Endpoint<E> {}
 
-#[derive(Default, Debug)]
-pub struct ExtraExecutorTask {
-    ranges: Vec<coppb::KeyRange>,
-    region: Arc<metapb::Region>,
-    peer_id: u64,
-    term: u64,
-    index_pointers: Vec<usize>,
-}
-
 impl<E: Engine> Endpoint<E> {
     pub fn new(
         cfg: &Config,
@@ -172,8 +149,8 @@ impl<E: Engine> Endpoint<E> {
         if need_check_locks(req_ctx.context.get_isolation_level()) {
             let begin_instant = Instant::now();
             for range in &req_ctx.ranges {
-                let start_key = txn_types::Key::from_raw_maybe_unbounded(range.get_start());
-                let end_key = txn_types::Key::from_raw_maybe_unbounded(range.get_end());
+                let start_key = Key::from_raw_maybe_unbounded(range.get_start());
+                let end_key = Key::from_raw_maybe_unbounded(range.get_end());
                 self.concurrency_manager
                     .read_range_check(start_key.as_ref(), end_key.as_ref(), |key, lock| {
                         Lock::check_ts_conflict(
@@ -714,7 +691,7 @@ impl<E: Engine> Endpoint<E> {
         let mut handle_extra_request_cost: f64 = 0.0;
         let mut total_extra_task = 0;
         if sel.merge_from_bytes(resp.get_data()).is_ok() {
-            for (i, task) in extra_executor.tasks.iter().enumerate() {
+            for task in extra_executor.tasks.iter() {
                 if task.ranges.len() == 0 {
                     if task.index_pointers.len() > 0 {
                         keep_index.extend_from_slice(&task.index_pointers);
@@ -754,19 +731,9 @@ impl<E: Engine> Endpoint<E> {
             let mut extra_chunks = sel.take_extra_chunks();
 
             let mut batch_res: Vec<Option<MemoryTraceGuard<coppb::Response>>> = vec![];
-            let mut handled_count = 0;
             for furs in result_futures {
-                let group_res: Vec<Option<MemoryTraceGuard<coppb::Response>>> =
-                    futures::future::join_all(furs).await;
-                handled_count += group_res.len();
+                let group_res = futures::future::join_all(furs).await;
                 batch_res.extend(group_res);
-                let wait_cost: f64 = begin.elapsed().as_secs_f64();
-                // info!("handle groups extra_requests cost";
-                //     "start_ts" => start_ts,
-                //     "wait_group_tasks_cost" => wait_cost,
-                //     "total_extra_task" => total_extra_task,
-                //     "handled_count" => handled_count,
-                // );
             }
 
             for (i, extra_resp) in batch_res.iter().enumerate() {
@@ -814,7 +781,7 @@ impl<E: Engine> Endpoint<E> {
                     extra_executor.encode_index_results_to_chunks(index_results.results);
                 match index_chunks {
                     Ok(chunks) => sel.set_chunks(chunks.into()),
-                    Err(err) => info!("encode_index_results_to_chunks failed";),
+                    Err(err) => info!("encode_index_results_to_chunks failed"; "error" => ?err),
                 }
             }
             resp.set_data(
@@ -873,11 +840,17 @@ impl<E: Engine> Endpoint<E> {
             let build_cost = begin.elapsed().as_secs_f64();
             let begin = std::time::Instant::now();
             let handle_fut = match result_of_future {
-                Err(e) => return None,
+                Err(e) => {
+                    info!("handle_extra_request failed";"error" => ?e);
+                    return None;
+                }
                 Ok(handle_fut) => handle_fut,
             };
-            let (mut resp, extra_task) = match handle_fut.await {
-                Err(e) => return None,
+            let (resp, _) = match handle_fut.await {
+                Err(e) => {
+                    info!("handle_extra_request failed";"error" => ?e);
+                    return None;
+                }
                 Ok(response) => response,
             };
             let wait_resp_cost = begin.elapsed().as_secs_f64();

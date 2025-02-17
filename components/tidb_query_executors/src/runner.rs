@@ -11,12 +11,11 @@ use tidb_query_common::{
     execute_stats::ExecSummary,
     metrics::*,
     storage::{IntervalRange, Storage},
-    util::convert_to_prefix_next,
     Result,
 };
 use tidb_query_datatype::{
     expr::{EvalConfig, EvalContext, EvalWarnings},
-    EvalType, FieldTypeAccessor, FieldTypeTp,
+    EvalType, FieldTypeAccessor,
 };
 use tikv_util::{
     deadline::Deadline,
@@ -41,7 +40,6 @@ const BATCH_INITIAL_SIZE: usize = 32;
 // TODO: This value is chosen based on MonetDB/X100's research without our own
 // benchmarks.
 pub use tidb_query_expr::types::BATCH_MAX_SIZE;
-use tikv_util::codec::number::NumberEncoder;
 
 // TODO: Maybe there can be some better strategy. Needs benchmarks and tunes.
 const BATCH_GROW_FACTOR: usize = 2;

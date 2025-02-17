@@ -2,22 +2,18 @@
 
 mod storage_impl;
 
-use std::{future::Future, marker::PhantomData, sync::Arc};
+use std::{marker::PhantomData, sync::Arc};
 
 use api_version::KvFormat;
 use async_trait::async_trait;
 use kvproto::{
-    coprocessor as coppb,
     coprocessor::{KeyRange, Response},
     metapb,
 };
-use protobuf::{CodedInputStream, Message};
+use protobuf::Message;
 use raftstore::store::util;
 use tidb_query_common::{
-    error::{ErrorInner, EvaluateError},
-    execute_stats::ExecSummary,
-    storage::IntervalRange,
-    util::convert_to_prefix_next,
+    execute_stats::ExecSummary, storage::IntervalRange, util::convert_to_prefix_next,
 };
 use tidb_query_datatype::{
     codec::{
@@ -29,15 +25,13 @@ use tidb_query_datatype::{
 };
 use tidb_query_executors::interface::BatchExecuteResult;
 use tikv_alloc::trace::MemoryTraceGuard;
-use tikv_kv::{with_tls_engine, Engine};
 use tikv_util::codec::number::NumberEncoder;
-use tipb::{Chunk, DagRequest, FieldType, SelectResponse, StreamResponse, TableScan};
-use tracker::{set_tls_tracker_token, RequestInfo, RequestType, GLOBAL_TRACKERS};
+use tipb::{Chunk, DagRequest, FieldType, SelectResponse, StreamResponse};
 use txn_types::Key;
 
 pub use self::storage_impl::TikvStorage;
 use crate::{
-    coprocessor::{metrics::*, Deadline, Endpoint, Error, RequestHandler, Result},
+    coprocessor::{metrics::*, Deadline, RequestHandler, Result},
     storage::{Statistics, Store},
     tikv_util::quota_limiter::QuotaLimiter,
 };
@@ -131,12 +125,11 @@ impl<S: Store + 'static, F: KvFormat> DagHandlerBuilder<S, F> {
 pub struct BatchDagHandler {
     runner: tidb_query_executors::runner::BatchExecutorsRunner<Statistics>,
     data_version: Option<u64>,
-    extra_table_id: Option<i64>,
 }
 
 impl BatchDagHandler {
     pub fn new<S: Store + 'static, F: KvFormat>(
-        mut req: DagRequest,
+        req: DagRequest,
         ranges: Vec<KeyRange>,
         store: S,
         data_version: Option<u64>,
@@ -147,7 +140,6 @@ impl BatchDagHandler {
         paging_size: Option<u64>,
         quota_limiter: Arc<QuotaLimiter>,
     ) -> Result<Self> {
-        let extra_table_id = req.has_extra_table_id().then(|| req.get_extra_table_id());
         Ok(Self {
             runner: tidb_query_executors::runner::BatchExecutorsRunner::from_request::<_, F>(
                 req,
@@ -160,7 +152,6 @@ impl BatchDagHandler {
                 quota_limiter,
             )?,
             data_version,
-            extra_table_id,
         })
     }
 }
@@ -281,7 +272,7 @@ impl IndexLookupBatchDagHandler {
     async fn internal_handle_request(
         &mut self,
     ) -> tidb_query_common::Result<(SelectResponse, Option<IntervalRange>)> {
-        let (mut results, record_len, warnings, range) = self.index_runner.run_request().await?;
+        let (results, record_len, warnings, range) = self.index_runner.run_request().await?;
 
         let mut ctx = EvalContext::new(self.index_runner.config.clone());
         let schema = self.index_runner.schema();
@@ -325,7 +316,7 @@ impl IndexLookupBatchDagHandler {
                     LogicalRows::from_slice(&result.logical_rows),
                 )?;
                 let handle_values = result.physical_columns[offset].decoded().to_int_vec();
-                for (idx, handle) in handle_values.iter().enumerate() {
+                for handle in handle_values.iter() {
                     info!("decode handle for extra task"; "handle" => handle);
                     if handle.is_some() {
                         let mut key;
@@ -340,17 +331,7 @@ impl IndexLookupBatchDagHandler {
             keys.sort_by(|a, b| a.0.cmp(&b.0));
             let mut ranges: Vec<KeyRange> = Vec::new();
             let mut last_region: Option<(Arc<metapb::Region>, u64, u64)> = None;
-            fn add_point_range(
-                key: Vec<u8>,
-                region: Arc<metapb::Region>,
-                peer_id: u64,
-                term: u64,
-                ranges: &mut Vec<KeyRange>,
-            ) {
-                // info!("index lookup locate key"; "key" => ?key,
-                //                             "region" => region.id,
-                //                             "peer" => peer_id,
-                //                             "term" => term);
+            fn add_point_range(key: Vec<u8>, ranges: &mut Vec<KeyRange>) {
                 let mut r = KeyRange::new();
                 r.set_start(key);
                 r.set_end(r.get_start().to_vec());
@@ -375,13 +356,7 @@ impl IndexLookupBatchDagHandler {
                                 append_last_range(raw_key.clone(), &mut ranges);
                             }
                             _ => {
-                                add_point_range(
-                                    raw_key.clone(),
-                                    region.clone(),
-                                    *peer_id,
-                                    *term,
-                                    &mut ranges,
-                                );
+                                add_point_range(raw_key.clone(), &mut ranges);
                             }
                         };
                         last_handle = Some(handle);
@@ -403,7 +378,7 @@ impl IndexLookupBatchDagHandler {
 
                 if let Some((region, peer_id, term)) = locate_key(key.as_encoded()) {
                     last_region = Some((region.clone(), peer_id, term));
-                    add_point_range(raw_key.clone(), region, peer_id, term, &mut ranges);
+                    add_point_range(raw_key.clone(), &mut ranges);
                     last_handle = Some(handle);
                     ranges_index_pointers.push(i);
                 } else {
