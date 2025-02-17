@@ -296,11 +296,6 @@ impl_box_observer!(
     WrappedRaftMessageObserver
 );
 impl_box_observer!(
-    BoxExtraMessageObserver,
-    ExtraMessageObserver,
-    WrappedExtraMessageObserver
-);
-impl_box_observer!(
     BoxRegionHeartbeatObserver,
     RegionHeartbeatObserver,
     WrappedRegionHeartbeatObserver
@@ -344,7 +339,6 @@ where
     pd_task_observers: Vec<Entry<BoxPdTaskObserver>>,
     update_safe_ts_observers: Vec<Entry<BoxUpdateSafeTsObserver>>,
     raft_message_observers: Vec<Entry<BoxRaftMessageObserver>>,
-    extra_message_observers: Vec<Entry<BoxExtraMessageObserver>>,
     region_heartbeat_observers: Vec<Entry<BoxRegionHeartbeatObserver>>,
     destroy_peer_observers: Vec<Entry<BoxDestroyPeerObserver>>,
     transfer_leader_observers: Vec<Entry<BoxTransferLeaderObserver>>,
@@ -371,7 +365,6 @@ impl<E: KvEngine> Default for Registry<E> {
             pd_task_observers: Default::default(),
             update_safe_ts_observers: Default::default(),
             raft_message_observers: Default::default(),
-            extra_message_observers: Default::default(),
             region_heartbeat_observers: Default::default(),
             destroy_peer_observers: Default::default(),
             transfer_leader_observers: Default::default(),
@@ -448,10 +441,6 @@ impl<E: KvEngine> Registry<E> {
 
     pub fn register_raft_message_observer(&mut self, priority: u32, qo: BoxRaftMessageObserver) {
         push!(priority, qo, self.raft_message_observers);
-    }
-
-    pub fn register_extra_message_observer(&mut self, priority: u32, qo: BoxExtraMessageObserver) {
-        push!(priority, qo, self.extra_message_observers);
     }
 
     pub fn register_region_heartbeat_observer(
@@ -948,13 +937,6 @@ impl<E: KvEngine> CoprocessorHost<E> {
             }
         }
         true
-    }
-
-    pub fn on_extra_message(&self, r: &Region, msg: &ExtraMessage) {
-        for observer in &self.registry.extra_message_observers {
-            let observer = observer.observer.inner();
-            observer.on_extra_message(r, msg);
-        }
     }
 
     /// Returns false if the message should not be stepped later.

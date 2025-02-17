@@ -7,17 +7,17 @@ use engine_traits::{CacheRegion, EvictReason, KvEngine, RegionCacheEngineExt, Re
 use kvproto::{
     metapb::{Peer, Region},
     raft_cmdpb::AdminCmdType,
-    raft_serverpb::{ExtraMessage, ExtraMessageType, RaftApplyState},
+    raft_serverpb::{ExtraMessageType, RaftApplyState},
 };
 use protobuf::ProtobufEnum as _;
 use raft::StateRole;
 use raftstore::{
     coprocessor::{
-        dispatcher::{BoxDestroyPeerObserver, BoxExtraMessageObserver, BoxTransferLeaderObserver},
+        dispatcher::{BoxDestroyPeerObserver, BoxTransferLeaderObserver},
         AdminObserver, ApplyCtxInfo, ApplySnapshotObserver, BoxAdminObserver,
         BoxApplySnapshotObserver, BoxQueryObserver, BoxRoleObserver, Cmd, Coprocessor,
-        CoprocessorHost, DestroyPeerObserver, ExtraMessageObserver, ObserverContext, QueryObserver,
-        RegionState, RoleObserver, TransferLeaderCustomContext, TransferLeaderObserver,
+        CoprocessorHost, DestroyPeerObserver, ObserverContext, QueryObserver, RegionState,
+        RoleObserver, TransferLeaderCustomContext, TransferLeaderObserver,
     },
     store::TransferLeaderContext,
 };
@@ -57,10 +57,6 @@ impl LoadEvictionObserver {
         coprocessor_host
             .registry
             .register_role_observer(priority, BoxRoleObserver::new(self.clone()));
-        // Pre load region in transfer leader
-        coprocessor_host
-            .registry
-            .register_extra_message_observer(priority, BoxExtraMessageObserver::new(self.clone()));
         // Eviction the cached region when the peer is destroyed.
         coprocessor_host
             .registry
@@ -312,21 +308,34 @@ impl TransferLeaderObserver for LoadEvictionObserver {
         };
 
         let need_warmup = ty == ExtraMessageType::MsgPreLoadRegionRequest;
-        if need_warmup {
-            // Exclude loading states to make sure the region is active.
-            let active_only = true;
-            let has_cached = self.cache_engine.region_cached(r.region(), active_only);
-            if !has_cached {
-                IN_MEMORY_ENGINE_TRANSFER_LEADER_WARMUP_COUNTER_STATIC
-                    .warmup
-                    .inc();
-                self.cache_engine.load_region(r.region());
-            }
-            has_cached
-        } else {
+        if !need_warmup {
             // Ready to ack.
-            true
+            return true;
         }
+
+        // Exclude loading states to make sure the region is active.
+        let active_only = true;
+        let has_cached = self.cache_engine.region_cached(r.region(), active_only);
+        if has_cached {
+            // Ready to ack.
+            return true;
+        }
+
+        if region.get_peers().is_empty() {
+            // MsgPreLoadRegionRequest is sent before leader issue a transfer leader
+            // request. It is possible that the peer is not initialized yet.
+            warn!("ime skip warmup an uninitialized region"; "region" => ?region);
+            IN_MEMORY_ENGINE_TRANSFER_LEADER_WARMUP_COUNTER_STATIC
+                .skip_warmup
+                .inc();
+            return true;
+        }
+
+        IN_MEMORY_ENGINE_TRANSFER_LEADER_WARMUP_COUNTER_STATIC
+            .warmup
+            .inc();
+        self.cache_engine.load_region(r.region());
+        false
     }
 }
 
@@ -369,21 +378,6 @@ impl RoleObserver for LoadEvictionObserver {
                 "region" => ?cache_region,
             );
             self.evict_region(cache_region, EvictReason::BecomeFollower);
-        }
-    }
-}
-
-impl ExtraMessageObserver for LoadEvictionObserver {
-    fn on_extra_message(&self, region: &Region, extra_msg: &ExtraMessage) {
-        if extra_msg.get_type() == ExtraMessageType::MsgPreLoadRegionRequest {
-            if region.get_peers().is_empty() {
-                // MsgPreLoadRegionRequest is sent before leader issue a
-                // transfer leader request. It is possible that the peer
-                // is not initialized yet.
-                warn!("ime skip warmup an uninitialized region"; "region" => ?region);
-                return;
-            }
-            self.cache_engine.load_region(region);
         }
     }
 }

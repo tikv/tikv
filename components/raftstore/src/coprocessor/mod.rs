@@ -17,7 +17,7 @@ use kvproto::{
         AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request,
         TransferLeaderRequest,
     },
-    raft_serverpb::{ExtraMessage, RaftApplyState},
+    raft_serverpb::RaftApplyState,
 };
 use pd_client::RegionStat;
 use raft::{eraftpb, StateRole};
@@ -358,11 +358,6 @@ pub trait RaftMessageObserver: Coprocessor {
     fn on_raft_message(&self, _: &RaftMessage) -> bool {
         true
     }
-}
-
-//
-pub trait ExtraMessageObserver: Coprocessor {
-    fn on_extra_message(&self, _: &Region, _: &ExtraMessage) {}
 }
 
 #[derive(Clone, Debug, Default)]
