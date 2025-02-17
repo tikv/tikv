@@ -371,7 +371,7 @@ impl<E: Engine> GcRunnerCore<E> {
     /// recording modifies only.
     fn mvcc_txn_with_dummy_cm() -> MvccTxn {
         // TODO txn only used for GC, but this is hacky, maybe need an Option?
-        let concurrency_manager = ConcurrencyManager::new(1.into());
+        let concurrency_manager = ConcurrencyManager::new_dummy();
         MvccTxn::new(TimeStamp::zero(), concurrency_manager)
     }
 

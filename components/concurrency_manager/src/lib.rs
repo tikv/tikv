@@ -105,15 +105,28 @@ pub struct ConcurrencyManager {
 }
 
 impl ConcurrencyManager {
-    // This method should be used in test only. To create a new concurrency manager,
-    // please use `new_with_config` instead.
-    pub fn new(latest_ts: TimeStamp) -> Self {
+    /// This is ONLY used in tests, please do not use it elsewhere.
+    /// To create a new concurrency manager, please use `new_with_config`
+    /// instead.
+    pub fn new_for_test(latest_ts: TimeStamp) -> Self {
         Self::new_with_config(
             latest_ts,
             DEFAULT_LIMIT_VALID_DURATION,
             ActionOnInvalidMaxTs::Panic,
             None,
-            DEFAULT_LIMIT_VALID_DURATION + Duration::from_secs(1),
+            Duration::ZERO,
+        )
+    }
+
+    /// This is ONLY used by `GcRunnerCore` as a temporary solution, please do
+    /// not use it elsewhere.
+    pub fn new_dummy() -> Self {
+        Self::new_with_config(
+            1.into(),
+            DEFAULT_LIMIT_VALID_DURATION,
+            ActionOnInvalidMaxTs::Panic,
+            None,
+            Duration::ZERO,
         )
     }
 
@@ -649,7 +662,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_lock_keys_order() {
-        let concurrency_manager = ConcurrencyManager::new(1.into());
+        let concurrency_manager = ConcurrencyManager::new_for_test(1.into());
         let keys: Vec<_> = [b"c", b"a", b"b"]
             .iter()
             .copied()
@@ -663,7 +676,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_max_ts() {
-        let concurrency_manager = ConcurrencyManager::new(10.into());
+        let concurrency_manager = ConcurrencyManager::new_for_test(10.into());
         let _ = concurrency_manager.update_max_ts(20.into(), "");
         assert_eq!(concurrency_manager.max_ts(), 20.into());
 
@@ -691,7 +704,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_global_min_lock_ts() {
-        let concurrency_manager = ConcurrencyManager::new(1.into());
+        let concurrency_manager = ConcurrencyManager::new_for_test(1.into());
 
         assert_eq!(concurrency_manager.global_min_lock_ts(), None);
         let guard = concurrency_manager.lock_key(&Key::from_raw(b"a")).await;
@@ -756,7 +769,7 @@ mod tests {
 
     #[test]
     fn test_max_ts_limit_edge_cases() {
-        let cm = ConcurrencyManager::new(TimeStamp::new(100));
+        let cm = ConcurrencyManager::new_for_test(TimeStamp::new(100));
 
         // Test transition from zero limit
         assert_eq!(cm.max_ts_limit.load().limit, 0.into());
@@ -887,7 +900,7 @@ mod tests {
 
     #[test]
     fn test_update_max_ts_without_limit() {
-        let cm = ConcurrencyManager::new(TimeStamp::new(100));
+        let cm = ConcurrencyManager::new_for_test(TimeStamp::new(100));
 
         cm.update_max_ts(TimeStamp::new(500), "test_source".to_string())
             .unwrap();

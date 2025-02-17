@@ -1479,7 +1479,7 @@ pub mod tests {
             .api_version(api_version)
             .build()
             .unwrap();
-        let concurrency_manager = ConcurrencyManager::new(1.into());
+        let concurrency_manager = ConcurrencyManager::new_for_test(1.into());
         let need_encode_key = !is_raw_kv || api_version == ApiVersion::V2;
         let db = rocks.get_rocksdb();
         (
