@@ -1620,7 +1620,7 @@ fn find_zone_transition(
 
     let mut i = 0;
     while t1 + chrono::Duration::seconds(1) < t2 {
-        if i > 1000 {
+        if i > 100 {
             // Just avoid infinity loop because of potential bug, maybe we can remove it in
             // the future
             return Err(
