@@ -40,7 +40,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 pub use checksum::checksum_crc64_xor;
 use engine_traits::PerfLevel;
-use kvproto::{coprocessor as coppb, kvrpcpb};
+use kvproto::{coprocessor as coppb, kvrpcpb, metapb};
 use lazy_static::lazy_static;
 use metrics::ReqTag;
 use rand::prelude::*;
@@ -54,7 +54,10 @@ pub use self::{
     endpoint::Endpoint,
     error::{Error, Result},
 };
-use crate::storage::{mvcc::TimeStamp, Statistics};
+use crate::{
+    coprocessor::dag::ExtraExecutor,
+    storage::{mvcc::TimeStamp, Statistics},
+};
 
 pub const REQ_TYPE_DAG: i64 = 103;
 pub const REQ_TYPE_ANALYZE: i64 = 104;
@@ -89,6 +92,17 @@ pub trait RequestHandler: Send {
 
     fn index_lookup(&self) -> Option<(Vec<FieldType>, i64)> {
         None
+    }
+
+    fn has_extra_executor(&self) -> bool {
+        false
+    }
+
+    fn build_extra_executor(
+        mut self: Box<Self>,
+        locate_key: fn(key: &[u8]) -> Option<(Arc<metapb::Region>, u64, u64)>,
+    ) -> Result<Option<ExtraExecutor>> {
+        Ok(None)
     }
 
     fn into_boxed(self) -> Box<dyn RequestHandler>

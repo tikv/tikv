@@ -169,17 +169,16 @@ impl RequestHandler for BatchDagHandler {
     }
 }
 
-pub struct IndexLookupBatchDagHandler<E: Engine> {
+pub struct IndexLookupBatchDagHandler {
     index_runner: tidb_query_executors::runner::BatchExecutorsRunner<Statistics>,
     index_data_version: Option<u64>,
     extra_table_id: i64,
 
-    pub copr: Arc<Endpoint<E>>,
-    pub req: coppb::Request,
+    index_results: Option<IndexScanResults>,
 }
 
 #[async_trait]
-impl<E: Engine> RequestHandler for IndexLookupBatchDagHandler<E> {
+impl RequestHandler for IndexLookupBatchDagHandler {
     async fn handle_request(&mut self) -> Result<MemoryTraceGuard<Response>> {
         let result = self.internal_handle_request().await;
         // this can't be cached?
@@ -203,15 +202,42 @@ impl<E: Engine> RequestHandler for IndexLookupBatchDagHandler<E> {
         self.index_runner.collect_scan_summary(dest);
     }
 
-    fn index_lookup(&self) -> Option<(Vec<FieldType>, i64)> {
-        None
+    fn has_extra_executor(&self) -> bool {
+        self.index_results.is_some()
+    }
+
+    fn build_extra_executor(
+        mut self: Box<Self>,
+        locate_key: fn(key: &[u8]) -> Option<(Arc<metapb::Region>, u64, u64)>,
+    ) -> Result<Option<ExtraExecutor>> {
+        match self.index_results {
+            Some(ref mut results) => {
+                let mut ctx = EvalContext::new(self.index_runner.config.clone());
+                let schema = self.index_runner.schema();
+                let table_id = self.extra_table_id;
+                let tasks = Self::build_extra_tasks_internal(
+                    &mut ctx,
+                    &schema,
+                    &mut results.results,
+                    results.record_len,
+                    table_id,
+                    locate_key,
+                )?;
+
+                let index_results = self.index_results.take().unwrap();
+                Ok(Some(ExtraExecutor {
+                    handler: self,
+                    index_results: Some(index_results),
+                    tasks,
+                }))
+            }
+            _ => return Ok(None),
+        }
     }
 }
 
-impl<E: Engine> IndexLookupBatchDagHandler<E> {
+impl IndexLookupBatchDagHandler {
     pub fn new<S: Store + 'static, F: KvFormat>(
-        copr: Arc<Endpoint<E>>,
-        req: coppb::Request,
         dag_req: DagRequest,
         ranges: Vec<KeyRange>,
         store: S,
@@ -224,7 +250,6 @@ impl<E: Engine> IndexLookupBatchDagHandler<E> {
         quota_limiter: Arc<QuotaLimiter>,
         extra_table_id: i64,
     ) -> Result<Self> {
-        let req2 = req.clone();
         Ok(Self {
             index_runner: tidb_query_executors::runner::BatchExecutorsRunner::from_request::<_, F>(
                 dag_req,
@@ -238,8 +263,7 @@ impl<E: Engine> IndexLookupBatchDagHandler<E> {
             )?,
             index_data_version: data_version,
             extra_table_id,
-            copr,
-            req: req2,
+            index_results: None,
         })
     }
     async fn internal_handle_request(
@@ -248,42 +272,23 @@ impl<E: Engine> IndexLookupBatchDagHandler<E> {
         let (mut results, record_len, warnings, range) = self.index_runner.run_request().await?;
 
         let mut ctx = EvalContext::new(self.index_runner.config.clone());
-        if record_len == 0 {
+        let schema = self.index_runner.schema();
+        if record_len == 0 || schema.len() != 1 {
             return self.build_response(&mut ctx, results, None, warnings, range);
         }
-        let schema = self.index_runner.schema();
-        let extra_tasks = match Self::build_extra_tasks(
-            &mut ctx,
-            &schema,
-            &mut results,
+        self.index_results = Some(IndexScanResults {
+            results,
             record_len,
-            self.extra_table_id,
-        ) {
-            Ok(extra_tasks) => extra_tasks,
-            Err(e) => {
-                // ignore and build resp
-                info!("build extra task failed"; "error" => ?e);
-                return self.build_response(&mut ctx, results, None, warnings, range);
-            }
-        };
-        let extra_chunks = Self::handle_extra_requests(
-            self.copr.clone(),
-            self.req.clone(),
-            &mut results,
-            extra_tasks,
-            None,
-        )
-        .await?;
-
-        return self.build_response(&mut ctx, results, Some(extra_chunks), warnings, range);
+        });
+        return self.build_response(&mut ctx, vec![], None, warnings, range);
     }
-
-    fn build_extra_tasks(
+    fn build_extra_tasks_internal(
         ctx: &mut EvalContext,
         schema: &[FieldType],
         results: &mut Vec<BatchExecuteResult>,
         record_len: usize,
         table_id: i64,
+        locate_key: fn(key: &[u8]) -> Option<(Arc<metapb::Region>, u64, u64)>,
     ) -> Result<Vec<ExtraExecutorTask>> {
         let mut extra_tasks = Vec::new();
         if record_len == 0 || schema.len() != 1 {
@@ -384,9 +389,7 @@ impl<E: Engine> IndexLookupBatchDagHandler<E> {
                     }
                 }
 
-                if let Some((region, peer_id, term)) =
-                    unsafe { with_tls_engine(|engine| Self::locate_key(engine, key.as_encoded())) }
-                {
+                if let Some((region, peer_id, term)) = locate_key(key.as_encoded()) {
                     last_region = Some((region.clone(), peer_id, term));
                     add_point_range(raw_key.clone(), region, peer_id, term, &mut ranges);
                     last_handle = Some(handle);
@@ -419,115 +422,115 @@ impl<E: Engine> IndexLookupBatchDagHandler<E> {
         Ok(extra_tasks)
     }
 
-    async fn handle_extra_requests(
-        copr: Arc<Endpoint<E>>,
-        req: coppb::Request,
-        results: &mut Vec<BatchExecuteResult>,
-        extra_tasks: Vec<ExtraExecutorTask>,
-        peer: Option<String>,
-    ) -> tidb_query_common::Result<Vec<Chunk>> {
-        let mut result_futures = Vec::new();
-        let mut result_futures_batch = Vec::new();
-        let mut keep_index = Vec::new();
-        let mut handle_extra_request_cost: f64 = 0.0;
-        let mut total_extra_task = 0;
-        for task in extra_tasks.iter() {
-            if task.ranges.len() == 0 {
-                if task.index_pointers.len() > 0 {
-                    keep_index.extend_from_slice(&task.index_pointers);
-                }
-                continue;
-            }
-            let begin = std::time::Instant::now();
-            let range_result = Self::handle_extra_request(
-                copr.clone(),
-                req.clone(),
-                task.ranges.clone(),
-                peer.clone(),
-                task.region.clone(),
-                task.peer_id,
-                task.term,
-            );
-            handle_extra_request_cost += begin.elapsed().as_secs_f64();
-            total_extra_task += 1;
-            result_futures_batch.push(range_result);
-            if result_futures_batch.len() > 100 {
-                result_futures.push(result_futures_batch);
-                result_futures_batch = Vec::new();
-            }
-        }
-        if result_futures_batch.len() > 0 {
-            result_futures.push(result_futures_batch);
-        }
-
-        if result_futures.len() == 0 {
-            // this may print many log
-            info!("no extra task need to do");
-            // return Ok(resp);
-            panic!("xxxx");
-        }
-        let begin = std::time::Instant::now();
-        // let mut total_chunks = sel.take_extra_chunks();
-        let mut extra_chunks = Vec::new();
-
-        let mut batch_res: Vec<Option<MemoryTraceGuard<coppb::Response>>> = vec![];
-        let mut handled_count = 0;
-        for furs in result_futures {
-            let group_res: Vec<Option<MemoryTraceGuard<coppb::Response>>> =
-                futures::future::join_all(furs).await;
-            handled_count += group_res.len();
-            batch_res.extend(group_res);
-            let wait_cost: f64 = begin.elapsed().as_secs_f64();
-            info!("handle groups extra_requests cost";
-                // "start_ts" => start_ts,
-                "wait_group_tasks_cost" => wait_cost,
-                "total_extra_task" => total_extra_task,
-                "handled_count" => handled_count,
-            );
-        }
-        for (i, extra_resp) in batch_res.iter().enumerate() {
-            let mut extra_sel = SelectResponse::default();
-            if let Some(extra_resp) = extra_resp {
-                if extra_sel.merge_from_bytes(extra_resp.get_data()).is_ok() {
-                    let chunks = extra_sel.take_chunks().to_vec();
-                    for chk in chunks {
-                        extra_chunks.push(chk);
-                    }
-                } else {
-                    keep_index.extend_from_slice(&extra_tasks[i].index_pointers);
-                }
-            } else {
-                keep_index.extend_from_slice(&extra_tasks[i].index_pointers);
-            }
-        }
-
-        let wait_extra_task_resp_cost: f64 = begin.elapsed().as_secs_f64();
-        info!("handle all extra_requests cost";
-            // "start_ts" => start_ts,
-            "handle_extra_request_cost" => handle_extra_request_cost,
-            "wait_extra_task_resp_cost" => wait_extra_task_resp_cost,
-            "total_extra_task" => total_extra_task,
-        );
-        // sel.set_extra_chunks(total_chunks);
-        if keep_index.len() == 0 {
-            // info!("no need keep index data since all have extra task");
-            // sel.clear_chunks();
-            results.clear();
-        } else {
-            keep_index.sort();
-            info!("some index data need keep"; "keep_index_idxs" => ?keep_index);
-            for result in results.iter_mut() {
-                let mut new_logical_rows = Vec::new();
-                for (i, row) in result.logical_rows.iter().enumerate() {
-                    if !keep_index.contains(&i) {
-                        new_logical_rows.push(*row);
-                    }
-                }
-                result.logical_rows = new_logical_rows;
-            }
-        }
-        Ok(extra_chunks)
-    }
+    // async fn handle_extra_requests(
+    //     copr: Arc<Endpoint<E>>,
+    //     req: coppb::Request,
+    //     results: &mut Vec<BatchExecuteResult>,
+    //     extra_tasks: Vec<ExtraExecutorTask>,
+    //     peer: Option<String>,
+    // ) -> tidb_query_common::Result<Vec<Chunk>> {
+    //     let mut result_futures = Vec::new();
+    //     let mut result_futures_batch = Vec::new();
+    //     let mut keep_index = Vec::new();
+    //     let mut handle_extra_request_cost: f64 = 0.0;
+    //     let mut total_extra_task = 0;
+    //     for task in extra_tasks.iter() {
+    //         if task.ranges.len() == 0 {
+    //             if task.index_pointers.len() > 0 {
+    //                 keep_index.extend_from_slice(&task.index_pointers);
+    //             }
+    //             continue;
+    //         }
+    //         let begin = std::time::Instant::now();
+    //         let range_result = Self::handle_extra_request(
+    //             copr.clone(),
+    //             req.clone(),
+    //             task.ranges.clone(),
+    //             peer.clone(),
+    //             task.region.clone(),
+    //             task.peer_id,
+    //             task.term,
+    //         );
+    //         handle_extra_request_cost += begin.elapsed().as_secs_f64();
+    //         total_extra_task += 1;
+    //         result_futures_batch.push(range_result);
+    //         if result_futures_batch.len() > 100 {
+    //             result_futures.push(result_futures_batch);
+    //             result_futures_batch = Vec::new();
+    //         }
+    //     }
+    //     if result_futures_batch.len() > 0 {
+    //         result_futures.push(result_futures_batch);
+    //     }
+    //
+    //     if result_futures.len() == 0 {
+    //         // this may print many log
+    //         info!("no extra task need to do");
+    //         // return Ok(resp);
+    //         panic!("xxxx");
+    //     }
+    //     let begin = std::time::Instant::now();
+    //     // let mut total_chunks = sel.take_extra_chunks();
+    //     let mut extra_chunks = Vec::new();
+    //
+    //     let mut batch_res: Vec<Option<MemoryTraceGuard<coppb::Response>>> =
+    // vec![];     let mut handled_count = 0;
+    //     for furs in result_futures {
+    //         let group_res: Vec<Option<MemoryTraceGuard<coppb::Response>>> =
+    //             futures::future::join_all(furs).await;
+    //         handled_count += group_res.len();
+    //         batch_res.extend(group_res);
+    //         let wait_cost: f64 = begin.elapsed().as_secs_f64();
+    //         info!("handle groups extra_requests cost";
+    //             // "start_ts" => start_ts,
+    //             "wait_group_tasks_cost" => wait_cost,
+    //             "total_extra_task" => total_extra_task,
+    //             "handled_count" => handled_count,
+    //         );
+    //     }
+    //     for (i, extra_resp) in batch_res.iter().enumerate() {
+    //         let mut extra_sel = SelectResponse::default();
+    //         if let Some(extra_resp) = extra_resp {
+    //             if extra_sel.merge_from_bytes(extra_resp.get_data()).is_ok() {
+    //                 let chunks = extra_sel.take_chunks().to_vec();
+    //                 for chk in chunks {
+    //                     extra_chunks.push(chk);
+    //                 }
+    //             } else {
+    //                 keep_index.extend_from_slice(&extra_tasks[i].index_pointers);
+    //             }
+    //         } else {
+    //             keep_index.extend_from_slice(&extra_tasks[i].index_pointers);
+    //         }
+    //     }
+    //
+    //     let wait_extra_task_resp_cost: f64 = begin.elapsed().as_secs_f64();
+    //     info!("handle all extra_requests cost";
+    //         // "start_ts" => start_ts,
+    //         "handle_extra_request_cost" => handle_extra_request_cost,
+    //         "wait_extra_task_resp_cost" => wait_extra_task_resp_cost,
+    //         "total_extra_task" => total_extra_task,
+    //     );
+    //     // sel.set_extra_chunks(total_chunks);
+    //     if keep_index.len() == 0 {
+    //         // info!("no need keep index data since all have extra task");
+    //         // sel.clear_chunks();
+    //         results.clear();
+    //     } else {
+    //         keep_index.sort();
+    //         info!("some index data need keep"; "keep_index_idxs" => ?keep_index);
+    //         for result in results.iter_mut() {
+    //             let mut new_logical_rows = Vec::new();
+    //             for (i, row) in result.logical_rows.iter().enumerate() {
+    //                 if !keep_index.contains(&i) {
+    //                     new_logical_rows.push(*row);
+    //                 }
+    //             }
+    //             result.logical_rows = new_logical_rows;
+    //         }
+    //     }
+    //     Ok(extra_chunks)
+    // }
 
     #[inline]
     pub fn build_response(
@@ -535,12 +538,10 @@ impl<E: Engine> IndexLookupBatchDagHandler<E> {
         ctx: &mut EvalContext,
         results: Vec<BatchExecuteResult>,
         extra_chunks: Option<Vec<Chunk>>,
-        mut warnings: EvalWarnings,
+        warnings: EvalWarnings,
         range: Option<IntervalRange>,
     ) -> tidb_query_common::Result<(SelectResponse, Option<IntervalRange>)> {
-        let chunks = self
-            .index_runner
-            .encode_to_chunks(ctx, false, results, &mut warnings)?;
+        let chunks = self.index_runner.encode_to_chunks(ctx, false, results)?;
 
         let mut resp = self.index_runner.build_response(chunks, warnings)?;
         if let Some(extra_chunks) = extra_chunks {
@@ -549,106 +550,127 @@ impl<E: Engine> IndexLookupBatchDagHandler<E> {
         Ok((resp, range))
     }
 
-    fn handle_extra_request(
-        copr: Arc<Endpoint<E>>,
-        req: coppb::Request,
-        ranges: Vec<KeyRange>,
-        peer: Option<String>,
-        region: Arc<metapb::Region>,
-        peer_id: u64,
-        term: u64,
-    ) -> impl Future<Output = Option<MemoryTraceGuard<Response>>> {
-        let begin = std::time::Instant::now();
-        let mut req = req.clone();
-        req.set_ranges(ranges.into());
-        let new_context = req.mut_context();
-        let old_region_id = new_context.get_region_id();
-        new_context.set_region_id(region.id);
-        new_context.set_region_epoch(region.get_region_epoch().clone());
-        new_context.set_term(term);
-        new_context.set_replica_read(false);
-        new_context.set_stale_read(false);
-        for p in &region.peers {
-            if p.id == peer_id {
-                new_context.set_peer(p.clone());
-                break;
-            }
-        }
-        let mut dag = DagRequest::default();
-        let data = req.take_data();
-        let mut input = CodedInputStream::from_bytes(&data);
-        dag.merge_from(&mut input).expect("decode dag failed");
-        let extra_executor = dag.take_extra_executors();
-        let extra_output_offset = dag.take_extra_output_offsets();
-        dag.set_output_offsets(extra_output_offset);
-        dag.set_executors(extra_executor);
-        dag.clear_extra_table_id();
-        req.set_data(dag.write_to_bytes().expect(
-            "dag write to byte
-        failed",
-        ));
-        let request_info = RequestInfo::new(req.get_context(), RequestType::Unknown, req.start_ts);
-        let cur_tracker = GLOBAL_TRACKERS.insert(::tracker::Tracker::new(request_info));
-        set_tls_tracker_token(cur_tracker);
-        let result_of_future = copr
-            .parse_request_and_check_memory_locks(req, peer.clone(), false)
-            .map(|(handler_builder, req_ctx)| copr.handle_unary_request(req_ctx, handler_builder));
+    // fn handle_extra_request(
+    //     copr: Arc<Endpoint<E>>,
+    //     req: coppb::Request,
+    //     ranges: Vec<KeyRange>,
+    //     peer: Option<String>,
+    //     region: Arc<metapb::Region>,
+    //     peer_id: u64,
+    //     term: u64,
+    // ) -> impl Future<Output = Option<MemoryTraceGuard<Response>>> {
+    //     let begin = std::time::Instant::now();
+    //     let mut req = req.clone();
+    //     req.set_ranges(ranges.into());
+    //     let new_context = req.mut_context();
+    //     let old_region_id = new_context.get_region_id();
+    //     new_context.set_region_id(region.id);
+    //     new_context.set_region_epoch(region.get_region_epoch().clone());
+    //     new_context.set_term(term);
+    //     new_context.set_replica_read(false);
+    //     new_context.set_stale_read(false);
+    //     for p in &region.peers {
+    //         if p.id == peer_id {
+    //             new_context.set_peer(p.clone());
+    //             break;
+    //         }
+    //     }
+    //     let mut dag = DagRequest::default();
+    //     let data = req.take_data();
+    //     let mut input = CodedInputStream::from_bytes(&data);
+    //     dag.merge_from(&mut input).expect("decode dag failed");
+    //     let extra_executor = dag.take_extra_executors();
+    //     let extra_output_offset = dag.take_extra_output_offsets();
+    //     dag.set_output_offsets(extra_output_offset);
+    //     dag.set_executors(extra_executor);
+    //     dag.clear_extra_table_id();
+    //     req.set_data(dag.write_to_bytes().expect(
+    //         "dag write to byte
+    //     failed",
+    //     ));
+    //     let request_info = RequestInfo::new(req.get_context(),
+    // RequestType::Unknown, req.start_ts);     let cur_tracker =
+    // GLOBAL_TRACKERS.insert(::tracker::Tracker::new(request_info));
+    //     set_tls_tracker_token(cur_tracker);
+    //     let result_of_future = copr
+    //         .parse_request_and_check_memory_locks(req, peer.clone(), false)
+    //         .map(|(handler_builder, req_ctx)| copr.handle_unary_request(req_ctx,
+    // handler_builder));
+    //
+    //     async move {
+    //         let build_cost = begin.elapsed().as_secs_f64();
+    //         let begin = std::time::Instant::now();
+    //         let handle_fut = match result_of_future {
+    //             Err(e) => return None,
+    //             Ok(handle_fut) => handle_fut,
+    //         };
+    //         let (mut resp, extra_task) = match handle_fut.await {
+    //             Err(e) => return None,
+    //             Ok(response) => response,
+    //         };
+    //         let wait_resp_cost = begin.elapsed().as_secs_f64();
+    //         let td = resp.get_exec_details_v2().get_time_detail_v2();
+    //         let sd = resp.get_exec_details_v2().get_scan_detail_v2();
+    //         let process_wall_time = (td.process_wall_time_ns as f64) /
+    // 1_000_000_000.0;         let wait_wall_time = (td.wait_wall_time_ns as
+    // f64) / 1_000_000_000.0;         let process_suspend_wall_time =
+    //             (td.process_suspend_wall_time_ns as f64) / 1_000_000_000.0;
+    //         let kv_read_wall_time = (td.kv_read_wall_time_ns as f64) /
+    // 1_000_000_000.0;         let get_snapshot_time =
+    // (sd.get_get_snapshot_nanos() as f64) / 1_000_000_000.0;         let
+    // rocksdb_block_read_time =             (sd.get_rocksdb_block_read_nanos()
+    // as f64) / 1_000_000_000.0;         info!("handle_extra_request cost";
+    //             // "start_ts" => start_ts,
+    //             "index_region" => old_region_id,
+    //             "row_region" => region.id,
+    //             "build_cost" => build_cost,
+    //             "wait_resp_cost" => wait_resp_cost,
+    //             "total_cost" => build_cost + wait_resp_cost,
+    //             "process_wall_time" => process_wall_time,
+    //             "wait_wall_time" => wait_wall_time,
+    //             "process_suspend_wall_time" => process_suspend_wall_time,
+    //             "kv_read_wall_time" => kv_read_wall_time,
+    //             "get_snapshot_time" => get_snapshot_time,
+    //             "rocksdb_block_read" => rocksdb_block_read_time,
+    //         );
+    //
+    //         GLOBAL_TRACKERS.remove(cur_tracker);
+    //         Some(resp)
+    //     }
+    // }
+}
 
-        async move {
-            let build_cost = begin.elapsed().as_secs_f64();
-            let begin = std::time::Instant::now();
-            let handle_fut = match result_of_future {
-                Err(e) => return None,
-                Ok(handle_fut) => handle_fut,
-            };
-            let (mut resp, extra_task) = match handle_fut.await {
-                Err(e) => return None,
-                Ok(response) => response,
-            };
-            let wait_resp_cost = begin.elapsed().as_secs_f64();
-            let td = resp.get_exec_details_v2().get_time_detail_v2();
-            let sd = resp.get_exec_details_v2().get_scan_detail_v2();
-            let process_wall_time = (td.process_wall_time_ns as f64) / 1_000_000_000.0;
-            let wait_wall_time = (td.wait_wall_time_ns as f64) / 1_000_000_000.0;
-            let process_suspend_wall_time =
-                (td.process_suspend_wall_time_ns as f64) / 1_000_000_000.0;
-            let kv_read_wall_time = (td.kv_read_wall_time_ns as f64) / 1_000_000_000.0;
-            let get_snapshot_time = (sd.get_get_snapshot_nanos() as f64) / 1_000_000_000.0;
-            let rocksdb_block_read_time =
-                (sd.get_rocksdb_block_read_nanos() as f64) / 1_000_000_000.0;
-            info!("handle_extra_request cost";
-                // "start_ts" => start_ts,
-                "index_region" => old_region_id,
-                "row_region" => region.id,
-                "build_cost" => build_cost,
-                "wait_resp_cost" => wait_resp_cost,
-                "total_cost" => build_cost + wait_resp_cost,
-                "process_wall_time" => process_wall_time,
-                "wait_wall_time" => wait_wall_time,
-                "process_suspend_wall_time" => process_suspend_wall_time,
-                "kv_read_wall_time" => kv_read_wall_time,
-                "get_snapshot_time" => get_snapshot_time,
-                "rocksdb_block_read" => rocksdb_block_read_time,
-            );
+pub struct IndexScanResults {
+    pub results: Vec<BatchExecuteResult>,
+    pub record_len: usize,
+}
 
-            GLOBAL_TRACKERS.remove(cur_tracker);
-            Some(resp)
-        }
-    }
-
-    #[inline]
-    fn locate_key(engine: &mut E, key: &[u8]) -> Option<(Arc<metapb::Region>, u64, u64)> {
-        engine.locate_key(key)
-    }
+pub struct ExtraExecutor {
+    pub handler: Box<IndexLookupBatchDagHandler>,
+    pub index_results: Option<IndexScanResults>,
+    pub tasks: Vec<ExtraExecutorTask>,
 }
 
 #[derive(Default, Debug)]
-struct ExtraExecutorTask {
-    ranges: Vec<KeyRange>,
-    region: Arc<metapb::Region>,
-    peer_id: u64,
-    term: u64,
-    index_pointers: Vec<usize>,
+pub struct ExtraExecutorTask {
+    pub ranges: Vec<KeyRange>,
+    pub region: Arc<metapb::Region>,
+    pub peer_id: u64,
+    pub term: u64,
+    pub index_pointers: Vec<usize>,
+}
+
+impl ExtraExecutor {
+    #[inline]
+    pub fn encode_index_results_to_chunks(
+        &mut self,
+        results: Vec<BatchExecuteResult>,
+    ) -> tidb_query_common::Result<Vec<Chunk>> {
+        let mut ctx = EvalContext::new(self.handler.index_runner.config.clone());
+        self.handler
+            .index_runner
+            .encode_to_chunks(&mut ctx, false, results)
+    }
 }
 
 fn handle_qe_response(

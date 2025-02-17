@@ -497,7 +497,6 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         let mut results = vec![];
         let mut batch_size = Self::batch_initial_size();
         let mut warnings = self.config.new_eval_warnings();
-        let mut ctx = EvalContext::new(self.config.clone());
         let mut record_all = 0;
 
         loop {
@@ -729,14 +728,15 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
     ) -> Result<(BatchExecIsDrain, usize)> {
         self.deadline.check()?;
 
-        let result = self.out_most_executor.next_batch(batch_size).await;
+        let mut result = self.out_most_executor.next_batch(batch_size).await;
 
         let drained = match result.is_drained {
             Err(e) => return Err(e),
             Ok(drained) => drained,
         };
 
-        let record_len = self.encode_to_chunk(ctx, is_streaming, result, chunk, warnings)?;
+        warnings.merge(&mut result.warnings);
+        let record_len = self.encode_to_chunk(ctx, is_streaming, result, chunk)?;
         return Ok((drained, record_len));
     }
 
@@ -746,7 +746,6 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         is_streaming: bool,
         mut result: BatchExecuteResult,
         chunk: &mut Chunk,
-        warnings: &mut EvalWarnings,
     ) -> Result<usize> {
         let mut record_len = 0;
         if !result.logical_rows.is_empty() {
@@ -788,7 +787,6 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             }
             record_len += result.logical_rows.len();
         }
-        warnings.merge(&mut result.warnings);
         Ok(record_len)
     }
     pub fn encode_to_chunks(
@@ -796,13 +794,11 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         ctx: &mut EvalContext,
         is_streaming: bool,
         results: Vec<BatchExecuteResult>,
-        warnings: &mut EvalWarnings,
     ) -> Result<Vec<Chunk>> {
         let mut chunks = vec![];
         for result in results {
             let mut chunk = Chunk::default();
-            let record_len =
-                self.encode_to_chunk(ctx, is_streaming, result, &mut chunk, warnings)?;
+            let record_len = self.encode_to_chunk(ctx, is_streaming, result, &mut chunk)?;
             if record_len > 0 {
                 chunks.push(chunk);
             }

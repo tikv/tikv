@@ -463,10 +463,7 @@ impl<E: Engine> Endpoint<E> {
         semaphore: Option<Arc<Semaphore>>,
         mut tracker: Box<Tracker<E>>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
-    ) -> Result<(
-        MemoryTraceGuard<coppb::Response>,
-        Option<(Vec<ExtraExecutorTask>, Vec<Vec<Datum>>, Vec<FieldType>)>,
-    )> {
+    ) -> Result<(MemoryTraceGuard<coppb::Response>, Option<ExtraExecutor>)> {
         // When this function is being executed, it may be queued for a long time, so
         // that deadline may exceed.
         tracker.on_scheduled();
@@ -510,16 +507,16 @@ impl<E: Engine> Endpoint<E> {
             handler_builder(snapshot, &tracker.req_ctx)?
         };
 
-        let index_lookup = handler.index_lookup();
-        if let Some((_, tid)) = index_lookup {
-            if tid == 107 {
-                info!("handle index lookup begin";
-                    "start_ts" => tracker.req_ctx.txn_start_ts,
-                    "region" => tracker.req_ctx.context.region_id,
-                    "tid" => tid,
-                );
-            }
-        }
+        // let index_lookup = handler.index_lookup();
+        // if let Some((_, tid)) = index_lookup {
+        //     if tid == 107 {
+        //         info!("handle index lookup begin";
+        //             "start_ts" => tracker.req_ctx.txn_start_ts,
+        //             "region" => tracker.req_ctx.context.region_id,
+        //             "tid" => tid,
+        //         );
+        //     }
+        // }
         tracker.on_begin_all_items();
 
         let deadline = tracker.req_ctx.deadline;
@@ -555,21 +552,36 @@ impl<E: Engine> Endpoint<E> {
         resp.set_exec_details_v2(exec_details_v2);
         resp.set_latest_buckets_version(buckets_version);
 
-        // build extra task if needed
-        if let Some((schema, extra_table_id)) = index_lookup {
-            let mut sel = SelectResponse::default();
-            if sel.merge_from_bytes(resp.get_data()).is_ok() {
-                let start_ts = tracker.req_ctx.txn_start_ts;
-                let extra_task_range = Self::build_extra_executor_range(
-                    &mut sel,
-                    schema.clone(),
-                    extra_table_id,
-                    start_ts,
+        let extra_executor = handler.build_extra_executor(|key| unsafe {
+            with_tls_engine(|engine| Self::locate_key(engine, key))
+        });
+        let extra_executor = match extra_executor {
+            Ok(extra_executor) => extra_executor,
+            Err(err) => {
+                info!("handle index lookup begin, but failed";
+                    "start_ts" => tracker.req_ctx.txn_start_ts,
+                    "region" => tracker.req_ctx.context.region_id,
+                    "error" => err.to_string()
                 );
-                return Ok((resp, extra_task_range));
+                None
             }
-        }
-        Ok((resp, None))
+        };
+
+        // build extra task if needed
+        // if let Some((schema, extra_table_id)) = index_lookup {
+        //     let mut sel = SelectResponse::default();
+        //     if sel.merge_from_bytes(resp.get_data()).is_ok() {
+        //         let start_ts = tracker.req_ctx.txn_start_ts;
+        //         let extra_task_range = Self::build_extra_executor_range(
+        //             &mut sel,
+        //             schema.clone(),
+        //             extra_table_id,
+        //             start_ts,
+        //         );
+        //         return Ok((resp, extra_task_range));
+        //     }
+        // }
+        Ok((resp, extra_executor))
     }
 
     fn build_extra_executor_range(
@@ -765,12 +777,8 @@ impl<E: Engine> Endpoint<E> {
         &self,
         req_ctx: ReqContext,
         handler_builder: RequestHandlerBuilder<E::Snap>,
-    ) -> impl Future<
-        Output = Result<(
-            MemoryTraceGuard<coppb::Response>,
-            Option<(Vec<ExtraExecutorTask>, Vec<Vec<Datum>>, Vec<FieldType>)>,
-        )>,
-    > {
+    ) -> impl Future<Output = Result<(MemoryTraceGuard<coppb::Response>, Option<ExtraExecutor>)>>
+    {
         let priority = req_ctx.context.get_priority();
         let task_id = req_ctx.build_task_id();
         let key_ranges: Vec<_> = req_ctx
@@ -876,21 +884,13 @@ impl<E: Engine> Endpoint<E> {
             };
 
             let (handle_res, batch_res) = futures::join!(handle_fut, result_of_batch);
-            let (mut res, extra_tasks) = match handle_res {
+            let (mut res, extra_executor) = match handle_res {
                 Err(e) => return make_error_response(e).into(),
                 Ok(response) => response,
             };
-            if let Some((extra_tasks, index_data, schema)) = extra_tasks {
+            if let Some(extra_executor) = extra_executor {
                 match this
-                    .handle_extra_requests(
-                        extra_req,
-                        peer,
-                        res.consume(),
-                        extra_tasks,
-                        index_data,
-                        schema,
-                        start_ts,
-                    )
+                    .handle_extra_executor(extra_req, peer, res.consume(), extra_executor, start_ts)
                     .await
                 {
                     Err(e) => return make_error_response(e).into(),
@@ -906,6 +906,134 @@ impl<E: Engine> Endpoint<E> {
             res
         };
         Either::Right(fut)
+    }
+
+    fn handle_extra_executor(
+        &self,
+        req: coppb::Request,
+        peer: Option<String>,
+        mut resp: coppb::Response,
+        mut extra_executor: ExtraExecutor,
+        start_ts: TimeStamp,
+    ) -> impl Future<Output = Result<coppb::Response>> {
+        let mut sel = SelectResponse::default();
+
+        let mut result_futures = Vec::new();
+        let mut result_futures_batch = Vec::new();
+        let mut keep_index = Vec::new();
+        let mut handle_extra_request_cost: f64 = 0.0;
+        let mut total_extra_task = 0;
+        if sel.merge_from_bytes(resp.get_data()).is_ok() {
+            for (i, task) in extra_executor.tasks.iter().enumerate() {
+                if task.ranges.len() == 0 {
+                    if task.index_pointers.len() > 0 {
+                        keep_index.extend_from_slice(&task.index_pointers);
+                    }
+                    continue;
+                }
+                let begin = std::time::Instant::now();
+                let range_result = self.handle_extra_request(
+                    req.clone(),
+                    task.ranges.clone(),
+                    peer.clone(),
+                    task.region.clone(),
+                    task.peer_id,
+                    task.term,
+                    start_ts,
+                );
+                handle_extra_request_cost += begin.elapsed().as_secs_f64();
+                total_extra_task += 1;
+                result_futures_batch.push(range_result);
+                if result_futures_batch.len() > 100 {
+                    result_futures.push(result_futures_batch);
+                    result_futures_batch = Vec::new();
+                }
+            }
+            if result_futures_batch.len() > 0 {
+                result_futures.push(result_futures_batch);
+            }
+        }
+
+        async move {
+            if result_futures.len() == 0 {
+                // this may print many log
+                info!("no extra task need to do"; "keep_index.len" => keep_index.len());
+                return Ok(resp);
+            }
+            let begin = std::time::Instant::now();
+            let mut extra_chunks = sel.take_extra_chunks();
+
+            let mut batch_res: Vec<Option<MemoryTraceGuard<coppb::Response>>> = vec![];
+            let mut handled_count = 0;
+            for furs in result_futures {
+                let group_res: Vec<Option<MemoryTraceGuard<coppb::Response>>> =
+                    futures::future::join_all(furs).await;
+                handled_count += group_res.len();
+                batch_res.extend(group_res);
+                let wait_cost: f64 = begin.elapsed().as_secs_f64();
+                info!("handle groups extra_requests cost";
+                    "start_ts" => start_ts,
+                    "wait_group_tasks_cost" => wait_cost,
+                    "total_extra_task" => total_extra_task,
+                    "handled_count" => handled_count,
+                );
+            }
+
+            for (i, extra_resp) in batch_res.iter().enumerate() {
+                let mut extra_sel = SelectResponse::default();
+                if let Some(extra_resp) = extra_resp {
+                    if extra_sel.merge_from_bytes(extra_resp.get_data()).is_ok() {
+                        let chunks = extra_sel.take_chunks().to_vec();
+                        for chk in chunks {
+                            extra_chunks.push(chk);
+                        }
+                    } else {
+                        keep_index.extend_from_slice(&extra_executor.tasks[i].index_pointers);
+                    }
+                } else {
+                    keep_index.extend_from_slice(&extra_executor.tasks[i].index_pointers);
+                }
+            }
+            let wait_extra_task_resp_cost: f64 = begin.elapsed().as_secs_f64();
+            info!("handle all extra_requests cost";
+                "start_ts" => start_ts,
+                "handle_extra_request_cost" => handle_extra_request_cost,
+                "wait_extra_task_resp_cost" => wait_extra_task_resp_cost,
+                "total_extra_task" => total_extra_task,
+            );
+            sel.set_extra_chunks(extra_chunks);
+            if keep_index.len() == 0 {
+                // info!("no need keep index data since all have extra task");
+                sel.clear_chunks();
+            } else {
+                keep_index.sort();
+                info!("some index data need keep"; "keep_index_idxs" => ?keep_index);
+                let mut index_offset = 0;
+                let mut index_results = extra_executor.index_results.take().unwrap();
+                for result in index_results.results.iter_mut() {
+                    let mut new_logical_rows = Vec::new();
+                    for (i, row) in result.logical_rows.iter().enumerate() {
+                        if !keep_index.contains(&(i + index_offset)) {
+                            new_logical_rows.push(*row);
+                        }
+                    }
+                    index_offset += result.logical_rows.len();
+                    result.logical_rows = new_logical_rows;
+                }
+                let index_chunks =
+                    extra_executor.encode_index_results_to_chunks(index_results.results);
+                match index_chunks {
+                    Ok(chunks) => sel.set_chunks(chunks.into()),
+                    Err(err) => info!("encode_index_results_to_chunks failed";),
+                }
+            }
+            resp.set_data(
+                sel.write_to_bytes()
+                    .expect("write select resp to byte failed"),
+            );
+            info!("finish handle extra requests");
+            Ok(resp)
+        }
     }
 
     #[inline]
