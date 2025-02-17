@@ -114,7 +114,7 @@ impl ConcurrencyManager {
             DEFAULT_LIMIT_VALID_DURATION,
             ActionOnInvalidMaxTs::Panic,
             None,
-            Duration::ZERO,
+            DEFAULT_LIMIT_VALID_DURATION + Duration::from_secs(1),
         )
     }
 
@@ -774,15 +774,15 @@ mod tests {
         // Test transition from zero limit
         assert_eq!(cm.max_ts_limit.load().limit, 0.into());
         cm.set_max_ts_limit(TimeStamp::new(1000));
-        assert_eq!(cm.max_ts_limit.load().limit, 1000.into());
+        assert_eq!(cm.max_ts_limit.load().limit, 12058625000.into());
 
         // Try to lower from 1000 to 500 - should be ignored
         cm.set_max_ts_limit(TimeStamp::new(500));
-        assert_eq!(cm.max_ts_limit.load().limit, 1000.into());
+        assert_eq!(cm.max_ts_limit.load().limit, 12058625000.into());
 
         // Test setting limit to max, should have no effect
         cm.set_max_ts_limit(TimeStamp::max());
-        assert_eq!(cm.max_ts_limit.load().limit, 1000.into());
+        assert_eq!(cm.max_ts_limit.load().limit, 12058625000.into());
     }
 
     #[test]
