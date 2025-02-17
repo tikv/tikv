@@ -84,7 +84,7 @@ use crate::{
         local_metrics::{RaftMetrics, TimeTracker},
         memory::*,
         metrics::*,
-        msg::{Callback, ExtCallback, InspectedRaftMessage},
+        msg::{Callback, CampaignType, ExtCallback, InspectedRaftMessage},
         peer::{
             ConsistencyState, ForceLeaderState, Peer, PersistSnapshotResult, StaleState,
             UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
@@ -1254,8 +1254,18 @@ where
                     self.maybe_destroy();
                 }
             }
-            CasualMessage::Campaign => {
-                let _ = self.fsm.peer.raft_group.campaign();
+            CasualMessage::Campaign(campaign_type) => {
+                match campaign_type {
+                    CampaignType::ForceLeader => {
+                        // Forcely campaign to be the leader of the region.
+                        let _ = self.fsm.peer.raft_group.campaign();
+                    }
+                    CampaignType::UnsafeSplitCampaign => {
+                        // If the message is sent by the parent, it means that the parent is already
+                        // the leader of the parent region.
+                        let _ = self.fsm.peer.maybe_campaign(true);
+                    }
+                }
                 self.fsm.has_ready = true;
             }
         }
@@ -1799,7 +1809,7 @@ where
             // follower state
             let _ = self.ctx.router.send(
                 self.region_id(),
-                PeerMsg::CasualMessage(CasualMessage::Campaign),
+                PeerMsg::CasualMessage(CasualMessage::Campaign(CampaignType::ForceLeader)),
             );
         }
         self.fsm.has_ready = true;
@@ -1913,6 +1923,24 @@ where
                     self.on_enter_force_leader();
                 }
             }
+        }
+    }
+
+    #[inline]
+    /// Check whether the peer has any uncleared records in the
+    /// uncampaigned_new_regions list.
+    fn check_uncampaigned_regions(&mut self) {
+        fail_point!("on_skip_check_uncampaigned_regions", |_| {});
+        let has_uncompaigned_regions = !self
+            .fsm
+            .peer
+            .uncampaigned_new_regions
+            .as_ref()
+            .map_or(false, |r| r.is_empty());
+        // If the peer has any uncleared records in the uncampaigned_new_regions list,
+        // and there has valid leader in the region, it's safely to clear the records.
+        if has_uncompaigned_regions && self.fsm.peer.has_valid_leader() {
+            self.fsm.peer.uncampaigned_new_regions = None;
         }
     }
 
@@ -2695,6 +2723,8 @@ where
 
         result?;
 
+        self.check_uncampaigned_regions();
+
         if self.fsm.peer.any_new_peer_catch_up(from_peer_id) {
             self.fsm.peer.heartbeat_pd(self.ctx);
             self.fsm.peer.should_wake_up = true;
@@ -3403,6 +3433,9 @@ where
         }
     }
 
+    // NOTE: This method is used by both the leader and the follower.
+    // Both the request and response for transfer-leader share the MessageType
+    // `MsgTransferLeader`.
     fn on_transfer_leader_msg(&mut self, msg: &eraftpb::Message, peer_disk_usage: DiskUsage) {
         // log_term is set by original leader, represents the term last log is written
         // in, which should be equal to the original leader's term.
@@ -3439,6 +3472,7 @@ where
                             "region_id" => self.fsm.region_id(),
                             "peer_id" => self.fsm.peer_id(),
                             "to" => ?from,
+                            "last_index" => self.fsm.peer.get_store().last_index(),
                         );
                         let mut cmd = new_admin_request(
                             self.fsm.peer.region().get_id(),
@@ -3498,6 +3532,11 @@ where
         {
             return false;
         }
+
+        fail_point!("propose_locks_before_transfer_leader", |_| {
+            pessimistic_locks.status = LocksStatus::TransferringLeader;
+            true
+        });
 
         // If it is not writable, it's probably because it's a retried TransferLeader
         // and the locks have been proposed. But we still need to return true to
@@ -4126,7 +4165,7 @@ where
         // It's not correct anymore, so set it to false to schedule a split check task.
         self.fsm.peer.may_skip_split_check = false;
 
-        let is_leader = self.fsm.peer.is_leader();
+        let (is_leader, is_follower) = (self.fsm.peer.is_leader(), self.fsm.peer.is_follower());
         if is_leader {
             if share_source_region_size {
                 self.fsm.peer.approximate_size = share_size;
@@ -4297,6 +4336,18 @@ where
                 .unwrap();
 
             if !campaigned {
+                // The new peer has not campaigned yet, record it for later campaign.
+                if is_follower && self.fsm.peer.region().get_peers().len() > 1 {
+                    if self.fsm.peer.uncampaigned_new_regions.is_none() {
+                        self.fsm.peer.uncampaigned_new_regions = Some(vec![]);
+                    }
+                    self.fsm
+                        .peer
+                        .uncampaigned_new_regions
+                        .as_mut()
+                        .unwrap()
+                        .push(new_region_id);
+                }
                 if let Some(msg) = meta
                     .pending_msgs
                     .swap_remove_front(|m| m.get_to_peer() == &meta_peer)
@@ -5423,7 +5474,7 @@ where
             }
             Err(e) => {
                 debug!(
-                    "failed to propose";
+                    "failed to pre propose";
                     "region_id" => self.region_id(),
                     "peer_id" => self.fsm.peer_id(),
                     "message" => ?msg,
@@ -5456,8 +5507,19 @@ where
         let mut resp = RaftCmdResponse::default();
         let term = self.fsm.peer.term();
         bind_term(&mut resp, term);
+        // Save important details from `msg` so we can log them later if the proposal
+        // fails. This is a workaround because `msg` gets moved when proposed.
+        let is_admin_request = msg.has_admin_request();
+        let admin_cmd_type = is_admin_request.then(|| msg.get_admin_request().get_cmd_type());
         if self.fsm.peer.propose(self.ctx, cb, msg, resp, diskfullopt) {
             self.fsm.has_ready = true;
+        } else {
+            debug!(
+                "failed to propose";
+                "region_id" => self.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "admin_cmd_type" => ?admin_cmd_type,
+            );
         }
 
         if self.fsm.peer.should_wake_up {

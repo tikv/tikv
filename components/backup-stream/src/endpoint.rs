@@ -32,7 +32,7 @@ use tikv::config::{BackupStreamConfig, ResolvedTsConfig};
 use tikv_util::{
     box_err,
     config::ReadableDuration,
-    debug, defer, info,
+    debug, defer, error, info,
     memory::MemoryQuota,
     sys::thread::ThreadBuildWrapper,
     time::{Instant, Limiter},
@@ -233,8 +233,10 @@ where
         self.meta_client.clone()
     }
 
-    fn on_fatal_error_of_task(&self, task: &str, err: &Error) -> future![()] {
+    fn on_fatal_error_of_task(&self, task: &str, err: &Error) -> future![bool] {
         metrics::update_task_status(TaskStatus::Error, task);
+        error!(?err; "Task encounters fatal error, will pause this task."; "task" => %task,);
+
         let meta_cli = self.get_meta_client();
         let pdc = self.pd_client.clone();
         let store_id = self.store_id;
@@ -246,6 +248,12 @@ where
         let task = task.to_owned();
         async move {
             let err_fut = async {
+                #[cfg(feature = "failpoints")]
+                fail::fail_point!("log-backup-upload-error", |v| {
+                    info!("injected error."; "value" => ?v);
+                    Result::Err(Error::Other(box_err!("injected error: {:?}", v)))
+                });
+
                 let safepoint = meta_cli.global_progress_of_task(&task).await?;
                 pdc.update_service_safe_point(
                     safepoint_name,
@@ -262,7 +270,10 @@ where
                 meta_cli.report_last_error(&task, last_error).await?;
                 Result::Ok(())
             };
-            if let Err(err_report) = err_fut.await {
+            let res = err_fut.await;
+            let paused = res.is_ok();
+
+            if let Err(err_report) = res {
                 err_report.report(format_args!("failed to upload error {}", err_report));
                 let name = task.to_owned();
                 // Let's retry reporting after 5s.
@@ -277,6 +288,7 @@ where
                     );
                 });
             }
+            paused
         }
     }
 
@@ -287,9 +299,12 @@ where
             .block_on(self.range_router.select_task(select.reference()));
         warn!("fatal error reporting"; "selector" => ?select, "selected" => ?tasks, "err" => %err);
         for task in tasks {
-            // Let's pause the task first.
-            self.unload_task(&task);
-            self.pool.block_on(self.on_fatal_error_of_task(&task, &err));
+            if self.pool.block_on(self.on_fatal_error_of_task(&task, &err)) {
+                // It is necessary to notify all other stores before pausing the task locally.
+                // Or once uploading error failed, we cannot upload it because the task cannot
+                // be found.
+                self.unload_task(&task);
+            }
         }
     }
 
