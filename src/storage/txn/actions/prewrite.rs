@@ -427,9 +427,9 @@ impl<'a> PrewriteMutation<'a> {
                             continue;
                         }
 
-                        warn!("conflicting write was found, pessimistic lock must be lost for the corresponding row key"; 
-                            "key" => %self.key, 
-                            "start_ts" => self.txn_props.start_ts, 
+                        warn!("conflicting write was found, pessimistic lock must be lost for the corresponding row key";
+                            "key" => %self.key,
+                            "start_ts" => self.txn_props.start_ts,
                             "for_update_ts" => for_update_ts,
                             "conflicting start_ts" => write.start_ts,
                             "conflicting commit_ts" => commit_ts);
@@ -489,6 +489,10 @@ impl<'a> PrewriteMutation<'a> {
         if let Some(secondary_keys) = self.secondary_keys {
             lock.use_async_commit = true;
             lock.secondaries = secondary_keys.to_owned();
+        } else if try_one_pc {
+            // Set `use_one_pc` to true to prevent the in-memory lock from being skipped
+            // when reading with max-ts.
+            lock.use_one_pc = true;
         }
 
         let final_min_commit_ts = if lock.use_async_commit || try_one_pc {
@@ -503,6 +507,7 @@ impl<'a> PrewriteMutation<'a> {
             fail_point!("after_calculate_min_commit_ts");
             if let Err(Error(box ErrorInner::CommitTsTooLarge { .. })) = &res {
                 try_one_pc = false;
+                lock.use_one_pc = false;
                 lock.use_async_commit = false;
                 lock.secondaries = Vec::new();
             }
@@ -784,6 +789,8 @@ fn amend_pessimistic_lock<S: Snapshot>(
 
 pub mod tests {
     #[cfg(test)]
+    use std::borrow::Cow;
+    #[cfg(test)]
     use std::sync::Arc;
 
     use concurrency_manager::ConcurrencyManager;
@@ -793,7 +800,7 @@ pub mod tests {
     #[cfg(test)]
     use tikv_kv::RocksEngine;
     #[cfg(test)]
-    use txn_types::OldValue;
+    use txn_types::{OldValue, TsSet};
 
     use super::*;
     #[cfg(test)]
@@ -1127,6 +1134,8 @@ pub mod tests {
         // success 1pc prewrite needs to be transformed to locks
         assert!(!must_locked(&mut engine, b"k1", 10).use_async_commit);
         assert!(!must_locked(&mut engine, b"k2", 10).use_async_commit);
+        assert!(!must_locked(&mut engine, b"k1", 10).use_one_pc);
+        assert!(!must_locked(&mut engine, b"k2", 10).use_one_pc);
     }
 
     pub fn try_pessimistic_prewrite_check_not_exists<E: Engine>(
@@ -2509,5 +2518,58 @@ pub mod tests {
         assert_eq!(lock.last_change_ts, TimeStamp::zero());
         assert_eq!(lock.versions_to_last_change, 0);
         must_rollback(&mut engine, key, 40, false);
+    }
+
+    #[test]
+    fn test_1pc_set_lock_use_one_pc() {
+        let mut engine = crate::storage::TestEngineBuilder::new().build().unwrap();
+        let cm = ConcurrencyManager::new(42.into());
+
+        let snapshot = engine.snapshot(Default::default()).unwrap();
+
+        let mut txn = MvccTxn::new(10.into(), cm.clone());
+        let mut reader = SnapshotReader::new(10.into(), snapshot, false);
+
+        let k1 = b"k1";
+        let k2 = b"k2";
+
+        prewrite(
+            &mut txn,
+            &mut reader,
+            &optimistic_async_props(k1, 10.into(), 50.into(), 2, true),
+            Mutation::make_put(Key::from_raw(k1), b"v1".to_vec()),
+            &None,
+            SkipPessimisticCheck,
+        )
+        .unwrap();
+        prewrite(
+            &mut txn,
+            &mut reader,
+            &optimistic_async_props(k1, 10.into(), 50.into(), 1, true),
+            Mutation::make_put(Key::from_raw(k2), b"v2".to_vec()),
+            &None,
+            SkipPessimisticCheck,
+        )
+        .unwrap();
+
+        // lock.use_one_pc should be set to true when using 1pc.
+        assert_eq!(txn.guards.len(), 2);
+        txn.guards[0].with_lock(|l| assert!(l.as_ref().unwrap().use_one_pc));
+        txn.guards[1].with_lock(|l| assert!(l.as_ref().unwrap().use_one_pc));
+
+        // read with max_ts should be blocked by the lock.
+        for &key in &[k1, k2] {
+            let k = Key::from_raw(key);
+            let res = cm.read_key_check(&k, |l| {
+                Lock::check_ts_conflict(
+                    Cow::Borrowed(l),
+                    &k,
+                    TimeStamp::max(),
+                    &TsSet::Empty,
+                    crate::storage::IsolationLevel::Si,
+                )
+            });
+            assert!(res.is_err());
+        }
     }
 }
