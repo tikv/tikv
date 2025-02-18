@@ -26,6 +26,16 @@ make_auto_flush_static_metric! {
     pub struct FailedReasonCountVec: LocalIntCounter {
         "type" => FailedReason,
     }
+
+    pub label_enum TransferLeaderWarmupType {
+        request,
+        warmup,
+        skip_warmup,
+    }
+
+    pub struct TransferLeaderWarmup: LocalIntCounter {
+        "type" => TransferLeaderWarmupType,
+    }
 }
 
 lazy_static! {
@@ -42,6 +52,13 @@ lazy_static! {
             &["type"],
         )
         .unwrap();
+    pub static ref IN_MEMORY_ENGINE_TRANSFER_LEADER_WARMUP_COUNTER_VEC: IntCounterVec =
+        register_int_counter_vec!(
+            "tikv_in_memory_engine_transfer_leader_warmup_total",
+            "Total number of in memory engine transfer leader warmup",
+            &["type"],
+        )
+        .unwrap();
 }
 
 lazy_static! {
@@ -50,5 +67,9 @@ lazy_static! {
     pub static ref IN_MEMORY_ENGINE_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC: FailedReasonCountVec = auto_flush_from!(
         IN_MEMORY_ENGINE_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_VEC,
         FailedReasonCountVec
+    );
+    pub static ref IN_MEMORY_ENGINE_TRANSFER_LEADER_WARMUP_COUNTER_STATIC: TransferLeaderWarmup = auto_flush_from!(
+        IN_MEMORY_ENGINE_TRANSFER_LEADER_WARMUP_COUNTER_VEC,
+        TransferLeaderWarmup
     );
 }
