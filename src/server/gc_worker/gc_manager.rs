@@ -21,7 +21,7 @@ use super::{
     compaction_filter::is_compaction_filter_allowed,
     config::GcWorkerConfigManager,
     gc_worker::{schedule_gc, GcSafePointProvider, GcTask},
-    Result,
+    Error, ErrorInner, Result,
 };
 use crate::{server::metrics::*, storage::Callback, tikv_util::sys::thread::StdThreadBuildWrapper};
 
@@ -514,14 +514,18 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
             self.check_if_need_rewind(&progress, &mut need_rewind, &mut end);
 
             let controller: Arc<(Mutex<usize>, Condvar)> = Arc::clone(&task_controller);
-            let cb = Box::new(move |_res| {
-                let (lock, cvar) = &*controller;
-                let mut current_tasks = lock.lock().unwrap();
-                *current_tasks -= 1;
-                cvar.notify_one();
-                AUTO_GC_PROCESSED_REGIONS_GAUGE_VEC
-                    .with_label_values(&[PROCESS_TYPE_GC])
-                    .inc();
+            let cb = Box::new(move |res| {
+                if let Err(Error(box ErrorInner::GcWorkerTooBusy)) = res {
+                    // the task is actually not scheduled, so no action here.
+                } else {
+                    let (lock, cvar) = &*controller;
+                    let mut current_tasks = lock.lock().unwrap();
+                    *current_tasks -= 1;
+                    cvar.notify_one();
+                    AUTO_GC_PROCESSED_REGIONS_GAUGE_VEC
+                        .with_label_values(&[PROCESS_TYPE_GC])
+                        .inc();
+                }
             });
             maybe_wait(self.max_concurrent_tasks - 1);
             let mut current_tasks = lock.lock().unwrap();
@@ -1010,5 +1014,36 @@ mod tests {
                 ],
             );
         }
+    }
+
+    #[test]
+    fn test_gc_worker_full() {
+        let safe_points = vec![233];
+        let regions: BTreeMap<_, _> = vec![
+            (b"".to_vec(), b"1".to_vec(), 1),
+            (b"1".to_vec(), b"".to_vec(), 2),
+        ]
+        .into_iter()
+        .map(|(start_key, end_key, id)| {
+            let mut r = metapb::Region::default();
+            r.set_id(id);
+            r.set_start_key(start_key.clone());
+            r.set_end_key(end_key);
+            r.mut_peers().push(new_peer(1, 1));
+            let info = RegionInfo::new(r, StateRole::Leader);
+            (start_key, info)
+        })
+        .collect();
+
+        let mut test_util = GcManagerTestUtil::new(regions);
+
+        for safe_point in &safe_points {
+            test_util.add_next_safe_point(*safe_point);
+        }
+        test_util.gc_manager.as_mut().unwrap().initialize();
+
+        fail::cfg("schedule_gc_full", "return").unwrap();
+        test_util.gc_manager.as_mut().unwrap().gc_a_round().unwrap();
+        test_util.stop();
     }
 }
