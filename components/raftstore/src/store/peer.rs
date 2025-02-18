@@ -4818,33 +4818,30 @@ where
             self.transfer_leader_state.transfer_leader_msg = None;
             return false;
         }
-        if self.is_ready_ack_transfer_leader_msg(ctx) {
-            self.ack_transfer_leader_msg(false);
-            self.transfer_leader_state.transfer_leader_msg = None;
-            true
-        } else {
-            false
-        }
-    }
 
-    /// Check if the transferee is ready to ack the transfer leader message.
-    /// It returns true if any of the following conditions is met:
-    ///
-    /// * The deadline is exceeded.
-    /// * The cache has warmed up and the coprocessor is ready to ack.
-    fn is_ready_ack_transfer_leader_msg<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) -> bool {
         let Some((msg, deadline)) = &self.transfer_leader_state.transfer_leader_msg else {
             // There is no pending transfer leader message, do not ack.
             return false;
         };
 
+        // Ack the message if any of the following conditions is met:
+        //
+        // * The deadline is exceeded.
+        // * The cache has warmed up and coprocessors are ready to ack.
         let is_deadline_exceeded = Instant::now() >= *deadline;
         let is_cop_ready = ctx
             .coprocessor_host
             .pre_ack_transfer_leader(self.region(), msg);
         let is_cache_ready = self.maybe_transfer_leader_cache_warmup(ctx, msg.get_index());
 
-        is_deadline_exceeded || (is_cache_ready && is_cop_ready)
+        let is_ready_ack = is_deadline_exceeded || (is_cache_ready && is_cop_ready);
+        if !is_ready_ack {
+            return false;
+        }
+
+        self.ack_transfer_leader_msg(false);
+        self.transfer_leader_state.transfer_leader_msg = None;
+        true
     }
 
     /// Check if the cache has warmed up (caching raft logs >= low_index).

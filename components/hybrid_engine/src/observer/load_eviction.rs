@@ -21,7 +21,7 @@ use raftstore::{
     },
     store::TransferLeaderContext,
 };
-use tikv_util::{codec::number::decode_var_i64, debug, info, warn};
+use tikv_util::{codec::number::decode_var_i64, debug, warn};
 
 #[derive(Clone)]
 pub struct LoadEvictionObserver {
@@ -294,10 +294,12 @@ impl TransferLeaderObserver for LoadEvictionObserver {
             other => {
                 // For compatibility, return ready if the context is not found
                 // or invalid.
-                info!("ime transfer leader context not found";
-                    "region_id" => ?region.get_id(),
-                    "from" => ?msg.get_from(),
-                    "error" => ?other.err());
+                if other.is_err() {
+                    warn!("ime transfer leader warmup ignored";
+                        "region_id" => ?region.get_id(),
+                        "from" => ?msg.get_from(),
+                        "error" => ?other.err());
+                }
                 return true;
             }
         };

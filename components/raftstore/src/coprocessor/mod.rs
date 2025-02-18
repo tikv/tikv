@@ -618,6 +618,11 @@ impl fmt::Debug for TransferLeaderCustomContext {
 }
 
 pub trait TransferLeaderObserver: Coprocessor {
+    /// Hook to call before proposing transfer leader request.
+    /// The return value is a custom context which will be set as the context
+    /// of the transfer leader request.
+    ///
+    /// Called by a leader.
     fn pre_transfer_leader(
         &self,
         _ctx: &mut ObserverContext<'_>,
@@ -626,6 +631,12 @@ pub trait TransferLeaderObserver: Coprocessor {
         Ok(None)
     }
 
+    /// Hook to call after acknowledging a transfer leader request.
+    /// Implementations can decode the custom context from the transfer leader
+    /// request and initiates necessary preparations.
+    /// Return false to delay acknowledging the transfer leader request.
+    ///
+    /// Called by a leader transferee.
     fn pre_ack_transfer_leader(&self, _: &mut ObserverContext<'_>, _: &eraftpb::Message) -> bool {
         true
     }
