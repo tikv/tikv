@@ -4959,6 +4959,38 @@ def InMemoryEngine() -> RowPanel:
             ),
         ]
     )
+    layout.row(
+        [
+            heatmap_panel(
+                title="Cached Region Coprocessor Requests",
+                description="Tthe number of coprocessor requests of cached regions that is observed during auto load and evict",
+                yaxis=yaxis(format=UNITS.SHORT),
+                metric="tikv_in_memory_engine_auto_load_evict_cached_region_coprocessor_requests_bucket",
+            ),
+            heatmap_panel(
+                title="Cached Region MVCC Amplification",
+                description="Tthe MVCC amplification of cached regions that is observed during auto load and evict",
+                yaxis=yaxis(format=UNITS.SHORT),
+                metric="tikv_in_memory_engine_auto_load_evict_cached_region_mvcc_amplification_bucket",
+            ),
+        ]
+    )
+    layout.row(
+        [
+            heatmap_panel(
+                title="Top Region Coprocessor Requests",
+                description="Tthe number of coprocessor requests of top regions that is observed during auto load and evict",
+                yaxis=yaxis(format=UNITS.SHORT),
+                metric="tikv_in_memory_engine_auto_load_evict_top_region_coprocessor_requests_bucket",
+            ),
+            heatmap_panel(
+                title="Top Region MVCC Amplification",
+                description="Tthe MVCC amplification of top regions that is observed during auto load and evict",
+                yaxis=yaxis(format=UNITS.SHORT),
+                metric="tikv_in_memory_engine_auto_load_evict_top_region_mvcc_amplification_bucket",
+            ),
+        ]
+    )
     return layout.row_panel
 
 
