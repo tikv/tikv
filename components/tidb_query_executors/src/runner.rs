@@ -56,7 +56,7 @@ pub struct BatchExecutorsRunner<SS> {
     /// The offset of the columns need to be outputted. For example, TiDB may
     /// only needs a subset of the columns in the result so that unrelated
     /// columns don't need to be encoded and returned back.
-    output_offsets: Vec<u32>,
+    pub output_offsets: Vec<u32>,
 
     pub config: Arc<EvalConfig>,
 

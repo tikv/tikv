@@ -217,12 +217,15 @@ impl RequestHandler for IndexLookupBatchDagHandler {
                 let mut ctx = EvalContext::new(self.index_runner.config.clone());
                 let schema = self.index_runner.schema();
                 let table_id = self.extra_table_id;
+                // todo: get handle offset from request.
+                let offset = self.index_runner.output_offsets[0] as usize;
                 let tasks = Self::build_extra_tasks_internal(
                     &mut ctx,
                     &schema,
                     &mut results.results,
                     results.record_len,
                     table_id,
+                    offset,
                     locate_key,
                 )?;
 
@@ -289,6 +292,7 @@ impl IndexLookupBatchDagHandler {
         results: &mut Vec<BatchExecuteResult>,
         record_len: usize,
         table_id: i64,
+        offset: usize,
         locate_key: fn(key: &[u8]) -> Option<(Arc<metapb::Region>, u64, u64)>,
     ) -> Result<Vec<ExtraExecutorTask>> {
         let mut extra_tasks = Vec::new();
@@ -305,17 +309,16 @@ impl IndexLookupBatchDagHandler {
             table_prefix.encode_i64(table_id).expect("encode i64 succ");
             table_prefix.extend(RECORD_PREFIX_SEP);
 
-            let offset = 0;
             let mut keys = Vec::with_capacity(record_len);
             for result in results {
                 result.physical_columns[offset].ensure_decoded(
                     ctx,
-                    &schema[offset],
+                    &schema[0],
                     LogicalRows::from_slice(&result.logical_rows),
                 )?;
                 let handle_values = result.physical_columns[offset].decoded().to_int_vec();
                 for handle in handle_values.iter() {
-                    info!("decode handle for extra task"; "handle" => handle);
+                    info!("decode handle for extra task"; "handle" => handle, "offset" => offset);
                     if handle.is_some() {
                         let mut key;
                         let handle = handle.unwrap();
