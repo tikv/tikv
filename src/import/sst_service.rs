@@ -97,7 +97,7 @@ const SUSPEND_REQUEST_MAX_SECS: u64 = // 6h
 fn check_import_resources() -> Result<()> {
     // Check disk space first
     if get_disk_status(0) != DiskUsage::Normal {
-        return Err(Error::ResourceNotEnough("Disk space not enough".to_owned()).into());
+        return Err(Error::DiskSpaceNotEnough.into());
     }
 
     // Check memory usage
