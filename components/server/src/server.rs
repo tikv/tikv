@@ -275,8 +275,7 @@ where
     router: RaftRouter<EK, ER>,
     system: Option<RaftBatchSystem<EK, ER>>,
     resolver: Option<resolve::PdStoreAddrResolver>,
-    snap_mgr: Option<SnapManager>,
-    // Will be filled in `init_servers`.
+    snap_mgr: Option<SnapManager>, // Will be filled in `init_servers`.
     engines: Option<TikvEngines<EK, ER>>,
     kv_statistics: Option<Arc<RocksStatistics>>,
     range_cache_engine_statistics: Option<Arc<RangeCacheMemoryEngineStatistics>>,

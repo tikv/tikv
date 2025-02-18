@@ -311,7 +311,9 @@ pub trait ReadExecutorProvider: Send + Clone + 'static {
     /// StoreMeta
     fn get_executor_and_len(&self, region_id: u64) -> (usize, Option<Self::Executor>);
 
-    fn locate_key(&self, key: &[u8]) -> Option<(Arc<metapb::Region>, u64, u64)>;
+    fn locate_key(&self, _key: &[u8]) -> Option<(Arc<metapb::Region>, u64, u64)> {
+        None
+    }
 }
 
 #[derive(Clone)]

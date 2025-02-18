@@ -587,13 +587,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             }
 
             if self.is_drained(drained, record_all) {
-                let range = if drained == BatchExecIsDrain::Drain {
-                    None
-                } else {
-                    // It's not allowed to stop paging when BatchExecIsDrain::PagingDrain.
-                    self.paging_size
-                        .map(|_| self.out_most_executor.take_scanned_range())
-                };
+                let range = self.get_next_paging_range(drained);
                 let resp = self.build_response(chunks, warnings)?;
                 return Ok((resp, range));
             }

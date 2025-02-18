@@ -12,7 +12,7 @@ use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine};
 use futures::Future;
 use kvproto::{
-    errorpb, metapb,
+    errorpb,
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse},
 };
 use raftstore::{
@@ -563,9 +563,6 @@ where
             );
         }
         (meta.readers.len(), None)
-    }
-    fn locate_key(&self, _key: &[u8]) -> Option<(Arc<metapb::Region>, u64, u64)> {
-        None
     }
 }
 
