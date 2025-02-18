@@ -97,14 +97,14 @@ const SUSPEND_REQUEST_MAX_SECS: u64 = // 6h
 fn check_import_resources() -> Result<()> {
     // Check disk space first
     if get_disk_status(0) != DiskUsage::Normal {
-        return Err(Error::DiskSpaceNotEnough.into());
+        return Err(Error::DiskSpaceNotEnough);
     }
 
     // Check memory usage
     // high water is 90% of the memory limit by default
     let mut usage = 0;
     if memory_usage_reaches_high_water(&mut usage) {
-        return Err(Error::ResourceNotEnough("Memory usage too high".to_owned()).into());
+        return Err(Error::ResourceNotEnough("Memory usage too high".to_owned()));
     }
 
     Ok(())
