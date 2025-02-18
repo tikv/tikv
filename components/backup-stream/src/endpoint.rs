@@ -262,12 +262,12 @@ where
                     }
                     _ => Err(err),
                 })?;
-                meta_cli.pause(&t).await?;
                 let mut last_error = StreamBackupError::new();
                 last_error.set_error_code(code);
                 last_error.set_error_message(msg.clone());
                 last_error.set_store_id(store_id);
                 last_error.set_happen_at(TimeStamp::physical_now());
+                meta_cli.pause_with_err(&t, last_error.clone()).await?;
                 meta_cli.report_last_error(&t, last_error).await?;
 
                 Result::Ok(())
