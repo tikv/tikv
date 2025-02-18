@@ -188,7 +188,6 @@ pub struct IndexLookupBatchDagHandler {
 impl RequestHandler for IndexLookupBatchDagHandler {
     async fn handle_request(&mut self) -> Result<MemoryTraceGuard<Response>> {
         let result = self.internal_handle_request().await;
-        // this can't be cached?
         handle_qe_response(
             result,
             self.index_runner.can_be_cached(),
@@ -229,7 +228,7 @@ impl RequestHandler for IndexLookupBatchDagHandler {
 
                 let index_results = self.index_results.take().unwrap();
                 Ok(Some(ExtraExecutor {
-                    handler: self,
+                    index_runner: self.index_runner,
                     index_results: Some(index_results),
                     tasks,
                 }))
@@ -273,7 +272,6 @@ impl IndexLookupBatchDagHandler {
         &mut self,
     ) -> tidb_query_common::Result<(SelectResponse, Option<IntervalRange>)> {
         let (results, record_len, warnings, range) = self.index_runner.run_request().await?;
-
         let mut ctx = EvalContext::new(self.index_runner.config.clone());
         let schema = self.index_runner.schema();
         if record_len == 0 || schema.len() != 1 {
@@ -382,8 +380,7 @@ impl IndexLookupBatchDagHandler {
                     last_handle = Some(handle);
                     ranges_index_pointers.push(i);
                 } else {
-                    info!("index lookup not locate key"; "key" => ?key,
-    "handle" => handle);
+                    info!("index lookup not locate key"; "key" => ?key, "handle" => handle);
                     index_not_located_task.index_pointers.push(i);
                 }
             }
@@ -401,7 +398,6 @@ impl IndexLookupBatchDagHandler {
             extra_tasks.push(index_not_located_task);
             let build_cost = begin.elapsed().as_secs_f64();
             info!("build extra task range cost";
-                // "start_ts" => start_ts,
                 "build_cost" => build_cost,
                 "extra_task_count" => extra_tasks.len(),
             );
@@ -419,7 +415,6 @@ impl IndexLookupBatchDagHandler {
         range: Option<IntervalRange>,
     ) -> tidb_query_common::Result<(SelectResponse, Option<IntervalRange>)> {
         let chunks = self.index_runner.encode_to_chunks(ctx, false, results)?;
-
         let mut resp = self.index_runner.build_response(chunks, warnings)?;
         if let Some(extra_chunks) = extra_chunks {
             resp.set_extra_chunks(extra_chunks.into());
@@ -434,7 +429,7 @@ pub struct IndexScanResults {
 }
 
 pub struct ExtraExecutor {
-    pub handler: Box<IndexLookupBatchDagHandler>,
+    pub index_runner: tidb_query_executors::runner::BatchExecutorsRunner<Statistics>,
     pub index_results: Option<IndexScanResults>,
     pub tasks: Vec<ExtraExecutorTask>,
 }
@@ -454,10 +449,8 @@ impl ExtraExecutor {
         &mut self,
         results: Vec<BatchExecuteResult>,
     ) -> tidb_query_common::Result<Vec<Chunk>> {
-        let mut ctx = EvalContext::new(self.handler.index_runner.config.clone());
-        self.handler
-            .index_runner
-            .encode_to_chunks(&mut ctx, false, results)
+        let mut ctx = EvalContext::new(self.index_runner.config.clone());
+        self.index_runner.encode_to_chunks(&mut ctx, false, results)
     }
 }
 

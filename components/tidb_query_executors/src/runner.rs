@@ -810,10 +810,7 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
             Err(e) => return Err(e),
             Ok(drained) => drained,
         };
-        let mut record_len = 0;
-        if !result.logical_rows.is_empty() {
-            record_len += result.logical_rows.len();
-        }
+        let record_len = result.logical_rows.len();
         warnings.merge(&mut result.warnings);
         Ok((result, drained, record_len))
     }

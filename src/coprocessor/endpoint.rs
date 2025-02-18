@@ -40,7 +40,7 @@ use tipb::{
     AnalyzeReq, AnalyzeType, ChecksumRequest, ChecksumScanOn, DagRequest, ExecType, SelectResponse,
 };
 use tokio::sync::Semaphore;
-use txn_types::{Key, Lock};
+use txn_types::Lock;
 
 use super::config_manager::CopConfigManager;
 use crate::{
@@ -149,8 +149,8 @@ impl<E: Engine> Endpoint<E> {
         if need_check_locks(req_ctx.context.get_isolation_level()) {
             let begin_instant = Instant::now();
             for range in &req_ctx.ranges {
-                let start_key = Key::from_raw_maybe_unbounded(range.get_start());
-                let end_key = Key::from_raw_maybe_unbounded(range.get_end());
+                let start_key = txn_types::Key::from_raw_maybe_unbounded(range.get_start());
+                let end_key = txn_types::Key::from_raw_maybe_unbounded(range.get_end());
                 self.concurrency_manager
                     .read_range_check(start_key.as_ref(), end_key.as_ref(), |key, lock| {
                         Lock::check_ts_conflict(
@@ -684,7 +684,6 @@ impl<E: Engine> Endpoint<E> {
         start_ts: TimeStamp,
     ) -> impl Future<Output = Result<coppb::Response>> {
         let mut sel = SelectResponse::default();
-
         let mut result_futures = Vec::new();
         let mut result_futures_batch = Vec::new();
         let mut keep_index = Vec::new();
@@ -723,7 +722,6 @@ impl<E: Engine> Endpoint<E> {
 
         async move {
             if result_futures.len() == 0 {
-                // this may print many log
                 info!("no extra task need to do"; "keep_index.len" => keep_index.len());
                 return Ok(resp);
             }
@@ -759,6 +757,7 @@ impl<E: Engine> Endpoint<E> {
                 "total_extra_task" => total_extra_task,
             );
             sel.set_extra_chunks(extra_chunks);
+            resp.set_can_be_cached(false); // this can't be cached?
             if keep_index.len() == 0 {
                 info!("no need keep index data since all have extra task");
                 sel.clear_chunks();
@@ -767,6 +766,7 @@ impl<E: Engine> Endpoint<E> {
                 info!("some index data need keep"; "keep_index_idxs" => ?keep_index);
                 let mut index_offset = 0;
                 let mut index_results = extra_executor.index_results.take().unwrap();
+                // todo: optimize following logic.
                 for result in index_results.results.iter_mut() {
                     let mut new_logical_rows = Vec::new();
                     for (i, row) in result.logical_rows.iter().enumerate() {
@@ -1530,12 +1530,12 @@ mod tests {
             .map(|config| {
                 let engine = Arc::new(Mutex::new(engine.clone()));
                 YatpPoolBuilder::new(DefaultTicker::default())
-                        .config(config)
-                        .name_prefix("coprocessor_endpoint_test_full")
-                        .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
-                        // Safety: we call `set_` and `destroy_` with the same engine type.
-                        .before_stop(|| unsafe { destroy_tls_engine::<RocksEngine>() })
-                        .build_future_pool()
+                    .config(config)
+                    .name_prefix("coprocessor_endpoint_test_full")
+                    .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
+                    // Safety: we call `set_` and `destroy_` with the same engine type.
+                    .before_stop(|| unsafe { destroy_tls_engine::<RocksEngine>() })
+                    .build_future_pool()
             })
             .collect::<Vec<_>>(),
         );

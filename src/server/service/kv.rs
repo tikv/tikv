@@ -1316,7 +1316,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     let begin_instant = Instant::now();
                     let resp = future::ok(batch_commands_response::Response::default());
                     response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::invalid, String::default(), ResourcePriority::unknown);
-                }
+                },
                 Some(batch_commands_request::request::Cmd::Get(req)) => {
                     handle_cluster_id_mismatch!(cluster_id, req);
                     let resource_control_ctx = req.get_context().get_resource_control_context();
@@ -1341,7 +1341,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                             .map_err(|e| {GRPC_MSG_FAIL_COUNTER.kv_get.inc(); e});
                         response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::kv_get, source, resource_group_priority);
                     }
-                }
+                },
                 Some(batch_commands_request::request::Cmd::RawGet(req)) => {
                     handle_cluster_id_mismatch!(cluster_id, req);
                     let resource_control_ctx = req.get_context().get_resource_control_context();
@@ -1365,7 +1365,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                             .map_err(|e| {GRPC_MSG_FAIL_COUNTER.raw_get.inc(); e});
                         response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::raw_get, source, resource_group_priority);
                     }
-                }
+                },
                 Some(batch_commands_request::request::Cmd::Coprocessor(req)) => {
                     handle_cluster_id_mismatch!(cluster_id, req);
                     let resource_control_ctx = req.get_context().get_resource_control_context();
@@ -1385,7 +1385,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                         })
                         .map_err(|e| {GRPC_MSG_FAIL_COUNTER.coprocessor.inc(); e});
                     response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::coprocessor, source, resource_group_priority);
-                }
+                },
                 Some(batch_commands_request::request::Cmd::GetHealthFeedback(req)) => {
                     handle_cluster_id_mismatch!(cluster_id, req);
                     let begin_instant = Instant::now();
@@ -1394,7 +1394,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     // the batch response. See `HealthFeedbackAttacher::attach_if_needed`.
                     let resp = std::future::ready(Ok(GetHealthFeedbackResponse::default()).map(oneof!(batch_commands_response::response::Cmd::GetHealthFeedback)));
                     response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::get_health_feedback, source, ResourcePriority::unknown);
-                }
+                },
                 Some(batch_commands_request::request::Cmd::Empty(req)) => {
                     let begin_instant = Instant::now();
                     let resp = future_handle_empty(req)
@@ -2518,7 +2518,6 @@ pub struct MeasuredSingleResponse {
     pub measure: GrpcRequestDuration,
     pub server_err: Option<Error>,
 }
-
 impl MeasuredSingleResponse {
     pub fn new<T>(id: u64, resp: T, measure: GrpcRequestDuration, server_err: Option<Error>) -> Self
     where
@@ -2540,7 +2539,6 @@ pub struct MeasuredBatchResponse {
     pub measures: Vec<GrpcRequestDuration>,
     pub server_err: Option<Error>,
 }
-
 impl Default for MeasuredBatchResponse {
     fn default() -> Self {
         MeasuredBatchResponse {
