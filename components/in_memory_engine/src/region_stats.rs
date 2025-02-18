@@ -21,8 +21,15 @@ use tikv_util::{config::VersionTrack, info, worker::Scheduler};
 use tokio::sync::mpsc;
 
 use crate::{
-    memory_controller::MemoryController, region_manager::CopRequestsSma, BackgroundTask,
-    InMemoryEngineConfig,
+    memory_controller::MemoryController,
+    metrics::{
+        IN_MEMORY_ENGINE_AUTO_LOAD_EVICT_CACHED_REGION_COP_REQ,
+        IN_MEMORY_ENGINE_AUTO_LOAD_EVICT_CACHED_REGION_MVCC_AMP,
+        IN_MEMORY_ENGINE_AUTO_LOAD_EVICT_TOP_REGION_COP_REQ,
+        IN_MEMORY_ENGINE_AUTO_LOAD_EVICT_TOP_REGION_MVCC_AMP,
+    },
+    region_manager::CopRequestsSma,
+    BackgroundTask, InMemoryEngineConfig,
 };
 
 /// Do not evict a region if has been cached for less than this duration.
@@ -184,32 +191,36 @@ impl RegionStatsManager {
             for region in &curr_top_regions {
                 let _ = region_loaded_map.insert(region.0.id, Instant::now());
                 if !cached_regions.contains_key(&region.0.id) {
+                    IN_MEMORY_ENGINE_AUTO_LOAD_EVICT_TOP_REGION_COP_REQ
+                        .observe(region.1.query_stats.coprocessor as f64);
+                    IN_MEMORY_ENGINE_AUTO_LOAD_EVICT_TOP_REGION_MVCC_AMP
+                        .observe(region.1.cop_detail.mvcc_amplification() as f64);
                     regions_to_load.push(region.0.clone());
                 }
             }
             regions_to_load
         };
 
-        {
-            // TODO(SpadeA): remove it after it's stable
-            let debug: Vec<_> = cached_region_stats
-                .iter()
-                .map(|crs| {
-                    format!(
-                        "region_id={}, cop={}, avg_cop={}, cop_detail={:?}, mvcc_amplification={}",
-                        crs.region.id,
-                        crs.stat.query_stats.coprocessor,
-                        crs.sma_cop_requests_avg,
-                        crs.stat.cop_detail,
-                        crs.stat.cop_detail.mvcc_amplification(),
-                    )
-                })
-                .collect();
-            info!(
-                "ime collect regions activities";
-                "regions" => ?debug,
-            );
+        let mut debug = Vec::with_capacity(cached_region_stats.len());
+        for crs in &cached_region_stats {
+            debug.push(format!(
+                "region_id={}, cop={}, avg_cop={}, cop_detail={:?}, mvcc_amplification={}",
+                crs.region.id,
+                crs.stat.query_stats.coprocessor,
+                crs.sma_cop_requests_avg,
+                crs.stat.cop_detail,
+                crs.stat.cop_detail.mvcc_amplification(),
+            ));
+            IN_MEMORY_ENGINE_AUTO_LOAD_EVICT_CACHED_REGION_COP_REQ
+                .observe(crs.stat.query_stats.coprocessor as f64);
+            IN_MEMORY_ENGINE_AUTO_LOAD_EVICT_CACHED_REGION_MVCC_AMP
+                .observe(crs.stat.cop_detail.mvcc_amplification() as f64);
         }
+        // TODO(SpadeA): remove it after it's stable
+        info!(
+            "ime collect regions activities";
+            "regions" => ?debug,
+        );
 
         let has_reached_stop_load = memory_controller.reached_stop_load_threshold();
         let mut regions_loaded = self.region_loaded_at.write().unwrap();

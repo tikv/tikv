@@ -19,7 +19,7 @@ use engine_traits::{CacheRegion, EvictReason, FailedReason, OnEvictFinishedCallb
 use futures::executor::block_on;
 use parking_lot::RwLock;
 use strum::EnumCount;
-use tikv_util::{info, smoother::Smoother, time::Instant, warn};
+use tikv_util::{debug, info, smoother::Smoother, time::Instant, warn};
 
 use crate::{metrics::observe_eviction_duration, read::RegionCacheSnapshotMeta};
 
@@ -853,23 +853,23 @@ impl RegionManager {
         evict_reason: EvictReason,
         mut on_evict_finished: Option<OnEvictFinishedCallback>,
     ) -> Vec<CacheRegion> {
-        info!(
-            "ime try to evict region";
-            "evict_region" => ?evict_region,
-            "reason" => ?evict_reason,
-        );
-
         let mut regions_map = self.regions_map.write();
         let mut evict_ids = vec![];
         regions_map.on_all_overlapped_regions(evict_region, |meta| {
             evict_ids.push(meta.region.id);
         });
         if evict_ids.is_empty() {
-            info!("ime evict a region that is not cached";
+            debug!("ime evict a region that is not cached";
                 "reason" => ?evict_reason,
                 "region" => ?evict_region);
             return vec![];
         }
+
+        info!(
+            "ime try to evict region";
+            "evict_region" => ?evict_region,
+            "reason" => ?evict_reason,
+        );
 
         let mut deletable_regions = vec![];
         for rid in evict_ids {
