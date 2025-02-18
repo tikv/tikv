@@ -10,12 +10,8 @@ use std::{
     time::Duration,
 };
 
-<<<<<<< HEAD
 use engine_rocks::RocksEngine;
-use engine_traits::{Peekable, CF_RAFT};
-=======
 use engine_traits::{Peekable, CF_DEFAULT, CF_RAFT};
->>>>>>> 706f0a0888 (raftstore: do not override min_matched index with min_committed index (#18204))
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
     kvrpcpb::{PrewriteRequestPessimisticAction::*, *},
