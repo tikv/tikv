@@ -338,9 +338,6 @@ fn test_download_sst() {
         .mut_sst()
         .mut_range()
         .set_end(vec![sst_range.1 + 1]);
-
-    // let result = import.download(&download).unwrap();
-
     let result = import.download(&download).unwrap();
     assert!(result.get_is_empty());
 
