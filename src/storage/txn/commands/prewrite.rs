@@ -537,10 +537,9 @@ impl<K: PrewriteKind> Prewriter<K> {
         self.check_max_ts_synced(&snapshot)?;
 
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
-        let mut reader = ReaderWithStats::new(
-            SnapshotReader::new_with_ctx(self.start_ts, snapshot, &self.ctx),
-            context.statistics,
-        );
+        let mut snapshot_reader = SnapshotReader::new_with_ctx(self.start_ts, snapshot, &self.ctx);
+        snapshot_reader.setup_with_hint_items(&mut self.mutations, |m| m.key());
+        let mut reader = ReaderWithStats::new(snapshot_reader, context.statistics);
         // Set extra op here for getting the write record when check write conflict in
         // prewrite.
 
@@ -616,7 +615,6 @@ impl<K: PrewriteKind> Prewriter<K> {
 
         // If there are other errors, return other error prior to `AssertionFailed`.
         let mut assertion_failure = None;
-
         for m in mem::take(&mut self.mutations) {
             let pessimistic_action = m.pessimistic_action();
             let expected_for_update_ts = m.pessimistic_expected_for_update_ts();
@@ -885,6 +883,7 @@ trait MutationLock {
     fn pessimistic_action(&self) -> PrewriteRequestPessimisticAction;
     fn pessimistic_expected_for_update_ts(&self) -> Option<TimeStamp>;
     fn into_mutation(self) -> Mutation;
+    fn key(&self) -> &Key;
 }
 
 impl MutationLock for Mutation {
@@ -898,6 +897,10 @@ impl MutationLock for Mutation {
 
     fn into_mutation(self) -> Mutation {
         self
+    }
+
+    fn key(&self) -> &Key {
+        self.key()
     }
 }
 
@@ -925,6 +928,10 @@ impl MutationLock for PessimisticMutation {
 
     fn into_mutation(self) -> Mutation {
         self.mutation
+    }
+
+    fn key(&self) -> &Key {
+        self.mutation.key()
     }
 }
 
@@ -1200,7 +1207,7 @@ mod tests {
         .unwrap();
         let d = perf.delta();
         assert_eq!(1, statistic.write.seek);
-        assert_eq!(d.internal_delete_skipped_count, 0);
+        assert_eq!(d.internal_delete_skipped_count, 40);
     }
 
     #[test]
