@@ -934,6 +934,8 @@ where
     /// leader, a campaign is triggered for those regions.
     /// Once the parent region has valid leader, this list will be cleared.
     pub uncampaigned_new_regions: Option<Vec<u64>>,
+
+    tiflash_stores: HashSet<u64>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -1086,6 +1088,7 @@ where
             busy_on_apply: Some(false),
             last_leader_committed_idx: None,
             uncampaigned_new_regions: None,
+            tiflash_stores: HashSet::default(),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -1102,6 +1105,13 @@ where
     /// Sets commit group to the peer.
     pub fn init_replication_mode(&mut self, state: &mut GlobalReplicationState) {
         debug!("init commit group"; "state" => ?state, "region_id" => self.region_id, "peer_id" => self.peer.id);
+        for (store, labels) in state.group.labels.iter() {
+            for store_label in labels {
+                if store_label.get_value().to_lowercase() == "tiflash" {
+                    self.tiflash_stores.insert(*store);
+                }
+            }
+        }
         if self.is_initialized() {
             let version = state.status().get_dr_auto_sync().state_id;
             let gb = state.calculate_commit_group(version, self.get_store().region().get_peers());
@@ -1142,6 +1152,13 @@ where
                     _ => (true, true),
                 }
             };
+        for (store, labels) in (*guard).group.labels.iter() {
+            for store_label in labels {
+                if store_label.get_value().to_lowercase() == "tiflash" {
+                    self.tiflash_stores.insert(*store);
+                }
+            }
+        }
         drop(guard);
         self.switch_group_commit(enable_group_commit, calculate_group_id, state);
     }
@@ -2226,7 +2243,8 @@ where
             // Learners like TiFlash are ignored, because they may be tombstoned in earlier
             // stage of the unsafe recovery process, so that forced leader
             // cannot append logs to them.
-            if failed_stores.contains(&peer.get_store_id()) || peer.get_role() == PeerRole::Learner
+            if failed_stores.contains(&peer.get_store_id())
+                || self.tiflash_stores.contains(&peer.get_store_id())
             {
                 continue;
             }

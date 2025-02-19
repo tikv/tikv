@@ -1471,6 +1471,12 @@ fn test_force_leader_forward_commit_idx_ignoring_learners() {
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 4);
 
+    cluster.add_label(nodes[3], "engine", "tiflash");
+    for node_id in nodes.iter() {
+        cluster.stop_node(*node_id);
+        cluster.run_node(*node_id).unwrap();
+    }
+
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
     let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
@@ -1505,8 +1511,6 @@ fn test_force_leader_forward_commit_idx_ignoring_learners() {
     // Makes the group lose its quorum.
     cluster.stop_node(nodes[0]);
     cluster.stop_node(nodes[1]);
-    // Stop the learner to prevent the force leader to replicate logs to it.
-    cluster.stop_node(nodes[3]);
 
     let put = new_put_cmd(b"k2", b"v2");
     let req = new_request(
@@ -1532,6 +1536,8 @@ fn test_force_leader_forward_commit_idx_ignoring_learners() {
     // restart to clean lease
     cluster.stop_node(nodes[2]);
     cluster.run_node(nodes[2]).unwrap();
+    // Stop the learner to prevent the force leader to replicate logs to it.
+    cluster.stop_node(nodes[3]);
     // Does not mark the learner as failed, while the leader can still forward the
     // commit index.
     cluster.must_enter_force_leader(region.get_id(), nodes[2], vec![nodes[1], nodes[0]]);

@@ -14,7 +14,7 @@ use tikv_util::info;
 /// label value will be mapped to the same group ID.
 #[derive(Default, Debug)]
 pub struct StoreGroup {
-    labels: HashMap<u64, Vec<metapb::StoreLabel>>,
+    pub labels: HashMap<u64, Vec<metapb::StoreLabel>>,
     label_ids: HashMap<String, u64>,
     stores: HashMap<u64, u64>,
     label_key: String,
