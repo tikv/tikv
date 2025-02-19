@@ -1462,3 +1462,84 @@ fn test_unsafe_recovery_during_merge() {
     }
     assert!(demoted);
 }
+
+#[test_case(test_raftstore::new_node_cluster)]
+fn test_force_leader_forward_commit_idx_ignoring_learners() {
+    let mut cluster = new_cluster(0, 4);
+    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
+    cluster.run();
+    let nodes = Vec::from_iter(cluster.get_node_ids());
+    assert_eq!(nodes.len(), 4);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
+
+    // Make peer on node 4 a learner.
+    let peer_on_store4 = find_peer(&region, nodes[3]).unwrap().to_owned();
+    // Remove the peer on node 4.
+    pd_client.must_remove_peer(region.get_id(), peer_on_store4.clone());
+    // Add the peer on node 4 as a learner.
+    let mut learner_on_store4 = new_peer(nodes[3], pd_client.alloc_id().unwrap());
+    learner_on_store4.set_role(metapb::PeerRole::Learner);
+    pd_client.must_add_peer(region.get_id(), learner_on_store4.clone());
+
+    // Makes the leadership definite.
+    let store2_peer = find_peer(&region, nodes[2]).unwrap().to_owned();
+    cluster.must_transfer_leader(region.get_id(), store2_peer);
+    let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
+
+    cluster.must_put(b"k1", b"v1");
+    assert_eq!(cluster.must_get(b"k1"), Some(b"v1".to_vec()));
+
+    // Get the current commit index and last index.
+    let commit_index = cluster
+        .raft_local_state(region.get_id(), nodes[2])
+        .get_hard_state()
+        .commit;
+    let last_index = cluster
+        .raft_local_state(region.get_id(), nodes[2])
+        .last_index;
+    assert_eq!(commit_index, last_index);
+
+    // Makes the group lose its quorum.
+    cluster.stop_node(nodes[0]);
+    cluster.stop_node(nodes[1]);
+    // Stop the learner to prevent the force leader to replicate logs to it.
+    cluster.stop_node(nodes[3]);
+
+    let put = new_put_cmd(b"k2", b"v2");
+    let req = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![put],
+        true,
+    );
+    // marjority is lost, can't propose command successfully.
+    cluster
+        .call_command_on_leader(req, Duration::from_millis(10))
+        .unwrap_err();
+
+    let commit_index = cluster
+        .raft_local_state(region.get_id(), nodes[2])
+        .get_hard_state()
+        .commit;
+    let last_index = cluster
+        .raft_local_state(region.get_id(), nodes[2])
+        .last_index;
+    more_asserts::assert_gt!(last_index, commit_index);
+
+    // restart to clean lease
+    cluster.stop_node(nodes[2]);
+    cluster.run_node(nodes[2]).unwrap();
+    // Does not mark the learner as failed, while the leader can still forward the
+    // commit index.
+    cluster.must_enter_force_leader(region.get_id(), nodes[2], vec![nodes[1], nodes[0]]);
+
+    // The commit index should be forwarded.
+    let new_commit_index = cluster
+        .raft_local_state(region.get_id(), nodes[2])
+        .get_hard_state()
+        .commit;
+    more_asserts::assert_gt!(new_commit_index, last_index);
+}
