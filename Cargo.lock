@@ -1092,12 +1092,21 @@ name = "concurrency_manager"
 version = "0.0.1"
 dependencies = [
  "criterion",
+ "crossbeam",
  "crossbeam-skiplist",
  "fail",
  "futures 0.3.15",
  "kvproto",
+ "lazy_static",
+ "online_config",
  "parking_lot 0.12.1",
+ "pd_client",
+ "prometheus",
  "rand 0.8.5",
+ "serde",
+ "slog",
+ "slog-global",
+ "thiserror",
  "tikv_alloc",
  "tikv_util",
  "tokio",
@@ -2992,7 +3001,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-7.5#268d20d61b8bf097f064a87a9af3cb91725ff179"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-7.5#fa1a8745a1475010053728922189ad47f25c5122"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -3011,7 +3020,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-7.5#268d20d61b8bf097f064a87a9af3cb91725ff179"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-7.5#fa1a8745a1475010053728922189ad47f25c5122"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4045,9 +4054,9 @@ checksum = "ac74c624d6b2d21f425f752262f42188365d7b8ff1aff74c82e45136510a4857"
 
 [[package]]
 name = "prettyplease"
-version = "0.1.21"
+version = "0.1.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c142c0e46b57171fe0c528bee8c5b7569e80f0c17e377cd0e30ea57dbc11bb51"
+checksum = "6c8646e95016a7a6c4adea95bafa8a16baab64b583356217f2c85db4a39d9a86"
 dependencies = [
  "proc-macro2",
  "syn 1.0.103",
@@ -4183,7 +4192,7 @@ dependencies = [
  "log",
  "multimap",
  "petgraph",
- "prettyplease 0.1.21",
+ "prettyplease 0.1.25",
  "prost",
  "prost-types",
  "regex",
@@ -4920,7 +4929,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-7.5#268d20d61b8bf097f064a87a9af3cb91725ff179"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-7.5#fa1a8745a1475010053728922189ad47f25c5122"
 dependencies = [
  "libc 0.2.146",
  "librocksdb_sys",
@@ -6524,7 +6533,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "7.5.4"
+version = "7.5.5"
 dependencies = [
  "anyhow",
  "api_version",
@@ -7104,7 +7113,7 @@ version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48c6fd7c2581e36d63388a9e04c350c21beb7a8b059580b2e93993c526899ddc"
 dependencies = [
- "prettyplease 0.1.21",
+ "prettyplease 0.1.25",
  "proc-macro2",
  "prost-build",
  "quote",

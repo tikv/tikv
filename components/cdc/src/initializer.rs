@@ -110,12 +110,24 @@ impl<E: KvEngine> Initializer<E> {
         fail_point!("cdc_before_initialize");
         let _permit = concurrency_semaphore.acquire().await;
 
+        let region_id = self.region_id;
+        let downstream_id = self.downstream_id;
+        let observe_id = self.observe_id;
+        // when there are a lot of pending incremental scan tasks, they may be stopped,
+        // check the state here to accelerate tasks cancel process.
+        if self.downstream_state.load() == DownstreamState::Stopped {
+            info!("cdc async incremental scan canceled before start";
+                "region_id" => region_id,
+                "downstream_id" => ?downstream_id,
+                "observe_id" => ?observe_id,
+                "conn_id" => ?self.conn_id);
+            return Err(Error::Other(box_err!("scan canceled")));
+        }
+
         // To avoid holding too many snapshots and holding them too long,
         // we need to acquire scan concurrency permit before taking snapshot.
         let sched = self.sched.clone();
-        let region_id = self.region_id;
         let region_epoch = self.region_epoch.clone();
-        let downstream_id = self.downstream_id;
         let downstream_state = self.downstream_state.clone();
         let (cb, fut) = tikv_util::future::paired_future_callback();
         let sink = self.sink.clone();
@@ -350,8 +362,8 @@ impl<E: KvEngine> Initializer<E> {
                         if self.observed_range.contains_encoded_key(key) {
                             read_old_value(entry.old_value(), &mut stats.old_value)?;
                             total_bytes += entry.size();
-                            entries.push(Some(KvEntry::TxnEntry(entry)));
                         }
+                        entries.push(Some(KvEntry::TxnEntry(entry)));
                     }
                     None => {
                         entries.push(None);
@@ -436,6 +448,7 @@ impl<E: KvEngine> Initializer<E> {
             self.request_id,
             entries,
             self.filter_loop,
+            &self.observed_range,
         )?;
         if done {
             let (cb, fut) = tikv_util::future::paired_future_callback();
@@ -741,14 +754,12 @@ mod tests {
             total_bytes += v.len();
             let ts = TimeStamp::new(i as _);
             must_prewrite_put(&mut engine, k, v, k, ts);
-            if i < 90 {
-                let txn_locks = expected_locks.entry(ts).or_insert_with(|| {
-                    let mut txn_locks = TxnLocks::default();
-                    txn_locks.sample_lock = Some(k.to_vec().into());
-                    txn_locks
-                });
-                txn_locks.lock_count += 1;
-            }
+            let txn_locks = expected_locks.entry(ts).or_insert_with(|| {
+                let mut txn_locks = TxnLocks::default();
+                txn_locks.sample_lock = Some(k.to_vec().into());
+                txn_locks
+            });
+            txn_locks.lock_count += 1;
         }
 
         let region = Region::default();
