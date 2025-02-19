@@ -2,7 +2,7 @@
 
 // #[PerformanceCriticalPath]
 use kvproto::kvrpcpb::ExtraOp;
-use tikv_kv::{Modify, ScanMode};
+use tikv_kv::Modify;
 use txn_types::{insert_old_value_if_resolved, Key, OldValues, TimeStamp, TxnExtra};
 
 use crate::storage::{
@@ -90,11 +90,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
         let mut txn = MvccTxn::new(start_ts, context.concurrency_manager);
 
         let mut snapshot_reader = SnapshotReader::new_with_ctx(start_ts, snapshot, &ctx);
-        if keys.len() > 1 {
-            keys.sort();
-            snapshot_reader.set_scan_mode(ScanMode::Forward);
-            snapshot_reader.set_lower_bound(keys.first().unwrap().0.clone());
-        }
+        snapshot_reader.setup_with_hint_items(&mut keys, |k| &k.0);
         let mut reader = ReaderWithStats::new(snapshot_reader, context.statistics);
 
         let total_keys = keys.len();

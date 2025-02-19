@@ -1,7 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use tikv_kv::ScanMode;
 use txn_types::{Key, TimeStamp};
 
 use crate::storage::{
@@ -53,11 +52,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Rollback {
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
 
         let mut snapshot_reader = SnapshotReader::new_with_ctx(self.start_ts, snapshot, &self.ctx);
-        if self.keys.len() > 1 {
-            self.keys.sort();
-            snapshot_reader.set_scan_mode(ScanMode::Forward);
-            snapshot_reader.set_lower_bound(self.keys.first().unwrap().clone());
-        }
+        snapshot_reader.setup_with_hint_items(&mut self.keys, |k| k);
         let mut reader = ReaderWithStats::new(snapshot_reader, context.statistics);
 
         let rows = self.keys.len();

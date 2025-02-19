@@ -4,7 +4,6 @@ use std::mem;
 
 // #[PerformanceCriticalPath]
 use kvproto::kvrpcpb::{AssertionLevel, ExtraOp, PrewriteRequestPessimisticAction};
-use tikv_kv::ScanMode;
 use txn_types::{insert_old_value_if_resolved, Mutation, OldValues, TimeStamp, TxnExtra};
 
 use crate::storage::{
@@ -79,11 +78,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Flush {
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
 
         let mut snapshot_reader = SnapshotReader::new_with_ctx(self.start_ts, snapshot, &self.ctx);
-        if self.mutations.len() > 1 {
-            self.mutations.sort_by(|a, b| a.key().cmp(b.key()));
-            snapshot_reader.set_scan_mode(ScanMode::Forward);
-            snapshot_reader.set_lower_bound(self.mutations.first().unwrap().key().clone());
-        }
+        snapshot_reader.setup_with_hint_items(&mut self.mutations, |m| m.key());
         let mut reader = ReaderWithStats::new(snapshot_reader, context.statistics);
         let mut old_values = Default::default();
 

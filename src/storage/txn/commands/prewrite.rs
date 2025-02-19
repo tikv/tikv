@@ -13,7 +13,7 @@ use kvproto::kvrpcpb::{
     AssertionLevel, ExtraOp, PrewriteRequestForUpdateTsConstraint,
     PrewriteRequestPessimisticAction::{self, *},
 };
-use tikv_kv::{ScanMode, SnapshotExt};
+use tikv_kv::SnapshotExt;
 use txn_types::{
     insert_old_value_if_resolved, Key, Mutation, OldValues, TimeStamp, TxnExtra, Write, WriteType,
 };
@@ -538,12 +538,7 @@ impl<K: PrewriteKind> Prewriter<K> {
 
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
         let mut snapshot_reader = SnapshotReader::new_with_ctx(self.start_ts, snapshot, &self.ctx);
-
-        if self.mutations.len() > 1 {
-            self.mutations.sort_by(|a, b| a.key().cmp(b.key()));
-            snapshot_reader.set_scan_mode(ScanMode::Forward);
-            snapshot_reader.set_lower_bound(self.mutations.first().unwrap().key().clone());
-        };
+        snapshot_reader.setup_with_hint_items(&mut self.mutations, |m| m.key());
         let mut reader = ReaderWithStats::new(snapshot_reader, context.statistics);
         // Set extra op here for getting the write record when check write conflict in
         // prewrite.

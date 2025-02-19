@@ -2,7 +2,6 @@
 
 // #[PerformanceCriticalPath]
 use collections::HashMap;
-use tikv_kv::ScanMode;
 use txn_types::{Key, Lock, TimeStamp};
 
 use crate::storage::{
@@ -86,12 +85,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
         let mut txn = MvccTxn::new(TimeStamp::zero(), context.concurrency_manager);
 
         let mut snapshot_reader = SnapshotReader::new_with_ctx(TimeStamp::zero(), snapshot, &ctx);
-        if key_locks.len() > 1 {
-            key_locks.sort_by(|a, b| a.0.cmp(&b.0));
-            snapshot_reader.set_scan_mode(ScanMode::Forward);
-            snapshot_reader.set_lower_bound(key_locks.first().unwrap().0.clone());
-        }
-
+        snapshot_reader.setup_with_hint_items(&mut key_locks, |k| &k.0);
         let mut reader = ReaderWithStats::new(snapshot_reader, context.statistics);
 
         let mut scan_key = self.scan_key.take();

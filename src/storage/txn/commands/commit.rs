@@ -1,7 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use tikv_kv::ScanMode;
 use txn_types::Key;
 
 use crate::storage::{
@@ -58,11 +57,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Commit {
         let mut txn = MvccTxn::new(self.lock_ts, context.concurrency_manager);
         let mut keys = self.keys;
         let mut snapshot_reader = SnapshotReader::new_with_ctx(self.lock_ts, snapshot, &self.ctx);
-        if keys.len() > 1 {
-            keys.sort();
-            snapshot_reader.set_scan_mode(ScanMode::Forward);
-            snapshot_reader.set_lower_bound(keys.first().unwrap().clone());
-        };
+        snapshot_reader.setup_with_hint_items(&mut keys, |k| k);
         let mut reader = ReaderWithStats::new(snapshot_reader, context.statistics);
 
         let rows = keys.len();

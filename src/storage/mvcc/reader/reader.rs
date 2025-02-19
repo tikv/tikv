@@ -124,13 +124,14 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
     }
 
     #[inline(always)]
-    pub fn set_scan_mode(&mut self, scan_mode: ScanMode) {
-        self.reader.scan_mode = Some(scan_mode);
-    }
-
-    #[inline(always)]
-    pub fn set_lower_bound(&mut self, lower: Key) {
-        self.reader.set_range(Some(lower), None);
+    pub fn setup_with_hint_items<T>(&mut self, items: &mut Vec<T>, key_of: fn(&T) -> &Key) {
+        // enable scan mode if there are multiple items, so that we don't need to seek for every key.
+        if items.len() > 1 {
+            items.sort_by(|a, b| key_of(a).cmp(key_of(b)));
+            self.reader.scan_mode = Some(ScanMode::Forward);
+            self.reader
+                .set_range(Some(key_of(items.first().unwrap()).clone()), None);
+        }
     }
 }
 
