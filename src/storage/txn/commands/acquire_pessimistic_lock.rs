@@ -86,12 +86,12 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
             ))));
         }
 
-        let (start_ts, ctx, keys) = (self.start_ts, self.ctx, self.keys);
+        let (start_ts, ctx, mut keys) = (self.start_ts, self.ctx, self.keys);
         let mut txn = MvccTxn::new(start_ts, context.concurrency_manager);
-        let mut reader = ReaderWithStats::new(
-            SnapshotReader::new_with_ctx(start_ts, snapshot, &ctx),
-            context.statistics,
-        );
+
+        let mut snapshot_reader = SnapshotReader::new_with_ctx(start_ts, snapshot, &ctx);
+        snapshot_reader.setup_with_hint_items(&mut keys, |k| &k.0);
+        let mut reader = ReaderWithStats::new(snapshot_reader, context.statistics);
 
         let total_keys = keys.len();
         let mut res = PessimisticLockResults::with_capacity(total_keys);

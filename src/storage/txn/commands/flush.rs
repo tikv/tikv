@@ -2,8 +2,8 @@
 
 use std::mem;
 
-use kvproto::kvrpcpb::{AssertionLevel, ExtraOp, PrewriteRequestPessimisticAction};
 // #[PerformanceCriticalPath]
+use kvproto::kvrpcpb::{AssertionLevel, ExtraOp, PrewriteRequestPessimisticAction};
 use txn_types::{insert_old_value_if_resolved, Mutation, OldValues, TimeStamp, TxnExtra};
 
 use crate::storage::{
@@ -76,10 +76,10 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Flush {
         }
         let rows = self.mutations.len();
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
-        let mut reader = ReaderWithStats::new(
-            SnapshotReader::new_with_ctx(self.start_ts, snapshot, &self.ctx),
-            context.statistics,
-        );
+
+        let mut snapshot_reader = SnapshotReader::new_with_ctx(self.start_ts, snapshot, &self.ctx);
+        snapshot_reader.setup_with_hint_items(&mut self.mutations, |m| m.key());
+        let mut reader = ReaderWithStats::new(snapshot_reader, context.statistics);
         let mut old_values = Default::default();
 
         let res = self.flush(&mut txn, &mut reader, &mut old_values, context.extra_op);
