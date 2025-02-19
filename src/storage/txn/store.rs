@@ -706,7 +706,7 @@ mod tests {
 
             // do prewrite.
             {
-                let cm = ConcurrencyManager::new(START_TS);
+                let cm = ConcurrencyManager::new_for_test(START_TS);
                 let mut txn = MvccTxn::new(START_TS, cm);
                 let mut reader = SnapshotReader::new(START_TS, self.snapshot.clone(), true);
                 for key in &self.keys {
@@ -740,7 +740,7 @@ mod tests {
             self.refresh_snapshot();
             // do commit
             {
-                let cm = ConcurrencyManager::new(START_TS);
+                let cm = ConcurrencyManager::new_for_test(START_TS);
                 let mut txn = MvccTxn::new(START_TS, cm);
                 let mut reader = SnapshotReader::new(START_TS, self.snapshot.clone(), true);
                 for key in &self.keys {
