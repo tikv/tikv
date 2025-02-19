@@ -194,7 +194,7 @@ impl RegionStatsManager {
                     IN_MEMORY_ENGINE_AUTO_LOAD_EVICT_TOP_REGION_COP_REQ
                         .observe(region.1.query_stats.coprocessor as f64);
                     IN_MEMORY_ENGINE_AUTO_LOAD_EVICT_TOP_REGION_MVCC_AMP
-                        .observe(region.1.cop_detail.mvcc_amplification() as f64);
+                        .observe(region.1.cop_detail.mvcc_amplification());
                     regions_to_load.push(region.0.clone());
                 }
             }
@@ -214,7 +214,7 @@ impl RegionStatsManager {
             IN_MEMORY_ENGINE_AUTO_LOAD_EVICT_CACHED_REGION_COP_REQ
                 .observe(crs.stat.query_stats.coprocessor as f64);
             IN_MEMORY_ENGINE_AUTO_LOAD_EVICT_CACHED_REGION_MVCC_AMP
-                .observe(crs.stat.cop_detail.mvcc_amplification() as f64);
+                .observe(crs.stat.cop_detail.mvcc_amplification());
         }
         // TODO(SpadeA): remove it after it's stable
         info!(
