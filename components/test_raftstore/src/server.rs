@@ -394,7 +394,7 @@ impl ServerCluster {
 
         let latest_ts =
             block_on(self.pd_client.get_tso()).expect("failed to get timestamp from PD");
-        let concurrency_manager = ConcurrencyManager::new(latest_ts);
+        let concurrency_manager = ConcurrencyManager::new_for_test(latest_ts);
 
         let (tx, rx) = std::sync::mpsc::channel();
         let mut gc_worker = GcWorker::new(

@@ -467,7 +467,7 @@ pub mod tests {
     ) -> MvccResult<PessimisticLockKeyResult> {
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let cm = ConcurrencyManager::new(0.into());
+        let cm = ConcurrencyManager::new_for_test(0.into());
         let start_ts = start_ts.into();
         let mut txn = MvccTxn::new(start_ts, cm);
         let mut reader = SnapshotReader::new(start_ts, snapshot, true);
@@ -538,7 +538,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let min_commit_ts = min_commit_ts.into();
-        let cm = ConcurrencyManager::new(min_commit_ts);
+        let cm = ConcurrencyManager::new_for_test(min_commit_ts);
         let start_ts = start_ts.into();
         let mut txn = MvccTxn::new(start_ts, cm);
         let mut reader = SnapshotReader::new(start_ts, snapshot, true);
@@ -720,7 +720,7 @@ pub mod tests {
     ) -> MvccError {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let min_commit_ts = min_commit_ts.into();
-        let cm = ConcurrencyManager::new(min_commit_ts);
+        let cm = ConcurrencyManager::new_for_test(min_commit_ts);
         let start_ts = start_ts.into();
         let mut txn = MvccTxn::new(start_ts, cm);
         let mut reader = SnapshotReader::new(start_ts, snapshot, true);
@@ -1325,7 +1325,7 @@ pub mod tests {
             for need_value in &[true, false] {
                 for need_check_existence in &[true, false] {
                     let snapshot = engine.snapshot(Default::default()).unwrap();
-                    let cm = ConcurrencyManager::new(start_ts);
+                    let cm = ConcurrencyManager::new_for_test(start_ts);
                     let mut txn = MvccTxn::new(start_ts, cm);
                     let mut reader = SnapshotReader::new(start_ts, snapshot, true);
                     let need_old_value = true;
@@ -1375,7 +1375,7 @@ pub mod tests {
         // Lock @ start ts 9, for update ts 12, commit ts 13
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let min_commit_ts = TimeStamp::zero();
-        let cm = ConcurrencyManager::new(min_commit_ts);
+        let cm = ConcurrencyManager::new_for_test(min_commit_ts);
         let start_ts = TimeStamp::new(9);
         let for_update_ts = TimeStamp::new(12);
         let need_old_value = true;
@@ -1456,7 +1456,7 @@ pub mod tests {
                     let need_value = *need_value;
                     let t = Box::new(move |snapshot, start_ts| {
                         let key = Key::from_raw(key);
-                        let cm = ConcurrencyManager::new(start_ts);
+                        let cm = ConcurrencyManager::new_for_test(start_ts);
                         let mut txn = MvccTxn::new(start_ts, cm);
                         let mut reader = SnapshotReader::new(start_ts, snapshot, true);
                         let need_old_value = true;
@@ -1509,7 +1509,7 @@ pub mod tests {
         // set.
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let min_commit_ts = TimeStamp::zero();
-        let cm = ConcurrencyManager::new(min_commit_ts);
+        let cm = ConcurrencyManager::new_for_test(min_commit_ts);
         let start_ts = TimeStamp::new(15);
         let for_update_ts = TimeStamp::new(15);
         let need_old_value = true;
