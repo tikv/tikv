@@ -125,7 +125,8 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
 
     #[inline(always)]
     pub fn setup_with_hint_items<T>(&mut self, items: &mut Vec<T>, key_of: fn(&T) -> &Key) {
-        // enable scan mode if there are multiple items, so that we don't need to seek for every key.
+        // enable scan mode if there are multiple items, so that we don't need to seek
+        // for every key.
         if items.len() > 1 {
             items.sort_by(|a, b| key_of(a).cmp(key_of(b)));
             self.reader.scan_mode = Some(ScanMode::Forward);
