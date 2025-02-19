@@ -110,7 +110,7 @@ fn start_raftstore(
             Worker::new("split"),
             AutoSplitController::default(),
             Arc::default(),
-            ConcurrencyManager::new(1.into()),
+            ConcurrencyManager::new_for_test(1.into()),
             CollectorRegHandle::new_for_test(),
             HealthController::new(),
             None,

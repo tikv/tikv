@@ -157,7 +157,7 @@ mod tests {
     fn test_cas_basic_impl<F: KvFormat>() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let ts_provider = super::super::test_util::gen_ts_provider(F::TAG);
-        let cm = concurrency_manager::ConcurrencyManager::new(1.into());
+        let cm = concurrency_manager::ConcurrencyManager::new_for_test(1.into());
         let key = b"rk";
 
         let encoded_key = F::encode_raw_key(key, None);
@@ -249,7 +249,7 @@ mod tests {
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let ts_provider = super::super::test_util::gen_ts_provider(F::TAG);
 
-        let cm = concurrency_manager::ConcurrencyManager::new(1.into());
+        let cm = concurrency_manager::ConcurrencyManager::new_for_test(1.into());
         let raw_key = b"rk";
         let raw_value = b"valuek";
         let ttl = 30;

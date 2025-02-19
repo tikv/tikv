@@ -157,7 +157,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let start_ts = start_ts.into();
-        let cm = ConcurrencyManager::new(start_ts);
+        let cm = ConcurrencyManager::new_for_test(start_ts);
         let command = TxnHeartBeat {
             ctx: Context::default(),
             primary_key: Key::from_raw(primary_key),
@@ -200,7 +200,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let start_ts = start_ts.into();
-        let cm = ConcurrencyManager::new(start_ts);
+        let cm = ConcurrencyManager::new_for_test(start_ts);
         let command = TxnHeartBeat {
             ctx,
             primary_key: Key::from_raw(primary_key),
@@ -289,7 +289,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let start_ts = 5.into();
-        let cm = ConcurrencyManager::new(start_ts);
+        let cm = ConcurrencyManager::new_for_test(start_ts);
         let command = TxnHeartBeat {
             ctx: ctx.clone(),
             primary_key: Key::from_raw(k),

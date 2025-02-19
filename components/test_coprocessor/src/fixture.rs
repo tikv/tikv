@@ -189,7 +189,7 @@ fn init_data_with_details_impl<E: Engine>(
         &CoprReadPoolConfig::default_for_test(),
         store.get_engine(),
     ));
-    let cm = ConcurrencyManager::new(1.into());
+    let cm = ConcurrencyManager::new_for_test(1.into());
     let limiter = Arc::new(QuotaLimiter::default());
     let copr = Endpoint::new(
         cfg,
