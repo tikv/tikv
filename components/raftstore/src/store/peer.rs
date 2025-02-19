@@ -16,7 +16,10 @@ use std::{
 
 use bitflags::bitflags;
 use bytes::Bytes;
-use codec::prelude::NumberDecoder;
+use codec::{
+    buffer::BufferReader,
+    prelude::{NumberDecoder, NumberEncoder},
+};
 use collections::{HashMap, HashSet};
 use crossbeam::{atomic::AtomicCell, channel::TrySendError};
 use engine_traits::{
@@ -91,7 +94,7 @@ use super::{
 use crate::{
     coprocessor::{
         split_observer::NO_VALID_SPLIT_KEY, CoprocessorHost, RegionChangeEvent, RegionChangeReason,
-        RoleChange,
+        RoleChange, TransferLeaderCustomContext,
     },
     errors::RAFTSTORE_IS_BUSY,
     router::{RaftStoreRouter, ReadContext},
@@ -3958,12 +3961,7 @@ where
         self.should_wake_up = true;
     }
 
-    fn pre_transfer_leader<T: Transport>(
-        &mut self,
-        peer: &metapb::Peer,
-        extra_msgs: Vec<ExtraMessage>,
-        ctx: &mut PollContext<EK, ER, T>,
-    ) -> bool {
+    fn pre_transfer_leader(&mut self, peer: &metapb::Peer, context: TransferLeaderContext) -> bool {
         // Broadcast heartbeat to make sure followers commit the entries immediately.
         // It's only necessary to ping the target peer, but ping all for simplicity.
         self.raft_group.ping();
@@ -3977,17 +3975,17 @@ where
         // log is always its current term. Not just set term because raft library
         // forbids setting it for MsgTransferLeader messages.
         msg.set_log_term(self.term());
-        self.raft_group.raft.msgs.push(msg);
-
-        extra_msgs.into_iter().for_each(|extra_msg| {
-            let mut msg = RaftMessage::default();
-            msg.set_region_id(self.region_id);
-            msg.set_from_peer(self.peer.clone());
-            msg.set_to_peer(peer.clone());
-            msg.set_region_epoch(self.region().get_region_epoch().clone());
-            msg.set_extra_msg(extra_msg);
-            self.send_raft_messages(ctx, vec![msg]);
+        let ctx = context.to_bytes().unwrap_or_else(|e| {
+            warn!(
+                "failed to encode transfer leader context";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+                "err" => ?e,
+            );
+            Bytes::new()
         });
+        msg.set_context(ctx);
+        self.raft_group.raft.msgs.push(msg);
 
         true
     }
@@ -4779,12 +4777,12 @@ where
     }
 
     /// Set a pending transfer leader message to allow the transferee to
-    /// initiate raft log cache warmup.
+    /// initiate raft log cache warmup and other necessary works.
     /// The message will be cleaned up once the transferee has warmed up its
     /// cache or the peer becomes leader.
     ///
     /// Called by transferee.
-    pub fn set_pending_transfer_leader_msg(&mut self, msg: &eraftpb::Message) {
+    pub fn set_pending_transfer_leader_msg(&mut self, cfg: &Config, msg: &eraftpb::Message) {
         // log_term is set by original leader in pre transfer leader stage.
         // Callers must guarantee that the message is a valid transfer leader
         // message.
@@ -4797,7 +4795,18 @@ where
             self.tag,
             msg.get_msg_type(),
         );
-        self.transfer_leader_state.transfer_leader_msg = Some(msg.clone());
+
+        // We don't want to block transfer leader indefinitely, so set a
+        // deadline for the transferee to warm up its cache and other necessary
+        // works. Half of the election timeout should be long enough.
+        let half_election_timeout = cfg.raft_base_tick_interval.0
+            * std::cmp::max(1, cfg.raft_election_timeout_ticks / 2) as u32;
+        // Cache warmup has its own timeout, so we need to wait for the longer
+        // one.
+        let max_wait_duration =
+            std::cmp::max(half_election_timeout, cfg.max_entry_cache_warmup_duration.0);
+        let deadline = Instant::now() + max_wait_duration;
+        self.transfer_leader_state.transfer_leader_msg = Some((msg.clone(), deadline));
     }
 
     /// Ack transfer leader message if there is a pending transfer leader
@@ -4809,25 +4818,38 @@ where
             self.transfer_leader_state.transfer_leader_msg = None;
             return false;
         }
-        let Some(msg) = &self.transfer_leader_state.transfer_leader_msg else {
+
+        let Some((msg, deadline)) = &self.transfer_leader_state.transfer_leader_msg else {
+            // There is no pending transfer leader message, do not ack.
             return false;
         };
-        let low_index = msg.get_index();
-        if self.is_ready_ack_transfer_leader_msg(ctx, low_index) {
-            self.ack_transfer_leader_msg(false);
-            self.transfer_leader_state.transfer_leader_msg = None;
-            true
-        } else {
-            false
+
+        // Ack the message if any of the following conditions is met:
+        //
+        // * The deadline is exceeded.
+        // * The cache has warmed up and coprocessors are ready to ack.
+        let is_deadline_exceeded = Instant::now() >= *deadline;
+        let is_cop_ready = ctx
+            .coprocessor_host
+            .pre_ack_transfer_leader(self.region(), msg);
+        let is_cache_ready = self.maybe_transfer_leader_cache_warmup(ctx, msg.get_index());
+
+        let is_ready_ack = is_deadline_exceeded || (is_cache_ready && is_cop_ready);
+        if !is_ready_ack {
+            return false;
         }
+
+        self.ack_transfer_leader_msg(false);
+        self.transfer_leader_state.transfer_leader_msg = None;
+        true
     }
 
-    /// Before ack the transfer leader message sent by the leader.
-    /// Currently, it only warms up the entry cache in this stage.
+    /// Check if the cache has warmed up (caching raft logs >= low_index).
+    /// If the cache has not warmed up, it will try to warm up the cache.
     ///
-    /// Returns true if the cache has warmed up (caching raft logs >= low_index)
-    /// or the warmup operation is timed out.
-    fn is_ready_ack_transfer_leader_msg<T>(
+    /// Returns true if the cache has warmed up or the warmup operation is
+    /// timed out.
+    fn maybe_transfer_leader_cache_warmup<T>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
         low_index: u64,
@@ -4835,7 +4857,6 @@ where
         if !ctx.cfg.warmup_entry_cache_enabled() {
             return true;
         }
-
         // The start index of warmup range. It is leader's entry_cache_first_index,
         // which in general is equal to the lowest matched index.
         let mut low = low_index;
@@ -4966,7 +4987,7 @@ where
         cb: Callback<EK::Snapshot>,
     ) -> bool {
         let transfer_leader = get_transfer_leader_cmd(&req).unwrap();
-        let extra_msgs = match ctx
+        let transfer_leader_ctx = match ctx
             .coprocessor_host
             .pre_transfer_leader(self.region(), transfer_leader)
         {
@@ -4981,7 +5002,7 @@ where
                 cb.invoke_with_response(resp);
                 return false;
             }
-            Ok(msgs) => msgs,
+            Ok(ctx) => TransferLeaderContext::Custom(ctx),
         };
         ctx.raft_metrics.propose.transfer_leader.inc();
 
@@ -5014,7 +5035,7 @@ where
         let transferred = if peer.id == self.peer.id {
             false
         } else {
-            self.pre_transfer_leader(peer, extra_msgs, ctx)
+            self.pre_transfer_leader(peer, transfer_leader_ctx)
         };
 
         // transfer leader command doesn't need to replicate log and apply, so we
@@ -5440,7 +5461,7 @@ where
                         "peer_id" => self.peer.get_id(),
                         "target_peer_id" => p.get_id(),
                     );
-                    self.pre_transfer_leader(&p, vec![], ctx);
+                    self.pre_transfer_leader(&p, TransferLeaderContext::None);
                 }
             }
         } else {
@@ -6300,16 +6321,31 @@ pub enum TransferLeaderContext {
     /// A reply of a AdminCmd TransferLeader.
     /// Tag: 1.
     CommandReply,
+    /// A context from TransferLeaderObserver coprocessors.
+    /// Tag: 2.
+    Custom(Vec<TransferLeaderCustomContext>),
 }
 
 impl TransferLeaderContext {
-    const TAG_COMMAND_REPLY: u8 = TRANSFER_LEADER_COMMAND_REPLY_CTX[0];
+    const TAG_COMMAND_REPLY: u8 = TRANSFER_LEADER_COMMAND_REPLY_CTX[0]; // 1.
+    const TAG_CUSTOM: u8 = 2;
     pub fn from_bytes(mut ctx: &[u8]) -> Result<TransferLeaderContext> {
         if ctx.is_empty() {
             return Ok(TransferLeaderContext::None);
         }
         match box_try!(ctx.read_u8()) {
             Self::TAG_COMMAND_REPLY => Ok(TransferLeaderContext::CommandReply),
+            Self::TAG_CUSTOM => {
+                let mut coprocessor_ctx = vec![];
+                while !ctx.is_empty() {
+                    let len = box_try!(ctx.read_var_u64()) as usize;
+                    let key = box_try!(ctx.read_bytes(len)).to_vec();
+                    let len = box_try!(ctx.read_var_u64()) as usize;
+                    let value = box_try!(ctx.read_bytes(len)).to_vec();
+                    coprocessor_ctx.push(TransferLeaderCustomContext { key, value });
+                }
+                Ok(TransferLeaderContext::Custom(coprocessor_ctx))
+            }
             tag => Err(box_err!("invalid tag: {}", tag)),
         }
     }
@@ -6320,7 +6356,28 @@ impl TransferLeaderContext {
             TransferLeaderContext::CommandReply => {
                 Ok(Bytes::from_static(TRANSFER_LEADER_COMMAND_REPLY_CTX))
             }
+            TransferLeaderContext::Custom(coprocessor_ctx) => {
+                let mut ctx = vec![];
+                box_try!(ctx.write_u8(Self::TAG_CUSTOM));
+                for cctx in coprocessor_ctx {
+                    let TransferLeaderCustomContext { key, value } = cctx;
+                    box_try!(ctx.write_var_u64(key.len() as u64));
+                    ctx.extend_from_slice(key);
+                    box_try!(ctx.write_var_u64(value.len() as u64));
+                    ctx.extend_from_slice(value);
+                }
+                Ok(Bytes::from(ctx))
+            }
         }
+    }
+
+    pub fn get_custom_ctx(&self, key: &[u8]) -> Option<&[u8]> {
+        let TransferLeaderContext::Custom(cctx) = self else {
+            return None;
+        };
+        cctx.iter()
+            .find(|c| c.key == key)
+            .map(|c| c.value.as_slice())
     }
 }
 
@@ -6330,10 +6387,10 @@ pub struct TransferLeaderState {
     /// Only leader can update this field, and it is meaningful only when a peer
     /// is a leader or a leader is stepping down.
     pub leader_transferee: u64,
-    /// A pre transfer leader message sent from leader.
-    /// Only leader transferee can update this field and it is meaningful only
-    /// when a peer is a leader transferee.
-    pub transfer_leader_msg: Option<eraftpb::Message>,
+    /// A pre transfer leader message sent from leader and a deadline for a
+    /// leader transferee to confirm the transfer leader message.
+    /// Only leader transferee can update this field.
+    pub transfer_leader_msg: Option<(eraftpb::Message, Instant)>,
     /// The entry cache async warm up state that is issued by a pre transfer
     /// leader message.
     pub cache_warmup_state: Option<CacheWarmupState>,
@@ -6814,6 +6871,37 @@ mod tests {
         assert_eq!(
             TransferLeaderContext::from_bytes(TRANSFER_LEADER_COMMAND_REPLY_CTX).unwrap(),
             TransferLeaderContext::CommandReply
+        );
+
+        ctx = TransferLeaderContext::Custom(vec![
+            TransferLeaderCustomContext {
+                key: b"key1".to_vec(),
+                value: b"value1".to_vec(),
+            },
+            TransferLeaderCustomContext {
+                key: b"key2".to_vec(),
+                value: b"value2".to_vec(),
+            },
+        ]);
+        let bytes = ctx.to_bytes().unwrap();
+        assert_eq!(TransferLeaderContext::from_bytes(&bytes).unwrap(), ctx);
+        assert_eq!(
+            TransferLeaderContext::from_bytes(&bytes)
+                .unwrap()
+                .get_custom_ctx(b"key1"),
+            Some(b"value1".as_slice())
+        );
+        assert_eq!(
+            TransferLeaderContext::from_bytes(&bytes)
+                .unwrap()
+                .get_custom_ctx(b"key2"),
+            Some(b"value2".as_slice())
+        );
+        assert_eq!(
+            TransferLeaderContext::from_bytes(&bytes)
+                .unwrap()
+                .get_custom_ctx(b"key3".as_slice()),
+            None
         );
     }
 }
