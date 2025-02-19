@@ -266,9 +266,8 @@ impl RegionStatsManager {
             }
 
             // Do not evict regions that were loaded less than `EVICT_MIN_DURATION` ago.
-            // If it has no time recorded, it should be loaded
-            // be pre-load or something, record the time and
-            // does not evict it this time.
+            // If it has no time recorded, it should be warmed up by transfer leader
+            // record the time and does not evict it this time.
             let load_time = regions_loaded.entry(crs.region.id).or_insert(now);
             let can_evict = now
                 .checked_duration_since(*load_time)
