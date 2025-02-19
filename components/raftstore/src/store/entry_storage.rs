@@ -628,6 +628,7 @@ impl CacheWarmupState {
             return true;
         }
         if Instant::now() > self.election_timeout_at {
+            WARM_UP_ENTRY_CACHE_COUNTER.stale.inc();
             self.is_election_timeout = true;
         }
         self.is_election_timeout
