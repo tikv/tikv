@@ -3082,9 +3082,6 @@ where
     }
 
     fn on_extra_message(&mut self, mut msg: RaftMessage) {
-        self.ctx
-            .coprocessor_host
-            .on_extra_message(self.fsm.peer.region(), msg.get_extra_msg());
         match msg.get_extra_msg().get_type() {
             ExtraMessageType::MsgRegionWakeUp | ExtraMessageType::MsgCheckStalePeer => {
                 if msg.get_extra_msg().forcely_awaken {
@@ -3818,7 +3815,16 @@ where
             .maybe_reject_transfer_leader_msg(self.ctx, msg, peer_disk_usage)
             && self.fsm.peer.pre_ack_transfer_leader_msg(self.ctx, msg)
         {
+<<<<<<< HEAD
             self.fsm.peer.ack_transfer_leader_msg(false);
+=======
+            self.fsm
+                .peer
+                .set_pending_transfer_leader_msg(&self.ctx.cfg, msg);
+            if self.fsm.peer.maybe_ack_transfer_leader_msg(self.ctx) {
+                self.fsm.has_ready = true;
+            }
+>>>>>>> 39a47fba00 (raftstore: warm up IME before transferring leadership (#17882))
         }
     }
 

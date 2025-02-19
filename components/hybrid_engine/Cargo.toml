@@ -6,6 +6,12 @@ publish = false
 license = "Apache-2.0"
 
 [dependencies]
+<<<<<<< HEAD
+=======
+codec = { workspace = true }
+crossbeam = { workspace = true }
+engine_rocks = { workspace = true }
+>>>>>>> 39a47fba00 (raftstore: warm up IME before transferring leadership (#17882))
 engine_traits = { workspace = true }
 txn_types = { workspace = true }
 tikv_util = { workspace = true }
@@ -19,8 +25,13 @@ prometheus = { version = "0.13", default-features = false, features = [
     "nightly",
 ] }
 prometheus-static-metric = "0.5"
+<<<<<<< HEAD
 lazy_static = "1.4.0"
 crossbeam = { workspace = true }
+=======
+protobuf = { version = "2.8", features = ["bytes"] }
+raft = { workspace = true }
+>>>>>>> 39a47fba00 (raftstore: warm up IME before transferring leadership (#17882))
 raftstore = { workspace = true }
 raft = { workspace = true }
 kvproto = { workspace = true }
