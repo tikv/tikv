@@ -6,6 +6,7 @@ publish = false
 license = "Apache-2.0"
 
 [dependencies]
+codec = { workspace = true }
 crossbeam = { workspace = true }
 engine_rocks = { workspace = true }
 engine_traits = { workspace = true }
@@ -18,6 +19,7 @@ prometheus = { version = "0.13", default-features = false, features = [
     "nightly",
 ] }
 prometheus-static-metric = "0.5"
+protobuf = { version = "2.8", features = ["bytes"] }
 raft = { workspace = true }
 raftstore = { workspace = true }
 slog = { workspace = true }
