@@ -641,13 +641,7 @@ macro_rules! impl_write {
                         .try_fold(
                             (writer, resource_limiter),
                             |(mut writer, limiter), req| async move {
-                                match check_import_resources() {
-                                    Ok(()) => (),
-                                    Err(e) => {
-                                        return Err(e);
-                                    }
-                                }
-
+                                check_import_resources()?;
                                 let batch = match req.chunk {
                                     Some($chunk_ty::Batch(b)) => b,
                                     _ => return Err(Error::InvalidChunk),
