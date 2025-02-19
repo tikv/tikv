@@ -122,7 +122,7 @@ fn test_node_bootstrap_with_prepared_data() {
         importer,
         split_check_scheduler,
         AutoSplitController::default(),
-        ConcurrencyManager::new(1.into()),
+        ConcurrencyManager::new_for_test(1.into()),
         CollectorRegHandle::new_for_test(),
         None,
         DiskCheckRunner::dummy(),

@@ -209,7 +209,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let current_ts = current_ts.into();
-        let cm = ConcurrencyManager::new(current_ts);
+        let cm = ConcurrencyManager::new_for_test(current_ts);
         let lock_ts: TimeStamp = lock_ts.into();
         let command = crate::storage::txn::commands::CheckTxnStatus {
             ctx: Context::default(),
@@ -263,7 +263,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let current_ts = current_ts.into();
-        let cm = ConcurrencyManager::new(current_ts);
+        let cm = ConcurrencyManager::new_for_test(current_ts);
         let lock_ts: TimeStamp = lock_ts.into();
         let command = crate::storage::txn::commands::CheckTxnStatus {
             ctx,

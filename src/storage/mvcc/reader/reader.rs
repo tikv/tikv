@@ -1066,7 +1066,7 @@ pub mod tests {
         pub fn prewrite(&mut self, m: Mutation, pk: &[u8], start_ts: impl Into<TimeStamp>) {
             let snap = self.snapshot();
             let start_ts = start_ts.into();
-            let cm = ConcurrencyManager::new(start_ts);
+            let cm = ConcurrencyManager::new_for_test(start_ts);
             let mut txn = MvccTxn::new(start_ts, cm);
             let mut reader = SnapshotReader::new(start_ts, snap, true);
 
@@ -1091,7 +1091,7 @@ pub mod tests {
         ) {
             let snap = self.snapshot();
             let start_ts = start_ts.into();
-            let cm = ConcurrencyManager::new(start_ts);
+            let cm = ConcurrencyManager::new_for_test(start_ts);
             let mut txn = MvccTxn::new(start_ts, cm);
             let mut reader = SnapshotReader::new(start_ts, snap, true);
 
@@ -1117,7 +1117,7 @@ pub mod tests {
         ) {
             let snap = self.snapshot();
             let for_update_ts = for_update_ts.into();
-            let cm = ConcurrencyManager::new(for_update_ts);
+            let cm = ConcurrencyManager::new_for_test(for_update_ts);
             let start_ts = start_ts.into();
             let mut txn = MvccTxn::new(start_ts, cm);
             let mut reader = SnapshotReader::new(start_ts, snap, true);
@@ -1148,7 +1148,7 @@ pub mod tests {
         ) {
             let snap = self.snapshot();
             let start_ts = start_ts.into();
-            let cm = ConcurrencyManager::new(start_ts);
+            let cm = ConcurrencyManager::new_for_test(start_ts);
             let mut txn = MvccTxn::new(start_ts, cm);
             let mut reader = SnapshotReader::new(start_ts, snap, true);
             commit(&mut txn, &mut reader, Key::from_raw(pk), commit_ts.into()).unwrap();
@@ -1158,7 +1158,7 @@ pub mod tests {
         pub fn rollback(&mut self, pk: &[u8], start_ts: impl Into<TimeStamp>) {
             let snap = self.snapshot();
             let start_ts = start_ts.into();
-            let cm = ConcurrencyManager::new(start_ts);
+            let cm = ConcurrencyManager::new_for_test(start_ts);
             let mut txn = MvccTxn::new(start_ts, cm);
             let mut reader = SnapshotReader::new(start_ts, snap, true);
             cleanup(
@@ -1173,7 +1173,7 @@ pub mod tests {
         }
 
         pub fn gc(&mut self, pk: &[u8], safe_point: impl Into<TimeStamp> + Copy) {
-            let cm = ConcurrencyManager::new(safe_point.into());
+            let cm = ConcurrencyManager::new_for_test(safe_point.into());
             loop {
                 let snap = self.snapshot();
                 let mut txn = MvccTxn::new(safe_point.into(), cm.clone());
@@ -2480,7 +2480,7 @@ pub mod tests {
         ];
         for (i, case) in cases.into_iter().enumerate() {
             let mut engine = TestEngineBuilder::new().build().unwrap();
-            let cm = ConcurrencyManager::new(42.into());
+            let cm = ConcurrencyManager::new_for_test(42.into());
             let mut txn = MvccTxn::new(TimeStamp::new(10), cm.clone());
             for (write_record, put_ts) in case.written.iter() {
                 txn.put_write(

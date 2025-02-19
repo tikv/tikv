@@ -25,7 +25,7 @@ where
     let ctx = Context::default();
     let snapshot = engine.snapshot(Default::default()).unwrap();
     let start_ts = start_ts.into();
-    let cm = ConcurrencyManager::new(start_ts);
+    let cm = ConcurrencyManager::new_for_test(start_ts);
     let mut txn = MvccTxn::new(start_ts, cm);
     let mut reader = SnapshotReader::new(start_ts, snapshot, true);
 
@@ -69,7 +69,7 @@ where
 
 fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher<'_>, config: &BenchConfig<F>) {
     let mut engine = config.engine_factory.build();
-    let cm = ConcurrencyManager::new(1.into());
+    let cm = ConcurrencyManager::new_for_test(1.into());
     b.iter_batched(
         || {
             let mutations: Vec<(Mutation, Vec<u8>)> = KvGenerator::with_seed(
@@ -119,7 +119,7 @@ fn mvcc_prewrite<E: Engine, F: EngineFactory<E>>(b: &mut Bencher<'_>, config: &B
 
 fn mvcc_commit<E: Engine, F: EngineFactory<E>>(b: &mut Bencher<'_>, config: &BenchConfig<F>) {
     let mut engine = config.engine_factory.build();
-    let cm = ConcurrencyManager::new(1.into());
+    let cm = ConcurrencyManager::new_for_test(1.into());
     b.iter_batched(
         || setup_prewrite(&mut engine, config, 1),
         |(snapshot, keys)| {
@@ -138,7 +138,7 @@ fn mvcc_rollback_prewrote<E: Engine, F: EngineFactory<E>>(
     config: &BenchConfig<F>,
 ) {
     let mut engine = config.engine_factory.build();
-    let cm = ConcurrencyManager::new(1.into());
+    let cm = ConcurrencyManager::new_for_test(1.into());
     b.iter_batched(
         || setup_prewrite(&mut engine, config, 1),
         |(snapshot, keys)| {
@@ -164,7 +164,7 @@ fn mvcc_rollback_conflict<E: Engine, F: EngineFactory<E>>(
     config: &BenchConfig<F>,
 ) {
     let mut engine = config.engine_factory.build();
-    let cm = ConcurrencyManager::new(1.into());
+    let cm = ConcurrencyManager::new_for_test(1.into());
     b.iter_batched(
         || setup_prewrite(&mut engine, config, 2),
         |(snapshot, keys)| {
@@ -190,7 +190,7 @@ fn mvcc_rollback_non_prewrote<E: Engine, F: EngineFactory<E>>(
     config: &BenchConfig<F>,
 ) {
     let mut engine = config.engine_factory.build();
-    let cm = ConcurrencyManager::new(1.into());
+    let cm = ConcurrencyManager::new_for_test(1.into());
     b.iter_batched(
         || {
             let kvs = KvGenerator::with_seed(

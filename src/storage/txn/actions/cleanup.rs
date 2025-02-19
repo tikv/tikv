@@ -113,7 +113,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let current_ts = current_ts.into();
-        let cm = ConcurrencyManager::new(current_ts);
+        let cm = ConcurrencyManager::new_for_test(current_ts);
         let start_ts = start_ts.into();
         let mut txn = MvccTxn::new(start_ts, cm);
         let mut reader = SnapshotReader::new(start_ts, snapshot, true);
@@ -129,7 +129,7 @@ pub mod tests {
     ) -> MvccError {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let current_ts = current_ts.into();
-        let cm = ConcurrencyManager::new(current_ts);
+        let cm = ConcurrencyManager::new_for_test(current_ts);
         let start_ts = start_ts.into();
         let mut txn = MvccTxn::new(start_ts, cm);
         let mut reader = SnapshotReader::new(start_ts, snapshot, true);
@@ -156,7 +156,7 @@ pub mod tests {
             must_commit(engine, key, gc_fence.prev(), gc_fence);
         }
 
-        let cm = ConcurrencyManager::new(current_ts);
+        let cm = ConcurrencyManager::new_for_test(current_ts);
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut txn = MvccTxn::new(start_ts, cm);
         let mut reader = SnapshotReader::new(start_ts, snapshot, true);

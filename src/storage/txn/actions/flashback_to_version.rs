@@ -326,7 +326,7 @@ pub mod tests {
         let key_locks =
             flashback_to_version_read_lock(&mut reader, key, Some(next_key).as_ref(), start_ts)
                 .unwrap();
-        let cm = ConcurrencyManager::new(TimeStamp::zero());
+        let cm = ConcurrencyManager::new_for_test(TimeStamp::zero());
         let mut txn = MvccTxn::new(start_ts, cm);
         rollback_locks(&mut txn, snapshot, key_locks).unwrap();
         let rows = txn.modifies.len();
@@ -341,7 +341,7 @@ pub mod tests {
         start_ts: impl Into<TimeStamp>,
     ) -> usize {
         let (version, start_ts) = (version.into(), start_ts.into());
-        let cm = ConcurrencyManager::new(TimeStamp::zero());
+        let cm = ConcurrencyManager::new_for_test(TimeStamp::zero());
         let mut txn = MvccTxn::new(start_ts, cm);
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let ctx = Context::default();
@@ -388,7 +388,7 @@ pub mod tests {
             commit_ts,
         )
         .unwrap();
-        let cm = ConcurrencyManager::new(TimeStamp::zero());
+        let cm = ConcurrencyManager::new_for_test(TimeStamp::zero());
         let mut txn = MvccTxn::new(start_ts, cm);
         flashback_to_version_write(&mut txn, &mut reader, keys, version, start_ts, commit_ts)
             .unwrap();
@@ -405,7 +405,7 @@ pub mod tests {
         commit_ts: impl Into<TimeStamp>,
     ) -> usize {
         let (version, start_ts, commit_ts) = (version.into(), start_ts.into(), commit_ts.into());
-        let cm = ConcurrencyManager::new(TimeStamp::zero());
+        let cm = ConcurrencyManager::new_for_test(TimeStamp::zero());
         let mut txn = MvccTxn::new(start_ts, cm);
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let ctx = Context::default();
