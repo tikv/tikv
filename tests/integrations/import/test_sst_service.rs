@@ -47,6 +47,14 @@ fn test_upload_sst() {
     );
     set_disk_status(DiskUsage::Normal);
 
+    // high memory usage
+    fail::cfg("memory_usage_reaches_high_water", "return").unwrap();
+    assert_to_string_contains!(
+        send_upload_sst(&import, &meta, &data).unwrap_err(),
+        "Memory usage too high"
+    );
+    fail::remove("memory_usage_reaches_high_water");
+
     let mut meta = new_sst_meta(crc32, length);
     meta.set_region_id(ctx.get_region_id());
     meta.set_region_epoch(ctx.get_region_epoch().clone());
@@ -97,11 +105,16 @@ fn test_write_sst() {
 }
 
 #[test]
-fn test_write_sst_when_disk_full() {
+fn test_write_sst_when_resource_full() {
     set_disk_status(DiskUsage::AlmostFull);
     let (_cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client();
     run_test_write_sst(ctx, tikv, import, "DiskSpaceNotEnough");
     set_disk_status(DiskUsage::Normal);
+
+    fail::cfg("memory_usage_reaches_high_water", "return").unwrap();
+    let (_cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client();
+    run_test_write_sst(ctx, tikv, import, "Memory usage too high");
+    fail::remove("memory_usage_reaches_high_water");
 }
 
 #[test]
