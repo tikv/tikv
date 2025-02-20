@@ -118,12 +118,20 @@ fn test_restart_peer_busy_on_apply() {
     // Restart the node 3 and check the Peer 1003 is under applying stage.
     cluster.run_node(3).unwrap();
 
+    let (tx, rx) = mpsc::sync_channel(128);
     // Wait for a while and check the node is still busy on applying.
     thread::sleep(Duration::from_millis(base_tick_ms * 30));
     cluster.must_send_store_heartbeat(3);
     thread::sleep(Duration::from_millis(base_tick_ms));
     let stats = cluster.pd_client.get_store_stats(3).unwrap();
     assert!(stats.is_busy);
+    let ordered_tx = tx.clone();
+    fail::cfg_callback("on_raft_base_tick_ordered_1003", move || {
+        ordered_tx.send(1003).unwrap()
+    })
+    .unwrap();
+    assert_eq!(rx.recv_timeout(Duration::from_secs(1)).unwrap(), 1003);
+    fail::remove("on_raft_base_tick_ordered_1003");
 
     // Recover the applying processing on Peer 1003 and wait for a while, then
     // the region will be hibernated.
@@ -134,7 +142,6 @@ fn test_restart_peer_busy_on_apply() {
     let stats = cluster.pd_client.get_store_stats(3).unwrap();
     assert!(!stats.is_busy);
     // Check hibernated.
-    let (tx, rx) = mpsc::sync_channel(128);
     fail::cfg_callback("on_raft_base_tick_idle", move || tx.send(0).unwrap()).unwrap();
     let mut raft_msg = RaftMessage::default();
     raft_msg.region_id = 1;
