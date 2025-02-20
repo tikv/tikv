@@ -23,6 +23,8 @@ use raftstore::{
 };
 use tikv_util::{codec::number::decode_var_i64, debug, warn};
 
+use crate::metrics::IN_MEMORY_ENGINE_TRANSFER_LEADER_WARMUP_COUNTER_STATIC;
+
 #[derive(Clone)]
 pub struct LoadEvictionObserver {
     cache_engine: Arc<dyn RegionCacheEngineExt + Send + Sync>,
@@ -263,6 +265,9 @@ impl TransferLeaderObserver for LoadEvictionObserver {
         if !self.cache_engine.region_cached(ctx.region(), active_only) {
             return Ok(None);
         }
+        IN_MEMORY_ENGINE_TRANSFER_LEADER_WARMUP_COUNTER_STATIC
+            .request
+            .inc();
         let mut value = vec![];
         value
             .write_var_i64(ExtraMessageType::MsgPreLoadRegionRequest.value() as i64)
@@ -314,6 +319,9 @@ impl TransferLeaderObserver for LoadEvictionObserver {
             // MsgPreLoadRegionRequest is sent before leader issue a transfer leader
             // request. It is possible that the peer is not initialized yet.
             warn!("ime skip warmup an uninitialized region"; "region" => ?region);
+            IN_MEMORY_ENGINE_TRANSFER_LEADER_WARMUP_COUNTER_STATIC
+                .skip_warmup
+                .inc();
             return true;
         }
 
@@ -325,6 +333,9 @@ impl TransferLeaderObserver for LoadEvictionObserver {
             return true;
         }
 
+        IN_MEMORY_ENGINE_TRANSFER_LEADER_WARMUP_COUNTER_STATIC
+            .warmup
+            .inc();
         self.cache_engine.load_region(r.region());
         false
     }
