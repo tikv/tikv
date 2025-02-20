@@ -7,7 +7,7 @@ use std::{
     result::Result as StdResult,
     string::String,
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc,
     },
     time::Duration,
@@ -16,17 +16,21 @@ use std::{
 use api_version::{ApiV2, KeyMode, KvFormat};
 use collections::HashMap;
 use crossbeam::atomic::AtomicCell;
+use fail::fail_point;
+use futures::{
+    channel::mpsc::{self, UnboundedReceiver, UnboundedSender},
+    lock::Mutex,
+    StreamExt,
+};
 use kvproto::{
-    cdcpb::{
-        ChangeDataRequestKvApi, Error as EventError, Event, EventEntries, EventLogType, EventRow,
-        EventRowOpType, Event_oneof_event,
-    },
+    cdcpb::{ChangeDataRequestKvApi, Error as ErrorEvent, EventLogType, EventRow, EventRowOpType},
+    errorpb::Error as RequestError,
     kvrpcpb::ExtraOp as TxnExtraOp,
     metapb::{Region, RegionEpoch},
     raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, CmdType, PutRequest, Request},
 };
 use raftstore::{
-    coprocessor::{Cmd, CmdBatch, ObserveHandle},
+    coprocessor::{Cmd, CmdBatch, ObserveHandle, ObserveId},
     store::util::compare_region_epoch,
     Error as RaftStoreError,
 };
@@ -36,19 +40,23 @@ use tikv_util::{
     memory::{HeapSize, MemoryQuota},
     time::Instant,
     warn,
+    worker::Scheduler,
 };
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteBatchFlags, WriteRef, WriteType};
 
 use crate::{
-    channel::{CdcEvent, SendError, Sink, CDC_EVENT_MAX_BYTES},
-    endpoint::Advance,
+    channel::{DownstreamSink, SendError},
+    endpoint::{Deregister, Task},
     initializer::KvEntry,
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
-    service::{Conn, ConnId, FeatureGate, RequestId},
+    service::{ConnId, RequestId},
     txn_source::TxnSource,
     Error, Result,
 };
+
+// The maximum bytes of events can be batched into one `CdcEvent::Event`, 32KB.
+const CDC_EVENT_MAX_BYTES: usize = 32 * 1024;
 
 static DOWNSTREAM_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
 
@@ -89,7 +97,7 @@ impl Default for DownstreamState {
 
 /// Should only be called when it's uninitialized or stopped. Return false if
 /// it's stopped.
-pub(crate) fn on_init_downstream(s: &AtomicCell<DownstreamState>) -> bool {
+fn on_init_downstream(s: &AtomicCell<DownstreamState>) -> bool {
     s.compare_exchange(
         DownstreamState::Uninitialized,
         DownstreamState::Initializing,
@@ -124,35 +132,32 @@ impl DownstreamState {
 }
 
 pub struct Downstream {
-    /// A unique identifier of the Downstream.
     pub id: DownstreamId,
-    /// The IP address of downstream.
-    pub peer: String,
-    pub region_epoch: RegionEpoch,
+
     /// The request ID set by CDC to identify events corresponding different
     /// requests.
-    pub req_id: RequestId,
+    pub request_id: RequestId,
     pub conn_id: ConnId,
-
+    pub peer: String,
+    pub region_epoch: RegionEpoch,
     pub kv_api: ChangeDataRequestKvApi,
     pub filter_loop: bool,
     pub observed_range: ObservedRange,
 
-    sink: Option<Sink>,
+    pub sink: DownstreamSink,
     state: Arc<AtomicCell<DownstreamState>>,
-    pub(crate) scan_truncated: Arc<AtomicBool>,
 
     // Fields to handle ResolvedTs advancing. If `lock_heap` is none it means
     // the downstream hasn't finished the incremental scanning.
     lock_heap: Option<BTreeMap<TimeStamp, isize>>,
-    advanced_to: TimeStamp,
+    pub advanced_to: Arc<AtomicU64>,
 }
 
 impl fmt::Debug for Downstream {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Downstream")
             .field("id", &self.id)
-            .field("req_id", &self.req_id)
+            .field("request_id", &self.request_id)
             .field("conn_id", &self.conn_id)
             .finish()
     }
@@ -164,79 +169,31 @@ impl Downstream {
     /// peer is the address of the downstream.
     /// sink sends data to the downstream.
     pub fn new(
+        request_id: RequestId,
+        conn_id: ConnId,
         peer: String,
         region_epoch: RegionEpoch,
-        req_id: RequestId,
-        conn_id: ConnId,
         kv_api: ChangeDataRequestKvApi,
         filter_loop: bool,
         observed_range: ObservedRange,
+        sink: DownstreamSink,
     ) -> Downstream {
         Downstream {
             id: DownstreamId::new(),
+            request_id,
+            conn_id,
             peer,
             region_epoch,
-            req_id,
-            conn_id,
             kv_api,
             filter_loop,
-
             observed_range,
 
-            sink: None,
+            sink,
             state: Arc::new(AtomicCell::new(DownstreamState::default())),
-            scan_truncated: Arc::new(AtomicBool::new(false)),
 
             lock_heap: None,
-            advanced_to: TimeStamp::zero(),
+            advanced_to: Arc::new(AtomicU64::new(0)),
         }
-    }
-
-    // NOTE: it's not allowed to sink `EventError` directly by this function,
-    // because the sink can be also used by an incremental scan. We must ensure
-    // no more events can be pushed to the sink after an `EventError` is sent.
-    pub fn sink_event(&self, mut event: Event, force: bool) -> Result<()> {
-        event.set_request_id(self.req_id.0);
-        if self.sink.is_none() {
-            info!("cdc drop event, no sink";
-                "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => ?self.req_id);
-            return Err(Error::Sink(SendError::Disconnected));
-        }
-        let sink = self.sink.as_ref().unwrap();
-        match sink.unbounded_send(CdcEvent::Event(event), force) {
-            Ok(_) => Ok(()),
-            Err(SendError::Disconnected) => {
-                debug!("cdc send event failed, disconnected";
-                    "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => ?self.req_id);
-                Err(Error::Sink(SendError::Disconnected))
-            }
-            // TODO handle errors.
-            Err(e @ SendError::Full) | Err(e @ SendError::Congested) => {
-                info!("cdc send event failed, full";
-                    "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => ?self.req_id);
-                Err(Error::Sink(e))
-            }
-        }
-    }
-
-    /// EventErrors must be sent by this function. And we must ensure no more
-    /// events or ResolvedTs will be sent to the downstream after
-    /// `sink_error_event` is called.
-    pub fn sink_error_event(&self, region_id: u64, err_event: EventError) -> Result<()> {
-        info!("cdc downstream meets region error";
-            "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => ?self.req_id);
-
-        self.scan_truncated.store(true, Ordering::Release);
-        let mut change_data_event = Event::default();
-        change_data_event.event = Some(Event_oneof_event::Error(err_event));
-        change_data_event.region_id = region_id;
-        // Try it's best to send error events.
-        let force_send = true;
-        self.sink_event(change_data_event, force_send)
-    }
-
-    pub fn set_sink(&mut self, sink: Sink) {
-        self.sink = Some(sink);
     }
 
     pub fn get_state(&self) -> Arc<AtomicCell<DownstreamState>> {
@@ -323,13 +280,19 @@ impl MiniLock {
 pub struct Delegate {
     pub region_id: u64,
     pub handle: ObserveHandle,
+    pub sched: UnboundedSender<DelegateTask>,
+
+    tasks: UnboundedReceiver<DelegateTask>,
+    feedbacks: Scheduler<Task>,
     memory_quota: Arc<MemoryQuota>,
+    old_value_cache: Arc<Mutex<OldValueCache>>,
+    txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
 
     lock_tracker: LockTracker,
     downstreams: Vec<Downstream>,
-    txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
-    failed: bool,
+    stopped: bool,
 
+    old_value_stats: Statistics,
     created: Instant,
     last_lag_warn: Instant,
 }
@@ -359,6 +322,36 @@ impl Drop for Delegate {
 }
 
 impl Delegate {
+    /// Create a Delegate the given region.
+    pub fn new(
+        region_id: u64,
+        feedbacks: Scheduler<Task>,
+        memory_quota: Arc<MemoryQuota>,
+        old_value_cache: Arc<Mutex<OldValueCache>>,
+        txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
+    ) -> Delegate {
+        let (tx, rx) = mpsc::unbounded();
+        Delegate {
+            region_id,
+            handle: ObserveHandle::new(),
+            sched: tx,
+
+            tasks: rx,
+            feedbacks,
+            memory_quota,
+            old_value_cache,
+            txn_extra_op,
+
+            lock_tracker: LockTracker::Pending,
+            downstreams: Vec::new(),
+            stopped: false,
+
+            old_value_stats: Statistics::default(),
+            created: Instant::now_coarse(),
+            last_lag_warn: Instant::now_coarse(),
+        }
+    }
+
     fn push_lock(&mut self, key: Key, start_ts: MiniLock) -> Result<isize> {
         let bytes = key.approximate_heap_size();
         let mut lock_count_modify = 0;
@@ -411,7 +404,7 @@ impl Delegate {
         Ok(lock_count_modify)
     }
 
-    pub(crate) fn init_lock_tracker(&mut self) -> bool {
+    fn init_lock_tracker(&mut self) -> bool {
         if matches!(self.lock_tracker, LockTracker::Pending) {
             self.lock_tracker = LockTracker::Preparing(vec![]);
             return true;
@@ -465,11 +458,11 @@ impl Delegate {
         Ok(())
     }
 
-    pub(crate) fn finish_scan_locks(
+    fn finish_scan_locks(
         &mut self,
         region: Region,
         locks: BTreeMap<Key, MiniLock>,
-    ) -> Result<Vec<(&Downstream, Error)>> {
+    ) -> Result<Vec<(Downstream, Error)>> {
         fail::fail_point!("cdc_finish_scan_locks_memory_quota_exceed", |_| Err(
             Error::MemoryQuotaExceeded(tikv_util::memory::MemoryQuotaExceeded)
         ));
@@ -484,40 +477,23 @@ impl Delegate {
 
         // Check observed key range in region.
         let mut failed_downstreams = Vec::new();
-        for downstream in &mut self.downstreams {
+        for mut downstream in std::mem::take(&mut self.downstreams) {
             downstream.observed_range.update_region_key_range(region);
-            if let Err(e) = Self::check_epoch_on_ready(downstream, region) {
-                failed_downstreams.push((&*downstream, e));
+            if let Err(e) = Self::check_epoch_on_ready(&downstream, region) {
+                failed_downstreams.push((downstream, e));
+            } else {
+                self.downstreams.push(downstream);
             }
         }
-
         Ok(failed_downstreams)
     }
 
-    /// Create a Delegate the given region.
-    pub fn new(
-        region_id: u64,
-        memory_quota: Arc<MemoryQuota>,
-        txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
-    ) -> Delegate {
-        Delegate {
-            region_id,
-            handle: ObserveHandle::new(),
-            memory_quota,
-
-            lock_tracker: LockTracker::Pending,
-            downstreams: Vec::new(),
-            txn_extra_op,
-            failed: false,
-
-            created: Instant::now_coarse(),
-            last_lag_warn: Instant::now_coarse(),
+    fn subscribe(&mut self, downstream: Downstream) -> StdResult<(), (Error, Downstream)> {
+        if self.stopped {
+            let mut e = RequestError::default();
+            e.mut_region_not_found().region_id = self.region_id;
+            return Err((Error::Request(Box::new(e)), downstream));
         }
-    }
-
-    /// Let downstream subscribe the delegate.
-    /// Return error if subscribe fails and the `Delegate` won't be changed.
-    pub fn subscribe(&mut self, downstream: Downstream) -> StdResult<(), (Error, Downstream)> {
         if let LockTracker::Prepared { ref region, .. } = &self.lock_tracker {
             // Check if the downstream is outdated.
             if let Err(e) = Self::check_epoch_on_ready(&downstream, region) {
@@ -528,95 +504,11 @@ impl Delegate {
         Ok(())
     }
 
-    pub fn downstream(&self, downstream_id: DownstreamId) -> Option<&Downstream> {
-        self.downstreams().iter().find(|d| d.id == downstream_id)
-    }
-
-    pub fn downstreams(&self) -> &Vec<Downstream> {
-        &self.downstreams
-    }
-
-    pub fn downstreams_mut(&mut self) -> &mut Vec<Downstream> {
-        &mut self.downstreams
-    }
-
-    /// Let downstream unsubscribe the delegate.
-    /// Return whether the delegate is empty or not.
-    pub fn unsubscribe(&mut self, id: DownstreamId, err: Option<Error>) -> bool {
-        let error_event = err.map(|err| err.into_error_event(self.region_id));
-        let region_id = self.region_id;
-        if let Some(d) = self.remove_downstream(id) {
-            if let Some(error_event) = error_event {
-                if let Err(err) = d.sink_error_event(region_id, error_event.clone()) {
-                    warn!("cdc send unsubscribe failed";
-                        "region_id" => region_id, "error" => ?err, "origin_error" => ?error_event,
-                        "downstream_id" => ?d.id, "downstream" => ?d.peer,
-                        "request_id" => ?d.req_id, "conn_id" => ?d.conn_id);
-                }
-            }
-            d.state.store(DownstreamState::Stopped);
-        }
-        self.downstreams().is_empty()
-    }
-
-    pub fn mark_failed(&mut self) {
-        self.failed = true;
-    }
-
-    pub fn has_failed(&self) -> bool {
-        self.failed
-    }
-
-    /// Stop the delegate
-    ///
-    /// This means the region has met an unrecoverable error for CDC.
-    /// It broadcasts errors to all downstream and stops.
-    pub fn stop(&mut self, err: Error) {
-        self.mark_failed();
-        self.stop_observing();
-
-        info!("cdc met region error";
-            "region_id" => self.region_id, "error" => ?err);
-        let region_id = self.region_id;
-        let error = err.into_error_event(self.region_id);
-        let send = move |downstream: &Downstream| {
-            downstream.state.store(DownstreamState::Stopped);
-            let error_event = error.clone();
-            if let Err(err) = downstream.sink_error_event(region_id, error_event) {
-                warn!("cdc send region error failed";
-                    "region_id" => region_id, "error" => ?err, "origin_error" => ?error,
-                    "downstream_id" => ?downstream.id, "downstream" => ?downstream.peer,
-                    "request_id" => ?downstream.req_id, "conn_id" => ?downstream.conn_id);
-            } else {
-                info!("cdc send region error success";
-                    "region_id" => region_id, "origin_error" => ?error,
-                    "downstream_id" => ?downstream.id, "downstream" => ?downstream.peer,
-                    "request_id" => ?downstream.req_id, "conn_id" => ?downstream.conn_id);
-            }
-        };
-
-        for downstream in &self.downstreams {
-            send(downstream);
-        }
-    }
-
-    /// `txn_extra_op` returns a shared flag which is accessed in TiKV's
-    /// transaction layer to determine whether to capture modifications' old
-    /// value or not. Unsubscribing all downstreams or calling
-    /// `Delegate::stop` will store it with `TxnExtraOp::Noop`.
-    ///
-    /// NOTE: Dropping a `Delegate` won't update this flag.
-    pub fn txn_extra_op(&self) -> &AtomicCell<TxnExtraOp> {
-        self.txn_extra_op.as_ref()
-    }
-
-    /// Try advance and broadcast resolved ts.
-    pub(crate) fn on_min_ts(
+    fn on_min_ts(
         &mut self,
         min_ts: TimeStamp,
         current_ts: TimeStamp,
-        connections: &HashMap<ConnId, Conn>,
-        advance: &mut Advance,
+        cb: Box<dyn FnOnce(()) + Send>,
     ) {
         let locks = match &self.lock_tracker {
             LockTracker::Prepared { locks, .. } => locks,
@@ -638,12 +530,10 @@ impl Delegate {
             }
         };
 
-        let mut handle_downstream = |downstream: &mut Downstream| -> Option<TimeStamp> {
+        let handle_downstream = |downstream: &mut Downstream| {
             if !downstream.state.load().ready_for_advancing_ts() {
-                advance.blocked_on_scan += 1;
-                return None;
+                return;
             }
-            advance.scan_finished += 1;
 
             if downstream.lock_heap.is_none() {
                 let mut lock_heap = BTreeMap::<TimeStamp, isize>::new();
@@ -656,43 +546,26 @@ impl Delegate {
 
             let lock_heap = downstream.lock_heap.as_ref().unwrap();
             let min_lock = lock_heap.keys().next().cloned().unwrap_or(min_ts);
-            let advanced_to = std::cmp::min(min_lock, min_ts);
-            if advanced_to > downstream.advanced_to {
-                downstream.advanced_to = advanced_to;
-            } else {
-                advance.blocked_on_locks += 1;
+            let advanced_to = std::cmp::min(min_lock, min_ts).into_inner();
+            if advanced_to > downstream.advanced_to.load(Ordering::Acquire) {
+                downstream.advanced_to.store(advanced_to, Ordering::Release);
             }
-            Some(downstream.advanced_to)
         };
 
         let mut slow_downstreams = Vec::new();
         for d in &mut self.downstreams {
-            let advanced_to = match handle_downstream(d) {
-                Some(ts) => ts,
-                None => continue,
-            };
-
-            let features = connections.get(&d.conn_id).unwrap().features();
-            if features.contains(FeatureGate::STREAM_MULTIPLEXING) {
-                let k = (d.conn_id, d.req_id);
-                let v = advance.multiplexing.entry(k).or_default();
-                v.push(self.region_id, advanced_to);
-            } else if features.contains(FeatureGate::BATCH_RESOLVED_TS) {
-                let v = advance.exclusive.entry(d.conn_id).or_default();
-                v.push(self.region_id, advanced_to);
-            } else {
-                let k = (d.conn_id, self.region_id);
-                let v = (d.req_id, advanced_to);
-                advance.compat.insert(k, v);
-            }
-
-            let lag = current_ts
-                .physical()
-                .saturating_sub(d.advanced_to.physical());
-            if Duration::from_millis(lag) > WARN_LAG_THRESHOLD {
-                slow_downstreams.push(d.id);
+            handle_downstream(d);
+            let advanced_to = d.advanced_to.load(Ordering::Relaxed);
+            if advanced_to > 0 {
+                let lag = current_ts
+                    .physical()
+                    .saturating_sub(TimeStamp::from(advanced_to).physical());
+                if Duration::from_millis(lag) > WARN_LAG_THRESHOLD {
+                    slow_downstreams.push(d.id);
+                }
             }
         }
+        cb(());
 
         if !slow_downstreams.is_empty() {
             let now = Instant::now_coarse();
@@ -707,14 +580,8 @@ impl Delegate {
         }
     }
 
-    pub fn on_batch(
-        &mut self,
-        batch: CmdBatch,
-        old_value_cb: &OldValueCallback,
-        old_value_cache: &mut OldValueCache,
-        statistics: &mut Statistics,
-    ) -> Result<()> {
-        // Stale CmdBatch, drop it silently.
+    async fn on_batch(&mut self, batch: CmdBatch, old_value_cb: OldValueCallback) -> Result<()> {
+        fail_point!("cdc_before_handle_observed_event", |_| Ok(()));
         if batch.cdc_id != self.handle.id {
             return Ok(());
         }
@@ -731,14 +598,8 @@ impl Delegate {
             }
             if !request.has_admin_request() {
                 let flags = WriteBatchFlags::from_bits_truncate(request.get_header().get_flags());
-                self.sink_data(
-                    index,
-                    request.requests.into(),
-                    flags,
-                    old_value_cb,
-                    old_value_cache,
-                    statistics,
-                )?;
+                self.sink_data(index, request.requests.into(), flags, &old_value_cb)
+                    .await?;
             } else {
                 self.sink_admin(request.take_admin_request(), response.take_admin_response())?;
             }
@@ -746,124 +607,14 @@ impl Delegate {
         Ok(())
     }
 
-    pub(crate) fn convert_to_grpc_events(
-        region_id: u64,
-        request_id: RequestId,
-        entries: Vec<Option<KvEntry>>,
-        filter_loop: bool,
-        observed_range: &ObservedRange,
-    ) -> Result<Vec<CdcEvent>> {
-        let entries_len = entries.len();
-        let mut rows = vec![Vec::with_capacity(entries_len)];
-        let mut current_rows_size: usize = 0;
-        for entry in entries {
-            let (mut row, mut _has_value) = (EventRow::default(), false);
-            let row_size: usize;
-            match entry {
-                Some(KvEntry::RawKvEntry(kv_pair)) => {
-                    decode_rawkv(kv_pair.0, kv_pair.1, &mut row)?;
-                    row_size = row.key.len() + row.value.len();
-                }
-                Some(KvEntry::TxnEntry(TxnEntry::Prewrite {
-                    default,
-                    lock,
-                    old_value,
-                })) => {
-                    if !observed_range.contains_encoded_key(&lock.0) {
-                        continue;
-                    }
-                    let l = Lock::parse(&lock.1).unwrap();
-                    if decode_lock(lock.0, l, &mut row, &mut _has_value) {
-                        continue;
-                    }
-                    decode_default(default.1, &mut row, &mut _has_value);
-                    row.old_value = old_value.finalized().unwrap_or_default();
-                    row_size = row.key.len() + row.value.len() + row.old_value.len();
-                }
-                Some(KvEntry::TxnEntry(TxnEntry::Commit {
-                    default,
-                    write,
-                    old_value,
-                })) => {
-                    if !observed_range.contains_encoded_key(&write.0) {
-                        continue;
-                    }
-                    if decode_write(write.0, &write.1, &mut row, &mut _has_value, false) {
-                        continue;
-                    }
-                    decode_default(default.1, &mut row, &mut _has_value);
-
-                    // This type means the row is self-contained, it has,
-                    //   1. start_ts
-                    //   2. commit_ts
-                    //   3. key
-                    //   4. value
-                    if row.get_type() == EventLogType::Rollback {
-                        // We dont need to send rollbacks to downstream,
-                        // because downstream does not needs rollback to clean
-                        // prewrite as it drops all previous stashed data.
-                        continue;
-                    }
-                    set_event_row_type(&mut row, EventLogType::Committed);
-                    row.old_value = old_value.finalized().unwrap_or_default();
-                    row_size = row.key.len() + row.value.len() + row.old_value.len();
-                }
-                None => {
-                    // This type means scan has finished.
-                    set_event_row_type(&mut row, EventLogType::Initialized);
-                    row_size = 0;
-                }
-            }
-            if TxnSource::is_lightning_physical_import(row.txn_source)
-                || TxnSource::is_lossy_ddl_reorg_source_set(row.txn_source)
-                || filter_loop && TxnSource::is_cdc_write_source_set(row.txn_source)
-            {
-                continue;
-            }
-            if current_rows_size + row_size >= CDC_EVENT_MAX_BYTES {
-                rows.push(Vec::with_capacity(entries_len));
-                current_rows_size = 0;
-            }
-            current_rows_size += row_size;
-            rows.last_mut().unwrap().push(row);
-        }
-
-        let rows = rows
-            .into_iter()
-            .filter(|rs| !rs.is_empty())
-            .map(|rs| {
-                let event_entries = EventEntries {
-                    entries: rs.into(),
-                    ..Default::default()
-                };
-                CdcEvent::Event(Event {
-                    region_id,
-                    request_id: request_id.0,
-                    event: Some(Event_oneof_event::Entries(event_entries)),
-                    ..Default::default()
-                })
-            })
-            .collect();
-        Ok(rows)
-    }
-
-    fn sink_data(
+    async fn sink_data(
         &mut self,
         index: u64,
         requests: Vec<Request>,
         flags: WriteBatchFlags,
         old_value_cb: &OldValueCallback,
-        old_value_cache: &mut OldValueCache,
-        statistics: &mut Statistics,
     ) -> Result<()> {
         debug_assert_eq!(self.txn_extra_op.load(), TxnExtraOp::ReadOldValue);
-
-        let read_old_value = |row: &mut EventRow, read_old_ts| -> Result<()> {
-            let key = Key::from_raw(&row.key).append_ts(row.start_ts.into());
-            let old_value = old_value_cb(key, read_old_ts, old_value_cache, statistics)?;
-            row.old_value = old_value.unwrap_or_default();
-            Ok(())
-        };
 
         let mut rows_builder = RowsBuilder::default();
         rows_builder.is_one_pc = flags.contains(WriteBatchFlags::ONE_PC);
@@ -877,12 +628,12 @@ impl Delegate {
         }
 
         let (raws, txns) = rows_builder.finish_build();
-        self.sink_downstream_raw(raws, index)?;
-        self.sink_downstream_tidb(txns, read_old_value)?;
+        self.sink_downstream_raw(raws, index).await?;
+        self.sink_downstream_tidb(txns, old_value_cb).await?;
         Ok(())
     }
 
-    fn sink_downstream_raw(&mut self, entries: Vec<EventRow>, index: u64) -> Result<()> {
+    async fn sink_downstream_raw(&mut self, entries: Vec<EventRow>, index: u64) -> Result<()> {
         let mut downstreams = Vec::with_capacity(self.downstreams.len());
         for d in &mut self.downstreams {
             if d.kv_api == ChangeDataRequestKvApi::RawKv && d.state.load().ready_for_change_events()
@@ -894,34 +645,30 @@ impl Delegate {
             return Ok(());
         }
 
-        for downstream in downstreams {
-            let filtered_entries: Vec<_> = entries
+        let mut failed_downstreams = vec![];
+        for d in downstreams {
+            let v: Vec<_> = entries
                 .iter()
-                .filter(|x| downstream.observed_range.contains_raw_key(&x.key))
+                .filter(|x| d.observed_range.contains_raw_key(&x.key))
                 .cloned()
                 .collect();
-            if filtered_entries.is_empty() {
+            if v.is_empty() {
                 continue;
             }
-            let event = Event {
-                region_id: self.region_id,
-                index,
-                request_id: downstream.req_id.0,
-                event: Some(Event_oneof_event::Entries(EventEntries {
-                    entries: filtered_entries.into(),
-                    ..Default::default()
-                })),
-                ..Default::default()
-            };
-            downstream.sink_event(event, false)?;
+            if let Err(e) = d.sink.send_observed_raw(index, v).await {
+                failed_downstreams.push((d.id, e));
+            }
+        }
+        for (d, e) in failed_downstreams {
+            self.on_stop_downstream(Some(e), d).await
         }
         Ok(())
     }
 
-    fn sink_downstream_tidb(
+    async fn sink_downstream_tidb(
         &mut self,
         mut entries: Vec<RowInBuilding>,
-        mut read_old_value: impl FnMut(&mut EventRow, TimeStamp) -> Result<()>,
+        old_value_cb: &OldValueCallback,
     ) -> Result<()> {
         let mut downstreams = Vec::with_capacity(self.downstreams.len());
         for d in &mut self.downstreams {
@@ -930,11 +677,9 @@ impl Delegate {
                 downstreams.push(d);
             }
         }
-        if downstreams.is_empty() {
-            return Ok(());
-        }
 
-        for downstream in downstreams {
+        let mut failed_downstreams = vec![];
+        for d in downstreams {
             let mut filtered_entries = Vec::with_capacity(entries.len());
             for RowInBuilding {
                 v,
@@ -943,16 +688,19 @@ impl Delegate {
                 ..
             } in &mut entries
             {
-                if !downstream.observed_range.contains_raw_key(&v.key) {
+                if !d.observed_range.contains_raw_key(&v.key) {
                     continue;
                 }
-                if let Some(read_old_ts) = needs_old_value {
-                    read_old_value(v, *read_old_ts)?;
+                if let Some(ts) = needs_old_value {
+                    let key = Key::from_raw(&v.key).append_ts(v.start_ts.into());
+                    let mut cache = self.old_value_cache.lock().await;
+                    let old_value = old_value_cb(key, *ts, &mut cache, &mut self.old_value_stats)?;
+                    v.old_value = old_value.unwrap_or_default();
                     *needs_old_value = None;
                 }
 
-                if *lock_count_modify != 0 && downstream.lock_heap.is_some() {
-                    let lock_heap = downstream.lock_heap.as_mut().unwrap();
+                if *lock_count_modify != 0 && d.lock_heap.is_some() {
+                    let lock_heap = d.lock_heap.as_mut().unwrap();
                     match lock_heap.entry(v.start_ts.into()) {
                         BTreeMapEntry::Vacant(x) => {
                             x.insert(*lock_count_modify);
@@ -973,7 +721,7 @@ impl Delegate {
 
                 if TxnSource::is_lightning_physical_import(v.txn_source)
                     || TxnSource::is_lossy_ddl_reorg_source_set(v.txn_source)
-                    || downstream.filter_loop && TxnSource::is_cdc_write_source_set(v.txn_source)
+                    || d.filter_loop && TxnSource::is_cdc_write_source_set(v.txn_source)
                 {
                     continue;
                 }
@@ -983,16 +731,12 @@ impl Delegate {
             if filtered_entries.is_empty() {
                 continue;
             }
-            let event = Event {
-                region_id: self.region_id,
-                request_id: downstream.req_id.0,
-                event: Some(Event_oneof_event::Entries(EventEntries {
-                    entries: filtered_entries.into(),
-                    ..Default::default()
-                })),
-                ..Default::default()
-            };
-            downstream.sink_event(event, false)?;
+            if let Err(e) = d.sink.send_observed_tidb(filtered_entries).await {
+                failed_downstreams.push((d.id, e));
+            }
+        }
+        for (d, e) in failed_downstreams {
+            self.on_stop_downstream(Some(e), d).await
         }
         Ok(())
     }
@@ -1091,21 +835,8 @@ impl Delegate {
     }
 
     fn add_downstream(&mut self, downstream: Downstream) {
-        self.downstreams_mut().push(downstream);
+        self.downstreams.push(downstream);
         self.txn_extra_op.store(TxnExtraOp::ReadOldValue);
-    }
-
-    fn remove_downstream(&mut self, id: DownstreamId) -> Option<Downstream> {
-        if let Some(index) = self.downstreams.iter().position(|x| x.id == id) {
-            let downstream = self.downstreams.swap_remove(index);
-            if self.downstreams.is_empty() {
-                // Stop observing when the last downstream is removed. Otherwise the observer
-                // will keep pushing events to the delegate.
-                self.stop_observing();
-            }
-            return Some(downstream);
-        }
-        None
     }
 
     fn check_epoch_on_ready(downstream: &Downstream, region: &Region) -> Result<()> {
@@ -1121,7 +852,7 @@ impl Delegate {
                 "region_id" => region.id,
                 "downstream_id" => ?downstream.id,
                 "conn_id" => ?downstream.conn_id,
-                "req_id" => ?downstream.req_id,
+                "request_id" => ?downstream.request_id,
                 "err" => ?e
             );
             // Downstream is outdated, mark stop.
@@ -1131,12 +862,222 @@ impl Delegate {
         Ok(())
     }
 
-    fn stop_observing(&self) {
-        info!("cdc stop observing"; "region_id" => self.region_id, "failed" => self.failed);
+    fn stop_observing(&mut self) {
+        self.stopped = true;
+        self.tasks.close();
         // Stop observe further events.
         self.handle.stop_observing();
         // To inform transaction layer no more old values are required for the region.
         self.txn_extra_op.store(TxnExtraOp::Noop);
+    }
+
+    pub fn meta(&self) -> DelegateMeta {
+        DelegateMeta {
+            region_id: self.region_id,
+            handle: self.handle.clone(),
+            sched: self.sched.clone(),
+        }
+    }
+
+    pub async fn handle_tasks(&mut self) {
+        while let Some(task) = self.tasks.next().await {
+            match task {
+                DelegateTask::Subscribe { downstream, cb } => {
+                    if self.on_subscribe_downstream(downstream).await {
+                        cb(());
+                    }
+                }
+                DelegateTask::ObservedEvent { cmds, old_value_cb } => {
+                    self.memory_quota.free(cmds.size());
+                    if let Err(e) = self.on_batch(cmds, old_value_cb).await {
+                        self.on_stop(Some(e)).await;
+                    }
+                }
+                DelegateTask::Stop { observe_id, err } => {
+                    if self.handle.id != observe_id {
+                        debug!("cdc stale stop delegate";
+                            "region_id" => self.region_id,
+                            "observe_id" => ?observe_id,
+                            "current_id" => ?self.handle.id);
+                        return;
+                    }
+                    self.on_stop(err).await;
+                }
+                DelegateTask::StopDownstream { downstream_id, err } => {
+                    self.on_stop_downstream(err, downstream_id).await;
+                }
+                DelegateTask::MinTs {
+                    min_ts,
+                    current_ts,
+                    cb,
+                } => {
+                    self.on_min_ts(min_ts, current_ts, cb);
+                }
+                DelegateTask::FinishScanLocks {
+                    observe_id,
+                    region,
+                    locks,
+                } => {
+                    if self.handle.id != observe_id {
+                        debug!("cdc stale region finish scan locks";
+                            "region_id" => self.region_id,
+                            "observe_id" => ?observe_id,
+                            "current_id" => ?self.handle.id);
+                        return;
+                    }
+                    self.on_finish_scan_locks(region, locks).await;
+                }
+                DelegateTask::InitDownstream {
+                    observe_id,
+                    downstream_id,
+                    build_resolver,
+                    cb,
+                } => {
+                    self.on_init_downstream(observe_id, downstream_id, build_resolver, cb);
+                }
+                DelegateTask::FlushStats => {
+                    flush_oldvalue_stats(&self.old_value_stats, TAG_DELTA_CHANGE);
+                    self.old_value_stats = Statistics::default();
+                }
+                DelegateTask::Validate(validate) => {
+                    validate(Some(self));
+                }
+            }
+        }
+    }
+
+    async fn on_subscribe_downstream(&mut self, downstream: Downstream) -> bool {
+        if let Err((err, downstream)) = self.subscribe(downstream) {
+            let err_event = Some(err.into_error_event(self.region_id));
+            self.deregister_downstream(err_event, downstream).await;
+            return false;
+        }
+        true
+    }
+
+    async fn deregister_downstream_inner(
+        &mut self,
+        err_event: Option<ErrorEvent>,
+        downstream: Downstream,
+    ) -> bool {
+        downstream.state.store(DownstreamState::Stopped);
+        if let Some(err_event) = err_event {
+            // To avoid ResolvedTs being sent out after the error event.
+            downstream.advanced_to.store(0, Ordering::Release);
+
+            if let Err(err) = downstream.sink.cancel_by_error(err_event).await {
+                assert!(matches!(err, Error::Sink(SendError::Disconnected)));
+                warn!("cdc send region error failed";
+                    "region_id" => self.region_id, "error" => ?err,
+                    "downstream_id" => ?downstream.id, "downstream" => ?downstream.peer,
+                    "request_id" => ?downstream.request_id, "conn_id" => ?downstream.conn_id);
+            } else {
+                info!("cdc send region error success";
+                    "region_id" => self.region_id,
+                    "downstream_id" => ?downstream.id, "downstream" => ?downstream.peer,
+                    "request_id" => ?downstream.request_id, "conn_id" => ?downstream.conn_id);
+            }
+        }
+        let _ = self
+            .feedbacks
+            .schedule_force(Task::Deregister(Deregister::Downstream {
+                conn_id: downstream.conn_id,
+                request_id: downstream.request_id,
+                region_id: self.region_id,
+                downstream_id: downstream.id,
+            }));
+        self.downstreams.is_empty()
+    }
+
+    async fn deregister_downstream(
+        &mut self,
+        err_event: Option<ErrorEvent>,
+        downstream: Downstream,
+    ) {
+        if self
+            .deregister_downstream_inner(err_event, downstream)
+            .await
+        {
+            self.on_stop(None).await;
+        }
+    }
+
+    async fn on_stop(&mut self, err: Option<Error>) {
+        fail_point!("cdc_before_handle_stop_delegate", |_| {});
+        info!("cdc stop delegate"; "region_id" => self.region_id, "error" => ?err);
+        let err_event = err.map(|x| x.into_error_event(self.region_id));
+        while !self.downstreams.is_empty() {
+            let downstream = self.downstreams.swap_remove(0);
+            self.deregister_downstream_inner(err_event.clone(), downstream)
+                .await;
+        }
+        self.stop_observing();
+        let _ = self
+            .feedbacks
+            .schedule_force(Task::Deregister(Deregister::Delegate {
+                region_id: self.region_id,
+                observe_id: self.handle.id,
+            }));
+    }
+
+    async fn on_stop_downstream(&mut self, err: Option<Error>, downstream_id: DownstreamId) {
+        info!("cdc stop downstream"; "region_id" => self.region_id, "downstream_id" => ?downstream_id, "error" => ?err);
+        if let Some(x) = self.downstreams.iter().position(|d| d.id == downstream_id) {
+            let downstream = self.downstreams.swap_remove(x);
+            let err_event = err.map(|x| x.into_error_event(self.region_id));
+            self.deregister_downstream(err_event, downstream).await;
+        }
+    }
+
+    async fn on_finish_scan_locks(&mut self, region: Region, locks: BTreeMap<Key, MiniLock>) {
+        match self.finish_scan_locks(region, locks) {
+            Ok(fails) => {
+                for (downstream, err) in fails {
+                    let err_event = Some(err.into_error_event(self.region_id));
+                    self.deregister_downstream(err_event, downstream).await;
+                }
+            }
+            Err(err) => self.on_stop(Some(err)).await,
+        }
+    }
+
+    fn on_init_downstream(
+        &mut self,
+        observe_id: ObserveId,
+        downstream_id: DownstreamId,
+        build_resolver: Arc<AtomicBool>,
+        cb: Box<dyn FnOnce() + Send>,
+    ) {
+        if self.handle.id != observe_id {
+            debug!("cdc stale region init downstream";
+                "region_id" => self.region_id,
+                "observe_id" => ?observe_id,
+                "current_id" => ?self.handle.id);
+            return;
+        }
+        if self.init_lock_tracker() {
+            build_resolver.store(true, Ordering::Release);
+        }
+        if let Some(d) = self.downstreams.iter().find(|d| d.id == downstream_id) {
+            let downstream_state = d.get_state();
+            if on_init_downstream(&downstream_state) {
+                info!("cdc downstream starts to initialize";
+                    "region_id" => self.region_id,
+                    "observe_id" => ?observe_id,
+                    "downstream_id" => ?downstream_id);
+            } else {
+                warn!("cdc downstream fails to initialize: canceled";
+                    "region_id" => self.region_id,
+                    "observe_id" => ?observe_id,
+                    "downstream_id" => ?downstream_id);
+            }
+        }
+        cb();
+    }
+
+    /// Only used in tests.
+    pub fn downstreams_count(&self) -> usize {
+        self.downstreams.len()
     }
 }
 
@@ -1400,17 +1341,166 @@ impl ObservedRange {
     }
 }
 
+pub enum DelegateTask {
+    Subscribe {
+        downstream: Downstream,
+        cb: Box<dyn FnOnce(()) + Send>,
+    },
+    ObservedEvent {
+        cmds: CmdBatch,
+        old_value_cb: OldValueCallback,
+    },
+    Stop {
+        observe_id: ObserveId,
+        err: Option<Error>,
+    },
+    StopDownstream {
+        downstream_id: DownstreamId,
+        err: Option<Error>,
+    },
+    MinTs {
+        min_ts: TimeStamp,
+        current_ts: TimeStamp,
+        cb: Box<dyn FnOnce(()) + Send>,
+    },
+    FinishScanLocks {
+        observe_id: ObserveId,
+        region: Region,
+        locks: BTreeMap<Key, MiniLock>,
+    },
+    InitDownstream {
+        observe_id: ObserveId,
+        downstream_id: DownstreamId,
+        build_resolver: Arc<AtomicBool>,
+        cb: Box<dyn FnOnce() + Send>,
+    },
+    FlushStats,
+    Validate(Box<dyn FnOnce(Option<&Delegate>) + Send>),
+}
+
+impl fmt::Debug for DelegateTask {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut de = f.debug_struct("DelegateTask");
+        let de = match self {
+            DelegateTask::Subscribe { .. } => de.field("type", &"Subscribe"),
+            DelegateTask::ObservedEvent { .. } => de.field("type", &"ObservedEvent"),
+            DelegateTask::Stop { .. } => de.field("type", &"Stop"),
+            DelegateTask::StopDownstream { .. } => de.field("type", &"StopDownstream"),
+            DelegateTask::MinTs { .. } => de.field("type", &"MinTs"),
+            DelegateTask::FinishScanLocks { .. } => de.field("type", &"FinishScanLocks"),
+            DelegateTask::InitDownstream { .. } => de.field("type", &"InitDownstream"),
+            DelegateTask::FlushStats => de.field("type", &"FlushStats"),
+            DelegateTask::Validate(..) => de.field("type", &"Validate"),
+        };
+        de.finish()
+    }
+}
+
+#[derive(Clone)]
+pub struct DelegateMeta {
+    pub region_id: u64,
+    pub handle: ObserveHandle,
+    pub sched: UnboundedSender<DelegateTask>,
+}
+
+impl DelegateMeta {
+    pub async fn flush_stats_periodically(&self) {
+        let mut ticker = tokio::time::interval(Duration::from_secs(10));
+        loop {
+            ticker.tick().await;
+            if self.sched.unbounded_send(DelegateTask::FlushStats).is_err() {
+                break;
+            }
+        }
+    }
+}
+
 const WARN_LAG_THRESHOLD: Duration = Duration::from_secs(600);
 const WARN_LAG_INTERVAL: Duration = Duration::from_secs(60);
 
+pub(crate) fn convert_to_grpc_events(
+    entries: Vec<Option<KvEntry>>,
+    filter_loop: bool,
+) -> Result<Vec<Vec<EventRow>>> {
+    let entries_len = entries.len();
+    let mut rows = vec![Vec::with_capacity(entries_len)];
+    let mut current_rows_size: usize = 0;
+    for entry in entries {
+        let (mut row, mut _has_value) = (EventRow::default(), false);
+        let row_size: usize;
+        match entry {
+            Some(KvEntry::RawKvEntry(kv_pair)) => {
+                decode_rawkv(kv_pair.0, kv_pair.1, &mut row)?;
+                row_size = row.key.len() + row.value.len();
+            }
+            Some(KvEntry::TxnEntry(TxnEntry::Prewrite {
+                default,
+                lock,
+                old_value,
+            })) => {
+                let l = Lock::parse(&lock.1).unwrap();
+                if decode_lock(lock.0, l, &mut row, &mut _has_value) {
+                    continue;
+                }
+                decode_default(default.1, &mut row, &mut _has_value);
+                row.old_value = old_value.finalized().unwrap_or_default();
+                row_size = row.key.len() + row.value.len() + row.old_value.len();
+            }
+            Some(KvEntry::TxnEntry(TxnEntry::Commit {
+                default,
+                write,
+                old_value,
+            })) => {
+                if decode_write(write.0, &write.1, &mut row, &mut _has_value, false) {
+                    continue;
+                }
+                decode_default(default.1, &mut row, &mut _has_value);
+
+                // This type means the row is self-contained, it has,
+                //   1. start_ts
+                //   2. commit_ts
+                //   3. key
+                //   4. value
+                if row.get_type() == EventLogType::Rollback {
+                    // We dont need to send rollbacks to downstream,
+                    // because downstream does not needs rollback to clean
+                    // prewrite as it drops all previous stashed data.
+                    continue;
+                }
+                set_event_row_type(&mut row, EventLogType::Committed);
+                row.old_value = old_value.finalized().unwrap_or_default();
+                row_size = row.key.len() + row.value.len() + row.old_value.len();
+            }
+            None => {
+                // This type means scan has finished.
+                set_event_row_type(&mut row, EventLogType::Initialized);
+                row_size = 0;
+            }
+        }
+        if TxnSource::is_lightning_physical_import(row.txn_source)
+            || TxnSource::is_lossy_ddl_reorg_source_set(row.txn_source)
+            || filter_loop && TxnSource::is_cdc_write_source_set(row.txn_source)
+        {
+            continue;
+        }
+
+        current_rows_size += row_size;
+        if current_rows_size >= CDC_EVENT_MAX_BYTES {
+            rows.push(Vec::with_capacity(entries_len));
+            current_rows_size = row_size;
+        }
+        rows.last_mut().unwrap().push(row);
+    }
+
+    Ok(rows)
+}
+
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
-
     use api_version::RawValue;
-    use futures::{executor::block_on, stream::StreamExt};
+    use futures::executor::block_on;
     use kvproto::{errorpb::Error as ErrorHeader, metapb::Region};
-    use tikv_util::memory::MemoryQuota;
+    use tikv_util::{config::ReadableSize, memory::MemoryQuota, worker::dummy_scheduler};
 
     use super::*;
     use crate::channel::{channel, recv_timeout};
@@ -1418,80 +1508,83 @@ mod tests {
     #[test]
     fn test_error() {
         let region_id = 1;
-        let mut region = Region::default();
-        region.set_id(region_id);
-        region.mut_peers().push(Default::default());
-        region.mut_region_epoch().set_version(2);
-        region.mut_region_epoch().set_conf_ver(2);
-        let region_epoch = region.get_region_epoch().clone();
 
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
-        let (sink, mut drain) = channel(ConnId::default(), 1, quota.clone());
-        let rx = drain.drain();
-        let request_id = RequestId(123);
-        let mut downstream = Downstream::new(
-            String::new(),
-            region_epoch,
-            request_id,
-            ConnId::new(),
-            ChangeDataRequestKvApi::TiDb,
-            false,
-            ObservedRange::default(),
-        );
-        downstream.set_sink(sink);
-
-        let mut delegate = Delegate::new(region_id, quota, Default::default());
-        delegate.subscribe(downstream).unwrap();
-        assert!(delegate.handle.is_observing());
-
-        assert!(delegate.init_lock_tracker());
-        let fails = delegate
-            .finish_scan_locks(region, Default::default())
-            .unwrap();
-        assert!(fails.is_empty());
-        assert!(delegate.downstreams[0].observed_range.all_key_covered);
-
-        let rx_wrap = Cell::new(Some(rx));
-        let receive_error = || {
-            let (event, rx) = block_on(rx_wrap.replace(None).unwrap().into_future());
-            rx_wrap.set(Some(rx));
-            if let CdcEvent::Event(mut e) = event.unwrap().0 {
-                assert_eq!(e.get_request_id(), request_id.0);
-                let event = e.event.take().unwrap();
-                match event {
-                    Event_oneof_event::Error(err) => err,
-                    other => panic!("unknown event {:?}", other),
-                }
-            } else {
-                panic!("unknown event")
-            }
+        let (fbtx, _feedbacks) = dummy_scheduler();
+        let new_delegate = || {
+            Delegate::new(
+                region_id,
+                fbtx.clone(),
+                quota.clone(),
+                Arc::new(Mutex::new(OldValueCache::new(ReadableSize(1024)))),
+                Default::default(),
+            )
         };
 
+        let conn_id = ConnId::new();
+        let (sink, mut drain) = channel(conn_id, quota.clone());
+        let request_id = RequestId(123);
+        let new_downstream = || {
+            Downstream::new(
+                request_id,
+                conn_id,
+                String::new(),
+                Default::default(),
+                ChangeDataRequestKvApi::TiDb,
+                false,
+                ObservedRange::default(),
+                DownstreamSink::new(region_id, request_id, sink.clone()),
+            )
+        };
+
+        let mut receive_error = || {
+            let mut e = recv_timeout(&mut drain, Duration::from_millis(100))
+                .unwrap()
+                .unwrap();
+            let mut events: Vec<_> = e.take_events().into();
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0].region_id, region_id);
+            assert_eq!(events[0].request_id, request_id.0);
+            assert!(events[0].has_error());
+            events[0].take_error()
+        };
+
+        let mut delegate = new_delegate();
+        delegate.subscribe(new_downstream()).unwrap();
         let mut err_header = ErrorHeader::default();
         err_header.set_not_leader(Default::default());
-        delegate.stop(Error::request(err_header));
+        block_on(delegate.on_stop(Some(Error::request(err_header))));
         let err = receive_error();
         assert!(err.has_not_leader());
-        // Observing is disabled by any error.
         assert!(!delegate.handle.is_observing());
 
+        let mut delegate = new_delegate();
+        delegate.subscribe(new_downstream()).unwrap();
         let mut err_header = ErrorHeader::default();
         err_header.set_region_not_found(Default::default());
-        delegate.stop(Error::request(err_header));
+        block_on(delegate.on_stop(Some(Error::request(err_header))));
         let err = receive_error();
         assert!(err.has_region_not_found());
+        assert!(!delegate.handle.is_observing());
 
-        delegate.stop(Error::Sink(SendError::Congested));
+        let mut delegate = new_delegate();
+        delegate.subscribe(new_downstream()).unwrap();
+        block_on(delegate.on_stop(Some(Error::Sink(SendError::Congested))));
         let err = receive_error();
         assert!(err.has_congested());
+        assert!(!delegate.handle.is_observing());
 
+        let mut delegate = new_delegate();
+        delegate.subscribe(new_downstream()).unwrap();
         let mut err_header = ErrorHeader::default();
         err_header.set_epoch_not_match(Default::default());
-        delegate.stop(Error::request(err_header));
+        block_on(delegate.on_stop(Some(Error::request(err_header))));
         let err = receive_error();
         assert!(err.has_epoch_not_match());
+        assert!(!delegate.handle.is_observing());
 
-        // Split
+        let mut delegate = new_delegate();
+        delegate.subscribe(new_downstream()).unwrap();
         let mut region = Region::default();
         region.set_id(1);
         let mut request = AdminRequest::default();
@@ -1499,7 +1592,7 @@ mod tests {
         let mut response = AdminResponse::default();
         response.mut_split().set_left(region.clone());
         let err = delegate.sink_admin(request, response).err().unwrap();
-        delegate.stop(err);
+        block_on(delegate.on_stop(Some(err)));
         let mut err = receive_error();
         assert!(err.has_epoch_not_match());
         err.take_epoch_not_match()
@@ -1507,13 +1600,16 @@ mod tests {
             .into_iter()
             .find(|r| r.get_id() == 1)
             .unwrap();
+        assert!(!delegate.handle.is_observing());
 
+        let mut delegate = new_delegate();
+        delegate.subscribe(new_downstream()).unwrap();
         let mut request = AdminRequest::default();
         request.set_cmd_type(AdminCmdType::BatchSplit);
         let mut response = AdminResponse::default();
         response.mut_splits().set_regions(vec![region].into());
         let err = delegate.sink_admin(request, response).err().unwrap();
-        delegate.stop(err);
+        block_on(delegate.on_stop(Some(err)));
         let mut err = receive_error();
         assert!(err.has_epoch_not_match());
         err.take_epoch_not_match()
@@ -1521,103 +1617,125 @@ mod tests {
             .into_iter()
             .find(|r| r.get_id() == 1)
             .unwrap();
+        assert!(!delegate.handle.is_observing());
 
-        // Merge
+        let mut delegate = new_delegate();
+        delegate.subscribe(new_downstream()).unwrap();
         let mut request = AdminRequest::default();
         request.set_cmd_type(AdminCmdType::PrepareMerge);
         let response = AdminResponse::default();
         let err = delegate.sink_admin(request, response).err().unwrap();
-        delegate.stop(err);
+        block_on(delegate.on_stop(Some(err)));
         let mut err = receive_error();
         assert!(err.has_epoch_not_match());
         assert!(err.take_epoch_not_match().current_regions.is_empty());
+        assert!(!delegate.handle.is_observing());
 
+        let mut delegate = new_delegate();
+        delegate.subscribe(new_downstream()).unwrap();
         let mut request = AdminRequest::default();
         request.set_cmd_type(AdminCmdType::CommitMerge);
         let response = AdminResponse::default();
         let err = delegate.sink_admin(request, response).err().unwrap();
-        delegate.stop(err);
+        block_on(delegate.on_stop(Some(err)));
         let mut err = receive_error();
         assert!(err.has_epoch_not_match());
         assert!(err.take_epoch_not_match().current_regions.is_empty());
+        assert!(!delegate.handle.is_observing());
 
+        let mut delegate = new_delegate();
+        delegate.subscribe(new_downstream()).unwrap();
         let mut request = AdminRequest::default();
         request.set_cmd_type(AdminCmdType::RollbackMerge);
         let response = AdminResponse::default();
         let err = delegate.sink_admin(request, response).err().unwrap();
-        delegate.stop(err);
+        block_on(delegate.on_stop(Some(err)));
         let mut err = receive_error();
         assert!(err.has_epoch_not_match());
         assert!(err.take_epoch_not_match().current_regions.is_empty());
+        assert!(!delegate.handle.is_observing());
     }
 
     #[test]
     fn test_delegate_subscribe_unsubscribe() {
-        let new_downstream = |id: RequestId, region_version: u64| {
-            let peer = format!("{:?}", id);
+        let conn_id = ConnId::new();
+        let quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let (sink, _drain) = channel(conn_id, quota.clone());
+
+        let new_downstream = |request_id: RequestId, region_version: u64, sink| {
             let mut epoch = RegionEpoch::default();
             epoch.set_conf_ver(region_version);
             epoch.set_version(region_version);
             Downstream::new(
-                peer,
+                request_id,
+                conn_id,
+                format!("{:?}", request_id),
                 epoch,
-                id,
-                ConnId::new(),
                 ChangeDataRequestKvApi::TiDb,
                 false,
                 ObservedRange::default(),
+                DownstreamSink::new(1, request_id, sink),
             )
         };
 
         // Create a new delegate.
-        let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let (fbtx, _feedbacks) = dummy_scheduler();
         let txn_extra_op = Arc::new(AtomicCell::new(TxnExtraOp::Noop));
-        let mut delegate = Delegate::new(1, memory_quota, txn_extra_op.clone());
+
+        let mut delegate = Delegate::new(
+            1,
+            fbtx,
+            quota,
+            Arc::new(Mutex::new(OldValueCache::new(ReadableSize(1024)))),
+            txn_extra_op.clone(),
+        );
         assert_eq!(txn_extra_op.load(), TxnExtraOp::Noop);
         assert!(delegate.handle.is_observing());
 
         // Subscribe once.
-        let downstream1 = new_downstream(RequestId(1), 1);
+        let downstream1 = new_downstream(RequestId(1), 1, sink.clone());
         let downstream1_id = downstream1.id;
         delegate.subscribe(downstream1).unwrap();
         assert_eq!(txn_extra_op.load(), TxnExtraOp::ReadOldValue);
         assert!(delegate.handle.is_observing());
 
         // Subscribe twice and then unsubscribe the second downstream.
-        let downstream2 = new_downstream(RequestId(2), 1);
+        let downstream2 = new_downstream(RequestId(2), 1, sink.clone());
         let downstream2_id = downstream2.id;
         delegate.subscribe(downstream2).unwrap();
-        assert!(!delegate.unsubscribe(downstream2_id, None));
+        block_on(delegate.on_stop_downstream(None, downstream2_id));
         assert_eq!(txn_extra_op.load(), TxnExtraOp::ReadOldValue);
         assert!(delegate.handle.is_observing());
 
+        let downstream3 = new_downstream(RequestId(3), 2, sink.clone());
+        delegate.subscribe(downstream3).unwrap();
+
         // `on_region_ready` when the delegate isn't resolved.
-        delegate.subscribe(new_downstream(RequestId(1), 2)).unwrap();
-        let mut region = Region::default();
-        region.mut_region_epoch().set_conf_ver(1);
-        region.mut_region_epoch().set_version(1);
         {
             assert!(delegate.init_lock_tracker());
+
+            let mut region = Region::default();
+            region.mut_region_epoch().set_conf_ver(1);
+            region.mut_region_epoch().set_version(1);
             let failures = delegate
                 .finish_scan_locks(region, Default::default())
                 .unwrap();
             assert_eq!(failures.len(), 1);
             let id = failures[0].0.id;
-            delegate.unsubscribe(id, None);
-            assert_eq!(delegate.downstreams().len(), 1);
+            block_on(delegate.on_stop_downstream(None, id));
+            assert_eq!(delegate.downstreams.len(), 1);
         }
         assert_eq!(txn_extra_op.load(), TxnExtraOp::ReadOldValue);
         assert!(delegate.handle.is_observing());
 
         // Subscribe with an invalid epoch.
-        delegate
-            .subscribe(new_downstream(RequestId(1), 2))
-            .unwrap_err();
-        assert_eq!(delegate.downstreams().len(), 1);
+        let downstream4 = new_downstream(RequestId(4), 2, sink.clone());
+        delegate.subscribe(downstream4).unwrap_err();
+        assert_eq!(delegate.downstreams.len(), 1);
 
         // Unsubscribe all downstreams.
-        assert!(delegate.unsubscribe(downstream1_id, None));
-        assert!(delegate.downstreams().is_empty());
+        block_on(delegate.on_stop_downstream(None, downstream1_id));
+        assert!(delegate.downstreams.is_empty());
         assert_eq!(txn_extra_op.load(), TxnExtraOp::Noop);
         assert!(!delegate.handle.is_observing());
     }
@@ -1687,15 +1805,26 @@ mod tests {
 
     #[test]
     fn test_downstream_filter_entires() {
+        let conn_id = ConnId::new();
+        let quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let (sink, mut drain) = channel(conn_id, quota.clone());
+        let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let txn_extra_op = Arc::new(AtomicCell::new(TxnExtraOp::Noop));
+        let (fbtx, _feedbacks) = dummy_scheduler();
+
         // Create a new delegate that observes [b, d).
         let observed_range = ObservedRange::new(
             Key::from_raw(b"b").into_encoded(),
             Key::from_raw(b"d").into_encoded(),
         )
         .unwrap();
-        let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
-        let txn_extra_op = Arc::new(AtomicCell::new(TxnExtraOp::Noop));
-        let mut delegate = Delegate::new(1, memory_quota, txn_extra_op);
+        let mut delegate = Delegate::new(
+            1,
+            fbtx,
+            memory_quota,
+            Arc::new(Mutex::new(OldValueCache::new(ReadableSize(1024)))),
+            txn_extra_op,
+        );
         assert!(delegate.handle.is_observing());
         assert!(delegate.init_lock_tracker());
 
@@ -1720,45 +1849,44 @@ mod tests {
         }
         assert_eq!(rows_builder.txns_by_key.len(), 5);
 
-        let (sink, mut drain) = channel(ConnId::default(), 1, Arc::new(MemoryQuota::new(1024)));
-        let mut downstream = Downstream::new(
+        let downstream = Downstream::new(
+            RequestId(1),
+            conn_id,
             "peer".to_owned(),
             RegionEpoch::default(),
-            RequestId(1),
-            ConnId::new(),
             ChangeDataRequestKvApi::TiDb,
             false,
             observed_range,
+            DownstreamSink::new(1, RequestId(1), sink),
         );
-        downstream.set_sink(sink);
         downstream.get_state().store(DownstreamState::Normal);
         delegate.add_downstream(downstream);
         let (_, entries) = rows_builder.finish_build();
-        delegate
-            .sink_downstream_tidb(entries, |_, _| Ok(()))
-            .unwrap();
+        let cb: OldValueCallback = Box::new(|_, _, _, _| Ok(None));
+        block_on(delegate.sink_downstream_tidb(entries, &cb)).unwrap();
 
-        let (mut tx, mut rx) = futures::channel::mpsc::unbounded();
-        let runtime = tokio::runtime::Runtime::new().unwrap();
-        runtime.spawn(async move {
-            drain.forward(&mut tx).await.unwrap();
-        });
-        let (e, _) = recv_timeout(&mut rx, std::time::Duration::from_secs(5))
+        let e = recv_timeout(&mut drain, Duration::from_millis(100))
             .unwrap()
             .unwrap();
         assert_eq!(e.events[0].get_entries().get_entries().len(), 2, "{:?}", e);
     }
 
     fn test_downstream_txn_source_filter(txn_source: TxnSource, filter_loop: bool) {
+        let conn_id = ConnId::new();
+        let quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let (sink, mut drain) = channel(conn_id, quota.clone());
+        let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let cache = Arc::new(Mutex::new(OldValueCache::new(ReadableSize(1024))));
+        let txn_extra_op = Arc::new(AtomicCell::new(TxnExtraOp::Noop));
+        let (fbtx, _feedbacks) = dummy_scheduler();
+
         // Create a new delegate that observes [a, f).
         let observed_range = ObservedRange::new(
             Key::from_raw(b"a").into_encoded(),
             Key::from_raw(b"f").into_encoded(),
         )
         .unwrap();
-        let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
-        let txn_extra_op = Arc::new(AtomicCell::new(TxnExtraOp::Noop));
-        let mut delegate = Delegate::new(1, memory_quota, txn_extra_op);
+        let mut delegate = Delegate::new(1, fbtx, memory_quota, cache, txn_extra_op);
         assert!(delegate.handle.is_observing());
         assert!(delegate.init_lock_tracker());
 
@@ -1787,30 +1915,23 @@ mod tests {
         }
         assert_eq!(rows_builder.txns_by_key.len(), 5);
 
-        let (sink, mut drain) = channel(ConnId::default(), 1, Arc::new(MemoryQuota::new(1024)));
-        let mut downstream = Downstream::new(
+        let downstream = Downstream::new(
+            RequestId(1),
+            conn_id,
             "peer".to_owned(),
             RegionEpoch::default(),
-            RequestId(1),
-            ConnId::new(),
             ChangeDataRequestKvApi::TiDb,
             filter_loop,
             observed_range,
+            DownstreamSink::new(1, RequestId(1), sink),
         );
-        downstream.set_sink(sink);
         downstream.get_state().store(DownstreamState::Normal);
         delegate.add_downstream(downstream);
         let (_, entries) = rows_builder.finish_build();
-        delegate
-            .sink_downstream_tidb(entries, |_, _| Ok(()))
-            .unwrap();
+        let cb: OldValueCallback = Box::new(|_, _, _, _| Ok(None));
+        block_on(delegate.sink_downstream_tidb(entries, &cb)).unwrap();
 
-        let (mut tx, mut rx) = futures::channel::mpsc::unbounded();
-        let runtime = tokio::runtime::Runtime::new().unwrap();
-        runtime.spawn(async move {
-            drain.forward(&mut tx).await.unwrap();
-        });
-        let (e, _) = recv_timeout(&mut rx, std::time::Duration::from_secs(5))
+        let e = recv_timeout(&mut drain, Duration::from_millis(100))
             .unwrap()
             .unwrap();
         assert_eq!(e.events[0].get_entries().get_entries().len(), 1, "{:?}", e);
@@ -1891,8 +2012,11 @@ mod tests {
 
     #[test]
     fn test_lock_tracker() {
+        let (fbtx, _feedbacks) = dummy_scheduler();
+        let cache = Arc::new(Mutex::new(OldValueCache::new(ReadableSize(1024))));
+
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
-        let mut delegate = Delegate::new(1, quota.clone(), Default::default());
+        let mut delegate = Delegate::new(1, fbtx, quota.clone(), cache, Default::default());
         assert!(delegate.init_lock_tracker());
         assert!(!delegate.init_lock_tracker());
 
@@ -1949,8 +2073,10 @@ mod tests {
 
     #[test]
     fn test_lock_tracker_untrack_vacant() {
+        let (fbtx, _feedbacks) = dummy_scheduler();
+        let cache = Arc::new(Mutex::new(OldValueCache::new(ReadableSize(1024))));
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
-        let mut delegate = Delegate::new(1, quota.clone(), Default::default());
+        let mut delegate = Delegate::new(1, fbtx, quota.clone(), cache, Default::default());
         assert!(delegate.init_lock_tracker());
         assert!(!delegate.init_lock_tracker());
 

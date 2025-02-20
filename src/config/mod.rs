@@ -3000,9 +3000,14 @@ impl Default for BackupStreamConfig {
 pub struct CdcConfig {
     pub min_ts_interval: ReadableDuration,
     pub hibernate_regions_compatible: bool,
-    // TODO(hi-rustin): Consider resizing the thread pool based on `incremental_scan_threads`.
+
+    /// Threads for collecting and sending events to TiCDC clients.
+    #[online_config(skip)]
+    pub responser_threads: usize,
+    /// Threads for incremental scans.
     #[online_config(skip)]
     pub incremental_scan_threads: usize,
+
     // The number of scan tasks that is allowed to run concurrently.
     pub incremental_scan_concurrency: usize,
     // The number of scan tasks that is allowed to be created. In other words,
@@ -3047,6 +3052,8 @@ impl Default for CdcConfig {
         Self {
             min_ts_interval: ReadableDuration::secs(1),
             hibernate_regions_compatible: true,
+            // 3 threads for outputing events to CDC clients.
+            responser_threads: 3,
             // 4 threads for incremental scan.
             incremental_scan_threads: 4,
             // At most 6 concurrent running tasks.
@@ -3079,6 +3086,13 @@ impl CdcConfig {
             );
             self.min_ts_interval = default_cfg.min_ts_interval;
         }
+        if self.responser_threads == 0 {
+            warn!(
+                "cdc.responser-threads can't be 0, change it to {}",
+                default_cfg.responser_threads
+            );
+            self.responser_threads = default_cfg.responser_threads;
+        }
         if self.incremental_scan_threads == 0 {
             warn!(
                 "cdc.incremental-scan-threads can't be 0, change it to {}",
@@ -3101,6 +3115,20 @@ impl CdcConfig {
                 self.incremental_scan_concurrency
             );
             self.incremental_scan_concurrency_limit = self.incremental_scan_concurrency
+        }
+        if self.incremental_scan_speed_limit.0 == 0 {
+            warn!(
+                "cdc.incremental-scan-speed-limit can't be 0, change it to {}",
+                default_cfg.incremental_scan_speed_limit
+            );
+            self.incremental_scan_speed_limit = default_cfg.incremental_scan_speed_limit;
+        }
+        if self.incremental_fetch_speed_limit.0 == 0 {
+            warn!(
+                "cdc.incremental-fetch-speed-limit can't be 0, change it to {}",
+                default_cfg.incremental_fetch_speed_limit
+            );
+            self.incremental_fetch_speed_limit = default_cfg.incremental_fetch_speed_limit;
         }
         if self.incremental_scan_ts_filter_ratio < 0.0
             || self.incremental_scan_ts_filter_ratio > 1.0

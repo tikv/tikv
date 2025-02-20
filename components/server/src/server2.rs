@@ -125,7 +125,7 @@ use tikv_util::{
     yatp_pool::CleanupMethod,
     Either,
 };
-use tokio::runtime::Builder;
+use tokio::runtime::{Builder, Handle};
 
 use crate::{
     common::{
@@ -253,6 +253,7 @@ struct TikvServer<ER: RaftEngine> {
     cdc_worker: Option<Box<LazyWorker<cdc::Task>>>,
     cdc_scheduler: Option<Scheduler<cdc::Task>>,
     cdc_memory_quota: Option<Arc<MemoryQuota>>,
+    cdc_responser_workers: Option<Handle>,
     backup_stream_scheduler: Option<tikv_util::worker::Scheduler<backup_stream::Task>>,
     sst_worker: Option<Box<LazyWorker<String>>>,
     quota_limiter: Arc<QuotaLimiter>,
@@ -415,6 +416,7 @@ where
             cdc_worker: None,
             cdc_scheduler: None,
             cdc_memory_quota: None,
+            cdc_responser_workers: None,
             backup_stream_scheduler: None,
             sst_worker: None,
             quota_limiter,
@@ -677,7 +679,7 @@ where
 
         let cdc_memory_quota = self.cdc_memory_quota.as_ref().unwrap();
         // Register cdc observer.
-        let cdc_ob = cdc::CdcObserver::new(cdc_scheduler.clone(), cdc_memory_quota.clone());
+        let cdc_ob = cdc::CdcObserver::new(cdc_memory_quota.clone());
         cdc_ob.register_to(self.coprocessor_host.as_mut().unwrap());
         // Register cdc config manager.
         cfg_controller.register(
@@ -703,6 +705,7 @@ where
             cdc_memory_quota.clone(),
             self.causal_ts_provider.clone(),
         );
+        self.cdc_responser_workers = Some(cdc_endpoint.get_responser_workers());
         cdc_worker.start_with_timer(cdc_endpoint);
         self.core.to_stop.push(cdc_worker);
 
@@ -1105,6 +1108,7 @@ where
         let cdc_service = cdc::Service::new(
             self.cdc_scheduler.as_ref().unwrap().clone(),
             self.cdc_memory_quota.as_ref().unwrap().clone(),
+            self.cdc_responser_workers.as_ref().unwrap().clone(),
         );
         if servers
             .server
