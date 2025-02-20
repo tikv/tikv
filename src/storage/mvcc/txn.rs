@@ -806,7 +806,7 @@ pub(crate) mod tests {
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let cm = ConcurrencyManager::new(10.into());
+        let cm = ConcurrencyManager::new_for_test(10.into());
         let mut txn = MvccTxn::new(10.into(), cm.clone());
         let mut reader = SnapshotReader::new(10.into(), snapshot, true);
         let key = Key::from_raw(k);
@@ -854,7 +854,7 @@ pub(crate) mod tests {
         must_commit(&mut engine, key, 5, 10);
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let cm = ConcurrencyManager::new(10.into());
+        let cm = ConcurrencyManager::new_for_test(10.into());
         let mut txn = MvccTxn::new(5.into(), cm.clone());
         let mut reader = SnapshotReader::new(5.into(), snapshot, true);
         prewrite(
@@ -1302,7 +1302,7 @@ pub(crate) mod tests {
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let mut engine_clone = engine.clone();
         let ctx = Context::default();
-        let cm = ConcurrencyManager::new(42.into());
+        let cm = ConcurrencyManager::new_for_test(42.into());
 
         let mut do_prewrite = || {
             let snapshot = engine_clone.snapshot(Default::default()).unwrap();
@@ -1359,7 +1359,7 @@ pub(crate) mod tests {
     fn test_async_pessimistic_prewrite_primary() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let ctx = Context::default();
-        let cm = ConcurrencyManager::new(42.into());
+        let cm = ConcurrencyManager::new_for_test(42.into());
 
         must_acquire_pessimistic_lock(&mut engine, b"key", b"key", 2, 2);
 
@@ -1417,7 +1417,7 @@ pub(crate) mod tests {
     #[test]
     fn test_async_commit_pushed_min_commit_ts() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
-        let cm = ConcurrencyManager::new(42.into());
+        let cm = ConcurrencyManager::new_for_test(42.into());
 
         // Simulate that min_commit_ts is pushed forward larger than latest_ts
         must_acquire_pessimistic_lock_impl(

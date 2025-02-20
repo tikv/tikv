@@ -1152,7 +1152,7 @@ mod tests {
             &CoprReadPoolConfig::default_for_test(),
             engine,
         ));
-        let cm = ConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new_for_test(1.into());
         let copr = Endpoint::<RocksEngine>::new(
             &Config::default(),
             read_pool.handle(),
@@ -1194,7 +1194,7 @@ mod tests {
             &CoprReadPoolConfig::default_for_test(),
             engine,
         ));
-        let cm = ConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new_for_test(1.into());
         let mut copr = Endpoint::<RocksEngine>::new(
             &Config::default(),
             read_pool.handle(),
@@ -1233,7 +1233,7 @@ mod tests {
             &CoprReadPoolConfig::default_for_test(),
             engine,
         ));
-        let cm = ConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new_for_test(1.into());
         let copr = Endpoint::<RocksEngine>::new(
             &Config::default(),
             read_pool.handle(),
@@ -1257,7 +1257,7 @@ mod tests {
             &CoprReadPoolConfig::default_for_test(),
             engine,
         ));
-        let cm = ConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new_for_test(1.into());
         let copr = Endpoint::<RocksEngine>::new(
             &Config::default(),
             read_pool.handle(),
@@ -1306,7 +1306,7 @@ mod tests {
             .collect::<Vec<_>>(),
         );
 
-        let cm = ConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new_for_test(1.into());
         let copr = Endpoint::<RocksEngine>::new(
             &Config::default(),
             read_pool.handle(),
@@ -1358,7 +1358,7 @@ mod tests {
             &CoprReadPoolConfig::default_for_test(),
             engine,
         ));
-        let cm = ConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new_for_test(1.into());
         let copr = Endpoint::<RocksEngine>::new(
             &Config::default(),
             read_pool.handle(),
@@ -1384,7 +1384,7 @@ mod tests {
             &CoprReadPoolConfig::default_for_test(),
             engine,
         ));
-        let cm = ConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new_for_test(1.into());
         let copr = Endpoint::<RocksEngine>::new(
             &Config::default(),
             read_pool.handle(),
@@ -1438,7 +1438,7 @@ mod tests {
             &CoprReadPoolConfig::default_for_test(),
             engine,
         ));
-        let cm = ConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new_for_test(1.into());
         let copr = Endpoint::<RocksEngine>::new(
             &Config::default(),
             read_pool.handle(),
@@ -1467,7 +1467,7 @@ mod tests {
             &CoprReadPoolConfig::default_for_test(),
             engine,
         ));
-        let cm = ConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new_for_test(1.into());
         let copr = Endpoint::<RocksEngine>::new(
             &Config::default(),
             read_pool.handle(),
@@ -1564,7 +1564,7 @@ mod tests {
             &CoprReadPoolConfig::default_for_test(),
             engine,
         ));
-        let cm = ConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new_for_test(1.into());
         let copr = Endpoint::<RocksEngine>::new(
             &Config {
                 end_point_stream_channel_size: 3,
@@ -1637,7 +1637,7 @@ mod tests {
             ..Default::default()
         };
 
-        let cm = ConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new_for_test(1.into());
         let copr = Endpoint::<RocksEngine>::new(
             &config,
             read_pool.handle(),
@@ -2017,7 +2017,7 @@ mod tests {
             &CoprReadPoolConfig::default_for_test(),
             engine,
         ));
-        let cm = ConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new_for_test(1.into());
         let copr = Endpoint::<RocksEngine>::new(
             &Config::default(),
             read_pool.handle(),
@@ -2074,7 +2074,7 @@ mod tests {
             &CoprReadPoolConfig::default_for_test(),
             engine,
         ));
-        let cm = ConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new_for_test(1.into());
         let key = Key::from_raw(b"key");
         let guard = block_on(cm.lock_key(&key));
         guard.with_lock(|lock| {
@@ -2137,7 +2137,7 @@ mod tests {
             &CoprReadPoolConfig::default_for_test(),
             engine,
         ));
-        let cm = ConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new_for_test(1.into());
         let copr = Endpoint::<RocksEngine>::new(
             &Config::default(),
             read_pool.handle(),

@@ -67,6 +67,21 @@ impl IntervalUnit {
         }
     }
 
+    pub fn is_valid_for_timestamp(&self) -> bool {
+        matches!(
+            self,
+            IntervalUnit::Microsecond
+                | IntervalUnit::Second
+                | IntervalUnit::Minute
+                | IntervalUnit::Hour
+                | IntervalUnit::Day
+                | IntervalUnit::Week
+                | IntervalUnit::Month
+                | IntervalUnit::Quarter
+                | IntervalUnit::Year
+        )
+    }
+
     pub fn is_clock_unit(&self) -> bool {
         use IntervalUnit::*;
         matches!(

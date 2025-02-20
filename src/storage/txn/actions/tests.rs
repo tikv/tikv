@@ -136,7 +136,7 @@ pub fn must_prewrite_put_impl_with_should_not_exist<E: Engine>(
         ..Default::default()
     };
     let snapshot = engine.snapshot(snap_ctx).unwrap();
-    let cm = ConcurrencyManager::new(ts);
+    let cm = ConcurrencyManager::new_for_test(ts);
     let mut txn = MvccTxn::new(ts, cm);
     let mut reader = SnapshotReader::new(ts, snapshot, true);
 
@@ -256,7 +256,7 @@ pub fn flush_put_impl_with_assertion<E: Engine>(
         Context::new(),
     );
     let mut statistics = Statistics::default();
-    let cm = ConcurrencyManager::new(start_ts);
+    let cm = ConcurrencyManager::new_for_test(start_ts);
     let context = WriteContext {
         lock_mgr: &MockLockManager::new(),
         concurrency_manager: cm.clone(),
@@ -675,7 +675,7 @@ pub fn must_prewrite_put_err_impl_with_should_not_exist<E: Engine>(
 ) -> Error {
     let snapshot = engine.snapshot(Default::default()).unwrap();
     let for_update_ts = for_update_ts.into();
-    let cm = ConcurrencyManager::new(for_update_ts);
+    let cm = ConcurrencyManager::new_for_test(for_update_ts);
     let ts = ts.into();
     let mut txn = MvccTxn::new(ts, cm);
     let mut reader = SnapshotReader::new(ts, snapshot, true);
@@ -854,7 +854,7 @@ fn must_prewrite_delete_impl<E: Engine>(
     };
     let snapshot = engine.snapshot(snap_ctx).unwrap();
     let for_update_ts = for_update_ts.into();
-    let cm = ConcurrencyManager::new(for_update_ts);
+    let cm = ConcurrencyManager::new_for_test(for_update_ts);
     let ts = ts.into();
     let mut txn = MvccTxn::new(ts, cm);
     let mut reader = SnapshotReader::new(ts, snapshot, true);
@@ -933,7 +933,7 @@ fn must_prewrite_lock_impl<E: Engine>(
     let ctx = Context::default();
     let snapshot = engine.snapshot(Default::default()).unwrap();
     let for_update_ts = for_update_ts.into();
-    let cm = ConcurrencyManager::new(for_update_ts);
+    let cm = ConcurrencyManager::new_for_test(for_update_ts);
     let ts = ts.into();
     let mut txn = MvccTxn::new(ts, cm);
     let mut reader = SnapshotReader::new(ts, snapshot, true);
@@ -972,7 +972,7 @@ pub fn must_prewrite_lock_err<E: Engine>(
 ) {
     let snapshot = engine.snapshot(Default::default()).unwrap();
     let ts = ts.into();
-    let cm = ConcurrencyManager::new(ts);
+    let cm = ConcurrencyManager::new_for_test(ts);
     let mut txn = MvccTxn::new(ts, cm);
     let mut reader = SnapshotReader::new(ts, snapshot, true);
 
@@ -1008,7 +1008,7 @@ pub fn must_rollback<E: Engine>(
     let ctx = Context::default();
     let snapshot = engine.snapshot(Default::default()).unwrap();
     let start_ts = start_ts.into();
-    let cm = ConcurrencyManager::new(start_ts);
+    let cm = ConcurrencyManager::new_for_test(start_ts);
     let mut txn = MvccTxn::new(start_ts, cm);
     let mut reader = SnapshotReader::new(start_ts, snapshot, true);
     txn::cleanup(
@@ -1025,7 +1025,7 @@ pub fn must_rollback<E: Engine>(
 pub fn must_rollback_err<E: Engine>(engine: &mut E, key: &[u8], start_ts: impl Into<TimeStamp>) {
     let snapshot = engine.snapshot(Default::default()).unwrap();
     let start_ts = start_ts.into();
-    let cm = ConcurrencyManager::new(start_ts);
+    let cm = ConcurrencyManager::new_for_test(start_ts);
     let mut txn = MvccTxn::new(start_ts, cm);
     let mut reader = SnapshotReader::new(start_ts, snapshot, true);
     txn::cleanup(
