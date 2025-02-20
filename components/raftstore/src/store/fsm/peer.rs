@@ -2963,6 +2963,7 @@ where
         if !self.ctx.cfg.hibernate_regions
             || self.fsm.peer.has_uncommitted_log()
             || self.fsm.peer.wait_data
+            || self.fsm.peer.busy_on_apply.is_some() /* still under applying raft logs */
             || from.get_id() != self.fsm.peer.leader_id()
         {
             // Ignore the message means rejecting implicitly.
