@@ -840,6 +840,13 @@ impl Config {
             ));
         }
 
+        // 10 minutes is large enough for warmup cache before transfer leader
+        // which in most case, it only take a few seconds.
+        if self.max_entry_cache_warmup_duration > ReadableDuration::minutes(10) {
+            warn!("raftstore.max-entry-cache-warmup-duration is too large, override to 10m.");
+            self.max_entry_cache_warmup_duration = ReadableDuration::minutes(10);
+        }
+
         let abnormal_leader_missing = self.abnormal_leader_missing_duration.as_millis();
         if abnormal_leader_missing < stale_state_check {
             return Err(box_err!(

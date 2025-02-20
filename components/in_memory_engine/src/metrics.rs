@@ -166,6 +166,30 @@ lazy_static! {
         "The gap between tikv auto gc safe point and the oldest auto gc safe point in the in-memory engine",
     )
     .unwrap();
+    pub static ref IN_MEMORY_ENGINE_AUTO_LOAD_EVICT_CACHED_REGION_COP_REQ: Histogram = register_histogram!(
+        "tikv_in_memory_engine_auto_load_evict_cached_region_coprocessor_requests",
+        "Histogram of the number of coprocessor requests of cached regions that is observed during auto load and evict",
+        exponential_buckets(1.0, 2.0, 16).unwrap()
+    )
+    .unwrap();
+    pub static ref IN_MEMORY_ENGINE_AUTO_LOAD_EVICT_CACHED_REGION_MVCC_AMP: Histogram = register_histogram!(
+        "tikv_in_memory_engine_auto_load_evict_cached_region_mvcc_amplification",
+        "Histogram of the mvcc amplification of cached regions that is observed during auto load and evict",
+        exponential_buckets(1.0, 2.0, 16).unwrap()
+    )
+    .unwrap();
+    pub static ref IN_MEMORY_ENGINE_AUTO_LOAD_EVICT_TOP_REGION_COP_REQ: Histogram = register_histogram!(
+        "tikv_in_memory_engine_auto_load_evict_top_region_coprocessor_requests",
+        "Histogram of the number of coprocessor requests of top regions that is observed during auto load and evict",
+        exponential_buckets(1.0, 2.0, 16).unwrap()
+    )
+    .unwrap();
+    pub static ref IN_MEMORY_ENGINE_AUTO_LOAD_EVICT_TOP_REGION_MVCC_AMP: Histogram = register_histogram!(
+        "tikv_in_memory_engine_auto_load_evict_top_region_mvcc_amplification",
+        "Histogram of the mvcc amplification of top regions that is observed during auto load and evict",
+        exponential_buckets(1.0, 2.0, 16).unwrap()
+    )
+    .unwrap();
 }
 
 lazy_static! {
