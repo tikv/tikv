@@ -688,8 +688,22 @@ pub enum Cmd {
         )]
         compression_level: Option<i32>,
 
-        #[structopt(long, help("Don't try to skip already finished compactions."))]
+        #[structopt(
+            long,
+            help(
+                "if set, all checkpoints will be ignored. i.e. all finished compaction will be regenerated."
+            )
+        )]
         force_regenerate: bool,
+
+        #[structopt(
+            long,
+            default_value = "16777216", // 16 MiB
+            help(
+                "specify the minimal compaction size in bytes, if backup data of a region doesn't reach this threshold, it won't be compacted"
+            )
+        )]
+        minimal_compaction_size: u64,
     },
     /// Get the state of a region's RegionReadProgress.
     GetRegionReadProgress {
