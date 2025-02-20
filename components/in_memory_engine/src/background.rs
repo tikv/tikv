@@ -327,7 +327,11 @@ impl BgWorkManager {
                     let cache_region = CacheRegion::from_region(&r);
                     if let Err(e) = region_manager.load_region(cache_region) {
                         failed += 1;
-                        warn!("ime load region failed"; "err" => ?e, "region" => ?r);
+                        // Ignore the error caused by the same region. It is possible that the
+                        // caller is trying to load the same region multiple times.
+                        if !e.is_caused_by_same_region() {
+                            warn!("ime load region failed"; "err" => ?e, "region" => ?r);
+                        }
                     }
                 }
                 info!(
@@ -524,7 +528,8 @@ impl BackgroundRunnerCore {
                 "ime safe point update";
                 "prev" => region_meta.safe_point(),
                 "current" => safe_point,
-                "region" => ?region,
+                "region_id" => ?region.id,
+                "epoch_version" => ?region.epoch_version,
             );
             region_meta.set_safe_point(safe_point);
             region_meta.set_in_gc(true);
@@ -548,7 +553,8 @@ impl BackgroundRunnerCore {
         IN_MEMORY_ENGINE_GC_TIME_HISTOGRAM.observe(duration.as_secs_f64());
         info!(
             "ime region gc complete";
-            "region" => ?gc_region.as_ref(),
+            "region_id" => ?gc_region.id,
+            "epoch_version" => ?gc_region.epoch_version,
             "gc_duration" => ?duration,
             "total_version" => filter.metrics.total,
             "filtered_version" => filter.metrics.filtered,
