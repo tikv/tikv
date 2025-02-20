@@ -104,7 +104,10 @@ fn check_import_resources() -> Result<()> {
     // high water is 90% of the memory limit by default
     let mut usage = 0;
     if memory_usage_reaches_high_water(&mut usage) {
-        return Err(Error::ResourceNotEnough("Memory usage too high".to_owned()));
+        return Err(Error::ResourceNotEnough(format!(
+            "Memory usage too high: {} bytes",
+            usage
+        )));
     }
 
     Ok(())
@@ -791,7 +794,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                         match check_import_resources() {
                             Ok(()) => (),
                             Err(e) => {
-                                warn!("Upload failed due to not enough disk space");
+                                warn!("Upload failed due to not enough resource {:?}", e);
                                 return Err(e);
                             }
                         }
