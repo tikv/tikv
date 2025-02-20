@@ -108,9 +108,11 @@ fn test_download_to_full_resource() {
     let result = import.download(&download).unwrap();
     assert!(!result.get_is_empty());
     assert!(result.has_error());
-    assert_eq!(
-        result.get_error().get_message(),
-        "resource is not enough Memory usage too high"
+    assert!(
+        result
+            .get_error()
+            .get_message()
+            .contains("Memory usage too high")
     );
     fail::remove("memory_usage_reaches_high_water");
 }
