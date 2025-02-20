@@ -4644,7 +4644,7 @@ def InMemoryEngine() -> RowPanel:
                             "tikv_in_memory_engine_cache_count",
                             by_labels=["instance", "type"],
                         ),
-                        legend_format="{{instance}}--{{type}}",
+                        legend_format="{{instance}}-{{type}}",
                     ),
                 ],
             ),
@@ -4714,6 +4714,25 @@ def InMemoryEngine() -> RowPanel:
                     target(
                         expr=expr_sum_delta(
                             "tikv_in_memory_engine_eviction_duration_secs_count",
+                            by_labels=["type"],
+                        ),
+                        legend_format="{{type}}",
+                        additional_groupby=True,
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Region Warmup Count",
+                description="The count of region warmup per seconds",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_in_memory_engine_transfer_leader_warmup_total",
                             by_labels=["type"],
                         ),
                         legend_format="{{type}}",
@@ -4937,6 +4956,38 @@ def InMemoryEngine() -> RowPanel:
                         additional_groupby=True,
                     ),
                 ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            heatmap_panel(
+                title="Cached Region Coprocessor Requests",
+                description="Tthe number of coprocessor requests of cached regions that is observed during auto load and evict",
+                yaxis=yaxis(format=UNITS.SHORT),
+                metric="tikv_in_memory_engine_auto_load_evict_cached_region_coprocessor_requests_bucket",
+            ),
+            heatmap_panel(
+                title="Cached Region MVCC Amplification",
+                description="Tthe MVCC amplification of cached regions that is observed during auto load and evict",
+                yaxis=yaxis(format=UNITS.SHORT),
+                metric="tikv_in_memory_engine_auto_load_evict_cached_region_mvcc_amplification_bucket",
+            ),
+        ]
+    )
+    layout.row(
+        [
+            heatmap_panel(
+                title="Top Region Coprocessor Requests",
+                description="Tthe number of coprocessor requests of top regions that is observed during auto load and evict",
+                yaxis=yaxis(format=UNITS.SHORT),
+                metric="tikv_in_memory_engine_auto_load_evict_top_region_coprocessor_requests_bucket",
+            ),
+            heatmap_panel(
+                title="Top Region MVCC Amplification",
+                description="Tthe MVCC amplification of top regions that is observed during auto load and evict",
+                yaxis=yaxis(format=UNITS.SHORT),
+                metric="tikv_in_memory_engine_auto_load_evict_top_region_mvcc_amplification_bucket",
             ),
         ]
     )
