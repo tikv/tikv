@@ -68,7 +68,7 @@ fn test_download_sst_blocking_sst_writer() {
 }
 
 #[test]
-fn test_download_to_full_disk() {
+fn test_download_to_full_resource() {
     let (_cluster, ctx, _tikv, import) = new_cluster_and_tikv_import_client();
     let temp_dir = Builder::new()
         .prefix("test_download_sst_blocking_sst_writer")
@@ -102,6 +102,19 @@ fn test_download_to_full_disk() {
         "TiKV disk space is not enough."
     );
     disk::set_disk_status(DiskUsage::Normal);
+
+    // high memory usage
+    fail::cfg("memory_usage_reaches_high_water", "return").unwrap();
+    let result = import.download(&download).unwrap();
+    assert!(!result.get_is_empty());
+    assert!(result.has_error());
+    assert!(
+        result
+            .get_error()
+            .get_message()
+            .contains("Memory usage too high")
+    );
+    fail::remove("memory_usage_reaches_high_water");
 }
 
 #[test]
