@@ -243,7 +243,7 @@ fn test_early_apply_leader_demote_by_append() {
     for i in 1..=3 {
         cluster.clear_recv_filter_on_node(i);
     }
-    
+
     // remove fp.
     fail::remove(fp);
     cluster.must_put(b"k1", b"v4");
