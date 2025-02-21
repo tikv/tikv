@@ -968,7 +968,7 @@ mod tests {
             .unwrap();
 
         // disable the ime
-        let mut config_manager = InMemoryEngineConfigManager(config.clone());
+        let mut config_manager = InMemoryEngineConfigManager::new(config.clone());
         let mut config_change = ConfigChange::new();
         config_change.insert(String::from("enable"), ConfigValue::Bool(false));
         config_manager.dispatch(config_change).unwrap();
@@ -994,7 +994,7 @@ mod tests {
         assert_eq!(snap2.get_value(b"zkk11").unwrap().unwrap(), &val1);
 
         // enable the ime again
-        let mut config_manager = InMemoryEngineConfigManager(config.clone());
+        let mut config_manager = InMemoryEngineConfigManager::new(config.clone());
         let mut config_change = ConfigChange::new();
         config_change.insert(String::from("enable"), ConfigValue::Bool(true));
         config_manager.dispatch(config_change).unwrap();

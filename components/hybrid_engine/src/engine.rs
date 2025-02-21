@@ -123,7 +123,7 @@ mod tests {
         let s = hybrid_engine.new_snapshot(Some(snap_ctx.clone()));
         assert!(!s.region_cache_snapshot_available());
 
-        let mut config_manager = InMemoryEngineConfigManager(config.clone());
+        let mut config_manager = InMemoryEngineConfigManager::new(config.clone());
         let mut config_change = ConfigChange::new();
         config_change.insert(String::from("enable"), ConfigValue::Bool(false));
         config_manager.dispatch(config_change).unwrap();
