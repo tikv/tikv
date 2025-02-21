@@ -1894,9 +1894,6 @@ fn test_node_merge_with_apply_ahead_of_persist() {
     configure_for_merge(&mut cluster.cfg);
     cluster.cfg.raft_store.cmd_batch_concurrent_ready_max_count = 32;
     cluster.cfg.raft_store.store_io_pool_size = 1;
-    // even if "early apply" is disabled, the raft committed index can still be
-    // higher than persisted/matched index.
-    cluster.cfg.raft_store.max_apply_unpersisted_log_limit = 0;
 
     cluster.run();
     let pd_client = Arc::clone(&cluster.pd_client);
