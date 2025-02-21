@@ -195,6 +195,8 @@ impl EntryCache {
                     mem_size_change -=
                         (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64;
                 }
+                // NOTE: if we are going to support apply unpersisted entries on follower,
+                // this assert will not longer be correct.
                 if let Some(cached) = self.trace.back() {
                     // Only committed entries can be traced, and only uncommitted entries
                     // can be truncated. So there won't be any overlaps.

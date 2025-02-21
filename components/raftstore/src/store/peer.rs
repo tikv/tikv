@@ -806,6 +806,7 @@ where
     /// The index of last scheduled committed raft log.
     pub last_applying_idx: u64,
     pub max_apply_unpersisted_log_limit: u64,
+    enable_apply_unpersisted_log_state: bool,
     /// The minimum raft index after which apply unpersisted raft log can be
     /// enabled. We force disable apply unpersisted raft log in following 2
     /// situation:
@@ -1036,6 +1037,7 @@ where
             tag: tag.clone(),
             last_applying_idx: applied_index,
             max_apply_unpersisted_log_limit: cfg.max_apply_unpersisted_log_limit,
+            enable_apply_unpersisted_log_state: false,
             min_safe_index_for_unpersisted_apply: last_index,
             last_compacted_idx: 0,
             last_compacted_time: Instant::now(),
@@ -1217,6 +1219,7 @@ where
                     == 0
             {
                 RAFT_ENABLE_UNPERSISTED_APPLY_GAUGE.inc();
+                self.enable_apply_unpersisted_log_state = true;
             }
             self.raft_group
                 .raft
@@ -1237,6 +1240,12 @@ where
             > 0
         {
             self.raft_group.raft.set_max_apply_unpersisted_log_limit(0);
+        }
+        // NOTE: `max_apply_unpersisted_log_limit` can be reset in raft-rs when leader
+        // demote to follower, in this case, we should still decrease the
+        // metrics counter.
+        if self.enable_apply_unpersisted_log_state {
+            self.enable_apply_unpersisted_log_state = false;
             RAFT_ENABLE_UNPERSISTED_APPLY_GAUGE.dec();
         }
     }
