@@ -2941,7 +2941,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         );
         self.ctx
             .server_readiness
-            .no_busy_apply_peers
+            .raft_peers_caught_up
             .store(!busy_on_apply, Ordering::Relaxed);
 
         // If the store already pass the check, it should clear the

@@ -587,7 +587,7 @@ pub fn set_vec_capacity<T>(v: &mut Vec<T>, cap: usize) {
 
 #[derive(Serialize)]
 pub struct ServerReadiness {
-    pub no_busy_apply_peers: AtomicBool,
+    pub raft_peers_caught_up: AtomicBool,
     pub connected_to_pd: AtomicBool,
 }
 
@@ -595,13 +595,13 @@ impl ServerReadiness {
     // Constructor to create a new ServerReadiness instance
     pub fn new() -> Self {
         ServerReadiness {
-            no_busy_apply_peers: AtomicBool::new(false),
+            raft_peers_caught_up: AtomicBool::new(false),
             connected_to_pd: AtomicBool::new(false),
         }
     }
 
     pub fn is_ready(&self) -> bool {
-        self.no_busy_apply_peers.load(Ordering::SeqCst)
+        self.raft_peers_caught_up.load(Ordering::SeqCst)
             && self.connected_to_pd.load(Ordering::SeqCst)
     }
 
