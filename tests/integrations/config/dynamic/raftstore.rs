@@ -117,6 +117,7 @@ fn start_raftstore(
             DiskCheckRunner::dummy(),
             GrpcServiceManager::dummy(),
             Arc::new(AtomicU64::new(0)),
+            None,
         )
         .unwrap();
 

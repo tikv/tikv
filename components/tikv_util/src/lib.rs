@@ -584,7 +584,6 @@ pub fn set_vec_capacity<T>(v: &mut Vec<T>, cap: usize) {
     }
 }
 
-
 /// Represents the readiness state of the server.
 ///
 /// Each field is a flag indicating a condition that must be met for the server

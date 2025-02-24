@@ -43,10 +43,10 @@ use tikv::{
 };
 use tikv_util::{
     config::VersionTrack,
-    ServerReadiness,
     sys::disk,
     time::ThreadReadId,
     worker::{Builder as WorkerBuilder, LazyWorker},
+    ServerReadiness,
 };
 
 use super::*;

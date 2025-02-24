@@ -85,11 +85,10 @@ use tikv::{
 use tikv_util::{
     config::VersionTrack,
     quota_limiter::QuotaLimiter,
-    ServerReadiness,
     sys::thread::ThreadBuildWrapper,
     time::ThreadReadId,
     worker::{Builder as WorkerBuilder, LazyWorker, Scheduler},
-    HandyRwLock,
+    HandyRwLock, ServerReadiness,
 };
 use tokio::runtime::Builder as TokioBuilder;
 use txn_types::TxnExtraScheduler;

@@ -615,6 +615,29 @@ where
         Self::metrics_to_resp(req, should_simplify)
     }
 
+    fn handle_ready_request(
+        req: Request<Body>,
+        server_readiness: Option<Arc<ServerReadiness>>,
+    ) -> hyper::Result<Response<Body>> {
+        let verbose = req
+            .uri()
+            .query()
+            .map_or(false, |query| query.contains("verbose"));
+        if let Some(r) = server_readiness {
+            let status_code = if r.is_ready() {
+                StatusCode::OK
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+
+            let body = if verbose { r.to_json() } else { "".to_string() };
+
+            Ok(make_response(status_code, body))
+        } else {
+            Ok(Response::default())
+        }
+    }
+
     fn start_serve<I, C>(&mut self, builder: HyperBuilder<I>)
     where
         I: Accept<Conn = C, Error = std::io::Error> + Send + 'static,
@@ -689,13 +712,7 @@ where
                             }
                             (Method::GET, "/status") => Ok(Response::default()),
                             (Method::GET, "/ready") => {
-                                if let Some(r) = server_readiness && !r.is_ready() {
-                                    return Ok(make_response(
-                                        StatusCode::SERVICE_UNAVAILABLE,
-                                        r.to_json(),
-                                    ))
-                                }
-                                Ok(Response::default())
+                                Self::handle_ready_request(req, server_readiness)
                             }
                             (Method::GET, "/debug/pprof/heap_list") => {
                                 Ok(make_response(
@@ -2038,18 +2055,22 @@ mod tests {
         let uri = Uri::builder()
             .scheme("http")
             .authority(status_server.listening_addr().to_string().as_str())
-            .path_and_query("/ready")
+            .path_and_query("/ready?verbose")
             .build()
             .unwrap();
         let uri2 = uri.clone();
+        // Set one readiness condition to true.
+        server_readiness
+            .connected_to_pd
+            .store(true, Ordering::Relaxed);
         let handle = status_server.thread_pool.spawn(async move {
             let resp = client.get(uri).await.unwrap();
-            assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
             let body_bytes = hyper::body::to_bytes(resp.into_body()).await.unwrap();
             let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
             assert_eq!(
-                json["connected_to_pd"], false,
+                json["connected_to_pd"], true,
                 "connected_to_pd should be false"
             );
             assert_eq!(
@@ -2057,12 +2078,9 @@ mod tests {
                 "raft_peers_caught_up should be false"
             );
         });
-
         block_on(handle).unwrap();
 
-        server_readiness
-            .connected_to_pd
-            .store(true, Ordering::Relaxed);
+        // Set the remaining readiness conditions to true.
         server_readiness
             .raft_peers_caught_up
             .store(true, Ordering::Relaxed);
@@ -2071,12 +2089,6 @@ mod tests {
         let handle2 = status_server.thread_pool.spawn(async move {
             let resp = client.get(uri2).await.unwrap();
             assert_eq!(resp.status(), StatusCode::OK);
-
-            let body_bytes = hyper::body::to_bytes(resp.into_body()).await.unwrap();
-            assert!(
-                body_bytes.is_empty(),
-                "Body should be empty when the server is ready"
-            );
         });
         block_on(handle2).unwrap();
 
