@@ -167,12 +167,12 @@ fn test_early_apply_yield_followed_with_many_entries() {
     must_get_equal(&cluster.get_engine(3), b"k150", b"v150");
 }
 
-// Test the consistency of EntryCache when partioned leader constains
-// uncommitted propose, after the partion is recovered, it can replicate raft
-// entries for new leader correctly. The case test the corner scenario that
-// partitioned leader receive a new Append msg for new elected leader and the
-// new entries are already committed and overlap with existing
-// entries uncomitted entries in the entry cache, it may cause panic if handles
+// Test the consistency of EntryCache when partitioned leader constains
+// uncommitted propose, and after the partition is recovered, it can replicate
+// raft entries for new leader correctly. This case test the corner scenario
+// that partitioned leader receive a new Append msg for new elected leader and
+// the new entries are already committed and overlap with existing entries
+// uncomitted entries in the entry cache, it may cause panic if handles
 // incorrectly. See issue https://github.com/tikv/tikv/issues/17868 for more details.
 #[test]
 fn test_early_apply_leader_demote_by_append() {
