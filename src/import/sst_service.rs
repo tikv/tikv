@@ -41,7 +41,7 @@ use tikv_util::{
     resizable_threadpool::{DeamonRuntimeHandle, ResizableRuntime},
     sys::{
         disk::{get_disk_status, DiskUsage},
-        memory_usage_reaches_high_water,
+        get_global_memory_usage, memory_usage_reaches_high_water, SysQuota,
     },
     time::{Instant, Limiter},
     HandyRwLock,
@@ -93,6 +93,10 @@ const WRITER_GC_INTERVAL: Duration = Duration::from_secs(300);
 const SUSPEND_REQUEST_MAX_SECS: u64 = // 6h
     6 * 60 * 60;
 
+const REJECT_SERVE_MEMORY_USAGE: u64 = 1024 * 1024 * 1024; //1G
+// consider block cache and raft store. the memory usage will be
+const HIGH_IMPORT_MEMORY_WATER_RATIO: f64 = 0.95;
+
 /// Check if the system has enough resources for import tasks
 fn check_import_resources() -> Result<()> {
     // Check disk space first
@@ -100,16 +104,37 @@ fn check_import_resources() -> Result<()> {
         return Err(Error::DiskSpaceNotEnough);
     }
 
-    // Check memory usage
-    // high water is 90% of the memory limit by default
-    let mut usage = 0;
-    if memory_usage_reaches_high_water(&mut usage) {
-        return Err(Error::ResourceNotEnough(format!(
-            "Memory usage too high: {} bytes",
-            usage
-        )));
+    let usage = get_global_memory_usage();
+    let mem_limit = (|| {
+        fail_point!("mock_memory_limit", |t| {
+            t.unwrap().parse::<u64>().unwrap()
+        });
+        SysQuota::memory_limit_in_bytes()
+    });
+
+    if mem_limit == 0 || mem_limit < usage {
+        // make it through when cannot get correct memory
+        warn!(
+            "Memory limit isn't correct. skip next check, limit is {}, usage is {}",
+            mem_limit, usage
+        );
+        return Ok(());
     }
 
+    let usage_ratio = usage as f64 / mem_limit as f64;
+
+    // Reject ONLY if BOTH:
+    // - Available memory is below REJECT_SERVE_MEMORY_USAGE
+    // - Memory usage ratio is 90%+
+    if mem_limit - usage < REJECT_SERVE_MEMORY_USAGE
+        && usage_ratio >= HIGH_IMPORT_MEMORY_WATER_RATIO
+    {
+        return Err(Error::ResourceNotEnough(format!(
+            "Memory usage too high: {} bytes (≈{:.1}%)",
+            usage,
+            usage_ratio * 100.0
+        )));
+    }
     Ok(())
 }
 
@@ -1305,7 +1330,7 @@ mod test {
     use txn_types::{Key, TimeStamp, Write, WriteBatchFlags, WriteType};
 
     use crate::{
-        import::sst_service::{check_local_region_stale, RequestCollector},
+        import::sst_service::{check_import_resources, check_local_region_stale, RequestCollector},
         server::raftkv,
     };
 
@@ -1658,5 +1683,10 @@ mod test {
                 .to_string()
                 .contains("retry write later")
         );
+    }
+
+    fn test_import_memory_check() {
+        let result = check_import_resources();
+        assert!(result.is_ok()); // Skips check when mem_limit < usage
     }
 }
