@@ -41,7 +41,7 @@ use tikv_util::{
     resizable_threadpool::{DeamonRuntimeHandle, ResizableRuntime},
     sys::{
         disk::{get_disk_status, DiskUsage},
-        get_global_memory_usage, memory_usage_reaches_high_water, SysQuota,
+        get_global_memory_usage, SysQuota,
     },
     time::{Instant, Limiter},
     HandyRwLock,
@@ -110,7 +110,7 @@ fn check_import_resources() -> Result<()> {
             t.unwrap().parse::<u64>().unwrap()
         });
         SysQuota::memory_limit_in_bytes()
-    });
+    })();
 
     if mem_limit == 0 || mem_limit < usage {
         // make it through when cannot get correct memory
