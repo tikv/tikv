@@ -618,6 +618,8 @@ where
 
     pub process_stat: Option<ProcessStat>,
 
+    // A reference for updating the server readiness state, which is queried by
+    // the status server's /ready API.
     pub server_readiness: Arc<ServerReadiness>,
 }
 

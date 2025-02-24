@@ -893,7 +893,8 @@ where
 
     // Service manager for grpc service.
     grpc_service_manager: GrpcServiceManager,
-
+    // A reference for updating the server readiness state, which is queried by
+    // the status server's /ready API.
     server_readiness: Arc<ServerReadiness>,
 }
 

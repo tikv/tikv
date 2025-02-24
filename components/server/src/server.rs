@@ -175,14 +175,14 @@ fn run_impl<CER, F>(
     let listener = tikv.core.init_flow_receiver();
     let (engines, engines_info, in_memory_engine) = tikv.init_raw_engines(listener);
     tikv.init_engines(engines.clone());
-    let server_config = tikv.init_servers(); // <== it's currently here. 
+    let server_config = tikv.init_servers();
     tikv.register_services();
     tikv.init_metrics_flusher(fetcher, engines_info);
     tikv.init_cgroup_monitor();
     tikv.init_storage_stats_task(engines);
     tikv.init_max_ts_updater();
     tikv.run_server(server_config);
-    tikv.run_status_server(in_memory_engine); // <== you need to pass the flag into this place 
+    tikv.run_status_server(in_memory_engine);
     tikv.core.init_quota_tuning_task(tikv.quota_limiter.clone());
 
     // Build a background worker for handling signals.
@@ -488,7 +488,7 @@ where
             resolved_ts_scheduler: None,
             grpc_service_mgr: GrpcServiceManager::new(tx),
             snap_br_rejector: None,
-            server_readiness: Arc::new(ServerReadiness::new()),
+            server_readiness: Arc::new(ServerReadiness::default()),
         }
     }
 

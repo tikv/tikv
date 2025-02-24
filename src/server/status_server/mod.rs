@@ -2020,7 +2020,7 @@ mod tests {
 
     #[test]
     fn test_ready_endpoint() {
-        let server_readiness = Arc::new(ServerReadiness::new());
+        let server_readiness = Arc::new(ServerReadiness::default());
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),

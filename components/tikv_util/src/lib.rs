@@ -33,8 +33,7 @@ use nix::{
     sys::wait::{wait, WaitStatus},
     unistd::{fork, ForkResult},
 };
-use serde::Serialize; // Import the Serialize trait
-use serde_json; // Import serde_json for JSON serialization
+use serde::Serialize;
 
 use crate::sys::thread::StdThreadBuildWrapper;
 
@@ -585,27 +584,29 @@ pub fn set_vec_capacity<T>(v: &mut Vec<T>, cap: usize) {
     }
 }
 
+
+/// Represents the readiness state of the server.
+///
+/// Each field is a flag indicating a condition that must be met for the server
+/// to be considered fully ready to serve.
 #[derive(Serialize)]
 pub struct ServerReadiness {
-    pub raft_peers_caught_up: AtomicBool,
+    /// Indicates whether the server has connected to PD.
     pub connected_to_pd: AtomicBool,
+    /// Indicates whether a sufficient number of Raft peers have caught up
+    /// applying logs.
+    pub raft_peers_caught_up: AtomicBool,
 }
 
 impl ServerReadiness {
-    // Constructor to create a new ServerReadiness instance
-    pub fn new() -> Self {
-        ServerReadiness {
-            raft_peers_caught_up: AtomicBool::new(false),
-            connected_to_pd: AtomicBool::new(false),
-        }
-    }
-
+    /// Checks if the server is ready.
+    ///
+    /// All conditions must be met for the server to be considered ready.
     pub fn is_ready(&self) -> bool {
         self.raft_peers_caught_up.load(Ordering::SeqCst)
             && self.connected_to_pd.load(Ordering::SeqCst)
     }
 
-    // Method to serialize the struct into JSON
     pub fn to_json(&self) -> String {
         let json_result = serde_json::to_string_pretty(&self);
         match json_result {
@@ -613,6 +614,15 @@ impl ServerReadiness {
             Err(e) => {
                 format!("failed to serialize ServerReadiness: {}", e)
             }
+        }
+    }
+}
+
+impl Default for ServerReadiness {
+    fn default() -> Self {
+        ServerReadiness {
+            raft_peers_caught_up: AtomicBool::new(false),
+            connected_to_pd: AtomicBool::new(false),
         }
     }
 }

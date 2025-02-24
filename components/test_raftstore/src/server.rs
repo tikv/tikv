@@ -85,6 +85,7 @@ use tikv::{
 use tikv_util::{
     config::VersionTrack,
     quota_limiter::QuotaLimiter,
+    ServerReadiness,
     sys::thread::ThreadBuildWrapper,
     time::ThreadReadId,
     worker::{Builder as WorkerBuilder, LazyWorker, Scheduler},
@@ -688,6 +689,7 @@ impl ServerCluster {
             DiskCheckRunner::dummy(),
             GrpcServiceManager::dummy(),
             Arc::new(AtomicU64::new(0)),
+            Arc::new(ServerReadiness::default()),
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
