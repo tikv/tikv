@@ -952,6 +952,8 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             match check_import_resources() {
                 Ok(()) => (),
                 Err(e) => {
+                    // in case of immediate retry from client side
+                    tokio::time::sleep(Duration::from_secs(1)).await;
                     resp.set_error(e.into());
                     return crate::send_rpc_response!(Ok(resp), sink, label, timer);
                 }
