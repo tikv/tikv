@@ -1176,12 +1176,14 @@ where
                             if req.get_header().get_flag_data().is_empty() {
                                 false
                             } else {
-                                let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
+                                let read_ts =
+                                    decode_u64(&mut req.get_header().get_flag_data()).unwrap();
                                 read_ts != 0
                             }
                         };
                         if !req.get_header().get_replica_read() || !read_ts_valid {
-                            // don't read from cache if it's not a follower read or read ts is invalid
+                            // don't read from cache if it's not a follower read or read ts is
+                            // invalid
                             self.redirect(RaftCommand::new(req, cb));
                             return;
                         }
