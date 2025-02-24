@@ -459,6 +459,7 @@ impl Service {
             Ok::<(), String>(())
         };
 
+        let scheduler_dereg = self.scheduler.clone();
         let peer = ctx.peer();
         ctx.spawn(async move {
             if let Err(e) = recv_req.await {
@@ -468,7 +469,7 @@ impl Service {
             }
 
             let deregister = Deregister::Conn(conn_id);
-            if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
+            if let Err(e) = scheduler_dereg.schedule(Task::Deregister(deregister)) {
                 error!("cdc deregister failed"; "error" => ?e, "conn_id" => ?conn_id);
             }
         });
