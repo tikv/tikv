@@ -1330,7 +1330,7 @@ mod test {
     use txn_types::{Key, TimeStamp, Write, WriteBatchFlags, WriteType};
 
     use crate::{
-        import::sst_service::{check_import_resources, check_local_region_stale, RequestCollector},
+        import::sst_service::{check_local_region_stale, RequestCollector},
         server::raftkv,
     };
 
@@ -1683,10 +1683,5 @@ mod test {
                 .to_string()
                 .contains("retry write later")
         );
-    }
-
-    fn test_import_memory_check() {
-        let result = check_import_resources();
-        assert!(result.is_ok()); // Skips check when mem_limit < usage
     }
 }
