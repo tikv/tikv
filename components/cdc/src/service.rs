@@ -455,10 +455,6 @@ impl Service {
             while let Some(request) = stream.try_next().await? {
                 Self::handle_request(&scheduler, &peer, request, conn_id)?;
             }
-            let deregister = Deregister::Conn(conn_id);
-            if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
-                error!("cdc deregister failed"; "error" => ?e, "conn_id" => ?conn_id);
-            }
             Ok::<(), String>(())
         };
 
@@ -468,6 +464,11 @@ impl Service {
                 warn!("cdc receive failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
             } else {
                 info!("cdc receive closed"; "downstream" => peer, "conn_id" => ?conn_id);
+            }
+
+            let deregister = Deregister::Conn(conn_id);
+            if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
+                error!("cdc deregister failed"; "error" => ?e, "conn_id" => ?conn_id);
             }
         });
 
