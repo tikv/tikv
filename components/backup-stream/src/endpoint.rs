@@ -228,17 +228,13 @@ where
         let task = task.to_owned();
         async move {
             let err_fut = async {
-<<<<<<< HEAD
-                let safepoint = meta_cli.global_progress_of_task(&task).await?;
-=======
                 #[cfg(feature = "failpoints")]
                 fail::fail_point!("log-backup-upload-error", |v| {
                     info!("injected error."; "value" => ?v);
                     Result::Err(Error::Other(box_err!("injected error: {:?}", v)))
                 });
 
-                let safepoint = meta_cli.global_progress_of_task(&t).await?;
->>>>>>> fcf4b967c3 (upload pause state before unloading a task (#18131))
+                let safepoint = meta_cli.global_progress_of_task(&task).await?;
                 pdc.update_service_safe_point(
                     safepoint_name,
                     TimeStamp::new(safepoint.saturating_sub(1)),
@@ -251,12 +247,7 @@ where
                 last_error.set_error_message(msg.clone());
                 last_error.set_store_id(store_id);
                 last_error.set_happen_at(TimeStamp::physical_now());
-<<<<<<< HEAD
                 meta_cli.report_last_error(&task, last_error).await?;
-=======
-                meta_cli.report_last_error(&t, last_error).await?;
-
->>>>>>> fcf4b967c3 (upload pause state before unloading a task (#18131))
                 Result::Ok(())
             };
             let res = err_fut.await;
@@ -277,13 +268,8 @@ where
                     );
                 });
             }
-<<<<<<< HEAD
-        }
-=======
             paused
-        };
-        tracing_active_tree::frame!("on_fatal_error_of_task"; f; %err, %task)
->>>>>>> fcf4b967c3 (upload pause state before unloading a task (#18131))
+        }
     }
 
     fn on_fatal_error(&self, select: TaskSelector, err: Box<Error>) {
