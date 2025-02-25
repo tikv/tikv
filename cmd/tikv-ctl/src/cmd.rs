@@ -4,6 +4,7 @@ use std::{borrow::ToOwned, str, string::ToString, sync::LazyLock, u64};
 
 use clap::{crate_authors, AppSettings};
 use engine_traits::{SstCompressionType, CF_DEFAULT};
+use raft_engine::ReadableSize;
 use structopt::StructOpt;
 
 const RAW_KEY_HINT: &str = "Raw key (generally starts with \"z\") in escaped form";
@@ -698,12 +699,12 @@ pub enum Cmd {
 
         #[structopt(
             long,
-            default_value = "16777216", // 16 MiB
+            default_value = "16M",
             help(
                 "specify the minimal compaction size in bytes, if backup data of a region doesn't reach this threshold, it won't be compacted"
             )
         )]
-        minimal_compaction_size: u64,
+        minimal_compaction_size: ReadableSize,
     },
     /// Get the state of a region's RegionReadProgress.
     GetRegionReadProgress {

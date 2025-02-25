@@ -471,7 +471,7 @@ fn main() {
             } else {
                 Some(compact_log_hooks::checkpoint::Checkpoint::default())
             };
-            let skip_small_compaction = SkipSmallCompaction::new(minimal_compaction_size);
+            let skip_small_compaction = SkipSmallCompaction::new(minimal_compaction_size.0);
             let hooks = (
                 (
                     (log_to_term, checkpoint),
