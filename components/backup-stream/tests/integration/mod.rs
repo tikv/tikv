@@ -9,9 +9,7 @@ mod suite;
 mod all {
     use std::time::{Duration, Instant};
 
-    use backup_stream::{
-        router::TaskSelector, GetCheckpointResult, RegionCheckpointOperation, RegionSet, Task,
-    };
+    use backup_stream::{GetCheckpointResult, RegionCheckpointOperation, RegionSet, Task};
     use futures::{Stream, StreamExt};
     use pd_client::PdClient;
     use test_raftstore::IsolationFilterFactory;
