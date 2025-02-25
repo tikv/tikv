@@ -129,9 +129,10 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
         // for every key.
         if items.len() > 1 {
             items.sort_by(|a, b| key_of(a).cmp(key_of(b)));
-            self.reader.scan_mode = Some(ScanMode::Forward);
-            self.reader
-                .set_range(Some(key_of(items.first().unwrap()).clone()), None);
+            // self.reader.scan_mode = Some(ScanMode::Forward);
+            // self.reader
+            //     .set_range(Some(key_of(items.first().unwrap()).clone()),
+            // None);
         }
     }
 }
