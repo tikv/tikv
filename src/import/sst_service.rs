@@ -6,7 +6,6 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
-use rand::Rng;
 
 use engine_traits::{CompactExt, CF_DEFAULT, CF_WRITE};
 use file_system::{set_io_type, IoType};
@@ -30,6 +29,7 @@ use raftstore::{
     RegionInfoAccessor,
 };
 use raftstore_v2::StoreMeta;
+use rand::Rng;
 use resource_control::{with_resource_limiter, ResourceGroupManager};
 use sst_importer::{
     error_inc, metrics::*, sst_importer::DownloadExt, Config, ConfigManager, Error, Result,
@@ -928,8 +928,8 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             match check_import_resources() {
                 Ok(()) => (),
                 Err(e) => {
-                    let jitter = rand::thread_rng().gen_range(0..=2);
-                    tokio::time::sleep(Duration::from_secs(1+jitter as u64)).await;
+                    let jitter: u64 = rand::thread_rng().gen_range(0, 3); 
+                    tokio::time::sleep(Duration::from_secs(1 + jitter)).await;
                     resp.set_error(e.into());
                     return crate::send_rpc_response!(Ok(resp), sink, label, timer);
                 }
