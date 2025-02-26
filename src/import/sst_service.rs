@@ -6,6 +6,7 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
+use rand::Rng;
 
 use engine_traits::{CompactExt, CF_DEFAULT, CF_WRITE};
 use file_system::{set_io_type, IoType};
@@ -927,7 +928,8 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             match check_import_resources() {
                 Ok(()) => (),
                 Err(e) => {
-                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    let jitter = rand::thread_rng().gen_range(0..=2);
+                    tokio::time::sleep(Duration::from_secs(1+jitter as u64)).await;
                     resp.set_error(e.into());
                     return crate::send_rpc_response!(Ok(resp), sink, label, timer);
                 }
