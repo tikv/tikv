@@ -1933,26 +1933,32 @@ fn test_pending_peer_in_heartbeat_during_split() {
     configure_for_merge(&mut cluster.cfg);
     cluster.cfg.raft_store.store_batch_system.max_batch_size = Some(1);
     cluster.cfg.raft_store.store_batch_system.pool_size = 1;
-    cluster.cfg.raft_store.dev_assert = false;
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
     cluster.run();
 
-    let pd_client2 = pd_client.clone();
-    // Pause at the following failpoint so that peer 2 won't be able to split
-    // and thus the new peer 1002 won't be created. Peer 1002 should always be
+    let pd_client_clone: Arc<test_pd_client::TestPdClient> = pd_client.clone();
+    // Pause at the following failpoint so that peer 3 won't be able to split
+    // and thus the new peer 1003 won't be created. Peer 1003 should always be
     // pending in the region heartbeat uploaded to PD.
-    let apply_before_split_1_2_fp = "apply_before_split_1_2";
-    fail::cfg(apply_before_split_1_2_fp, "pause").unwrap();
+    let apply_before_split_1_3_fp = "apply_before_split_1_3";
+    fail::cfg(apply_before_split_1_3_fp, "pause").unwrap();
     let finish_hb_fp = "test_pd_client::finish_region_heartbeat";
     fail::cfg_callback(finish_hb_fp, move || {
         let region_id = 1000;
-        let peer_id = 1002;
-        if pd_client2.get_region_last_report_ts(region_id).is_some() {
-            let pending_peers = pd_client2.get_pending_peers();
-            if !pending_peers.contains_key(&peer_id) {
-                panic!("peer {} should still be pending", peer_id);
+        // Check the heartbeat of new region to see if it has been created.
+        if pd_client_clone
+            .get_region_last_report_ts(region_id)
+            .is_some()
+        {
+            let region = pd_client_clone.get_region(b"k1").unwrap();
+            assert!(region.id == region_id);
+            let new_peer_on_store_3 = find_peer(&region, 3).unwrap();
+
+            let pending_peers = pd_client_clone.get_pending_peers();
+            if !pending_peers.contains_key(&new_peer_on_store_3.id) {
+                panic!("peer {} should still be pending", new_peer_on_store_3.id);
             }
         }
     })
@@ -1963,17 +1969,12 @@ fn test_pending_peer_in_heartbeat_during_split() {
     // region 1, leader is peer 1.
     cluster.must_transfer_leader(region.get_id(), peer_1);
 
-    let k = b"k1_for_apply_to_current_term";
-    cluster.must_put(k, b"value");
-    must_get_equal(&cluster.get_engine(1), k, b"value");
-
     cluster.must_split(&region, b"k2");
-
     cluster.must_put(b"k1", b"v1");
     cluster.must_put(b"k3", b"v3");
 
     fail::remove(finish_hb_fp);
-    fail::remove(apply_before_split_1_2_fp);
-    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
-    must_get_equal(&cluster.get_engine(2), b"k3", b"v3");
+    fail::remove(apply_before_split_1_3_fp);
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k3", b"v3");
 }
