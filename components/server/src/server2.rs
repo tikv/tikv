@@ -1384,7 +1384,6 @@ where
                 self.resource_manager.clone(),
                 self.grpc_service_mgr.clone(),
                 None,
-                None,
             ) {
                 Ok(status_server) => Box::new(status_server),
                 Err(e) => {

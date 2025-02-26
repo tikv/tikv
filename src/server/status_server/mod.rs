@@ -58,7 +58,7 @@ use tikv_util::{
     logger::set_log_level,
     metrics::{dump, dump_to},
     timer::GLOBAL_TIMER_HANDLE,
-    ServerReadiness,
+    GLOBAL_SERVER_READINESS,
 };
 use tokio::{
     io::{AsyncRead, AsyncWrite},
@@ -100,7 +100,6 @@ pub struct StatusServer<R> {
     resource_manager: Option<Arc<ResourceGroupManager>>,
     grpc_service_mgr: GrpcServiceManager,
     in_memory_engine: Option<RegionCacheMemoryEngine>,
-    server_readiness: Option<Arc<ServerReadiness>>,
 }
 
 impl<R> StatusServer<R>
@@ -115,7 +114,6 @@ where
         resource_manager: Option<Arc<ResourceGroupManager>>,
         grpc_service_mgr: GrpcServiceManager,
         in_memory_engine: Option<RegionCacheMemoryEngine>,
-        server_readiness: Option<Arc<ServerReadiness>>,
     ) -> Result<Self> {
         let thread_pool = Builder::new_multi_thread()
             .enable_all()
@@ -139,7 +137,6 @@ where
             resource_manager,
             grpc_service_mgr,
             in_memory_engine,
-            server_readiness,
         })
     }
 
@@ -615,27 +612,24 @@ where
         Self::metrics_to_resp(req, should_simplify)
     }
 
-    fn handle_ready_request(
-        req: Request<Body>,
-        server_readiness: Option<Arc<ServerReadiness>>,
-    ) -> hyper::Result<Response<Body>> {
+    fn handle_ready_request(req: Request<Body>) -> hyper::Result<Response<Body>> {
         let verbose = req
             .uri()
             .query()
             .map_or(false, |query| query.contains("verbose"));
-        if let Some(r) = server_readiness {
-            let status_code = if r.is_ready() {
-                StatusCode::OK
-            } else {
-                StatusCode::INTERNAL_SERVER_ERROR
-            };
 
-            let body = if verbose { r.to_json() } else { "".to_string() };
-
-            Ok(make_response(status_code, body))
+        let status_code = if GLOBAL_SERVER_READINESS.is_ready() {
+            StatusCode::OK
         } else {
-            Ok(Response::default())
-        }
+            StatusCode::INTERNAL_SERVER_ERROR
+        };
+
+        let body = if verbose {
+            GLOBAL_SERVER_READINESS.to_json()
+        } else {
+            "".to_string()
+        };
+        Ok(make_response(status_code, body))
     }
 
     fn start_serve<I, C>(&mut self, builder: HyperBuilder<I>)
@@ -651,8 +645,6 @@ where
         let resource_manager = self.resource_manager.clone();
         let grpc_service_mgr = self.grpc_service_mgr.clone();
         let in_memory_engine = self.in_memory_engine.clone();
-
-        let server_readiness = self.server_readiness.clone();
         // Start to serve.
         let server = builder.serve(make_service_fn(move |conn: &C| {
             let x509 = conn.get_x509();
@@ -662,7 +654,6 @@ where
             let resource_manager = resource_manager.clone();
             let in_memory_engine = in_memory_engine.clone();
             let grpc_service_mgr = grpc_service_mgr.clone();
-            let server_readiness = server_readiness.clone();
             async move {
                 // Create a status service.
                 Ok::<_, hyper::Error>(service_fn(move |req: Request<Body>| {
@@ -672,7 +663,6 @@ where
                     let router = router.clone();
                     let resource_manager = resource_manager.clone();
                     let grpc_service_mgr = grpc_service_mgr.clone();
-                    let server_readiness = server_readiness.clone();
                     let in_memory_engine = in_memory_engine.clone();
                     async move {
                         let path = req.uri().path().to_owned();
@@ -712,7 +702,7 @@ where
                             }
                             (Method::GET, "/status") => Ok(Response::default()),
                             (Method::GET, "/ready") => {
-                                Self::handle_ready_request(req, server_readiness)
+                                Self::handle_ready_request(req)
                             }
                             (Method::GET, "/debug/pprof/heap_list") => {
                                 Ok(make_response(
@@ -1264,7 +1254,7 @@ mod tests {
     use service::service_manager::GrpcServiceManager;
     use test_util::new_security_cfg;
     use tikv_kv::RaftExtension;
-    use tikv_util::{logger::get_log_level, ServerReadiness};
+    use tikv_util::{logger::get_log_level, GLOBAL_SERVER_READINESS};
 
     use crate::{
         config::{ConfigController, TikvConfig},
@@ -1290,7 +1280,6 @@ mod tests {
             MockRouter,
             None,
             GrpcServiceManager::dummy(),
-            None,
             None,
         )
         .unwrap();
@@ -1340,7 +1329,6 @@ mod tests {
             MockRouter,
             None,
             GrpcServiceManager::dummy(),
-            None,
             None,
         )
         .unwrap();
@@ -1394,7 +1382,6 @@ mod tests {
                 MockRouter,
                 None,
                 GrpcServiceManager::dummy(),
-                None,
                 None,
             )
             .unwrap();
@@ -1458,7 +1445,6 @@ mod tests {
             MockRouter,
             None,
             GrpcServiceManager::dummy(),
-            None,
             None,
         )
         .unwrap();
@@ -1577,7 +1563,6 @@ mod tests {
             None,
             GrpcServiceManager::dummy(),
             None,
-            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1623,7 +1608,6 @@ mod tests {
             None,
             GrpcServiceManager::dummy(),
             None,
-            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1660,7 +1644,6 @@ mod tests {
             MockRouter,
             None,
             GrpcServiceManager::dummy(),
-            None,
             None,
         )
         .unwrap();
@@ -1735,7 +1718,6 @@ mod tests {
             None,
             GrpcServiceManager::dummy(),
             None,
-            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1766,7 +1748,6 @@ mod tests {
             MockRouter,
             None,
             GrpcServiceManager::dummy(),
-            None,
             None,
         )
         .unwrap();
@@ -1801,7 +1782,6 @@ mod tests {
             MockRouter,
             None,
             GrpcServiceManager::dummy(),
-            None,
             None,
         )
         .unwrap();
@@ -1854,7 +1834,6 @@ mod tests {
             MockRouter,
             None,
             GrpcServiceManager::dummy(),
-            None,
             None,
         )
         .unwrap();
@@ -1912,7 +1891,6 @@ mod tests {
             None,
             GrpcServiceManager::dummy(),
             None,
-            None,
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -1968,7 +1946,6 @@ mod tests {
                 None,
                 GrpcServiceManager::dummy(),
                 None,
-                None,
             )
             .unwrap();
             let addr = "127.0.0.1:0".to_owned();
@@ -2007,7 +1984,6 @@ mod tests {
                 None,
                 GrpcServiceManager::dummy(),
                 None,
-                None,
             )
             .unwrap();
             let addr = "127.0.0.1:0".to_owned();
@@ -2037,7 +2013,6 @@ mod tests {
 
     #[test]
     fn test_ready_endpoint() {
-        let server_readiness = Arc::new(ServerReadiness::default());
         let mut status_server = StatusServer::new(
             1,
             ConfigController::default(),
@@ -2046,7 +2021,6 @@ mod tests {
             None,
             GrpcServiceManager::dummy(),
             None,
-            Some(server_readiness.clone()),
         )
         .unwrap();
         let addr = "127.0.0.1:0".to_owned();
@@ -2060,7 +2034,7 @@ mod tests {
             .unwrap();
         let uri2 = uri.clone();
         // Set one readiness condition to true.
-        server_readiness
+        GLOBAL_SERVER_READINESS
             .connected_to_pd
             .store(true, Ordering::Relaxed);
         let handle = status_server.thread_pool.spawn(async move {
@@ -2081,7 +2055,7 @@ mod tests {
         block_on(handle).unwrap();
 
         // Set the remaining readiness conditions to true.
-        server_readiness
+        GLOBAL_SERVER_READINESS
             .raft_peers_caught_up
             .store(true, Ordering::Relaxed);
 

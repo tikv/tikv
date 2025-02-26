@@ -136,7 +136,7 @@ use tikv_util::{
     time::{Instant, Monitor},
     worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
     yatp_pool::CleanupMethod,
-    Either, ServerReadiness,
+    Either,
 };
 use tokio::runtime::Builder;
 
@@ -280,7 +280,6 @@ where
     resolved_ts_scheduler: Option<Scheduler<Task>>,
     grpc_service_mgr: GrpcServiceManager,
     snap_br_rejector: Option<Arc<PrepareDiskSnapObserver>>,
-    server_readiness: Arc<ServerReadiness>,
 }
 
 struct TikvEngines<RocksEngine: KvEngine, ER: RaftEngine> {
@@ -488,7 +487,6 @@ where
             resolved_ts_scheduler: None,
             grpc_service_mgr: GrpcServiceManager::new(tx),
             snap_br_rejector: None,
-            server_readiness: Arc::new(ServerReadiness::default()),
         }
     }
 
@@ -1072,7 +1070,6 @@ where
                 disk_check_runner,
                 self.grpc_service_mgr.clone(),
                 safe_point.clone(),
-                self.server_readiness.clone(),
             )
             .unwrap_or_else(|e| fatal!("failed to start raft_server: {}", e));
 
@@ -1592,7 +1589,6 @@ where
                 self.resource_manager.clone(),
                 self.grpc_service_mgr.clone(),
                 in_memory_engine,
-                Some(self.server_readiness.clone()),
             ) {
                 Ok(status_server) => Box::new(status_server),
                 Err(e) => {

@@ -46,7 +46,6 @@ use tikv_util::{
     sys::disk,
     time::ThreadReadId,
     worker::{Builder as WorkerBuilder, LazyWorker},
-    ServerReadiness,
 };
 
 use super::*;
@@ -370,7 +369,6 @@ impl Simulator for NodeCluster {
             DiskCheckRunner::dummy(),
             GrpcServiceManager::dummy(),
             Arc::new(AtomicU64::new(0)),
-            Arc::new(ServerReadiness::default()),
         )?;
         assert!(
             engines

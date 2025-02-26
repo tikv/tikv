@@ -128,7 +128,6 @@ fn test_node_bootstrap_with_prepared_data() {
         DiskCheckRunner::dummy(),
         GrpcServiceManager::dummy(),
         Arc::new(AtomicU64::new(0)),
-        None,
     )
     .unwrap();
     assert!(

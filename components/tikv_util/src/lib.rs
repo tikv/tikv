@@ -29,6 +29,7 @@ use std::{
     time::Duration,
 };
 
+use lazy_static::lazy_static;
 use nix::{
     sys::wait::{wait, WaitStatus},
     unistd::{fork, ForkResult},
@@ -584,11 +585,20 @@ pub fn set_vec_capacity<T>(v: &mut Vec<T>, cap: usize) {
     }
 }
 
+// Global server readiness state.
+//
+// This is used to track whether TiKV is fully ready to serve requests after
+// startup. It is queried by the `/ready` API of the status server.
+lazy_static! {
+    pub static ref GLOBAL_SERVER_READINESS: Arc<ServerReadiness> =
+        Arc::new(ServerReadiness::default());
+}
+
 /// Represents the readiness state of the server.
 ///
 /// Each field is a flag indicating a condition that must be met for the server
 /// to be considered fully ready to serve.
-#[derive(Serialize)]
+#[derive(Serialize, Default)]
 pub struct ServerReadiness {
     /// Indicates whether the server has connected to PD.
     pub connected_to_pd: AtomicBool,
@@ -613,15 +623,6 @@ impl ServerReadiness {
             Err(e) => {
                 format!("failed to serialize ServerReadiness: {}", e)
             }
-        }
-    }
-}
-
-impl Default for ServerReadiness {
-    fn default() -> Self {
-        ServerReadiness {
-            raft_peers_caught_up: AtomicBool::new(false),
-            connected_to_pd: AtomicBool::new(false),
         }
     }
 }

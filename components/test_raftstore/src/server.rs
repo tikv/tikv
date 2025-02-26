@@ -88,7 +88,7 @@ use tikv_util::{
     sys::thread::ThreadBuildWrapper,
     time::ThreadReadId,
     worker::{Builder as WorkerBuilder, LazyWorker, Scheduler},
-    HandyRwLock, ServerReadiness,
+    HandyRwLock,
 };
 use tokio::runtime::Builder as TokioBuilder;
 use txn_types::TxnExtraScheduler;
@@ -688,7 +688,6 @@ impl ServerCluster {
             DiskCheckRunner::dummy(),
             GrpcServiceManager::dummy(),
             Arc::new(AtomicU64::new(0)),
-            Arc::new(ServerReadiness::default()),
         )?;
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
