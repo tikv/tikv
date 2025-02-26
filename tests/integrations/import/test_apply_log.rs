@@ -58,6 +58,22 @@ fn test_apply_full_disk() {
         "TiKV disk space is not enough."
     );
     disk::set_disk_status(DiskUsage::Normal);
+<<<<<<< HEAD
+=======
+
+    fail::cfg("mock_memory_usage", "return(10307921510)").unwrap(); // 9.5G
+    fail::cfg("mock_memory_limit", "return(10737418240)").unwrap(); // 10G
+    let result = import.apply(&req).unwrap();
+    assert!(result.has_error());
+    assert!(
+        result
+            .get_error()
+            .get_message()
+            .contains("Memory usage too high")
+    );
+    fail::remove("mock_memory_usage");
+    fail::remove("mock_memory_limit");
+>>>>>>> 71aecc2382 (import: relax memory check constraints (#18248))
 }
 
 #[test]
