@@ -28,6 +28,7 @@ use raftstore::coprocessor::{CoprocessorHost, RegionInfoProvider};
 use tikv_kv::{CfStatistics, CursorBuilder, Modify, SnapContext};
 use tikv_util::{
     config::{Tracker, VersionTrack},
+    set_panic_context,
     store::find_peer,
     time::{duration_to_sec, Instant, Limiter, SlowTimer},
     worker::{Builder as WorkerBuilder, LazyWorker, Runnable, ScheduleError, Scheduler},
@@ -357,6 +358,7 @@ impl<E: Engine> GcRunnerCore<E> {
         txn: &mut MvccTxn,
         reader: &mut MvccReader<E::Snap>,
     ) -> Result<()> {
+        let _guard = set_panic_context! {"key" => key};
         let next_gc_info = gc(txn, reader, key.clone(), safe_point).map_err(TxnError::from_mvcc)?;
         gc_info.found_versions += next_gc_info.found_versions;
         gc_info.deleted_versions += next_gc_info.deleted_versions;
@@ -466,6 +468,7 @@ impl<E: Engine> GcRunnerCore<E> {
         let mut gc_info = GcInfo::default();
         let mut keys = keys.into_iter().peekable();
         for region in regions {
+            let _guard = set_panic_context! {"region" => region.id};
             let mut txn = Self::mvcc_txn_with_dummy_cm();
             let mut reader = self.create_reader(
                 count,
