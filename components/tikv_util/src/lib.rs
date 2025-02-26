@@ -542,13 +542,21 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
             .location()
             .map(|l| format!("{}:{}", l.file(), l.line()));
         let bt = backtrace::Backtrace::new();
-        crit!("{}", msg;
-            "thread_name" => name,
-            "location" => loc.unwrap_or_else(|| "<unknown>".to_owned()),
-            "backtrace" => format_args!("{:?}", bt),
-            "context" => get_panic_context(),
-        );
-
+        let context = get_panic_context();
+        if context.is_empty() {
+            crit!("{}", msg;
+                "thread_name" => name,
+                "location" => loc.unwrap_or_else(|| "<unknown>".to_owned()),
+                "backtrace" => format_args!("{:?}", bt),
+            );
+        } else {
+            crit!("{}", msg;
+                "thread_name" => name,
+                "location" => loc.unwrap_or_else(|| "<unknown>".to_owned()),
+                "backtrace" => format_args!("{:?}", bt),
+                "context" => context,
+            );
+        }
         // There might be remaining logs in the async logger.
         // To collect remaining logs and also collect future logs, replace the old one
         // with a terminal logger.
