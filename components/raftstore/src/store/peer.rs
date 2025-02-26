@@ -2116,6 +2116,7 @@ where
             // immediately, even though it may not have been elected yet. Since
             // we can't determine the progress of followers at this point, we
             // conservatively mark all other peers as pending.
+            assert!(!self.is_leader());
             for peer in self.region().get_peers() {
                 if peer.get_id() == self.peer.get_id() {
                     continue;

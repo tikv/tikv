@@ -1955,7 +1955,8 @@ fn test_pending_peer_in_heartbeat_during_split() {
                 panic!("peer {} should still be pending", peer_id);
             }
         }
-    }).unwrap();
+    })
+    .unwrap();
 
     let region = pd_client.get_region(b"k1").unwrap();
     let peer_1 = find_peer(&region, 1).unwrap().to_owned();
