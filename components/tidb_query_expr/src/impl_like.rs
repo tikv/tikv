@@ -2,11 +2,129 @@
 
 use tidb_query_codegen::rpn_fn;
 use tidb_query_common::Result;
-use tidb_query_datatype::codec::{collation::*, data_type::*};
+use tidb_query_datatype::codec::{collation::*, data_type::*, Error};
+use tipb::{Expr, ExprType};
 
-#[rpn_fn]
+const PATTERN_IDX: usize = 1;
+const ESCAPE_IDX: usize = 2;
+
+enum PatternType {
+    PatternOne,
+    PatternAny,
+    PatternMatch,
+}
+
+struct LikeMeta {
+    pattern_literal: Vec<u32>,
+    pattern_types: Vec<PatternType>,
+}
+
+fn init_like_meta<CS: Charset>(expr: &mut Expr) -> Result<Option<LikeMeta>> {
+    let children = expr.mut_children();
+    if children.len() != 3 {
+        return Err(Error::incorrect_parameters(&format!(
+            "Number of parameter is not 3, but get {}",
+            children.len()
+        ))
+        .into());
+    }
+
+    let pattern = match children[PATTERN_IDX].get_tp() {
+        ExprType::Bytes | ExprType::String => children[PATTERN_IDX].get_val(),
+        _ => return Ok(None),
+    };
+
+    let mut escape: u32 = '\\' as u32;
+
+    match children[ESCAPE_IDX].get_tp() {
+        ExprType::Int64 | ExprType::Uint64 => {
+            let mut buf: [u8; 8] = [0; 8];
+            let buf_vec = children[ESCAPE_IDX].get_val().to_vec();
+            if buf_vec.len() == 8 {
+                for (i, &item) in buf_vec.iter().enumerate() {
+                    buf[i] = item;
+                }
+
+                escape = i64::from_le_bytes(buf) as u32; // TODO maybe big endian
+            }
+        }
+        _ => return Ok(None),
+    };
+
+    let pattern_len = pattern.len();
+    let mut pattern_literal = Vec::<u32>::new();
+    let mut pattern_types = Vec::<PatternType>::new();
+    let mut i = 0;
+    let mut is_last_pattern_any = false;
+
+    pattern_literal.reserve(pattern_len);
+    pattern_types.reserve(pattern_len);
+
+    while i < pattern_len {
+        if let Some((c, c_len)) = CS::decode_one(&pattern[i..]) {
+            let mut item: u32 = c.into();
+            let tp: PatternType;
+            if item == '_' as u32 {
+                // %_ => _%
+                if is_last_pattern_any {
+                    let modified_idx = pattern_literal.len() - 1;
+                    pattern_literal[modified_idx] = item;
+                    pattern_types[modified_idx] = PatternType::PatternOne;
+
+                    tp = PatternType::PatternAny;
+                    item = match CS::decode_one("%".as_bytes()) {
+                        Some((tmp_c, _)) => tmp_c.into(),
+                        None => {
+                            return Err(
+                                Error::incorrect_parameters("Fail to decode `%` character").into()
+                            );
+                        }
+                    };
+                    is_last_pattern_any = true;
+                } else {
+                    tp = PatternType::PatternOne;
+                    is_last_pattern_any = false;
+                }
+            } else if item == '%' as u32 {
+                // %% => %
+                if is_last_pattern_any {
+                    i += c_len;
+                    continue;
+                }
+
+                tp = PatternType::PatternAny;
+                is_last_pattern_any = true;
+            } else if item == escape {
+                tp = PatternType::PatternMatch;
+                if i < pattern_len - c_len {
+                    i += c_len;
+                    if let Some((next_c, next_c_len)) = CS::decode_one(&pattern[i..]) {
+                        item = next_c.into();
+                        i += next_c_len
+                    }
+                }
+                is_last_pattern_any = false;
+            } else {
+                tp = PatternType::PatternMatch;
+                is_last_pattern_any = false;
+            }
+
+            pattern_literal.push(item);
+            pattern_types.push(tp);
+        }
+    }
+
+    Ok(Some(LikeMeta {
+        pattern_literal,
+        pattern_types,
+    }))
+}
+
+// #[rpn_fn(capture = [metadata], metadata_mapper = build_add_sub_date_meta)]
+#[rpn_fn(capture = [metadata], metadata_mapper = init_like_meta::<CS>)]
 #[inline]
 pub fn like<C: Collator, CS: Charset>(
+    metadata: &Option<LikeMeta>,
     target: BytesRef,
     pattern: BytesRef,
     escape: &i64,
