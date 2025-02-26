@@ -24,8 +24,8 @@ use raftstore::{
         metrics::RAFT_PEER_PENDING_DURATION,
         util::{Lease, RegionReadProgress},
         BucketStatsInfo, Config, EntryStorage, ForceLeaderState, PeerStat, ProposalQueue,
-        ReadDelegate, ReadIndexQueue, ReadProgress, TabletSnapManager, UnsafeRecoveryState,
-        WriteTask,
+        ReadDelegate, ReadIndexQueue, ReadProgress, TabletSnapManager, TransferLeaderState,
+        UnsafeRecoveryState, WriteTask,
     },
 };
 use slog::{debug, info, Logger};
@@ -142,6 +142,8 @@ pub struct Peer<EK: KvEngine, ER: RaftEngine> {
     /// For details, see the comment of `ForceLeaderState`.
     force_leader_state: Option<ForceLeaderState>,
     unsafe_recovery_state: Option<UnsafeRecoveryState>,
+
+    transfer_leader_state: TransferLeaderState,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -237,6 +239,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             region_merge_proposal_index: 0_u64,
             force_leader_state: None,
             unsafe_recovery_state: None,
+            transfer_leader_state: TransferLeaderState::default(),
         };
 
         // If merge_context is not None, it means the PrepareMerge is applied before
@@ -1028,5 +1031,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     pub fn unsafe_recovery_state_mut(&mut self) -> &mut Option<UnsafeRecoveryState> {
         &mut self.unsafe_recovery_state
+    }
+
+    pub fn transfer_leader_state(&self) -> &TransferLeaderState {
+        &self.transfer_leader_state
+    }
+
+    pub fn transfer_leader_state_mut(&mut self) -> &mut TransferLeaderState {
+        &mut self.transfer_leader_state
     }
 }

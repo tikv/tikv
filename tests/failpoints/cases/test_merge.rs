@@ -10,7 +10,7 @@ use std::{
     time::Duration,
 };
 
-use engine_traits::{Peekable, CF_RAFT};
+use engine_traits::{Peekable, CF_DEFAULT, CF_RAFT};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
     kvrpcpb::{PrewriteRequestPessimisticAction::*, *},
@@ -2337,4 +2337,84 @@ fn test_raft_log_gc_after_merge() {
 
     let resp = rx.recv().unwrap();
     assert!(resp.response.get_header().has_error());
+}
+
+// This case tests following scenario:
+// When the disk IO is slow or block and PrepareMerge is proposed, it is
+// possible that the leader's committed index is higher than its persisted
+// index. In this case, we should still ensure that all peers can recover
+// necessary raft logs from the CatchUpLogs phase.
+// For more information, see: https://github.com/tikv/tikv/issues/18129
+#[test]
+fn test_node_merge_with_apply_ahead_of_persist() {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster.cfg);
+    cluster.cfg.raft_store.cmd_batch_concurrent_ready_max_count = 32;
+    cluster.cfg.raft_store.store_io_pool_size = 1;
+    // even if "early apply" is disabled, the raft committed index can still be
+    // higher than persisted/matched index.
+    cluster.cfg.raft_store.max_apply_unpersisted_log_limit = 0;
+
+    cluster.run();
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v1");
+
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k2");
+    let left = cluster.get_region(b"k1");
+    let right = cluster.get_region(b"k3");
+
+    cluster.must_put(b"k1", b"v2");
+    cluster.must_put(b"k3", b"v2");
+
+    let raft_before_save_on_store_1_fp = "raft_before_persist_on_store_1";
+    // Skip persisting to simulate raft log persist lag but not block node restart.
+    fail::cfg(raft_before_save_on_store_1_fp, "return").unwrap();
+
+    let cmd = new_put_cf_cmd(CF_DEFAULT, b"k1", b"v3");
+    let req = new_request(left.id, left.get_region_epoch().clone(), vec![cmd], false);
+    cluster
+        .call_command_on_leader(req, Duration::from_secs(1))
+        .unwrap_err();
+    let cmd = new_put_cf_cmd(CF_DEFAULT, b"k3", b"v3");
+    let req = new_request(right.id, right.get_region_epoch().clone(), vec![cmd], false);
+    cluster
+        .call_command_on_leader(req, Duration::from_secs(1))
+        .unwrap_err();
+
+    let schedule_merge_fp = "on_schedule_merge";
+    fail::cfg(schedule_merge_fp, "return()").unwrap();
+
+    // Propose merge on leader will fail with timeout due to not persist.
+    let req = cluster.new_prepare_merge(left.get_id(), right.get_id());
+    cluster
+        .call_command_on_leader(req, Duration::from_secs(1))
+        .unwrap_err();
+
+    // stop node 1, some unpersisted logs will be lost.
+    cluster.stop_node(1);
+
+    fail::remove(raft_before_save_on_store_1_fp);
+    fail::remove(schedule_merge_fp);
+
+    // Wait till merge is finished.
+    pd_client.check_merged_timeout(left.get_id(), Duration::from_secs(5));
+
+    // restart node 1 to let it apply the merge.
+    cluster.run_node(1).unwrap();
+
+    let region = cluster.get_region(b"k1");
+    let peer = region
+        .get_peers()
+        .iter()
+        .find(|p| p.store_id == 1)
+        .unwrap()
+        .clone();
+    cluster.must_transfer_leader(1, peer);
+
+    cluster.must_put(b"k1", b"v3");
 }
