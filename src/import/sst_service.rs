@@ -29,6 +29,7 @@ use raftstore::{
     RegionInfoAccessor,
 };
 use raftstore_v2::StoreMeta;
+use rand::Rng;
 use resource_control::{with_resource_limiter, ResourceGroupManager};
 use sst_importer::{
     error_inc, metrics::*, sst_importer::DownloadExt, Config, ConfigManager, Error, Result,
@@ -98,9 +99,16 @@ const REJECT_SERVE_MEMORY_USAGE: u64 = 1024 * 1024 * 1024; //1G
 const HIGH_IMPORT_MEMORY_WATER_RATIO: f64 = 0.95;
 
 /// Check if the system has enough resources for import tasks
-fn check_import_resources() -> Result<()> {
+async fn check_import_resources() -> Result<()> {
+    // these error(memory or disk) cannot be recover at a short time,
+    // in case client retry immediately, sleep for a while
+    async fn sleep_with_jitter() {
+        let jitter = rand::thread_rng().gen_range(1000, 2000);
+        tokio::time::sleep(Duration::from_millis(jitter)).await;
+    }
     // Check disk space first
     if get_disk_status(0) != DiskUsage::Normal {
+        sleep_with_jitter().await;
         return Err(Error::DiskSpaceNotEnough);
     }
 
@@ -115,24 +123,26 @@ fn check_import_resources() -> Result<()> {
     if mem_limit == 0 || mem_limit < usage {
         // make it through when cannot get correct memory
         warn!(
-            "Memory limit isn't correct. skip next check, limit is {}, usage is {}",
+            "Memory limit isn't correct. skip next check, limit is {} bytes, usage is {} bytes",
             mem_limit, usage
         );
         return Ok(());
     }
 
-    let usage_ratio = usage as f64 / mem_limit as f64;
+    let available_memory = mem_limit - usage;
+    let min_required_memory = std::cmp::min(
+        REJECT_SERVE_MEMORY_USAGE,
+        ((1.0 - HIGH_IMPORT_MEMORY_WATER_RATIO) * mem_limit as f64) as u64,
+    );
 
     // Reject ONLY if BOTH:
     // - Available memory is below REJECT_SERVE_MEMORY_USAGE
-    // - Memory usage ratio is 90%+
-    if mem_limit - usage < REJECT_SERVE_MEMORY_USAGE
-        && usage_ratio >= HIGH_IMPORT_MEMORY_WATER_RATIO
-    {
+    // - Memory usage ratio is 95%+
+    if available_memory < min_required_memory {
+        sleep_with_jitter().await;
         return Err(Error::ResourceNotEnough(format!(
-            "Memory usage too high: {} bytes (≈{:.1}%)",
-            usage,
-            usage_ratio * 100.0
+            "Memory usage too high, usage: {} bytes, mem limit {} bytes",
+            usage, mem_limit
         )));
     }
     Ok(())
@@ -669,7 +679,7 @@ macro_rules! impl_write {
                         .try_fold(
                             (writer, resource_limiter),
                             |(mut writer, limiter), req| async move {
-                                check_import_resources()?;
+                                check_import_resources().await?;
                                 let batch = match req.chunk {
                                     Some($chunk_ty::Batch(b)) => b,
                                     _ => return Err(Error::InvalidChunk),
@@ -816,7 +826,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 let file = import.create(meta)?;
                 let mut file = rx
                     .try_fold(file, |mut file, chunk| async move {
-                        match check_import_resources() {
+                        match check_import_resources().await {
                             Ok(()) => (),
                             Err(e) => {
                                 warn!("Upload failed due to not enough resource {:?}", e);
@@ -897,7 +907,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 .observe(start.saturating_elapsed().as_secs_f64());
 
             let mut resp = ApplyResponse::default();
-            match check_import_resources() {
+            match check_import_resources().await {
                 Ok(()) => (),
                 Err(e) => {
                     resp.set_error(e.into());
@@ -949,11 +959,9 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 .observe(start.saturating_elapsed().as_secs_f64());
 
             let mut resp = DownloadResponse::default();
-            match check_import_resources() {
+            match check_import_resources().await {
                 Ok(()) => (),
                 Err(e) => {
-                    // in case of immediate retry from client side
-                    tokio::time::sleep(Duration::from_secs(1)).await;
                     resp.set_error(e.into());
                     return crate::send_rpc_response!(Ok(resp), sink, label, timer);
                 }
