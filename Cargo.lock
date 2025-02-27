@@ -6205,7 +6205,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "6.5.12"
+version = "6.5.13"
 dependencies = [
  "anyhow",
  "api_version",
