@@ -129,7 +129,7 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
         // for every key.
         if items.len() > 1 {
             items.sort_by(|a, b| key_of(a).cmp(key_of(b)));
-            self.reader.scan_mode = Some(ScanMode::Forward);
+            self.reader.lock_scan_mode = Some(ScanMode::Forward);
         }
     }
 }
@@ -146,6 +146,11 @@ pub struct MvccReader<S: EngineSnapshot> {
     upper_bound: Option<Key>,
 
     hint_min_ts: Option<Bound<TimeStamp>>,
+
+    // None means single key read for each key.
+    // Some(ScanMode::Forward) means reading lock operations following operations are performed on
+    // a cursor.
+    lock_scan_mode: Option<ScanMode>,
 
     /// None means following operations are performed on a single user key,
     /// i.e., different versions of the same key. It can use prefix seek to
@@ -177,6 +182,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             lower_bound: None,
             upper_bound: None,
             hint_min_ts: None,
+            lock_scan_mode: scan_mode,
             scan_mode,
             current_key: None,
             fill_cache,
@@ -196,6 +202,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             lower_bound: None,
             upper_bound: None,
             hint_min_ts: None,
+            lock_scan_mode: scan_mode,
             scan_mode,
             current_key: None,
             fill_cache: !ctx.get_not_fill_cache(),
@@ -246,7 +253,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             return Ok(Some(pessimistic_lock));
         }
 
-        if self.scan_mode.is_some() {
+        if self.scan_mode.is_some() || self.lock_scan_mode.is_some() {
             self.create_lock_cursor_if_not_exist()?;
         }
 
