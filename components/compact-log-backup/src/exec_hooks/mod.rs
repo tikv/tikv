@@ -13,6 +13,7 @@ pub mod checkpoint;
 pub mod consistency;
 pub mod observability;
 pub mod save_meta;
+pub mod skip_small_compaction;
 
 #[derive(Default)]
 pub struct CollectStatistic {
