@@ -1282,9 +1282,15 @@ where
         let f = async move {
             match resp.await {
                 Ok(mut resp) => {
-                    GLOBAL_SERVER_READINESS
+                    if GLOBAL_SERVER_READINESS
                         .connected_to_pd
-                        .store(true, Ordering::Relaxed);
+                        .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+                        .is_ok()
+                    {
+                        // Log when the server readiness condition changes.
+                        info!("ServerReadiness: connected to PD");
+                    }
+
                     if let Some(status) = resp.replication_status.take() {
                         let _ = router.send_control(StoreMsg::UpdateReplicationMode(status));
                     }

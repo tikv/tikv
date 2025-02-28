@@ -2929,16 +2929,26 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             busy_apply_peers_count,
             completed_apply_peers_count,
         );
-        GLOBAL_SERVER_READINESS
-            .raft_peers_caught_up
-            .store(!busy_on_apply, Ordering::Relaxed);
-        // If the store already pass the check, it should clear the
-        // `completed_apply_peers_count` to skip the check next time.
-        if !busy_on_apply && completed_apply_peers_count.is_some() {
-            let mut meta = self.ctx.store_meta.lock().unwrap();
-            meta.completed_apply_peers_count = None;
-            meta.busy_apply_peers.clear();
+
+        if !busy_on_apply {
+            // If the store already passes the check, it should clear the
+            // `completed_apply_peers_count` to skip the check next time.
+            if completed_apply_peers_count.is_some() {
+                let mut meta = self.ctx.store_meta.lock().unwrap();
+                meta.completed_apply_peers_count = None;
+                meta.busy_apply_peers.clear();
+            }
+
+            if GLOBAL_SERVER_READINESS
+                .raft_peers_caught_up
+                .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                // Log when the server readiness condition changes.
+                info!("ServerReadiness: Raft peers have caught up applying logs");
+            }
         }
+
         let store_is_busy = self
             .ctx
             .global_stat
