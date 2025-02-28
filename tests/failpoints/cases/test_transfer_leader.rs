@@ -571,7 +571,7 @@ fn test_turnoff_warmup_entry_cache() {
 #[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_when_warmup_fail_and_its_timeout_is_too_long() {
     let mut cluster = new_cluster(0, 3);
-    cluster.cfg.raft_store.max_entry_cache_warmup_duration = ReadableDuration::secs(1000);
+    cluster.cfg.raft_store.max_entry_cache_warmup_duration = ReadableDuration::secs(u64::MAX / 2);
     prevent_from_gc_raft_log(&mut cluster.cfg);
     run_cluster_for_test_warmup_entry_cache!(cluster);
 
