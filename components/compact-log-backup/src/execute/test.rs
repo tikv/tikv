@@ -21,6 +21,7 @@ use crate::{
     errors::OtherErrExt,
     exec_hooks::{
         checkpoint::Checkpoint, consistency::StorageConsistencyGuard, save_meta::SaveMeta,
+        skip_small_compaction::SkipSmallCompaction,
     },
     execute::hooking::{CId, ExecHooks, SubcompactionFinishCtx},
     storage::LOCK_PREFIX,
@@ -308,4 +309,29 @@ async fn test_abort_unlocking() {
         .unwrap_err();
     let l = load_locks(st.storage().as_ref()).await;
     assert_eq!(l.len(), 0, "it is {:?}", l);
+}
+
+#[tokio::test]
+async fn test_filter_out_small_compactions() {
+    let st = TmpStorage::create();
+    let mut cm = HashMap::new();
+    st.build_flush("0.log", "v1/backupmeta/0.meta", gen_builder(&mut cm, 0, 15))
+        .await;
+
+    let exec = create_compaction(st.backend());
+
+    tokio::task::spawn_blocking(move || {
+        exec.run((SkipSmallCompaction::new(27800), SaveMeta::default()))
+    })
+    .await
+    .unwrap()
+    .unwrap();
+
+    let migs = st.load_migrations().await.unwrap();
+    let c_path = &migs[0].1.compactions[0];
+    let cs = st.load_subcompactions(&c_path.artifacts).await.unwrap();
+    assert_eq!(cs.len(), 8, "{:?}", cs);
+    for c in &cs {
+        assert!(c.get_meta().get_size() >= 27800, "{:?}", c.get_meta());
+    }
 }
