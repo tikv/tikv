@@ -7,11 +7,7 @@
 #![feature(test)]
 #![allow(internal_features)]
 #![feature(str_internals)]
-<<<<<<< HEAD
-=======
-#![feature(core_intrinsics)]
 #![feature(round_ties_even)]
->>>>>>> 5ac2208f1b (expression: change the round rule to `round to nearest even` (#17935))
 
 #[macro_use]
 extern crate num_derive;
