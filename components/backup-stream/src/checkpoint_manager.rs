@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cell::RefCell, collections::HashMap, sync::Arc, time::Duration};
+use std::{cell::RefCell, collections::HashMap};
 
 use futures::{
     channel::mpsc::{self as async_mpsc, Receiver, Sender},
@@ -13,7 +13,6 @@ use kvproto::{
     logbackuppb::{FlushEvent, SubscribeFlushEventResponse},
     metapb::Region,
 };
-use pd_client::PdClient;
 use tikv_util::{box_err, defer, info, warn, worker::Scheduler};
 use tracing::instrument;
 use txn_types::TimeStamp;
@@ -397,7 +396,7 @@ impl CheckpointManager {
         &mut self,
         f: impl FnOnce(&SubscriptionManager) -> T + Send + 'static,
     ) -> T {
-        use std::sync::Mutex;
+        use std::sync::{Arc, Mutex};
 
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         let t = Arc::new(Mutex::new(None));
@@ -480,54 +479,7 @@ pub trait FlushObserver: Send + 'static {
     }
 }
 
-pub struct BasicFlushObserver<PD> {
-    pd_cli: Arc<PD>,
-    store_id: u64,
-}
-
-impl<PD> BasicFlushObserver<PD> {
-    pub fn new(pd_cli: Arc<PD>, store_id: u64) -> Self {
-        Self { pd_cli, store_id }
-    }
-}
-
-#[async_trait::async_trait]
-impl<PD: PdClient + 'static> FlushObserver for BasicFlushObserver<PD> {
-    async fn before(&mut self, _checkpoints: Vec<ResolveResult>) {}
-
-    async fn after(&mut self, task: &str, rts: u64) -> Result<()> {
-        if let Err(err) = self
-            .pd_cli
-            .update_service_safe_point(
-                format!("backup-stream-{}-{}", task, self.store_id),
-                TimeStamp::new(rts.saturating_sub(1)),
-                // Add a service safe point for 2 hours.
-                // We make it the same duration as we meet fatal errors because TiKV may be
-                // SIGKILL'ed after it meets fatal error and before it successfully updated the
-                // fatal error safepoint.
-                // TODO: We'd better make the coordinator, who really
-                // calculates the checkpoint to register service safepoint.
-                Duration::from_secs(60 * 60 * 2),
-            )
-            .await
-        {
-            Error::from(err).report("failed to update service safe point!");
-            // don't give up?
-        }
-
-        // Currently, we only support one task at the same time,
-        // so use the task as label would be ok.
-        metrics::STORE_CHECKPOINT_TS
-            .with_label_values(&[task])
-            .set(rts as _);
-        Ok(())
-    }
-}
-
-pub struct CheckpointV3FlushObserver<S, O> {
-    /// We should modify the rts (the local rts isn't right.)
-    /// This should be a BasicFlushObserver or something likewise.
-    baseline: O,
+pub struct CheckpointV3FlushObserver<S> {
     sched: Scheduler<Task>,
     meta_cli: MetadataClient<S>,
 
@@ -535,23 +487,21 @@ pub struct CheckpointV3FlushObserver<S, O> {
     global_checkpoint_cache: HashMap<String, Checkpoint>,
 }
 
-impl<S, O> CheckpointV3FlushObserver<S, O> {
-    pub fn new(sched: Scheduler<Task>, meta_cli: MetadataClient<S>, baseline: O) -> Self {
+impl<S> CheckpointV3FlushObserver<S> {
+    pub fn new(sched: Scheduler<Task>, meta_cli: MetadataClient<S>) -> Self {
         Self {
             sched,
             meta_cli,
             checkpoints: vec![],
             // We almost always have only one entry.
             global_checkpoint_cache: HashMap::with_capacity(1),
-            baseline,
         }
     }
 }
 
-impl<S, O> CheckpointV3FlushObserver<S, O>
+impl<S> CheckpointV3FlushObserver<S>
 where
     S: MetaStore + 'static,
-    O: FlushObserver + Send,
 {
     async fn get_checkpoint(&mut self, task: &str) -> Result<Checkpoint> {
         let cp = match self.global_checkpoint_cache.get(task) {
@@ -568,10 +518,9 @@ where
 }
 
 #[async_trait::async_trait]
-impl<S, O> FlushObserver for CheckpointV3FlushObserver<S, O>
+impl<S> FlushObserver for CheckpointV3FlushObserver<S>
 where
     S: MetaStore + 'static,
-    O: FlushObserver + Send,
 {
     async fn before(&mut self, checkpoints: Vec<ResolveResult>) {
         self.checkpoints = checkpoints;
@@ -585,9 +534,11 @@ where
 
         let global_checkpoint = self.get_checkpoint(task).await?;
         info!("getting global checkpoint from cache for updating."; "checkpoint" => ?global_checkpoint);
-        self.baseline
-            .after(task, global_checkpoint.ts.into_inner())
-            .await?;
+        // Currently, we only support one task at the same time,
+        // so use the task as label would be ok.
+        metrics::STORE_CHECKPOINT_TS
+            .with_label_values(&[task])
+            .set(global_checkpoint.ts.into_inner() as _);
         Ok(())
     }
 
@@ -607,18 +558,15 @@ where
 pub mod tests {
     use std::{
         assert_matches,
-        collections::HashMap,
-        sync::{Arc, Mutex, RwLock},
-        time::Duration,
+        sync::{Arc, Mutex},
     };
 
-    use futures::{future::ok, Sink};
+    use futures::Sink;
     use grpcio::{RpcStatus, RpcStatusCode};
     use kvproto::{logbackuppb::SubscribeFlushEventResponse, metapb::*};
-    use pd_client::{PdClient, PdFuture};
     use txn_types::TimeStamp;
 
-    use super::{BasicFlushObserver, FlushObserver, RegionIdWithVersion};
+    use super::RegionIdWithVersion;
     use crate::{
         subscription_track::{CheckpointType, ResolveResult},
         GetCheckpointResult,
@@ -853,51 +801,5 @@ pub mod tests {
         assert_matches::assert_matches!(r, GetCheckpointResult::Ok{checkpoint, ..} if checkpoint.into_inner() == 8);
         let r = mgr.get_from_region(RegionIdWithVersion::new(2, 34));
         assert_matches::assert_matches!(r, GetCheckpointResult::Ok{checkpoint, ..} if checkpoint.into_inner() == 17);
-    }
-
-    pub struct MockPdClient {
-        safepoint: RwLock<HashMap<String, TimeStamp>>,
-    }
-
-    impl PdClient for MockPdClient {
-        fn update_service_safe_point(
-            &self,
-            name: String,
-            safepoint: TimeStamp,
-            _ttl: Duration,
-        ) -> PdFuture<()> {
-            // let _ = self.safepoint.insert(name, safepoint);
-            self.safepoint.write().unwrap().insert(name, safepoint);
-
-            Box::pin(ok(()))
-        }
-    }
-
-    impl MockPdClient {
-        fn new() -> Self {
-            Self {
-                safepoint: RwLock::new(HashMap::default()),
-            }
-        }
-
-        fn get_service_safe_point(&self, name: String) -> Option<TimeStamp> {
-            self.safepoint.read().unwrap().get(&name).copied()
-        }
-    }
-
-    #[tokio::test]
-    async fn test_after() {
-        let store_id = 1;
-        let pd_cli = Arc::new(MockPdClient::new());
-        let mut flush_observer = BasicFlushObserver::new(pd_cli.clone(), store_id);
-        let task = String::from("test");
-        let rts = 12345;
-
-        let r = flush_observer.after(&task, rts).await;
-        assert_eq!(r.is_ok(), true);
-
-        let service_id = format!("backup-stream-{}-{}", task, store_id);
-        let r = pd_cli.get_service_safe_point(service_id).unwrap();
-        assert_eq!(r.into_inner(), rts - 1);
     }
 }
