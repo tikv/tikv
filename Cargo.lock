@@ -5179,7 +5179,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.7.0"
-source = "git+https://github.com/glorv/raft-rs?branch=reset-on-follower#d5a0e2c3742f472bf72fc57b78ea0224326c6522"
+source = "git+https://github.com/tikv/raft-rs?branch=master#0d01b20312f74889a5e44ad4180aade5da2f16fa"
 dependencies = [
  "bytes",
  "fxhash",
@@ -5238,7 +5238,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.7.0"
-source = "git+https://github.com/glorv/raft-rs?branch=reset-on-follower#d5a0e2c3742f472bf72fc57b78ea0224326c6522"
+source = "git+https://github.com/tikv/raft-rs?branch=master#0d01b20312f74889a5e44ad4180aade5da2f16fa"
 dependencies = [
  "bytes",
  "protobuf",
