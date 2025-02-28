@@ -41,8 +41,8 @@ const COMPACTION_V1_PREFIX: &str = "v1/compactions";
 /// The config for an execution of a compaction.
 ///
 /// This structure itself fully defines what work the compaction need to do.
-/// That is, keeping this structure unchanged, the compaction should always
-/// generate the same artifices.
+/// That is, keeping this structure unchanged, the compaction task generated
+/// should be the same. (But some of them may be filtered out later.)
 #[derive(Debug)]
 pub struct ExecutionConfig {
     /// Filter out files doesn't contain any record with TS great or equal than
