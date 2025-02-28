@@ -1130,13 +1130,18 @@ pub fn schedule_gc(
     safe_point: TimeStamp,
     callback: Callback<()>,
 ) -> Result<()> {
-    scheduler
-        .schedule(GcTask::Gc {
-            region,
-            safe_point,
-            callback,
-        })
-        .or_else(handle_gc_task_schedule_error)
+    let task = GcTask::Gc {
+        region,
+        safe_point,
+        callback,
+    };
+    if fail::eval("schedule_gc_full", |_| true).is_some() {
+        handle_gc_task_schedule_error(ScheduleError::Full(task))
+    } else {
+        scheduler
+            .schedule(task)
+            .or_else(handle_gc_task_schedule_error)
+    }
 }
 
 /// Does GC synchronously.
