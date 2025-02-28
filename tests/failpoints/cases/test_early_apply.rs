@@ -237,7 +237,7 @@ fn test_early_apply_leader_demote_by_append() {
         .map(|e| e.index)
         .unwrap();
     msg.mut_message().commit = entry_idx;
-    let peer_msg = PeerMsg::RaftMessage(Box::new(InspectedRaftMessage { heap_size: 0, msg }), None);
+    let peer_msg = PeerMsg::RaftMessage(InspectedRaftMessage { heap_size: 0, msg }, None);
     cluster.get_router(1).unwrap().send(1, peer_msg).unwrap();
 
     for i in 1..=3 {
