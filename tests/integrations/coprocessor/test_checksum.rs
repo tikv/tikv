@@ -79,6 +79,7 @@ fn reversed_checksum_crc64_xor<E: Engine>(store: &Store<E>, range: KeyRange) -> 
         Default::default(),
         Default::default(),
         false,
+        false,
     );
     let mut scanner = RangesScanner::<_, ApiV1>::new(RangesScannerOptions {
         storage: TikvStorage::new(store, false),
