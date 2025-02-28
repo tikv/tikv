@@ -2352,6 +2352,12 @@ where
             self.fsm.hibernate_state.group_state() == GroupState::Chaos,
             |_| {}
         );
+        fail_point!(
+            "on_raft_base_tick_ordered_1003",
+            self.fsm.peer.peer_id() == 1003
+                && self.fsm.hibernate_state.group_state() == GroupState::Ordered,
+            |_| {}
+        );
 
         if self.fsm.peer.pending_remove {
             self.fsm.peer.mut_store().flush_entry_cache_metrics();
@@ -2963,6 +2969,7 @@ where
         if !self.ctx.cfg.hibernate_regions
             || self.fsm.peer.has_uncommitted_log()
             || self.fsm.peer.wait_data
+            || self.fsm.peer.busy_on_apply.is_some() /* still under applying raft logs */
             || from.get_id() != self.fsm.peer.leader_id()
         {
             // Ignore the message means rejecting implicitly.
