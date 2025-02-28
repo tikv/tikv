@@ -201,7 +201,12 @@ impl EntryCache {
                     let cached_last = cached.range.end - 1;
                     // TODO: if we are going to support apply unpersisted entries on
                     // follower, this assert will not longer be correct.
-                    assert!(cached_last < trunc_to_idx);
+                    assert!(
+                        cached_last < trunc_to_idx,
+                        "cached_last: {}, trunc_to_idx: {}",
+                        cached_last,
+                        trunc_to_idx
+                    );
                 }
             } else if cache_last_index + 1 < first_index {
                 panic!(

@@ -167,12 +167,12 @@ fn test_early_apply_yield_followed_with_many_entries() {
     must_get_equal(&cluster.get_engine(3), b"k150", b"v150");
 }
 
-// Test the consistency of EntryCache when partitioned leader constains
+// Test the consistency of EntryCache when partitioned leader contains
 // uncommitted propose, and after the partition is recovered, it can replicate
-// raft entries for new leader correctly. This case test the corner scenario
-// that partitioned leader receive a new Append msg for new elected leader and
-// the new entries are already committed and overlap with existing entries
-// uncomitted entries in the entry cache, it may cause panic if handles
+// raft entries for new leader correctly. This case tests the corner scenario
+// that partitioned leader receives a new Append msg from new elected leader and
+// the new entries are already committed and overlap with existing
+// uncommitted entries in the entry cache, it may cause panic if handled
 // incorrectly. See issue https://github.com/tikv/tikv/issues/17868 for more details.
 #[test]
 fn test_early_apply_leader_demote_by_append() {
@@ -213,7 +213,7 @@ fn test_early_apply_leader_demote_by_append() {
     block_on_timeout(ch, Duration::from_millis(100)).unwrap_err();
 
     let fp = "pause_on_peer_collect_message";
-    // pause peer 1 to wait for leader timeout, should new leader
+    // pause peer 1 to wait for leader timeout.
     fail::cfg(fp, "pause").unwrap();
 
     // wait for leader timeout.
