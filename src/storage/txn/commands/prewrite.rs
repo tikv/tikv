@@ -2993,4 +2993,51 @@ mod tests {
         must_locked(&mut engine, k2, 10);
         must_locked(&mut engine, k3, 10);
     }
+
+    // #[test]
+    // fn test_prewrite_read_newer_version() {
+    //     let mut engine = TestEngineBuilder::new().build().unwrap();
+    //     let cm =
+    // concurrency_manager::ConcurrencyManager::new_for_test(1.into());
+
+    //     let k1 = b"k1";
+    //     let k2 = b"k2";
+    //     let mutations = vec![
+    //         Mutation::make_put(Key::from_raw(&k1.to_vec()), k1.to_vec()),
+    //         Mutation::make_put(Key::from_raw(&k2.to_vec()), k2.to_vec()),
+    //     ];
+
+    //     let mut statistics = Statistics::default();
+    //     prewrite_with_cm(
+    //         &mut engine,
+    //         cm.clone(),
+    //         &mut statistics,
+    //         mutations,
+    //         k1.to_vec(),
+    //         10,
+    //         None,
+    //     )
+    //     .unwrap();
+
+    //     commit(
+    //         &mut engine,
+    //         &mut statistics,
+    //         vec![Key::from_raw(&k1.to_vec())],
+    //         10,
+    //         20,
+    //     )
+    //     .unwrap();
+
+    //     let mutations = vec![Mutation::make_put(Key::from_raw(&k1.to_vec()),
+    // k1.to_vec())];     let e = prewrite_with_cm(
+    //         &mut engine,
+    //         cm.clone(),
+    //         &mut statistics,
+    //         mutations,
+    //         k1.to_vec(),
+    //         15,
+    //         None,
+    //     );
+    //     println!("{:?}", e);
+    // }
 }
