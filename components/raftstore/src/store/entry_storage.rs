@@ -199,7 +199,14 @@ impl EntryCache {
                     // Only committed entries can be traced, and only uncommitted entries
                     // can be truncated. So there won't be any overlaps.
                     let cached_last = cached.range.end - 1;
-                    assert!(cached_last < trunc_to_idx);
+                    // TODO: if we are going to support apply unpersisted entries on
+                    // follower, this assert will not longer be correct.
+                    assert!(
+                        cached_last < trunc_to_idx,
+                        "cached_last: {}, trunc_to_idx: {}",
+                        cached_last,
+                        trunc_to_idx
+                    );
                 }
             } else if cache_last_index + 1 < first_index {
                 panic!(
