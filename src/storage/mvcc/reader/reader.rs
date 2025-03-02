@@ -259,7 +259,16 @@ impl<S: EngineSnapshot> MvccReader<S> {
 
         let res = if let Some(ref mut cursor) = self.lock_cursor {
             match cursor.get(key, &mut self.statistics.lock)? {
-                Some(v) => Some(Lock::parse(v)?),
+                Some(v) => {
+                    let non_cursor_v = self.snapshot.get_cf(CF_LOCK, key)?;
+                    if non_cursor_v != Some(v.to_vec()) {
+                        panic!(
+                            "DBG, cursor read result different from snapshot get, key: {}, cursor value: {:?}, non-cursor value: {:?}",
+                            key, v, non_cursor_v
+                        );
+                    }
+                    Some(Lock::parse(v)?)
+                },
                 None => None,
             }
         } else {
