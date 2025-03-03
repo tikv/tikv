@@ -491,17 +491,11 @@ lazy_static! {
             exponential_buckets(0.00001, 2.0, 26).unwrap() // 10us ~ 671s.
         ).unwrap();
 
-    pub static ref PEER_DESTROY_KV_DURATION_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_raftstore_peer_destroy_kv_write_duration_seconds",
-            "Bucketed histogram of peer destroy kv engine write duration",
-            exponential_buckets(0.00001, 2.0, 26).unwrap() // 10us ~ 671s.
-        ).unwrap();
-
-    pub static ref PEER_DESTROY_RAFT_DURATION_HISTOGRAM: Histogram =
-        register_histogram!(
-            "tikv_raftstore_peer_destroy_raft_write_duration_seconds",
-            "Bucketed histogram of peer destroy raft engine write duration",
+    pub static ref STORE_IO_DURATION_HISTOGRAM: HistogramVec =
+        register_histogram_vec!(
+            "tikv_raftstore_io_duration_seconds",
+            "Bucketed histogram of raftstore IO duration",
+            &["type", "reason"],
             exponential_buckets(0.00001, 2.0, 26).unwrap() // 10us ~ 671s.
         ).unwrap();
 

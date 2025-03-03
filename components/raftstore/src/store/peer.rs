@@ -962,6 +962,7 @@ where
         peer: metapb::Peer,
         wait_data: bool,
         create_by_peer: Option<metapb::Peer>,
+        raft_metrics: &RaftMetrics,
     ) -> Result<Peer<EK, ER>> {
         let peer_id = peer.get_id();
         if peer_id == raft::INVALID_ID {
@@ -977,6 +978,7 @@ where
             raftlog_fetch_scheduler,
             peer.get_id(),
             tag.clone(),
+            raft_metrics,
         )?;
         let applied_index = ps.applied_index();
 
@@ -1484,7 +1486,7 @@ where
             write_opts.set_sync(true);
             kv_wb.write_opt(&write_opts)?;
             raft_metrics
-                .peer_destroy_kv_write
+                .io_write_peer_destroy_kv
                 .observe(start.saturating_elapsed().as_secs_f64());
 
             drop(pending_create_peers);
@@ -1494,7 +1496,7 @@ where
             engines.raft.consume(&mut raft_wb, true)?;
             perf_context.report_metrics(&[]);
             raft_metrics
-                .peer_destroy_kv_write
+                .io_write_peer_destroy_raft
                 .observe(start.saturating_elapsed().as_secs_f64());
 
             if self.get_store().is_initialized() && !keep_data {
@@ -5254,6 +5256,7 @@ where
         let mut reader = PollContextReader {
             engines: &ctx.engines,
         };
+        let _timer = ctx.raft_metrics.io_read_peer_snapshot_read.start_timer();
         let mut resp = reader.execute(
             &read_ctx,
             &req,
