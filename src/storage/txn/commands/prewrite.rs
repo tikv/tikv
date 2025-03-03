@@ -538,7 +538,7 @@ impl<K: PrewriteKind> Prewriter<K> {
 
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
         let mut snapshot_reader = SnapshotReader::new_with_ctx(self.start_ts, snapshot, &self.ctx);
-        // snapshot_reader.setup_with_hint_items(&mut self.mutations, |m| m.key());
+        snapshot_reader.setup_with_hint_items(&mut self.mutations, |m| m.key());
         let mut reader = ReaderWithStats::new(snapshot_reader, context.statistics);
         // Set extra op here for getting the write record when check write conflict in
         // prewrite.

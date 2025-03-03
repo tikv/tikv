@@ -341,11 +341,18 @@ impl Resolver {
     ) -> Result<(), MemoryQuotaExceeded> {
         let bytes = self.lock_heap_size(&key);
         self.memory_quota.alloc(bytes)?;
+        let clone_key = key.clone();
         let key: Arc<[u8]> = key.into_boxed_slice().into();
         match self.locks_by_key.entry(key) {
-            HashMapEntry::Occupied(_) => {
+            HashMapEntry::Occupied(entry) => {
                 // Free memory quota because it's already in the map.
                 self.memory_quota.free(bytes);
+                warn!("DBG, track lock, key already exists";
+                    "key" => &log_wrappers::Value::key(&clone_key),
+                    "region_id" => self.region_id,
+                    "existing_start_ts" => entry.get(),
+                    "new_start_ts" => start_ts,
+                );
             }
             HashMapEntry::Vacant(entry) => {
                 // Add lock count for the start ts.
