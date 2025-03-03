@@ -203,7 +203,7 @@ pub fn commit_flashback_key(
     flashback_commit_ts: TimeStamp,
 ) -> TxnResult<()> {
     let exist_lock = reader.load_lock(key_to_commit)?;
-    warn!("DBG, prewrite flashback lock, exist lock: {:?}, key: {:?}, flashback_start_ts: {}, flashback_commit_ts: {}",
+    warn!("DBG, commit flashback lock, exist lock: {:?}, key: {:?}, flashback_start_ts: {}, flashback_commit_ts: {}",
         exist_lock, key_to_commit, flashback_start_ts, flashback_commit_ts);
     if let Some(mut lock) = exist_lock {
         txn.put_write(
