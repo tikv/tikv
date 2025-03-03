@@ -193,7 +193,9 @@ fn init_raft_state<EK: KvEngine, ER: RaftEngine>(
         raft_state.mut_hard_state().set_commit(RAFT_INIT_LOG_INDEX);
         let mut lb = engines.raft.log_batch(0);
         lb.put_raft_state(region.get_id(), &raft_state)?;
+        let start = Instant::now();
         engines.raft.consume(&mut lb, true)?;
+        PEER_CREATE_RAFT_DURATION_HISTOGRAM.observe(start.saturating_elapsed().as_secs_f64());
     }
     Ok(raft_state)
 }
