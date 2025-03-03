@@ -4206,6 +4206,7 @@ where
             &mut self.ctx.raft_perf_context,
             merged_by_target,
             &self.ctx.pending_create_peers,
+            &self.ctx.raft_metrics,
         ) {
             // If not panic here, the peer will be recreated in the next restart,
             // then it will be gc again. But if some overlap region is created

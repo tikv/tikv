@@ -169,6 +169,10 @@ pub struct RaftMetrics {
     pub write_block_wait: LocalHistogram,
     pub propose_log_size: LocalHistogram,
 
+    // Raftstore disk IO metrics
+    pub peer_destroy_kv_write: LocalHistogram,
+    pub peer_destroy_raft_write: LocalHistogram,
+
     // waterfall metrics
     pub waterfall_metrics: bool,
     pub wf_batch_wait: LocalHistogram,
@@ -211,6 +215,8 @@ impl RaftMetrics {
             commit_log: PEER_COMMIT_LOG_HISTOGRAM.local(),
             write_block_wait: STORE_WRITE_MSG_BLOCK_WAIT_DURATION_HISTOGRAM.local(),
             propose_log_size: PEER_PROPOSE_LOG_SIZE_HISTOGRAM.local(),
+            peer_destroy_kv_write: PEER_DESTROY_KV_DURATION_HISTOGRAM.local(),
+            peer_destroy_raft_write: PEER_DESTROY_RAFT_DURATION_HISTOGRAM.local(),
             waterfall_metrics,
             wf_batch_wait: STORE_WF_BATCH_WAIT_DURATION_HISTOGRAM.local(),
             wf_send_to_queue: STORE_WF_SEND_TO_QUEUE_DURATION_HISTOGRAM.local(),
@@ -249,6 +255,8 @@ impl RaftMetrics {
         self.commit_log.flush();
         self.write_block_wait.flush();
         self.propose_log_size.flush();
+        self.peer_destroy_kv_write.flush();
+        self.peer_destroy_raft_write.flush();
 
         if self.waterfall_metrics {
             self.wf_batch_wait.flush();

@@ -1398,6 +1398,7 @@ where
         perf_context: &mut ER::PerfContext,
         keep_data: bool,
         pending_create_peers: &Mutex<HashMap<u64, (u64, bool)>>,
+        raft_metrics: &RaftMetrics,
     ) -> Result<()> {
         fail_point!("raft_store_skip_destroy_peer", |_| Ok(()));
         let t = TiInstant::now();
@@ -1477,16 +1478,24 @@ where
                 },
             )?;
 
+            let start = Instant::now();
             // write kv rocksdb first in case of restart happen between two write
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
             kv_wb.write_opt(&write_opts)?;
+            raft_metrics
+                .peer_destroy_kv_write
+                .observe(start.saturating_elapsed().as_secs_f64());
 
             drop(pending_create_peers);
 
+            let start = Instant::now();
             perf_context.start_observe();
             engines.raft.consume(&mut raft_wb, true)?;
             perf_context.report_metrics(&[]);
+            raft_metrics
+                .peer_destroy_kv_write
+                .observe(start.saturating_elapsed().as_secs_f64());
 
             if self.get_store().is_initialized() && !keep_data {
                 // If we meet panic when deleting data and raft log, the dirty data
