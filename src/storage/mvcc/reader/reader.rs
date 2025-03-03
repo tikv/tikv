@@ -8,6 +8,7 @@ use kvproto::{
     errorpb::{self, EpochNotMatch, FlashbackInProgress, StaleCommand},
     kvrpcpb::Context,
 };
+use nom::AsBytes;
 use raftstore::store::{LocksStatus, PeerPessimisticLocks};
 use tikv_kv::{SnapshotExt, SEEK_BOUND};
 use tikv_util::time::Instant;
@@ -258,17 +259,21 @@ impl<S: EngineSnapshot> MvccReader<S> {
         }
 
         let res = if let Some(ref mut cursor) = self.lock_cursor {
-            match cursor.get(key, &mut self.statistics.lock)? {
-                Some(v) => {
-                    let non_cursor_v = self.snapshot.get_cf(CF_LOCK, key)?;
-                    if non_cursor_v != Some(v.to_vec()) {
-                        panic!(
-                            "DBG, cursor read result different from snapshot get, key: {}, cursor value: {:?}, non-cursor value: {:?}",
-                            key, v, non_cursor_v
-                        );
-                    }
-                    Some(Lock::parse(v)?)
-                },
+            let cursor_result = cursor.get(key, &mut self.statistics.lock)?;
+
+            let nv = self.snapshot.get_cf(CF_LOCK, key)?;
+            let non_cursor_v = nv.as_ref().map(|v| v.as_bytes());
+            if non_cursor_v != cursor_result {
+                let cursor_lock = cursor_result.map(Lock::parse);
+                let non_cursor_lock = non_cursor_v.map(Lock::parse);
+                panic!(
+                    "DBG, cursor read result different from snapshot get, key: {}, cursor value: {:?}, cursr lock: {:?}, non-cursor value: {:?}, non_cursor lock: {:?}",
+                    key, cursor_result, cursor_lock, non_cursor_v, non_cursor_lock,
+                );
+            }
+
+            match cursor_result {
+                Some(v) => Some(Lock::parse(v)?),
                 None => None,
             }
         } else {
