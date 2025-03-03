@@ -854,6 +854,10 @@ fn async_commit_timestamps(
             });
         }
 
+        if l.is_some(){
+            warn!("DBG, overwriting lock in async_commit_timestamps, lock: {:?}, new lock: {:?}", l.clone().unwrap(), lock.clone());
+        }
+
         lock.min_commit_ts = min_commit_ts;
         *l = Some(lock.clone());
         Ok(min_commit_ts)

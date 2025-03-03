@@ -8,7 +8,6 @@ use kvproto::{
     errorpb::{self, EpochNotMatch, FlashbackInProgress, StaleCommand},
     kvrpcpb::Context,
 };
-use nom::AsBytes;
 use raftstore::store::{LocksStatus, PeerPessimisticLocks};
 use tikv_kv::{SnapshotExt, SEEK_BOUND};
 use tikv_util::time::Instant;
@@ -253,7 +252,6 @@ impl<S: EngineSnapshot> MvccReader<S> {
         if let Some(pessimistic_lock) = self.load_in_memory_pessimistic_lock(key)? {
             return Ok(Some(pessimistic_lock));
         }
-
         if self.scan_mode.is_some() || self.lock_scan_mode.is_some() {
             self.create_lock_cursor_if_not_exist()?;
         }
@@ -262,7 +260,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             let cursor_result = cursor.get(key, &mut self.statistics.lock)?;
 
             let nv = self.snapshot.get_cf(CF_LOCK, key)?;
-            let non_cursor_v = nv.as_ref().map(|v| v.as_bytes());
+            let non_cursor_v = nv.as_ref().map(|v| v.as_ref());
             if non_cursor_v != cursor_result {
                 let cursor_lock = cursor_result.map(Lock::parse);
                 let non_cursor_lock = non_cursor_v.map(Lock::parse);
