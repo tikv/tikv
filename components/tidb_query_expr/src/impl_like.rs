@@ -14,7 +14,7 @@ enum PatternType {
     PatternMatch,
 }
 
-struct LikeMeta {
+pub struct LikeMeta {
     pattern_literal: Vec<u32>,
     pattern_types: Vec<PatternType>,
 }
@@ -120,21 +120,19 @@ fn init_like_meta<CS: Charset>(expr: &mut Expr) -> Result<Option<LikeMeta>> {
     }))
 }
 
-// #[rpn_fn(capture = [metadata], metadata_mapper = build_add_sub_date_meta)]
-#[rpn_fn(capture = [metadata], metadata_mapper = init_like_meta::<CS>)]
-#[inline]
-pub fn like<C: Collator, CS: Charset>(
-    metadata: &Option<LikeMeta>,
-    target: BytesRef,
-    pattern: BytesRef,
-    escape: &i64,
-) -> Result<Option<i64>> {
+fn like_without_cache<C: Collator, CS: Charset>(target: BytesRef, pattern: BytesRef,escape: &i64) -> Result<Option<i64>> {
     let escape = *escape as u32;
+
     // current search positions in pattern and target.
     let (mut px, mut tx) = (0, 0);
+
     // positions for backtrace.
     let (mut next_px, mut next_tx) = (0, 0);
-    while px < pattern.len() || tx < target.len() {
+
+    let pattern_len = pattern.len();
+    let target_len = target.len();
+
+    while px < pattern_len || tx < target_len {
         if let Some((c, mut poff)) = CS::decode_one(&pattern[px..]) {
             let code: u32 = c.into();
             if code == '_' as u32 {
@@ -184,6 +182,77 @@ pub fn like<C: Collator, CS: Charset>(
     }
 
     Ok(Some(true as i64))
+}
+
+fn like_with_cache<C: Collator, CS: Charset>(metadata: &LikeMeta, target: BytesRef) -> Result<Option<i64>> {
+    // current search positions in pattern and target.
+    let (mut px, mut tx) = (0, 0);
+
+    // positions for backtrace.
+    let (mut next_px, mut next_tx) = (0, 0);
+
+    let pattern_len = metadata.pattern_literal.len();
+    let target_len = target.len();
+
+    while px < pattern_len || tx < target_len {
+        let pattern_type = &metadata.pattern_types[px];
+        match pattern_type {
+            PatternType::PatternAny => {
+                // update the backtrace point.
+                next_px = px;
+                px += 1;
+                next_tx = tx;
+                next_tx += if let Some((_, toff)) = CS::decode_one(&target[tx..]) {
+                    toff
+                } else {
+                    1
+                };
+                continue;
+            }
+            PatternType::PatternMatch => {
+                if let Some((_, toff)) = CS::decode_one(&target[tx..]) {
+                    if let Ok(std::cmp::Ordering::Equal) =
+                        C::sort_compare(&target[tx..tx + toff], &metadata.pattern_literal[px].to_le_bytes(), true) // TODO maybe big endian
+                    {
+                        tx += toff;
+                        px += 1;
+                        continue;
+                    }
+                }
+            }
+            PatternType::PatternOne => {
+                if let Some((_, toff)) = CS::decode_one(&target[tx..]) {
+                    px += 1;
+                    tx += toff;
+                    continue;
+                }
+            }
+        }
+
+        // mismatch and backtrace to last %.
+        if 0 < next_tx && next_tx <= target.len() {
+            px = next_px;
+            tx = next_tx;
+            continue;
+        }
+        return Ok(Some(false as i64));
+    }
+
+    Ok(Some(true as i64))
+}
+
+#[rpn_fn(capture = [metadata], metadata_mapper = init_like_meta::<CS>)]
+#[inline]
+pub fn like<C: Collator, CS: Charset>(
+    metadata: &Option<LikeMeta>,
+    target: BytesRef,
+    pattern: BytesRef,
+    escape: &i64,
+) -> Result<Option<i64>> {
+    match metadata {
+        Some(like_meta) => like_with_cache::<C, CS>(like_meta, target),
+        None => like_without_cache::<C, CS>(target, pattern, escape),
+    }
 }
 
 #[cfg(test)]
