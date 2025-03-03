@@ -317,7 +317,7 @@ impl Resolver {
         if let Some(index) = index {
             self.update_tracked_index(index);
         }
-        debug!(
+        warn!(
             "track lock {}@{}",
             &log_wrappers::Value::key(&key),
             start_ts;
