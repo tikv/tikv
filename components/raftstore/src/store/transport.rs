@@ -78,7 +78,10 @@ where
 {
     #[inline]
     fn send(&self, region_id: u64, msg: CasualMessage<EK>) -> Result<()> {
-        match self.router.send(region_id, PeerMsg::CasualMessage(msg)) {
+        match self
+            .router
+            .send(region_id, PeerMsg::CasualMessage(Box::new(msg)))
+        {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(_)) => Err(Error::Transport(DiscardReason::Full)),
             Err(TrySendError::Disconnected(_)) => Err(Error::RegionNotFound(region_id)),
@@ -102,7 +105,7 @@ where
     fn significant_send(&self, region_id: u64, msg: SignificantMsg<EK::Snapshot>) -> Result<()> {
         if let Err(SendError(msg)) = self
             .router
-            .force_send(region_id, PeerMsg::SignificantMsg(msg))
+            .force_send(region_id, PeerMsg::SignificantMsg(Box::new(msg)))
         {
             // TODO: panic here once we can detect system is shutting down reliably.
 
