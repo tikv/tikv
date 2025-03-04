@@ -443,6 +443,7 @@ impl Resolver {
         let min_lock = self.oldest_transaction();
         let has_lock = min_lock.is_some();
         let min_txn_ts = min_lock.as_ref().map(|(ts, _)| *ts).unwrap_or(min_ts);
+        let min_lock_1 = min_lock.clone();
 
         // No more commit happens before the ts.
         let new_resolved_ts = cmp::min(min_txn_ts, min_ts);
@@ -471,6 +472,14 @@ impl Resolver {
         }
 
         // Resolved ts never decrease.
+        if new_resolved_ts < self.resolved_ts {
+            warn!("DBG resolved ts decrease";
+                "min_lock" => ?min_lock_1,
+                "region_id" => self.region_id,
+                "new_resolved_ts" => new_resolved_ts,
+                "old_resolved_ts" => self.resolved_ts,
+            );
+        }
         self.resolved_ts = cmp::max(self.resolved_ts, new_resolved_ts);
 
         // Publish an `(apply index, safe ts)` item into the region read progress
