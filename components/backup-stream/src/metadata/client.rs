@@ -1,6 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp::Ordering, collections::HashMap, fmt::Debug, path::Path, sync::Arc};
+use std::{cmp::Ordering, fmt::Debug, path::Path, sync::Arc};
 
 use chrono::Local;
 use dashmap::DashMap;
@@ -58,7 +58,7 @@ impl serde::Serialize for Payload {
             Payload::Utf8Text(s) => s.as_bytes().to_vec(),
             Payload::LogBackupError(err) => err.write_to_bytes().unwrap(),
         };
-        let payload_value_base64 = base64::encode(&payload_value);
+        let payload_value_base64 = base64::encode(payload_value);
         iter.insert("payload", &payload_value_base64);
         serializer.collect_map(iter)
     }

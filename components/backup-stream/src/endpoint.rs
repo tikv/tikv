@@ -238,7 +238,7 @@ where
         let safepoint_name = self.pause_guard_id_for_task(task);
         let safepoint_ttl = self.pause_guard_duration();
         let code = err.error_code().code.to_owned();
-        let msg = err.to_string();
+        let msg = format!("[store = {}] {}", store_id, err);
         let t = task.to_owned();
         let f = async move {
             let err_fut = async {
