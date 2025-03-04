@@ -75,7 +75,7 @@ fn test_meta_inconsistency() {
     let region = cluster.get_region(b"");
     cluster.must_split(&region, b"k5");
 
-    // Scheduler a larger peed id heartbeat msg to trigger peer destroy for peer
+    // Scheduler a larger peer id heartbeat msg to trigger peer destroy for peer
     // 1003, pause it before the meta.lock operation so new region insertions by
     // region split could go first.
     // Thus a inconsistency could happen because the destroy is handled
@@ -722,7 +722,7 @@ fn test_split_continue_when_destroy_peer_after_mem_check() {
     })
     .unwrap();
 
-    // Resum region 1000 processing and wait till it's destroyed.
+    // Resume region 1000 processing and wait till it's destroyed.
     fail::remove(before_check_snapshot_1000_2_fp);
     destroy_rx.recv_timeout(Duration::from_secs(3)).unwrap();
 
