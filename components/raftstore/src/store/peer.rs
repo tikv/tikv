@@ -1623,8 +1623,6 @@ where
                 && !self.is_leader()
                 // Keep ticking if it's waiting for snapshot.
                 && !self.wait_data
-                // Keep ticking if it still has some pending and unapplied raft logs.
-                && self.busy_on_apply.is_none()
         }
     }
 
