@@ -15,7 +15,8 @@ enum PatternType {
 }
 
 pub struct LikeMeta {
-    pattern_literal: Vec<u32>,
+    pattern_bytes: Vec<u8>,
+    pattern_character_len: Vec<usize>,
     pattern_types: Vec<PatternType>,
 }
 
@@ -45,82 +46,92 @@ fn init_like_meta<CS: Charset>(expr: &mut Expr) -> Result<Option<LikeMeta>> {
                     buf[i] = item;
                 }
 
-                escape = i64::from_le_bytes(buf) as u32; // TODO maybe big endian
+                escape = i64::from_be_bytes(buf) as u32; // TODO need tests
             }
         }
         _ => return Ok(None),
     };
 
-    let pattern_len = pattern.len();
-    let mut pattern_literal = Vec::<u32>::new();
-    let mut pattern_types = Vec::<PatternType>::new();
     let mut i = 0;
+    let pattern_len = pattern.len();
+    let mut pattern_bytes = Vec::<u8>::new();
+    let mut pattern_single_character_len = Vec::<usize>::new();
+    let mut pattern_types = Vec::<PatternType>::new();
     let mut is_last_pattern_any = false;
 
-    pattern_literal.reserve(pattern_len);
+    pattern_bytes.reserve(pattern_len);
+    pattern_single_character_len.reserve(pattern_len);
     pattern_types.reserve(pattern_len);
 
     while i < pattern_len {
-        if let Some((c, c_len)) = CS::decode_one(&pattern[i..]) {
-            let mut item: u32 = c.into();
+        if let Some((c, mut c_len)) = CS::decode_one(&pattern[i..]) {
+            let mut current_c_bytes = &pattern[i..i + c_len];
+            let item: u32 = c.into();
             let tp: PatternType;
-            if item == '_' as u32 {
+            if item == escape {
+                tp = PatternType::PatternMatch;
+                if i < pattern_len - c_len {
+                    i += c_len;
+                    if let Some((_, next_c_len)) = CS::decode_one(&pattern[i..]) {
+                        current_c_bytes = &pattern[i..i + next_c_len];
+                        c_len = next_c_len;
+                        i += c_len;
+                    }
+                } else {
+                    i += c_len;
+                }
+                is_last_pattern_any = false;
+            } else if item == '_' as u32 {
                 // %_ => _%
                 if is_last_pattern_any {
-                    let modified_idx = pattern_literal.len() - 1;
-                    pattern_literal[modified_idx] = item;
-                    pattern_types[modified_idx] = PatternType::PatternOne;
+                    let last_idx = pattern_single_character_len.len() - 1;
+                    let last_len = pattern_single_character_len[last_idx];
+                    pattern_bytes.resize(pattern_bytes.len() - last_len, 0);
+                    pattern_bytes.extend_from_slice(current_c_bytes);
+                    pattern_types[last_idx] = PatternType::PatternOne;
 
                     tp = PatternType::PatternAny;
-                    item = match CS::decode_one("%".as_bytes()) {
-                        Some((tmp_c, _)) => tmp_c.into(),
-                        None => {
-                            return Err(
-                                Error::incorrect_parameters("Fail to decode `%` character").into()
-                            );
-                        }
-                    };
+                    current_c_bytes = "%".as_bytes();
+                    c_len = current_c_bytes.len();
                     is_last_pattern_any = true;
                 } else {
                     tp = PatternType::PatternOne;
                     is_last_pattern_any = false;
                 }
+                i += c_len;
             } else if item == '%' as u32 {
                 // %% => %
+                i += c_len;
                 if is_last_pattern_any {
-                    i += c_len;
                     continue;
                 }
 
                 tp = PatternType::PatternAny;
                 is_last_pattern_any = true;
-            } else if item == escape {
-                tp = PatternType::PatternMatch;
-                if i < pattern_len - c_len {
-                    i += c_len;
-                    if let Some((next_c, next_c_len)) = CS::decode_one(&pattern[i..]) {
-                        item = next_c.into();
-                        i += next_c_len
-                    }
-                }
-                is_last_pattern_any = false;
             } else {
                 tp = PatternType::PatternMatch;
                 is_last_pattern_any = false;
+                i += c_len
             }
 
-            pattern_literal.push(item);
+            pattern_bytes.extend_from_slice(&current_c_bytes);
+            pattern_single_character_len.push(c_len);
             pattern_types.push(tp);
         }
     }
 
     Ok(Some(LikeMeta {
-        pattern_literal,
+        pattern_bytes,
+        pattern_character_len: pattern_single_character_len,
         pattern_types,
     }))
 }
 
-fn like_without_cache<C: Collator, CS: Charset>(target: BytesRef, pattern: BytesRef,escape: &i64) -> Result<Option<i64>> {
+fn like_without_cache<C: Collator, CS: Charset>(
+    target: BytesRef,
+    pattern: BytesRef,
+    escape: &i64,
+) -> Result<Option<i64>> {
     let escape = *escape as u32;
 
     // current search positions in pattern and target.
@@ -135,13 +146,13 @@ fn like_without_cache<C: Collator, CS: Charset>(target: BytesRef, pattern: Bytes
     while px < pattern_len || tx < target_len {
         if let Some((c, mut poff)) = CS::decode_one(&pattern[px..]) {
             let code: u32 = c.into();
-            if code == '_' as u32 {
+            if code == '_' as u32 && escape != '_' as u32 {
                 if let Some((_, toff)) = CS::decode_one(&target[tx..]) {
                     px += poff;
                     tx += toff;
                     continue;
                 }
-            } else if code == '%' as u32 {
+            } else if code == '%' as u32 && escape != '%' as u32 {
                 // update the backtrace point.
                 next_px = px;
                 px += poff;
@@ -173,7 +184,7 @@ fn like_without_cache<C: Collator, CS: Charset>(target: BytesRef, pattern: Bytes
             }
         }
         // mismatch and backtrace to last %.
-        if 0 < next_tx && next_tx <= target.len() {
+        if next_tx > 0 && next_tx <= target_len {
             px = next_px;
             tx = next_tx;
             continue;
@@ -184,47 +195,53 @@ fn like_without_cache<C: Collator, CS: Charset>(target: BytesRef, pattern: Bytes
     Ok(Some(true as i64))
 }
 
-fn like_with_cache<C: Collator, CS: Charset>(metadata: &LikeMeta, target: BytesRef) -> Result<Option<i64>> {
-    // current search positions in pattern and target.
-    let (mut px, mut tx) = (0, 0);
-
-    // positions for backtrace.
-    let (mut next_px, mut next_tx) = (0, 0);
-
-    let pattern_len = metadata.pattern_literal.len();
+fn like_with_cache<C: Collator, CS: Charset>(
+    metadata: &LikeMeta,
+    target: BytesRef,
+) -> Result<Option<i64>> {
+    let (mut px, mut pbx, mut tx, mut next_px, mut next_pbx, mut next_tx) = (0, 0, 0, 0, 0, 0);
+    let pattern_len = metadata.pattern_types.len();
     let target_len = target.len();
 
     while px < pattern_len || tx < target_len {
-        let pattern_type = &metadata.pattern_types[px];
-        match pattern_type {
-            PatternType::PatternAny => {
-                // update the backtrace point.
-                next_px = px;
-                px += 1;
-                next_tx = tx;
-                next_tx += if let Some((_, toff)) = CS::decode_one(&target[tx..]) {
-                    toff
-                } else {
-                    1
-                };
-                continue;
-            }
-            PatternType::PatternMatch => {
-                if let Some((_, toff)) = CS::decode_one(&target[tx..]) {
-                    if let Ok(std::cmp::Ordering::Equal) =
-                        C::sort_compare(&target[tx..tx + toff], &metadata.pattern_literal[px].to_le_bytes(), true) // TODO maybe big endian
-                    {
-                        tx += toff;
-                        px += 1;
-                        continue;
+        if px < pattern_len {
+            let pattern_type = &metadata.pattern_types[px];
+            match pattern_type {
+                PatternType::PatternAny => {
+                    // update the backtrace point.
+                    next_px = px;
+                    next_pbx = pbx;
+                    pbx += metadata.pattern_character_len[px];
+                    px += 1;
+                    next_tx = tx;
+                    next_tx += if let Some((_, toff)) = CS::decode_one(&target[tx..]) {
+                        toff
+                    } else {
+                        1
+                    };
+                    continue;
+                }
+                PatternType::PatternMatch => {
+                    if let Some((_, toff)) = CS::decode_one(&target[tx..]) {
+                        if let Ok(std::cmp::Ordering::Equal) = C::sort_compare(
+                            &target[tx..tx + toff],
+                            &metadata.pattern_bytes[pbx..pbx + metadata.pattern_character_len[px]],
+                            true,
+                        ) {
+                            tx += toff;
+                            pbx += metadata.pattern_character_len[px];
+                            px += 1;
+                            continue;
+                        }
                     }
                 }
-            }
-            PatternType::PatternOne => {
-                if let Some((_, toff)) = CS::decode_one(&target[tx..]) {
-                    px += 1;
-                    tx += toff;
-                    continue;
+                PatternType::PatternOne => {
+                    if let Some((_, toff)) = CS::decode_one(&target[tx..]) {
+                        pbx += metadata.pattern_character_len[px];
+                        px += 1;
+                        tx += toff;
+                        continue;
+                    }
                 }
             }
         }
@@ -232,6 +249,7 @@ fn like_with_cache<C: Collator, CS: Charset>(metadata: &LikeMeta, target: BytesR
         // mismatch and backtrace to last %.
         if 0 < next_tx && next_tx <= target.len() {
             px = next_px;
+            pbx = next_pbx;
             tx = next_tx;
             continue;
         }
@@ -257,14 +275,121 @@ pub fn like<C: Collator, CS: Charset>(
 
 #[cfg(test)]
 mod tests {
-    use tidb_query_datatype::{builder::FieldTypeBuilder, Collation, FieldTypeTp};
+    use tidb_query_datatype::{
+        codec::batch::{LazyBatchColumn, LazyBatchColumnVec},
+        expr::EvalContext,
+        Collation, EvalType, FieldTypeTp,
+    };
     use tipb::ScalarFuncSig;
+    use tipb_helper::ExprDefBuilder;
 
-    use crate::test_util::RpnFnScalarEvaluator;
+    use crate::RpnExpressionBuilder;
+
+    fn test_like_impl(
+        target: &str,
+        pattern: &str,
+        escape: char,
+        collation: Collation,
+        target_collation: Collation,
+        pattern_collation: Collation,
+        expected: Option<i64>,
+    ) {
+        for i in 0..2 {
+            let use_column_ref = i == 1;
+
+            let mut ctx = EvalContext::default();
+
+            let mut builder = ExprDefBuilder::scalar_func_with_collation(
+                ScalarFuncSig::LikeSig,
+                FieldTypeTp::LongLong,
+                collation,
+            );
+
+            let mut schema = Vec::new();
+            let mut columns = LazyBatchColumnVec::empty();
+            if use_column_ref {
+                schema.extend_from_slice(&[
+                    FieldTypeTp::String.into(),
+                    FieldTypeTp::String.into(),
+                    FieldTypeTp::LongLong.into(),
+                ]);
+                builder = builder
+                    .push_child(ExprDefBuilder::column_ref_with_collation(
+                        0,
+                        FieldTypeTp::String,
+                        target_collation,
+                    ))
+                    .push_child(ExprDefBuilder::column_ref_with_collation(
+                        1,
+                        FieldTypeTp::String,
+                        pattern_collation,
+                    ))
+                    .push_child(ExprDefBuilder::column_ref(2, FieldTypeTp::LongLong));
+                let mut col_vec = Vec::new();
+                let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1, EvalType::Bytes);
+                col.mut_decoded()
+                    .push_bytes(Some(target.as_bytes().to_vec()));
+                col_vec.push(col);
+
+                let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1, EvalType::Bytes);
+                col.mut_decoded()
+                    .push_bytes(Some(pattern.as_bytes().to_vec()));
+                col_vec.push(col);
+
+                let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1, EvalType::Int);
+                col.mut_decoded().push_int(Some(escape as i64));
+                col_vec.push(col);
+
+                columns = LazyBatchColumnVec::from(col_vec);
+            } else {
+                builder = builder
+                    .push_child(ExprDefBuilder::constant_bytes_with_collation(
+                        target.as_bytes().to_vec(),
+                        target_collation,
+                    ))
+                    .push_child(ExprDefBuilder::constant_bytes_with_collation(
+                        pattern.as_bytes().to_vec(),
+                        pattern_collation,
+                    ))
+                    .push_child(ExprDefBuilder::constant_int(escape as i64));
+            }
+
+            let node = builder.build();
+            let exp =
+                RpnExpressionBuilder::build_from_expr_tree(node, &mut ctx, schema.len()).unwrap();
+
+            let val = exp.eval(&mut ctx, &schema, &mut columns, &[0], 1);
+
+            match val {
+                Ok(val) => {
+                    assert!(val.is_vector());
+                    let v = val.vector_value().unwrap().as_ref().to_int_vec();
+                    assert_eq!(v.len(), 1);
+                    assert_eq!(
+                        v[0].unwrap(),
+                        expected.unwrap(),
+                        "{:?} {:?}",
+                        target,
+                        pattern,
+                    );
+                }
+                Err(_) => panic!("Get unexpected error"),
+            }
+        }
+    }
 
     #[test]
     fn test_like() {
         let cases = vec![
+            (r#"123"#, r#"%%"#, '%', Collation::Binary, Some(0)),
+            (r#"%"#, r#"%"#, '%', Collation::Binary, Some(1)),
+            (r#"%"#, r#"%%"#, '%', Collation::Binary, Some(1)),
+            (r#"123"#, r#"%"#, '%', Collation::Binary, Some(0)),
+            (r#"_"#, r#"__"#, '_', Collation::Binary, Some(1)),
+            (r#"1"#, r#"_"#, '_', Collation::Binary, Some(0)),
+            (r#"hello"#, r#"%"#, '\\', Collation::Binary, Some(1)),
+            (r#"hello"#, r#"hel%a"#, '\\', Collation::Binary, Some(0)),
+            (r#"hello"#, r#"hel"#, '\\', Collation::Binary, Some(0)),
             (r#"hello"#, r#"%HELLO%"#, '\\', Collation::Binary, Some(0)),
             (
                 r#"Hello, World"#,
@@ -323,21 +448,21 @@ mod tests {
                 Collation::Binary,
                 Some(1),
             ),
-            (r#"C:\Programs\"#, r#"%%\"#, '%', Collation::Binary, Some(1)),
-            (r#"C:\Programs%"#, r#"%%%"#, '%', Collation::Binary, Some(1)),
+            (r#"C:\Programs\"#, r#"%%\"#, '%', Collation::Binary, Some(0)),
+            (r#"C:\Programs%"#, r#"%%%"#, '%', Collation::Binary, Some(0)),
             (
                 r#"C:\Programs%"#,
                 r#"%%%%"#,
                 '%',
                 Collation::Binary,
-                Some(1),
+                Some(0),
             ),
             (r#"hello"#, r#"\%"#, '\\', Collation::Binary, Some(0)),
             (r#"%"#, r#"\%"#, '\\', Collation::Binary, Some(1)),
-            (r#"3hello"#, r#"%%hello"#, '%', Collation::Binary, Some(1)),
+            (r#"3hello"#, r#"%%hello"#, '%', Collation::Binary, Some(0)),
             (r#"3hello"#, r#"3%hello"#, '3', Collation::Binary, Some(0)),
             (r#"3hello"#, r#"__hello"#, '_', Collation::Binary, Some(0)),
-            (r#"3hello"#, r#"%_hello"#, '%', Collation::Binary, Some(1)),
+            (r#"3hello"#, r#"%_hello"#, '%', Collation::Binary, Some(0)),
             (
                 r#"aaaaaaaaaaaaaaaaaaaaaaaaaaa"#,
                 r#"a%a%a%a%a%a%a%a%b"#,
@@ -395,26 +520,10 @@ mod tests {
                 Some(1),
             ),
         ];
+
         for (target, pattern, escape, collation, expected) in cases {
-            let ret_ft = FieldTypeBuilder::new()
-                .tp(FieldTypeTp::LongLong)
-                .collation(collation)
-                .build();
-            let arg_ft = FieldTypeBuilder::new()
-                .tp(FieldTypeTp::String)
-                .collation(collation)
-                .build();
-            let output = RpnFnScalarEvaluator::new()
-                .return_field_type(ret_ft.clone())
-                .push_param_with_field_type(target.to_owned().into_bytes(), arg_ft.clone())
-                .push_param_with_field_type(pattern.to_owned().into_bytes(), arg_ft)
-                .push_param(escape as i64)
-                .evaluate(ScalarFuncSig::LikeSig)
-                .unwrap();
-            assert_eq!(
-                output, expected,
-                "target={}, pattern={}, escape={}",
-                target, pattern, escape
+            test_like_impl(
+                target, pattern, escape, collation, collation, collation, expected,
             );
         }
     }
@@ -545,35 +654,18 @@ mod tests {
                 Some(0),
             ),
         ];
+
         for (target, pattern, escape, collation, target_collation, pattern_collation, expected) in
             cases
         {
-            let output = RpnFnScalarEvaluator::new()
-                .return_field_type(
-                    FieldTypeBuilder::new()
-                        .tp(FieldTypeTp::LongLong)
-                        .collation(collation)
-                        .build(),
-                )
-                .push_param_with_field_type(
-                    target.to_owned().into_bytes(),
-                    FieldTypeBuilder::new()
-                        .tp(FieldTypeTp::String)
-                        .collation(target_collation),
-                )
-                .push_param_with_field_type(
-                    pattern.to_owned().into_bytes(),
-                    FieldTypeBuilder::new()
-                        .tp(FieldTypeTp::String)
-                        .collation(pattern_collation),
-                )
-                .push_param(escape as i64)
-                .evaluate(ScalarFuncSig::LikeSig)
-                .unwrap();
-            assert_eq!(
-                output, expected,
-                "target={}, pattern={}, escape={}",
-                target, pattern, escape
+            test_like_impl(
+                target,
+                pattern,
+                escape,
+                collation,
+                target_collation,
+                pattern_collation,
+                expected,
             );
         }
     }

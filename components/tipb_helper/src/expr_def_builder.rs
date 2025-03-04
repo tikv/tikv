@@ -3,7 +3,7 @@
 use codec::prelude::NumberEncoder;
 use tidb_query_datatype::{
     codec::mysql::{Decimal, DecimalEncoder, Duration, TimeType},
-    FieldTypeAccessor, FieldTypeFlag, FieldTypeTp,
+    Collation, FieldTypeAccessor, FieldTypeFlag, FieldTypeTp,
 };
 use tipb::{Expr, ExprType, FieldType, ScalarFuncSig};
 
@@ -51,6 +51,17 @@ impl ExprDefBuilder {
         expr.mut_field_type()
             .as_mut_accessor()
             .set_tp(FieldTypeTp::VarChar);
+        Self(expr)
+    }
+
+    pub fn constant_bytes_with_collation(v: Vec<u8>, collation: Collation) -> Self {
+        let mut expr = Expr::default();
+        expr.set_tp(ExprType::String);
+        expr.set_val(v);
+        expr.mut_field_type()
+            .as_mut_accessor()
+            .set_tp(FieldTypeTp::VarChar)
+            .set_collation(collation);
         Self(expr)
     }
 
@@ -103,11 +114,39 @@ impl ExprDefBuilder {
         Self(expr)
     }
 
+    pub fn column_ref_with_collation(
+        offset: usize,
+        field_type: impl Into<FieldType>,
+        collation: Collation,
+    ) -> Self {
+        let mut expr = Expr::default();
+        expr.set_tp(ExprType::ColumnRef);
+        expr.mut_val().write_i64(offset as i64).unwrap();
+        let mut f = field_type.into();
+        f.set_collation(collation);
+        expr.set_field_type(f);
+        Self(expr)
+    }
+
     pub fn scalar_func(sig: ScalarFuncSig, field_type: impl Into<FieldType>) -> Self {
         let mut expr = Expr::default();
         expr.set_tp(ExprType::ScalarFunc);
         expr.set_sig(sig);
         expr.set_field_type(field_type.into());
+        Self(expr)
+    }
+
+    pub fn scalar_func_with_collation(
+        sig: ScalarFuncSig,
+        field_type: impl Into<FieldType>,
+        collation: Collation,
+    ) -> Self {
+        let mut expr = Expr::default();
+        expr.set_tp(ExprType::ScalarFunc);
+        expr.set_sig(sig);
+        let mut f = field_type.into();
+        f.set_collation(collation);
+        expr.set_field_type(f);
         Self(expr)
     }
 
