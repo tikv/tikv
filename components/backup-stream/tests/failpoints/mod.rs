@@ -538,4 +538,24 @@ mod all {
             safepoints
         );
     }
+
+    #[test]
+    fn pending_flush_when_force_flush() {
+        let mut suite = SuiteBuilder::new_named("pending_flush").nodes(1).build();
+        fail::cfg("delay_on_flush", "sleep(5000)").unwrap();
+        suite.must_register_task(1, "pending_flush");
+        suite.sync();
+        let keyset = run_async_test(suite.write_records(0, 1, 1));
+        suite.force_flush_files("pending_flush");
+        suite.for_each_log_backup_cli(|_id, c| {
+            let res = c.flush_now(Default::default()).unwrap();
+            assert_eq!(res.results.len(), 1, "{:?}", res.results);
+            assert!(res.results[0].error_message.is_empty(), "{:?}", res);
+            assert!(res.results[0].success, "{:?}", res);
+        });
+        suite.check_for_write_records(
+            suite.flushed_files.path(),
+            keyset.iter().map(|v| v.as_slice()),
+        )
+    }
 }
