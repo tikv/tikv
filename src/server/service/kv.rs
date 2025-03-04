@@ -529,6 +529,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         reject_if_cluster_id_mismatch!(req, self, ctx, sink);
         let begin_instant = Instant::now();
 
+        warn!("DBG receive kv_prepare_flashback_to_version");
+
         let source = req.get_context().get_request_source().to_owned();
         let resp = future_prepare_flashback_to_version(self.storage.clone(), req);
         let task = async move {
@@ -540,6 +542,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                 .unknown
                 .observe(elapsed.as_secs_f64());
             record_request_source_metrics(source, elapsed);
+
+            warn!("DBG response kv_prepare_flashback_to_version");
+
             ServerResult::Ok(())
         }
         .map_err(|e| {
