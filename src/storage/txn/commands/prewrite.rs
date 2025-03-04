@@ -538,7 +538,7 @@ impl<K: PrewriteKind> Prewriter<K> {
 
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
         let mut snapshot_reader = SnapshotReader::new_with_ctx(self.start_ts, snapshot, &self.ctx);
-        snapshot_reader.setup_with_hint_items(&mut self.mutations, |m| m.key());
+        // snapshot_reader.setup_with_hint_items(&mut self.mutations, |m| m.key());
         let mut reader = ReaderWithStats::new(snapshot_reader, context.statistics);
         // Set extra op here for getting the write record when check write conflict in
         // prewrite.
@@ -615,7 +615,7 @@ impl<K: PrewriteKind> Prewriter<K> {
 
         // If there are other errors, return other error prior to `AssertionFailed`.
         let mut assertion_failure = None;
-        let mut prev_key = None;
+        // let mut prev_key = None;
         for m in mem::take(&mut self.mutations) {
             let pessimistic_action = m.pessimistic_action();
             let expected_for_update_ts = m.pessimistic_expected_for_update_ts();
@@ -623,13 +623,13 @@ impl<K: PrewriteKind> Prewriter<K> {
             let key = m.key().clone();
             let mutation_type = m.mutation_type();
 
-            prev_key.map(|prev_key| if prev_key >= key {
-                panic!(
-                    "Prewrite mutations are not in order: {:?} >= {:?}",
-                    prev_key, key
-                );
-            });
-            prev_key = Some(key.clone());
+            // prev_key.map(|prev_key| if prev_key >= key {
+            //     panic!(
+            //         "Prewrite mutations are not in order: {:?} >= {:?}",
+            //         prev_key, key
+            //     );
+            // });
+            // prev_key = Some(key.clone());
 
             let mut secondaries = &self.secondary_keys.as_ref().map(|_| vec![]);
             if Some(m.key()) == async_commit_pk {

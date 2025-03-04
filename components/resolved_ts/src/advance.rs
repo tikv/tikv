@@ -126,7 +126,7 @@ impl AdvanceTsWorker {
             let mut mm = None;
             let mut mk = None;
             if let Some((min_mem_lock_ts, lock)) = cm.global_min_lock() {
-                mm = Some(min_mem_lock_ts.clone());
+                mm = Some(min_mem_lock_ts);
                 mk = Some(lock.clone());
                 if min_mem_lock_ts < min_ts {
                     min_ts = min_mem_lock_ts;
