@@ -103,9 +103,10 @@ fn test_download_to_full_resource() {
     );
     disk::set_disk_status(DiskUsage::Normal);
 
-    // high memory usage
-    fail::cfg("memory_usage_reaches_high_water", "return").unwrap();
-    let result = import.download(&download).unwrap();
+    // high memory usage reach both limit: usage + ratio
+    fail::cfg("mock_memory_usage", "return(10307921510)").unwrap(); // 9.5G
+    fail::cfg("mock_memory_limit", "return(10737418240)").unwrap(); // 10G
+    let result: DownloadResponse = import.download(&download).unwrap();
     assert!(!result.get_is_empty());
     assert!(result.has_error());
     assert!(
@@ -114,7 +115,35 @@ fn test_download_to_full_resource() {
             .get_message()
             .contains("Memory usage too high")
     );
-    fail::remove("memory_usage_reaches_high_water");
+
+    // only usage below 1G won't report error
+    fail::cfg("mock_memory_usage", "return(8589934593)").unwrap(); // 8G
+    fail::cfg("mock_memory_limit", "return(9663676416)").unwrap(); // 9G
+    let result: DownloadResponse = import.download(&download).unwrap();
+    assert!(!result.has_error());
+
+    // incorrect mem limit(0) won't report error to client
+    fail::cfg("mock_memory_limit", "return(0)").unwrap(); // 9G
+    let result: DownloadResponse = import.download(&download).unwrap();
+    assert!(!result.has_error());
+
+    // incorrect mem limit(< usage) won't report error to client
+    fail::cfg("mock_memory_limit", "return(1)").unwrap(); // 9G
+    let result: DownloadResponse = import.download(&download).unwrap();
+    assert!(!result.has_error());
+
+    fail::cfg("mock_memory_limit", "return(8589934594)").unwrap(); // 8G + 1B
+    let result: DownloadResponse = import.download(&download).unwrap();
+    assert!(result.has_error());
+    assert!(
+        result
+            .get_error()
+            .get_message()
+            .contains("Memory usage too high")
+    );
+
+    fail::remove("mock_memory_usage");
+    fail::remove("mock_memory_limit");
 }
 
 #[test]

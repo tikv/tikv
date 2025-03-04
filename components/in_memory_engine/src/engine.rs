@@ -568,19 +568,19 @@ impl RegionCacheEngineExt for RegionCacheMemoryEngine {
                             "region" => ?region,
                         );
                         if let Err(e) = self.load_region(region.clone()) {
-                            warn!(
-                                "ime load region failed";
-                                "err" => ?e,
-                                "region" => ?region,
-                            );
+                            // Ignore the error caused by the same region. It is possible that the
+                            // caller is trying to load the same region multiple times.
+                            if !e.is_caused_by_same_region() {
+                                warn!("ime load region failed"; "err" => ?e, "region" => ?region);
+                            }
                         }
                     }
                 } else if let Err(e) = self.load_region(region.clone()) {
-                    warn!(
-                        "ime load region failed";
-                        "error" => ?e,
-                        "region" => ?region,
-                    );
+                    // Ignore the error caused by the same region. It is possible that the
+                    // caller is trying to load the same region multiple times.
+                    if !e.is_caused_by_same_region() {
+                        warn!("ime load region failed"; "err" => ?e, "region" => ?region);
+                    }
                 }
             }
             RegionEvent::Split {
