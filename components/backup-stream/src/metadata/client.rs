@@ -26,15 +26,6 @@ use crate::{
     errors::{ContextualResultExt, Error, Result},
 };
 
-// {
-// "severity": "ERROR" | "REGULAR_OPERATION",
-// "operation_hostname": string,
-// "operation_pid": int,
-// "operation_time": datetime,
-// "payload_type": "application/x-protobuf;messageType=brpb.StreamBackupError" |
-// "text/plain;charset=UTF-8", "payload": bytes,
-// }
-
 enum Payload {
     #[allow(dead_code)]
     Utf8Text(String),
