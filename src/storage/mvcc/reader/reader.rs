@@ -127,9 +127,10 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
     pub fn setup_with_hint_items<T>(&mut self, items: &mut [T], key_of: fn(&T) -> &Key) {
         // enable scan mode if there are multiple items, so that we don't need to seek
         // for every key.
+        println!("- call setup_with_hint_items");
         if items.len() > 1 {
             items.sort_by(|a, b| key_of(a).cmp(key_of(b)));
-            // self.reader.lock_scan_mode = Some(ScanMode::Forward);
+            self.reader.lock_scan_mode = Some(ScanMode::Forward);
         }
     }
 }
@@ -260,6 +261,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             let cursor_result = cursor.get(key, &mut self.statistics.lock)?;
 
             let nv = self.snapshot.get_cf(CF_LOCK, key)?;
+            self.statistics.lock.get += 1;
             let non_cursor_v = nv.as_ref().map(|v| v.as_ref());
             if non_cursor_v != cursor_result {
                 let cursor_lock = cursor_result.map(Lock::parse);

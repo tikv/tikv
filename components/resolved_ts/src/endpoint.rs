@@ -891,15 +891,20 @@ where
             return;
         }
         let now = tikv_util::time::Instant::now_coarse();
+        let mut min_ts = ts;
         for region_id in regions.iter() {
             if let Some(observe_region) = self.regions.get_mut(region_id) {
                 if let ResolverStatus::Ready = observe_region.resolver_status {
-                    let _ = observe_region
+                    let region_ts = observe_region
                         .resolver
                         .resolve(ts, Some(now), ts_source.clone());
+                    if region_ts < min_ts {
+                        min_ts = region_ts;
+                    }
                 }
             }
         }
+        warn!("DBG resolved ts advanced"; "ts" => ?min_ts);
     }
 
     // Tracking or untracking locks with incoming commands that corresponding
