@@ -2,7 +2,7 @@
 
 use std::{
     any::Any,
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fmt,
     marker::PhantomData,
     sync::{Arc, Mutex},
@@ -104,6 +104,7 @@ pub struct Endpoint<S, R, E: KvEngine, PDC> {
     /// Each time we spawn a task, once time goes by, we abort that task.
     pub abort_last_storage_save: Option<AbortHandle>,
     pub initial_scan_semaphore: Arc<Semaphore>,
+    flush_done_subscribers: HashMap<String, Sender<FlushResult>>,
 }
 
 impl<S, R, E, PDC> Endpoint<S, R, E, PDC>
@@ -202,6 +203,7 @@ where
             config,
             checkpoint_mgr,
             abort_last_storage_save: None,
+            flush_done_subscribers: Default::default(),
         };
         ep.pool.spawn(root!(ep.min_ts_worker()));
         ep
@@ -878,6 +880,7 @@ where
         }
     }
 
+<<<<<<< HEAD
     pub fn on_force_flush(&self, task: String) {
         self.pool.block_on(async move {
             let handler_res = self.range_router.get_task_handler(&task);
@@ -892,6 +895,48 @@ where
                 min_ts: mts,
             })
             .await;
+=======
+    fn subscribe_flush_done(&mut self, task: &str, mailbox: Sender<FlushResult>) {
+        if let Some(old_one) = self.flush_done_subscribers.insert(task.to_owned(), mailbox) {
+            let res = FlushResult {
+                task: task.to_owned(),
+                error: Some(Box::new(Error::Other(box_err!(
+                    "another waiter enters and this one was aborted: try again later"
+                )))),
+            };
+            let _ = old_one.try_send(res);
+        }
+    }
+
+    pub fn on_force_flush(&mut self, task: TaskSelectorRef<'_>, sender: Sender<FlushResult>) {
+        let hnd = self.pool.handle().clone();
+        hnd.block_on(async {
+            info!("Triggering force flush."; "selector" => ?task);
+            let handlers = self.range_router.select_task_handler(task);
+            for hnd in handlers {
+                let mts = self.prepare_min_ts().await;
+                let sched = self.scheduler.clone();
+                let sender = sender.clone();
+                self.subscribe_flush_done(&hnd.task.info.name, sender);
+                match hnd.set_flushing_status_cas(false, true) {
+                    Ok(_) => {
+                        self.region_op(ObserveOp::ResolveRegions {
+                            callback: Box::new(move |res| {
+                                try_send!(
+                                    sched,
+                                    Task::ExecFlush(hnd.task.info.name.to_owned(), res)
+                                );
+                            }),
+                            min_ts: mts,
+                        })
+                        .await;
+                    }
+                    Err(_) => {
+                        info!("on_force_flush: a flush is on the way, waiting its finish..."; "task" => %hnd.task.info.name);
+                    }
+                }
+            }
+>>>>>>> 403ce522a (log_backup: always wait force flush RPCs (#18221))
         });
     }
 
@@ -899,10 +944,17 @@ where
         self.pool.block_on(async move {
             let (mts, flush_ts) = self.prepare_min_ts().await;
             let sched = self.scheduler.clone();
+<<<<<<< HEAD
             info!("min_ts prepared for flushing"; "min_ts" => %mts, "flush_ts" => %flush_ts);
             self.region_op(ObserveOp::ResolveRegions {
                 callback: Box::new(move |res| {
                     try_send!(sched, Task::ExecFlush(task, res, flush_ts));
+=======
+            info!("min_ts prepared for flushing"; "min_ts" => %mts);
+            self.region_op(ObserveOp::ResolveRegions {
+                callback: Box::new(move |res| {
+                    try_send!(sched, Task::ExecFlush(task, res));
+>>>>>>> 403ce522a (log_backup: always wait force flush RPCs (#18221))
                 }),
                 min_ts: mts,
             })
@@ -910,6 +962,7 @@ where
         })
     }
 
+<<<<<<< HEAD
     fn on_exec_flush(&mut self, task: String, resolved: ResolvedRegions, flush_ts: TimeStamp) {
         self.checkpoint_mgr.freeze();
         self.pool.spawn(
@@ -919,6 +972,20 @@ where
                 }
             })),
         );
+=======
+    fn on_exec_flush(&mut self, task: String, resolved: ResolvedRegions) {
+        self.checkpoint_mgr.freeze();
+        let fut = self.do_flush(task.clone(), resolved);
+        let sched = self.scheduler.clone();
+        self.pool.spawn(root!("flush"; async move {
+            let res = fut.await;
+            if let Err(ref err) = &res {
+                err.report("during updating flush status")
+            }
+            let flush_res = FlushResult { task, error: res.err().map(Box::new) };
+            try_send!(sched, Task::Flushed(flush_res));
+        }));
+>>>>>>> 403ce522a (log_backup: always wait force flush RPCs (#18221))
     }
 
     fn update_global_checkpoint(&self, task: String) -> future![()] {
@@ -1063,9 +1130,27 @@ where
                 }
             }
             Task::MarkFailover(t) => self.failover_time = Some(t),
+<<<<<<< HEAD
             Task::ExecFlush(task, min_ts, flush_ts) => self.on_exec_flush(task, min_ts, flush_ts),
+=======
+            Task::ExecFlush(task, min_ts) => self.on_exec_flush(task, min_ts),
+>>>>>>> 403ce522a (log_backup: always wait force flush RPCs (#18221))
             Task::RegionCheckpointsOp(s) => self.handle_region_checkpoints_op(s),
             Task::UpdateGlobalCheckpoint(task) => self.on_update_global_checkpoint(task),
+            Task::Flushed(result) => self.on_flushed(result),
+        }
+    }
+
+    fn on_flushed(&mut self, result: FlushResult) {
+        if let Some(sender) = self.flush_done_subscribers.remove(&result.task) {
+            // Send the message after the subscription manager have tried to sent this flush
+            // result to subscribers.
+            self.checkpoint_mgr.sync_with_subs_mgr(move |_| {
+                if let Err(err) = sender.try_send(result) {
+                    let err_msg = err.to_string();
+                    info!("failed to send flush result, waiter is gone or channel blocked"; "err" => %err_msg, "result" => ?err.into_inner());
+                }
+            })
         }
     }
 
@@ -1261,6 +1346,15 @@ impl fmt::Debug for RegionCheckpointOperation {
     }
 }
 
+<<<<<<< HEAD
+=======
+#[derive(Debug)]
+pub struct FlushResult {
+    pub task: String,
+    pub error: Option<Box<Error>>,
+}
+
+>>>>>>> 403ce522a (log_backup: always wait force flush RPCs (#18221))
 pub enum Task {
     WatchTask(TaskOp),
     BatchEvent(Vec<CmdBatch>),
@@ -1291,9 +1385,15 @@ pub enum Task {
     MarkFailover(Instant),
     /// Flush the task with name.
     Flush(String),
+    /// The task was flushed.
+    Flushed(FlushResult),
     /// Execute the flush with the calculated resolved result.
     /// This is an internal command only issued by the `Flush` task.
+<<<<<<< HEAD
     ExecFlush(String, ResolvedRegions, TimeStamp),
+=======
+    ExecFlush(String, ResolvedRegions),
+>>>>>>> 403ce522a (log_backup: always wait force flush RPCs (#18221))
     /// The command for getting region checkpoints.
     RegionCheckpointsOp(RegionCheckpointOperation),
     /// update global-checkpoint-ts to storage.
@@ -1389,6 +1489,7 @@ impl std::fmt::Debug for ObserveOp {
 impl fmt::Debug for Task {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Flushed(task) => f.debug_tuple("Flushed").field(task).finish(),
             Self::WatchTask(arg0) => f.debug_tuple("WatchTask").field(arg0).finish(),
             Self::BatchEvent(arg0) => f
                 .debug_tuple("BatchEvent")
@@ -1406,7 +1507,11 @@ impl fmt::Debug for Task {
                 .debug_tuple("MarkFailover")
                 .field(&format_args!("{:?} ago", t.saturating_elapsed()))
                 .finish(),
+<<<<<<< HEAD
             Self::ExecFlush(arg0, arg1, arg2) => f
+=======
+            Self::ExecFlush(arg0, arg1) => f
+>>>>>>> 403ce522a (log_backup: always wait force flush RPCs (#18221))
                 .debug_tuple("ExecFlush")
                 .field(arg0)
                 .field(&arg1.global_checkpoint())
@@ -1429,6 +1534,7 @@ impl fmt::Display for Task {
 impl Task {
     fn label(&self) -> &'static str {
         match self {
+            Task::Flushed(_) => "flushed",
             Task::WatchTask(w) => match w {
                 TaskOp::AddTask(_) => "watch_task.add",
                 TaskOp::RemoveTask(_) => "watch_task.remove",
