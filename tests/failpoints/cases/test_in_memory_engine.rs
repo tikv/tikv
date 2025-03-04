@@ -216,18 +216,12 @@ fn test_load() {
         let r2 = cluster.get_region(&split_keys[1]);
         let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
         region_cache_engine
-            .core()
-            .region_manager()
             .load_region(CacheRegion::from_region(&r))
             .unwrap();
         region_cache_engine
-            .core()
-            .region_manager()
             .load_region(CacheRegion::from_region(&r1))
             .unwrap();
         region_cache_engine
-            .core()
-            .region_manager()
             .load_region(CacheRegion::from_region(&r2))
             .unwrap();
     }
@@ -281,8 +275,6 @@ fn test_load_with_split() {
         // it correctly.
         let cache_range = new_region(1, "", "");
         region_cache_engine
-            .core()
-            .region_manager()
             .load_region(CacheRegion::from_region(&cache_range))
             .unwrap();
     }
@@ -370,8 +362,6 @@ fn test_load_with_split2() {
     // try to load a region with old epoch and bigger range,
     // it should be updated to the real region range.
     region_cache_engine
-        .core()
-        .region_manager()
         .load_region(CacheRegion::new(r_split.id, 0, DATA_MIN_KEY, DATA_MAX_KEY))
         .unwrap();
 
@@ -437,11 +427,7 @@ fn test_load_with_eviction() {
     // it correctly.
     let r = cluster.get_region(b"");
     let cache_range = CacheRegion::from_region(&r);
-    region_cache_engine
-        .core()
-        .region_manager()
-        .load_region(cache_range)
-        .unwrap();
+    region_cache_engine.load_region(cache_range).unwrap();
 
     let product1 = ProductTable::new();
     let product2 = ProductTable::new();
@@ -522,8 +508,7 @@ fn test_evictions_after_transfer_leader() {
         .unwrap_err();
 }
 
-#[test]
-fn test_eviction_after_merge() {
+fn test_commit_merge(test_reload: bool) {
     let mut cluster = new_server_cluster_with_hybrid_engine(0, 1);
     cluster.run();
     let r = cluster.get_region(b"");
@@ -551,11 +536,163 @@ fn test_eviction_after_merge() {
         .snapshot(range2.clone(), 100, 100)
         .unwrap();
 
+    if !test_reload {
+        // Prevent reload.
+        fail::cfg("ime_on_load_region", "return").unwrap();
+    }
+
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.must_merge(r.get_id(), r2.get_id());
 
     region_cache_engine.snapshot(range1, 100, 100).unwrap_err();
     region_cache_engine.snapshot(range2, 100, 100).unwrap_err();
+
+    if test_reload {
+        // Get the latest region `r2`.
+        let r2 = cluster.get_region(b"key1");
+        let range2 = CacheRegion::from_region(&r2);
+        // `r2` should be reloaded after merge completed.
+        eventually(Duration::from_millis(100), Duration::from_secs(5), || {
+            region_cache_engine
+                .snapshot(range2.clone(), 100, 100)
+                .is_ok()
+        });
+    }
+}
+
+#[test]
+fn test_eviction_after_merge() {
+    let test_reload = false;
+    test_commit_merge(test_reload);
+}
+
+// IME should reload cached region automatically after commit merge to
+// minimize the impact to coprocessor requests.
+#[test]
+fn test_reload_after_merge() {
+    let test_reload = true;
+    test_commit_merge(test_reload);
+}
+
+fn test_rollback_merge(test_reload: bool) {
+    let mut cluster = new_server_cluster_with_hybrid_engine(0, 3);
+    configure_for_merge(&mut cluster.cfg);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run_conf_change();
+
+    let region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k2").unwrap();
+
+    pd_client.must_add_peer(left.get_id(), new_peer(2, 2));
+    pd_client.must_add_peer(right.get_id(), new_peer(2, 4));
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    let mut region = pd_client.get_region(b"k1").unwrap();
+    let target_region = pd_client.get_region(b"k3").unwrap();
+
+    let schedule_merge_fp = "on_schedule_merge";
+    fail::cfg(schedule_merge_fp, "return()").unwrap();
+
+    let (tx, rx) = sync_channel(1);
+    fail::cfg_callback("on_apply_res_prepare_merge", move || {
+        tx.send(()).unwrap();
+    })
+    .unwrap();
+
+    cluster.merge_region(region.get_id(), target_region.get_id(), Callback::None);
+    // PrepareMerge is applied.
+    rx.recv().unwrap();
+
+    let leader = cluster.leader_of_region(left.get_id()).unwrap();
+
+    let region_cache_engine = cluster.sim.rl().get_region_cache_engine(leader.store_id);
+
+    // After prepare merge, version becomes 2 + 1 = 3;
+    region.mut_region_epoch().set_version(3);
+    // load region after PrepareMerge.
+    let cache_region = CacheRegion::from_region(&region);
+    region_cache_engine
+        .core()
+        .region_manager()
+        .new_region(cache_region.clone());
+    eventually(Duration::from_millis(100), Duration::from_secs(5), || {
+        region_cache_engine
+            .snapshot(cache_region.clone(), 100, 100)
+            .is_ok()
+    });
+    if !test_reload {
+        // Prevent reload after rollback merge.
+        fail::cfg("ime_on_load_region", "return").unwrap();
+    }
+
+    // Add a peer to trigger rollback.
+    pd_client.must_add_peer(right.get_id(), new_peer(3, 5));
+    cluster.must_put(b"k4", b"v4");
+    must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
+
+    let mut region = pd_client.get_region(b"k1").unwrap();
+    // After split and prepare_merge, version becomes 1 + 2 = 3;
+    assert_eq!(region.get_region_epoch().get_version(), 3);
+    // After ConfChange and prepare_merge, conf version becomes 1 + 2 = 3;
+    assert_eq!(region.get_region_epoch().get_conf_ver(), 3);
+    fail::remove(schedule_merge_fp);
+    // Wait till rollback.
+    cluster.must_put(b"k11", b"v11");
+
+    // After rollback, version becomes 3 + 1 = 4;
+    region.mut_region_epoch().set_version(4);
+    for i in 1..3 {
+        must_get_equal(&cluster.get_engine(i), b"k11", b"v11");
+        let state = cluster.region_local_state(region.get_id(), i);
+        assert_eq!(state.get_state(), PeerState::Normal);
+        assert_eq!(*state.get_region(), region);
+    }
+
+    if !test_reload {
+        // After rollback, IME cached region is evicted.
+        eventually(Duration::from_millis(100), Duration::from_secs(5), || {
+            let region_map = region_cache_engine
+                .core()
+                .region_manager()
+                .regions_map()
+                .read();
+            region_map.regions().is_empty()
+        });
+    } else {
+        // Get the latest region.
+        let region = pd_client.get_region(b"k1").unwrap();
+        let cache_region = CacheRegion::from_region(&region);
+        // Region should be reloaded after merge completed.
+        eventually(Duration::from_millis(100), Duration::from_secs(5), || {
+            region_cache_engine
+                .snapshot(cache_region.clone(), 100, 100)
+                .is_ok()
+        });
+    }
+}
+
+// IME should also handle RollbackMerge event, we also try to evict the region
+// on merge rollback for simplicity. If region is loaded after PrepareMerge and
+// the merge is rollbacked, IME should track this rollback because it will also
+// change epoch version.
+#[test]
+fn test_eviction_after_rollback_merge() {
+    let test_reload = false;
+    test_rollback_merge(test_reload);
+}
+
+// IME should reload cached region automatically after merge rollback to
+// minimize the impact to coprocessor requests.
+#[test]
+fn test_reload_after_rollback_merge() {
+    let test_reload = true;
+    test_rollback_merge(test_reload);
 }
 
 #[test]
@@ -740,8 +877,6 @@ fn test_delete_range() {
             // it correctly.
             let cache_range = new_region(1, "", "");
             region_cache_engine
-                .core()
-                .region_manager()
                 .load_region(CacheRegion::from_region(&cache_range))
                 .unwrap();
         }
@@ -808,8 +943,6 @@ fn test_evict_on_flashback() {
     {
         let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
         region_cache_engine
-            .core()
-            .region_manager()
             .load_region(CacheRegion::from_region(&r))
             .unwrap();
     }
@@ -853,8 +986,6 @@ fn test_load_during_flashback() {
     {
         let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
         region_cache_engine
-            .core()
-            .region_manager()
             .load_region(CacheRegion::from_region(&r))
             .unwrap();
     }
@@ -888,13 +1019,9 @@ fn test_apply_prepared_but_not_write() {
     // load both regions at store 1
     let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
     region_cache_engine
-        .core()
-        .region_manager()
         .load_region(CacheRegion::from_region(&r1))
         .unwrap();
     region_cache_engine
-        .core()
-        .region_manager()
         .load_region(CacheRegion::from_region(&r2))
         .unwrap();
 
@@ -989,11 +1116,7 @@ fn test_eviction_when_destroy_peer() {
     {
         let region_cache_engine = cluster.sim.rl().get_region_cache_engine(1);
         let cache_region = CacheRegion::from_region(&r);
-        region_cache_engine
-            .core()
-            .region_manager()
-            .load_region(cache_region)
-            .unwrap();
+        region_cache_engine.load_region(cache_region).unwrap();
     }
 
     must_copr_load_data(&mut cluster, &t1, 1);
@@ -1059,99 +1182,6 @@ fn test_eviction_when_destroy_uninitialized_peer() {
     let learner2 = new_learner_peer(2, 3);
     pd_client.must_add_peer(region.get_id(), learner2.clone());
     cluster.must_region_exist(region.get_id(), 2);
-}
-
-// IME should also handle RollbackMerge event, we also try to evict the region
-// on merge rollback for simplicity. If region is loaded after PrepareMerge and
-// the merge is rollbacked, IME should track this rollback because it will also
-// change epoch version.
-#[test]
-fn test_region_rollback_merge() {
-    let mut cluster = new_server_cluster_with_hybrid_engine(0, 3);
-    configure_for_merge(&mut cluster.cfg);
-    let pd_client = Arc::clone(&cluster.pd_client);
-    pd_client.disable_default_operator();
-
-    cluster.run_conf_change();
-
-    let region = pd_client.get_region(b"k1").unwrap();
-    cluster.must_split(&region, b"k2");
-    let left = pd_client.get_region(b"k1").unwrap();
-    let right = pd_client.get_region(b"k2").unwrap();
-
-    pd_client.must_add_peer(left.get_id(), new_peer(2, 2));
-    pd_client.must_add_peer(right.get_id(), new_peer(2, 4));
-
-    cluster.must_put(b"k1", b"v1");
-    cluster.must_put(b"k3", b"v3");
-
-    let mut region = pd_client.get_region(b"k1").unwrap();
-    let target_region = pd_client.get_region(b"k3").unwrap();
-
-    let schedule_merge_fp = "on_schedule_merge";
-    fail::cfg(schedule_merge_fp, "return()").unwrap();
-
-    let (tx, rx) = sync_channel(1);
-    fail::cfg_callback("on_apply_res_prepare_merge", move || {
-        tx.send(()).unwrap();
-    })
-    .unwrap();
-
-    cluster.merge_region(region.get_id(), target_region.get_id(), Callback::None);
-    // PrepareMerge is applied.
-    rx.recv().unwrap();
-
-    let leader = cluster.leader_of_region(left.get_id()).unwrap();
-
-    let region_cache_engine = cluster.sim.rl().get_region_cache_engine(leader.store_id);
-
-    // After prepare merge, version becomes 2 + 1 = 3;
-    region.mut_region_epoch().set_version(3);
-    // load region after PrepareMerge.
-    {
-        let cache_region = CacheRegion::from_region(&region);
-        region_cache_engine
-            .core()
-            .region_manager()
-            .new_region(cache_region);
-    }
-
-    // Add a peer to trigger rollback.
-    pd_client.must_add_peer(right.get_id(), new_peer(3, 5));
-    cluster.must_put(b"k4", b"v4");
-    must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
-
-    let mut region = pd_client.get_region(b"k1").unwrap();
-    // After split and prepare_merge, version becomes 1 + 2 = 3;
-    assert_eq!(region.get_region_epoch().get_version(), 3);
-    // After ConfChange and prepare_merge, conf version becomes 1 + 2 = 3;
-    assert_eq!(region.get_region_epoch().get_conf_ver(), 3);
-    fail::remove(schedule_merge_fp);
-    // Wait till rollback.
-    cluster.must_put(b"k11", b"v11");
-
-    // After rollback, version becomes 3 + 1 = 4;
-    region.mut_region_epoch().set_version(4);
-    for i in 1..3 {
-        must_get_equal(&cluster.get_engine(i), b"k11", b"v11");
-        let state = cluster.region_local_state(region.get_id(), i);
-        assert_eq!(state.get_state(), PeerState::Normal);
-        assert_eq!(*state.get_region(), region);
-    }
-
-    // after rollback, IME cached region is evicted.
-    test_util::eventually(
-        Duration::from_millis(10),
-        Duration::from_millis(1000),
-        || {
-            let region_map = region_cache_engine
-                .core()
-                .region_manager()
-                .regions_map()
-                .read();
-            region_map.regions().is_empty()
-        },
-    );
 }
 
 // IME must not panic when pre-load an uninitialized peer.
