@@ -317,7 +317,7 @@ impl Resolver {
         if let Some(index) = index {
             self.update_tracked_index(index);
         }
-        warn!(
+        debug!(
             "DBG track lock {}@{}",
             &log_wrappers::Value::key(&key),
             start_ts;
@@ -376,7 +376,7 @@ impl Resolver {
         if let Some(start_ts) = self.locks_by_key.remove(key) {
             let bytes = self.lock_heap_size(key);
             self.memory_quota.free(bytes);
-            warn!(
+            debug!(
                 "DBG untrack lock {}@{}",
                 &log_wrappers::Value::key(key),
                 start_ts;
