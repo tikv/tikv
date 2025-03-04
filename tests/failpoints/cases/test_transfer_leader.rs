@@ -571,7 +571,7 @@ fn test_turnoff_warmup_entry_cache() {
 #[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_when_warmup_fail_and_its_timeout_is_too_long() {
     let mut cluster = new_cluster(0, 3);
-    cluster.cfg.raft_store.max_entry_cache_warmup_duration = ReadableDuration::secs(1000);
+    cluster.cfg.raft_store.max_entry_cache_warmup_duration = ReadableDuration::secs(u64::MAX / 2);
     prevent_from_gc_raft_log(&mut cluster.cfg);
     run_cluster_for_test_warmup_entry_cache!(cluster);
 
@@ -609,7 +609,6 @@ fn test_when_warmup_succeed_and_become_leader() {
     // Generally, the cache will be compacted during post_apply.
     // However, if the cache is warmed up recently, the cache should be kept.
     let applied_index = cluster.apply_state(1, 2).applied_index;
-    debug!("applied_index: {}", applied_index);
     cluster.must_put(b"kk1", b"vv1");
     cluster.wait_applied_index(1, 2, applied_index + 1);
 
@@ -638,12 +637,42 @@ fn test_when_warmup_succeed_and_not_become_leader() {
     // Since the warmup state is stale, the peer should exit warmup state,
     // and the entry cache should be compacted during post_apply.
     let applied_index = cluster.apply_state(1, 2).applied_index;
-    debug!("applied_index: {}", applied_index);
     cluster.must_put(b"kk1", b"vv1");
     cluster.wait_applied_index(1, 2, applied_index + 1);
     // The peer should warm up cache again when it receives a new TransferLeaderMsg.
     cluster.transfer_leader(1, new_peer(2, 2));
     assert!(rx.recv_timeout(Duration::from_millis(500)).unwrap());
+}
+
+/// Leader transferee should only ack MsgTransferLeader once.
+// TODO: It may need to retry sending MsgTransferLeader in case the ack is lost.
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_warmup_entry_ack_transfer_leader_once() {
+    let mut cluster = new_cluster(0, 3);
+    prevent_from_gc_raft_log(&mut cluster.cfg);
+    run_cluster_for_test_warmup_entry_cache!(cluster);
+
+    // Wait follower compact the cache after applying the logs.
+    let applied_index = cluster.apply_state(1, 2).applied_index;
+    cluster.must_put(b"kk1", b"vv1");
+    cluster.wait_applied_index(1, 2, applied_index + 1);
+
+    let (tx, rx) = channel::unbounded();
+    let recv_filter = Box::new(
+        RegionPacketFilter::new(1, 1)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgTransferLeader)
+            .set_msg_callback(Arc::new(move |m| {
+                tx.send(m.get_message().get_from()).unwrap();
+            })),
+    );
+    cluster.sim.wl().add_recv_filter(1, recv_filter);
+
+    // The peer should only ack transfer leader once.
+    cluster.transfer_leader(1, new_peer(2, 2));
+    rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    rx.recv_timeout(Duration::from_secs(1)).unwrap_err();
 }
 
 #[test_case(test_raftstore::new_node_cluster)]

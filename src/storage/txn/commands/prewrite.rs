@@ -537,10 +537,9 @@ impl<K: PrewriteKind> Prewriter<K> {
         self.check_max_ts_synced(&snapshot)?;
 
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
-        let mut reader = ReaderWithStats::new(
-            SnapshotReader::new_with_ctx(self.start_ts, snapshot, &self.ctx),
-            context.statistics,
-        );
+        let mut snapshot_reader = SnapshotReader::new_with_ctx(self.start_ts, snapshot, &self.ctx);
+        snapshot_reader.setup_with_hint_items(&mut self.mutations, |m| m.key());
+        let mut reader = ReaderWithStats::new(snapshot_reader, context.statistics);
         // Set extra op here for getting the write record when check write conflict in
         // prewrite.
 
@@ -616,7 +615,6 @@ impl<K: PrewriteKind> Prewriter<K> {
 
         // If there are other errors, return other error prior to `AssertionFailed`.
         let mut assertion_failure = None;
-
         for m in mem::take(&mut self.mutations) {
             let pessimistic_action = m.pessimistic_action();
             let expected_for_update_ts = m.pessimistic_expected_for_update_ts();
@@ -885,6 +883,7 @@ trait MutationLock {
     fn pessimistic_action(&self) -> PrewriteRequestPessimisticAction;
     fn pessimistic_expected_for_update_ts(&self) -> Option<TimeStamp>;
     fn into_mutation(self) -> Mutation;
+    fn key(&self) -> &Key;
 }
 
 impl MutationLock for Mutation {
@@ -898,6 +897,10 @@ impl MutationLock for Mutation {
 
     fn into_mutation(self) -> Mutation {
         self
+    }
+
+    fn key(&self) -> &Key {
+        self.key()
     }
 }
 
@@ -925,6 +928,10 @@ impl MutationLock for PessimisticMutation {
 
     fn into_mutation(self) -> Mutation {
         self.mutation
+    }
+
+    fn key(&self) -> &Key {
+        self.mutation.key()
     }
 }
 
@@ -1200,7 +1207,7 @@ mod tests {
         .unwrap();
         let d = perf.delta();
         assert_eq!(1, statistic.write.seek);
-        assert_eq!(d.internal_delete_skipped_count, 0);
+        assert_eq!(d.internal_delete_skipped_count, 40);
     }
 
     #[test]
@@ -1208,7 +1215,7 @@ mod tests {
         use crate::storage::mvcc::tests::{must_get, must_get_commit_ts, must_unlocked};
 
         let mut engine = TestEngineBuilder::new().build().unwrap();
-        let cm = concurrency_manager::ConcurrencyManager::new(1.into());
+        let cm = concurrency_manager::ConcurrencyManager::new_for_test(1.into());
 
         let key = b"k";
         let value = b"v";
@@ -1244,7 +1251,7 @@ mod tests {
         use crate::storage::mvcc::tests::{must_get, must_get_commit_ts, must_unlocked};
 
         let mut engine = TestEngineBuilder::new().build().unwrap();
-        let cm = concurrency_manager::ConcurrencyManager::new(1.into());
+        let cm = concurrency_manager::ConcurrencyManager::new_for_test(1.into());
 
         let key = b"k";
         let value = b"v";
@@ -1345,7 +1352,7 @@ mod tests {
     #[test]
     fn test_prewrite_pessimsitic_1pc() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
-        let cm = concurrency_manager::ConcurrencyManager::new(1.into());
+        let cm = concurrency_manager::ConcurrencyManager::new_for_test(1.into());
         let key = b"k";
         let value = b"v";
 
@@ -1480,7 +1487,7 @@ mod tests {
     #[test]
     fn test_prewrite_async_commit() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
-        let cm = concurrency_manager::ConcurrencyManager::new(1.into());
+        let cm = concurrency_manager::ConcurrencyManager::new_for_test(1.into());
 
         let key = b"k";
         let value = b"v";
@@ -1546,7 +1553,7 @@ mod tests {
     #[test]
     fn test_prewrite_pessimsitic_async_commit() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
-        let cm = concurrency_manager::ConcurrencyManager::new(1.into());
+        let cm = concurrency_manager::ConcurrencyManager::new_for_test(1.into());
 
         let key = b"k";
         let value = b"v";
@@ -1668,7 +1675,7 @@ mod tests {
             () => {
                 WriteContext {
                     lock_mgr: &MockLockManager::new(),
-                    concurrency_manager: ConcurrencyManager::new(10.into()),
+                    concurrency_manager: ConcurrencyManager::new_for_test(10.into()),
                     extra_op: ExtraOp::Noop,
                     statistics: &mut Statistics::default(),
                     async_apply_prewrite: false,
@@ -1717,7 +1724,7 @@ mod tests {
     // this test shows which stage in raft can we return the response
     #[test]
     fn test_response_stage() {
-        let cm = ConcurrencyManager::new(42.into());
+        let cm = ConcurrencyManager::new_for_test(42.into());
         let start_ts = TimeStamp::new(10);
         let keys = [b"k1", b"k2"];
         let values = [b"v1", b"v2"];
@@ -1859,7 +1866,7 @@ mod tests {
     fn test_prewrite_should_not_exist() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
         // concurency_manager.max_tx = 5
-        let cm = ConcurrencyManager::new(5.into());
+        let cm = ConcurrencyManager::new_for_test(5.into());
         let mut statistics = Statistics::default();
 
         let (key, value) = (b"k", b"val");
@@ -1911,7 +1918,7 @@ mod tests {
     #[test]
     fn test_optimistic_prewrite_committed_transaction() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
-        let cm = ConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new_for_test(1.into());
         let mut statistics = Statistics::default();
 
         let key = b"k";
@@ -2004,7 +2011,7 @@ mod tests {
     #[test]
     fn test_pessimistic_prewrite_committed_transaction() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
-        let cm = ConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new_for_test(1.into());
         let mut statistics = Statistics::default();
 
         let key = b"k";
@@ -2121,7 +2128,7 @@ mod tests {
     #[test]
     fn test_repeated_pessimistic_prewrite_1pc() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
-        let cm = ConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new_for_test(1.into());
         let mut statistics = Statistics::default();
 
         must_acquire_pessimistic_lock(&mut engine, b"k2", b"k2", 5, 5);
@@ -2170,7 +2177,7 @@ mod tests {
     #[test]
     fn test_repeated_prewrite_non_pessimistic_lock() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
-        let cm = ConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new_for_test(1.into());
         let mut statistics = Statistics::default();
 
         let cm = &cm;
@@ -2340,7 +2347,7 @@ mod tests {
     #[test]
     fn test_prewrite_rolledback_transaction() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
-        let cm = ConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new_for_test(1.into());
         let mut statistics = Statistics::default();
 
         let k1 = b"k1";
@@ -2478,7 +2485,7 @@ mod tests {
 
         // Txn1 continues. If the two keys are sent in the single prewrite request, the
         // AssertionFailed error won't be returned since there are other error.
-        let cm = ConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new_for_test(1.into());
         let mut stat = Statistics::default();
         // Two keys in single request:
         let cmd = PrewritePessimistic::with_defaults(
@@ -2600,7 +2607,7 @@ mod tests {
         );
         let context = WriteContext {
             lock_mgr: &MockLockManager::new(),
-            concurrency_manager: ConcurrencyManager::new(20.into()),
+            concurrency_manager: ConcurrencyManager::new_for_test(20.into()),
             extra_op: ExtraOp::Noop,
             statistics: &mut statistics,
             async_apply_prewrite: false,
@@ -2621,7 +2628,7 @@ mod tests {
     #[test]
     fn test_repeated_prewrite_commit_ts_too_large() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
-        let cm = ConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new_for_test(1.into());
         let mut statistics = Statistics::default();
 
         // First, prewrite and commit normally.
@@ -2691,7 +2698,7 @@ mod tests {
         use crate::storage::txn::sched_pool::set_tls_feature_gate;
 
         let mut engine = TestEngineBuilder::new().build().unwrap();
-        let cm = concurrency_manager::ConcurrencyManager::new(1.into());
+        let cm = concurrency_manager::ConcurrencyManager::new_for_test(1.into());
 
         let key = b"k";
         let value = b"v";
@@ -2773,7 +2780,7 @@ mod tests {
         use crate::storage::txn::sched_pool::set_tls_feature_gate;
 
         let mut engine = TestEngineBuilder::new().build().unwrap();
-        let cm = concurrency_manager::ConcurrencyManager::new(1.into());
+        let cm = concurrency_manager::ConcurrencyManager::new_for_test(1.into());
 
         let key = b"k";
         let value = b"v";

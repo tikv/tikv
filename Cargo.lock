@@ -3238,6 +3238,7 @@ checksum = "9a3a5bfb195931eeb336b2a7b4d761daec841b97f947d34394601737a7bba5e4"
 name = "hybrid_engine"
 version = "0.0.1"
 dependencies = [
+ "codec",
  "crossbeam",
  "engine_rocks",
  "engine_traits",
@@ -3249,6 +3250,7 @@ dependencies = [
  "online_config",
  "prometheus",
  "prometheus-static-metric",
+ "protobuf",
  "raft",
  "raftstore",
  "slog",
@@ -3816,7 +3818,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#c55bb14ec41439c2c1849358a1c57bb6c0fbdbf7"
+source = "git+https://github.com/tikv/rust-rocksdb.git#56f3a91154d91a37eb4508976f8288c1fdec46b2"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -3835,7 +3837,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#c55bb14ec41439c2c1849358a1c57bb6c0fbdbf7"
+source = "git+https://github.com/tikv/rust-rocksdb.git#56f3a91154d91a37eb4508976f8288c1fdec46b2"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -5177,7 +5179,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#a76fb6ef2cbd002ec10d63a2ac68b4a20b20fe3e"
+source = "git+https://github.com/tikv/raft-rs?branch=master#0d01b20312f74889a5e44ad4180aade5da2f16fa"
 dependencies = [
  "bytes",
  "fxhash",
@@ -5236,7 +5238,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#a76fb6ef2cbd002ec10d63a2ac68b4a20b20fe3e"
+source = "git+https://github.com/tikv/raft-rs?branch=master#0d01b20312f74889a5e44ad4180aade5da2f16fa"
 dependencies = [
  "bytes",
  "protobuf",
@@ -5271,6 +5273,7 @@ dependencies = [
  "bytes",
  "causal_ts",
  "chrono",
+ "codec",
  "collections",
  "concurrency_manager",
  "crc32fast",
@@ -5793,7 +5796,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#c55bb14ec41439c2c1849358a1c57bb6c0fbdbf7"
+source = "git+https://github.com/tikv/rust-rocksdb.git#56f3a91154d91a37eb4508976f8288c1fdec46b2"
 dependencies = [
  "libc 0.2.151",
  "librocksdb_sys",
@@ -7280,6 +7283,7 @@ dependencies = [
  "bstr",
  "byteorder",
  "chrono",
+ "chrono-tz",
  "codec",
  "crypto",
  "file_system",

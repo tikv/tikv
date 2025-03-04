@@ -140,7 +140,7 @@ pub mod tests {
     pub fn must_succeed<E: Engine>(engine: &mut E, key: &[u8], safe_point: impl Into<TimeStamp>) {
         let ctx = SnapContext::default();
         let snapshot = engine.snapshot(ctx).unwrap();
-        let cm = ConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new_for_test(1.into());
         let mut txn = MvccTxn::new(TimeStamp::zero(), cm);
         let mut reader = MvccReader::new(snapshot, Some(ScanMode::Forward), true);
         gc(&mut txn, &mut reader, Key::from_raw(key), safe_point.into()).unwrap();

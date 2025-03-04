@@ -15,7 +15,7 @@ const KEY_LEN: usize = 64;
 const LOCK_COUNT: usize = 10_000;
 
 fn prepare_cm() -> ConcurrencyManager {
-    let cm = ConcurrencyManager::new(1.into());
+    let cm = ConcurrencyManager::new_for_test(1.into());
     let mut buf = [0; KEY_LEN];
     for _ in 0..LOCK_COUNT {
         thread_rng().fill_bytes(&mut buf[..]);
