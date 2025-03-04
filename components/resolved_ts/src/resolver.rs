@@ -318,7 +318,7 @@ impl Resolver {
             self.update_tracked_index(index);
         }
         warn!(
-            "track lock {}@{}",
+            "DBG track lock {}@{}",
             &log_wrappers::Value::key(&key),
             start_ts;
             "region_id" => self.region_id,
@@ -377,7 +377,7 @@ impl Resolver {
             let bytes = self.lock_heap_size(key);
             self.memory_quota.free(bytes);
             warn!(
-                "untrack lock {}@{}",
+                "DBG untrack lock {}@{}",
                 &log_wrappers::Value::key(key),
                 start_ts;
                 "region_id" => self.region_id,

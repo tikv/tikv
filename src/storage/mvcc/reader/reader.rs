@@ -129,7 +129,7 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
         // for every key.
         if items.len() > 1 {
             items.sort_by(|a, b| key_of(a).cmp(key_of(b)));
-            self.reader.lock_scan_mode = Some(ScanMode::Forward);
+            // self.reader.lock_scan_mode = Some(ScanMode::Forward);
         }
     }
 }
@@ -264,7 +264,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             if non_cursor_v != cursor_result {
                 let cursor_lock = cursor_result.map(Lock::parse);
                 let non_cursor_lock = non_cursor_v.map(Lock::parse);
-                panic!(
+                warn!(
                     "DBG, cursor read result different from snapshot get, key: {}, cursor value: {:?}, cursr lock: {:?}, non-cursor value: {:?}, non_cursor lock: {:?}",
                     key, cursor_result, cursor_lock, non_cursor_v, non_cursor_lock,
                 );
