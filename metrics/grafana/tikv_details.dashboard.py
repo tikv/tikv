@@ -1971,6 +1971,80 @@ def RaftWaterfall() -> RowPanel:
     return layout.row_panel
 
 
+def RaftstoreIO() -> RowPanel:
+    layout = Layout(title="Raftstore IO")
+
+    def add_row(layout, label: str, desc: str):
+        title = label.replace("_", " ").capitalize()
+        layout.row(
+            heatmap_panel_graph_panel_histogram_quantile_pairs(
+                heatmap_title=f"{title}",
+                heatmap_description=f"{desc}",
+                graph_title=f"99% {title}",
+                graph_description=f"{desc}",
+                graph_by_labels=["instance"],
+                graph_hides=["count", "avg"],
+                yaxis_format=UNITS.SECONDS,
+                metric="tikv_raftstore_io_duration_seconds",
+                label_selectors=[f'reason="{label}"'],
+            )
+        )
+
+    for lb, desc in [
+        (
+            "peer_destroy_kv_write",
+            "The time taken by Raftstore to complete RocksDB write operation when destroying a peer",
+        ),
+        (
+            "peer_destroy_raft_write",
+            "The time taken by Raftstore to complete RaftEngine write operation when destroying a peer",
+        ),
+        (
+            "init_raft_state",
+            "The time taken by Raftstore to complete initializing raft state when creating a peer",
+        ),
+        (
+            "init_apply_state",
+            "The time taken by Raftstore to complete initializing apply state when creating a peer",
+        ),
+        (
+            "entry_storage_create",
+            "The time taken by Raftstore to complete RaftEngine read operation when creating a peer",
+        ),
+        (
+            "store_check_msg",
+            "The time taken by Raftstore to check region state when TiKV receives an message to non-exist regions",
+        ),
+        (
+            "peer_check_merge_target_stale",
+            "The time taken by Raftstore to check stale merged regions",
+        ),
+        (
+            "peer_maybe_create",
+            "The time taken by Raftstore to complete RocksDB and RaftEngine read operation when creating a peer",
+        ),
+        (
+            "peer_snapshot_read",
+            "The time taken by Raftstore to complete a read requests",
+        ),
+        (
+            "v2_compatible_learner",
+            "The time taken by Raftstore to handle raftstore v2 compatibility checking",
+        ),
+        (
+            "raft_term",
+            "The time taken by Raftstore to get terms of raft logs by reading RaftEngine",
+        ),
+        (
+            "raft_fetch_log",
+            "The time taken by Raftstore to fetch raft logs by reading RaftEngine",
+        ),
+    ]:
+        add_row(layout, lb, desc)
+
+    return layout.row_panel
+
+
 def RaftIO() -> RowPanel:
     layout = Layout(title="Raft IO")
     layout.row(
@@ -10149,6 +10223,7 @@ dashboard = Dashboard(
         IOBreakdown(),
         # Raftstore
         RaftWaterfall(),
+        RaftstoreIO(),
         RaftIO(),
         RaftPropose(),
         RaftProcess(),

@@ -229,7 +229,7 @@ impl RaftMetrics {
                 .with_label_values(&["write", "peer_destroy_kv_write"])
                 .local(),
             io_write_peer_destroy_raft: STORE_IO_DURATION_HISTOGRAM
-                .with_label_values(&["write", "peer_destroy_raft_write:"])
+                .with_label_values(&["write", "peer_destroy_raft_write"])
                 .local(),
             io_write_init_raft_state: STORE_IO_DURATION_HISTOGRAM
                 .with_label_values(&["write", "init_raft_state"])
