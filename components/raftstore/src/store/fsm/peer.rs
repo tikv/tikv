@@ -197,6 +197,11 @@ where
     propose_checked: Option<bool>,
     request: Option<RaftCmdRequest>,
     callbacks: Vec<Callback<E::Snapshot>>,
+
+    // Ref: https://github.com/tikv/tikv/issues/16818.
+    // Check for duplicate key entries batching proposed commands.
+    // TODO: remove this field when the cause of issue 16818 is located.
+    lock_cf_keys: HashSet<Vec<u8>>,
 }
 
 impl<EK, ER> Drop for PeerFsm<EK, ER>
@@ -435,6 +440,7 @@ where
             propose_checked: None,
             request: None,
             callbacks: vec![],
+            lock_cf_keys: HashSet::default(),
         }
     }
 
@@ -470,6 +476,21 @@ where
             mut callback,
             ..
         } = cmd;
+        // Ref: https://github.com/tikv/tikv/issues/16818.
+        // Check for duplicate key entries batching proposed commands.
+        // TODO: remove this check when the cause of issue 16818 is located.
+        for req in request.get_requests() {
+            if req.has_put() && req.get_put().get_cf() == CF_LOCK {
+                let key = req.get_put().get_key();
+                if !self.lock_cf_keys.insert(key.to_vec()) {
+                    panic!(
+                        "found duplicate key in Lock CF PUT request between batched requests. \
+                            key: {:?}, existing batch request: {:?}, new request to add: {:?}",
+                        key, self.request, request
+                    );
+                }
+            }
+        }
         if let Some(batch_req) = self.request.as_mut() {
             let requests: Vec<_> = request.take_requests().into();
             for q in requests {
@@ -512,6 +533,7 @@ where
             self.batch_req_size = 0;
             self.has_proposed_cb = false;
             self.propose_checked = None;
+            self.lock_cf_keys = HashSet::default();
             if self.callbacks.len() == 1 {
                 let cb = self.callbacks.pop().unwrap();
                 return Some((req, cb));
@@ -672,6 +694,22 @@ where
                     if let Some(Err(e)) = cmd.extra_opts.deadline.map(|deadline| deadline.check()) {
                         cmd.callback.invoke_with_response(new_error(e.into()));
                         continue;
+                    }
+
+                    // Ref: https://github.com/tikv/tikv/issues/16818.
+                    // Check for duplicate key entries within the to be proposed raft cmd.
+                    // TODO: remove this check when the cause of issue 16818 is located.
+                    let mut keys_set = std::collections::HashSet::new();
+                    for req in cmd.request.get_requests() {
+                        if req.has_put() && req.get_put().get_cf() == CF_LOCK {
+                            let key = req.get_put().get_key();
+                            if !keys_set.insert(key.to_vec()) {
+                                panic!(
+                                    "found duplicate key in Lock CF PUT request, key: {:?}, cmd: {:?}",
+                                    key, cmd
+                                );
+                            }
+                        }
                     }
 
                     let req_size = cmd.request.compute_size();
@@ -7517,4 +7555,76 @@ mod tests {
             assert!(flag.load(Ordering::Acquire));
         }
     }
+<<<<<<< HEAD
+=======
+
+    #[test]
+    fn test_batch_raft_cmd_request_builder_size_limit() {
+        let mut cfg = Config::default();
+        cfg.raft_entry_max_size = ReadableSize::gb(1);
+        let mut q = Request::default();
+        let mut builder = BatchRaftCmdRequestBuilder::<KvTestEngine>::new();
+
+        let mut req = RaftCmdRequest::default();
+        let mut put = PutRequest::default();
+        put.set_key(b"aaaa".to_vec());
+        let val = (0..200_000).map(|_| 0).collect_vec();
+        put.set_value(val);
+        q.set_cmd_type(CmdType::Put);
+        q.set_put(put);
+        req.mut_requests().push(q.clone());
+        let _ = q.take_put();
+        let req_size = req.compute_size();
+        assert!(builder.can_batch(&cfg, &req, req_size));
+        let cb = Callback::write_ext(Box::new(move |_| {}), None, None);
+        let cmd = RaftCommand::new(req.clone(), cb);
+        builder.add(cmd, req_size);
+
+        let mut req = RaftCmdRequest::default();
+        let mut put = PutRequest::default();
+        put.set_key(b"aaaa".to_vec());
+        let val = (0..900_000).map(|_| 0).collect_vec();
+        put.set_value(val);
+        q.set_cmd_type(CmdType::Put);
+        q.set_put(put);
+        req.mut_requests().push(q.clone());
+        let _ = q.take_put();
+        let req_size = req.compute_size();
+        assert!(!builder.can_batch(&cfg, &req, req_size));
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_batch_build_with_duplicate_lock_cf_keys() {
+        let mut builder = BatchRaftCmdRequestBuilder::<KvTestEngine>::new();
+
+        // Create first request.
+        let mut req1 = RaftCmdRequest::default();
+        let mut put1 = Request::default();
+        let mut put_req1 = PutRequest::default();
+        put_req1.set_cf(CF_LOCK.to_string());
+        put_req1.set_key(b"key1".to_vec());
+        put_req1.set_value(b"value1".to_vec());
+        put1.set_cmd_type(CmdType::Put);
+        put1.set_put(put_req1);
+        req1.mut_requests().push(put1);
+
+        // Create second request with same key in Lock CF.
+        let mut req2 = RaftCmdRequest::default();
+        let mut put2 = Request::default();
+        let mut put_req2 = PutRequest::default();
+        put_req2.set_cf(CF_LOCK.to_string());
+        put_req2.set_key(b"key1".to_vec());
+        put_req2.set_value(b"value2".to_vec());
+        put2.set_cmd_type(CmdType::Put);
+        put2.set_put(put_req2);
+        req2.mut_requests().push(put2);
+
+        // Add both requests to batch builder, should cause panic.
+        let size = req1.compute_size();
+        builder.add(RaftCommand::new(req1, Callback::None), size);
+        let size = req2.compute_size();
+        builder.add(RaftCommand::new(req2, Callback::None), size);
+    }
+>>>>>>> 5f60963f26 (raftstore: add more duplicate entry check before proposing write command and batching commands (#17899))
 }
