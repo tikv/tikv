@@ -345,6 +345,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             if storage_iteration_finished {
                 return Ok(None);
             }
+            assert!(self.lock_scan_mode.is_none());
             self.create_lock_cursor_if_not_exist()?;
             let cursor = self.lock_cursor.as_mut().unwrap();
             if !lock_cursor_seeked {
@@ -740,6 +741,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
     where
         F: Fn(&Key, &Lock) -> bool,
     {
+        assert!(self.lock_scan_mode.is_none());
         self.create_lock_cursor_if_not_exist()?;
         let cursor = self.lock_cursor.as_mut().unwrap();
         let ok = match start {
