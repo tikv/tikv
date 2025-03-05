@@ -31,10 +31,12 @@ use std::{
     time::Duration,
 };
 
+use lazy_static::lazy_static;
 use nix::{
     sys::wait::{wait, WaitStatus},
     unistd::{fork, ForkResult},
 };
+use serde::Serialize;
 
 use crate::sys::thread::StdThreadBuildWrapper;
 
@@ -653,6 +655,48 @@ pub fn set_vec_capacity<T>(v: &mut Vec<T>, cap: usize) {
         cmp::Ordering::Less => v.shrink_to(cap),
         cmp::Ordering::Greater => v.reserve_exact(cap - v.len()),
         cmp::Ordering::Equal => {}
+    }
+}
+
+// Global server readiness state.
+//
+// This is used to track whether TiKV is fully ready to serve requests after
+// startup. It is queried by the `/ready` API of the status server.
+lazy_static! {
+    pub static ref GLOBAL_SERVER_READINESS: Arc<ServerReadiness> =
+        Arc::new(ServerReadiness::default());
+}
+
+/// Represents the readiness state of the server.
+///
+/// Each field is a flag indicating a condition that must be met for the server
+/// to be considered fully ready to serve.
+#[derive(Serialize, Default)]
+pub struct ServerReadiness {
+    /// Indicates whether the server has connected to PD.
+    pub connected_to_pd: AtomicBool,
+    /// Indicates whether a sufficient number of Raft peers have caught up
+    /// applying logs.
+    pub raft_peers_caught_up: AtomicBool,
+}
+
+impl ServerReadiness {
+    /// Checks if the server is ready.
+    ///
+    /// All conditions must be met for the server to be considered ready.
+    pub fn is_ready(&self) -> bool {
+        self.raft_peers_caught_up.load(Ordering::SeqCst)
+            && self.connected_to_pd.load(Ordering::SeqCst)
+    }
+
+    pub fn to_json(&self) -> String {
+        let json_result = serde_json::to_string_pretty(&self);
+        match json_result {
+            Ok(json) => json,
+            Err(e) => {
+                format!("failed to serialize ServerReadiness: {}", e)
+            }
+        }
     }
 }
 
