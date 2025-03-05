@@ -2,20 +2,28 @@
 
 use std::sync::Arc;
 
+use codec::prelude::NumberEncoder;
 use engine_traits::{CacheRegion, EvictReason, KvEngine, RegionCacheEngineExt, RegionEvent};
 use kvproto::{
     metapb::{Peer, Region},
     raft_cmdpb::AdminCmdType,
-    raft_serverpb::{ExtraMessage, ExtraMessageType, RaftApplyState},
+    raft_serverpb::{ExtraMessageType, RaftApplyState},
 };
+use protobuf::ProtobufEnum as _;
 use raft::StateRole;
-use raftstore::coprocessor::{
-    dispatcher::{BoxDestroyPeerObserver, BoxExtraMessageObserver},
-    AdminObserver, ApplyCtxInfo, ApplySnapshotObserver, BoxAdminObserver, BoxApplySnapshotObserver,
-    BoxQueryObserver, BoxRoleObserver, Cmd, Coprocessor, CoprocessorHost, DestroyPeerObserver,
-    ExtraMessageObserver, ObserverContext, QueryObserver, RegionState, RoleObserver,
+use raftstore::{
+    coprocessor::{
+        dispatcher::{BoxDestroyPeerObserver, BoxTransferLeaderObserver},
+        AdminObserver, ApplyCtxInfo, ApplySnapshotObserver, BoxAdminObserver,
+        BoxApplySnapshotObserver, BoxQueryObserver, BoxRoleObserver, Cmd, Coprocessor,
+        CoprocessorHost, DestroyPeerObserver, ObserverContext, QueryObserver, RegionState,
+        RoleObserver, TransferLeaderCustomContext, TransferLeaderObserver,
+    },
+    store::TransferLeaderContext,
 };
-use tikv_util::{debug, warn};
+use tikv_util::{codec::number::decode_var_i64, debug, warn};
+
+use crate::metrics::IN_MEMORY_ENGINE_TRANSFER_LEADER_WARMUP_COUNTER_STATIC;
 
 #[derive(Clone)]
 pub struct LoadEvictionObserver {
@@ -49,14 +57,14 @@ impl LoadEvictionObserver {
         coprocessor_host
             .registry
             .register_role_observer(priority, BoxRoleObserver::new(self.clone()));
-        // Pre load region in transfer leader
-        coprocessor_host
-            .registry
-            .register_extra_message_observer(priority, BoxExtraMessageObserver::new(self.clone()));
         // Eviction the cached region when the peer is destroyed.
         coprocessor_host
             .registry
             .register_destroy_peer_observer(priority, BoxDestroyPeerObserver::new(self.clone()));
+        coprocessor_host.registry.register_transfer_leader_observer(
+            priority,
+            BoxTransferLeaderObserver::new(self.clone()),
+        );
     }
 
     fn post_exec_cmd(
@@ -242,18 +250,94 @@ impl AdminObserver for LoadEvictionObserver {
         // immediately, so return false.
         false
     }
+}
 
+const TRANSFER_LEADER_CONTEXT_KEY: &[u8] = b"ime";
+
+impl TransferLeaderObserver for LoadEvictionObserver {
     fn pre_transfer_leader(
         &self,
         ctx: &mut ObserverContext<'_>,
         _tr: &kvproto::raft_cmdpb::TransferLeaderRequest,
-    ) -> raftstore::coprocessor::Result<Option<kvproto::raft_serverpb::ExtraMessage>> {
-        if !self.cache_engine.region_cached(ctx.region()) {
+    ) -> raftstore::coprocessor::Result<Option<TransferLeaderCustomContext>> {
+        // Warm up transferee's cache when a region is in active or in loading.
+        let active_only = false;
+        if !self.cache_engine.region_cached(ctx.region(), active_only) {
             return Ok(None);
         }
-        let mut msg = ExtraMessage::new();
-        msg.set_type(ExtraMessageType::MsgPreLoadRegionRequest);
-        Ok(Some(msg))
+        IN_MEMORY_ENGINE_TRANSFER_LEADER_WARMUP_COUNTER_STATIC
+            .request
+            .inc();
+        let mut value = vec![];
+        value
+            .write_var_i64(ExtraMessageType::MsgPreLoadRegionRequest.value() as i64)
+            .unwrap();
+        Ok(Some(TransferLeaderCustomContext {
+            key: TRANSFER_LEADER_CONTEXT_KEY.to_vec(),
+            value,
+        }))
+    }
+
+    fn pre_ack_transfer_leader(
+        &self,
+        r: &mut ObserverContext<'_>,
+        msg: &raft::eraftpb::Message,
+    ) -> bool {
+        fn get_value(ctx: &[u8]) -> raftstore::Result<Option<ExtraMessageType>> {
+            let ctx = TransferLeaderContext::from_bytes(ctx)?;
+            let Some(mut value) = ctx.get_custom_ctx(TRANSFER_LEADER_CONTEXT_KEY) else {
+                return Ok(None);
+            };
+            let value = decode_var_i64(&mut value)?;
+            Ok(ExtraMessageType::from_i32(value as i32))
+        }
+
+        let region = r.region();
+        let context = msg.get_context();
+        let ty = match get_value(context) {
+            Ok(Some(ty)) => ty,
+            other => {
+                // For compatibility, return ready if the context is not found
+                // or invalid.
+                if other.is_err() {
+                    warn!("ime transfer leader warmup ignored";
+                        "region_id" => ?region.get_id(),
+                        "from" => ?msg.get_from(),
+                        "error" => ?other.err());
+                }
+                return true;
+            }
+        };
+
+        let need_warmup = ty == ExtraMessageType::MsgPreLoadRegionRequest;
+        if !need_warmup {
+            // Ready to ack.
+            return true;
+        }
+
+        if region.get_peers().is_empty() {
+            // MsgPreLoadRegionRequest is sent before leader issue a transfer leader
+            // request. It is possible that the peer is not initialized yet.
+            warn!("ime skip warmup an uninitialized region"; "region" => ?region);
+            IN_MEMORY_ENGINE_TRANSFER_LEADER_WARMUP_COUNTER_STATIC
+                .skip_warmup
+                .inc();
+            return true;
+        }
+
+        // Exclude loading states to make sure the region is active.
+        let active_only = true;
+        let has_cached = self.cache_engine.region_cached(r.region(), active_only);
+        if has_cached {
+            // Ready to ack.
+            return true;
+        }
+
+        IN_MEMORY_ENGINE_TRANSFER_LEADER_WARMUP_COUNTER_STATIC
+            .warmup
+            .inc();
+        self.cache_engine.load_region(r.region());
+        false
     }
 }
 
@@ -266,7 +350,7 @@ impl ApplySnapshotObserver for LoadEvictionObserver {
         _: Option<&raftstore::store::Snapshot>,
     ) {
         // While currently, we evict cached region after leader step down.
-        // A region can may still be loaded when it's leader. E.g, to pre-load
+        // A region can may still be loaded when it's leader. E.g, to warmup
         // some hot regions before transferring leader.
         let cache_region = CacheRegion::from_region(ctx.region());
         self.evict_region(cache_region, EvictReason::ApplySnapshot)
@@ -296,21 +380,6 @@ impl RoleObserver for LoadEvictionObserver {
                 "region" => ?cache_region,
             );
             self.evict_region(cache_region, EvictReason::BecomeFollower);
-        }
-    }
-}
-
-impl ExtraMessageObserver for LoadEvictionObserver {
-    fn on_extra_message(&self, region: &Region, extra_msg: &ExtraMessage) {
-        if extra_msg.get_type() == ExtraMessageType::MsgPreLoadRegionRequest {
-            if region.get_peers().is_empty() {
-                // MsgPreLoadRegionRequest is sent before leader issue a
-                // transfer leader request. It is possible that the peer
-                // is not initialized yet.
-                warn!("ime skip pre-load an uninitialized region"; "region" => ?region);
-                return;
-            }
-            self.cache_engine.load_region(region);
         }
     }
 }
@@ -356,7 +425,7 @@ mod tests {
             self.region_events.lock().unwrap().push(event);
         }
 
-        fn region_cached(&self, _: &Region) -> bool {
+        fn region_cached(&self, _: &Region, _: bool) -> bool {
             unreachable!()
         }
 

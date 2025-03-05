@@ -422,7 +422,7 @@ impl TestNode {
             cfg,
             cop_cfg,
             trans,
-            ConcurrencyManager::new(1.into()),
+            ConcurrencyManager::new_for_test(1.into()),
             None,
             &self.logger,
             resource_ctl,

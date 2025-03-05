@@ -17,7 +17,7 @@ use kvproto::{
         AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request,
         TransferLeaderRequest,
     },
-    raft_serverpb::{ExtraMessage, RaftApplyState},
+    raft_serverpb::RaftApplyState,
 };
 use pd_client::RegionStat;
 use raft::{eraftpb, StateRole};
@@ -139,14 +139,6 @@ pub trait AdminObserver: Coprocessor {
         _: &mut ApplyCtxInfo<'_>,
     ) -> bool {
         false
-    }
-
-    fn pre_transfer_leader(
-        &self,
-        _ctx: &mut ObserverContext<'_>,
-        _tr: &TransferLeaderRequest,
-    ) -> Result<Option<ExtraMessage>> {
-        Ok(None)
     }
 }
 
@@ -366,11 +358,6 @@ pub trait RaftMessageObserver: Coprocessor {
     fn on_raft_message(&self, _: &RaftMessage) -> bool {
         true
     }
-}
-
-//
-pub trait ExtraMessageObserver: Coprocessor {
-    fn on_extra_message(&self, _: &Region, _: &ExtraMessage) {}
 }
 
 #[derive(Clone, Debug, Default)]
@@ -613,6 +600,46 @@ pub trait UpdateSafeTsObserver: Coprocessor {
 pub trait DestroyPeerObserver: Coprocessor {
     /// Hook to call when destroying a peer.
     fn on_destroy_peer(&self, _: &Region) {}
+}
+
+#[derive(PartialEq)]
+pub struct TransferLeaderCustomContext {
+    pub key: Vec<u8>,
+    pub value: Vec<u8>,
+}
+
+impl fmt::Debug for TransferLeaderCustomContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TransferLeaderCustomContext")
+            .field("key", &log_wrappers::Value(&self.key))
+            .field("value", &log_wrappers::Value(&self.value))
+            .finish()
+    }
+}
+
+pub trait TransferLeaderObserver: Coprocessor {
+    /// Hook to call before proposing transfer leader request.
+    /// The return value is a custom context which will be set as the context
+    /// of the transfer leader request.
+    ///
+    /// Called by a leader.
+    fn pre_transfer_leader(
+        &self,
+        _ctx: &mut ObserverContext<'_>,
+        _tr: &TransferLeaderRequest,
+    ) -> Result<Option<TransferLeaderCustomContext>> {
+        Ok(None)
+    }
+
+    /// Hook to call after acknowledging a transfer leader request.
+    /// Implementations can decode the custom context from the transfer leader
+    /// request and initiates necessary preparations.
+    /// Return false to delay acknowledging the transfer leader request.
+    ///
+    /// Called by a leader transferee.
+    fn pre_ack_transfer_leader(&self, _: &mut ObserverContext<'_>, _: &eraftpb::Message) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]

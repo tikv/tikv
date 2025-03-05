@@ -965,7 +965,7 @@ pub mod test_util {
         start_ts: u64,
         one_pc_max_commit_ts: Option<u64>,
     ) -> Result<PrewriteResult> {
-        let cm = ConcurrencyManager::new(start_ts.into());
+        let cm = ConcurrencyManager::new_for_test(start_ts.into());
         prewrite_with_cm(
             engine,
             cm,
@@ -1008,7 +1008,7 @@ pub mod test_util {
         for_update_ts: u64,
         one_pc_max_commit_ts: Option<u64>,
     ) -> Result<PrewriteResult> {
-        let cm = ConcurrencyManager::new(start_ts.into());
+        let cm = ConcurrencyManager::new_for_test(start_ts.into());
         pessimistic_prewrite_with_cm(
             engine,
             cm,
@@ -1068,7 +1068,7 @@ pub mod test_util {
                 .into_iter()
                 .map(|(size, ts)| (size, TimeStamp::from(ts))),
         );
-        let cm = ConcurrencyManager::new(start_ts.into());
+        let cm = ConcurrencyManager::new_for_test(start_ts.into());
         prewrite_command(engine, cm, statistics, cmd)
     }
 
@@ -1081,7 +1081,7 @@ pub mod test_util {
     ) -> Result<()> {
         let ctx = Context::default();
         let snap = engine.snapshot(Default::default())?;
-        let concurrency_manager = ConcurrencyManager::new(lock_ts.into());
+        let concurrency_manager = ConcurrencyManager::new_for_test(lock_ts.into());
         let cmd = Commit::new(
             keys,
             TimeStamp::from(lock_ts),
@@ -1113,7 +1113,7 @@ pub mod test_util {
     ) -> Result<()> {
         let ctx = Context::default();
         let snap = engine.snapshot(Default::default())?;
-        let concurrency_manager = ConcurrencyManager::new(start_ts.into());
+        let concurrency_manager = ConcurrencyManager::new_for_test(start_ts.into());
         let cmd = Rollback::new(keys, TimeStamp::from(start_ts), ctx);
         let context = WriteContext {
             lock_mgr: &MockLockManager::new(),

@@ -139,7 +139,7 @@ pub trait RegionCacheEngineExt {
     // region cache engine and kv engine
     fn on_region_event(&self, event: RegionEvent);
 
-    fn region_cached(&self, region: &Region) -> bool;
+    fn region_cached(&self, region: &Region, active_only: bool) -> bool;
 
     fn load_region(&self, region: &Region);
 }

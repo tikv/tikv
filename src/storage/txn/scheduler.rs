@@ -2232,7 +2232,7 @@ mod tests {
             TxnScheduler::new(
                 engine.clone(),
                 MockLockManager::new(),
-                ConcurrencyManager::new(1.into()),
+                ConcurrencyManager::new_for_test(1.into()),
                 &config,
                 DynamicConfigs {
                     pipelined_pessimistic_lock: Arc::new(AtomicBool::new(true)),
@@ -2585,7 +2585,7 @@ mod tests {
         let scheduler = TxnScheduler::new(
             engine,
             MockLockManager::new(),
-            ConcurrencyManager::new(1.into()),
+            ConcurrencyManager::new_for_test(1.into()),
             &config,
             DynamicConfigs {
                 pipelined_pessimistic_lock: Arc::new(AtomicBool::new(false)),

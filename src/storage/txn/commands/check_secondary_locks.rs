@@ -141,7 +141,7 @@ fn check_status_from_lock<S: Snapshot>(
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
-    fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
+    fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         // It is not allowed for commit to overwrite a protected rollback. So we update
         // max_ts to prevent this case from happening.
         let region_id = self.ctx.get_region_id();
@@ -152,10 +152,10 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
             })?;
 
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
-        let mut reader = ReaderWithStats::new(
-            SnapshotReader::new_with_ctx(self.start_ts, snapshot, &self.ctx),
-            context.statistics,
-        );
+
+        let mut snapshot_reader = SnapshotReader::new_with_ctx(self.start_ts, snapshot, &self.ctx);
+        snapshot_reader.setup_with_hint_items(&mut self.keys, |k| k);
+        let mut reader = ReaderWithStats::new(snapshot_reader, context.statistics);
         let mut released_locks = ReleasedLocks::new();
         let mut result = SecondaryLocksStatus::Locked(Vec::new());
 
@@ -267,7 +267,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let lock_ts = lock_ts.into();
-        let cm = ConcurrencyManager::new(lock_ts);
+        let cm = ConcurrencyManager::new_for_test(lock_ts);
         let command = crate::storage::txn::commands::CheckSecondaryLocks {
             ctx: ctx.clone(),
             keys: vec![Key::from_raw(key)],
@@ -301,7 +301,7 @@ pub mod tests {
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let mut engine_clone = engine.clone();
         let ctx = Context::default();
-        let cm = ConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new_for_test(1.into());
 
         let mut check_secondary = |key, ts| {
             let snapshot = engine_clone.snapshot(Default::default()).unwrap();

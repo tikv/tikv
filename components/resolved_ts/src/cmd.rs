@@ -471,7 +471,7 @@ mod tests {
         assert_eq!(rows, expected);
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let cm = ConcurrencyManager::new(42.into());
+        let cm = ConcurrencyManager::new_for_test(42.into());
         let mut txn = MvccTxn::new(10.into(), cm);
         let mut reader = SnapshotReader::new(10.into(), snapshot, true);
         prewrite(

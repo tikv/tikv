@@ -28,6 +28,7 @@ use raftstore::coprocessor::{CoprocessorHost, RegionInfoProvider};
 use tikv_kv::{CfStatistics, CursorBuilder, Modify, SnapContext};
 use tikv_util::{
     config::{Tracker, VersionTrack},
+    set_panic_context,
     store::find_peer,
     time::{duration_to_sec, Instant, Limiter, SlowTimer},
     worker::{Builder as WorkerBuilder, LazyWorker, Runnable, ScheduleError, Scheduler},
@@ -357,6 +358,7 @@ impl<E: Engine> GcRunnerCore<E> {
         txn: &mut MvccTxn,
         reader: &mut MvccReader<E::Snap>,
     ) -> Result<()> {
+        let _guard = set_panic_context! {"key" => key};
         let next_gc_info = gc(txn, reader, key.clone(), safe_point).map_err(TxnError::from_mvcc)?;
         gc_info.found_versions += next_gc_info.found_versions;
         gc_info.deleted_versions += next_gc_info.deleted_versions;
@@ -366,9 +368,12 @@ impl<E: Engine> GcRunnerCore<E> {
         Ok(())
     }
 
-    fn new_txn() -> MvccTxn {
+    /// Creates a `MvccTxn` with a dummy concurrency manager, do not use it
+    /// beside the `GCRunner`. It's better to abstract `MvccTxn` for
+    /// recording modifies only.
+    fn mvcc_txn_with_dummy_cm() -> MvccTxn {
         // TODO txn only used for GC, but this is hacky, maybe need an Option?
-        let concurrency_manager = ConcurrencyManager::new(1.into());
+        let concurrency_manager = ConcurrencyManager::new_dummy();
         MvccTxn::new(TimeStamp::zero(), concurrency_manager)
     }
 
@@ -463,7 +468,8 @@ impl<E: Engine> GcRunnerCore<E> {
         let mut gc_info = GcInfo::default();
         let mut keys = keys.into_iter().peekable();
         for region in regions {
-            let mut txn = Self::new_txn();
+            let _guard = set_panic_context! {"region" => region.id};
+            let mut txn = Self::mvcc_txn_with_dummy_cm();
             let mut reader = self.create_reader(
                 count,
                 &region,
@@ -516,7 +522,7 @@ impl<E: Engine> GcRunnerCore<E> {
                         range_start_key.clone(),
                         range_end_key.clone(),
                     )?;
-                    txn = Self::new_txn();
+                    txn = Self::mvcc_txn_with_dummy_cm();
                 }
             }
 
@@ -1159,13 +1165,18 @@ pub fn schedule_gc(
     safe_point: TimeStamp,
     callback: Callback<()>,
 ) -> Result<()> {
-    scheduler
-        .schedule(GcTask::Gc {
-            region,
-            safe_point,
-            callback,
-        })
-        .or_else(handle_gc_task_schedule_error)
+    let task = GcTask::Gc {
+        region,
+        safe_point,
+        callback,
+    };
+    if fail::eval("schedule_gc_full", |_| true).is_some() {
+        handle_gc_task_schedule_error(ScheduleError::Full(task))
+    } else {
+        scheduler
+            .schedule(task)
+            .or_else(handle_gc_task_schedule_error)
+    }
 }
 
 /// Does GC synchronously.
