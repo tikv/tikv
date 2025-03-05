@@ -20,7 +20,10 @@ use std::{
 };
 
 use collections::HashMap;
-use compact_log_backup::{exec_hooks as compact_log_hooks, execute as compact_log, TraceResultExt};
+use compact_log_backup::{
+    exec_hooks::{self as compact_log_hooks, skip_small_compaction::SkipSmallCompaction},
+    execute as compact_log, TraceResultExt,
+};
 use crypto::fips;
 use encryption_export::{
     create_backend, data_key_manager_from_config, DataKeyManager, DecrypterReader, Iv,
@@ -397,6 +400,7 @@ fn main() {
             compression_level,
             name,
             force_regenerate,
+            minimal_compaction_size,
         } => {
             let tmp_engine =
                 TemporaryRocks::new(&cfg).expect("failed to create temp engine for writing SSTs.");
@@ -467,8 +471,12 @@ fn main() {
             } else {
                 Some(compact_log_hooks::checkpoint::Checkpoint::default())
             };
+            let skip_small_compaction = SkipSmallCompaction::new(minimal_compaction_size.0);
             let hooks = (
-                ((log_to_term, checkpoint), with_status_server),
+                (
+                    (log_to_term, checkpoint),
+                    (with_status_server, skip_small_compaction),
+                ),
                 (save_meta, with_lock),
             );
             match exec.run(hooks) {

@@ -1000,7 +1000,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let ts = ts.into();
-        let cm = ConcurrencyManager::new(ts);
+        let cm = ConcurrencyManager::new_for_test(ts);
         let mut txn = MvccTxn::new(ts, cm);
         let mut reader = SnapshotReader::new(ts, snapshot, true);
 
@@ -1034,7 +1034,7 @@ pub mod tests {
     ) -> Result<()> {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let ts = ts.into();
-        let cm = ConcurrencyManager::new(ts);
+        let cm = ConcurrencyManager::new_for_test(ts);
         let mut txn = MvccTxn::new(ts, cm);
         let mut reader = SnapshotReader::new(ts, snapshot, true);
 
@@ -1054,7 +1054,7 @@ pub mod tests {
     #[test]
     fn test_async_commit_prewrite_check_max_commit_ts() {
         let mut engine = crate::storage::TestEngineBuilder::new().build().unwrap();
-        let cm = ConcurrencyManager::new(42.into());
+        let cm = ConcurrencyManager::new_for_test(42.into());
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let mut txn = MvccTxn::new(10.into(), cm.clone());
@@ -1101,7 +1101,7 @@ pub mod tests {
     #[test]
     fn test_async_commit_prewrite_min_commit_ts() {
         let mut engine = crate::storage::TestEngineBuilder::new().build().unwrap();
-        let cm = ConcurrencyManager::new(41.into());
+        let cm = ConcurrencyManager::new_for_test(41.into());
         let snapshot = engine.snapshot(Default::default()).unwrap();
 
         // should_not_write mutations don't write locks or change data so that they
@@ -1239,7 +1239,7 @@ pub mod tests {
     #[test]
     fn test_1pc_check_max_commit_ts() {
         let mut engine = crate::storage::TestEngineBuilder::new().build().unwrap();
-        let cm = ConcurrencyManager::new(42.into());
+        let cm = ConcurrencyManager::new_for_test(42.into());
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
 
@@ -1294,7 +1294,7 @@ pub mod tests {
     ) -> Result<()> {
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let ts = ts.into();
-        let cm = ConcurrencyManager::new(ts);
+        let cm = ConcurrencyManager::new_for_test(ts);
         let mut txn = MvccTxn::new(ts, cm);
         let mut reader = SnapshotReader::new(ts, snapshot, false);
 
@@ -1326,7 +1326,7 @@ pub mod tests {
     #[test]
     fn test_async_commit_pessimistic_prewrite_check_max_commit_ts() {
         let mut engine = crate::storage::TestEngineBuilder::new().build().unwrap();
-        let cm = ConcurrencyManager::new(42.into());
+        let cm = ConcurrencyManager::new_for_test(42.into());
 
         must_acquire_pessimistic_lock(&mut engine, b"k1", b"k1", 10, 10);
         must_acquire_pessimistic_lock(&mut engine, b"k2", b"k1", 10, 10);
@@ -1379,7 +1379,7 @@ pub mod tests {
     #[test]
     fn test_1pc_pessimistic_prewrite_check_max_commit_ts() {
         let mut engine = crate::storage::TestEngineBuilder::new().build().unwrap();
-        let cm = ConcurrencyManager::new(42.into());
+        let cm = ConcurrencyManager::new_for_test(42.into());
 
         must_acquire_pessimistic_lock(&mut engine, b"k1", b"k1", 10, 10);
         must_acquire_pessimistic_lock(&mut engine, b"k2", b"k1", 10, 10);
@@ -1432,7 +1432,7 @@ pub mod tests {
     #[test]
     fn test_prewrite_check_gc_fence() {
         let mut engine = crate::storage::TestEngineBuilder::new().build().unwrap();
-        let cm = ConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new_for_test(1.into());
 
         // PUT,           Read
         //  `------^
@@ -1850,7 +1850,7 @@ pub mod tests {
                 txn_source: 0,
             };
             let snapshot = engine.snapshot(Default::default()).unwrap();
-            let cm = ConcurrencyManager::new(start_ts);
+            let cm = ConcurrencyManager::new_for_test(start_ts);
             let mut txn = MvccTxn::new(start_ts, cm);
             let mut reader = SnapshotReader::new(start_ts, snapshot, true);
             let (_, old_value) = prewrite(
@@ -1906,7 +1906,7 @@ pub mod tests {
             txn_source: 0,
         };
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let cm = ConcurrencyManager::new(start_ts);
+        let cm = ConcurrencyManager::new_for_test(start_ts);
         let mut txn = MvccTxn::new(start_ts, cm);
         let mut reader = SnapshotReader::new(start_ts, snapshot, true);
         let (_, old_value) = prewrite(
@@ -2031,7 +2031,7 @@ pub mod tests {
             key,
             require_old_value_none,
             vec![Box::new(move |snapshot, start_ts| {
-                let cm = ConcurrencyManager::new(start_ts);
+                let cm = ConcurrencyManager::new_for_test(start_ts);
                 let mut txn = MvccTxn::new(start_ts, cm);
                 let mut reader = SnapshotReader::new(start_ts, snapshot, true);
                 let txn_props = TransactionProperties {
@@ -2069,7 +2069,7 @@ pub mod tests {
             key,
             require_old_value_none,
             vec![Box::new(move |snapshot, start_ts| {
-                let cm = ConcurrencyManager::new(start_ts);
+                let cm = ConcurrencyManager::new_for_test(start_ts);
                 let mut txn = MvccTxn::new(start_ts, cm);
                 let mut reader = SnapshotReader::new(start_ts, snapshot, true);
                 let txn_props = TransactionProperties {
@@ -2770,7 +2770,7 @@ pub mod tests {
     #[test]
     fn test_1pc_set_lock_use_one_pc() {
         let mut engine = crate::storage::TestEngineBuilder::new().build().unwrap();
-        let cm = ConcurrencyManager::new(42.into());
+        let cm = ConcurrencyManager::new_for_test(42.into());
 
         let snapshot = engine.snapshot(Default::default()).unwrap();
 

@@ -261,7 +261,7 @@ mod tests {
     ) -> PessimisticLockResults {
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
-        let cm = ConcurrencyManager::new(TimeStamp::zero());
+        let cm = ConcurrencyManager::new_for_test(TimeStamp::zero());
 
         let items_info: Vec<_> = lock_wait_entries
             .iter()
