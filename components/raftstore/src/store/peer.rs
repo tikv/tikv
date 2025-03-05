@@ -2236,13 +2236,16 @@ where
         let region = self.region();
         let mut replicated_idx = self.raft_group.raft.raft_log.persisted;
         for (peer_id, p) in self.raft_group.raft.prs().iter() {
-            let store_id = region
+            let peer = region
                 .get_peers()
                 .iter()
                 .find(|p| p.get_id() == *peer_id)
-                .unwrap()
-                .get_store_id();
-            if failed_stores.contains(&store_id) {
+                .unwrap();
+            // Learners like TiFlash are ignored, because they may be tombstoned in earlier
+            // stage of the unsafe recovery process, so that forced leader
+            // cannot append logs to them.
+            if failed_stores.contains(&peer.get_store_id()) || peer.get_role() == PeerRole::Learner
+            {
                 continue;
             }
             if replicated_idx > p.matched {
