@@ -226,7 +226,7 @@ fn setup_test_suite() -> (TestSuite, Store<RocksEngine>, Endpoint<RocksEngine>) 
         &CoprReadPoolConfig::default_for_test(),
         store.get_engine(),
     ));
-    let cm = ConcurrencyManager::new(1.into());
+    let cm = ConcurrencyManager::new_for_test(1.into());
     let endpoint = Endpoint::new(
         &Default::default(),
         pool.handle(),

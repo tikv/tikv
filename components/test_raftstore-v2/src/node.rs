@@ -272,7 +272,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
         //     f(node_id, &mut coprocessor_host);
         // }
 
-        let cm = ConcurrencyManager::new(1.into());
+        let cm = ConcurrencyManager::new_for_test(1.into());
         self.concurrency_managers.insert(node_id, cm.clone());
 
         ReplicaReadLockChecker::new(cm.clone()).register(&mut coprocessor_host);

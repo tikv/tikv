@@ -1512,7 +1512,7 @@ mod tests {
             })),
             CdcObserver::new(task_sched, memory_quota.clone()),
             Arc::new(StdMutex::new(store_meta)),
-            ConcurrencyManager::new(1.into()),
+            ConcurrencyManager::new_for_test(1.into()),
             env,
             security_mgr,
             memory_quota,

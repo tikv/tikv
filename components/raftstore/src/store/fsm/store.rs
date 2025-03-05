@@ -62,7 +62,7 @@ use tikv_util::{
     future::poll_future_notify,
     info, is_zero_duration,
     mpsc::{self, LooseBoundedSender, Receiver},
-    slow_log,
+    set_panic_context, slow_log,
     store::{find_peer, region_on_stores},
     sys::{
         self as sys_util,
@@ -1074,6 +1074,10 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
         &mut self,
         peer: &mut impl DerefMut<Target = PeerFsm<EK, ER>>,
     ) -> HandleResult {
+        let _guard = set_panic_context! {
+            "region_id" => peer.region_id(),
+            "peer_id" => peer.peer_id(),
+        };
         let mut handle_result = HandleResult::KeepProcessing;
 
         fail_point!(

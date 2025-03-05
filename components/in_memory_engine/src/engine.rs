@@ -568,19 +568,19 @@ impl RegionCacheEngineExt for RegionCacheMemoryEngine {
                             "region" => ?region,
                         );
                         if let Err(e) = self.load_region(region.clone()) {
-                            warn!(
-                                "ime load region failed";
-                                "err" => ?e,
-                                "region" => ?region,
-                            );
+                            // Ignore the error caused by the same region. It is possible that the
+                            // caller is trying to load the same region multiple times.
+                            if !e.is_caused_by_same_region() {
+                                warn!("ime load region failed"; "err" => ?e, "region" => ?region);
+                            }
                         }
                     }
                 } else if let Err(e) = self.load_region(region.clone()) {
-                    warn!(
-                        "ime load region failed";
-                        "error" => ?e,
-                        "region" => ?region,
-                    );
+                    // Ignore the error caused by the same region. It is possible that the
+                    // caller is trying to load the same region multiple times.
+                    if !e.is_caused_by_same_region() {
+                        warn!("ime load region failed"; "err" => ?e, "region" => ?region);
+                    }
                 }
             }
             RegionEvent::Split {
@@ -607,10 +607,17 @@ impl RegionCacheEngineExt for RegionCacheMemoryEngine {
         }
     }
 
-    fn region_cached(&self, region: &Region) -> bool {
+    fn region_cached(&self, region: &Region, is_active: bool) -> bool {
         let regions_map = self.core.region_manager().regions_map().read();
         if let Some(meta) = regions_map.region_meta(region.get_id()) {
-            matches!(meta.get_state(), RegionState::Active | RegionState::Loading)
+            if is_active {
+                matches!(meta.get_state(), RegionState::Active)
+            } else {
+                matches!(
+                    meta.get_state(),
+                    RegionState::Active | RegionState::Loading | RegionState::Pending
+                )
+            }
         } else {
             false
         }
