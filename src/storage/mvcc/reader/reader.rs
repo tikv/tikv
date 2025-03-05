@@ -125,10 +125,6 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
 
     #[inline(always)]
     pub fn setup_with_hint_items<T>(&mut self, items: &mut [T], key_of: fn(&T) -> &Key) {
-        use backtrace::Backtrace;
-        let bt = Backtrace::new();
-        warn!("DBG stack of setup_with_hint_items {:?}", bt);
-
         // enable scan mode if there are multiple items, so that we don't need to seek
         // for every key.
         if items.len() > 1 {
