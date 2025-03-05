@@ -283,7 +283,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             }
         };
 
-        self.lock_cursor.take();
+        // self.lock_cursor.take();
 
         Ok(res)
     }
@@ -697,9 +697,14 @@ impl<S: EngineSnapshot> MvccReader<S> {
 
     fn create_lock_cursor_if_not_exist(&mut self) -> Result<()> {
         if self.lock_cursor.is_none() {
+            let scan_mode = if self.lock_scan_mode.is_some() {
+                self.lock_scan_mode.unwrap()
+            } else {
+                self.get_scan_mode(true)
+            };
             let cursor = CursorBuilder::new(&self.snapshot, CF_LOCK)
                 .fill_cache(self.fill_cache)
-                .scan_mode(self.get_scan_mode(true))
+                .scan_mode(scan_mode)
                 .range(self.lower_bound.clone(), self.upper_bound.clone())
                 .build()?;
             self.lock_cursor = Some(cursor);
