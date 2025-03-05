@@ -283,7 +283,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             }
         };
 
-        // self.lock_cursor.take();
+        self.lock_cursor.take();
 
         Ok(res)
     }
