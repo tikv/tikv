@@ -51,6 +51,7 @@ use tikv_util::{
     topn::TopN,
     warn,
     worker::{Runnable, ScheduleError, Scheduler},
+    GLOBAL_SERVER_READINESS,
 };
 use yatp::Remote;
 
@@ -1281,6 +1282,15 @@ where
         let f = async move {
             match resp.await {
                 Ok(mut resp) => {
+                    if GLOBAL_SERVER_READINESS
+                        .connected_to_pd
+                        .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+                        .is_ok()
+                    {
+                        // Log when the server readiness condition changes.
+                        info!("ServerReadiness: connected to PD");
+                    }
+
                     if let Some(status) = resp.replication_status.take() {
                         let _ = router.send_control(StoreMsg::UpdateReplicationMode(status));
                     }
