@@ -2945,7 +2945,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 .is_ok()
             {
                 // Log when the server readiness condition changes.
-                info!("ServerReadiness: Raft peers have caught up applying logs");
+                info!("ServerReadiness: Raft pending peers have caught up applying logs");
             }
         }
 
