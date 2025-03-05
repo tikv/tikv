@@ -5358,7 +5358,7 @@ mod tests {
         // Admin command
         for admin_cmd in AdminCmdType::values() {
             let mut req = RaftCmdRequest::default();
-            req.mut_admin_request().set_cmd_type(admin_cmd.clone());
+            req.mut_admin_request().set_cmd_type(*admin_cmd);
             assert_eq!(
                 should_sync_log(&req),
                 matches!(
