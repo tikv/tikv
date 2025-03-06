@@ -1900,7 +1900,6 @@ pub async fn future_prepare_flashback_to_version<E: Engine, L: LockManager, F: K
     storage: Storage<E, L, F>,
     req: PrepareFlashbackToVersionRequest,
 ) -> ServerResult<PrepareFlashbackToVersionResponse> {
-
     warn!("DBG receive kv_prepare_flashback_to_version");
 
     let f = storage

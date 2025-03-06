@@ -133,7 +133,10 @@ impl AdvanceTsWorker {
                     ts_source = TsSource::MemoryLock(lock);
                 }
             }
-            warn!("DBG, advance resolved ts to: {}, min_mema_lock_ts: {:?}, min lock key: {:?}", min_ts, mm, mk);
+            warn!(
+                "DBG, advance resolved ts to: {}, min_mema_lock_ts: {:?}, min lock key: {:?}",
+                min_ts, mm, mk
+            );
 
             let regions = leader_resolver
                 .resolve(regions, min_ts, Some(advance_ts_interval))

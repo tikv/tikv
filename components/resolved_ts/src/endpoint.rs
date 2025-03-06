@@ -895,9 +895,10 @@ where
         for region_id in regions.iter() {
             if let Some(observe_region) = self.regions.get_mut(region_id) {
                 if let ResolverStatus::Ready = observe_region.resolver_status {
-                    let region_ts = observe_region
-                        .resolver
-                        .resolve(ts, Some(now), ts_source.clone());
+                    let region_ts =
+                        observe_region
+                            .resolver
+                            .resolve(ts, Some(now), ts_source.clone());
                     if region_ts < min_ts {
                         min_ts = region_ts;
                     }

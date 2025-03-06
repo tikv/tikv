@@ -150,8 +150,10 @@ pub fn prewrite_flashback_key(
     flashback_start_ts: TimeStamp,
 ) -> TxnResult<()> {
     let exist_lock = reader.load_lock(key_to_lock)?;
-    warn!("DBG, prewrite flashback lock, exist lock: {:?}, key: {:?}, flashback_version: {}, flashback_start_ts: {}",
-        exist_lock, key_to_lock, flashback_version, flashback_start_ts);
+    warn!(
+        "DBG, prewrite flashback lock, exist lock: {:?}, key: {:?}, flashback_version: {}, flashback_start_ts: {}",
+        exist_lock, key_to_lock, flashback_version, flashback_start_ts
+    );
     if exist_lock.is_some() {
         return Ok(());
     }
@@ -203,8 +205,10 @@ pub fn commit_flashback_key(
     flashback_commit_ts: TimeStamp,
 ) -> TxnResult<()> {
     let exist_lock = reader.load_lock(key_to_commit)?;
-    warn!("DBG, commit flashback lock, exist lock: {:?}, key: {:?}, flashback_start_ts: {}, flashback_commit_ts: {}",
-        exist_lock, key_to_commit, flashback_start_ts, flashback_commit_ts);
+    warn!(
+        "DBG, commit flashback lock, exist lock: {:?}, key: {:?}, flashback_start_ts: {}, flashback_commit_ts: {}",
+        exist_lock, key_to_commit, flashback_start_ts, flashback_commit_ts
+    );
     if let Some(mut lock) = exist_lock {
         txn.put_write(
             key_to_commit.clone(),

@@ -257,22 +257,41 @@ impl<S: EngineSnapshot> MvccReader<S> {
         }
 
         let res = if let Some(ref mut cursor) = self.lock_cursor {
-            let cursor_result = cursor.get(key, &mut self.statistics.lock)?;
-
-            let nv = self.snapshot.get_cf(CF_LOCK, key)?;
+            let cursor_result = cursor.get(key, &mut self.statistics.lock);
+            let non_cursor_result = self.snapshot.get_cf(CF_LOCK, key);
             self.statistics.lock.get += 1;
-            let non_cursor_v = nv.as_ref().map(|v| v.as_ref());
-            if non_cursor_v != cursor_result {
-                let cursor_lock = cursor_result.map(Lock::parse);
-                let non_cursor_lock = non_cursor_v.map(Lock::parse);
+
+            if cursor_result.is_err() ^ non_cursor_result.is_err() {
+                panic!(
+                    "DBG, cursor read result different from snapshot get, key: {}, cursor value: {:?}, non-cursor value: {:?}",
+                    key, cursor_result, non_cursor_result
+                );
+            }
+
+            let cursor_result = cursor_result?;
+            let non_cursor_result = non_cursor_result?;
+            let non_cursor_result = non_cursor_result.as_ref().map(|v| v.as_ref());
+
+            if non_cursor_result != cursor_result {
+                let cursor_lock = cursor_result.map(|v| {
+                    let v = v.to_owned();
+                    Lock::parse(&v)
+                });
+                let non_cursor_lock = non_cursor_result.map(|v| {
+                    let v = v.to_owned();
+                    Lock::parse(&v)
+                });
                 panic!(
                     "DBG, cursor read result different from snapshot get, key: {}, cursor value: {:?}, cursr lock: {:?}, non-cursor value: {:?}, non_cursor lock: {:?}",
-                    key, cursor_result, cursor_lock, non_cursor_v, non_cursor_lock,
+                    key, cursor_result, cursor_lock, non_cursor_result, non_cursor_lock,
                 );
             }
 
             match cursor_result {
-                Some(v) => Some(Lock::parse(v)?),
+                Some(v) => {
+                    let v = v.to_owned();
+                    Some(Lock::parse(&v)?)
+                }
                 None => None,
             }
         } else {
