@@ -12,6 +12,7 @@ pub mod hex;
 use std::{fmt, str::FromStr, sync::atomic::Ordering};
 
 use atomic::Atomic;
+use online_config::ConfigValue;
 use protobuf::atomic_flags::{
     set_redact_level as proto_set_redact_level, RedactLevel, DEFAULT_REDACT_MARKER_HEAD,
     DEFAULT_REDACT_MARKER_TAIL,
@@ -77,6 +78,15 @@ impl Default for RedactOption {
     }
 }
 
+impl fmt::Display for RedactOption {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Flag(flag) => write!(f, "{}", if *flag { "on" } else { "off" }),
+            Self::Marker => write!(f, "marker"),
+        }
+    }
+}
+
 impl FromStr for RedactOption {
     type Err = String;
     fn from_str(s: &str) -> Result<RedactOption, String> {
@@ -86,6 +96,26 @@ impl FromStr for RedactOption {
             "off" | "OFF" => Ok(RedactOption::Flag(false)),
             "marker" | "MARKER" => Ok(RedactOption::Marker),
             s => Err(format!("expect: marker, on | off, got: {:?}", s)),
+        }
+    }
+}
+
+impl TryFrom<ConfigValue> for RedactOption {
+    type Error = String;
+    fn try_from(value: ConfigValue) -> Result<Self, Self::Error> {
+        match value {
+            ConfigValue::Bool(flag) => Ok(RedactOption::Flag(flag)),
+            ConfigValue::String(s) => RedactOption::from_str(&s),
+            _ => Err(format!("expect: marker, on | off, got: {:?}", value)),
+        }
+    }
+}
+
+impl From<RedactOption> for ConfigValue {
+    fn from(option: RedactOption) -> Self {
+        match option {
+            RedactOption::Flag(flag) => ConfigValue::Bool(flag),
+            RedactOption::Marker => ConfigValue::String("marker".to_owned()),
         }
     }
 }
