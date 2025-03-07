@@ -545,7 +545,7 @@ def expr_histogram_quantile(
 
     Example:
 
-    histogram_quantile("0.99", sum(rate(
+    histogram_quantile(0.99, sum(rate(
         tikv_grpc_msg_duration_seconds_bucket
         {k8s_cluster="$k8s_cluster",tidb_cluster="$tidb_cluster",instance=~"$instance",type!="kv_gc"}
         [$__rate_interval]
