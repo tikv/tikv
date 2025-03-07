@@ -21,14 +21,15 @@ use kvproto::{
     metapb,
     raft_serverpb::{RaftApplyState, RaftLocalState},
 };
+use prometheus::local::LocalHistogram;
 use protobuf::Message;
 use raft::{prelude::*, util::limit_size, GetEntriesContext, StorageError};
 use tikv_alloc::TraceEvent;
 use tikv_util::{box_err, debug, error, info, time::Instant, warn, worker::Scheduler};
 
 use super::{
-    metrics::*, peer_storage::storage_error, WriteTask, MEMTRACE_ENTRY_CACHE, RAFT_INIT_LOG_INDEX,
-    RAFT_INIT_LOG_TERM,
+    local_metrics::RaftMetrics, metrics::*, peer_storage::storage_error, WriteTask,
+    MEMTRACE_ENTRY_CACHE, RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
 };
 use crate::{bytes_capacity, store::ReadTask, Result};
 
@@ -655,6 +656,9 @@ pub struct EntryStorage<EK: KvEngine, ER> {
     read_scheduler: Scheduler<ReadTask<EK>>,
     raftlog_fetch_stats: AsyncFetchStats,
     async_fetch_results: RefCell<HashMap<u64, RaftlogFetchState>>,
+
+    io_read_raft_term: LocalHistogram,
+    io_read_raft_fetch_log: LocalHistogram,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
@@ -665,6 +669,7 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
         apply_state: RaftApplyState,
         region: &metapb::Region,
         read_scheduler: Scheduler<ReadTask<EK>>,
+        raft_metrics: &RaftMetrics,
     ) -> Result<Self> {
         if let Err(e) = validate_states(region.id, &raft_engine, &mut raft_state, &apply_state) {
             return Err(box_err!(
@@ -688,6 +693,8 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
             read_scheduler,
             raftlog_fetch_stats: AsyncFetchStats::default(),
             async_fetch_results: RefCell::new(HashMap::default()),
+            io_read_raft_term: raft_metrics.io_read_raft_term.clone(),
+            io_read_raft_fetch_log: raft_metrics.io_read_raft_fetch_log.clone(),
         })
     }
 
@@ -819,6 +826,7 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
 
                 // the count of left entries isn't too large, fetch the remaining entries
                 // synchronously one by one
+                let _timer = self.io_read_raft_fetch_log.start_timer();
                 for idx in last + 1..high {
                     let ent = self.raft_engine.get_entry(region_id, idx)?;
                     match ent {
@@ -867,6 +875,7 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
         if tried_cnt >= MAX_ASYNC_FETCH_TRY_CNT {
             // even the larger range is invalid again, fallback to fetch in sync way
             self.raftlog_fetch_stats.fallback_fetch.update(|m| m + 1);
+            let _timer = self.io_read_raft_fetch_log.start_timer();
             let count = self.raft_engine.fetch_entries_to(
                 region_id,
                 low,
@@ -918,6 +927,7 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
                 Ok(ents)
             } else {
                 self.raftlog_fetch_stats.sync_fetch.update(|m| m + 1);
+                let _timer = self.io_read_raft_fetch_log.start_timer();
                 self.raft_engine.fetch_entries_to(
                     self.region_id,
                     low,
@@ -934,6 +944,7 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
                 self.async_fetch(self.region_id, low, cache_low, max_size, context, &mut ents)?
             } else {
                 self.raftlog_fetch_stats.sync_fetch.update(|m| m + 1);
+                let _timer = self.io_read_raft_fetch_log.start_timer();
                 self.raft_engine.fetch_entries_to(
                     self.region_id,
                     low,
@@ -968,6 +979,7 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
         if let Some(e) = self.cache.entry(idx) {
             Ok(e.get_term())
         } else {
+            let _timer = self.io_read_raft_term.start_timer();
             Ok(self
                 .raft_engine
                 .get_entry(self.region_id, idx)
