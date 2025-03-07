@@ -1721,6 +1721,7 @@ impl PdClient for TestPdClient {
             region_stat,
             replication_status,
         );
+        fail_point!("test_pd_client::finish_region_heartbeat");
         match resp {
             Ok(resp) => {
                 let store_id = leader.get_store_id();
