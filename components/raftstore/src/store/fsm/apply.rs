@@ -873,10 +873,18 @@ fn has_high_latency_operation(cmd: &RaftCmdRequest) -> bool {
 /// Checks if a write is needed to be issued after handling the command.
 fn should_sync_log(cmd: &RaftCmdRequest) -> bool {
     if cmd.has_admin_request() {
-        if cmd.get_admin_request().get_cmd_type() == AdminCmdType::CompactLog {
-            // We do not need to sync WAL before compact log, because this request will send
-            // a msg to raft_gc_log thread to delete the entries before this
-            // index instead of deleting them in apply thread directly.
+        if matches!(
+            cmd.get_admin_request().get_cmd_type(),
+            // We do not need to sync WAL before compact log, because this
+            // request will send a msg to raft_gc_log thread to delete the entries
+            // before this index instead of deleting them in apply thread directly.
+            AdminCmdType::CompactLog
+            // ComputeHash, VerifyHash and TransferLeader are read-only commands,
+            // so they do not need to sync WAL.
+            | AdminCmdType::ComputeHash
+                | AdminCmdType::VerifyHash
+                | AdminCmdType::TransferLeader
+        ) {
             return false;
         }
         return true;
@@ -5183,7 +5191,7 @@ mod tests {
         metapb::{self, RegionEpoch},
         raft_cmdpb::*,
     };
-    use protobuf::Message;
+    use protobuf::{Message, ProtobufEnum};
     use raft::eraftpb::{ConfChange, ConfChangeV2};
     use sst_importer::Config as ImportConfig;
     use tempfile::{Builder, TempDir};
@@ -5348,10 +5356,32 @@ mod tests {
     #[test]
     fn test_should_sync_log() {
         // Admin command
-        let mut req = RaftCmdRequest::default();
-        req.mut_admin_request()
-            .set_cmd_type(AdminCmdType::ComputeHash);
-        assert_eq!(should_sync_log(&req), true);
+        for admin_cmd in AdminCmdType::values() {
+            let mut req = RaftCmdRequest::default();
+            req.mut_admin_request().set_cmd_type(*admin_cmd);
+            assert_eq!(
+                should_sync_log(&req),
+                matches!(
+                    admin_cmd,
+                    AdminCmdType::InvalidAdmin |
+                    AdminCmdType::ChangePeer |
+                    AdminCmdType::Split |
+                    // AdminCmdType::CompactLog |
+                    // AdminCmdType::TransferLeader |
+                    // AdminCmdType::ComputeHash |
+                    // AdminCmdType::VerifyHash |
+                    AdminCmdType::PrepareMerge |
+                    AdminCmdType::CommitMerge |
+                    AdminCmdType::RollbackMerge |
+                    AdminCmdType::BatchSplit |
+                    AdminCmdType::ChangePeerV2 |
+                    AdminCmdType::PrepareFlashback |
+                    AdminCmdType::FinishFlashback |
+                    AdminCmdType::BatchSwitchWitness |
+                    AdminCmdType::UpdateGcPeer
+                )
+            );
+        }
 
         // IngestSst command
         let mut req = Request::default();
