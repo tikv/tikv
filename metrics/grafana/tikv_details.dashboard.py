@@ -6,6 +6,7 @@ sys.path.append(os.path.dirname(__file__))
 from common import (
     DATASOURCE,
     DATASOURCE_INPUT,
+    OPTIONAL_QUANTILE,
     Layout,
     expr_avg,
     expr_count_rate,
@@ -113,6 +114,13 @@ def Templates() -> Templating:
                 data_source=DATASOURCE,
                 hide=SHOW,
             ),
+            template(
+                name=OPTIONAL_QUANTILE,
+                type="custom",
+                query="0.99,0.999,0.9999,0.99999,1",
+                data_source=DATASOURCE,
+                hide=SHOW,
+            ),
         ]
     )
 
@@ -130,7 +138,9 @@ def Duration() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_histogram_quantile(
-                            0.99, "tikv_raftstore_append_log_duration_seconds"
+                            0.99,
+                            "tikv_raftstore_append_log_duration_seconds",
+                            is_optional_quantile=True,
                         ),
                         legend_format="Write Raft Log .99",
                         additional_groupby=True,
@@ -139,27 +149,34 @@ def Duration() -> RowPanel:
                         expr=expr_histogram_quantile(
                             0.99,
                             "tikv_raftstore_request_wait_time_duration_secs",
+                            is_optional_quantile=True,
                         ),
                         legend_format="Propose Wait .99",
                         additional_groupby=True,
                     ),
                     target(
                         expr=expr_histogram_quantile(
-                            0.99, "tikv_raftstore_apply_wait_time_duration_secs"
+                            0.99,
+                            "tikv_raftstore_apply_wait_time_duration_secs",
+                            is_optional_quantile=True,
                         ),
                         legend_format="Apply Wait .99",
                         additional_groupby=True,
                     ),
                     target(
                         expr=expr_histogram_quantile(
-                            0.99, "tikv_raftstore_commit_log_duration_seconds"
+                            0.99,
+                            "tikv_raftstore_commit_log_duration_seconds",
+                            is_optional_quantile=True,
                         ),
                         legend_format="Replicate Raft Log .99",
                         additional_groupby=True,
                     ),
                     target(
                         expr=expr_histogram_quantile(
-                            0.99, "tikv_raftstore_apply_log_duration_seconds"
+                            0.99,
+                            "tikv_raftstore_apply_log_duration_seconds",
+                            is_optional_quantile=True,
                         ),
                         legend_format="Apply Duration .99",
                         additional_groupby=True,
@@ -178,6 +195,7 @@ def Duration() -> RowPanel:
                             0.99,
                             "tikv_storage_engine_async_request_duration_seconds",
                             ['type="snapshot"'],
+                            is_optional_quantile=True,
                         ),
                         legend_format="Get Snapshot .99",
                         additional_groupby=True,
@@ -187,6 +205,7 @@ def Duration() -> RowPanel:
                             0.99,
                             "tikv_coprocessor_request_wait_seconds",
                             ['type="all"'],
+                            is_optional_quantile=True,
                         ),
                         legend_format="Cop Wait .99",
                         additional_groupby=True,
@@ -846,6 +865,7 @@ def Server() -> RowPanel:
                             0.99,
                             "tikv_server_address_resolve_duration_secs",
                             by_labels=["instance"],
+                            is_optional_quantile=True,
                         ),
                         legend_format="{{instance}}",
                     ),
@@ -864,6 +884,7 @@ def Server() -> RowPanel:
                             0.99,
                             "tikv_yatp_pool_schedule_wait_duration",
                             by_labels=["name", "priority"],
+                            is_optional_quantile=True,
                         ),
                         legend_format="{{name}}-{{priority}}",
                         additional_groupby=True,
@@ -1004,6 +1025,7 @@ def gRPC() -> RowPanel:
                             "tikv_grpc_msg_duration_seconds",
                             label_selectors=['type!="kv_gc"'],
                             by_labels=["type"],
+                            is_optional_quantile=True,
                         ),
                         legend_format="{{type}}",
                         additional_groupby=True,
@@ -1014,6 +1036,7 @@ def gRPC() -> RowPanel:
                             "tikv_grpc_msg_duration_seconds",
                             label_selectors=['type!="kv_gc"'],
                             by_labels=["type", "priority"],
+                            is_optional_quantile=True,
                         ),
                         legend_format="{{type}}-{{priority}}",
                         hide=True,
@@ -1057,6 +1080,7 @@ def gRPC() -> RowPanel:
                         expr=expr_histogram_quantile(
                             0.99,
                             "tikv_server_grpc_req_batch_size",
+                            is_optional_quantile=True,
                         ),
                         legend_format=r"99% request",
                         additional_groupby=True,
@@ -1065,6 +1089,7 @@ def gRPC() -> RowPanel:
                         expr=expr_histogram_quantile(
                             0.99,
                             "tikv_server_grpc_resp_batch_size",
+                            is_optional_quantile=True,
                         ),
                         legend_format=r"99% response",
                         additional_groupby=True,
@@ -1089,6 +1114,7 @@ def gRPC() -> RowPanel:
                         expr=expr_histogram_quantile(
                             0.99,
                             "tikv_server_request_batch_size",
+                            is_optional_quantile=True,
                         ),
                         legend_format=r"99% kv get batch",
                         additional_groupby=True,
@@ -1110,6 +1136,7 @@ def gRPC() -> RowPanel:
                         expr=expr_histogram_quantile(
                             0.99,
                             "tikv_server_raft_message_batch_size",
+                            is_optional_quantile=True,
                         ),
                         legend_format=r"99%",
                         additional_groupby=True,
@@ -1840,6 +1867,7 @@ def IOBreakdown() -> RowPanel:
                             0.99,
                             "tikv_rate_limiter_request_wait_duration_seconds",
                             by_labels=["type"],
+                            is_optional_quantile=True,
                         ),
                         legend_format=r"{{type}}-99%",
                         additional_groupby=True,
@@ -2075,6 +2103,7 @@ def RaftIO() -> RowPanel:
                             0.99,
                             "tikv_raftstore_store_write_msg_block_wait_duration_seconds",
                             by_labels=["instance"],
+                            is_optional_quantile=True,
                         ),
                         legend_format="{{instance}}",
                     ),
@@ -2098,6 +2127,7 @@ def RaftPropose() -> RowPanel:
                             0.99,
                             "tikv_raftstore_apply_proposal",
                             by_labels=["instance"],
+                            is_optional_quantile=True,
                         ),
                         legend_format="{{instance}}",
                     ),
@@ -2226,6 +2256,7 @@ def RaftPropose() -> RowPanel:
                             0.99,
                             "tikv_raftstore_store_perf_context_time_duration_secs",
                             by_labels=["type"],
+                            is_optional_quantile=True,
                         ),
                         legend_format="store-{{type}}",
                         additional_groupby=True,
@@ -2235,6 +2266,7 @@ def RaftPropose() -> RowPanel:
                             0.99,
                             "tikv_raftstore_apply_perf_context_time_duration_secs",
                             by_labels=["type"],
+                            is_optional_quantile=True,
                         ),
                         legend_format="apply-{{type}}",
                         additional_groupby=True,
@@ -2428,6 +2460,7 @@ def RaftProcess() -> RowPanel:
                             0.99,
                             "tikv_raft_apply_ahead_of_persist",
                             by_labels=["instance"],
+                            is_optional_quantile=True,
                         ),
                         legend_format="{{instance}}-99%",
                     ),
@@ -2677,6 +2710,7 @@ def RaftAdmin() -> RowPanel:
                             0.99,
                             "tikv_load_base_split_duration_seconds",
                             by_labels=["instance"],
+                            is_optional_quantile=True,
                         ),
                         legend_format="99%-{{instance}}",
                     ),
@@ -4009,6 +4043,7 @@ def Snapshot() -> RowPanel:
                             0.99,
                             "tikv_raftstore_snapshot_generation_wait_duration_seconds",
                             by_labels=["instance"],
+                            is_optional_quantile=True,
                         ),
                         legend_format="{{instance}}-generate",
                     ),
@@ -4017,6 +4052,7 @@ def Snapshot() -> RowPanel:
                             0.99,
                             "tikv_raftstore_snapshot_apply_wait_duration_seconds",
                             by_labels=["instance"],
+                            is_optional_quantile=True,
                         ),
                         legend_format="{{instance}}-apply",
                     ),
@@ -4031,6 +4067,7 @@ def Snapshot() -> RowPanel:
                         expr=expr_histogram_quantile(
                             0.99,
                             "tikv_server_send_snapshot_duration_seconds",
+                            is_optional_quantile=True,
                         ),
                         legend_format="send",
                         additional_groupby=True,
@@ -4040,6 +4077,7 @@ def Snapshot() -> RowPanel:
                             0.99,
                             "tikv_raftstore_snapshot_duration_seconds",
                             label_selectors=['type="apply"'],
+                            is_optional_quantile=True,
                         ),
                         legend_format="apply",
                         additional_groupby=True,
@@ -4049,6 +4087,7 @@ def Snapshot() -> RowPanel:
                             0.99,
                             "tikv_raftstore_snapshot_duration_seconds",
                             label_selectors=['type="generate"'],
+                            is_optional_quantile=True,
                         ),
                         legend_format="generate",
                         additional_groupby=True,
@@ -4858,6 +4897,7 @@ def InMemoryEngine() -> RowPanel:
                         expr=expr_histogram_quantile(
                             0.99,
                             "tikv_in_memory_engine_seek_duration",
+                            is_optional_quantile=True,
                         ),
                         legend_format="99%",
                         additional_groupby=True,
@@ -6888,21 +6928,27 @@ def RaftEngine() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_histogram_quantile(
-                            0.99, "raft_engine_write_preprocess_duration_seconds"
+                            0.99,
+                            "raft_engine_write_preprocess_duration_seconds",
+                            is_optional_quantile=True,
                         ),
                         legend_format="wait",
                         additional_groupby=True,
                     ),
                     target(
                         expr=expr_histogram_quantile(
-                            0.99, "raft_engine_write_leader_duration_seconds"
+                            0.99,
+                            "raft_engine_write_leader_duration_seconds",
+                            is_optional_quantile=True,
                         ),
                         legend_format="wal",
                         additional_groupby=True,
                     ),
                     target(
                         expr=expr_histogram_quantile(
-                            0.99, "raft_engine_write_apply_duration_seconds"
+                            0.99,
+                            "raft_engine_write_apply_duration_seconds",
+                            is_optional_quantile=True,
                         ),
                         legend_format="apply",
                         additional_groupby=True,
@@ -6996,21 +7042,27 @@ def RaftEngine() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_histogram_quantile(
-                            0.999, "raft_engine_read_entry_duration_seconds"
+                            0.99,
+                            "raft_engine_read_entry_duration_seconds",
+                            is_optional_quantile=True,
                         ),
                         legend_format="read_entry",
                         additional_groupby=True,
                     ),
                     target(
                         expr=expr_histogram_quantile(
-                            0.999, "raft_engine_read_message_duration_seconds"
+                            0.99,
+                            "raft_engine_read_message_duration_seconds",
+                            is_optional_quantile=True,
                         ),
                         legend_format="read_message",
                         additional_groupby=True,
                     ),
                     target(
                         expr=expr_histogram_quantile(
-                            0.999, "raft_engine_purge_duration_seconds"
+                            0.99,
+                            "raft_engine_purge_duration_seconds",
+                            is_optional_quantile=True,
                         ),
                         legend_format="purge",
                         additional_groupby=True,
@@ -8266,6 +8318,7 @@ def PointInTimeRestore() -> RowPanel:
                             label_selectors=[
                                 'request="apply"',
                             ],
+                            is_optional_quantile=True,
                         ),
                         legend_format="total-99",
                         additional_groupby=True,
@@ -8278,6 +8331,7 @@ def PointInTimeRestore() -> RowPanel:
                                 'type=~"queue|exec_download"',
                             ],
                             by_labels=["le", "type"],
+                            is_optional_quantile=True,
                         ),
                         legend_format="(DL){{type}}-99",
                         additional_groupby=True,
@@ -8287,6 +8341,7 @@ def PointInTimeRestore() -> RowPanel:
                             0.99,
                             "tikv_import_engine_request",
                             by_labels=["le", "type"],
+                            is_optional_quantile=True,
                         ),
                         legend_format="(AP){{type}}-99",
                         additional_groupby=True,
@@ -8661,6 +8716,7 @@ def ResolvedTS() -> RowPanel:
                             0.99,
                             "tikv_check_leader_request_item_count",
                             by_labels=["instance"],
+                            is_optional_quantile=True,
                         ),
                         legend_format="{{instance}}",
                     )
@@ -8680,6 +8736,7 @@ def ResolvedTS() -> RowPanel:
                             0.99,
                             "tikv_check_leader_request_size_bytes",
                             by_labels=["instance"],
+                            is_optional_quantile=True,
                         ),
                         legend_format="{{instance}}",
                     ),
@@ -8688,6 +8745,7 @@ def ResolvedTS() -> RowPanel:
                             0.99,
                             "tikv_check_leader_request_item_count",
                             by_labels=["instance"],
+                            is_optional_quantile=True,
                         ),
                         legend_format="{{instance}}-check-num",
                     ),
@@ -9009,6 +9067,7 @@ def BackupImport() -> RowPanel:
                             0.99,
                             "tikv_backup_range_duration_seconds",
                             by_labels=["type"],
+                            is_optional_quantile=True,
                         ),
                         legend_format="{{type}}-99%",
                         additional_groupby=True,
@@ -9761,6 +9820,7 @@ def BackupLog() -> RowPanel:
                             0.99,
                             "tikv_log_backup_internal_actor_acting_duration_sec",
                             by_labels=["message"],
+                            is_optional_quantile=True,
                         ),
                         legend_format="{{message}}",
                     )
@@ -9912,6 +9972,7 @@ def BackupLog() -> RowPanel:
                             0.99,
                             "tidb_log_backup_advancer_tick_duration_sec",
                             by_labels=["step"],
+                            is_optional_quantile=True,
                         ),
                         legend_format="{{ step }}",
                     )
@@ -9981,6 +10042,7 @@ def SlowTrendStatistics() -> RowPanel:
                             0.99,
                             "tikv_raftstore_inspect_duration_seconds",
                             by_labels=["instance", "type"],
+                            is_optional_quantile=True,
                         ),
                         legend_format="{{instance}}-{{type}}",
                     ),
