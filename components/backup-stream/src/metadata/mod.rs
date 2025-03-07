@@ -7,4 +7,6 @@ mod metrics;
 pub mod store;
 pub mod test;
 
-pub use client::{Checkpoint, CheckpointProvider, MetadataClient, MetadataEvent, StreamTask};
+pub use client::{
+    Checkpoint, CheckpointProvider, MetadataClient, MetadataEvent, PauseStatus, StreamTask,
+};

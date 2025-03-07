@@ -1,12 +1,14 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp::Ordering, collections::HashMap, fmt::Debug, path::Path, sync::Arc};
+use std::{cmp::Ordering, fmt::Debug, path::Path, sync::Arc};
 
+use chrono::Local;
 use dashmap::DashMap;
 use kvproto::{
     brpb::{StreamBackupError, StreamBackupTaskInfo},
     metapb::Region,
 };
+use protobuf::Message as _;
 use tikv_util::{defer, time::Instant, warn};
 use tokio_stream::StreamExt;
 use txn_types::TimeStamp;
@@ -20,9 +22,83 @@ use super::{
     },
 };
 use crate::{
-    debug,
+    annotate, debug,
     errors::{ContextualResultExt, Error, Result},
 };
+
+enum Payload {
+    #[allow(dead_code)]
+    Utf8Text(String),
+    LogBackupError(kvproto::brpb::StreamBackupError),
+}
+
+impl serde::Serialize for Payload {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let value = match self {
+            Payload::Utf8Text(_) => "text/plain;charset=UTF-8",
+            Payload::LogBackupError(_) => {
+                "application/x-protobuf;messageType=brpb.StreamBackupError"
+            }
+        };
+        let mut iter = std::collections::HashMap::new();
+        iter.insert("payload_type", value);
+        let payload_value = match self {
+            Payload::Utf8Text(s) => s.as_bytes().to_vec(),
+            Payload::LogBackupError(err) => err.write_to_bytes().unwrap(),
+        };
+        let payload_value_base64 = base64::encode(payload_value);
+        iter.insert("payload", &payload_value_base64);
+        serializer.collect_map(iter)
+    }
+}
+
+#[derive(derive_more::Deref)]
+struct RFC3336Time(chrono::DateTime<Local>);
+
+impl serde::Serialize for RFC3336Time {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.collect_str(&self.0.to_rfc3339())
+    }
+}
+
+#[derive(serde::Serialize)]
+struct PauseV2 {
+    severity: String,
+    operation_hostname: String,
+    operation_pid: u32,
+    operation_time: RFC3336Time,
+
+    #[serde(flatten)]
+    payload: Payload,
+}
+
+#[derive(Debug)]
+pub enum PauseStatus {
+    NotPaused,
+    PausedV1,
+    // The Raw JSON value of the paused V2.
+    // For now this API was only used for integration test
+    // hence deserializing isn't implemented.
+    PausedV2Json(String),
+}
+
+impl PauseV2 {
+    fn by_error(err: kvproto::brpb::StreamBackupError) -> Self {
+        Self {
+            severity: "ERROR".to_owned(),
+            operation_hostname: tikv_util::sys::hostname().unwrap_or_else(|| "unknown".to_owned()),
+            operation_pid: std::process::id(),
+            operation_time: RFC3336Time(Local::now()),
+            payload: Payload::LogBackupError(err),
+        }
+    }
+}
 
 /// Some operations over stream backup metadata key space.
 #[derive(Clone)]
@@ -331,6 +407,24 @@ impl<Store: MetaStore> MetadataClient<Store> {
             .await
     }
 
+    /// pause a task and upload the error
+    pub async fn pause_with_err(
+        &self,
+        name: &str,
+        err: kvproto::brpb::StreamBackupError,
+    ) -> Result<()> {
+        let pause = PauseV2::by_error(err);
+        let pause_bytes = serde_json::to_string(&pause)
+            .map_err(|e| annotate!(e, "failed to serialize the pause v2").report("pause_with_err"))
+            // Anyway the task must be paused.
+            .unwrap_or_default();
+        self.meta_store
+            .set(KeyValue(MetaKey::pause_of(name), pause_bytes.into_bytes()))
+            .await?;
+
+        Ok(())
+    }
+
     /// resume a task.
     pub async fn resume(&self, name: &str) -> Result<()> {
         self.meta_store
@@ -338,21 +432,22 @@ impl<Store: MetaStore> MetadataClient<Store> {
             .await
     }
 
-    pub async fn get_tasks_pause_status(&self) -> Result<HashMap<Vec<u8>, bool>> {
+    pub async fn pause_status(&self, name: &str) -> Result<PauseStatus> {
         let kvs = self
             .meta_store
-            .get_latest(Keys::Prefix(MetaKey::pause_prefix()))
-            .await?
-            .inner;
-        let mut pause_hash = HashMap::new();
-        let prefix_len = MetaKey::pause_prefix_len();
-
-        for kv in kvs {
-            let task_name = kv.key()[prefix_len..].to_vec();
-            pause_hash.insert(task_name, true);
+            .get_latest(Keys::Key(MetaKey::pause_of(name)))
+            .await?;
+        if kvs.inner.is_empty() {
+            return Ok(PauseStatus::NotPaused);
         }
-
-        Ok(pause_hash)
+        let kv = &kvs.inner[0];
+        let pause_bytes = kv.value();
+        let pause_str = std::str::from_utf8(pause_bytes).unwrap_or_default();
+        if !pause_str.is_empty() {
+            Ok(PauseStatus::PausedV2Json(pause_str.to_owned()))
+        } else {
+            Ok(PauseStatus::PausedV1)
+        }
     }
 
     /// query the named task from the meta store.
