@@ -16,7 +16,7 @@ use raft::{
     eraftpb::{ConfState, Entry, Snapshot},
     GetEntriesContext, RaftState, INVALID_ID,
 };
-use raftstore::store::{util, EntryStorage, ReadTask};
+use raftstore::store::{local_metrics::RaftMetrics, util, EntryStorage, ReadTask};
 use slog::{o, Logger};
 use tikv_util::{box_err, store::find_peer, worker::Scheduler};
 
@@ -187,6 +187,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             apply_state,
             region,
             read_scheduler,
+            &RaftMetrics::new(false),
         )?;
 
         Ok(Storage {

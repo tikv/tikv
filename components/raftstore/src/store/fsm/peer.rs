@@ -265,6 +265,7 @@ where
         engines: Engines<EK, ER>,
         region: &metapb::Region,
         wait_data: bool,
+        raft_metrics: &RaftMetrics,
     ) -> Result<SenderFsmPair<EK, ER>> {
         let meta_peer = match find_peer(region, store_id) {
             None => {
@@ -297,6 +298,7 @@ where
                     meta_peer,
                     wait_data,
                     None,
+                    raft_metrics,
                 )?,
                 tick_registry: [false; PeerTick::VARIANT_COUNT],
                 missing_ticks: 0,
@@ -328,6 +330,7 @@ where
         region_id: u64,
         peer: metapb::Peer,
         create_by_peer: metapb::Peer,
+        raft_metrics: &RaftMetrics,
     ) -> Result<SenderFsmPair<EK, ER>> {
         // We will remove tombstone key when apply snapshot
         info!(
@@ -357,6 +360,7 @@ where
                     peer,
                     false,
                     Some(create_by_peer),
+                    raft_metrics,
                 )?,
                 tick_registry: [false; PeerTick::VARIANT_COUNT],
                 missing_ticks: 0,
@@ -2553,6 +2557,9 @@ where
                     .peer
                     .region_buckets_info_mut()
                     .add_bucket_flow(&res.bucket_stat);
+                // Update the state whether the peer is pending on applying raft
+                // logs if necesssary.
+                self.on_check_peer_complete_apply_logs();
 
                 self.fsm.has_ready |= self.fsm.peer.post_apply(
                     self.ctx,
@@ -4206,6 +4213,7 @@ where
             &mut self.ctx.raft_perf_context,
             merged_by_target,
             &self.ctx.pending_create_peers,
+            &self.ctx.raft_metrics,
         ) {
             // If not panic here, the peer will be recreated in the next restart,
             // then it will be gc again. But if some overlap region is created
@@ -4652,6 +4660,7 @@ where
                 self.ctx.engines.clone(),
                 &new_region,
                 false,
+                &self.ctx.raft_metrics,
             ) {
                 Ok((sender, new_peer)) => (sender, new_peer),
                 Err(e) => {
@@ -4761,6 +4770,11 @@ where
             .get_id();
 
         let state_key = keys::region_state_key(target_region_id);
+        let _timer = self
+            .ctx
+            .raft_metrics
+            .io_read_peer_check_merge_target_stale
+            .start_timer();
         if let Some(target_state) = self
             .ctx
             .engines

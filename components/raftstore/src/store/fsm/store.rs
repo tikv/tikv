@@ -74,7 +74,7 @@ use tikv_util::{
     warn,
     worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
     yatp_pool::FuturePool,
-    Either, RingQueue,
+    Either, RingQueue, GLOBAL_SERVER_READINESS,
 };
 use time::{self, Timespec};
 
@@ -1321,6 +1321,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
         let mut merging_count = 0;
         let mut meta = self.store_meta.lock().unwrap();
         let mut replication_state = self.global_replication_state.lock().unwrap();
+        let mut raft_metrics = RaftMetrics::new(false);
         kv_engine.scan(CF_RAFT, start_key, end_key, false, |key, value| {
             let (region_id, suffix) = box_try!(keys::decode_region_meta_key(key));
             if suffix != keys::REGION_STATE_SUFFIX {
@@ -1360,6 +1361,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                 self.engines.clone(),
                 region,
                 local_state.get_state() == PeerState::Unavailable,
+                &raft_metrics,
             ));
             peer.peer.init_replication_mode(&mut replication_state);
             if local_state.get_state() == PeerState::Merging {
@@ -1401,6 +1403,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
                 self.engines.clone(),
                 &region,
                 false,
+                &raft_metrics,
             )?;
             peer.peer.init_replication_mode(&mut replication_state);
             peer.schedule_applying_snapshot();
@@ -1411,6 +1414,7 @@ impl<EK: KvEngine, ER: RaftEngine, T> RaftPollerBuilder<EK, ER, T> {
             meta.regions.insert(region.get_id(), region);
             region_peers.push((tx, peer));
         }
+        raft_metrics.maybe_flush();
 
         info!(
             "start store";
@@ -2061,9 +2065,13 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
 
         // Check if the target peer is tombstone.
         let state_key = keys::region_state_key(region_id);
+        let timer = self.ctx.raft_metrics.io_read_store_check_msg.start_timer();
         let local_state: RegionLocalState =
             match self.ctx.engines.kv.get_msg_cf(CF_RAFT, &state_key)? {
-                Some(state) => state,
+                Some(state) => {
+                    drop(timer);
+                    state
+                }
                 None => return Ok(CheckMsgStatus::NewPeerFirst),
             };
 
@@ -2259,6 +2267,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         // To make learner (e.g. tiflash engine) compatiable with raftstore v2,
         // it needs to response GcPeerResponse.
         if msg.get_is_tombstone() && self.ctx.cfg.enable_v2_compatible_learner {
+            let _timer = self
+                .ctx
+                .raft_metrics
+                .io_read_v2_compatible_learner
+                .start_timer();
             if let Some(msg) =
                 handle_tombstone_message_on_learner(&self.ctx.engines.kv, self.fsm.store.id, msg)
             {
@@ -2374,15 +2387,21 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         msg: &RaftMessage,
         is_local_first: bool,
     ) -> Result<bool> {
-        if is_local_first
-            && self
+        if is_local_first {
+            let _timer = self
+                .ctx
+                .raft_metrics
+                .io_read_peer_maybe_create
+                .start_timer();
+            if self
                 .ctx
                 .engines
                 .kv
                 .get_value_cf(CF_RAFT, &keys::region_state_key(region_id))?
                 .is_some()
-        {
-            return Ok(false);
+            {
+                return Ok(false);
+            }
         }
 
         let target = msg.get_to_peer();
@@ -2513,6 +2532,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             region_id,
             target.clone(),
             msg.get_from_peer().clone(),
+            &self.ctx.raft_metrics,
         )?;
 
         // WARNING: The checking code must be above this line.
@@ -2933,13 +2953,26 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             busy_apply_peers_count,
             completed_apply_peers_count,
         );
-        // If the store already pass the check, it should clear the
-        // `completed_apply_peers_count` to skip the check next time.
-        if !busy_on_apply && completed_apply_peers_count.is_some() {
-            let mut meta = self.ctx.store_meta.lock().unwrap();
-            meta.completed_apply_peers_count = None;
-            meta.busy_apply_peers.clear();
+
+        if !busy_on_apply {
+            // If the store already passes the check, it should clear the
+            // `completed_apply_peers_count` to skip the check next time.
+            if completed_apply_peers_count.is_some() {
+                let mut meta = self.ctx.store_meta.lock().unwrap();
+                meta.completed_apply_peers_count = None;
+                meta.busy_apply_peers.clear();
+            }
+
+            if GLOBAL_SERVER_READINESS
+                .raft_peers_caught_up
+                .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                // Log when the server readiness condition changes.
+                info!("ServerReadiness: Raft pending peers have caught up applying logs");
+            }
         }
+
         let store_is_busy = self
             .ctx
             .global_stat
@@ -3395,6 +3428,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             self.ctx.engines.clone(),
             &region,
             false,
+            &self.ctx.raft_metrics,
         ) {
             Ok((sender, peer)) => (sender, peer),
             Err(e) => {
