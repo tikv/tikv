@@ -402,7 +402,10 @@ mod tests {
     use tikv_util::worker;
 
     use super::*;
-    use crate::{store::PeerStorage, Result};
+    use crate::{
+        store::{local_metrics::RaftMetrics, PeerStorage},
+        Result,
+    };
 
     type DataSet = Vec<(Vec<u8>, Vec<u8>)>;
 
@@ -420,6 +423,7 @@ mod tests {
             raftlog_fetch_sched,
             0,
             "".to_owned(),
+            &RaftMetrics::new(false),
         )
         .unwrap()
     }
