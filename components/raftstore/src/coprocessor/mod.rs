@@ -589,7 +589,14 @@ pub trait CmdObserver<E>: Coprocessor {
 
 pub trait ReadIndexObserver: Coprocessor {
     // Hook to call when stepping in raft and the message is a read index message.
-    fn on_step(&self, _msg: &mut eraftpb::Message, _role: StateRole) {}
+    fn on_step(
+        &self,
+        _msg: &mut eraftpb::Message,
+        _role: StateRole,
+        _region_start_key: Option<&[u8]>,
+        _region_end_key: Option<&[u8]>,
+    ) {
+    }
 }
 
 pub trait UpdateSafeTsObserver: Coprocessor {

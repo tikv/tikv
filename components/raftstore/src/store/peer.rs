@@ -524,7 +524,7 @@ pub fn propose_read_index<T: raft::Storage>(
     let last_ready_read_count = raft_group.raft.ready_read_count();
 
     let id = Uuid::new_v4();
-    raft_group.read_index(ReadIndexContext::fields_to_bytes(id, request, None));
+    raft_group.read_index(ReadIndexContext::fields_to_bytes(id, request, None, None));
 
     let pending_read_count = raft_group.raft.pending_read_count();
     let ready_read_count = raft_group.raft.ready_read_count();
@@ -1935,8 +1935,12 @@ where
         }
         let msg_type = m.get_msg_type();
         if msg_type == MessageType::MsgReadIndex {
-            ctx.coprocessor_host
-                .on_step_read_index(&mut m, self.get_role());
+            ctx.coprocessor_host.on_step_read_index(
+                &mut m,
+                self.get_role(),
+                Some(self.region().get_start_key()),
+                Some(self.region().get_end_key()),
+            );
             // Must use the commit index of `PeerStorage` instead of the commit index
             // in raft-rs which may be greater than the former one.
             // For more details, see the annotations above `on_leader_commit_idx_changed`.
@@ -3626,10 +3630,21 @@ where
 
     fn apply_reads<T>(&mut self, ctx: &mut PollContext<EK, ER, T>, ready: &Ready) {
         let mut propose_time = None;
-        let states = ready.read_states().iter().map(|state| {
-            let read_index_ctx = ReadIndexContext::parse(state.request_ctx.as_slice()).unwrap();
-            (read_index_ctx.id, read_index_ctx.locked, state.index)
-        });
+        let states: Vec<_> = ready
+            .read_states()
+            .iter()
+            .map(|state| {
+                let read_index_ctx = ReadIndexContext::parse(state.request_ctx.as_slice()).unwrap();
+                if let Some(read_index_safe_ts) = read_index_ctx.read_index_safe_ts {
+                    // There are no pending conflict memory locks on the leader.
+                    if self.ready_to_handle_unsafe_replica_read(state.index) {
+                        self.read_progress
+                            .update_read_index_safe_ts(read_index_safe_ts);
+                    }
+                }
+                (read_index_ctx.id, read_index_ctx.locked, state.index)
+            })
+            .collect();
         // The follower may lost `ReadIndexResp`, so the pending_reads does not
         // guarantee the orders are consistent with read_states. `advance` will
         // update the `read_index` of read request that before this successful
@@ -4131,6 +4146,7 @@ where
             .read_index(ReadIndexContext::fields_to_bytes(
                 read.id,
                 read.addition_request.as_deref(),
+                None,
                 None,
             ));
         debug!(

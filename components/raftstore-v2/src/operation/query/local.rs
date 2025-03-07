@@ -203,6 +203,7 @@ where
         req: &RaftCmdRequest,
         has_read_index_success: bool,
     ) -> ReadResult<RegionSnapshot<E::Snapshot>, RaftCmdResponse> {
+        TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_received_requests.inc());
         match self.pre_propose_raft_command(req) {
             ReadResult::Ok((mut delegate, policy)) => {
                 let mut snap = match policy {
@@ -233,6 +234,8 @@ where
                         snap
                     }
                     ReadRequestPolicy::StaleRead => {
+                        TLS_LOCAL_READ_METRICS
+                            .with(|m| m.borrow_mut().local_received_stale_read_requests.inc());
                         let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
                         if let Err(e) = delegate.check_stale_read_safe(read_ts) {
                             return ReadResult::Err(e);
@@ -256,6 +259,8 @@ where
                         snap
                     }
                     ReadRequestPolicy::ReadIndex => {
+                        TLS_LOCAL_READ_METRICS
+                            .with(|m| m.borrow_mut().local_received_follower_read_requests.inc());
                         // ReadIndex is returned only for replica read.
                         if !has_read_index_success {
                             // It needs to read index before getting snapshot.
@@ -270,7 +275,7 @@ where
 
                         TLS_LOCAL_READ_METRICS.with(|m| {
                             m.borrow_mut().local_executed_requests.inc();
-                            m.borrow_mut().local_executed_replica_read_requests.inc()
+                            m.borrow_mut().local_executed_follower_read_requests.inc()
                         });
 
                         snap
