@@ -209,7 +209,6 @@ impl ConcurrencyManager {
         if !limit.limit.is_zero() && new_ts > limit.limit {
             let last_update = limit.update_time;
             let now = self.time_provider.now();
-            assert!(now >= last_update);
             let duration_to_last_limit_update = now - last_update;
 
             if duration_to_last_limit_update < self.limit_valid_duration {
