@@ -491,6 +491,26 @@ pub enum Cmd {
         /// How to compact the bottommost level
         bottommost: String,
     },
+    /// List regions and their overlapping files
+    RegionOverlapFiles {
+        #[structopt(long)]
+        /// specify manifest, if not set, it will look up manifest file in db
+        /// path
+        manifest: Option<String>,
+
+        #[structopt(long)]
+        /// specify manifest, if not set, it will look up manifest file in db
+        /// path
+        cf: Option<String>,
+
+        #[structopt(long)]
+        // RocksDB level
+        level: Option<u32>,
+
+        #[structopt(long, value_delimiter = ",")]
+        /// PD endpoints
+        pd: String,
+    },
     /// Show region properties
     RegionProperties {
         #[structopt(short = "r")]
