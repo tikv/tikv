@@ -307,7 +307,7 @@ impl TagInfos {
             peer_id: peer.get_id(),
             region_id: context.get_region_id(),
             key_ranges: vec![],
-            extra_attachment: Vec::from(context.get_resource_group_tag()),
+            extra_attachment: vec![],
         }
     }
 
@@ -322,7 +322,7 @@ impl TagInfos {
             peer_id: peer.get_id(),
             region_id: context.get_region_id(),
             key_ranges,
-            extra_attachment: Vec::from(context.get_resource_group_tag()),
+            extra_attachment: vec![],
         }
     }
 }
