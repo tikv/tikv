@@ -37,6 +37,7 @@ DATASOURCE_INPUT = DataSourceInput(
 DATASOURCE = f"${{{DATASOURCE_INPUT.name}}}"
 ADDITIONAL_GROUPBY = "$additional_groupby"
 OPTIONAL_QUANTILE = "optional_quantile"
+OPTIONAL_QUANTILE_INPUT = "$" + OPTIONAL_QUANTILE
 
 
 @attr.s
@@ -564,7 +565,7 @@ def expr_histogram_quantile(
     # histogram_quantile({quantile}, {sum_rate_of_buckets})
     quantile_str = f"{quantile}"
     if is_optional_quantile:
-        quantile_str = "$" + OPTIONAL_QUANTILE
+        quantile_str = OPTIONAL_QUANTILE_INPUT
     return expr_aggr(
         metric=sum_rate_of_buckets,
         aggr_op="histogram_quantile",
