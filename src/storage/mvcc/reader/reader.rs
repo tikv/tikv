@@ -24,7 +24,7 @@ use crate::storage::{
         default_not_found_error,
         metrics::{ScanLockReadTimeSource, SCAN_LOCK_READ_TIME_VEC},
         reader::{OverlappedWrite, TxnCommitRecord},
-        Result,
+        Error, ErrorInner, Result,
     },
 };
 
@@ -477,6 +477,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             self.write_cursor.take();
         }
         self.create_write_cursor()?;
+
         let cursor = self.write_cursor.as_mut().unwrap();
         // find a `ts` encoded key which is less than the `ts` encoded version of the
         // `key`
@@ -486,6 +487,12 @@ impl<S: EngineSnapshot> MvccReader<S> {
         }
         let write_key = cursor.key(&mut self.statistics.write);
         let commit_ts = Key::decode_ts_from(write_key)?;
+        if commit_ts.is_zero() {
+            return Err(Error::from(ErrorInner::Other(
+                format!("invalid commit-ts {}", commit_ts.into_inner()).into(),
+            )));
+        }
+
         // check whether the found written_key's "real key" part equals the `key` we
         // want to find
         if !Key::is_user_key_eq(write_key, key.as_encoded()) {
