@@ -16,7 +16,7 @@ pub fn next_last_change_info<S: Snapshot>(
     commit_ts: TimeStamp,
 ) -> Result<LastChange> {
     match write.write_type {
-        WriteType::Put | WriteType::Delete => Ok(LastChange::make_exist(commit_ts, 1)),
+        WriteType::Put | WriteType::Delete => Ok(LastChange::make_exist(commit_ts, 1)?),
         WriteType::Lock | WriteType::Rollback => {
             match &write.last_change {
                 LastChange::Exist {
@@ -25,7 +25,7 @@ pub fn next_last_change_info<S: Snapshot>(
                 } => Ok(LastChange::make_exist(
                     *last_change_ts,
                     estimated_versions_to_last_change + 1,
-                )),
+                )?),
                 LastChange::NotExist => Ok(LastChange::NotExist),
                 LastChange::Unknown => {
                     fail_point!("before_get_write_in_next_last_change_info");
@@ -51,7 +51,7 @@ pub fn next_last_change_info<S: Snapshot>(
                             Ok(LastChange::make_exist(
                                 last_change_ts,
                                 stat.write.next as u64 + 1,
-                            ))
+                            )?)
                         }
                     }
                 }
