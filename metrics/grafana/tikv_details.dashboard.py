@@ -752,7 +752,6 @@ def Server() -> RowPanel:
             graph_panel(
                 title="Region average written keys",
                 description="The average rate of written keys to Regions per TiKV instance",
-                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
                 targets=[
                     target(
                         expr=expr_histogram_avg("tikv_region_written_keys"),
