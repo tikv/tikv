@@ -9,12 +9,13 @@ use std::{
         mpsc::Sender,
         Arc, Mutex,
     },
+    time::Duration,
     vec::IntoIter,
 };
 
 use api_version::{ApiV2, KvFormat};
 use collections::HashMap;
-use concurrency_manager::ConcurrencyManager;
+use concurrency_manager::{ActionOnInvalidMaxTs, ConcurrencyManager};
 use engine_rocks::FlowInfo;
 use engine_traits::{
     raw_ttl::ttl_current_ts, DeleteStrategy, Error as EngineError, KvEngine, MiscExt, Range,
@@ -363,7 +364,14 @@ impl<E: Engine> GcRunnerCore<E> {
 
     fn new_txn() -> MvccTxn {
         // TODO txn only used for GC, but this is hacky, maybe need an Option?
-        let concurrency_manager = ConcurrencyManager::new(1.into());
+        // a dummy cm
+        let concurrency_manager = ConcurrencyManager::new_with_config(
+            1.into(),
+            Duration::from_secs(45),
+            ActionOnInvalidMaxTs::Log,
+            None,
+            Duration::from_secs(46),
+        );
         MvccTxn::new(TimeStamp::zero(), concurrency_manager)
     }
 
