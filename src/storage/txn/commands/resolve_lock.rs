@@ -85,7 +85,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLock {
         let mut txn = MvccTxn::new(TimeStamp::zero(), context.concurrency_manager);
 
         let mut snapshot_reader = SnapshotReader::new_with_ctx(TimeStamp::zero(), snapshot, &ctx);
-        snapshot_reader.setup_with_hint_items(&mut key_locks, |k| &k.0);
+        // snapshot_reader.setup_with_hint_items(&mut key_locks, |k| &k.0);
         let mut reader = ReaderWithStats::new(snapshot_reader, context.statistics);
 
         let mut scan_key = self.scan_key.take();

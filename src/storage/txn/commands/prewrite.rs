@@ -615,12 +615,21 @@ impl<K: PrewriteKind> Prewriter<K> {
 
         // If there are other errors, return other error prior to `AssertionFailed`.
         let mut assertion_failure = None;
+        // let mut prev_key = None;
         for m in mem::take(&mut self.mutations) {
             let pessimistic_action = m.pessimistic_action();
             let expected_for_update_ts = m.pessimistic_expected_for_update_ts();
             let m = m.into_mutation();
             let key = m.key().clone();
             let mutation_type = m.mutation_type();
+
+            // prev_key.map(|prev_key| if prev_key >= key {
+            //     panic!(
+            //         "Prewrite mutations are not in order: {:?} >= {:?}",
+            //         prev_key, key
+            //     );
+            // });
+            // prev_key = Some(key.clone());
 
             let mut secondaries = &self.secondary_keys.as_ref().map(|_| vec![]);
             if Some(m.key()) == async_commit_pk {
@@ -2993,4 +3002,51 @@ mod tests {
         must_locked(&mut engine, k2, 10);
         must_locked(&mut engine, k3, 10);
     }
+
+    // #[test]
+    // fn test_prewrite_read_newer_version() {
+    //     let mut engine = TestEngineBuilder::new().build().unwrap();
+    //     let cm =
+    // concurrency_manager::ConcurrencyManager::new_for_test(1.into());
+
+    //     let k1 = b"k1";
+    //     let k2 = b"k2";
+    //     let mutations = vec![
+    //         Mutation::make_put(Key::from_raw(&k1.to_vec()), k1.to_vec()),
+    //         Mutation::make_put(Key::from_raw(&k2.to_vec()), k2.to_vec()),
+    //     ];
+
+    //     let mut statistics = Statistics::default();
+    //     prewrite_with_cm(
+    //         &mut engine,
+    //         cm.clone(),
+    //         &mut statistics,
+    //         mutations,
+    //         k1.to_vec(),
+    //         10,
+    //         None,
+    //     )
+    //     .unwrap();
+
+    //     commit(
+    //         &mut engine,
+    //         &mut statistics,
+    //         vec![Key::from_raw(&k1.to_vec())],
+    //         10,
+    //         20,
+    //     )
+    //     .unwrap();
+
+    //     let mutations = vec![Mutation::make_put(Key::from_raw(&k1.to_vec()),
+    // k1.to_vec())];     let e = prewrite_with_cm(
+    //         &mut engine,
+    //         cm.clone(),
+    //         &mut statistics,
+    //         mutations,
+    //         k1.to_vec(),
+    //         15,
+    //         None,
+    //     );
+    //     println!("{:?}", e);
+    // }
 }

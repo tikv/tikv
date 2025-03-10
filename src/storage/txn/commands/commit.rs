@@ -57,7 +57,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Commit {
         let mut txn = MvccTxn::new(self.lock_ts, context.concurrency_manager);
         let mut keys = self.keys;
         let mut snapshot_reader = SnapshotReader::new_with_ctx(self.lock_ts, snapshot, &self.ctx);
-        snapshot_reader.setup_with_hint_items(&mut keys, |k| k);
+        // snapshot_reader.setup_with_hint_items(&mut keys, |k| k);
         let mut reader = ReaderWithStats::new(snapshot_reader, context.statistics);
 
         let rows = keys.len();
