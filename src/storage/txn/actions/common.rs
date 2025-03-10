@@ -3,7 +3,7 @@
 use tikv_kv::Snapshot;
 use txn_types::{Key, LastChange, OldValue, TimeStamp, Write, WriteType};
 
-use crate::storage::mvcc::{MvccTxn, Result, SnapshotReader, TxnCommitRecord};
+use crate::storage::mvcc::{Error, ErrorInner, MvccTxn, Result, SnapshotReader, TxnCommitRecord};
 
 /// Returns the new `LastChange` according to this write record. If it is
 /// unknown from the given write, try iterate to the last change and find the
@@ -15,8 +15,16 @@ pub fn next_last_change_info<S: Snapshot>(
     original_reader: &mut SnapshotReader<S>,
     commit_ts: TimeStamp,
 ) -> Result<LastChange> {
+    if commit_ts.is_zero() {
+        error!("write with invalid commit-ts"; "write" => ?write, "commit-ts" => ?commit_ts);
+        return Err(Error::from(ErrorInner::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "invaid commit-ts",
+        ))));
+    }
+
     match write.write_type {
-        WriteType::Put | WriteType::Delete => Ok(LastChange::make_exist(commit_ts, 1)),
+        WriteType::Put | WriteType::Delete => Ok(LastChange::make_exist(commit_ts, 1)?),
         WriteType::Lock | WriteType::Rollback => {
             match &write.last_change {
                 LastChange::Exist {
@@ -25,7 +33,7 @@ pub fn next_last_change_info<S: Snapshot>(
                 } => Ok(LastChange::make_exist(
                     *last_change_ts,
                     estimated_versions_to_last_change + 1,
-                )),
+                )?),
                 LastChange::NotExist => Ok(LastChange::NotExist),
                 LastChange::Unknown => {
                     fail_point!("before_get_write_in_next_last_change_info");
@@ -51,7 +59,7 @@ pub fn next_last_change_info<S: Snapshot>(
                             Ok(LastChange::make_exist(
                                 last_change_ts,
                                 stat.write.next as u64 + 1,
-                            ))
+                            )?)
                         }
                     }
                 }
