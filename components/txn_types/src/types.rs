@@ -18,6 +18,7 @@ use tikv_util::{
 };
 
 use super::timestamp::TimeStamp;
+use crate::{Error, ErrorInner};
 
 // Short value max len must <= 255.
 pub const SHORT_VALUE_MAX_LEN: usize = 255;
@@ -636,13 +637,20 @@ pub enum LastChange {
 }
 
 impl LastChange {
-    pub fn make_exist(last_change_ts: TimeStamp, estimated_versions_to_last_change: u64) -> Self {
-        assert!(!last_change_ts.is_zero());
-        assert!(estimated_versions_to_last_change > 0);
-        LastChange::Exist {
+    pub fn make_exist(
+        last_change_ts: TimeStamp,
+        estimated_versions_to_last_change: u64,
+    ) -> std::result::Result<Self, Error> {
+        if last_change_ts.is_zero() || estimated_versions_to_last_change <= 0 {
+            assert!(!last_change_ts.is_zero());
+            assert!(estimated_versions_to_last_change > 0);
+            return Err(Error::from(ErrorInner::BadFormatWrite));
+        }
+
+        Ok(LastChange::Exist {
             last_change_ts,
             estimated_versions_to_last_change,
-        }
+        })
     }
 
     // How `LastChange` is stored.
@@ -671,7 +679,10 @@ impl LastChange {
                 LastChange::Unknown
             }
         } else {
-            Self::make_exist(last_change_ts, estimated_versions_to_last_change)
+            LastChange::Exist {
+                last_change_ts,
+                estimated_versions_to_last_change,
+            }
         }
     }
 }
