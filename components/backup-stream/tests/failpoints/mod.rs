@@ -116,7 +116,6 @@ mod all {
         suite.run(|| {
             Task::ModifyObserve(backup_stream::ObserveOp::Start {
                 region: suite.cluster.get_region(&make_record_key(1, 886)),
-                handle: ObserveHandle::new(),
             })
         });
         fail::cfg("scan_after_get_snapshot", "off").unwrap();
