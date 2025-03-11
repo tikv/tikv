@@ -213,8 +213,9 @@ def Duration() -> RowPanel:
                     ),
                     target(
                         expr=expr_histogram_quantile(
-                            0.95,
+                            0.99,
                             "tikv_coprocessor_request_handle_seconds",
+                            is_optional_quantile=True,
                         ),
                         legend_format="Cop Handle-" + OPTIONAL_QUANTILE_INPUT,
                         additional_groupby=True,
