@@ -962,6 +962,7 @@ where
         peer: metapb::Peer,
         wait_data: bool,
         create_by_peer: Option<metapb::Peer>,
+        raft_metrics: &RaftMetrics,
     ) -> Result<Peer<EK, ER>> {
         let peer_id = peer.get_id();
         if peer_id == raft::INVALID_ID {
@@ -977,6 +978,7 @@ where
             raftlog_fetch_scheduler,
             peer.get_id(),
             tag.clone(),
+            raft_metrics,
         )?;
         let applied_index = ps.applied_index();
 
@@ -1398,6 +1400,7 @@ where
         perf_context: &mut ER::PerfContext,
         keep_data: bool,
         pending_create_peers: &Mutex<HashMap<u64, (u64, bool)>>,
+        raft_metrics: &RaftMetrics,
     ) -> Result<()> {
         fail_point!("raft_store_skip_destroy_peer", |_| Ok(()));
         let t = TiInstant::now();
@@ -1477,16 +1480,24 @@ where
                 },
             )?;
 
+            let start = Instant::now();
             // write kv rocksdb first in case of restart happen between two write
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(true);
             kv_wb.write_opt(&write_opts)?;
+            raft_metrics
+                .io_write_peer_destroy_kv
+                .observe(start.saturating_elapsed().as_secs_f64());
 
             drop(pending_create_peers);
 
+            let start = Instant::now();
             perf_context.start_observe();
             engines.raft.consume(&mut raft_wb, true)?;
             perf_context.report_metrics(&[]);
+            raft_metrics
+                .io_write_peer_destroy_raft
+                .observe(start.saturating_elapsed().as_secs_f64());
 
             if self.get_store().is_initialized() && !keep_data {
                 // If we meet panic when deleting data and raft log, the dirty data
@@ -2127,6 +2138,22 @@ where
         }
 
         if status.progress.is_none() {
+            // If `progress` is None, the current node is not the leader.
+            // Typically, `collect_pending_peers` is called only on the leader
+            // as part of the heartbeat process. However, after a split, the new
+            // peer that starts the first campaign is asked to send a heartbeat
+            // immediately, even though it may not have been elected yet. Since
+            // we can't determine the progress of followers at this point, we
+            // conservatively mark all other peers as pending.
+            assert!(!self.is_leader());
+            for peer in self.region().get_peers() {
+                if peer.get_id() == self.peer.get_id() {
+                    continue;
+                }
+                if let Some(p) = self.get_peer_from_cache(peer.get_id()) {
+                    pending_peers.push(p);
+                }
+            }
             return pending_peers;
         }
 
@@ -2236,13 +2263,16 @@ where
         let region = self.region();
         let mut replicated_idx = self.raft_group.raft.raft_log.persisted;
         for (peer_id, p) in self.raft_group.raft.prs().iter() {
-            let store_id = region
+            let peer = region
                 .get_peers()
                 .iter()
                 .find(|p| p.get_id() == *peer_id)
-                .unwrap()
-                .get_store_id();
-            if failed_stores.contains(&store_id) {
+                .unwrap();
+            // Learners like TiFlash are ignored, because they may be tombstoned in earlier
+            // stage of the unsafe recovery process, so that forced leader
+            // cannot append logs to them.
+            if failed_stores.contains(&peer.get_store_id()) || peer.get_role() == PeerRole::Learner
+            {
                 continue;
             }
             if replicated_idx > p.matched {
@@ -5245,6 +5275,7 @@ where
         let mut reader = PollContextReader {
             engines: &ctx.engines,
         };
+        let _timer = ctx.raft_metrics.io_read_peer_snapshot_read.start_timer();
         let mut resp = reader.execute(
             &read_ctx,
             &req,
