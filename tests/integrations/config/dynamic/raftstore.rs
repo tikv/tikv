@@ -156,7 +156,7 @@ fn new_changes(cfgs: Vec<(&str, &str)>) -> std::collections::HashMap<String, Str
 #[test]
 fn test_update_raftstore_config() {
     let (mut config, _dir) = TikvConfig::with_tmp().unwrap();
-    config.validate().unwrap();
+    config.validate(None).unwrap();
     let (cfg_controller, router, _, mut system) = start_raftstore(config.clone(), &_dir);
 
     // dispatch updated config
@@ -239,7 +239,7 @@ fn test_update_raftstore_io_config() {
     {
         let (mut resize_config, _dir) = TikvConfig::with_tmp().unwrap();
         resize_config.raft_store.store_io_pool_size = 0; // SYNC mode
-        resize_config.validate().unwrap();
+        resize_config.validate(None).unwrap();
         let (cfg_controller, _, _, mut system) = start_raftstore(resize_config, &_dir);
 
         // not allowed to resize from SYNC mode to ASYNC mode
@@ -255,7 +255,7 @@ fn test_update_raftstore_io_config() {
     {
         let (mut resize_config, _dir) = TikvConfig::with_tmp().unwrap();
         resize_config.raft_store.store_io_pool_size = 2;
-        resize_config.validate().unwrap();
+        resize_config.validate(None).unwrap();
         let (cfg_controller, _, _, mut system) = start_raftstore(resize_config, &_dir);
 
         // not allowed to resize from ASYNC mode to SYNC mode
@@ -271,7 +271,7 @@ fn test_update_raftstore_io_config() {
     {
         let (mut resize_config, _dir) = TikvConfig::with_tmp().unwrap();
         resize_config.raft_store.store_io_pool_size = 2;
-        resize_config.validate().unwrap();
+        resize_config.validate(None).unwrap();
         let (cfg_controller, _, _, mut system) = start_raftstore(resize_config, &_dir);
 
         // resize the count of ios to 1 by decreasing.
