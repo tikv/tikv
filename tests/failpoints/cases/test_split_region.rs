@@ -75,7 +75,7 @@ fn test_meta_inconsistency() {
     let region = cluster.get_region(b"");
     cluster.must_split(&region, b"k5");
 
-    // Scheduler a larger peed id heartbeat msg to trigger peer destroy for peer
+    // Scheduler a larger peer id heartbeat msg to trigger peer destroy for peer
     // 1003, pause it before the meta.lock operation so new region insertions by
     // region split could go first.
     // Thus a inconsistency could happen because the destroy is handled
@@ -722,7 +722,7 @@ fn test_split_continue_when_destroy_peer_after_mem_check() {
     })
     .unwrap();
 
-    // Resum region 1000 processing and wait till it's destroyed.
+    // Resume region 1000 processing and wait till it's destroyed.
     fail::remove(before_check_snapshot_1000_2_fp);
     destroy_rx.recv_timeout(Duration::from_secs(3)).unwrap();
 
@@ -1923,4 +1923,58 @@ fn test_region_split_after_new_leader_elected() {
         new_region_leader
     );
     fail::remove(skip_clear_uncampaign);
+}
+
+// Test that during a split, if a new peer hasn't been created it should always
+// be marked as a pending peer in the region heartbeat.
+#[test]
+fn test_pending_peer_in_heartbeat_during_split() {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster.cfg);
+    cluster.cfg.raft_store.store_batch_system.max_batch_size = Some(1);
+    cluster.cfg.raft_store.store_batch_system.pool_size = 1;
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+
+    let pd_client_clone: Arc<test_pd_client::TestPdClient> = pd_client.clone();
+    // Pause at the following failpoint so that peer 3 won't be able to split
+    // and thus the new peer 1003 won't be created. Peer 1003 should always be
+    // pending in the region heartbeat uploaded to PD.
+    let apply_before_split_1_3_fp = "apply_before_split_1_3";
+    fail::cfg(apply_before_split_1_3_fp, "pause").unwrap();
+    let finish_hb_fp = "test_pd_client::finish_region_heartbeat";
+    fail::cfg_callback(finish_hb_fp, move || {
+        let region_id = 1000;
+        // Check the heartbeat of new region to see if it has been created.
+        if pd_client_clone
+            .get_region_last_report_ts(region_id)
+            .is_some()
+        {
+            let region = pd_client_clone.get_region(b"k1").unwrap();
+            assert!(region.id == region_id);
+            let new_peer_on_store_3 = find_peer(&region, 3).unwrap();
+
+            let pending_peers = pd_client_clone.get_pending_peers();
+            if !pending_peers.contains_key(&new_peer_on_store_3.id) {
+                panic!("peer {} should still be pending", new_peer_on_store_3.id);
+            }
+        }
+    })
+    .unwrap();
+
+    let region = pd_client.get_region(b"k1").unwrap();
+    let peer_1 = find_peer(&region, 1).unwrap().to_owned();
+    // region 1, leader is peer 1.
+    cluster.must_transfer_leader(region.get_id(), peer_1);
+
+    cluster.must_split(&region, b"k2");
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    fail::remove(finish_hb_fp);
+    fail::remove(apply_before_split_1_3_fp);
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k3", b"v3");
 }

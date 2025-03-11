@@ -86,6 +86,7 @@ make_auto_flush_static_metric! {
         started,
         timeout,
         finished,
+        stale,
     }
 
     pub label_enum CompactionGuardAction {
@@ -481,6 +482,21 @@ lazy_static! {
             "tikv_raftstore_store_wf_commit_not_persist_log_duration_seconds",
             "Bucketed histogram of proposals' commit but not persist duration",
             exponential_buckets(0.00001, 2.0, 32).unwrap() // 10us ~ 42949s.
+        ).unwrap();
+
+    pub static ref PEER_CREATE_RAFT_DURATION_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_peer_create_raft_write_duration_seconds",
+            "Bucketed histogram of peer create raft engine write duration",
+            exponential_buckets(0.00001, 2.0, 26).unwrap() // 10us ~ 671s.
+        ).unwrap();
+
+    pub static ref STORE_IO_DURATION_HISTOGRAM: HistogramVec =
+        register_histogram_vec!(
+            "tikv_raftstore_io_duration_seconds",
+            "Bucketed histogram of raftstore IO duration",
+            &["type", "reason"],
+            exponential_buckets(0.00001, 2.0, 26).unwrap() // 10us ~ 671s.
         ).unwrap();
 
     pub static ref PEER_PROPOSAL_COUNTER_VEC: IntCounterVec =

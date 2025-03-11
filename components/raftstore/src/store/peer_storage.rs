@@ -38,11 +38,13 @@ use tikv_util::{
     worker::Scheduler,
 };
 
-use super::{metrics::*, worker::RegionTask, SnapEntry, SnapKey, SnapManager};
+use super::{
+    local_metrics::RaftMetrics, metrics::*, worker::RegionTask, SnapEntry, SnapKey, SnapManager,
+};
 use crate::{
     store::{
         async_io::{read::ReadTask, write::WriteTask},
-        entry_storage::EntryStorage,
+        entry_storage::{CacheWarmupState, EntryStorage},
         fsm::GenSnapTask,
         peer::PersistSnapshotResult,
         util,
@@ -193,7 +195,9 @@ fn init_raft_state<EK: KvEngine, ER: RaftEngine>(
         raft_state.mut_hard_state().set_commit(RAFT_INIT_LOG_INDEX);
         let mut lb = engines.raft.log_batch(0);
         lb.put_raft_state(region.get_id(), &raft_state)?;
+        let start = Instant::now();
         engines.raft.consume(&mut lb, true)?;
+        PEER_CREATE_RAFT_DURATION_HISTOGRAM.observe(start.saturating_elapsed().as_secs_f64());
     }
     Ok(raft_state)
 }
@@ -308,6 +312,7 @@ where
         raftlog_fetch_scheduler: Scheduler<ReadTask<EK>>,
         peer_id: u64,
         tag: String,
+        raft_metrics: &RaftMetrics,
     ) -> Result<PeerStorage<EK, ER>> {
         debug!(
             "creating storage on specified path";
@@ -315,9 +320,19 @@ where
             "peer_id" => peer_id,
             "path" => ?engines.kv.path(),
         );
+        let start = Instant::now();
         let raft_state = init_raft_state(&engines, region)?;
-        let apply_state = init_apply_state(&engines, region)?;
+        raft_metrics
+            .io_write_init_raft_state
+            .observe(start.saturating_elapsed().as_secs_f64());
 
+        let start = Instant::now();
+        let apply_state = init_apply_state(&engines, region)?;
+        raft_metrics
+            .io_write_init_apply_state
+            .observe(start.saturating_elapsed().as_secs_f64());
+
+        let start = Instant::now();
         let entry_storage = EntryStorage::new(
             peer_id,
             engines.raft.clone(),
@@ -325,7 +340,11 @@ where
             apply_state,
             region,
             raftlog_fetch_scheduler,
+            raft_metrics,
         )?;
+        raft_metrics
+            .io_read_entry_storage_create
+            .observe(start.saturating_elapsed().as_secs_f64());
 
         Ok(PeerStorage {
             engines,
@@ -633,8 +652,8 @@ where
         *gen_snap_task = Some(task);
     }
 
-    pub fn on_compact_raftlog(&mut self, idx: u64) {
-        self.entry_storage.compact_entry_cache(idx);
+    pub fn on_compact_raftlog(&mut self, idx: u64, state: Option<&mut CacheWarmupState>) {
+        self.entry_storage.compact_entry_cache(idx, state);
         self.cancel_generating_snap(Some(idx));
     }
 
@@ -1307,6 +1326,7 @@ pub mod tests {
             raftlog_fetch_scheduler,
             1,
             "".to_owned(),
+            &RaftMetrics::new(false),
         )
         .unwrap()
     }
@@ -1590,7 +1610,8 @@ pub mod tests {
             let mut store =
                 new_storage_from_ents(region_scheduler, raftlog_fetch_scheduler, &td, &ents);
             raftlog_fetch_worker.start(ReadRunner::new(router, store.engines.raft.clone()));
-            store.compact_entry_cache(5);
+            let mut cache_warmup_state = None;
+            store.compact_entry_cache(5, cache_warmup_state.as_mut());
             let mut e = store.entries(lo, hi, maxsize, GetEntriesContext::empty(true));
             if e == Err(raft::Error::Store(
                 raft::StorageError::LogTemporarilyUnavailable,
@@ -2175,6 +2196,7 @@ pub mod tests {
                 raftlog_fetch_sched.clone(),
                 0,
                 "".to_owned(),
+                &RaftMetrics::new(false),
             )
         };
         let mut s = build_storage().unwrap();

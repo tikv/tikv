@@ -14,8 +14,8 @@ use crossbeam_skiplist::{
 };
 use engine_rocks::RocksEngine;
 use engine_traits::{
-    CacheRegion, EvictReason, FailedReason, KvEngine, RegionCacheEngine, RegionCacheEngineExt,
-    RegionEvent, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
+    CacheRegion, EvictReason, FailedReason, KvEngine, OnEvictFinishedCallback, RegionCacheEngine,
+    RegionCacheEngineExt, RegionEvent, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
 use fail::fail_point;
 use kvproto::metapb::Region;
@@ -31,9 +31,7 @@ use crate::{
     },
     memory_controller::MemoryController,
     read::RegionCacheSnapshot,
-    region_manager::{
-        AsyncFnOnce, LoadFailedReason, RegionCacheStatus, RegionManager, RegionState,
-    },
+    region_manager::{LoadFailedReason, RegionCacheStatus, RegionManager, RegionState},
     statistics::Statistics,
     InMemoryEngineConfig, InMemoryEngineContext,
 };
@@ -398,6 +396,7 @@ impl RegionCacheMemoryEngine {
     }
 
     pub fn load_region(&self, cache_region: CacheRegion) -> result::Result<(), LoadFailedReason> {
+        fail_point!("ime_on_load_region", |_| { Ok(()) });
         self.core.region_manager().load_region(cache_region)
     }
 
@@ -415,12 +414,12 @@ impl RegionCacheMemoryEngine {
         &self,
         region: &CacheRegion,
         evict_reason: EvictReason,
-        cb: Option<Box<dyn AsyncFnOnce + Send + Sync>>,
+        on_evict_finished: Option<OnEvictFinishedCallback>,
     ) {
-        let deletable_regions = self
-            .core
-            .region_manager
-            .evict_region(region, evict_reason, cb);
+        let deletable_regions =
+            self.core
+                .region_manager
+                .evict_region(region, evict_reason, on_evict_finished);
         if !deletable_regions.is_empty() {
             // The region can be deleted directly.
             if let Err(e) = self
@@ -545,8 +544,12 @@ impl RegionCacheEngine for RegionCacheMemoryEngine {
 impl RegionCacheEngineExt for RegionCacheMemoryEngine {
     fn on_region_event(&self, event: RegionEvent) {
         match event {
-            RegionEvent::Eviction { region, reason } => {
-                self.evict_region(&region, reason, None);
+            RegionEvent::Eviction {
+                region,
+                reason,
+                on_evict_finished,
+            } => {
+                self.evict_region(&region, reason, on_evict_finished);
             }
             RegionEvent::TryLoad {
                 region,
@@ -565,19 +568,19 @@ impl RegionCacheEngineExt for RegionCacheMemoryEngine {
                             "region" => ?region,
                         );
                         if let Err(e) = self.load_region(region.clone()) {
-                            warn!(
-                                "ime load region failed";
-                                "err" => ?e,
-                                "region" => ?region,
-                            );
+                            // Ignore the error caused by the same region. It is possible that the
+                            // caller is trying to load the same region multiple times.
+                            if !e.is_caused_by_same_region() {
+                                warn!("ime load region failed"; "err" => ?e, "region" => ?region);
+                            }
                         }
                     }
-                } else if let Err(e) = self.core.region_manager().load_region(region.clone()) {
-                    warn!(
-                        "ime load region failed";
-                        "error" => ?e,
-                        "region" => ?region,
-                    );
+                } else if let Err(e) = self.load_region(region.clone()) {
+                    // Ignore the error caused by the same region. It is possible that the
+                    // caller is trying to load the same region multiple times.
+                    if !e.is_caused_by_same_region() {
+                        warn!("ime load region failed"; "err" => ?e, "region" => ?region);
+                    }
                 }
             }
             RegionEvent::Split {
@@ -604,10 +607,17 @@ impl RegionCacheEngineExt for RegionCacheMemoryEngine {
         }
     }
 
-    fn region_cached(&self, region: &Region) -> bool {
+    fn region_cached(&self, region: &Region, is_active: bool) -> bool {
         let regions_map = self.core.region_manager().regions_map().read();
         if let Some(meta) = regions_map.region_meta(region.get_id()) {
-            matches!(meta.get_state(), RegionState::Active | RegionState::Loading)
+            if is_active {
+                matches!(meta.get_state(), RegionState::Active)
+            } else {
+                matches!(
+                    meta.get_state(),
+                    RegionState::Active | RegionState::Loading | RegionState::Pending
+                )
+            }
         } else {
             false
         }
@@ -829,6 +839,7 @@ pub mod tests {
         engine.on_region_event(RegionEvent::Eviction {
             region: new_regions[0].clone(),
             reason: EvictReason::AutoEvict,
+            on_evict_finished: None,
         });
 
         // trigger split again
@@ -855,6 +866,7 @@ pub mod tests {
         engine.on_region_event(RegionEvent::Eviction {
             region: cache_region,
             reason: EvictReason::AutoEvict,
+            on_evict_finished: None,
         });
 
         // engine should become inactive after all regions are evicted.

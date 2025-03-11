@@ -2,20 +2,28 @@
 
 use std::sync::Arc;
 
+use codec::prelude::NumberEncoder;
 use engine_traits::{CacheRegion, EvictReason, KvEngine, RegionCacheEngineExt, RegionEvent};
 use kvproto::{
     metapb::{Peer, Region},
     raft_cmdpb::AdminCmdType,
-    raft_serverpb::{ExtraMessage, ExtraMessageType, RaftApplyState},
+    raft_serverpb::{ExtraMessageType, RaftApplyState},
 };
+use protobuf::ProtobufEnum as _;
 use raft::StateRole;
-use raftstore::coprocessor::{
-    dispatcher::{BoxDestroyPeerObserver, BoxExtraMessageObserver},
-    AdminObserver, ApplyCtxInfo, ApplySnapshotObserver, BoxAdminObserver, BoxApplySnapshotObserver,
-    BoxQueryObserver, BoxRoleObserver, Cmd, Coprocessor, CoprocessorHost, DestroyPeerObserver,
-    ExtraMessageObserver, ObserverContext, QueryObserver, RegionState, RoleObserver,
+use raftstore::{
+    coprocessor::{
+        dispatcher::{BoxDestroyPeerObserver, BoxTransferLeaderObserver},
+        AdminObserver, ApplyCtxInfo, ApplySnapshotObserver, BoxAdminObserver,
+        BoxApplySnapshotObserver, BoxQueryObserver, BoxRoleObserver, Cmd, Coprocessor,
+        CoprocessorHost, DestroyPeerObserver, ObserverContext, QueryObserver, RegionState,
+        RoleObserver, TransferLeaderCustomContext, TransferLeaderObserver,
+    },
+    store::TransferLeaderContext,
 };
-use tikv_util::{debug, warn};
+use tikv_util::{codec::number::decode_var_i64, debug, warn};
+
+use crate::metrics::IN_MEMORY_ENGINE_TRANSFER_LEADER_WARMUP_COUNTER_STATIC;
 
 #[derive(Clone)]
 pub struct LoadEvictionObserver {
@@ -49,14 +57,14 @@ impl LoadEvictionObserver {
         coprocessor_host
             .registry
             .register_role_observer(priority, BoxRoleObserver::new(self.clone()));
-        // Pre load region in transfer leader
-        coprocessor_host
-            .registry
-            .register_extra_message_observer(priority, BoxExtraMessageObserver::new(self.clone()));
         // Eviction the cached region when the peer is destroyed.
         coprocessor_host
             .registry
             .register_destroy_peer_observer(priority, BoxDestroyPeerObserver::new(self.clone()));
+        coprocessor_host.registry.register_transfer_leader_observer(
+            priority,
+            BoxTransferLeaderObserver::new(self.clone()),
+        );
     }
 
     fn post_exec_cmd(
@@ -74,32 +82,44 @@ impl LoadEvictionObserver {
         // Evicting the cache for region splits is not worthwhile and may cause
         // performance regression due to frequent loading and evicting of
         // hot regions.
-        if apply.pending_handle_ssts.is_some()
-            || (state.modified_region.is_some()
-                && matches!(
-                    cmd.request.get_admin_request().get_cmd_type(),
-                    AdminCmdType::PrepareMerge
-                        | AdminCmdType::CommitMerge
-                        | AdminCmdType::RollbackMerge
-                ))
-        {
+        if apply.pending_handle_ssts.is_some() {
             let cache_region = CacheRegion::from_region(ctx.region());
             debug!(
-                "ime evict range due to apply commands";
+                "ime evict region due to ingest sst";
                 "region" => ?cache_region,
-                "is_ingest_sst" => apply.pending_handle_ssts.is_some(),
-                "admin_command" => ?cmd.request.get_admin_request().get_cmd_type(),
             );
-            self.evict_region(cache_region, EvictReason::Merge)
+            self.evict_region(cache_region, EvictReason::IngestSST)
+        }
+        let cmd_type = cmd.request.get_admin_request().get_cmd_type();
+        if let Some(modified_region) = &state.modified_region {
+            if matches!(cmd_type, AdminCmdType::PrepareMerge) {
+                let cache_region = CacheRegion::from_region(ctx.region());
+                debug!(
+                    "ime evict region due to apply commands";
+                    "region" => ?cache_region,
+                    "admin_command" => ?cmd_type
+                );
+                self.evict_region(cache_region, EvictReason::PrepareMerge)
+            } else if matches!(
+                cmd_type,
+                AdminCmdType::CommitMerge | AdminCmdType::RollbackMerge
+            ) {
+                let cache_region = CacheRegion::from_region(ctx.region());
+                debug!(
+                    "ime evict region followed by reloading due to apply commands";
+                    "region" => ?cache_region,
+                    "admin_command" => ?cmd_type
+                );
+                self.merge_region(cache_region.clone(), modified_region.clone())
+            }
         }
         // there are new_regions, this must be a split event.
         if !state.new_regions.is_empty() {
-            let cmd_type = cmd.request.get_admin_request().get_cmd_type();
             assert!(cmd_type == AdminCmdType::BatchSplit || cmd_type == AdminCmdType::Split);
             debug!(
                 "ime handle region split";
                 "region_id" => ctx.region().get_id(),
-                "admin_command" => ?cmd.request.get_admin_request().get_cmd_type(),
+                "admin_command" => ?cmd_type,
                 "region" => ?state.modified_region.as_ref().unwrap(),
                 "new_regions" => ?state.new_regions,
             );
@@ -122,6 +142,25 @@ impl LoadEvictionObserver {
         });
     }
 
+    // Merged regions are evicted first and will be reloaded immediately to
+    // minimize the impact of the merge operations on the cache hit ratio.
+    fn merge_region(&self, region: CacheRegion, modified_region: Region) {
+        let cache_engine = self.cache_engine.clone();
+        let modified_region = CacheRegion::from_region(&modified_region);
+        self.cache_engine.on_region_event(RegionEvent::Eviction {
+            region: region.clone(),
+            reason: EvictReason::Merge,
+            on_evict_finished: Some(Box::new(move || {
+                Box::pin(async move {
+                    cache_engine.on_region_event(RegionEvent::TryLoad {
+                        region: modified_region,
+                        for_manual_range: false,
+                    });
+                })
+            })),
+        });
+    }
+
     // Try to load region. It will be loaded if it's overlapped with maunal range
     fn try_load_region(&self, region: CacheRegion) {
         self.cache_engine.on_region_event(RegionEvent::TryLoad {
@@ -131,8 +170,11 @@ impl LoadEvictionObserver {
     }
 
     fn evict_region(&self, region: CacheRegion, reason: EvictReason) {
-        self.cache_engine
-            .on_region_event(RegionEvent::Eviction { region, reason });
+        self.cache_engine.on_region_event(RegionEvent::Eviction {
+            region,
+            reason,
+            on_evict_finished: None,
+        });
     }
 }
 
@@ -208,18 +250,94 @@ impl AdminObserver for LoadEvictionObserver {
         // immediately, so return false.
         false
     }
+}
 
+const TRANSFER_LEADER_CONTEXT_KEY: &[u8] = b"ime";
+
+impl TransferLeaderObserver for LoadEvictionObserver {
     fn pre_transfer_leader(
         &self,
         ctx: &mut ObserverContext<'_>,
         _tr: &kvproto::raft_cmdpb::TransferLeaderRequest,
-    ) -> raftstore::coprocessor::Result<Option<kvproto::raft_serverpb::ExtraMessage>> {
-        if !self.cache_engine.region_cached(ctx.region()) {
+    ) -> raftstore::coprocessor::Result<Option<TransferLeaderCustomContext>> {
+        // Warm up transferee's cache when a region is in active or in loading.
+        let active_only = false;
+        if !self.cache_engine.region_cached(ctx.region(), active_only) {
             return Ok(None);
         }
-        let mut msg = ExtraMessage::new();
-        msg.set_type(ExtraMessageType::MsgPreLoadRegionRequest);
-        Ok(Some(msg))
+        IN_MEMORY_ENGINE_TRANSFER_LEADER_WARMUP_COUNTER_STATIC
+            .request
+            .inc();
+        let mut value = vec![];
+        value
+            .write_var_i64(ExtraMessageType::MsgPreLoadRegionRequest.value() as i64)
+            .unwrap();
+        Ok(Some(TransferLeaderCustomContext {
+            key: TRANSFER_LEADER_CONTEXT_KEY.to_vec(),
+            value,
+        }))
+    }
+
+    fn pre_ack_transfer_leader(
+        &self,
+        r: &mut ObserverContext<'_>,
+        msg: &raft::eraftpb::Message,
+    ) -> bool {
+        fn get_value(ctx: &[u8]) -> raftstore::Result<Option<ExtraMessageType>> {
+            let ctx = TransferLeaderContext::from_bytes(ctx)?;
+            let Some(mut value) = ctx.get_custom_ctx(TRANSFER_LEADER_CONTEXT_KEY) else {
+                return Ok(None);
+            };
+            let value = decode_var_i64(&mut value)?;
+            Ok(ExtraMessageType::from_i32(value as i32))
+        }
+
+        let region = r.region();
+        let context = msg.get_context();
+        let ty = match get_value(context) {
+            Ok(Some(ty)) => ty,
+            other => {
+                // For compatibility, return ready if the context is not found
+                // or invalid.
+                if other.is_err() {
+                    warn!("ime transfer leader warmup ignored";
+                        "region_id" => ?region.get_id(),
+                        "from" => ?msg.get_from(),
+                        "error" => ?other.err());
+                }
+                return true;
+            }
+        };
+
+        let need_warmup = ty == ExtraMessageType::MsgPreLoadRegionRequest;
+        if !need_warmup {
+            // Ready to ack.
+            return true;
+        }
+
+        if region.get_peers().is_empty() {
+            // MsgPreLoadRegionRequest is sent before leader issue a transfer leader
+            // request. It is possible that the peer is not initialized yet.
+            warn!("ime skip warmup an uninitialized region"; "region" => ?region);
+            IN_MEMORY_ENGINE_TRANSFER_LEADER_WARMUP_COUNTER_STATIC
+                .skip_warmup
+                .inc();
+            return true;
+        }
+
+        // Exclude loading states to make sure the region is active.
+        let active_only = true;
+        let has_cached = self.cache_engine.region_cached(r.region(), active_only);
+        if has_cached {
+            // Ready to ack.
+            return true;
+        }
+
+        IN_MEMORY_ENGINE_TRANSFER_LEADER_WARMUP_COUNTER_STATIC
+            .warmup
+            .inc();
+        self.cache_engine.load_region(r.region());
+        false
     }
 }
 
@@ -232,7 +350,7 @@ impl ApplySnapshotObserver for LoadEvictionObserver {
         _: Option<&raftstore::store::Snapshot>,
     ) {
         // While currently, we evict cached region after leader step down.
-        // A region can may still be loaded when it's leader. E.g, to pre-load
+        // A region can may still be loaded when it's leader. E.g, to warmup
         // some hot regions before transferring leader.
         let cache_region = CacheRegion::from_region(ctx.region());
         self.evict_region(cache_region, EvictReason::ApplySnapshot)
@@ -266,21 +384,6 @@ impl RoleObserver for LoadEvictionObserver {
     }
 }
 
-impl ExtraMessageObserver for LoadEvictionObserver {
-    fn on_extra_message(&self, region: &Region, extra_msg: &ExtraMessage) {
-        if extra_msg.get_type() == ExtraMessageType::MsgPreLoadRegionRequest {
-            if region.get_peers().is_empty() {
-                // MsgPreLoadRegionRequest is sent before leader issue a
-                // transfer leader request. It is possible that the peer
-                // is not initialized yet.
-                warn!("ime skip pre-load an uninitialized region"; "region" => ?region);
-                return;
-            }
-            self.cache_engine.load_region(region);
-        }
-    }
-}
-
 impl DestroyPeerObserver for LoadEvictionObserver {
     fn on_destroy_peer(&self, r: &Region) {
         let mut region = r.clone();
@@ -293,7 +396,8 @@ impl DestroyPeerObserver for LoadEvictionObserver {
         }
         self.cache_engine.on_region_event(RegionEvent::Eviction {
             region: CacheRegion::from_region(&region),
-            reason: EvictReason::PeerDestroy,
+            reason: EvictReason::DestroyPeer,
+            on_evict_finished: None,
         });
     }
 }
@@ -321,7 +425,7 @@ mod tests {
             self.region_events.lock().unwrap().push(event);
         }
 
-        fn region_cached(&self, _: &Region) -> bool {
+        fn region_cached(&self, _: &Region, _: bool) -> bool {
             unreachable!()
         }
 
@@ -336,6 +440,40 @@ mod tests {
             .mut_admin_request()
             .set_cmd_type(AdminCmdType::BatchSplit);
         request
+    }
+
+    fn assert_eq_region_events(got: &RegionEvent, expected: &RegionEvent) {
+        match (got, expected) {
+            (
+                RegionEvent::TryLoad {
+                    region: got_region,
+                    for_manual_range: got_for_manual_range,
+                },
+                RegionEvent::TryLoad {
+                    region: expected_region,
+                    for_manual_range: expected_for_manual_range,
+                },
+            ) => {
+                assert_eq!(got_region, expected_region);
+                assert_eq!(got_for_manual_range, expected_for_manual_range);
+            }
+            (
+                RegionEvent::Eviction {
+                    region: got_region,
+                    reason: got_reason,
+                    on_evict_finished: _,
+                },
+                RegionEvent::Eviction {
+                    region: expected_region,
+                    reason: expected_reason,
+                    on_evict_finished: _,
+                },
+            ) => {
+                assert_eq!(got_region, expected_region);
+                assert_eq!(got_reason, expected_reason);
+            }
+            _ => panic!("unexpected region event"),
+        }
     }
 
     #[test]
@@ -361,7 +499,7 @@ mod tests {
         let response = RaftCmdResponse::default();
         let cmd = Cmd::new(0, 0, request, response);
 
-        // Must not evict range for region split.
+        // Must not evict region for region split.
         observer.post_exec_cmd(&mut ctx, &cmd, &RegionState::default(), &mut apply);
         assert!(&cache_engine.region_events.lock().unwrap().is_empty());
     }
@@ -400,9 +538,10 @@ mod tests {
         let cached_region = CacheRegion::from_region(&region);
         let expected = RegionEvent::Eviction {
             region: cached_region,
-            reason: EvictReason::Merge,
+            reason: EvictReason::IngestSST,
+            on_evict_finished: None,
         };
-        assert_eq!(&cache_engine.region_events.lock().unwrap()[0], &expected);
+        assert_eq_region_events(&cache_engine.region_events.lock().unwrap()[0], &expected);
     }
 
     #[test]
@@ -421,6 +560,6 @@ mod tests {
             region: cached_region,
             for_manual_range: true,
         };
-        assert_eq!(&cache_engine.region_events.lock().unwrap()[0], &expected);
+        assert_eq_region_events(&cache_engine.region_events.lock().unwrap()[0], &expected);
     }
 }

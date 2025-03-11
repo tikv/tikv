@@ -93,7 +93,7 @@ mod tests {
 
     fn test_atomic_process_write_impl<F: KvFormat>() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
-        let cm = concurrency_manager::ConcurrencyManager::new(1.into());
+        let cm = concurrency_manager::ConcurrencyManager::new_for_test(1.into());
         let raw_keys = [b"ra", b"rz"];
         let raw_values = [b"valuea", b"valuez"];
         let ts_provider = super::super::test_util::gen_ts_provider(F::TAG);

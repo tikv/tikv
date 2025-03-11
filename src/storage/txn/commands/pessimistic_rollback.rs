@@ -157,7 +157,7 @@ pub mod tests {
         let ctx = Context::default();
         let snapshot = engine.snapshot(Default::default()).unwrap();
         let for_update_ts = for_update_ts.into();
-        let cm = ConcurrencyManager::new(for_update_ts);
+        let cm = ConcurrencyManager::new_for_test(for_update_ts);
         let start_ts = start_ts.into();
         let command = crate::storage::txn::commands::PessimisticRollback {
             ctx: ctx.clone(),
