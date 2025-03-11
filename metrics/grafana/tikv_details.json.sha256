@@ -1,1 +1,5 @@
+<<<<<<< HEAD
 869e474f816cdf647421c074b0e908864edc2e2bb5ed85f7e152e0d29f0d14b4  ./metrics/grafana/tikv_details.json
+=======
+51501138e612b5d9908b70e0318b5b1f2fad09823ce7447c8675d11a191f3aae  ./metrics/grafana/tikv_details.json
+>>>>>>> e4782d2145 (grafana: supply optional quantile metrics. (#18282))
