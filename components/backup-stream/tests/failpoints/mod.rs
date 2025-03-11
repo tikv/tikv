@@ -27,7 +27,6 @@ mod all {
     use encryption::{FileConfig, MasterKeyConfig};
     use futures::executor::block_on;
     use kvproto::encryptionpb::EncryptionMethod;
-    use raftstore::coprocessor::ObserveHandle;
     use tempfile::TempDir;
     use tikv_util::{
         config::{ReadableDuration, ReadableSize},
