@@ -553,11 +553,7 @@ where
         }
     }
 
-    fn schedule_start_observe(
-        &self,
-        backoff: Duration,
-        region: Region,
-    ) {
+    fn schedule_start_observe(&self, backoff: Duration, region: Region) {
         let tx = self.messenger.upgrade();
         let region_id = region.id;
         if tx.is_none() {
