@@ -5559,6 +5559,7 @@ mod tests {
             let (key, value) = write.0.clone().into_key_value();
             // The version we want to flashback to.
             let version = write.2;
+            println!("=== flashback start ===");
             run_flashback_to_version(
                 &storage,
                 start_ts,
@@ -5567,6 +5568,7 @@ mod tests {
                 key.clone(),
                 Some(Key::from_raw(b"z")),
             );
+            println!("=== flashback done ===");
             if let Mutation::Put(..) = write.0 {
                 expect_value(
                     value.unwrap(),

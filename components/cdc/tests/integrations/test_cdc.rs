@@ -2540,7 +2540,9 @@ fn test_flashback() {
     let (start_key, end_key) = (b"key0".to_vec(), b"key2".to_vec());
     // Prepare flashback.
     let flashback_start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    println!("=== prepare flashback start ===");
     suite.must_kv_prepare_flashback(region_id, &start_key, &end_key, flashback_start_ts);
+    println!("=== prepare flashback done ===");
     // resolved ts should not be advanced anymore.
     let mut counter = 0;
     let mut last_resolved_ts = 0;
