@@ -529,7 +529,7 @@ fn test_duplicate_and_close() {
     import.switch_mode(&req).unwrap();
 
     let data_count: u64 = 4096;
-    for commit_ts in 0..4 {
+    for commit_ts in 1..5 {
         let mut meta = new_sst_meta(0, 0);
         meta.set_region_id(ctx.get_region_id());
         meta.set_region_epoch(ctx.get_region_epoch().clone());
