@@ -876,10 +876,12 @@ version = "0.1.0"
 dependencies = [
  "async-compression",
  "async-trait",
+ "base64 0.13.0",
  "chrono",
  "concurrency_manager",
  "crc64fast",
  "dashmap",
+ "derive_more",
  "encryption",
  "encryption_export",
  "engine_panic",
@@ -907,6 +909,8 @@ dependencies = [
  "raftstore",
  "rand 0.8.5",
  "resolved_ts",
+ "serde",
+ "serde_json",
  "slog",
  "slog-global",
  "tempdir",
@@ -7315,7 +7319,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "9.0.0-alpha"
+version = "9.0.0-beta.1"
 dependencies = [
  "anyhow",
  "api_version",

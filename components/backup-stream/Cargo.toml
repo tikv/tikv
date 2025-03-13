@@ -28,10 +28,12 @@ harness = true
 [dependencies]
 async-compression = { version = "0.4.12", features = ["tokio", "zstd"] }
 async-trait = { version = "0.1" }
+base64 = "0.13.0"
 chrono = { workspace = true }
 concurrency_manager = { workspace = true }
 crc64fast = "0.1"
 dashmap = "5"
+derive_more = "0.99.3"
 encryption = { workspace = true }
 encryption_export = { workspace = true }
 engine_rocks = { workspace = true }
@@ -57,6 +59,8 @@ raft = { workspace = true }
 raftstore = { workspace = true }
 rand = "0.8.0"
 resolved_ts = { workspace = true }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["preserve_order"] }
 slog = { workspace = true }
 slog-global = { workspace = true }
 thiserror = "1"
