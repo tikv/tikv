@@ -125,11 +125,17 @@ impl<DB: SstExt> SubcompactionExec<DB>
 where
     <<DB as SstExt>::SstWriter as SstWriter>::ExternalSstFileReader: 'static,
 {
-    fn update_checksum_diff(a: &Record, b: &Record, diff: &mut ChecksumDiff) {
-        assert_eq!(
-            a, b,
-            "The record with same key contains different value: the backup might be corrupted."
-        );
+    fn update_checksum_diff(a: &Record, _b: &Record, diff: &mut ChecksumDiff) {
+        // When encountering records with identical keys with ts but different values,
+        // we skip the assertion. While this indicates potential txn
+        // inconsistency, it can be safely tolerated during restore since these
+        // are typically rollback records that won't affect the final state.
+        //
+        // TODO(https://github.com/tikv/tikv/issues/18300): Re-enable assertion once the underlying issue is fixed.
+        // assert_eq!(
+        //     a, b,
+        //     "The record with same key contains different value: the backup might be
+        // corrupted." );
 
         diff.removed_key += 1;
         diff.decreaed_size += (a.key.len() + a.value.len()) as u64;
@@ -356,15 +362,17 @@ where
         result.expected_keys -= cdiff.removed_key;
         result.expected_size -= cdiff.decreaed_size;
 
+        let uuid = uuid::Uuid::new_v4();
         let out_name = self
             .out_prefix
             .join(SST_OUT_REL)
             .join(format!(
-                "{}_{}_{}_{}.sst",
+                "{}_{}_{}_{}_{:?}.sst",
                 util::aligned_u64(c.input_min_ts),
                 util::aligned_u64(c.input_max_ts),
                 c.cf,
-                c.region_id
+                c.region_id,
+                uuid,
             ))
             .display()
             .to_string();

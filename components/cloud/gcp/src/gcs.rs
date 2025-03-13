@@ -332,25 +332,34 @@ impl BlobStorage for GcsStorage {
         reader: PutResource<'_>,
         content_length: u64,
     ) -> io::Result<()> {
-        if content_length == 0 {
-            // It is probably better to just write the empty file
-            // However, currently going forward results in a body write aborted error
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "no content to write",
-            ));
-        }
-
         let key = self.maybe_prefix_key(name);
         debug!("save file to GCS storage"; "key" => %key);
-        let bucket = BucketName::try_from(self.config.bucket.bucket.to_string())
-            .or_invalid_input(format_args!("invalid bucket {}", self.config.bucket.bucket))?;
 
-        let metadata = Metadata {
-            name: Some(key),
-            storage_class: self.config.storage_class,
-            ..Default::default()
-        };
+        if content_length == 0 {
+            // we need put empty(lock file) into gcs,
+            // this behavior need align with s3.
+            let oid = ObjectId::new(self.config.bucket.bucket.to_string(), key)
+                .or_invalid_input(format_args!("invalid object id"))?;
+            retry(
+                || async {
+                    let req = Object::insert_simple(
+                        &oid,
+                        "",
+                        0,
+                        Some(InsertObjectOptional {
+                            predefined_acl: self.config.predefined_acl,
+                            ..Default::default()
+                        }),
+                    )
+                    .map_err(RequestError::Gcs)?
+                    .map(|_| Body::empty());
+                    self.make_request(req, tame_gcs::Scopes::ReadWrite).await
+                },
+                "insert_simple",
+            )
+            .await?;
+            return Ok(());
+        }
 
         // FIXME: Switch to upload() API so we don't need to read the entire data into
         // memory in order to retry.
@@ -360,6 +369,15 @@ impl BlobStorage for GcsStorage {
         metrics::CLOUD_REQUEST_HISTOGRAM_VEC
             .with_label_values(&["gcp", "read_local"])
             .observe(begin.saturating_elapsed_secs());
+
+        let bucket = BucketName::try_from(self.config.bucket.bucket.to_string())
+            .or_invalid_input(format_args!("invalid bucket {}", self.config.bucket.bucket))?;
+        let metadata = Metadata {
+            name: Some(key),
+            storage_class: self.config.storage_class,
+            ..Default::default()
+        };
+
         let begin = Instant::now_coarse();
         retry(
             || async {
@@ -384,7 +402,7 @@ impl BlobStorage for GcsStorage {
         metrics::CLOUD_REQUEST_HISTOGRAM_VEC
             .with_label_values(&["gcp", "insert_multipart"])
             .observe(begin.saturating_elapsed_secs());
-        Ok::<_, io::Error>(())
+        Ok(())
     }
 
     fn get(&self, name: &str) -> cloud::blob::BlobStream<'_> {
