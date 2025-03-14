@@ -226,7 +226,7 @@ mod tests {
         o.register_region(&r);
         let task = rx.recv_timeout(Duration::from_secs(0)).unwrap().unwrap();
         let handle = ObserveHandle::new();
-        if let Task::ModifyObserve(ObserveOp::Start { ref region, .. }) = task {
+        if let Task::ModifyObserve(ObserveOp::Start { ref region }) = task {
             subs.register_region(region, handle.clone(), None);
         } else {
             panic!("unexpected message received: it is {}", task);
@@ -251,7 +251,7 @@ mod tests {
         o.register_region(&r);
         let task = rx.recv_timeout(Duration::from_secs(0)).unwrap().unwrap();
         let handle = ObserveHandle::new();
-        if let Task::ModifyObserve(ObserveOp::Start { ref region, .. }) = task {
+        if let Task::ModifyObserve(ObserveOp::Start { ref region }) = task {
             subs.register_region(region, handle.clone(), None);
         } else {
             panic!("not match, it is {:?}", task);
