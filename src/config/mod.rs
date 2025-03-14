@@ -3176,7 +3176,7 @@ impl Default for File {
     fn default() -> Self {
         Self {
             filename: "".to_owned(),
-            max_size: 300,
+            max_size: 4000,
             max_days: 0,
             max_backups: 0,
         }
