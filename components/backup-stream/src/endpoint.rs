@@ -629,7 +629,6 @@ where
                         .try_for_each(|r| {
                             tx.blocking_send(ObserveOp::Start {
                                 region: r.region.clone(),
-                                handle: ObserveHandle::new(),
                             })
                         });
                 }),
@@ -1292,7 +1291,6 @@ type ResolveRegionsCallback = Box<dyn FnOnce(ResolvedRegions) + 'static + Send>;
 pub enum ObserveOp {
     Start {
         region: Region,
-        handle: ObserveHandle,
     },
     Stop {
         region: Region,
@@ -1324,10 +1322,9 @@ pub enum ObserveOp {
 impl std::fmt::Debug for ObserveOp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Start { region, handle } => f
+            Self::Start { region } => f
                 .debug_struct("Start")
                 .field("region", &utils::debug_region(region))
-                .field("handle", &handle)
                 .finish(),
             Self::Stop { region } => f
                 .debug_struct("Stop")
