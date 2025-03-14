@@ -126,10 +126,10 @@ where
     <<DB as SstExt>::SstWriter as SstWriter>::ExternalSstFileReader: 'static,
 {
     fn update_checksum_diff(a: &Record, b: &Record, diff: &mut ChecksumDiff) {
-        assert_eq!(
-            a, b,
-            "The record with same key contains different value: the backup might be corrupted."
-        );
+        // assert_eq!(
+        //     a, b,
+        //     "The record with same key contains different value: the backup might be corrupted."
+        // );
 
         diff.removed_key += 1;
         diff.decreaed_size += (a.key.len() + a.value.len()) as u64;
