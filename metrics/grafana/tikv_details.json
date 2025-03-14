@@ -4963,7 +4963,7 @@
           "yaxes": [
             {
               "decimals": null,
-              "format": "bytes",
+              "format": "short",
               "label": null,
               "logBase": 1,
               "max": null,
