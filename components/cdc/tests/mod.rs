@@ -699,10 +699,11 @@ impl TestSuite {
 
     pub fn must_wait_delegate_condition(
         &self,
+        node_id: u64,
         region_id: u64,
         cond: Arc<dyn Fn(Option<&Delegate>) -> bool + Sync + Send>,
     ) {
-        let scheduler = self.endpoints[&region_id].scheduler();
+        let scheduler = self.endpoints[&node_id].scheduler();
         let start = Instant::now();
         loop {
             sleep_ms(100);
