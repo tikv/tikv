@@ -20,8 +20,20 @@ use tikv_util::{config::VersionTrack, info, smoother::Smoother, worker::Schedule
 use tokio::sync::mpsc;
 
 use crate::{
+<<<<<<< HEAD
     memory_controller::MemoryController, region_manager::AsyncFnOnce, BackgroundTask,
     InMemoryEngineConfig,
+=======
+    memory_controller::MemoryController,
+    metrics::{
+        IN_MEMORY_ENGINE_AUTO_LOAD_EVICT_CACHED_REGION_COP_REQ,
+        IN_MEMORY_ENGINE_AUTO_LOAD_EVICT_CACHED_REGION_MVCC_AMP,
+        IN_MEMORY_ENGINE_AUTO_LOAD_EVICT_TOP_REGION_COP_REQ,
+        IN_MEMORY_ENGINE_AUTO_LOAD_EVICT_TOP_REGION_MVCC_AMP,
+    },
+    region_manager::CopRequestsSma,
+    BackgroundTask, InMemoryEngineConfig,
+>>>>>>> c0b93db626 (In-memory Engine: reduce verbose logs and add metrics (#18232))
 };
 
 /// Do not evict a region if has been cached for less than this duration.
@@ -210,8 +222,20 @@ impl RegionStatsManager {
 
         {
             let mut region_loaded_map = self.region_loaded_at.write().unwrap();
+<<<<<<< HEAD
             for &region_id in curr_top_regions.keys() {
                 let _ = region_loaded_map.insert(region_id, Instant::now());
+=======
+            for region in &curr_top_regions {
+                let _ = region_loaded_map.insert(region.0.id, Instant::now());
+                if !cached_regions.contains_key(&region.0.id) {
+                    IN_MEMORY_ENGINE_AUTO_LOAD_EVICT_TOP_REGION_COP_REQ
+                        .observe(region.1.query_stats.coprocessor as f64);
+                    IN_MEMORY_ENGINE_AUTO_LOAD_EVICT_TOP_REGION_MVCC_AMP
+                        .observe(region.1.cop_detail.mvcc_amplification());
+                    regions_to_load.push(region.0.clone());
+                }
+>>>>>>> c0b93db626 (In-memory Engine: reduce verbose logs and add metrics (#18232))
             }
         }
 
@@ -241,6 +265,7 @@ impl RegionStatsManager {
             )
         };
 
+<<<<<<< HEAD
         info!(
             "ime mvcc amplification reduction filter";
             "mvcc_amplification_to_filter" => mvcc_amplification_to_filter,
@@ -264,7 +289,28 @@ impl RegionStatsManager {
                 "ime collect regions activities";
                 "regions" => ?debug,
             );
+=======
+        let mut debug = Vec::with_capacity(cached_region_stats.len());
+        for crs in &cached_region_stats {
+            debug.push(format!(
+                "region_id={}, cop={}, avg_cop={}, cop_detail={:?}, mvcc_amplification={}",
+                crs.region.id,
+                crs.stat.query_stats.coprocessor,
+                crs.sma_cop_requests_avg,
+                crs.stat.cop_detail,
+                crs.stat.cop_detail.mvcc_amplification(),
+            ));
+            IN_MEMORY_ENGINE_AUTO_LOAD_EVICT_CACHED_REGION_COP_REQ
+                .observe(crs.stat.query_stats.coprocessor as f64);
+            IN_MEMORY_ENGINE_AUTO_LOAD_EVICT_CACHED_REGION_MVCC_AMP
+                .observe(crs.stat.cop_detail.mvcc_amplification());
+>>>>>>> c0b93db626 (In-memory Engine: reduce verbose logs and add metrics (#18232))
         }
+        // TODO(SpadeA): remove it after it's stable
+        info!(
+            "ime collect regions activities";
+            "regions" => ?debug,
+        );
 
         let reach_stop_load = memory_controller.reached_stop_load_threshold();
         let mut regions_loaded = self.region_loaded_at.write().unwrap();
