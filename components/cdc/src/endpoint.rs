@@ -157,7 +157,7 @@ type InitCallback = Box<dyn FnOnce() + Send>;
 pub enum Validate {
     Region(u64, Box<dyn FnOnce(Option<&Delegate>) + Send>),
     OldValueCache(Box<dyn FnOnce(&OldValueCache) + Send>),
-    UnresolvedRegion(Box<dyn FnOnce(usize) + Send> ),
+    UnresolvedRegion(Box<dyn FnOnce(usize) + Send>),
 }
 
 pub enum Task {

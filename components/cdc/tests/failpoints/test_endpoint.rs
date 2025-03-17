@@ -734,14 +734,19 @@ fn test_cdc_unresolved_region_count_before_finish_scan_lock() {
             let (tx, rx) = mpsc::sync_channel(1);
             let checker = move |c: usize| tx.send(c).unwrap();
             scheduler
-                .schedule(Task::Validate(Validate::UnresolvedRegion(Box::new(checker))))
+                .schedule(Task::Validate(Validate::UnresolvedRegion(Box::new(
+                    checker,
+                ))))
                 .unwrap();
             let actual_count = rx.recv().unwrap();
             if actual_count == target_count {
                 return;
             }
             if start.elapsed() > Duration::from_secs(5) {
-                panic!("check unresolve region failed, actual_count: {}, target_count: {}", actual_count, target_count);
+                panic!(
+                    "check unresolve region failed, actual_count: {}, target_count: {}",
+                    actual_count, target_count
+                );
             }
         }
     }
@@ -778,7 +783,8 @@ fn test_cdc_unresolved_region_count_before_finish_scan_lock() {
     let mut event_feeds = Vec::with_capacity(region_count);
     let mut receive_events = Vec::with_capacity(region_count);
     for region in regions.clone() {
-        let (mut req_tx, event_feed, receive_event) = new_event_feed(suite.get_region_cdc_client(region.id));
+        let (mut req_tx, event_feed, receive_event) =
+            new_event_feed(suite.get_region_cdc_client(region.id));
         let mut req = suite.new_changedata_request(region.id);
         req.mut_header().set_ticdc_version("7.0.0".into());
         req.set_region_epoch(region.get_region_epoch().clone());
@@ -793,7 +799,7 @@ fn test_cdc_unresolved_region_count_before_finish_scan_lock() {
     // Wait until all initialization finishes and check again.
     fail::remove("before_schedule_resolver_ready");
     for receive_event in receive_events {
-        receive_event(false); 
+        receive_event(false);
     }
     check_unresolved_region_count(&suite.endpoints[&1].scheduler(), 0);
 
