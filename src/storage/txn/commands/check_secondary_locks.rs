@@ -154,7 +154,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
 
         let mut snapshot_reader = SnapshotReader::new_with_ctx(self.start_ts, snapshot, &self.ctx);
-        snapshot_reader.setup_with_hint_items(&mut self.keys, |k| k);
+        // snapshot_reader.setup_with_hint_items(&mut self.keys, |k| k);
         let mut reader = ReaderWithStats::new(snapshot_reader, context.statistics);
         let mut released_locks = ReleasedLocks::new();
         let mut result = SecondaryLocksStatus::Locked(Vec::new());

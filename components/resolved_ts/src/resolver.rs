@@ -318,7 +318,7 @@ impl Resolver {
             self.update_tracked_index(index);
         }
         debug!(
-            "track lock {}@{}",
+            "DBG track lock {}@{}",
             &log_wrappers::Value::key(&key),
             start_ts;
             "region_id" => self.region_id,
@@ -341,11 +341,18 @@ impl Resolver {
     ) -> Result<(), MemoryQuotaExceeded> {
         let bytes = self.lock_heap_size(&key);
         self.memory_quota.alloc(bytes)?;
+        let clone_key = key.clone();
         let key: Arc<[u8]> = key.into_boxed_slice().into();
         match self.locks_by_key.entry(key) {
-            HashMapEntry::Occupied(_) => {
+            HashMapEntry::Occupied(entry) => {
                 // Free memory quota because it's already in the map.
                 self.memory_quota.free(bytes);
+                warn!("DBG, track lock, key already exists";
+                    "key" => &log_wrappers::Value::key(&clone_key),
+                    "region_id" => self.region_id,
+                    "existing_start_ts" => entry.get(),
+                    "new_start_ts" => start_ts,
+                );
             }
             HashMapEntry::Vacant(entry) => {
                 // Add lock count for the start ts.
@@ -370,7 +377,7 @@ impl Resolver {
             let bytes = self.lock_heap_size(key);
             self.memory_quota.free(bytes);
             debug!(
-                "untrack lock {}@{}",
+                "DBG untrack lock {}@{}",
                 &log_wrappers::Value::key(key),
                 start_ts;
                 "region_id" => self.region_id,
@@ -436,6 +443,7 @@ impl Resolver {
         let min_lock = self.oldest_transaction();
         let has_lock = min_lock.is_some();
         let min_txn_ts = min_lock.as_ref().map(|(ts, _)| *ts).unwrap_or(min_ts);
+        let min_lock_1 = min_lock.clone();
 
         // No more commit happens before the ts.
         let new_resolved_ts = cmp::min(min_txn_ts, min_ts);
@@ -464,6 +472,14 @@ impl Resolver {
         }
 
         // Resolved ts never decrease.
+        if new_resolved_ts < self.resolved_ts {
+            warn!("DBG resolved ts decrease";
+                "min_lock" => ?min_lock_1,
+                "region_id" => self.region_id,
+                "new_resolved_ts" => new_resolved_ts,
+                "old_resolved_ts" => self.resolved_ts,
+            );
+        }
         self.resolved_ts = cmp::max(self.resolved_ts, new_resolved_ts);
 
         // Publish an `(apply index, safe ts)` item into the region read progress

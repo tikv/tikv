@@ -123,12 +123,20 @@ impl AdvanceTsWorker {
                 error!("failed to advance resolved_ts: failed to update max_ts in concurrency manager"; "err" => ?e);
                 return;
             }
+            let mut mm = None;
+            let mut mk = None;
             if let Some((min_mem_lock_ts, lock)) = cm.global_min_lock() {
+                mm = Some(min_mem_lock_ts);
+                mk = Some(lock.clone());
                 if min_mem_lock_ts < min_ts {
                     min_ts = min_mem_lock_ts;
                     ts_source = TsSource::MemoryLock(lock);
                 }
             }
+            warn!(
+                "DBG, advance resolved ts to: {}, min_mema_lock_ts: {:?}, min lock key: {:?}",
+                min_ts, mm, mk
+            );
 
             let regions = leader_resolver
                 .resolve(regions, min_ts, Some(advance_ts_interval))

@@ -129,9 +129,7 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
         // for every key.
         if items.len() > 1 {
             items.sort_by(|a, b| key_of(a).cmp(key_of(b)));
-            self.reader.scan_mode = Some(ScanMode::Forward);
-            self.reader
-                .set_range(Some(key_of(items.first().unwrap()).clone()), None);
+            self.reader.lock_scan_mode = Some(ScanMode::Forward);
         }
     }
 }
@@ -148,6 +146,11 @@ pub struct MvccReader<S: EngineSnapshot> {
     upper_bound: Option<Key>,
 
     hint_min_ts: Option<Bound<TimeStamp>>,
+
+    // None means single key read for each key.
+    // Some(ScanMode::Forward) means reading lock operations following operations are performed on
+    // a cursor.
+    lock_scan_mode: Option<ScanMode>,
 
     /// None means following operations are performed on a single user key,
     /// i.e., different versions of the same key. It can use prefix seek to
@@ -179,6 +182,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             lower_bound: None,
             upper_bound: None,
             hint_min_ts: None,
+            lock_scan_mode: None,
             scan_mode,
             current_key: None,
             fill_cache,
@@ -198,6 +202,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             lower_bound: None,
             upper_bound: None,
             hint_min_ts: None,
+            lock_scan_mode: None,
             scan_mode,
             current_key: None,
             fill_cache: !ctx.get_not_fill_cache(),
@@ -247,14 +252,46 @@ impl<S: EngineSnapshot> MvccReader<S> {
         if let Some(pessimistic_lock) = self.load_in_memory_pessimistic_lock(key)? {
             return Ok(Some(pessimistic_lock));
         }
-
-        if self.scan_mode.is_some() {
+        if self.scan_mode.is_some() || self.lock_scan_mode.is_some() {
             self.create_lock_cursor_if_not_exist()?;
         }
 
         let res = if let Some(ref mut cursor) = self.lock_cursor {
-            match cursor.get(key, &mut self.statistics.lock)? {
-                Some(v) => Some(Lock::parse(v)?),
+            let cursor_result = cursor.get(key, &mut self.statistics.lock);
+            let non_cursor_result = self.snapshot.get_cf(CF_LOCK, key);
+            self.statistics.lock.get += 1;
+
+            if cursor_result.is_err() ^ non_cursor_result.is_err() {
+                panic!(
+                    "DBG, cursor read result different from snapshot get, key: {}, cursor value: {:?}, non-cursor value: {:?}",
+                    key, cursor_result, non_cursor_result
+                );
+            }
+
+            let cursor_result = cursor_result?;
+            let non_cursor_result = non_cursor_result?;
+            let non_cursor_result = non_cursor_result.as_ref().map(|v| v.as_ref());
+
+            if non_cursor_result != cursor_result {
+                let cursor_lock = cursor_result.map(|v| {
+                    let v = v.to_owned();
+                    Lock::parse(&v)
+                });
+                let non_cursor_lock = non_cursor_result.map(|v| {
+                    let v = v.to_owned();
+                    Lock::parse(&v)
+                });
+                panic!(
+                    "DBG, cursor read result different from snapshot get, key: {}, cursor value: {:?}, cursr lock: {:?}, non-cursor value: {:?}, non_cursor lock: {:?}",
+                    key, cursor_result, cursor_lock, non_cursor_result, non_cursor_lock,
+                );
+            }
+
+            match cursor_result {
+                Some(v) => {
+                    let v = v.to_owned();
+                    Some(Lock::parse(&v)?)
+                }
                 None => None,
             }
         } else {
@@ -264,6 +301,8 @@ impl<S: EngineSnapshot> MvccReader<S> {
                 None => None,
             }
         };
+
+        self.lock_cursor.take();
 
         Ok(res)
     }
@@ -327,6 +366,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
             if storage_iteration_finished {
                 return Ok(None);
             }
+            assert!(self.lock_scan_mode.is_none());
             self.create_lock_cursor_if_not_exist()?;
             let cursor = self.lock_cursor.as_mut().unwrap();
             if !lock_cursor_seeked {
@@ -676,9 +716,14 @@ impl<S: EngineSnapshot> MvccReader<S> {
 
     fn create_lock_cursor_if_not_exist(&mut self) -> Result<()> {
         if self.lock_cursor.is_none() {
+            let scan_mode = if self.lock_scan_mode.is_some() {
+                self.lock_scan_mode.unwrap()
+            } else {
+                self.get_scan_mode(true)
+            };
             let cursor = CursorBuilder::new(&self.snapshot, CF_LOCK)
                 .fill_cache(self.fill_cache)
-                .scan_mode(self.get_scan_mode(true))
+                .scan_mode(scan_mode)
                 .range(self.lower_bound.clone(), self.upper_bound.clone())
                 .build()?;
             self.lock_cursor = Some(cursor);
@@ -722,6 +767,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
     where
         F: Fn(&Key, &Lock) -> bool,
     {
+        assert!(self.lock_scan_mode.is_none());
         self.create_lock_cursor_if_not_exist()?;
         let cursor = self.lock_cursor.as_mut().unwrap();
         let ok = match start {

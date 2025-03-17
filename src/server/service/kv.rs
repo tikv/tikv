@@ -540,6 +540,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                 .unknown
                 .observe(elapsed.as_secs_f64());
             record_request_source_metrics(source, elapsed);
+
             ServerResult::Ok(())
         }
         .map_err(|e| {
@@ -1899,6 +1900,8 @@ pub async fn future_prepare_flashback_to_version<E: Engine, L: LockManager, F: K
     storage: Storage<E, L, F>,
     req: PrepareFlashbackToVersionRequest,
 ) -> ServerResult<PrepareFlashbackToVersionResponse> {
+    warn!("DBG receive kv_prepare_flashback_to_version");
+
     let f = storage
         .get_engine()
         .start_flashback(req.get_context(), req.get_start_ts());
@@ -1912,11 +1915,16 @@ pub async fn future_prepare_flashback_to_version<E: Engine, L: LockManager, F: K
             res = f.await.unwrap_or_else(|e| Err(box_err!(e)));
         }
     }
+
     let mut resp = PrepareFlashbackToVersionResponse::default();
     if let Some(e) = extract_region_error(&res) {
+        warn!("DBG response kv_prepare_flashback_to_version with region err"; "err" => ?e.clone());
         resp.set_region_error(e);
     } else if let Err(e) = res {
+        warn!("DBG response kv_prepare_flashback_to_version with other err"; "err" => format!("{}", e));
         resp.set_error(format!("{}", e));
+    } else {
+        warn!("DBG response kv_prepare_flashback_to_version ok");
     }
     Ok(resp)
 }
