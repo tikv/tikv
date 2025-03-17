@@ -3,7 +3,7 @@
 use std::{
     sync::{mpsc, Arc},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use api_version::{test_kv_format_impl, KvFormat};
@@ -60,6 +60,7 @@ fn test_cdc_double_scan_deregister_impl<F: KvFormat>() {
 
     // wait for the second connection register to the delegate.
     suite.must_wait_delegate_condition(
+        1,
         1,
         Arc::new(|d: Option<&Delegate>| d.unwrap().downstreams().len() == 2),
     );
@@ -722,4 +723,91 @@ fn test_cdc_pipeline_dml() {
     assert_eq!(entries[0].generation, 1);
     assert_eq!(entries[0].value, vec![b'x'; 16]);
     assert_eq!(entries[1].r_type, EventLogType::Initialized);
+}
+
+#[test]
+fn test_cdc_unresolved_region_count_before_finish_scan_lock() {
+    fn check_unresolved_region_count(scheduler: &Scheduler<Task>, target_count: usize) {
+        let start = Instant::now();
+        loop {
+            sleep_ms(100);
+            let (tx, rx) = mpsc::sync_channel(1);
+            let checker = move |c: usize| tx.send(c).unwrap();
+            scheduler
+                .schedule(Task::Validate(Validate::UnresolvedRegion(Box::new(
+                    checker,
+                ))))
+                .unwrap();
+            let actual_count = rx.recv().unwrap();
+            if actual_count == target_count {
+                return;
+            }
+            if start.elapsed() > Duration::from_secs(5) {
+                panic!(
+                    "check unresolve region failed, actual_count: {}, target_count: {}",
+                    actual_count, target_count
+                );
+            }
+        }
+    }
+
+    let cluster = new_server_cluster(0, 1);
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
+
+    // create regions
+    let region_count = 100;
+    let split_keys: Vec<Vec<u8>> = (1..=region_count * 2 - 1)
+        .step_by(2)
+        .map(|i| format!("key_{:03}", i).into_bytes())
+        .collect();
+    let get_keys: Vec<Vec<u8>> = (0..=region_count * 2)
+        .step_by(2)
+        .map(|i| format!("key_{:03}", i).into_bytes())
+        .collect();
+    for i in 0..region_count - 1 {
+        let split_key = &split_keys[i];
+        let target_region = suite.cluster.get_region(split_key);
+        suite.cluster.must_split(&target_region, split_key);
+    }
+    let mut regions = Vec::with_capacity(region_count);
+    for i in 0..region_count {
+        let get_key = &get_keys[i];
+        let region = suite.cluster.get_region(get_key);
+        regions.push(region.clone());
+    }
+
+    fail::cfg("before_schedule_resolver_ready", "pause").unwrap();
+
+    // create event feed for all regions
+    let mut req_txs = Vec::with_capacity(region_count);
+    let mut event_feeds = Vec::with_capacity(region_count);
+    let mut receive_events = Vec::with_capacity(region_count);
+    for region in regions.clone() {
+        let (mut req_tx, event_feed, receive_event) =
+            new_event_feed(suite.get_region_cdc_client(region.id));
+        let mut req = suite.new_changedata_request(region.id);
+        req.mut_header().set_ticdc_version("7.0.0".into());
+        req.set_region_epoch(region.get_region_epoch().clone());
+        block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+        req_txs.push(req_tx);
+        event_feeds.push(event_feed);
+        receive_events.push(receive_event);
+    }
+
+    check_unresolved_region_count(&suite.endpoints[&1].scheduler(), region_count);
+
+    // Wait until all initialization finishes and check again.
+    fail::remove("before_schedule_resolver_ready");
+    for receive_event in receive_events {
+        receive_event(false);
+    }
+    check_unresolved_region_count(&suite.endpoints[&1].scheduler(), 0);
+
+    for req_tx in req_txs {
+        drop(req_tx);
+    }
+    for event_feed in event_feeds {
+        drop(event_feed);
+    }
+    suite.stop();
 }
