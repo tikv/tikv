@@ -466,9 +466,32 @@ impl TmpStorage {
 
     #[track_caller]
     pub fn verify_result(&self, res: SubcompactionResult, mut cm: CompactInMem) {
-        let sst_path = self.path().join(&res.meta.sst_outputs[0].name);
-        res.verify_checksum().unwrap();
-        verify_the_same::<RocksEngine>(sst_path, cm.must_iter()).unwrap();
+        // Verify SST file name format
+        for file in &res.meta.sst_outputs {
+            let sst_path = self.path().join(file.get_name());
+            let file_name = sst_path
+                .file_name()
+                .expect("SST path should have a file name")
+                .to_str()
+                .expect("SST file name should be valid UTF-8");
+            // Expected format: "{min_ts}_{max_ts}_{cf}_{region_id}_{uuid}.sst"
+            let parts: Vec<&str> = file_name.split('_').collect();
+            assert_eq!(
+                parts.len(),
+                5,
+                "SST file name should have 5 parts separated by '_'"
+            );
+
+            // Verify UUID format in the last part (removing .sst extension)
+            let uuid_part = parts[4].trim_end_matches(".sst");
+            assert!(
+                uuid::Uuid::parse_str(uuid_part).is_ok(),
+                "Invalid UUID format in SST file name"
+            );
+            // Verify the actual content
+            res.verify_checksum().unwrap();
+            verify_the_same::<RocksEngine>(sst_path, cm.must_iter()).unwrap();
+        }
     }
 
     pub async fn build_log_file(&self, name: &str, kvs: impl Iterator<Item = Kv>) -> LogFile {
