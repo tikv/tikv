@@ -156,12 +156,12 @@ impl<DB> SubcompactionExec<DB> {
         let partial_cmp = |wa: WriteRef<'_>, wb: WriteRef<'_>| {
             use WriteType::*;
             match (wa.write_type, wb.write_type) {
-                // Rollback -> Collapsed Write happens.
-                // Should keep the write.
-                (Put, Rollback) if wa.has_overlapped_rollback => Some(Ordering::Greater),
-                (Rollback, Put) if wb.has_overlapped_rollback => Some(Ordering::Less),
+                // Rollback -> Collapsed with Put happens.
+                // Should keep the Put.
+                (Put, Rollback | Put) if wa.has_overlapped_rollback => Some(Ordering::Greater),
+                (Rollback | Put, Put) if wb.has_overlapped_rollback => Some(Ordering::Less),
 
-                // Rollback -> Protected Rollback
+                // Rollback -> Protected Rollback.
                 // Keep the protected one.
                 // This was observered in some versions and shouldn't happen in normally.
                 (Rollback, Rollback) if wa.is_protected() => Some(Ordering::Greater),
@@ -808,5 +808,28 @@ mod test {
             vec![simple_write(b"key1", Delete, 60)],
         ];
         process_input_for_test(items, CF_DEFAULT).await;
+    }
+
+    #[tokio::test]
+    async fn test_many_rollback() {
+        use WriteType::*;
+        let items = vec![
+            vec![
+                simple_write(b"key1", Rollback, 60),
+                protected_rollback(b"key1", 60),
+            ],
+            vec![
+                put_with_collapsed_rollback(b"key1", 60),
+                simple_write(b"key1", Put, 62),
+            ],
+        ];
+        let res = process_input_for_test(items, CF_WRITE).await;
+        assert_eq!(
+            res,
+            &[
+                simple_write(b"key1", Put, 62),
+                put_with_collapsed_rollback(b"key1", 60)
+            ]
+        );
     }
 }
