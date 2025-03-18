@@ -152,8 +152,18 @@ impl<DB> SubcompactionExec<DB> {
         let wa = WriteRef::parse(&a.value).expect("record a isn't a valid write");
         let wb = WriteRef::parse(&b.value).expect("record b isn't a valid write");
 
+        let sanity_check = |wa: &WriteRef<'_>, wb: &WriteRef<'_>| {
+            if wa.write_type == wb.write_type {
+                assert_eq!(wa.start_ts, wb.start_ts);
+            }
+            // This cannot be applied to `Rollback` because `protected` was encoded to
+            // `short_value`.
+            if wa.write_type == WriteType::Put && wb.write_type == WriteType::Put {
+                assert_eq!(wa.short_value, wb.short_value);
+            }
+        };
         // partial ordering of two conflicting records.
-        let partial_cmp = |wa: WriteRef<'_>, wb: WriteRef<'_>| {
+        let partial_cmp = |wa: &WriteRef<'_>, wb: &WriteRef<'_>| {
             use WriteType::*;
             match (wa.write_type, wb.write_type) {
                 // Rollback -> Collapsed with Put happens.
@@ -172,7 +182,8 @@ impl<DB> SubcompactionExec<DB> {
             }
         };
 
-        let maybe_ord = partial_cmp(wa, wb);
+        sanity_check(&wa, &wb);
+        let maybe_ord = partial_cmp(&wa, &wb);
         info!("resolve conflict result."; "conflict_id" => cid, "order" => ?maybe_ord);
         match maybe_ord {
             Some(Ordering::Greater) => std::mem::swap(a, b),
