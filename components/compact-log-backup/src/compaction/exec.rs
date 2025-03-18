@@ -1,12 +1,13 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{
+    cmp::Ordering,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
 use engine_rocks::RocksEngine;
 use engine_traits::{
-    ExternalSstFileInfo, SstCompressionType, SstExt, SstWriter, SstWriterBuilder,
+    ExternalSstFileInfo, SstCompressionType, SstExt, SstWriter, SstWriterBuilder, CF_WRITE,
     DATA_KEY_PREFIX_LEN,
 };
 use external_storage::{ExternalStorage, UnpinReader};
@@ -14,8 +15,9 @@ use file_system::Sha256Reader;
 use futures::{future::TryFutureExt, io::AllowStdIo};
 use kvproto::brpb::{self, LogFileSubcompaction};
 use tikv_util::{
-    codec::bytes::decode_bytes_in_place, retry_expr, stream::JustRetry, time::Instant,
+    codec::bytes::decode_bytes_in_place, info, retry_expr, stream::JustRetry, time::Instant, warn,
 };
+use txn_types::{WriteRef, WriteType};
 
 use super::{EpochHint, Subcompaction, SubcompactionResult};
 use crate::{
@@ -121,24 +123,72 @@ struct ChecksumDiff {
     crc64xor_diff: u64,
 }
 
-impl<DB: SstExt> SubcompactionExec<DB>
-where
-    <<DB as SstExt>::SstWriter as SstWriter>::ExternalSstFileReader: 'static,
-{
-    fn update_checksum_diff(a: &Record, b: &Record, diff: &mut ChecksumDiff) {
-        // Records with identical keys (including ts) should have identical values.
-        // Different values for the same key indicates a transaction inconsistency
-        // in the backup, which needs investigation even if restore might tolerate it.
-        //
-        // Known issue: This assertion may fail when compacting protected rollback
-        // and normal rollback transactions. While restore can tolerate this case,
-        // To make the process more safe and predicted, we cannot just disable it.
-        // you can work around it by adjusting the compact interval.
-        // See https://github.com/tikv/tikv/issues/18300 for more details.
-        assert_eq!(
-            a, b,
-            "The record with same key contains different value: the backup might be corrupted."
-        );
+// Functions related to sorting records.
+// Maybe they can be extracted to another type...?
+impl<DB> SubcompactionExec<DB> {
+    /// resolve the conflict of two records.
+    /// after this function returns (if not panicked...), `b` will be the record
+    /// to be kept.
+    ///
+    /// # Panics
+    ///
+    /// In any case out of knowledge.
+    fn resolve(c: &Subcompaction, a: &mut Record, b: &mut Record) {
+        if a == b {
+            return;
+        }
+
+        let cid = rand::random::<u64>();
+        use util::redact;
+        warn!("encountering two different values: try to resolve them."; "key" => redact(&a.key), 
+            "value_a" => redact(&a.value), "value_b" => redact(&b.value), "conflict_id" => cid);
+
+        if c.cf != CF_WRITE {
+            panic!(
+                "encountering two different values but they are not in write CF, it is {}; cid = {}.",
+                c.cf, cid
+            );
+        }
+        let wa = WriteRef::parse(&a.value).expect("record a isn't a valid write");
+        let wb = WriteRef::parse(&b.value).expect("record b isn't a valid write");
+
+        // partial ordering of two conflicting records.
+        let partial_cmp = |wa: WriteRef<'_>, wb: WriteRef<'_>| {
+            use WriteType::*;
+            match (wa.write_type, wb.write_type) {
+                // Rollback -> Collapsed Write happens.
+                // Should keep the write.
+                (Put, Rollback) if wa.has_overlapped_rollback => Some(Ordering::Greater),
+                (Rollback, Put) if wb.has_overlapped_rollback => Some(Ordering::Less),
+
+                // Rollback -> Protected Rollback
+                // Keep the protected one.
+                // This was observered in some versions and shouldn't happen in normally.
+                (Rollback, Rollback) if wa.is_protected() => Some(Ordering::Greater),
+                (Rollback, Rollback) if wb.is_protected() => Some(Ordering::Less),
+
+                // No comparing rule here.
+                _ => None,
+            }
+        };
+
+        let maybe_ord = partial_cmp(wa, wb);
+        info!("resolve conflict result."; "conflict_id" => cid, "order" => ?maybe_ord);
+        match maybe_ord {
+            Some(Ordering::Greater) => std::mem::swap(a, b),
+            None => panic!("cannot resolve the conflict {}", cid),
+
+            Some(_) => {}
+        }
+    }
+
+    fn update_checksum_diff(
+        c: &Subcompaction,
+        a: &mut Record,
+        b: &mut Record,
+        diff: &mut ChecksumDiff,
+    ) {
+        Self::resolve(c, a, b);
 
         diff.removed_key += 1;
         diff.decreaed_size += (a.key.len() + a.value.len()) as u64;
@@ -155,7 +205,7 @@ where
     /// Sort all inputs and dedup them, generating the checksum diff.
     #[tracing::instrument(skip_all)]
     async fn process_input(
-        &mut self,
+        c: &Subcompaction,
         items: impl Iterator<Item = Vec<Record>>,
     ) -> (Vec<Record>, ChecksumDiff) {
         let mut flatten_items = items
@@ -168,7 +218,7 @@ where
         let mut diff = ChecksumDiff::default();
         flatten_items.dedup_by(|k1, k2| {
             if k1.key == k2.key {
-                Self::update_checksum_diff(k1, k2, &mut diff);
+                Self::update_checksum_diff(c, k1, k2, &mut diff);
                 true
             } else {
                 false
@@ -176,7 +226,12 @@ where
         });
         (flatten_items, diff)
     }
+}
 
+impl<DB: SstExt> SubcompactionExec<DB>
+where
+    <<DB as SstExt>::SstWriter as SstWriter>::ExternalSstFileReader: 'static,
+{
     #[tracing::instrument(skip_all)]
     async fn load(
         &mut self,
@@ -352,7 +407,7 @@ where
         self.compact_stat.load_duration += begin.saturating_elapsed();
 
         let begin = Instant::now();
-        let (sorted_items, cdiff) = self.process_input(items).await;
+        let (sorted_items, cdiff) = Self::process_input(c, items).await;
         self.compact_stat.sort_duration += begin.saturating_elapsed();
         if sorted_items.is_empty() {
             self.compact_stat.empty_generation += 1;
@@ -403,11 +458,13 @@ where
 
 #[cfg(test)]
 mod test {
+    use engine_traits::{CfName, CF_DEFAULT, CF_WRITE};
     use tidb_query_datatype::codec::table::encode_row_key;
-    use txn_types::Key;
+    use txn_types::{Key, Write, WriteType};
 
     use crate::{
-        compaction::Subcompaction,
+        compaction::{exec::SubcompactionExec, Subcompaction},
+        source::Record,
         storage::{Epoch, MetaFile},
         test_util::{
             gen_step, save_many_log_files, CompactInMem, KvGen, LogFileBuilder, TmpStorage,
@@ -584,5 +641,172 @@ mod test {
         let res = st.run_subcompaction(c).await;
         res.verify_checksum()
             .expect_err("should failed to verify checksum");
+    }
+
+    fn simple_write(key: &[u8], wt: WriteType, commit_ts: u64) -> Record {
+        let key = Key::from_raw(key).append_ts(commit_ts.into());
+        let value = Write::new(wt, 42.into(), None);
+        Record {
+            key: key.into_encoded(),
+            value: value.as_ref().to_bytes(),
+        }
+    }
+
+    fn protected_rollback(key: &[u8], commit_ts: u64) -> Record {
+        let key = Key::from_raw(key).append_ts(commit_ts.into());
+        let value = Write::new(WriteType::Rollback, 42.into(), Some(vec![b'p']));
+        Record {
+            key: key.into_encoded(),
+            value: value.as_ref().to_bytes(),
+        }
+    }
+
+    fn put_with_collapsed_rollback(key: &[u8], commit_ts: u64) -> Record {
+        let key = Key::from_raw(key).append_ts(commit_ts.into());
+        let value = Write::new(WriteType::Put, 42.into(), None).set_overlapped_rollback(true, None);
+        Record {
+            key: key.into_encoded(),
+            value: value.as_ref().to_bytes(),
+        }
+    }
+
+    fn cf_only_dummy_subcompaction(cf: &'static str) -> Subcompaction {
+        Subcompaction::singleton(LogFileBuilder::new(|v| v.cf = cf).build().0)
+    }
+
+    async fn process_input_for_test(items: Vec<Vec<Record>>, cf: CfName) -> Vec<Record> {
+        let c = cf_only_dummy_subcompaction(cf);
+        let (res, _) = SubcompactionExec::<()>::process_input(&c, items.into_iter()).await;
+        res
+    }
+
+    #[tokio::test]
+    async fn test_resolve_records() {
+        use WriteType::*;
+        let items = vec![vec![
+            simple_write(b"key1", Rollback, 60),
+            simple_write(b"key1", Rollback, 60),
+            put_with_collapsed_rollback(b"key1", 60),
+            simple_write(b"key1", Rollback, 60),
+            simple_write(b"key1", Rollback, 60),
+        ]];
+        let res = process_input_for_test(items, CF_WRITE).await;
+        assert_eq!(res, &[put_with_collapsed_rollback(b"key1", 60)]);
+    }
+
+    #[tokio::test]
+    async fn test_resolve_records_from_many_file() {
+        use WriteType::*;
+        let items = vec![
+            vec![
+                simple_write(b"key1", Rollback, 60),
+                simple_write(b"key1", Rollback, 60),
+            ],
+            vec![
+                simple_write(b"key1", Rollback, 60),
+                put_with_collapsed_rollback(b"key1", 60),
+                simple_write(b"key1", Rollback, 60),
+            ],
+        ];
+        let res = process_input_for_test(items, CF_WRITE).await;
+        assert_eq!(res, &[put_with_collapsed_rollback(b"key1", 60)]);
+    }
+
+    #[tokio::test]
+    async fn test_resolve_many_records() {
+        use WriteType::*;
+        let items = vec![
+            vec![
+                simple_write(b"key2", Rollback, 62),
+                simple_write(b"key1", Rollback, 60),
+                put_with_collapsed_rollback(b"key2", 62),
+            ],
+            vec![
+                simple_write(b"key1", Rollback, 60),
+                put_with_collapsed_rollback(b"key1", 60),
+                simple_write(b"key3", Delete, 63),
+            ],
+            vec![
+                simple_write(b"key2", Rollback, 62),
+                simple_write(b"key1", Put, 64),
+            ],
+        ];
+        let res = process_input_for_test(items, CF_WRITE).await;
+        assert_eq!(
+            res,
+            &[
+                simple_write(b"key1", Put, 64),
+                put_with_collapsed_rollback(b"key1", 60),
+                put_with_collapsed_rollback(b"key2", 62),
+                simple_write(b"key3", Delete, 63),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_protected_rollback() {
+        use WriteType::*;
+        let items = vec![
+            vec![
+                simple_write(b"key1", Rollback, 60),
+                simple_write(b"key1", Rollback, 60),
+                protected_rollback(b"key1", 60),
+            ],
+            vec![
+                simple_write(b"key1", Rollback, 60),
+                simple_write(b"key1", Rollback, 60),
+            ],
+        ];
+        let res = process_input_for_test(items, CF_WRITE).await;
+        assert_eq!(res, &[protected_rollback(b"key1", 60)]);
+    }
+
+    #[tokio::test]
+    #[should_panic]
+    async fn test_conflict_records() {
+        use WriteType::*;
+        let items = vec![
+            vec![simple_write(b"key1", Put, 60)],
+            vec![simple_write(b"key1", Delete, 60)],
+        ];
+        process_input_for_test(items, CF_WRITE).await;
+    }
+
+    #[tokio::test]
+    async fn test_non_write_cf() {
+        use WriteType::*;
+        let items = vec![
+            vec![
+                simple_write(b"key1", Put, 60),
+                simple_write(b"key1", Put, 60),
+            ],
+            vec![
+                simple_write(b"key1", Put, 60),
+                simple_write(b"key1", Delete, 61),
+            ],
+            vec![
+                simple_write(b"key1", Delete, 61),
+                simple_write(b"key1", Delete, 61),
+            ],
+        ];
+        let res = process_input_for_test(items, CF_DEFAULT).await;
+        assert_eq!(
+            res,
+            &[
+                simple_write(b"key1", Delete, 61),
+                simple_write(b"key1", Put, 60),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    #[should_panic]
+    async fn test_non_write_cf_fail() {
+        use WriteType::*;
+        let items = vec![
+            vec![simple_write(b"key1", Put, 60)],
+            vec![simple_write(b"key1", Delete, 60)],
+        ];
+        process_input_for_test(items, CF_DEFAULT).await;
     }
 }
