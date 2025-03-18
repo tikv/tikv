@@ -1,11 +1,7 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 pub use engine_traits::SstCompressionType;
-use tikv_util::{
-    error, info,
-    logger::{get_log_level, Level},
-    warn,
-};
+use tikv_util::{error, info, warn};
 use tokio::{io::AsyncWriteExt, signal::unix::SignalKind};
 
 use super::CollectStatistic;
@@ -41,11 +37,6 @@ impl ExecHooks for Observability {
         self.stats
             .update_collect_compaction_stat(cx.collect_compaction_stat_diff);
         self.stats.update_load_meta_stat(cx.load_stat_diff);
-
-        let level = get_log_level();
-        if level < Some(Level::Info) {
-            warn!("Most of compact-log progress logs are only enabled in the `info` level."; "current_level" => ?level);
-        }
 
         info!("Spawning compaction."; "cid" => cid.0, 
             "cf" => c.cf, 

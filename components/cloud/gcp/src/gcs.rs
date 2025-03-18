@@ -332,59 +332,78 @@ impl BlobStorage for GcsStorage {
         reader: PutResource<'_>,
         content_length: u64,
     ) -> io::Result<()> {
-        if content_length == 0 {
-            // It is probably better to just write the empty file
-            // However, currently going forward results in a body write aborted error
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "no content to write",
-            ));
-        }
-
         let key = self.maybe_prefix_key(name);
         debug!("save file to GCS storage"; "key" => %key);
-        let bucket = BucketName::try_from(self.config.bucket.bucket.to_string())
-            .or_invalid_input(format_args!("invalid bucket {}", self.config.bucket.bucket))?;
 
-        let metadata = Metadata {
-            name: Some(key),
-            storage_class: self.config.storage_class,
-            ..Default::default()
-        };
+        // Common setup
+        let oid = ObjectId::new(self.config.bucket.bucket.to_string(), key.clone())
+            .or_invalid_input(format_args!("invalid object id"))?;
 
-        // FIXME: Switch to upload() API so we don't need to read the entire data into
-        // memory in order to retry.
-        let begin = Instant::now_coarse();
-        let mut data = Vec::with_capacity(content_length as usize);
-        read_to_end(reader, &mut data).await?;
-        metrics::CLOUD_REQUEST_HISTOGRAM_VEC
-            .with_label_values(&["gcp", "read_local"])
-            .observe(begin.saturating_elapsed_secs());
-        let begin = Instant::now_coarse();
-        retry(
-            || async {
-                let data = Cursor::new(data.clone());
-                let req = Object::insert_multipart(
-                    &bucket,
-                    data,
-                    content_length,
-                    &metadata,
-                    Some(InsertObjectOptional {
-                        predefined_acl: self.config.predefined_acl,
-                        ..Default::default()
-                    }),
+        match content_length {
+            // Empty file case
+            0 => {
+                let begin = Instant::now_coarse();
+                retry(
+                    || async {
+                        let optional = InsertObjectOptional {
+                            predefined_acl: self.config.predefined_acl,
+                            ..Default::default()
+                        };
+                        let req = Object::insert_simple(&oid, "", 0, Some(optional))
+                            .map_err(RequestError::Gcs)?
+                            .map(|_| Body::empty());
+                        self.make_request(req, tame_gcs::Scopes::ReadWrite).await
+                    },
+                    "insert_simple",
                 )
-                .map_err(RequestError::Gcs)?
-                .map(|reader| Body::wrap_stream(AsyncReadAsSyncStreamOfBytes::new(reader)));
-                self.make_request(req, tame_gcs::Scopes::ReadWrite).await
-            },
-            "insert_multipart",
-        )
-        .await?;
-        metrics::CLOUD_REQUEST_HISTOGRAM_VEC
-            .with_label_values(&["gcp", "insert_multipart"])
-            .observe(begin.saturating_elapsed_secs());
-        Ok::<_, io::Error>(())
+                .await?;
+                metrics::CLOUD_REQUEST_HISTOGRAM_VEC
+                    .with_label_values(&["gcp", "insert_simple"])
+                    .observe(begin.saturating_elapsed_secs());
+                Ok(())
+            }
+            // Non-empty file case
+            _ => {
+                let begin = Instant::now_coarse();
+                let mut data = Vec::with_capacity(content_length as usize);
+                read_to_end(reader, &mut data).await?;
+                metrics::CLOUD_REQUEST_HISTOGRAM_VEC
+                    .with_label_values(&["gcp", "read_local"])
+                    .observe(begin.saturating_elapsed_secs());
+
+                let metadata = Metadata {
+                    name: Some(key),
+                    storage_class: self.config.storage_class,
+                    ..Default::default()
+                };
+                let begin = Instant::now_coarse();
+                retry(
+                    || async {
+                        let optional = InsertObjectOptional {
+                            predefined_acl: self.config.predefined_acl,
+                            ..Default::default()
+                        };
+                        let data = Cursor::new(data.clone());
+                        let req = Object::insert_multipart(
+                            &oid.bucket,
+                            data,
+                            content_length,
+                            &metadata,
+                            Some(optional),
+                        )
+                        .map_err(RequestError::Gcs)?
+                        .map(|reader| Body::wrap_stream(AsyncReadAsSyncStreamOfBytes::new(reader)));
+                        self.make_request(req, tame_gcs::Scopes::ReadWrite).await
+                    },
+                    "insert_multipart",
+                )
+                .await?;
+                metrics::CLOUD_REQUEST_HISTOGRAM_VEC
+                    .with_label_values(&["gcp", "insert_multipart"])
+                    .observe(begin.saturating_elapsed_secs());
+                Ok(())
+            }
+        }
     }
 
     fn get(&self, name: &str) -> cloud::blob::BlobStream<'_> {
