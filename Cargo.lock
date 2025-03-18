@@ -1559,6 +1559,7 @@ dependencies = [
  "tracing",
  "tracing-active-tree",
  "txn_types",
+ "uuid 0.8.2",
  "zstd 0.11.2+zstd.1.5.2",
 ]
 

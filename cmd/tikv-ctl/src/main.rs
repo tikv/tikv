@@ -56,7 +56,13 @@ use tikv::{
     server::{debug::BottommostLevelCompaction, KvEngineFactoryBuilder},
     storage::config::EngineType,
 };
-use tikv_util::{escape, run_and_wait_child_process, sys::thread::StdThreadBuildWrapper, unescape};
+use tikv_util::{
+    escape,
+    logger::{get_log_level, Level},
+    run_and_wait_child_process,
+    sys::thread::StdThreadBuildWrapper,
+    unescape, warn,
+};
 use txn_types::Key;
 
 use crate::{cmd::*, executor::*, util::*};
@@ -450,6 +456,11 @@ fn main() {
                     use compact_log_backup::OtherErrExt;
                     tikv_util::info!("Welcome to TiKV control: compact log backup.");
                     tikv_util::info!("TiKV version info."; "info_string" => tikv::tikv_version_info(None));
+
+                    let level = get_log_level();
+                    if level < Some(Level::Info) {
+                        warn!("Most of compact-log progress logs are only enabled in the `info` level."; "current_level" => ?level);
+                    }
 
                     let srv = StatusServerLite::new(Arc::new(self.cfg.security.clone()));
                     let _enter = cx.async_rt.enter();
