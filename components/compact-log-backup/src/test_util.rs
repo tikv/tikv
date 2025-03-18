@@ -21,7 +21,6 @@ use keys::origin_key;
 use kvproto::brpb::{self, Metadata};
 use protobuf::{parse_from_bytes, Message};
 use tempdir::TempDir;
-use test_util::init_log_for_test;
 use tidb_query_datatype::codec::table::encode_row_key;
 use tikv_util::codec::stream_event::EventEncoder;
 use txn_types::Key;
