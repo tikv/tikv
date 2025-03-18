@@ -125,17 +125,20 @@ impl<DB: SstExt> SubcompactionExec<DB>
 where
     <<DB as SstExt>::SstWriter as SstWriter>::ExternalSstFileReader: 'static,
 {
-    fn update_checksum_diff(a: &Record, _b: &Record, diff: &mut ChecksumDiff) {
-        // When encountering records with identical keys with ts but different values,
-        // we skip the assertion. While this indicates potential txn
-        // inconsistency, it can be safely tolerated during restore since these
-        // are typically rollback records that won't affect the final state.
+    fn update_checksum_diff(a: &Record, b: &Record, diff: &mut ChecksumDiff) {
+        // Records with identical keys (including ts) should have identical values.
+        // Different values for the same key indicates a transaction inconsistency
+        // in the backup, which needs investigation even if restore might tolerate it.
         //
-        // TODO(https://github.com/tikv/tikv/issues/18300): Re-enable assertion once the underlying issue is fixed.
-        // assert_eq!(
-        //     a, b,
-        //     "The record with same key contains different value: the backup might be
-        // corrupted." );
+        // Known issue: This assertion may fail when compacting protected rollback 
+        // and normal rollback transactions. While restore can tolerate this case,
+        // To make the process more safe and predicted, we cannot just disable it. 
+        // you can work around it by adjusting the compact interval.
+        // See https://github.com/tikv/tikv/issues/18300 for more details.
+        assert_eq!(
+            a, b,
+            "The record with same key contains different value: the backup might be corrupted."
+        );
 
         diff.removed_key += 1;
         diff.decreaed_size += (a.key.len() + a.value.len()) as u64;
