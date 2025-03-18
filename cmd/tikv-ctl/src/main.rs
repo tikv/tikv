@@ -57,8 +57,8 @@ use tikv::{
     storage::config::EngineType,
 };
 use tikv_util::{
-    escape, logger::get_log_level, run_and_wait_child_process, sys::thread::StdThreadBuildWrapper,
-    unescape, Level,
+    escape, logger::{get_log_level, Level}, run_and_wait_child_process, sys::thread::StdThreadBuildWrapper,
+    unescape, warn,
 };
 use txn_types::Key;
 
