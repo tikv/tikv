@@ -244,3 +244,95 @@ pub struct RequestMetrics {
     pub apply_write_wal_nanos: u64,
     pub apply_write_memtable_nanos: u64,
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        },
+        thread::sleep,
+        time::Duration,
+    };
+
+    use futures::{channel::oneshot::channel, executor::LocalPool, task::LocalSpawnExt};
+
+    use super::*;
+
+    struct TestTracker<T> {
+        inner: T,
+        poll_count: Arc<AtomicUsize>,
+    }
+
+    impl<T: FutureTrack> FutureTrack for TestTracker<T> {
+        fn on_poll_begin(&mut self) {
+            self.poll_count.fetch_add(1, Ordering::SeqCst);
+            self.inner.on_poll_begin();
+        }
+
+        fn on_poll_finish(&mut self) {
+            self.inner.on_poll_finish();
+        }
+    }
+
+    #[test]
+    fn test_token_future_track() {
+        let (tx, rx) = channel::<()>();
+
+        let token = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
+            &pb::Context::default(),
+            RequestType::Unknown,
+            0,
+        )));
+        let poll_count = Arc::new(AtomicUsize::new(0));
+        let poll_count_ = poll_count.clone();
+        let fut = track(
+            async move {
+                let _ = rx.await;
+                sleep(Duration::from_millis(100));
+
+                GLOBAL_TRACKERS.with_tracker(token, |tracker| {
+                    tracker.collect_future_poll_track();
+                });
+
+                sleep(Duration::from_millis(100));
+            },
+            TestTracker {
+                inner: token,
+                poll_count,
+            },
+        );
+        let mut local = LocalPool::new();
+        let spawner = local.spawner();
+        spawner.spawn_local(fut).unwrap();
+        assert!(!local.try_run_one());
+        assert_eq!(poll_count_.load(Ordering::SeqCst), 1);
+
+        tx.send(()).unwrap();
+        sleep(Duration::from_millis(300));
+        assert!(local.try_run_one());
+        assert_eq!(poll_count_.load(Ordering::SeqCst), 2);
+
+        let mut wait_details = pb::TimeDetailV2::default();
+        GLOBAL_TRACKERS.with_tracker(token, |tracker| {
+            tracker.write_time_detail(&mut wait_details);
+        });
+
+        let process_suspend_wall_time_ns = wait_details.get_process_suspend_wall_time_ns();
+        assert!(
+            process_suspend_wall_time_ns >= Duration::from_millis(300).as_nanos() as u64,
+            "{}",
+            process_suspend_wall_time_ns
+        );
+
+        let process_wall_time_ns = wait_details.get_process_wall_time_ns();
+        assert!(
+            process_wall_time_ns >= Duration::from_millis(100).as_nanos() as u64
+                && process_wall_time_ns < Duration::from_millis(200).as_nanos() as u64,
+            "{} {}",
+            process_wall_time_ns,
+            Duration::from_millis(100).as_nanos()
+        );
+    }
+}
