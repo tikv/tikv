@@ -130,9 +130,9 @@ where
         // Different values for the same key indicates a transaction inconsistency
         // in the backup, which needs investigation even if restore might tolerate it.
         //
-        // Known issue: This assertion may fail when compacting protected rollback 
+        // Known issue: This assertion may fail when compacting protected rollback
         // and normal rollback transactions. While restore can tolerate this case,
-        // To make the process more safe and predicted, we cannot just disable it. 
+        // To make the process more safe and predicted, we cannot just disable it.
         // you can work around it by adjusting the compact interval.
         // See https://github.com/tikv/tikv/issues/18300 for more details.
         assert_eq!(
