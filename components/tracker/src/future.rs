@@ -8,11 +8,17 @@ use std::{
 
 use pin_project::pin_project;
 
+/// A trait for tracking the polling of a future.
+/// It is used to do some work before and after polling the inner future.
+/// For example, it can be used to record the start and end time of polling.
+///
+/// The trait is used in [`track`] function.
 pub trait FutureTrack {
     fn on_poll_begin(&mut self);
     fn on_poll_finish(&mut self);
 }
 
+/// A future that tracks the polling of the inner future.
 pub fn track<F: Future, T: FutureTrack>(fut: F, fut_tracker: T) -> impl Future<Output = F::Output> {
     Tracker::new(fut, fut_tracker)
 }
