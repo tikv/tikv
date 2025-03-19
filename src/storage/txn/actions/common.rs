@@ -1,6 +1,7 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 use tikv_kv::Snapshot;
+use tikv_util::{log::BAD_DATA_STR, metrics::CRITICAL_ERROR};
 use txn_types::{Key, LastChange, OldValue, TimeStamp, Write, WriteType};
 
 use crate::storage::mvcc::{Error, ErrorInner, MvccTxn, Result, SnapshotReader, TxnCommitRecord};
@@ -17,6 +18,7 @@ pub fn next_last_change_info<S: Snapshot>(
 ) -> Result<LastChange> {
     if commit_ts.is_zero() {
         bad_data_error!("write with invalid commit-ts"; "write" => ?write, "commit-ts" => ?commit_ts);
+        CRITICAL_ERROR.with_label_values(&[BAD_DATA_STR]).inc();
         return Err(Error::from(ErrorInner::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "invaid commit-ts",

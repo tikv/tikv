@@ -10,7 +10,7 @@ use kvproto::{
 };
 use raftstore::store::{LocksStatus, PeerPessimisticLocks};
 use tikv_kv::{SnapshotExt, SEEK_BOUND};
-use tikv_util::time::Instant;
+use tikv_util::{log::BAD_DATA_STR, metrics::CRITICAL_ERROR, time::Instant};
 use txn_types::{
     Key, LastChange, Lock, OldValue, PessimisticLock, TimeStamp, TxnLockRef, Value, Write,
     WriteRef, WriteType,
@@ -490,6 +490,7 @@ impl<S: EngineSnapshot> MvccReader<S> {
         if commit_ts.is_zero() {
             // assert!(!commit_ts.is_zero());
             bad_data_error!("write with invalid commit-ts"; "key" => ?Key::from_raw(write_key), "commit-ts" => ?commit_ts);
+            CRITICAL_ERROR.with_label_values(&[BAD_DATA_STR]).inc();
             return Err(Error::from(ErrorInner::Other(
                 format!(
                     "bad data, invalid commit-ts:{}, key:{}",

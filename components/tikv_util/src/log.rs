@@ -59,6 +59,8 @@ macro_rules! error_unknown {
     };
 }
 
+pub const BAD_DATA_STR: &str = "bad data";
+
 #[macro_export]
 macro_rules! bad_data_error {
     (?$e:expr; $l:literal) => {
