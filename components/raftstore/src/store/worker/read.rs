@@ -22,6 +22,7 @@ use kvproto::{
 };
 use pd_client::BucketMeta;
 use tikv_util::{
+    box_err,
     codec::number::decode_u64,
     debug, error,
     lru::LruCache,
@@ -966,6 +967,9 @@ where
             match inspector.inspect(req) {
                 Ok(RequestPolicy::ReadLocal) => Ok(Some((delegate, RequestPolicy::ReadLocal))),
                 Ok(RequestPolicy::StaleRead) => Ok(Some((delegate, RequestPolicy::StaleRead))),
+                Ok(RequestPolicy::ReadIndexReplicaRead) => {
+                    Ok(Some((delegate, RequestPolicy::ReadIndexReplicaRead)))
+                }
                 Ok(RequestPolicy::ReadIndex) => Ok(Some((delegate, RequestPolicy::ReadIndex))),
                 // It can not handle other policies.
                 Ok(_) => Ok(None),
@@ -1172,25 +1176,13 @@ where
                     RequestPolicy::ReadIndex => {
                         TLS_LOCAL_READ_METRICS
                             .with(|m| m.borrow_mut().local_received_follower_read_requests.inc());
-                        let read_ts_valid = {
-                            if req.get_header().get_flag_data().is_empty() {
-                                false
-                            } else {
-                                let read_ts =
-                                    decode_u64(&mut req.get_header().get_flag_data()).unwrap();
-                                read_ts != 0
-                            }
-                        };
-                        if !req.get_header().get_replica_read() || !read_ts_valid {
-                            // don't read from cache if it's not a follower read or read ts is
-                            // invalid
-                            self.redirect(RaftCommand::new(req, cb));
-                            return;
-                        }
-
-                        // check first if it can be served locally wihout sending read index message
-                        // to leader. (https://github.com/tikv/rfcs/blob/master/text/0113-follower-read-cache.md)
-                        match self.try_local_stale_read(
+                        self.redirect(RaftCommand::new(req, cb));
+                        return;
+                    }
+                    RequestPolicy::ReadIndexReplicaRead => {
+                        TLS_LOCAL_READ_METRICS
+                            .with(|m| m.borrow_mut().local_received_follower_read_requests.inc());
+                        match self.try_local_folllower_read(
                             ctx,
                             &req,
                             &mut delegate,
@@ -1199,12 +1191,11 @@ where
                         ) {
                             Ok(read_resp) => {
                                 TLS_LOCAL_READ_METRICS.with(|m| {
-                                    m.borrow_mut().local_executed_follower_read_requests.inc()
+                                    m.borrow_mut().local_executed_stale_read_requests.inc()
                                 });
                                 read_resp
                             }
                             Err(_err_resp) => {
-                                // Forward to raftstore.
                                 self.redirect(RaftCommand::new(req, cb));
                                 return;
                             }
@@ -1250,6 +1241,41 @@ where
                     txn_extra_op: TxnExtraOp::Noop,
                 });
             }
+        }
+    }
+
+    fn try_local_folllower_read(
+        &mut self,
+        ctx: &ReadContext,
+        req: &RaftCmdRequest,
+        delegate: &mut CachedReadDelegate<E>,
+        snap_updated: &mut bool,
+        last_valid_ts: Timespec,
+    ) -> std::result::Result<ReadResponse<E::Snapshot>, RaftCmdResponse> {
+        let read_ts_valid = {
+            if req.get_header().get_flag_data().is_empty() {
+                false
+            } else {
+                let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
+                read_ts != 0
+            }
+        };
+        if !read_ts_valid {
+            // don't read from cache if it's not a follower read or read ts is
+            // invalid
+            let err_resp = cmd_resp::new_error(Error::Other(box_err!("invalid read ts")));
+            return Err(err_resp);
+        }
+
+        // check first if it can be served locally wihout sending read index message
+        // to leader. (https://github.com/tikv/rfcs/blob/master/text/0113-follower-read-cache.md)
+        match self.try_local_stale_read(ctx, &req, delegate, snap_updated, last_valid_ts) {
+            Ok(read_resp) => {
+                TLS_LOCAL_READ_METRICS
+                    .with(|m| m.borrow_mut().local_executed_follower_read_requests.inc());
+                Ok(read_resp)
+            }
+            Err(_err_resp) => Err(_err_resp),
         }
     }
 

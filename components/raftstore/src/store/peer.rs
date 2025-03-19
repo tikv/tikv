@@ -6171,11 +6171,14 @@ pub enum RequestPolicy {
     // Handle the read request directly without dispatch.
     ReadLocal,
     StaleRead,
-    // Handle the read request via raft's SafeReadIndex mechanism.
+    // Handle the read request via raft's SafeReadIndex mechanism. It doesn't check the read index
+    // cache
     ReadIndex,
     ProposeNormal,
     ProposeTransferLeader,
     ProposeConfChange,
+    // it checks the read index cache first before sending it to leader
+    ReadIndexReplicaRead,
 }
 
 /// `RequestInspector` makes `RequestPolicy` for requests.
@@ -6236,6 +6239,9 @@ pub trait RequestInspector {
         }
 
         if req.get_header().get_read_quorum() {
+            if req.get_header().get_replica_read() {
+                return Ok(RequestPolicy::ReadIndexReplicaRead);
+            }
             return Ok(RequestPolicy::ReadIndex);
         }
 

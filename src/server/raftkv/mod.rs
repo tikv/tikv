@@ -897,13 +897,19 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                         start_key.as_ref(),
                         end_key.as_ref(),
                         |key, lock| {
-                            txn_types::Lock::check_ts_conflict_for_replica_read(
-                                Cow::Borrowed(lock),
-                                key,
-                                start_ts,
-                                &Default::default(),
-                                IsolationLevel::Si,
-                            )
+                            // It returns immediately upon encountering a lock in a region,
+                            // regardless of the timestamp.
+                            // This optimization is for the read index cache on the follower side.
+                            // Considering timestamps might require
+                            // scanning the entire region.
+                            if lock.lock_type == LockType::Lock || lock.is_pessimistic_lock() {
+                                // Ignore lock when the lock's type is Lock or Pessimistic.
+                                return Ok(());
+                            }
+
+                            Err(Error::from(ErrorInner::KeyIsLocked(
+                                lock.into_owned().into_lock_info(raw_key),
+                            )))
                         },
                     );
                     if !matches!(res, Err(txn_types::Error(box ErrorInner::KeyIsLocked(_)))) {
