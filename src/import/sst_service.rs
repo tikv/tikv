@@ -667,6 +667,10 @@ macro_rules! impl_write {
                             );
                         }
                     };
+                    if let Err(e) = check_import_resources().await {
+                        warn!("Write failed due to not enough resource {:?}", e);
+                        return (Err(e), Some(rx));
+                    }
 
                     let writer = match import.$writer_fn(&*tablet, meta, txn_source) {
                         Ok(w) => w,
@@ -679,7 +683,6 @@ macro_rules! impl_write {
                         .try_fold(
                             (writer, resource_limiter),
                             |(mut writer, limiter), req| async move {
-                                check_import_resources().await?;
                                 let batch = match req.chunk {
                                     Some($chunk_ty::Batch(b)) => b,
                                     _ => return Err(Error::InvalidChunk),
@@ -824,16 +827,12 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                     _ => return Err(Error::InvalidChunk),
                 };
                 let file = import.create(meta)?;
+                if let Err(e) = check_import_resources().await {
+                    warn!("Upload failed due to not enough resource {:?}", e);
+                    return Err(e);
+                }
                 let mut file = rx
                     .try_fold(file, |mut file, chunk| async move {
-                        match check_import_resources().await {
-                            Ok(()) => (),
-                            Err(e) => {
-                                warn!("Upload failed due to not enough resource {:?}", e);
-                                return Err(e);
-                            }
-                        }
-
                         let start = Instant::now_coarse();
                         let data = chunk.get_data();
                         if data.is_empty() {
