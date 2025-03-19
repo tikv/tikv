@@ -122,18 +122,6 @@ impl<S: EngineSnapshot> SnapshotReader<S> {
     pub fn take_statistics(&mut self) -> Statistics {
         std::mem::take(&mut self.reader.statistics)
     }
-
-    #[inline(always)]
-    pub fn setup_with_hint_items<T>(&mut self, items: &mut [T], key_of: fn(&T) -> &Key) {
-        // enable scan mode if there are multiple items, so that we don't need to seek
-        // for every key.
-        if items.len() > 1 {
-            items.sort_by(|a, b| key_of(a).cmp(key_of(b)));
-            self.reader.scan_mode = Some(ScanMode::Forward);
-            self.reader
-                .set_range(Some(key_of(items.first().unwrap()).clone()), None);
-        }
-    }
 }
 
 pub struct MvccReader<S: EngineSnapshot> {
