@@ -141,7 +141,7 @@ fn check_status_from_lock<S: Snapshot>(
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
-    fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
+    fn process_write(self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         // It is not allowed for commit to overwrite a protected rollback. So we update
         // max_ts to prevent this case from happening.
         let region_id = self.ctx.get_region_id();
@@ -152,10 +152,10 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckSecondaryLocks {
             })?;
 
         let mut txn = MvccTxn::new(self.start_ts, context.concurrency_manager);
-
-        let mut snapshot_reader = SnapshotReader::new_with_ctx(self.start_ts, snapshot, &self.ctx);
-        snapshot_reader.setup_with_hint_items(&mut self.keys, |k| k);
-        let mut reader = ReaderWithStats::new(snapshot_reader, context.statistics);
+        let mut reader = ReaderWithStats::new(
+            SnapshotReader::new_with_ctx(self.start_ts, snapshot, &self.ctx),
+            context.statistics,
+        );
         let mut released_locks = ReleasedLocks::new();
         let mut result = SecondaryLocksStatus::Locked(Vec::new());
 
