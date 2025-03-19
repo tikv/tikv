@@ -99,7 +99,17 @@ const REJECT_SERVE_MEMORY_USAGE: u64 = 1024 * 1024 * 1024; //1G
 const HIGH_IMPORT_MEMORY_WATER_RATIO: f64 = 0.95;
 
 /// Check if the system has enough resources for import tasks
-async fn check_import_resources() -> Result<()> {
+async fn check_import_resources(mem_limit: u64) -> Result<()> {
+    #[cfg(feature = "failpoints")]
+    let mem_limit = (|| {
+        fail_point!("mock_memory_limit", |t| {
+            t.unwrap().parse::<u64>().unwrap()
+        });
+        mem_limit
+    })();
+    #[cfg(not(feature = "failpoints"))]
+    let mem_limit = mem_limit;
+
     // these error(memory or disk) cannot be recover at a short time,
     // in case client retry immediately, sleep for a while
     async fn sleep_with_jitter() {
@@ -113,13 +123,6 @@ async fn check_import_resources() -> Result<()> {
     }
 
     let usage = get_global_memory_usage();
-    let mem_limit = (|| {
-        fail_point!("mock_memory_limit", |t| {
-            t.unwrap().parse::<u64>().unwrap()
-        });
-        SysQuota::memory_limit_in_bytes()
-    })();
-
     if mem_limit == 0 || mem_limit < usage {
         // make it through when cannot get correct memory
         warn!(
@@ -195,6 +198,8 @@ pub struct ImportSstService<E: Engine> {
 
     // When less than now, don't accept any requests.
     suspend: Arc<SuspendDeadline>,
+
+    mem_limit: u64,
 }
 
 struct RequestCollector {
@@ -431,6 +436,7 @@ impl<E: Engine> ImportSstService<E> {
         // Drop the initial pool to accept new tasks
         threads_clone.lock().unwrap().adjust_with(num_threads);
 
+        let mem_limit = SysQuota::memory_limit_in_bytes();
         ImportSstService {
             cfg: cfg_mgr,
             tablets,
@@ -446,6 +452,7 @@ impl<E: Engine> ImportSstService<E> {
             store_meta,
             resource_manager,
             suspend: Arc::default(),
+            mem_limit,
         }
     }
 
@@ -595,6 +602,7 @@ macro_rules! impl_write {
         ) {
             let import = self.importer.clone();
             let tablets = self.tablets.clone();
+            let mem_limit = self.mem_limit;
             let region_info_accessor = self.region_info_accessor.clone();
             let (rx, buf_driver) =
                 create_stream_with_buffer(stream, self.cfg.rl().stream_channel_window);
@@ -667,7 +675,7 @@ macro_rules! impl_write {
                             );
                         }
                     };
-                    if let Err(e) = check_import_resources().await {
+                    if let Err(e) = check_import_resources(mem_limit).await {
                         warn!("Write failed due to not enough resource {:?}", e);
                         return (Err(e), Some(rx));
                     }
@@ -813,6 +821,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let label = "upload";
         let timer = Instant::now_coarse();
         let import = self.importer.clone();
+        let mem_limit= self.mem_limit;
         let (rx, buf_driver) =
             create_stream_with_buffer(stream, self.cfg.rl().stream_channel_window);
         let mut map_rx = rx.map_err(Error::from);
@@ -827,7 +836,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                     _ => return Err(Error::InvalidChunk),
                 };
                 let file = import.create(meta)?;
-                if let Err(e) = check_import_resources().await {
+                if let Err(e) = check_import_resources(mem_limit).await {
                     warn!("Upload failed due to not enough resource {:?}", e);
                     return Err(e);
                 }
@@ -895,6 +904,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let start = Instant::now();
         let importer = self.importer.clone();
         let limiter = self.limiter.clone();
+        let mem_limit= self.mem_limit;
         let max_raft_size = self.raft_entry_max_size.0 as usize;
         let applier = self.writer.clone();
 
@@ -906,7 +916,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 .observe(start.saturating_elapsed().as_secs_f64());
 
             let mut resp = ApplyResponse::default();
-            match check_import_resources().await {
+            match check_import_resources(mem_limit).await {
                 Ok(()) => (),
                 Err(e) => {
                     resp.set_error(e.into());
@@ -939,6 +949,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let timer = Instant::now_coarse();
         let importer = Arc::clone(&self.importer);
         let limiter = self.limiter.clone();
+        let mem_limit = self.mem_limit;
         let region_id = req.get_sst().get_region_id();
         let tablets = self.tablets.clone();
         let start = Instant::now();
@@ -959,7 +970,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 .observe(start.saturating_elapsed().as_secs_f64());
 
             let mut resp = DownloadResponse::default();
-            match check_import_resources().await {
+            match check_import_resources(mem_limit).await {
                 Ok(()) => (),
                 Err(e) => {
                     resp.set_error(e.into());
@@ -1007,7 +1018,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 ),
                 resource_limiter,
             );
-            let mut resp = DownloadResponse::default();
+            let mut resp: DownloadResponse = DownloadResponse::default();
             match res.await {
                 Ok(range) => match range {
                     Some(r) => resp.set_range(r),
