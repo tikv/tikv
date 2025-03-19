@@ -488,8 +488,15 @@ impl<S: EngineSnapshot> MvccReader<S> {
         let write_key = cursor.key(&mut self.statistics.write);
         let commit_ts = Key::decode_ts_from(write_key)?;
         if commit_ts.is_zero() {
+            // assert!(!commit_ts.is_zero());
+            bad_data_error!("write with invalid commit-ts"; "key" => ?Key::from_raw(write_key), "commit-ts" => ?commit_ts);
             return Err(Error::from(ErrorInner::Other(
-                format!("invalid commit-ts {}", commit_ts.into_inner()).into(),
+                format!(
+                    "bad data, invalid commit-ts:{}, key:{}",
+                    commit_ts.into_inner(),
+                    Key::from_raw(write_key)
+                )
+                .into(),
             )));
         }
 

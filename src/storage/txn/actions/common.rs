@@ -16,7 +16,7 @@ pub fn next_last_change_info<S: Snapshot>(
     commit_ts: TimeStamp,
 ) -> Result<LastChange> {
     if commit_ts.is_zero() {
-        error!("write with invalid commit-ts"; "write" => ?write, "commit-ts" => ?commit_ts);
+        bad_data_error!("write with invalid commit-ts"; "write" => ?write, "commit-ts" => ?commit_ts);
         return Err(Error::from(ErrorInner::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "invaid commit-ts",

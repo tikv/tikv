@@ -490,7 +490,7 @@ impl<'a> PrewriteMutation<'a> {
         let mut seek_ts = TimeStamp::max();
         while let Some((commit_ts, write)) = reader.seek_write(&self.key, seek_ts)? {
             if commit_ts.is_zero() {
-                error!("write with invalid commit-ts"; "write" => ?write, "commit-ts" => ?commit_ts);
+                bad_data_error!("write with invalid commit-ts"; "write" => ?write, "commit-ts" => ?commit_ts);
                 return Err(Error::from(ErrorInner::Io(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     "invaid commit-ts",

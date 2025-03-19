@@ -59,6 +59,29 @@ macro_rules! error_unknown {
     };
 }
 
+#[macro_export]
+macro_rules! bad_data_error {
+    (?$e:expr; $l:literal) => {
+        ::slog_global::error!($l; "message" => "bad data", "err" => ?$e, "err_code" => %error_code::ErrorCodeExt::error_code(&$e))
+    };
+
+    (%$e:expr; $l:literal) => {
+        ::slog_global::error!($l; "message" => "bad data", "err" => ?$e, "err_code" => %error_code::ErrorCodeExt::error_code(&$e))
+    };
+
+    (?$e:expr; $l:literal; $($args:tt)+) => {
+        ::slog_global::error!($l; "message" => "bad data", "err" => ?$e, "err_code" => %error_code::ErrorCodeExt::error_code(&$e), $($args)+)
+    };
+
+    (%$e:expr; $l:literal; $($args:tt)+) => {
+        ::slog_global::error!($l; "message" => "bad data", "err" => %$e, "err_code" => %error_code::ErrorCodeExt::error_code(&$e), $($args)+)
+    };
+
+    ($l:literal; $($args:tt)+) => {
+        ::slog_global::error!($l; "message" => "bad data", $($args)+)
+    };
+}
+
 /// Logs a warning level message using the slog global logger.
 #[macro_export]
 macro_rules! warn(($($args:tt)+) => {
