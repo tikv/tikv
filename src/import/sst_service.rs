@@ -821,7 +821,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let label = "upload";
         let timer = Instant::now_coarse();
         let import = self.importer.clone();
-        let mem_limit= self.mem_limit;
+        let mem_limit = self.mem_limit;
         let (rx, buf_driver) =
             create_stream_with_buffer(stream, self.cfg.rl().stream_channel_window);
         let mut map_rx = rx.map_err(Error::from);
@@ -904,7 +904,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
         let start = Instant::now();
         let importer = self.importer.clone();
         let limiter = self.limiter.clone();
-        let mem_limit= self.mem_limit;
+        let mem_limit = self.mem_limit;
         let max_raft_size = self.raft_entry_max_size.0 as usize;
         let applier = self.writer.clone();
 
@@ -1018,7 +1018,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 ),
                 resource_limiter,
             );
-            let mut resp: DownloadResponse = DownloadResponse::default();
+            let mut resp = DownloadResponse::default();
             match res.await {
                 Ok(range) => match range {
                     Some(r) => resp.set_range(r),
