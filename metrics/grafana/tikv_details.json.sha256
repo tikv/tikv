@@ -1,5 +1,6 @@
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 569c643314e35df742387a42d4c05ee366b02f157acad8d1a170c9bbc7629e44  ./metrics/grafana/tikv_details.json
 =======
 =======
@@ -20,3 +21,6 @@ e6d0f1da5bd352498d9b3efcbfc3cc7562ed185c402d344f9839d060403e7f70  ./metrics/graf
 233850f1c0a810b48b74a188c29ff78aa642284b2d382cec7bb9a3a767679443  ./metrics/grafana/tikv_details.json
 >>>>>>> 915204d87 (merge conflicts)
 >>>>>>> 155344939 (merge conflicts)
+=======
+15dc96e4553de6afbc6832b0cf3d8720e874427b9cfd7276d9b619f39833683a  ./metrics/grafana/tikv_details.json
+>>>>>>> 22e29276c (rebase)
