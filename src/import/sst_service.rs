@@ -910,7 +910,8 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 Ok(()) => (),
                 Err(e) => {
                     resp.set_error(e.into());
-                    return crate::send_rpc_response!(Ok(resp), sink, label, start);
+                    crate::send_rpc_response!(Ok(resp), sink, label, start);
+                    return;
                 }
             }
 
@@ -962,7 +963,8 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 Ok(()) => (),
                 Err(e) => {
                     resp.set_error(e.into());
-                    return crate::send_rpc_response!(Ok(resp), sink, label, timer);
+                    crate::send_rpc_response!(Ok(resp), sink, label, timer);
+                    return;
                 }
             }
 
@@ -985,7 +987,8 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                     ));
                     let mut resp = DownloadResponse::default();
                     resp.set_error(error.into());
-                    return crate::send_rpc_response!(Ok(resp), sink, label, timer);
+                    crate::send_rpc_response!(Ok(resp), sink, label, timer);
+                    return;
                 }
             };
 
