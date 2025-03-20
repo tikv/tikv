@@ -501,14 +501,8 @@ fn test_read_index_after_transfer_leader() {
     let mut responses = Vec::with_capacity(10);
     let region = cluster.get_region(b"k1");
     for _ in 0..10 {
-        let resp = async_read_index_on_peer(
-            &mut cluster,
-            new_peer(2, 2),
-            region.clone(),
-            b"k1",
-            true,
-            None,
-        );
+        let resp =
+            async_read_index_on_peer(&mut cluster, new_peer(2, 2), region.clone(), b"k1", true);
         responses.push(resp);
     }
     // Try to split the region to change the peer into `splitting` state then can
@@ -678,8 +672,7 @@ fn test_read_index_lock_checking_on_follower() {
     // Pause read_index before transferring leader to peer 3. Then, the read index
     // message will still be sent to the old leader peer 1.
     fail::cfg("before_propose_readindex", "1*pause").unwrap();
-    let mut resp =
-        async_read_index_on_peer(&mut cluster, new_peer(2, 2), r1.clone(), b"k1", true, None);
+    let mut resp = async_read_index_on_peer(&mut cluster, new_peer(2, 2), r1.clone(), b"k1", true);
     for i in 0..=20 {
         let res = block_on_timeout(resp.as_mut(), Duration::from_millis(500));
         if res.is_err() {
@@ -689,8 +682,7 @@ fn test_read_index_lock_checking_on_follower() {
             panic!("read index not blocked by failpoint: {:?}", res);
         }
         thread::sleep(Duration::from_millis(200));
-        resp =
-            async_read_index_on_peer(&mut cluster, new_peer(2, 2), r1.clone(), b"k1", true, None);
+        resp = async_read_index_on_peer(&mut cluster, new_peer(2, 2), r1.clone(), b"k1", true);
     }
 
     // Filter all other responses to peer 2, so the term of peer 2 will not change.
@@ -735,6 +727,7 @@ fn test_read_index_lock_checking_on_follower() {
 }
 
 #[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_read_index_lock_checking_on_false_leader() {
     let mut cluster = new_cluster(0, 5);
     // Use long election timeout and short lease.
@@ -802,7 +795,7 @@ fn test_read_index_lock_checking_on_false_leader() {
     // Read index from peer 2, the read index message will be sent to the old leader
     // peer 1. But the lease of peer 1 has expired and it cannot get majority of
     // heartbeat. So, we cannot get the result here.
-    let mut resp = async_read_index_on_peer(&mut cluster, new_peer(2, 2), r1, b"k1", true, None);
+    let mut resp = async_read_index_on_peer(&mut cluster, new_peer(2, 2), r1, b"k1", true);
     block_on_timeout(resp.as_mut(), Duration::from_millis(300)).unwrap_err();
 
     // Now, restore the network partition. Peer 1 should now become follower and
@@ -870,31 +863,13 @@ fn test_read_index_cache() {
             "panic(reading_from_cache_not_allowed)",
         )
         .unwrap();
-        let mut resp = async_read_index_on_peer(
-            &mut cluster,
-            new_peer(2, 2),
-            r1.clone(),
-            b"k1",
-            true,
-            Some(2),
-        );
-        if let Err(e) = block_on_timeout(resp.as_mut(), Duration::from_millis(300)) {
-            panic!("block_on_timeout failed: {:?}", e);
-        }
+        let mut resp = async_get_snap(&mut cluster, new_peer(2, 2), r1.clone(), b"k1", Some(2));
+        let _resp = block_on_timeout(resp.as_mut(), Duration::from_millis(2000)).unwrap();
     }
 
     //  read it again after removing the lock
-    let mut resp = async_read_index_on_peer(
-        &mut cluster,
-        new_peer(2, 2),
-        r1.clone(),
-        b"k1",
-        true,
-        Some(2),
-    );
-    if let Err(e) = block_on_timeout(resp.as_mut(), Duration::from_millis(300)) {
-        panic!("block_on_timeout failed: {:?}", e);
-    }
+    let mut resp = async_get_snap(&mut cluster, new_peer(2, 2), r1.clone(), b"k1", Some(2));
+    let _resp = block_on_timeout(resp.as_mut(), Duration::from_millis(2000)).unwrap();
 
     // this read should be from cache
     fail::remove("reading_from_cache");
@@ -903,17 +878,8 @@ fn test_read_index_cache() {
         "panic(reading_from_leader_not_allowed)",
     )
     .unwrap();
-    let mut resp = async_read_index_on_peer(
-        &mut cluster,
-        new_peer(2, 2),
-        r1.clone(),
-        b"k1",
-        true,
-        Some(1),
-    );
-    if let Err(e) = block_on_timeout(resp.as_mut(), Duration::from_millis(300)) {
-        panic!("block_on_timeout failed: {:?}", e);
-    }
+    let mut resp = async_get_snap(&mut cluster, new_peer(2, 2), r1.clone(), b"k1", Some(1));
+    let _resp = block_on_timeout(resp.as_mut(), Duration::from_millis(2000)).unwrap();
 
     // this read should be from leader
     fail::remove("reading_from_leader");
@@ -922,15 +888,6 @@ fn test_read_index_cache() {
         "panic(reading_from_cache_not_allowed)",
     )
     .unwrap();
-    let mut resp = async_read_index_on_peer(
-        &mut cluster,
-        new_peer(2, 2),
-        r1.clone(),
-        b"k1",
-        true,
-        Some(3),
-    );
-    if let Err(e) = block_on_timeout(resp.as_mut(), Duration::from_millis(300)) {
-        panic!("block_on_timeout failed: {:?}", e);
-    }
+    let mut resp = async_get_snap(&mut cluster, new_peer(2, 2), r1.clone(), b"k1", Some(3));
+    let _resp = block_on_timeout(resp.as_mut(), Duration::from_millis(2000)).unwrap();
 }

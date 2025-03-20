@@ -358,9 +358,8 @@ fn test_read_index_retry_lock_checking() {
 
     // Can't get response because read index responses are blocked.
     let r1 = cluster.get_region(b"k1");
-    let mut resp1 =
-        async_read_index_on_peer(&mut cluster, new_peer(2, 2), r1.clone(), b"k1", true, None);
-    let mut resp2 = async_read_index_on_peer(&mut cluster, new_peer(2, 2), r1, b"k2", true, None);
+    let mut resp1 = async_read_index_on_peer(&mut cluster, new_peer(2, 2), r1.clone(), b"k1", true);
+    let mut resp2 = async_read_index_on_peer(&mut cluster, new_peer(2, 2), r1, b"k2", true);
     block_on_timeout(resp1.as_mut(), Duration::from_secs(2)).unwrap_err();
     block_on_timeout(resp2.as_mut(), Duration::from_millis(1)).unwrap_err();
 

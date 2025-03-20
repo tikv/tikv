@@ -572,6 +572,34 @@ pub fn async_read_index_on_peer<T: Simulator>(
     region: metapb::Region,
     key: &[u8],
     read_quorum: bool,
+) -> BoxFuture<'static, RaftCmdResponse> {
+    let node_id = peer.get_store_id();
+    let mut cmd = new_read_index_cmd();
+    cmd.mut_read_index().set_start_ts(u64::MAX);
+    cmd.mut_read_index()
+        .mut_key_ranges()
+        .push(point_key_range(Key::from_raw(key)));
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![cmd],
+        read_quorum,
+    );
+    request.mut_header().set_peer(peer);
+    let (tx, mut rx) = future::bounded(1, future::WakePolicy::Immediately);
+    let cb = Callback::read(Box::new(move |resp| drop(tx.send(resp.response))));
+    cluster.sim.wl().async_read(node_id, None, request, cb);
+    Box::pin(async move {
+        let fut = rx.next();
+        fut.await.unwrap()
+    })
+}
+
+pub fn async_get_snap<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    peer: metapb::Peer,
+    region: metapb::Region,
+    key: &[u8],
     start_ts: Option<u64>,
 ) -> BoxFuture<'static, RaftCmdResponse> {
     let node_id = peer.get_store_id();
@@ -585,9 +613,9 @@ pub fn async_read_index_on_peer<T: Simulator>(
         region.get_id(),
         region.get_region_epoch().clone(),
         vec![cmd],
-        read_quorum,
+        true,
     );
-    request.mut_header().set_replica_read(read_quorum);
+    request.mut_header().set_replica_read(true);
     if let Some(start_ts) = start_ts {
         encode_start_ts_into_flag_data(request.mut_header(), start_ts);
     }
