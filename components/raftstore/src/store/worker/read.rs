@@ -981,6 +981,7 @@ where
     }
 
     fn redirect(&mut self, mut cmd: RaftCommand<E::Snapshot>) {
+        fail::fail_point!("reading_from_leader");
         debug!("localreader redirects command"; "command" => ?cmd);
         let region_id = cmd.request.get_header().get_region_id();
         let mut err = errorpb::Error::default();
