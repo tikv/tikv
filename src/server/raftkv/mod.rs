@@ -58,9 +58,7 @@ use tikv_util::{
     time::Instant,
 };
 use tracker::{get_tls_tracker_token, GLOBAL_TRACKERS};
-use txn_types::{
-    Key, TimeStamp, TxnExtra, TxnExtraScheduler, WriteBatchFlags,
-};
+use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, WriteBatchFlags};
 
 use super::metrics::*;
 use crate::storage::{
