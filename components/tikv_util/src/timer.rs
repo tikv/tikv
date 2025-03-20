@@ -225,7 +225,7 @@ impl<T: Now> Now for RatchetClock<T> {
                     AtomicOrdering::SeqCst,
                 ) {
                     Ok(_) => {
-                        return now;
+                        return self.start + Duration::from_millis(now_ms);
                     }
                     Err(last_now) => {
                         last_now_ms = last_now;
