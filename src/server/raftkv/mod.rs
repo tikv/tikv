@@ -59,7 +59,7 @@ use tikv_util::{
 };
 use tracker::{get_tls_tracker_token, GLOBAL_TRACKERS};
 use txn_types::{
-    ErrorInner, Key, LockType, TimeStamp, TxnExtra, TxnExtraScheduler, WriteBatchFlags,
+    Key, TimeStamp, TxnExtra, TxnExtraScheduler, WriteBatchFlags,
 };
 
 use super::metrics::*;
