@@ -5,6 +5,7 @@ use std::{
 };
 
 use async_compression::futures::write::ZstdDecoder;
+use encryption::MultiMasterKeyBackend;
 use external_storage::ExternalStorage;
 use futures::io::{AsyncWriteExt, Cursor};
 use futures_io::AsyncWrite;
@@ -23,11 +24,15 @@ use crate::{compaction::Input, errors::Result};
 #[derive(Clone)]
 pub struct Source {
     inner: Arc<dyn ExternalStorage>,
+    master_keys: MultiMasterKeyBackend,
 }
 
 impl Source {
     pub fn new(inner: Arc<dyn ExternalStorage>) -> Self {
-        Self { inner }
+        Self {
+            inner,
+            master_keys: MultiMasterKeyBackend::default(),
+        }
     }
 }
 

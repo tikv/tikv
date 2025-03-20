@@ -4,6 +4,7 @@ use std::{
     sync::Arc,
 };
 
+use encryption::MultiMasterKeyBackend;
 use engine_rocks::RocksEngine;
 use engine_traits::{
     ExternalSstFileInfo, SstCompressionType, SstExt, SstWriter, SstWriterBuilder,

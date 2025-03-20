@@ -7,6 +7,7 @@ mod test;
 use std::{borrow::Cow, cell::Cell, path::Path, sync::Arc};
 
 use chrono::Utc;
+use encryption::MultiMasterKeyBackend;
 use engine_rocks::RocksEngine;
 pub use engine_traits::SstCompressionType;
 use engine_traits::SstExt;
@@ -126,6 +127,8 @@ pub struct Execution<DB: SstExt = RocksEngine> {
     pub db: Option<DB>,
     /// The prefix of the artifices.
     pub out_prefix: String,
+    /// The encryption config.
+    pub encryption: MultiMasterKeyBackend,
 }
 
 struct ExecuteCtx<'a, H: ExecHooks> {
@@ -157,6 +160,7 @@ impl Execution {
             parent: next_compaction.clone(),
             "load_meta_file_names"
         ));
+        ext.master_key = self.encryption.clone();
 
         let ExecuteCtx {
             ref storage,

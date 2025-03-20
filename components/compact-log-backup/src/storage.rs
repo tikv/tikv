@@ -10,6 +10,7 @@ use std::{
 };
 
 use derive_more::Display;
+use encryption::{FileEncryptionInfo, MultiMasterKeyBackend};
 use external_storage::{BlobObject, ExternalStorage, UnpinReader};
 use futures::{
     future::{FusedFuture, FutureExt, TryFutureExt},
@@ -43,7 +44,7 @@ pub const MIGRATION_PREFIX: &str = "v1/migrations";
 pub const LOCK_PREFIX: &str = "v1/LOCK";
 
 /// The in-memory presentation of the message [`brpb::Metadata`].
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub struct MetaFile {
     pub name: Arc<str>,
     pub physical_files: Vec<PhysicalLogFile>,
@@ -95,7 +96,7 @@ impl MetaFile {
 }
 
 /// The in-memory presentation of the message [`brpb::DataFileGroup`].
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 pub struct PhysicalLogFile {
     pub size: u64,
     pub name: Arc<str>,
@@ -130,8 +131,7 @@ impl From<Epoch> for RegionEpoch {
 /// The in-memory presentation of the message [`brpb::DataFileInfo`].
 /// The difference is that all `Vec<u8>` are replaced with `Arc<[u8]>` to save
 /// memory.
-#[derive(Debug, Clone, PartialEq, Eq)]
-
+#[derive(Debug, Clone, PartialEq)]
 pub struct LogFile {
     pub id: LogFileId,
     pub file_real_size: u64,
@@ -153,6 +153,29 @@ pub struct LogFile {
     pub table_id: i64,
     pub resolved_ts: u64,
     pub sha256: Arc<[u8]>,
+
+    pub encryption: LogFileEncryptionInfo,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum LogFileEncryptionInfo {
+    Unresolved(kvproto::encryptionpb::MasterKeyBased),
+    RawKey(encryption::FileEncryptionInfo),
+}
+
+impl LogFileEncryptionInfo {
+    pub fn key(&self) -> Option<&encryption::FileEncryptionInfo> {
+        match self {
+            LogFileEncryptionInfo::Unresolved(_) => None,
+            LogFileEncryptionInfo::RawKey(key) => Some(key),
+        }
+    }
+}
+
+impl Default for LogFileEncryptionInfo {
+    fn default() -> Self {
+        Self::RawKey(Default::default())
+    }
 }
 
 impl LogFile {
@@ -206,6 +229,8 @@ pub struct LoadFromExt<'a> {
     /// The prefix of metadata in the external storage.
     /// By default it is `v1/backupmeta`.
     pub meta_prefix: &'a str,
+    /// The master key used to decrypt encrypted files.
+    pub master_key: MultiMasterKeyBackend,
 }
 
 impl<'a> LoadFromExt<'a> {
@@ -220,6 +245,7 @@ impl<'a> Default for LoadFromExt<'a> {
             max_concurrent_fetch: 16,
             loading_content_span: None,
             meta_prefix: METADATA_PREFIX,
+            master_key: MultiMasterKeyBackend::default(),
         }
     }
 }
@@ -515,6 +541,7 @@ impl LogFile {
             table_id: pb_info.table_id,
             compression: pb_info.compression_type,
             region_epoches,
+            encryption: Default::default(),
         }
     }
 

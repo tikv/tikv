@@ -76,6 +76,7 @@ pub fn create_compaction(st: StorageBackend) -> Execution {
         external_storage: st,
         db: None,
         out_prefix: "test-output".to_owned(),
+        encryption: Default::default(),
     }
 }
 

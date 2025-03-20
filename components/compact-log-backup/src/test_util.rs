@@ -352,6 +352,7 @@ impl LogFileBuilder {
                 .is_empty()
                 .not()
                 .then(|| self.region_epoches.into_boxed_slice().into()),
+            encryption: Default::default(),
         };
         (file, cnt.into_inner())
     }
