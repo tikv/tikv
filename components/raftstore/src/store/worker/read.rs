@@ -1269,7 +1269,7 @@ where
 
         // check first if it can be served locally wihout sending read index message
         // to leader. (https://github.com/tikv/rfcs/blob/master/text/0113-follower-read-cache.md)
-        match self.try_local_stale_read(ctx, &req, delegate, snap_updated, last_valid_ts) {
+        match self.try_local_stale_read(ctx, req, delegate, snap_updated, last_valid_ts) {
             Ok(read_resp) => {
                 TLS_LOCAL_READ_METRICS
                     .with(|m| m.borrow_mut().local_executed_follower_read_requests.inc());
