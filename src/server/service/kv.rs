@@ -1313,8 +1313,12 @@ fn response_batch_commands_request<F, T>(
     T: Default,
 {
     let task = async move {
+        let resp_res = resp.await;
+        // GrpcRequestDuration must be initialized after the response is ready,
+        // because it measures the grpc_wait_time, which is the time from
+        // receiving the response to sending it.
         let measure = GrpcRequestDuration::new(begin, label, source, resource_priority);
-        match resp.await {
+        match resp_res {
             Ok(resp) => {
                 let task = MeasuredSingleResponse::new(id, resp, measure, None);
                 if let Err(e) = tx.send_with(task, WakePolicy::Immediately) {
