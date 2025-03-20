@@ -577,7 +577,7 @@ pub fn async_read_index_on_peer<T: Simulator>(
     let node_id = peer.get_store_id();
     let mut cmd = new_snap_cmd();
     cmd.mut_read_index()
-        .set_start_ts(start_ts.unwrap_or_else(|| u64::MAX));
+        .set_start_ts(start_ts.unwrap_or(u64::MAX));
     cmd.mut_read_index()
         .mut_key_ranges()
         .push(point_key_range(Key::from_raw(key)));
@@ -588,8 +588,8 @@ pub fn async_read_index_on_peer<T: Simulator>(
         read_quorum,
     );
     request.mut_header().set_replica_read(read_quorum);
-    if start_ts.is_some() {
-        encode_start_ts_into_flag_data(request.mut_header(), start_ts.unwrap());
+    if let Some(start_ts) = start_ts {
+        encode_start_ts_into_flag_data(request.mut_header(), start_ts);
     }
     request.mut_header().set_peer(peer);
     let (tx, mut rx) = future::bounded(1, future::WakePolicy::Immediately);
