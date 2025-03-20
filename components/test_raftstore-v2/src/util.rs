@@ -321,7 +321,7 @@ pub fn async_read_index_on_peer<T: Simulator<EK>, EK: KvEngine>(
 ) -> BoxFuture<'static, RaftCmdResponse> {
     let mut cmd = new_get_cmd(key);
     cmd.mut_read_index()
-        .set_start_ts(start_ts.unwrap_or_else(|| u64::MAX));
+        .set_start_ts(start_ts.unwrap_or(u64::MAX));
     cmd.mut_read_index()
         .mut_key_ranges()
         .push(point_key_range(Key::from_raw(key)));
