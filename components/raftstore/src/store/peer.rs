@@ -3903,7 +3903,9 @@ where
                 self.read_local(ctx, req, cb);
                 return false;
             }
-            Ok(RequestPolicy::ReadIndex) => return self.read_index(ctx, req, err_resp, cb),
+            Ok(RequestPolicy::ReadIndex) | Ok(RequestPolicy::ReadIndexReplicaRead) => {
+                return self.read_index(ctx, req, err_resp, cb);
+            }
             Ok(RequestPolicy::ProposeTransferLeader) => {
                 return self.propose_transfer_leader(ctx, req, cb);
             }

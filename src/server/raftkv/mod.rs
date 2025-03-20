@@ -58,7 +58,9 @@ use tikv_util::{
     time::Instant,
 };
 use tracker::{get_tls_tracker_token, GLOBAL_TRACKERS};
-use txn_types::{ErrorInner, Key, TimeStamp, TxnExtra, TxnExtraScheduler, WriteBatchFlags};
+use txn_types::{
+    ErrorInner, Key, LockType, TimeStamp, TxnExtra, TxnExtraScheduler, WriteBatchFlags,
+};
 
 use super::metrics::*;
 use crate::storage::{
@@ -898,21 +900,21 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                         end_key.as_ref(),
                         |key, lock| {
                             // It returns immediately upon encountering a lock in a region,
-                            // regardless of the timestamp.
-                            // This optimization is for the read index cache on the follower side.
-                            // Considering timestamps might require
-                            // scanning the entire region.
-                            if lock.lock_type == LockType::Lock || lock.is_pessimistic_lock() {
-                                // Ignore lock when the lock's type is Lock or Pessimistic.
-                                return Ok(());
-                            }
-
-                            Err(Error::from(ErrorInner::KeyIsLocked(
-                                lock.into_owned().into_lock_info(raw_key),
-                            )))
+                            // regardless of the timestamp.This optimization is for the read index
+                            // cache on the follower side. Considering
+                            // timestamps might require scanning the
+                            // entire region.
+                            txn_types::Lock::check_lock_conflict_for_read_index_cache(
+                                Cow::Borrowed(lock),
+                                key,
+                                &Default::default(),
+                            )
                         },
                     );
-                    if !matches!(res, Err(txn_types::Error(box ErrorInner::KeyIsLocked(_)))) {
+                    if !matches!(
+                        res,
+                        Err(txn_types::Error(box txn_types::ErrorInner::KeyIsLocked(_)))
+                    ) {
                         rctx.read_index_safe_ts = Some(start_ts.into_inner());
                     }
                 }
