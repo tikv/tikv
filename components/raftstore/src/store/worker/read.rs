@@ -1193,6 +1193,7 @@ where
                                 TLS_LOCAL_READ_METRICS.with(|m| {
                                     m.borrow_mut().local_executed_stale_read_requests.inc()
                                 });
+                                fail::fail_point!("reading_from_cache");
                                 read_resp
                             }
                             Err(_err_resp) => {

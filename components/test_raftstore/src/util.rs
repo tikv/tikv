@@ -42,7 +42,7 @@ use pd_client::PdClient;
 use protobuf::RepeatedField;
 use raft::eraftpb::ConfChangeType;
 use raftstore::{
-    store::{fsm::RaftRouter, *},
+    store::{fsm::RaftRouter, util::encode_start_ts_into_flag_data, *},
     RaftRouterCompactedEventSender, Result,
 };
 use rand::{seq::SliceRandom, RngCore};
@@ -572,10 +572,12 @@ pub fn async_read_index_on_peer<T: Simulator>(
     region: metapb::Region,
     key: &[u8],
     read_quorum: bool,
+    start_ts: Option<u64>,
 ) -> BoxFuture<'static, RaftCmdResponse> {
     let node_id = peer.get_store_id();
-    let mut cmd = new_read_index_cmd();
-    cmd.mut_read_index().set_start_ts(u64::MAX);
+    let mut cmd = new_snap_cmd();
+    cmd.mut_read_index()
+        .set_start_ts(start_ts.unwrap_or_else(|| u64::MAX));
     cmd.mut_read_index()
         .mut_key_ranges()
         .push(point_key_range(Key::from_raw(key)));
@@ -585,6 +587,10 @@ pub fn async_read_index_on_peer<T: Simulator>(
         vec![cmd],
         read_quorum,
     );
+    request.mut_header().set_replica_read(read_quorum);
+    if start_ts.is_some() {
+        encode_start_ts_into_flag_data(request.mut_header(), start_ts.unwrap());
+    }
     request.mut_header().set_peer(peer);
     let (tx, mut rx) = future::bounded(1, future::WakePolicy::Immediately);
     let cb = Callback::read(Box::new(move |resp| drop(tx.send(resp.response))));
