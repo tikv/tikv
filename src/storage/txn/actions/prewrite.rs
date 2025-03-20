@@ -9,6 +9,7 @@ use kvproto::kvrpcpb::{
     PrewriteRequestPessimisticAction::{self, *},
     WriteConflictReason,
 };
+use tikv_util::{log::BAD_DATA_STR, metrics::CRITICAL_ERROR};
 use txn_types::{
     is_short_value, Key, LastChange, Mutation, MutationType, OldValue, TimeStamp, Value, Write,
     WriteType,
@@ -489,6 +490,14 @@ impl<'a> PrewriteMutation<'a> {
     ) -> Result<Option<(Write, TimeStamp)>> {
         let mut seek_ts = TimeStamp::max();
         while let Some((commit_ts, write)) = reader.seek_write(&self.key, seek_ts)? {
+            if commit_ts.is_zero() {
+                bad_data_error!("write with invalid commit-ts"; "write" => ?write, "commit-ts" => ?commit_ts);
+                CRITICAL_ERROR.with_label_values(&[BAD_DATA_STR]).inc();
+                return Err(Error::from(ErrorInner::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "invaid commit-ts",
+                ))));
+            }
             // If there's a write record whose commit_ts equals to our start ts, the current
             // transaction is ok to continue, unless the record means that the current
             // transaction has been rolled back.
