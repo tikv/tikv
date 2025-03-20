@@ -59,8 +59,7 @@ fn test_apply_full_resource() {
     );
     disk::set_disk_status(DiskUsage::Normal);
 
-    fail::cfg("mock_memory_usage", "return(10307921510)").unwrap(); // 9.5G
-    fail::cfg("mock_memory_limit", "return(10737418240)").unwrap(); // 10G
+    fail::cfg("memory_usage_reaches_high_water", "return").unwrap();
     let result = import.apply(&req).unwrap();
     assert!(result.has_error());
     assert!(
@@ -69,8 +68,7 @@ fn test_apply_full_resource() {
             .get_message()
             .contains("Memory usage too high")
     );
-    fail::remove("mock_memory_usage");
-    fail::remove("mock_memory_limit");
+    fail::remove("memory_usage_reaches_high_water");
 }
 
 #[test]

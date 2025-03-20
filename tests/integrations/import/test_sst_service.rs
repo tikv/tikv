@@ -48,14 +48,12 @@ fn test_upload_sst() {
     set_disk_status(DiskUsage::Normal);
 
     // high memory usage
-    fail::cfg("mock_memory_usage", "return(10307921510)").unwrap(); // 9.5G
-    fail::cfg("mock_memory_limit", "return(10737418240)").unwrap(); // 10G
+    fail::cfg("memory_usage_reaches_high_water", "return").unwrap();
     assert_to_string_contains!(
         send_upload_sst(&import, &meta, &data).unwrap_err(),
         "Memory usage too high"
     );
-    fail::remove("mock_memory_usage");
-    fail::remove("mock_memory_limit");
+    fail::remove("memory_usage_reaches_high_water");
 
     let mut meta = new_sst_meta(crc32, length);
     meta.set_region_id(ctx.get_region_id());
@@ -113,12 +111,10 @@ fn test_write_sst_when_resource_full() {
     run_test_write_sst(ctx, tikv, import, "DiskSpaceNotEnough");
     set_disk_status(DiskUsage::Normal);
 
-    fail::cfg("mock_memory_usage", "return(10307921510)").unwrap(); // 9.5G
-    fail::cfg("mock_memory_limit", "return(10737418240)").unwrap(); // 10G
+    fail::cfg("memory_usage_reaches_high_water", "return").unwrap();
     let (_cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client();
     run_test_write_sst(ctx, tikv, import, "Memory usage too high");
-    fail::remove("mock_memory_usage");
-    fail::remove("mock_memory_limit");
+    fail::remove("memory_usage_reaches_high_water");
 }
 
 #[test]
