@@ -160,7 +160,7 @@ impl Execution {
             parent: next_compaction.clone(),
             "load_meta_file_names"
         ));
-        ext.master_key = self.encryption.clone();
+        ext.master_keys = self.encryption.clone();
 
         let ExecuteCtx {
             ref storage,

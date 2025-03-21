@@ -230,7 +230,7 @@ pub struct LoadFromExt<'a> {
     /// By default it is `v1/backupmeta`.
     pub meta_prefix: &'a str,
     /// The master key used to decrypt encrypted files.
-    pub master_key: MultiMasterKeyBackend,
+    pub master_keys: MultiMasterKeyBackend,
 }
 
 impl<'a> LoadFromExt<'a> {
@@ -245,7 +245,7 @@ impl<'a> Default for LoadFromExt<'a> {
             max_concurrent_fetch: 16,
             loading_content_span: None,
             meta_prefix: METADATA_PREFIX,
-            master_key: MultiMasterKeyBackend::default(),
+            master_keys: MultiMasterKeyBackend::default(),
         }
     }
 }
@@ -376,8 +376,10 @@ impl<'a> StreamMetaStorage<'a> {
                         continue;
                     }
 
-                    let mut fut =
-                        Prefetch::new(MetaFile::load_from(self.ext_storage, load).boxed_local());
+                    let mut fut = Prefetch::new(
+                        MetaFile::load_from(self.ext_storage, load, &self.ext.master_keys)
+                            .boxed_local(),
+                    );
                     // start the execution of this future.
                     let poll = fut.poll_unpin(cx);
                     if poll.is_ready() {
@@ -453,6 +455,7 @@ impl MetaFile {
     async fn load_from(
         s: &dyn ExternalStorage,
         blob: BlobObject,
+        master_keys: &MultiMasterKeyBackend,
     ) -> Result<(Self, LoadMetaStatistic)> {
         use protobuf::Message;
 
