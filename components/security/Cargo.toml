@@ -10,8 +10,12 @@ collections = { workspace = true }
 encryption = { workspace = true }
 grpcio = { workspace = true }
 log_wrappers = { workspace = true }
+online_config = { workspace = true }
 serde = "1.0"
 serde_derive = "1.0"
+slog = { workspace = true }
+slog-global = { workspace = true }
+tikv_util = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3.0"
