@@ -210,7 +210,14 @@ impl ConcurrencyManager {
         if !limit.limit.is_zero() && new_ts > limit.limit {
             let last_update = limit.update_time;
             let now = self.time_provider.now();
+<<<<<<< HEAD
             let duration_to_last_limit_update = now - last_update;
+=======
+            if now < last_update {
+                warn!("clock went backwards"; "now" => ?now, "last_update" => ?last_update);
+            }
+            let duration_to_last_limit_update = now.saturating_duration_since(last_update);
+>>>>>>> 472f2aa115 (concurrency-manager: do not assert in concurrency manager (#18329))
 
             if duration_to_last_limit_update < self.limit_valid_duration {
                 // limit is valid
