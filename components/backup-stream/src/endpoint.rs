@@ -1110,7 +1110,7 @@ where
             self.checkpoint_mgr.sync_with_subs_mgr(move |_| {
                 if let Err(err) = sender.try_send(result) {
                     let err_msg = err.to_string();
-                    info!("failed to send flush result, waiter is gone or channel blocked"; "err" => %err_msg, "result" => ?err.into_inner());
+                    info!("failed to send flush result, waiter is gone or channel blocked"; "err" => %err_msg);
                 }
             })
         }
