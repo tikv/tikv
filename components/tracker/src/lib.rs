@@ -1,5 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+mod future;
 mod metrics;
 mod slab;
 mod tls;
@@ -9,16 +10,23 @@ use std::time::Instant;
 use kvproto::kvrpcpb as pb;
 
 pub use self::{
+    future::*,
     slab::{TrackerToken, TrackerTokenArray, GLOBAL_TRACKERS, INVALID_TRACKER_TOKEN},
     tls::*,
 };
 
 #[derive(Debug)]
+enum PollState {
+    None,
+    Begin(Instant),
+    Finish(Instant),
+}
+
+#[derive(Debug)]
 pub struct Tracker {
     pub req_info: RequestInfo,
     pub metrics: RequestMetrics,
-    // TODO: Add request stage info
-    // pub current_stage: RequestStage,
+    current_stage: PollState,
 }
 
 impl Tracker {
@@ -26,11 +34,15 @@ impl Tracker {
         Self {
             req_info,
             metrics: Default::default(),
+            // Set to Finish state to tracking the wait time before the first poll.
+            current_stage: PollState::Finish(Instant::now()),
         }
     }
 
     pub fn write_time_detail(&self, detail_v2: &mut pb::TimeDetailV2) {
         detail_v2.set_kv_grpc_process_time_ns(self.metrics.grpc_process_nanos);
+        detail_v2.set_process_wall_time_ns(self.metrics.future_process_nanos);
+        detail_v2.set_process_suspend_wall_time_ns(self.metrics.future_suspend_nanos);
     }
 
     pub fn write_scan_detail(&self, detail_v2: &mut pb::ScanDetailV2) {
@@ -82,6 +94,53 @@ impl Tracker {
         detail.set_apply_write_leader_wait_nanos(self.metrics.apply_thread_wait_nanos);
         detail.set_apply_write_wal_nanos(self.metrics.apply_write_wal_nanos);
         detail.set_apply_write_memtable_nanos(self.metrics.apply_write_memtable_nanos);
+    }
+
+    fn on_track_poll_begin(&mut self) {
+        let now = Instant::now();
+        match self.current_stage {
+            PollState::None => {}
+            PollState::Finish(at) => {
+                self.metrics.future_suspend_nanos +=
+                    now.saturating_duration_since(at).as_nanos() as u64;
+            }
+            _ => {
+                panic!(
+                    "unexpected tracker state {:?}, request_info: {:?}",
+                    self.current_stage, self.req_info
+                )
+            }
+        }
+        self.current_stage = PollState::Begin(now);
+    }
+
+    fn on_track_poll_finish(&mut self) {
+        if let PollState::Begin(at) = self.current_stage {
+            let now = Instant::now();
+            self.metrics.future_process_nanos +=
+                now.saturating_duration_since(at).as_nanos() as u64;
+            self.current_stage = PollState::Finish(now);
+        }
+    }
+
+    pub fn collect_future_poll_track(&mut self) {
+        self.on_track_poll_finish();
+        // Prevent double counting.
+        self.current_stage = PollState::None;
+    }
+}
+
+impl FutureTrack for TrackerToken {
+    fn on_poll_begin(&mut self) {
+        GLOBAL_TRACKERS.with_tracker(*self, |tracker| {
+            tracker.on_track_poll_begin();
+        });
+    }
+
+    fn on_poll_finish(&mut self) {
+        GLOBAL_TRACKERS.with_tracker(*self, |tracker| {
+            tracker.on_track_poll_finish();
+        });
     }
 }
 
@@ -157,6 +216,10 @@ pub struct RequestMetrics {
     pub latch_wait_nanos: u64,
     pub scheduler_process_nanos: u64,
     pub scheduler_throttle_nanos: u64,
+
+    pub future_process_nanos: u64,
+    pub future_suspend_nanos: u64,
+
     // temp instant used in raftstore metrics, first be the instant when creating the write
     // callback, then reset when it is ready to apply
     pub write_instant: Option<Instant>,
@@ -180,4 +243,96 @@ pub struct RequestMetrics {
     pub apply_thread_wait_nanos: u64,
     pub apply_write_wal_nanos: u64,
     pub apply_write_memtable_nanos: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        },
+        thread::sleep,
+        time::Duration,
+    };
+
+    use futures::{channel::oneshot::channel, executor::LocalPool, task::LocalSpawnExt};
+
+    use super::*;
+
+    struct TestTracker<T> {
+        inner: T,
+        poll_count: Arc<AtomicUsize>,
+    }
+
+    impl<T: FutureTrack> FutureTrack for TestTracker<T> {
+        fn on_poll_begin(&mut self) {
+            self.poll_count.fetch_add(1, Ordering::SeqCst);
+            self.inner.on_poll_begin();
+        }
+
+        fn on_poll_finish(&mut self) {
+            self.inner.on_poll_finish();
+        }
+    }
+
+    #[test]
+    fn test_token_future_track() {
+        let (tx, rx) = channel::<()>();
+
+        let token = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
+            &pb::Context::default(),
+            RequestType::Unknown,
+            0,
+        )));
+        let poll_count = Arc::new(AtomicUsize::new(0));
+        let poll_count_ = poll_count.clone();
+        let fut = track(
+            async move {
+                let _ = rx.await;
+                sleep(Duration::from_millis(100));
+
+                GLOBAL_TRACKERS.with_tracker(token, |tracker| {
+                    tracker.collect_future_poll_track();
+                });
+
+                sleep(Duration::from_millis(100));
+            },
+            TestTracker {
+                inner: token,
+                poll_count,
+            },
+        );
+        let mut local = LocalPool::new();
+        let spawner = local.spawner();
+        spawner.spawn_local(fut).unwrap();
+        assert!(!local.try_run_one());
+        assert_eq!(poll_count_.load(Ordering::SeqCst), 1);
+
+        tx.send(()).unwrap();
+        sleep(Duration::from_millis(300));
+        assert!(local.try_run_one());
+        assert_eq!(poll_count_.load(Ordering::SeqCst), 2);
+
+        let mut wait_details = pb::TimeDetailV2::default();
+        GLOBAL_TRACKERS.with_tracker(token, |tracker| {
+            tracker.write_time_detail(&mut wait_details);
+        });
+
+        let process_suspend_wall_time_ns = wait_details.get_process_suspend_wall_time_ns();
+        assert!(
+            process_suspend_wall_time_ns >= Duration::from_millis(300).as_nanos() as u64,
+            "{}",
+            process_suspend_wall_time_ns
+        );
+
+        let process_wall_time_ns = wait_details.get_process_wall_time_ns();
+        assert!(
+            process_wall_time_ns >= Duration::from_millis(100).as_nanos() as u64
+                && process_wall_time_ns < Duration::from_millis(200).as_nanos() as u64,
+            "{} {}",
+            process_wall_time_ns,
+            Duration::from_millis(100).as_nanos()
+        );
+    }
 }

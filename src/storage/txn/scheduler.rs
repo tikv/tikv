@@ -54,7 +54,7 @@ use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData, WriteEvent};
 use tikv_util::{
     memory::MemoryQuota, quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE,
 };
-use tracker::{set_tls_tracker_token, TrackerToken, TrackerTokenArray, GLOBAL_TRACKERS};
+use tracker::{set_tls_tracker_token, track, TrackerToken, TrackerTokenArray, GLOBAL_TRACKERS};
 use txn_types::TimeStamp;
 
 use super::task::Task;
@@ -711,7 +711,8 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
     /// Executes the task in the sched pool.
     fn execute(&self, mut task: Task) {
-        set_tls_tracker_token(task.tracker_token());
+        let tracker_token = task.tracker_token();
+        set_tls_tracker_token(tracker_token);
         let sched = self.clone();
         let metadata = TaskMetadata::from_ctx(task.cmd().resource_control_ctx());
         let request_source = task.cmd().ctx().request_source.clone();
@@ -778,6 +779,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 }
             }
         };
+        let execution = track(execution, tracker_token);
         let execution_bytes = std::mem::size_of_val(&execution);
         let memory_quota = self.inner.memory_quota.clone();
         memory_quota.alloc_force(execution_bytes);
@@ -812,6 +814,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         };
         if let Some(details) = sched_details {
             let req_info = GLOBAL_TRACKERS.with_tracker(details.tracker, |tracker| {
+                tracker.collect_future_poll_track();
                 tracker.metrics.scheduler_process_nanos = details
                     .start_process_instant
                     .saturating_elapsed()
@@ -932,6 +935,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 self.schedule_command(task, cb, None);
             } else {
                 GLOBAL_TRACKERS.with_tracker(sched_details.tracker, |tracker| {
+                    tracker.collect_future_poll_track();
                     tracker.metrics.scheduler_process_nanos = sched_details
                         .start_process_instant
                         .saturating_elapsed()
