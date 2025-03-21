@@ -26,27 +26,41 @@ use self::util::{
 
 #[test]
 fn test_concurrent_download_sst() {
+<<<<<<< HEAD
     init_log_for_test();
     let mut config = TikvConfig::default();
     // neet set server threads to a large number;
     config.import.num_threads = 2;
+=======
+    let mut config = TikvConfig::default();
+    // neet set server threads to a large number;
+    config.import.num_threads = 10;
+>>>>>>> master
     let (_cluster, ctx, tikv, import) = open_cluster_and_tikv_import_client(Some(config));
     let temp_dir = Builder::new()
         .prefix("test_concurrent_download_sst")
         .tempdir()
         .unwrap();
 
+<<<<<<< HEAD
     fail::cfg("create_local_storage_yield", "return(1000)").unwrap();
+=======
+>>>>>>> master
     let metas = Arc::new(Mutex::new(Vec::new()));
     let threads: Vec<_> = (0..10)
         .map(|i| {
             let file_name = format!("test_{}.sst", i);
+<<<<<<< HEAD
             let temp_path = temp_dir.path().to_owned();
             let sst_path = temp_path.join(&file_name);
+=======
+            let sst_path = temp_dir.path().join(&file_name);
+>>>>>>> master
             let sst_range = (i, (i + 1) * 2);
             let (mut meta, _) = gen_sst_file(sst_path, sst_range);
             meta.set_region_id(ctx.get_region_id());
             meta.set_region_epoch(ctx.get_region_epoch().clone());
+<<<<<<< HEAD
             let metas = Arc::clone(&metas);
             let import = import.clone();
 
@@ -69,6 +83,26 @@ fn test_concurrent_download_sst() {
                 download.mut_sst().mut_range().set_end(Vec::new());
                 let download = download.clone();
 
+=======
+
+            // Run multiple concurrent downloads
+            let mut download = DownloadRequest::default();
+            download.set_sst(meta.clone());
+            download.set_storage_backend(external_storage::make_local_backend(temp_dir.path()));
+            download.set_name(file_name);
+            download.mut_sst().mut_range().set_start(vec![sst_range.1]);
+            download
+                .mut_sst()
+                .mut_range()
+                .set_end(vec![sst_range.1 + 1]);
+            download.mut_sst().mut_range().set_start(Vec::new());
+            download.mut_sst().mut_range().set_end(Vec::new());
+            let import = import.clone();
+            let download = download.clone();
+            let metas = Arc::clone(&metas);
+
+            std::thread::spawn(move || {
+>>>>>>> master
                 let result: DownloadResponse = import.download(&download).unwrap();
                 assert!(!result.get_is_empty());
                 assert_eq!(result.get_range().get_start(), &[sst_range.0]);
@@ -84,7 +118,10 @@ fn test_concurrent_download_sst() {
     for handle in threads {
         handle.join().unwrap();
     }
+<<<<<<< HEAD
     fail::remove("create_local_storage_yield");
+=======
+>>>>>>> master
 
     // Now ingest all SSTs in order
     let metas = metas.lock().unwrap();
