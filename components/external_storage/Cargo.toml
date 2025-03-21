@@ -5,6 +5,9 @@ edition = "2021"
 publish = false
 license = "Apache-2.0"
 
+[features]
+failpoints = ["fail/failpoints"]
+
 [dependencies]
 async-compression = { version = "0.4.12", features = ["futures-io", "zstd"] }
 async-trait = "0.1"
@@ -13,6 +16,7 @@ azure = { workspace = true }
 chrono = { workspace = true }
 cloud = { workspace = true }
 encryption = { workspace = true }
+fail = "0.5"
 file_system = { workspace = true }
 futures = "0.3"
 futures-io = "0.3"

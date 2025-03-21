@@ -37,6 +37,22 @@ impl LocalStorage {
     /// Create a new local storage in the given path.
     pub fn new(base: &Path) -> io::Result<LocalStorage> {
         info!("create local storage"; "base" => base.display());
+        (|| {
+            fail::fail_point!("create_local_storage_yield", |v| {
+                info!("inject create storage sleep time: {:?}ms", v);
+                let v = v.unwrap().parse::<u64>().unwrap();
+                // Using block_in_place to execute a sleep in the current runtime.
+                // This simulates a task yielding execution,
+                // and allowing other tasks to run on this thread,
+                // which helps test potential deadlock scenarios when multiple tasks
+                // compete for the same resources.
+                tokio::task::block_in_place(move || {
+                    tokio::runtime::Handle::current().block_on(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(v)).await;
+                    })
+                });
+            })
+        })();
         let base_dir = Arc::new(File::from_std(StdFile::open(base)?));
         Ok(LocalStorage {
             base: base.to_owned(),
