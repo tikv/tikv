@@ -11,6 +11,7 @@ use kvproto::{disk_usage::DiskUsage, import_sstpb::*, tikvpb_grpc::TikvClient};
 use tempfile::{Builder, TempDir};
 use test_raftstore::{must_raw_put, Simulator};
 use test_sst_importer::*;
+use test_util::init_log_for_test;
 use tikv::config::TikvConfig;
 use tikv_util::{config::ReadableSize, sys::disk, HandyRwLock};
 
@@ -20,8 +21,78 @@ mod util;
 
 use self::util::{
     new_cluster_and_tikv_import_client, new_cluster_and_tikv_import_client_tde,
-    open_cluster_and_tikv_import_client_v2,
+    open_cluster_and_tikv_import_client, open_cluster_and_tikv_import_client_v2,
 };
+
+#[test]
+fn test_concurrent_download_sst() {
+    init_log_for_test();
+    let mut config = TikvConfig::default();
+    // neet set server threads to a large number;
+    config.import.num_threads = 2;
+    let (_cluster, ctx, tikv, import) = open_cluster_and_tikv_import_client(Some(config));
+    let temp_dir = Builder::new()
+        .prefix("test_concurrent_download_sst")
+        .tempdir()
+        .unwrap();
+
+    fail::cfg("create_local_storage_yield", "return(1000)").unwrap();
+    let metas = Arc::new(Mutex::new(Vec::new()));
+    let threads: Vec<_> = (0..10)
+        .map(|i| {
+            let file_name = format!("test_{}.sst", i);
+            let temp_path = temp_dir.path().to_owned();
+            let sst_path = temp_path.join(&file_name);
+            let sst_range = (i, (i + 1) * 2);
+            let (mut meta, _) = gen_sst_file(sst_path, sst_range);
+            meta.set_region_id(ctx.get_region_id());
+            meta.set_region_epoch(ctx.get_region_epoch().clone());
+            let metas = Arc::clone(&metas);
+            let import = import.clone();
+
+            std::thread::spawn(move || {
+                // Run multiple concurrent downloads
+                let mut download = DownloadRequest::default();
+                download.set_sst(meta.clone());
+                download.set_storage_backend(external_storage::make_local_backend(&temp_path));
+                download.set_name(file_name);
+                // make the same cache key for different requests,
+                // so that dashmap will get a lock with same entry.
+                // to verify there is no dead locks.
+                download.set_storage_cache_id("cache".to_string());
+                download.mut_sst().mut_range().set_start(vec![sst_range.1]);
+                download
+                    .mut_sst()
+                    .mut_range()
+                    .set_end(vec![sst_range.1 + 1]);
+                download.mut_sst().mut_range().set_start(Vec::new());
+                download.mut_sst().mut_range().set_end(Vec::new());
+                let download = download.clone();
+
+                let result: DownloadResponse = import.download(&download).unwrap();
+                assert!(!result.get_is_empty());
+                assert_eq!(result.get_range().get_start(), &[sst_range.0]);
+                assert_eq!(result.get_range().get_end(), &[sst_range.1 - 1]);
+                // Only store meta after successful download
+                metas.lock().unwrap().push((meta, sst_range));
+                println!("Thread {} completed download", i);
+            })
+        })
+        .collect();
+
+    // Wait for all downloads to complete
+    for handle in threads {
+        handle.join().unwrap();
+    }
+    fail::remove("create_local_storage_yield");
+
+    // Now ingest all SSTs in order
+    let metas = metas.lock().unwrap();
+    for (meta, sst_range) in metas.iter() {
+        must_ingest_sst(&import, ctx.clone(), meta.clone());
+        check_ingested_kvs(&tikv, &ctx, *sst_range);
+    }
+}
 
 // Opening sst writer involves IO operation, it may block threads for a while.
 // Test if download sst works when opening sst writer is blocked.
