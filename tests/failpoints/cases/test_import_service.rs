@@ -11,7 +11,6 @@ use kvproto::{disk_usage::DiskUsage, import_sstpb::*, tikvpb_grpc::TikvClient};
 use tempfile::{Builder, TempDir};
 use test_raftstore::{must_raw_put, Simulator};
 use test_sst_importer::*;
-use test_util::init_log_for_test;
 use tikv::config::TikvConfig;
 use tikv_util::{config::ReadableSize, sys::disk, HandyRwLock};
 
@@ -27,8 +26,7 @@ use self::util::{
 #[test]
 fn test_concurrent_download_sst() {
     let mut config = TikvConfig::default();
-    // neet set server threads to a large number;
-    config.import.num_threads = 2;
+    config.import.num_threads = 4;
     let (_cluster, ctx, tikv, import) = open_cluster_and_tikv_import_client(Some(config));
     let temp_dir = Builder::new()
         .prefix("test_concurrent_download_sst")
