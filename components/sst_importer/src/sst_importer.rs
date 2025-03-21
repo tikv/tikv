@@ -507,7 +507,13 @@ impl<E: KvEngine> SstImporter<E> {
             })?;
         }
 
-        let ext_storage = self.external_storage_or_cache(backend, cache_key)?;
+        // The `DashMap` locks the entry to ensure that only one thread loads the
+        // credentials at a time. However, if the thread gets blocked during the
+        // loading process, it can lead to a deadlock. To avoid this, blocking
+        // operations must be performed outside of the `DashMap`.
+        let ext_storage = tokio::task::block_in_place(move || {
+            self.external_storage_or_cache(backend, cache_key)
+        })?;
         let ext_storage = self.auto_encrypt_local_file_if_needed(ext_storage);
 
         let result = ext_storage
@@ -2577,15 +2583,17 @@ mod tests {
 
         // test do_download_kv_file().
         assert!(importer.download_to_disk_only());
-        let output = block_on_external_io(importer.download_kv_file(
-            &kv_meta,
-            ext_storage,
-            &backend,
-            &Limiter::new(f64::INFINITY),
-            None,
-            Vec::new(),
-        ))
-        .unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let output = runtime
+            .block_on(importer.download_kv_file(
+                &kv_meta,
+                ext_storage,
+                &backend,
+                &Limiter::new(f64::INFINITY),
+                None,
+                Vec::new(),
+            ))
+            .unwrap();
         assert_eq!(*output, buff);
         check_file_exists(&path.save, Some(&*key_manager));
 
@@ -2600,6 +2608,79 @@ mod tests {
         let shrint_files_cnt = importer.shrink_by_tick();
         assert_eq!(shrint_files_cnt, 1);
         check_file_not_exists(&path.save, Some(&*key_manager));
+    }
+
+    #[test]
+    fn test_concurreny_download_file_from_external_storage_for_sst() {
+        // creates a sample SST file.
+        let (_ext_sst_dir, backend, meta) = create_sample_external_sst_file().unwrap();
+
+        // create importer object.
+        let import_dir = tempfile::tempdir().unwrap();
+        let (_, key_manager) = new_key_manager_for_test();
+        let importer = SstImporter::<TestEngine>::new(
+            &Config::default(),
+            import_dir,
+            Some(key_manager.clone()),
+            ApiVersion::V1,
+            false,
+        )
+        .unwrap();
+
+        // Create multiple download tasks
+        let num_tasks = 4;
+        let mut handles = Vec::with_capacity(num_tasks);
+        let paths = (0..num_tasks)
+            .map(|i| {
+                let file_name = format!("sample_{}.sst", i);
+                importer.dir.get_import_path(&file_name).unwrap()
+            })
+            .collect::<Vec<_>>();
+
+        // Create a multi-threaded runtime
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(num_tasks)
+            .enable_all()
+            .build()
+            .unwrap();
+
+        // Spawn concurrent download tasks
+        for (i, path) in paths.iter().enumerate() {
+            let backend = backend.clone();
+            let path_temp = path.temp.clone();
+            let meta_length = meta.get_length();
+            let file_name = format!("sample_{}.sst", i);
+            let importer = importer.clone();
+
+            let handle = runtime.spawn(async move {
+                importer
+                    .download_file_from_external_storage(
+                        meta_length,
+                        &file_name,
+                        path_temp,
+                        &backend,
+                        &Limiter::new(f64::INFINITY),
+                        RestoreConfig::default(),
+                    )
+                    .unwrap();
+            });
+
+            handles.push(handle);
+        }
+
+        // Wait for all downloads to complete
+        for handle in handles {
+            runtime.block_on(handle).unwrap();
+        }
+
+        // Verify all files were downloaded correctly
+        for (i, path) in paths.iter().enumerate() {
+            check_file_exists(&path.temp, Some(&key_manager));
+            assert!(!check_file_is_same(
+                &_ext_sst_dir.path().join(format!("sample_{}.sst", i)),
+                &path.temp,
+            ));
+        }
     }
 
     #[test]
@@ -3872,15 +3953,17 @@ mod tests {
             )
             .unwrap();
 
-        let output = block_on_external_io(importer.download_kv_file(
-            &kv_meta,
-            ext_storage,
-            &storage_backend,
-            &Limiter::new(f64::INFINITY),
-            opt_cipher_info,
-            master_key_configs,
-        ))
-        .unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let output = runtime
+            .block_on(importer.download_kv_file(
+                &kv_meta,
+                ext_storage,
+                &storage_backend,
+                &Limiter::new(f64::INFINITY),
+                opt_cipher_info,
+                master_key_configs,
+            ))
+            .unwrap();
         assert_eq!(*output, file_content);
         if !in_mem {
             check_file_exists(&path.save, opt_key_manager.as_deref());
