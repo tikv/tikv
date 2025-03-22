@@ -22,7 +22,6 @@ use kvproto::{
 };
 use pd_client::BucketMeta;
 use tikv_util::{
-    box_err,
     codec::number::decode_u64,
     debug, error,
     lru::LruCache,
@@ -1181,27 +1180,15 @@ where
                         return;
                     }
                     RequestPolicy::ReadIndexReplicaRead => {
-                        TLS_LOCAL_READ_METRICS
-                            .with(|m| m.borrow_mut().local_received_follower_read_requests.inc());
-                        match self.try_local_folllower_read(
+                        self.try_local_folllower_read(
                             ctx,
-                            &req,
+                            req,
                             &mut delegate,
                             &mut snap_updated,
                             last_valid_ts,
-                        ) {
-                            Ok(read_resp) => {
-                                TLS_LOCAL_READ_METRICS.with(|m| {
-                                    m.borrow_mut().local_executed_follower_read_requests.inc()
-                                });
-                                fail::fail_point!("reading_from_cache");
-                                read_resp
-                            }
-                            Err(_) => {
-                                self.redirect(RaftCommand::new(req, cb));
-                                return;
-                            }
-                        }
+                            cb,
+                        );
+                        return;
                     }
                     _ => unreachable!(),
                 };
@@ -1249,17 +1236,26 @@ where
     fn try_local_folllower_read(
         &mut self,
         ctx: &ReadContext,
-        req: &RaftCmdRequest,
+        req: RaftCmdRequest,
         delegate: &mut CachedReadDelegate<E>,
         snap_updated: &mut bool,
         last_valid_ts: Timespec,
-    ) -> std::result::Result<ReadResponse<E::Snapshot>, RaftCmdResponse> {
-
-        if let(Ok(read_ts)) = decode_u64(&mut req.get_header().get_flag_data()) {
-            self.try_local_stale_read(ctx, req, delegate, snap_updated, last_valid_ts)
-        } else {
-            Err(cmd_resp::new_error(Error::Other(box_err!("invalid read ts")))) // Better to avoid `box_err` to save cost.
+        cb: Callback<E::Snapshot>,
+    ) {
+        TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_received_follower_read_requests.inc());
+        if let Ok(read_ts) = decode_u64(&mut req.get_header().get_flag_data()) {
+            if read_ts != 0 {
+                if let Ok(_resd_resp) =
+                    self.try_local_stale_read(ctx, &req, delegate, snap_updated, last_valid_ts)
+                {
+                    TLS_LOCAL_READ_METRICS
+                        .with(|m| m.borrow_mut().local_executed_follower_read_requests.inc());
+                    return;
+                }
+            }
         }
+        self.redirect(RaftCommand::new(req, cb));
+    }
     /// If read requests are received at the same RPC request, we can create one
     /// snapshot for all of them and check whether the time when the snapshot
     /// was created is in lease. We use ThreadReadId to figure out whether this

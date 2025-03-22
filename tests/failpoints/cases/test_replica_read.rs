@@ -863,13 +863,26 @@ fn test_read_index_cache() {
             "panic(reading_from_cache_not_allowed)",
         )
         .unwrap();
-        let mut resp = async_get_snap(&mut cluster, new_peer(2, 2), r1.clone(), b"k1", Some(2));
-        let _resp = block_on_timeout(resp.as_mut(), Duration::from_millis(2000)).unwrap();
+
+        let _resp = sync_get_snapshot(
+            &mut cluster,
+            new_peer(2, 2),
+            r1.clone(),
+            b"k1",
+            Some(2),
+            Duration::from_millis(2000),
+        );
     }
 
     //  read it again after removing the lock
-    let mut resp = async_get_snap(&mut cluster, new_peer(2, 2), r1.clone(), b"k1", Some(2));
-    let _resp = block_on_timeout(resp.as_mut(), Duration::from_millis(2000)).unwrap();
+    let _resp = sync_get_snapshot(
+        &mut cluster,
+        new_peer(2, 2),
+        r1.clone(),
+        b"k1",
+        Some(2),
+        Duration::from_millis(2000),
+    );
 
     // this read should be from cache
     fail::remove("reading_from_cache");
@@ -878,8 +891,14 @@ fn test_read_index_cache() {
         "panic(reading_from_leader_not_allowed)",
     )
     .unwrap();
-    let mut resp = async_get_snap(&mut cluster, new_peer(2, 2), r1.clone(), b"k1", Some(1));
-    let _resp = block_on_timeout(resp.as_mut(), Duration::from_millis(2000)).unwrap();
+    let _resp = sync_get_snapshot(
+        &mut cluster,
+        new_peer(2, 2),
+        r1.clone(),
+        b"k1",
+        Some(2),
+        Duration::from_millis(2000),
+    );
 
     // this read should be from leader
     fail::remove("reading_from_leader");
@@ -888,6 +907,12 @@ fn test_read_index_cache() {
         "panic(reading_from_cache_not_allowed)",
     )
     .unwrap();
-    let mut resp = async_get_snap(&mut cluster, new_peer(2, 2), r1.clone(), b"k1", Some(3));
-    let _resp = block_on_timeout(resp.as_mut(), Duration::from_millis(2000)).unwrap();
+    let _resp = sync_get_snapshot(
+        &mut cluster,
+        new_peer(2, 2),
+        r1.clone(),
+        b"k1",
+        Some(2),
+        Duration::from_millis(2000),
+    );
 }

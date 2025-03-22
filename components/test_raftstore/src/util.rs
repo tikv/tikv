@@ -62,6 +62,7 @@ pub use tikv_util::store::{find_peer, new_learner_peer, new_peer};
 use tikv_util::{
     config::*,
     escape,
+    future::block_on_timeout,
     mpsc::future,
     time::{Instant, ThreadReadId},
     worker::LazyWorker,
@@ -595,7 +596,22 @@ pub fn async_read_index_on_peer<T: Simulator>(
     })
 }
 
-pub async fn async_snapshot<T: Simulator>(
+pub fn sync_get_snapshot<T: Simulator>(
+    cluster: &mut Cluster<T>,
+    peer: metapb::Peer,
+    region: metapb::Region,
+    key: &[u8],
+    start_ts: Option<u64>,
+    timeout: Duration,
+) -> BoxFuture<'static, RaftCmdResponse> {
+    block_on_timeout(
+        async_get_snapshot(cluster, peer, region, key, start_ts),
+        timeout,
+    )
+    .unwrap()
+}
+
+pub async fn async_get_snapshot<T: Simulator>(
     cluster: &mut Cluster<T>,
     peer: metapb::Peer,
     region: metapb::Region,
