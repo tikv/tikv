@@ -1254,29 +1254,12 @@ where
         snap_updated: &mut bool,
         last_valid_ts: Timespec,
     ) -> std::result::Result<ReadResponse<E::Snapshot>, RaftCmdResponse> {
-        let read_ts_valid = {
-            if req.get_header().get_flag_data().is_empty() {
-                false
-            } else {
-                let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
-                read_ts != 0
-            }
-        };
-        if !read_ts_valid {
-            // don't read from cache if it's not a follower read or read ts is
-            // invalid
-            let err_resp = cmd_resp::new_error(Error::Other(box_err!("invalid read ts")));
-            return Err(err_resp);
-        }
 
-        // check first if it can be served locally wihout sending read index message
-        // to leader. (https://github.com/tikv/rfcs/blob/master/text/0113-follower-read-cache.md)
-        match self.try_local_stale_read(ctx, req, delegate, snap_updated, last_valid_ts) {
-            Ok(read_resp) => Ok(read_resp),
-            Err(_err_resp) => Err(_err_resp),
+        if let(Ok(read_ts)) = decode_u64(&mut req.get_header().get_flag_data()) {
+            self.try_local_stale_read(ctx, req, delegate, snap_updated, last_valid_ts)
+        } else {
+            Err(cmd_resp::new_error(Error::Other(box_err!("invalid read ts")))) // Better to avoid `box_err` to save cost.
         }
-    }
-
     /// If read requests are received at the same RPC request, we can create one
     /// snapshot for all of them and check whether the time when the snapshot
     /// was created is in lease. We use ThreadReadId to figure out whether this
