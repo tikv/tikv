@@ -595,7 +595,7 @@ pub fn async_read_index_on_peer<T: Simulator>(
     })
 }
 
-pub fn async_get_snap<T: Simulator>(
+pub async fn async_snapshot<T: Simulator>(
     cluster: &mut Cluster<T>,
     peer: metapb::Peer,
     region: metapb::Region,
