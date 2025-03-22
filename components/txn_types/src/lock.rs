@@ -539,6 +539,27 @@ impl Lock {
         }))
     }
 
+    // check if there is a lock conflict regardless of a timestamp
+    pub fn check_lock_conflict_for_read_index_cache(
+        lock: Cow<'_, Self>,
+        key: &Key,
+        bypass_locks: &TsSet,
+    ) -> Result<()> {
+        if lock.lock_type == LockType::Lock || lock.is_pessimistic_lock() {
+            // Ignore lock when the lock's type is Lock or Pessimistic.
+            return Ok(());
+        }
+
+        // The lock is resolved already.
+        if bypass_locks.contains(lock.ts) {
+            return Ok(());
+        }
+        let raw_key = key.to_raw()?;
+        Err(Error::from(ErrorInner::KeyIsLocked(
+            lock.into_owned().into_lock_info(raw_key),
+        )))
+    }
+
     pub fn check_ts_conflict(
         lock: Cow<'_, Self>,
         key: &Key,
