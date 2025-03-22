@@ -1197,7 +1197,7 @@ where
                                 fail::fail_point!("reading_from_cache");
                                 read_resp
                             }
-                            Err(_err_resp) => {
+                            Err(_) => {
                                 self.redirect(RaftCommand::new(req, cb));
                                 return;
                             }
