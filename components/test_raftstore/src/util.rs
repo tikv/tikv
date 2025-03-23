@@ -603,7 +603,7 @@ pub fn sync_get_snapshot<T: Simulator>(
     key: &[u8],
     start_ts: Option<u64>,
     timeout: Duration,
-) -> BoxFuture<'static, RaftCmdResponse> {
+) -> RaftCmdResponse {
     block_on_timeout(
         async_get_snapshot(cluster, peer, region, key, start_ts),
         timeout,
