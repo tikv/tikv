@@ -611,7 +611,7 @@ pub fn sync_get_snapshot<T: Simulator>(
     .unwrap()
 }
 
-pub async fn async_get_snapshot<T: Simulator>(
+pub fn async_get_snapshot<T: Simulator>(
     cluster: &mut Cluster<T>,
     peer: metapb::Peer,
     region: metapb::Region,
