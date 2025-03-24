@@ -85,6 +85,7 @@ use crate::{
             flow_controller::FlowController,
             latch::{Latches, Lock},
             sched_pool::{tls_collect_query, tls_collect_scan_details, SchedPool},
+            tracker::TlsFutureTracker,
             txn_status_cache::TxnStatusCache,
             Error, ErrorInner, ProcessResult,
         },
@@ -711,12 +712,13 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
     /// Executes the task in the sched pool.
     fn execute(&self, mut task: Task) {
-        let tracker_token = task.tracker_token();
-        set_tls_tracker_token(tracker_token);
+        set_tls_tracker_token(task.tracker_token());
         let sched = self.clone();
         let metadata = TaskMetadata::from_ctx(task.cmd().resource_control_ctx());
         let request_source = task.cmd().ctx().request_source.clone();
         let priority = task.cmd().priority();
+        let future_tracker =
+            TlsFutureTracker::new(task.tracker_token(), task.cmd().tag(), task.cid());
         let execution = async move {
             fail_point!("scheduler_start_execute");
             if sched.check_task_deadline_exceeded(&task, None) {
@@ -779,7 +781,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 }
             }
         };
-        let execution = track(execution, tracker_token);
+        let execution = track(execution, future_tracker);
         let execution_bytes = std::mem::size_of_val(&execution);
         let memory_quota = self.inner.memory_quota.clone();
         memory_quota.alloc_force(execution_bytes);
@@ -814,10 +816,10 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         };
         if let Some(details) = sched_details {
             let req_info = GLOBAL_TRACKERS.with_tracker(details.tracker, |tracker| {
-                tracker.collect_future_poll_track();
-                tracker.metrics.scheduler_process_nanos = details
-                    .start_process_instant
-                    .saturating_elapsed()
+                let now = Instant::now();
+                TlsFutureTracker::collect_to_tracker(now, tracker);
+                tracker.metrics.scheduler_process_nanos = now
+                    .saturating_duration_since(details.start_process_instant)
                     .as_nanos() as u64;
                 tracker.metrics.scheduler_throttle_nanos =
                     details.flow_control_nanos + details.quota_limit_delay_nanos;
@@ -935,12 +937,11 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 self.schedule_command(task, cb, None);
             } else {
                 GLOBAL_TRACKERS.with_tracker(sched_details.tracker, |tracker| {
-                    tracker.collect_future_poll_track();
-                    tracker.metrics.scheduler_process_nanos = sched_details
-                        .start_process_instant
-                        .saturating_elapsed()
-                        .as_nanos()
-                        as u64;
+                    let now = Instant::now();
+                    TlsFutureTracker::collect_to_tracker(now, tracker);
+                    tracker.metrics.scheduler_process_nanos =
+                        now.saturating_duration_since(sched_details.start_process_instant)
+                            .as_nanos() as u64;
                     tracker.metrics.scheduler_throttle_nanos =
                         sched_details.flow_control_nanos + sched_details.quota_limit_delay_nanos;
                 });

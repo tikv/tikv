@@ -12,6 +12,7 @@ mod actions;
 mod latch;
 mod store;
 mod task;
+mod tracker;
 
 use std::{error::Error as StdError, io::Error as IoError};
 
