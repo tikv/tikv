@@ -1076,6 +1076,29 @@ where
         Ok(response)
     }
 
+    fn try_local_follower_read(
+        &mut self,
+        ctx: &ReadContext,
+        req: &RaftCmdRequest,
+        delegate: &mut CachedReadDelegate<E>,
+        snap_updated: &mut bool,
+        last_valid_ts: Timespec,
+    ) -> Option<ReadResponse<E::Snapshot>> {
+        TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_received_follower_read_requests.inc());
+        if let Ok(read_ts) = decode_u64(&mut req.get_header().get_flag_data()) {
+            if read_ts != 0 {
+                if let Ok(read_resp) =
+                    self.try_local_stale_read(ctx, req, delegate, snap_updated, last_valid_ts)
+                {
+                    TLS_LOCAL_READ_METRICS
+                        .with(|m| m.borrow_mut().local_executed_follower_read_requests.inc());
+                    return Some(read_resp);
+                }
+            }
+        }
+        return None;
+    }
+
     pub fn propose_raft_command(
         &mut self,
         ctx: &ReadContext,
@@ -1180,15 +1203,18 @@ where
                         return;
                     }
                     RequestPolicy::ReadIndexReplicaRead => {
-                        self.try_local_folllower_read(
+                        if let Some(read_resp) = self.try_local_follower_read(
                             ctx,
-                            req,
+                            &req,
                             &mut delegate,
                             &mut snap_updated,
                             last_valid_ts,
-                            cb,
-                        );
-                        return;
+                        ) {
+                            read_resp
+                        } else {
+                            self.redirect(RaftCommand::new(req, cb));
+                            return;
+                        }
                     }
                     _ => unreachable!(),
                 };
@@ -1233,29 +1259,6 @@ where
         }
     }
 
-    fn try_local_folllower_read(
-        &mut self,
-        ctx: &ReadContext,
-        req: RaftCmdRequest,
-        delegate: &mut CachedReadDelegate<E>,
-        snap_updated: &mut bool,
-        last_valid_ts: Timespec,
-        cb: Callback<E::Snapshot>,
-    ) {
-        TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_received_follower_read_requests.inc());
-        if let Ok(read_ts) = decode_u64(&mut req.get_header().get_flag_data()) {
-            if read_ts != 0 {
-                if let Ok(_resd_resp) =
-                    self.try_local_stale_read(ctx, &req, delegate, snap_updated, last_valid_ts)
-                {
-                    TLS_LOCAL_READ_METRICS
-                        .with(|m| m.borrow_mut().local_executed_follower_read_requests.inc());
-                    return;
-                }
-            }
-        }
-        self.redirect(RaftCommand::new(req, cb));
-    }
     /// If read requests are received at the same RPC request, we can create one
     /// snapshot for all of them and check whether the time when the snapshot
     /// was created is in lease. We use ThreadReadId to figure out whether this
