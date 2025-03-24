@@ -1096,7 +1096,7 @@ where
                 }
             }
         }
-        return None;
+        None
     }
 
     pub fn propose_raft_command(
