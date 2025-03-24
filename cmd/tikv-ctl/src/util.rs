@@ -90,13 +90,12 @@ pub fn unmarshal_message_or_fail<T: protobuf::Message>(text: &str, flag_name: &s
     let maybe_res = base64::decode(text)
         .map_err(|err| format!("cannot parse base64: {}", err))
         .and_then(|storage_bytes| {
-            let mut ext_storage = T::new();
-            ext_storage
-                .merge_from_bytes(&storage_bytes)
+            let mut item = T::new();
+            item.merge_from_bytes(&storage_bytes)
                 .map_err(|err| format!("cannot parse bytes as StorageBackend: {}", err))?;
-            Result::Ok(ext_storage)
+            Result::Ok(item)
         });
-    let message = match maybe_res {
+    match maybe_res {
         Ok(s) => s,
         Err(err) => {
             clap::Error {
@@ -106,8 +105,7 @@ pub fn unmarshal_message_or_fail<T: protobuf::Message>(text: &str, flag_name: &s
             }
             .exit();
         }
-    };
-    message
+    }
 }
 
 #[cfg(test)]

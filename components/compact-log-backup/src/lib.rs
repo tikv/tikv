@@ -14,7 +14,6 @@ pub mod test_util;
 pub mod exec_hooks;
 pub mod execute;
 
-pub use encryption::MultiMasterKeyBackend;
 pub use errors::{Error, ErrorKind, OtherErrExt, Result, TraceResultExt};
 
 mod util;

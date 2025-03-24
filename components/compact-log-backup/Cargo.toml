@@ -66,6 +66,6 @@ pprof = { version = "0.14", default-features = false, features = [
   "flamegraph",
   "protobuf-codec",
 ] }
+rand = "0.8"
 tempdir = "0.3"
 test_util = { workspace = true }
-rand = "0.8"

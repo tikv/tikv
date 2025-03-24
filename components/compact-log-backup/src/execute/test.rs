@@ -27,8 +27,8 @@ use crate::{
     execute::hooking::{CId, ExecHooks, SubcompactionFinishCtx},
     storage::LOCK_PREFIX,
     test_util::{
-        enable_encryption, gen_step, init_multi_master_key_backend_with, CompactInMem, KvGen,
-        LogFileBuilder, TmpStorage,
+        gen_step, init_multi_master_key_backend_with, CompactInMem, KvGen, LogFileBuilder,
+        TmpStorage,
     },
     ErrorKind,
 };

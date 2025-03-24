@@ -19,9 +19,7 @@ use futures::{
 };
 use kvproto::{
     brpb::{self, FileType, MetaEdit, Migration},
-    encryptionpb::{
-        EncryptedContent, EncryptionMethod, FileEncryptionInfo, MasterKeyBased,
-    },
+    encryptionpb::{EncryptedContent, EncryptionMethod, FileEncryptionInfo, MasterKeyBased},
     metapb::RegionEpoch,
 };
 use prometheus::core::{Atomic, AtomicU64};
@@ -192,7 +190,7 @@ impl TryFrom<LogFileEncryptionInfo> for FileEncryptionInfo {
                     }),
                 );
                 enc.set_encryption_method(method);
-                enc.set_file_iv(iv.into());
+                enc.set_file_iv(iv);
             }
             LogFileEncryptionInfo::Unavailable { reason } => {
                 return Err(format!("unavaliable encryption info {}", reason));
@@ -284,7 +282,7 @@ impl LogFileEncryptionInfo {
                 iv_of_data: iv,
                 method_of_data: method,
             } => {
-                let key = master_keys.decrypt(&encrypted_key).await?;
+                let key = master_keys.decrypt(encrypted_key).await?;
                 *self = Self::ResolvedKey(encryption::FileEncryptionInfo {
                     method: *method,
                     key,

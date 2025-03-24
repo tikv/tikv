@@ -22,7 +22,7 @@ use std::{
 use collections::HashMap;
 use compact_log_backup::{
     exec_hooks::{self as compact_log_hooks, skip_small_compaction::SkipSmallCompaction},
-    execute as compact_log, MultiMasterKeyBackend, TraceResultExt,
+    execute as compact_log, TraceResultExt,
 };
 use crypto::fips;
 use encryption_export::{
@@ -35,9 +35,8 @@ use futures::{executor::block_on, future::try_join_all};
 use gag::BufferRedirect;
 use grpcio::{CallOption, ChannelBuilder, Environment};
 use kvproto::{
-    brpb,
     debugpb::{Db as DbType, *},
-    encryptionpb::{EncryptionMethod, MasterKey},
+    encryptionpb::EncryptionMethod,
     kvrpcpb::SplitRegionRequest,
     raft_serverpb::{SnapshotMeta, StoreIdent},
     tikvpb::TikvClient,

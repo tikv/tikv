@@ -5,12 +5,8 @@ use std::{
 };
 
 use async_compression::futures::write::ZstdDecoder;
-use encryption::MultiMasterKeyBackend;
 use external_storage::ExternalStorage;
-use futures::{
-    future::TryFutureExt,
-    io::{AsyncWriteExt, Cursor},
-};
+use futures::io::{AsyncWriteExt, Cursor};
 use futures_io::AsyncWrite;
 use kvproto::brpb;
 use prometheus::core::{Atomic, AtomicU64};
@@ -27,19 +23,11 @@ use crate::{compaction::Input, errors::Result, TraceResultExt};
 #[derive(Clone)]
 pub struct Source {
     inner: Arc<dyn ExternalStorage>,
-    master_keys: MultiMasterKeyBackend,
 }
 
 impl Source {
     pub fn new(inner: Arc<dyn ExternalStorage>) -> Self {
-        Self {
-            inner,
-            master_keys: MultiMasterKeyBackend::default(),
-        }
-    }
-
-    pub fn set_master_keys(&mut self, keys: MultiMasterKeyBackend) {
-        self.master_keys = keys;
+        Self { inner }
     }
 }
 

@@ -531,16 +531,6 @@ impl TmpStorage {
         self.try_run_subcompaction(c).await.unwrap()
     }
 
-    pub async fn run_ecnrypted_subcompaction(
-        &self,
-        c: Subcompaction,
-        enc: &MultiMasterKeyBackend,
-    ) -> SubcompactionResult {
-        let mut cw = SubcompactionExec::<RocksEngine>::default_config(self.storage().clone());
-        cw.source.set_master_keys(enc.clone());
-        cw.run(c, SubcompactExt::default()).await.unwrap()
-    }
-
     pub async fn try_run_subcompaction(&self, c: Subcompaction) -> Result<SubcompactionResult> {
         let cw = SubcompactionExec::<RocksEngine>::default_config(self.storage.clone());
         let ext = SubcompactExt::default();

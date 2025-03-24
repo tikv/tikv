@@ -4,7 +4,6 @@ use std::{
     sync::Arc,
 };
 
-
 use engine_rocks::RocksEngine;
 use engine_traits::{
     ExternalSstFileInfo, SstCompressionType, SstExt, SstWriter, SstWriterBuilder,
@@ -393,11 +392,9 @@ where
 
 #[cfg(test)]
 mod test {
-    use encryption::{MultiMasterKeyBackend};
+    use encryption::MultiMasterKeyBackend;
     use engine_rocks::RocksEngine;
-    use kvproto::encryptionpb::{EncryptionMethod};
-    
-    
+    use kvproto::encryptionpb::EncryptionMethod;
     use tidb_query_datatype::codec::table::encode_row_key;
     use txn_types::Key;
 
@@ -504,8 +501,7 @@ mod test {
             log.encryption.resolve(&enc).await.unwrap();
         }
         let c = Subcompaction::of_many(logs.into_iter());
-        let mut cw = SubcompactionExec::<RocksEngine>::default_config(st.storage().clone());
-        cw.source.set_master_keys(enc.clone());
+        let cw = SubcompactionExec::<RocksEngine>::default_config(st.storage().clone());
         let res = cw.run(c, SubcompactExt::default()).await.unwrap();
         st.verify_result(res, cm);
     }
