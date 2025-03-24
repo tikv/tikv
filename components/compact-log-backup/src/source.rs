@@ -7,7 +7,10 @@ use std::{
 use async_compression::futures::write::ZstdDecoder;
 use encryption::MultiMasterKeyBackend;
 use external_storage::ExternalStorage;
-use futures::io::{AsyncWriteExt, Cursor};
+use futures::{
+    future::TryFutureExt,
+    io::{AsyncWriteExt, Cursor},
+};
 use futures_io::AsyncWrite;
 use kvproto::brpb;
 use prometheus::core::{Atomic, AtomicU64};
@@ -18,7 +21,7 @@ use tikv_util::{
 use txn_types::Key;
 
 use super::{statistic::LoadStatistic, util::Cooperate};
-use crate::{compaction::Input, errors::Result};
+use crate::{compaction::Input, errors::Result, OtherErrExt, TraceResultExt};
 
 /// The manager of fetching log files from remote for compacting.
 #[derive(Clone)]
@@ -33,6 +36,10 @@ impl Source {
             inner,
             master_keys: MultiMasterKeyBackend::default(),
         }
+    }
+
+    pub fn set_master_keys(&mut self, keys: MultiMasterKeyBackend) {
+        self.master_keys = keys;
     }
 }
 
@@ -71,10 +78,17 @@ impl Source {
             let storage = self.inner.clone();
             let id = input.id.clone();
             let compression = input.compression;
+            let encryption = &input.encryption;
             async move {
                 let mut content = Vec::with_capacity(id.length as _);
                 let item = pin!(Cursor::new(&mut content));
-                let mut decompress = decompress(compression, item)?;
+                let mut decompress =
+                    Box::new(decompress(compression, item)?) as Box<dyn AsyncWrite + Send + Unpin>;
+                if !encryption.is_plaintext() {
+                    decompress = Box::new(encryption.decrypt(decompress).map_err(|err| {
+                        std::io::Error::new(std::io::ErrorKind::Other, err.to_string())
+                    })?) as Box<_>
+                }
                 let source = storage.read_part(&id.name, id.offset, id.length);
                 let n = futures::io::copy(source, &mut decompress).await?;
                 decompress.flush().await?;
@@ -98,7 +112,14 @@ impl Source {
         mut stat: Option<&mut LoadStatistic>,
         mut on_key_value: impl FnMut(&[u8], &[u8]),
     ) -> Result<()> {
-        let content = self.load_remote(input, &mut stat).await?;
+        let id = input.id.clone();
+        let content = self
+            .load_remote(input, &mut stat)
+            .await
+            .annotate(format_args!(
+                "failed to load file {}, maybe encryption misconfigured or no permission to the file",
+                id
+            ))?;
 
         let mut co = Cooperate::default();
         let mut iter = stream_event::EventIterator::new(&content);
@@ -121,7 +142,7 @@ impl Source {
 fn decompress(
     compression: brpb::CompressionType,
     input: Pin<&mut (impl AsyncWrite + Send)>,
-) -> std::io::Result<impl AsyncWrite + Send + '_> {
+) -> std::io::Result<impl AsyncWrite + Send + Unpin + '_> {
     match compression {
         kvproto::brpb::CompressionType::Zstd => Ok(ZstdDecoder::new(input)),
         compress => Err(std::io::Error::new(

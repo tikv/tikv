@@ -160,7 +160,9 @@ impl Execution {
             parent: next_compaction.clone(),
             "load_meta_file_names"
         ));
-        ext.master_keys = self.encryption.clone();
+        if self.encryption.is_initialized().await {
+            ext.resolve_with_master_key = Some(self.encryption.clone());
+        }
 
         let ExecuteCtx {
             ref storage,

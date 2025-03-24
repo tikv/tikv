@@ -10,7 +10,7 @@ use std::{
 };
 
 use derive_more::Display;
-use encryption::{FileEncryptionInfo, MultiMasterKeyBackend};
+use encryption::{DecrypterReader, DecrypterWriter, Iv, MultiMasterKeyBackend};
 use external_storage::{BlobObject, ExternalStorage, UnpinReader};
 use futures::{
     future::{FusedFuture, FutureExt, TryFutureExt},
@@ -19,6 +19,9 @@ use futures::{
 };
 use kvproto::{
     brpb::{self, FileType, MetaEdit, Migration},
+    encryptionpb::{
+        EncryptedContent, EncryptionMethod, FileEncryptionInfo, MasterKeyBased, PlainTextDataKey,
+    },
     metapb::RegionEpoch,
 };
 use prometheus::core::{Atomic, AtomicU64};
@@ -36,7 +39,7 @@ use super::{
     errors::{Error, Result},
     statistic::LoadMetaStatistic,
 };
-use crate::{compaction::EpochHint, errors::ErrorKind, util, OtherErrExt};
+use crate::{compaction::EpochHint, errors::ErrorKind, util, OtherErrExt, TraceResultExt};
 
 pub const METADATA_PREFIX: &str = "v1/backupmeta";
 pub const DEFAULT_COMPACTION_OUT_PREFIX: &str = "v1/compaction_out";
@@ -159,22 +162,153 @@ pub struct LogFile {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum LogFileEncryptionInfo {
-    Unresolved(kvproto::encryptionpb::MasterKeyBased),
-    RawKey(encryption::FileEncryptionInfo),
+    EncryptedKey {
+        encrypted_key: EncryptedContent,
+        iv_of_data: Vec<u8>,
+        method_of_data: EncryptionMethod,
+    },
+    ResolvedKey(encryption::FileEncryptionInfo),
+    Unavailable {
+        reason: String,
+    },
+}
+
+impl TryFrom<LogFileEncryptionInfo> for FileEncryptionInfo {
+    type Error = String;
+
+    fn try_from(value: LogFileEncryptionInfo) -> std::prelude::v1::Result<Self, Self::Error> {
+        let mut enc = Self::new();
+        match value {
+            LogFileEncryptionInfo::EncryptedKey {
+                encrypted_key,
+                iv_of_data: iv,
+                method_of_data: method,
+            } => {
+                enc.mode = Some(
+                    kvproto::encryptionpb::FileEncryptionInfo_oneof_mode::MasterKeyBased({
+                        let mut mb = MasterKeyBased::new();
+                        mb.set_data_key_encrypted_content(vec![encrypted_key].into());
+                        mb
+                    }),
+                );
+                enc.set_encryption_method(method);
+                enc.set_file_iv(iv.into());
+            }
+            LogFileEncryptionInfo::Unavailable { reason } => {
+                return Err(format!("unavaliable encryption info {}", reason));
+            }
+            LogFileEncryptionInfo::ResolvedKey(rk) => {
+                enc.mode = Some(
+                    kvproto::encryptionpb::FileEncryptionInfo_oneof_mode::PlainTextDataKey(
+                        Default::default(),
+                    ),
+                );
+                enc.set_encryption_method(rk.method);
+                enc.set_file_iv(rk.iv);
+            }
+        }
+        Ok(enc)
+    }
 }
 
 impl LogFileEncryptionInfo {
+    pub fn plaintext() -> Self {
+        Self::ResolvedKey(encryption::FileEncryptionInfo {
+            method: EncryptionMethod::Plaintext,
+            key: Vec::new(),
+            iv: Vec::new(),
+        })
+    }
+
+    pub fn iv(&self) -> &[u8] {
+        match self {
+            LogFileEncryptionInfo::Unavailable { .. } => &[],
+            LogFileEncryptionInfo::EncryptedKey { iv_of_data: iv, .. } => iv,
+            LogFileEncryptionInfo::ResolvedKey(key) => &key.iv,
+        }
+    }
+
+    pub fn method(&self) -> EncryptionMethod {
+        match self {
+            LogFileEncryptionInfo::Unavailable { .. } => EncryptionMethod::Unknown,
+            LogFileEncryptionInfo::EncryptedKey {
+                method_of_data: method,
+                ..
+            } => *method,
+            LogFileEncryptionInfo::ResolvedKey(key) => key.method,
+        }
+    }
+
     pub fn key(&self) -> Option<&encryption::FileEncryptionInfo> {
         match self {
-            LogFileEncryptionInfo::Unresolved(_) => None,
-            LogFileEncryptionInfo::RawKey(key) => Some(key),
+            LogFileEncryptionInfo::Unavailable { .. }
+            | LogFileEncryptionInfo::EncryptedKey { .. } => None,
+            LogFileEncryptionInfo::ResolvedKey(key) => Some(key),
         }
+    }
+
+    pub fn decrypt<W>(&self, r: W) -> Result<DecrypterWriter<W>> {
+        match self {
+            LogFileEncryptionInfo::ResolvedKey(key) => {
+                let reader = encryption::DecrypterWriter::new(
+                    r,
+                    key.method,
+                    &key.key,
+                    Iv::Ctr(
+                        key.iv
+                            .as_slice()
+                            .try_into()
+                            .map_err(|err| format!("the initial vector isn't a valid {:?}", err))
+                            .adapt_err()?,
+                    ),
+                );
+                reader.adapt_err()
+            }
+            LogFileEncryptionInfo::EncryptedKey { .. } => Err(Error::from(ErrorKind::Other(
+                "try to read a file but it has a encrypted key".to_owned(),
+            ))),
+            LogFileEncryptionInfo::Unavailable { reason } => Err(Error::from(ErrorKind::Other(
+                format!("unresolvable encrypted file: {reason}"),
+            ))),
+        }
+    }
+
+    pub async fn resolve(&mut self, master_keys: &MultiMasterKeyBackend) -> Result<()> {
+        match self {
+            Self::Unavailable { reason } => Err(Error::from(ErrorKind::Other(format!(
+                "unresolvable encrypted file: {reason}"
+            )))),
+            Self::ResolvedKey(_) => Ok(()),
+            Self::EncryptedKey {
+                encrypted_key,
+                iv_of_data: iv,
+                method_of_data: method,
+            } => {
+                let key = master_keys.decrypt(&encrypted_key).await?;
+                *self = Self::ResolvedKey(encryption::FileEncryptionInfo {
+                    method: *method,
+                    key,
+                    iv: std::mem::take(iv),
+                });
+                Ok(())
+            }
+        }
+    }
+
+    pub fn is_plaintext(&self) -> bool {
+        matches!(
+            self,
+            Self::ResolvedKey(encryption::FileEncryptionInfo {
+                method: EncryptionMethod::Plaintext,
+                ..
+            })
+        )
     }
 }
 
 impl Default for LogFileEncryptionInfo {
     fn default() -> Self {
-        Self::RawKey(Default::default())
+        Self::ResolvedKey(Default::default())
     }
 }
 
@@ -230,7 +364,7 @@ pub struct LoadFromExt<'a> {
     /// By default it is `v1/backupmeta`.
     pub meta_prefix: &'a str,
     /// The master key used to decrypt encrypted files.
-    pub master_keys: MultiMasterKeyBackend,
+    pub resolve_with_master_key: Option<MultiMasterKeyBackend>,
 }
 
 impl<'a> LoadFromExt<'a> {
@@ -245,7 +379,7 @@ impl<'a> Default for LoadFromExt<'a> {
             max_concurrent_fetch: 16,
             loading_content_span: None,
             meta_prefix: METADATA_PREFIX,
-            master_keys: MultiMasterKeyBackend::default(),
+            resolve_with_master_key: None,
         }
     }
 }
@@ -377,8 +511,12 @@ impl<'a> StreamMetaStorage<'a> {
                     }
 
                     let mut fut = Prefetch::new(
-                        MetaFile::load_from(self.ext_storage, load, &self.ext.master_keys)
-                            .boxed_local(),
+                        MetaFile::load_from(
+                            self.ext_storage,
+                            load,
+                            self.ext.resolve_with_master_key.clone(),
+                        )
+                        .boxed_local(),
                     );
                     // start the execution of this future.
                     let poll = fut.poll_unpin(cx);
@@ -451,11 +589,15 @@ impl<'a> StreamMetaStorage<'a> {
 }
 
 impl MetaFile {
+    /// Load metadata from a blob object.
+    ///
+    /// if `master_keys` is not `None`, will try to resolve the encrypted data
+    /// key by the master key.
     #[tracing::instrument(skip_all, fields(blob=%blob))]
     async fn load_from(
         s: &dyn ExternalStorage,
         blob: BlobObject,
-        master_keys: &MultiMasterKeyBackend,
+        master_keys: Option<MultiMasterKeyBackend>,
     ) -> Result<(Self, LoadMetaStatistic)> {
         use protobuf::Message;
 
@@ -487,7 +629,20 @@ impl MetaFile {
         let mut meta_file = kvproto::brpb::Metadata::new();
         meta_file.merge_from_bytes(&content)?;
         let name = Arc::from(blob.key.into_boxed_str());
-        let result = Self::from_file(name, meta_file);
+        let mut result = Self::from_file(name, meta_file);
+        if let Some(master_keys) = &master_keys {
+            for phy_file in &mut result.physical_files {
+                let futs = phy_file.files.iter_mut().map(|log_file| {
+                    log_file.encryption.resolve(master_keys).map(|res| {
+                        res.annotate(format_args!(
+                            "in the file {} at {}",
+                            phy_file.name, log_file.id
+                        ))
+                    })
+                });
+                futures::future::try_join_all(futs).await?;
+            }
+        }
 
         stat.physical_data_files_in += result.physical_files.len() as u64;
         stat.logical_data_files_in += result
@@ -511,6 +666,24 @@ impl LogFile {
                 .map(From::from)
                 .collect()
         });
+
+        use kvproto::encryptionpb::FileEncryptionInfo_oneof_mode as Mode;
+        let iv = pb_info.mut_file_encryption_info().take_file_iv();
+        let encryption = match &mut pb_info.mut_file_encryption_info().mode {
+            None => LogFileEncryptionInfo::plaintext(),
+            Some(Mode::MasterKeyBased(mb)) => LogFileEncryptionInfo::EncryptedKey {
+                encrypted_key: mb
+                    .take_data_key_encrypted_content()
+                    .into_iter()
+                    .next()
+                    .unwrap(),
+                iv_of_data: iv,
+                method_of_data: pb_info.get_file_encryption_info().encryption_method,
+            },
+            Some(Mode::PlainTextDataKey(pk)) => LogFileEncryptionInfo::Unavailable {
+                reason: format!("Plain text data key isn't supported for now: {:?}", pk),
+            },
+        };
         Self {
             id: LogFileId {
                 name: host_file,
@@ -544,7 +717,7 @@ impl LogFile {
             table_id: pb_info.table_id,
             compression: pb_info.compression_type,
             region_epoches,
-            encryption: Default::default(),
+            encryption,
         }
     }
 
@@ -579,6 +752,7 @@ impl LogFile {
                 .map(|v| v.iter().cloned().map(From::from).collect())
                 .unwrap_or_default(),
         );
+        pb.set_file_encryption_info(self.encryption.try_into().unwrap());
         pb
     }
 }

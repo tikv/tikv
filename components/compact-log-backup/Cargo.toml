@@ -20,6 +20,7 @@ crc64fast = "0.1"
 dashmap = "5"
 derive_more = "0.99.3"
 encryption = { workspace = true }
+encryption_export = { workspace = true }
 engine_rocks = { workspace = true }
 engine_traits = { workspace = true }
 external_storage = { workspace = true }
@@ -67,3 +68,4 @@ pprof = { version = "0.14", default-features = false, features = [
 ] }
 tempdir = "0.3"
 test_util = { workspace = true }
+rand = "0.8"

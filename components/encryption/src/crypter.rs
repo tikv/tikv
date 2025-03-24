@@ -4,7 +4,7 @@ use std::fmt::{self, Debug, Formatter};
 
 use byteorder::{BigEndian, ByteOrder};
 use cloud::kms::PlainKey;
-use kvproto::encryptionpb::EncryptionMethod;
+use kvproto::encryptionpb::{EncryptionMethod, PlainTextDataKey};
 use openssl::{
     rand,
     symm::{self, Cipher as OCipher},
