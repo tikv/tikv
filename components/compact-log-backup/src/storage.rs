@@ -10,7 +10,7 @@ use std::{
 };
 
 use derive_more::Display;
-use encryption::{DecrypterReader, DecrypterWriter, Iv, MultiMasterKeyBackend};
+use encryption::{DecrypterWriter, Iv, MultiMasterKeyBackend};
 use external_storage::{BlobObject, ExternalStorage, UnpinReader};
 use futures::{
     future::{FusedFuture, FutureExt, TryFutureExt},
@@ -20,7 +20,7 @@ use futures::{
 use kvproto::{
     brpb::{self, FileType, MetaEdit, Migration},
     encryptionpb::{
-        EncryptedContent, EncryptionMethod, FileEncryptionInfo, MasterKeyBased, PlainTextDataKey,
+        EncryptedContent, EncryptionMethod, FileEncryptionInfo, MasterKeyBased,
     },
     metapb::RegionEpoch,
 };

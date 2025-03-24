@@ -21,7 +21,7 @@ use futures::{
 use keys::origin_key;
 use kvproto::{
     brpb::{self, Metadata},
-    encryptionpb::{EncryptionMethod, MasterKey},
+    encryptionpb::EncryptionMethod,
 };
 use protobuf::{parse_from_bytes, Message};
 use rand::Rng;
@@ -230,16 +230,19 @@ impl<S: Iterator<Item = KeySeed>> Iterator for KvGen<S> {
     }
 }
 
-pub async fn enable_encryption(enc: &mut MultiMasterKeyBackend) {
-    let mut config = FileConfig::default();
-    let file = TempDir::new("master_key").unwrap();
-    let key_path = file.path().join("key");
+pub fn gen_aes256_key(p: &Path) -> PathBuf {
+    let key_path = p.join("key.bin");
     let mut raw_key = vec![0u8; 32];
     rand::thread_rng().fill(raw_key.as_mut_slice());
     let mut key = hex::encode(raw_key);
     key.push('\n');
     std::fs::write(&key_path, &key).unwrap();
-    config.path = key_path.to_string_lossy().to_string();
+    key_path
+}
+
+pub async fn init_multi_master_key_backend_with(key_file: &Path, enc: &mut MultiMasterKeyBackend) {
+    let mut config = FileConfig::default();
+    config.path = key_file.to_string_lossy().to_string();
     enc.update_from_config_if_needed(
         vec![MasterKeyConfig::File { config }],
         encryption_export::create_async_backend,
@@ -247,6 +250,12 @@ pub async fn enable_encryption(enc: &mut MultiMasterKeyBackend) {
     .await
     .unwrap();
     assert!(enc.is_initialized().await);
+}
+
+pub async fn enable_encryption(enc: &mut MultiMasterKeyBackend) {
+    let file = TempDir::new("master_key").unwrap();
+    let key_path = gen_aes256_key(file.path());
+    init_multi_master_key_backend_with(&key_path, enc).await;
 }
 
 pub fn gen_step(table_id: i64, start: i64, step: i64) -> impl Iterator<Item = KeySeed> {

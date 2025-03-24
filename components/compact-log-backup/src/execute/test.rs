@@ -26,7 +26,10 @@ use crate::{
     },
     execute::hooking::{CId, ExecHooks, SubcompactionFinishCtx},
     storage::LOCK_PREFIX,
-    test_util::{enable_encryption, gen_step, CompactInMem, KvGen, LogFileBuilder, TmpStorage},
+    test_util::{
+        enable_encryption, gen_step, init_multi_master_key_backend_with, CompactInMem, KvGen,
+        LogFileBuilder, TmpStorage,
+    },
     ErrorKind,
 };
 
@@ -77,7 +80,7 @@ pub fn create_compaction(st: StorageBackend) -> Execution {
         external_storage: st,
         db: None,
         out_prefix: "test-output".to_owned(),
-        encryption: Default::default(),
+        master_key: Default::default(),
     }
 }
 
@@ -122,10 +125,12 @@ async fn test_exec_simple() {
 
 #[tokio::test]
 async fn test_exec_encrypted() {
+    use crate::test_util;
     let st = TmpStorage::create();
     let mut cm = HashMap::new();
     let mut enc = MultiMasterKeyBackend::new();
-    enable_encryption(&mut enc).await;
+    let key_file = test_util::gen_aes256_key(st.path());
+    init_multi_master_key_backend_with(&key_file, &mut enc).await;
 
     for i in 0..3 {
         let mut builders = gen_builder(&mut cm, i, 10);
@@ -143,7 +148,9 @@ async fn test_exec_encrypted() {
     }
 
     let mut exec = create_compaction(st.backend());
-    exec.encryption = enc.clone();
+    exec.master_key
+        .mut_file()
+        .set_path(key_file.to_string_lossy().to_string());
 
     let (tx, mut rx) = tokio::sync::mpsc::channel(16);
     let bg_exec = tokio::task::spawn_blocking(move || {

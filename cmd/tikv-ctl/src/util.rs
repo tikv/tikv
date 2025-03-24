@@ -86,6 +86,30 @@ pub fn check_intersect_of_range(key_range: &KeyRange, key_range_limit: &KeyRange
     true
 }
 
+pub fn unmarshal_message_or_fail<T: protobuf::Message>(text: &str, flag_name: &str) -> T {
+    let maybe_res = base64::decode(text)
+        .map_err(|err| format!("cannot parse base64: {}", err))
+        .and_then(|storage_bytes| {
+            let mut ext_storage = T::new();
+            ext_storage
+                .merge_from_bytes(&storage_bytes)
+                .map_err(|err| format!("cannot parse bytes as StorageBackend: {}", err))?;
+            Result::Ok(ext_storage)
+        });
+    let message = match maybe_res {
+        Ok(s) => s,
+        Err(err) => {
+            clap::Error {
+                message: format!("({}) is invalid: {:?}", flag_name, err),
+                kind: clap::ErrorKind::InvalidValue,
+                info: None,
+            }
+            .exit();
+        }
+    };
+    message
+}
+
 #[cfg(test)]
 mod tests {
     use kvproto::kvrpcpb::KeyRange;

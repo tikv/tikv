@@ -21,7 +21,7 @@ use tikv_util::{
 use txn_types::Key;
 
 use super::{statistic::LoadStatistic, util::Cooperate};
-use crate::{compaction::Input, errors::Result, OtherErrExt, TraceResultExt};
+use crate::{compaction::Input, errors::Result, TraceResultExt};
 
 /// The manager of fetching log files from remote for compacting.
 #[derive(Clone)]
