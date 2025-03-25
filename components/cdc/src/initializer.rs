@@ -775,6 +775,8 @@ mod tests {
             ts_filter_ratio: 1.0, // always enable it.
             kv_api,
             filter_loop,
+
+            scan_phase: Arc::new(AtomicCell::new(ScanPhase::SnapshotAcquired)),
         };
 
         (receiver_worker, pool, initializer, rx, drain)
