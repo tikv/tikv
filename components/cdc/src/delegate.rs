@@ -146,6 +146,8 @@ pub struct Downstream {
     // the downstream hasn't finished the incremental scanning.
     lock_heap: Option<BTreeMap<TimeStamp, isize>>,
     advanced_to: TimeStamp,
+
+    pub(crate) scan_phase: Arc<AtomicCell<ScanPhase>>,
 }
 
 impl fmt::Debug for Downstream {
@@ -189,6 +191,8 @@ impl Downstream {
 
             lock_heap: None,
             advanced_to: TimeStamp::zero(),
+
+            scan_phase: Arc::new(AtomicCell::new(ScanPhase::Inited)),
         }
     }
 
@@ -632,6 +636,16 @@ impl Delegate {
                         "region_id" => self.region_id,
                         "elapsed" => ?elapsed,
                         "stage" => ?self.lock_tracker,
+                    );
+                    let scan_phases: Vec<_> = self
+                        .downstreams
+                        .iter()
+                        .for_each(|d| d.scan_phase.load())
+                        .collect();
+                    warn!(
+                        "cdc region downstream scan phases";
+                        "region_id" => self.region_id,
+                        "scan_phases" => ?scan_phases,
                     );
                     self.last_lag_warn = now;
                 }
@@ -1403,6 +1417,20 @@ impl ObservedRange {
 
 const WARN_LAG_THRESHOLD: Duration = Duration::from_secs(600);
 const WARN_LAG_INTERVAL: Duration = Duration::from_secs(60);
+
+#[derive(Debug)]
+pub(crate) enum ScanPhase {
+    Inited,
+    Enqueued,
+    SnapshotAcquired,
+    FetchingLocks,
+    LocksFetched,
+    InitForwarded,
+    FetchingRecords,
+    RecordsFetched,
+    BarrierOrdered,
+    Finished,
+}
 
 #[cfg(test)]
 mod tests {
