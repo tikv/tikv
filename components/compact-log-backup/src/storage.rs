@@ -196,13 +196,10 @@ impl TryFrom<LogFileEncryptionInfo> for FileEncryptionInfo {
                 return Err(format!("unavaliable encryption info {}", reason));
             }
             LogFileEncryptionInfo::ResolvedKey(rk) => {
-                enc.mode = Some(
-                    kvproto::encryptionpb::FileEncryptionInfo_oneof_mode::PlainTextDataKey(
-                        Default::default(),
-                    ),
-                );
                 enc.set_encryption_method(rk.method);
                 enc.set_file_iv(rk.iv);
+                enc.mode = None;
+                assert_eq!(rk.method, EncryptionMethod::Plaintext);
             }
         }
         Ok(enc)
