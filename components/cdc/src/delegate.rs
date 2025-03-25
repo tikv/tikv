@@ -640,7 +640,7 @@ impl Delegate {
                     let scan_phases: Vec<_> = self
                         .downstreams
                         .iter()
-                        .for_each(|d| d.scan_phase.load())
+                        .map(|d| d.scan_phase.load())
                         .collect();
                     warn!(
                         "cdc region downstream scan phases";
@@ -1418,7 +1418,7 @@ impl ObservedRange {
 const WARN_LAG_THRESHOLD: Duration = Duration::from_secs(600);
 const WARN_LAG_INTERVAL: Duration = Duration::from_secs(60);
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) enum ScanPhase {
     Inited,
     Enqueued,

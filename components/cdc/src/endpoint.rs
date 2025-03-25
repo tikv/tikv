@@ -965,7 +965,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             kv_api,
             filter_loop,
 
-            scan_phase: scan_phase.clone(),
+            scan_phase: downstream_scan_phase.clone(),
         };
 
         let cdc_handle = self.cdc_handle.clone();
