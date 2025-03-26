@@ -309,6 +309,7 @@ impl RegionStatsManager {
                     .take(max_count_to_evict)
                     .collect();
 
+<<<<<<< HEAD
             // TODO(SpadeA): remove it after it's stable
             let debug: Vec<_> = region_to_evict
                 .iter()
@@ -331,6 +332,91 @@ impl RegionStatsManager {
         } else {
             vec![]
         };
+=======
+        let mut total_next_prev = 0;
+        let mut total_cop_requests = 0;
+        for crs in &cached_region_stats {
+            total_next_prev += crs.stat.cop_detail.iterated_count();
+            total_cop_requests += crs.sma_cop_requests_avg;
+        }
+        let avg_next_prev = total_next_prev / cached_region_stats.len();
+        let avg_cop_requests = total_cop_requests / cached_region_stats.len();
+
+        let now = Instant::now();
+        let mut region_to_evict = Vec::with_capacity(max_count_to_evict);
+        for crs in cached_region_stats.into_iter().take(max_count_to_evict) {
+            let need_evict = {
+                // In case, memory usage is relatively low, we evict those that
+                // should not be cached.
+                //
+                // NB: When a region is cached, its RegionWriteCfCopDetail only
+                // reflects the MVCC amplification in IME not in RocksDB. So
+                // low MVCC amplification is not a good indicator for eviction.
+                //
+                // Instead, we assume workload patterns remain consistent after
+                // caching and evict based on request frequency.
+                let is_cop_requests_low = crs.sma_cop_requests_avg
+                    <= avg_cop_requests / SMA_COP_REQUEST_AVG_FILTER_FACTOR;
+
+                // Reliable means the region has been loaded for a while (
+                // by default 30 minutes), and the SMA coprocessor requests is
+                // stable.
+                let is_cop_requests_reliable =
+                    crs.sma_cop_requests_count > SMA_COP_REQUEST_COUNT_FILTER;
+
+                let is_iterated_count_low = crs.stat.cop_detail.iterated_count()
+                    <= avg_next_prev / ITERATED_COUNT_FILTER_FACTOR;
+
+                has_reached_stop_load
+                    && is_cop_requests_reliable
+                    && is_cop_requests_low
+                    && is_iterated_count_low
+            };
+            if !need_evict {
+                continue;
+            }
+
+            // Do not evict regions that were loaded less than `EVICT_MIN_DURATION` ago.
+            // If it has no time recorded, it should be warmed up by transfer leader
+            // record the time and does not evict it this time.
+            let load_time = regions_loaded.entry(crs.region.id).or_insert(now);
+            let can_evict = now
+                .checked_duration_since(*load_time)
+                .map_or(false, |d| d > self.evict_min_duration);
+            if !can_evict {
+                continue;
+            }
+            region_to_evict.push(crs);
+        }
+
+        // TODO(SpadeA): remove it after it's stable
+        let debug_evict: Vec<_> = region_to_evict
+            .iter()
+            .map(|crs| {
+                format!(
+                    "region_id={}, cop={}, avg_cop={}, cop_detail={:?}, mvcc_amplification={}",
+                    crs.region.id,
+                    crs.stat.query_stats.coprocessor,
+                    crs.sma_cop_requests_avg,
+                    crs.stat.cop_detail,
+                    crs.stat.cop_detail.mvcc_amplification(),
+                )
+            })
+            .collect();
+        let debug_load: Vec<_> = regions_to_load
+            .iter()
+            .map(|r| format!("region_id={}", r.id,))
+            .collect();
+        info!(
+            "ime collect regions to load and evict";
+            "reached_stop_limit" => has_reached_stop_load,
+            "load" => ?debug_load,
+            "evicts" => ?debug_evict,
+            "avg_next_prev" => avg_next_prev,
+            "avg_cop_requests" => avg_cop_requests,
+        );
+        let regions_to_evict = region_to_evict.into_iter().map(|crs| crs.region).collect();
+>>>>>>> 39a47fba00 (raftstore: warm up IME before transferring leadership (#17882))
         (regions_to_load, regions_to_evict)
     }
 

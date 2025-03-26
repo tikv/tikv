@@ -86,6 +86,7 @@ make_auto_flush_static_metric! {
         started,
         timeout,
         finished,
+        stale,
     }
 
     pub label_enum CompactionGuardAction {

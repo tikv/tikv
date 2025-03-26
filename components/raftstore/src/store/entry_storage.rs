@@ -632,8 +632,14 @@ impl CacheWarmupState {
         if self.is_stale {
             return true;
         }
+<<<<<<< HEAD
         if self.elapsed() > duration {
             self.is_stale = true;
+=======
+        if Instant::now() > self.election_timeout_at {
+            WARM_UP_ENTRY_CACHE_COUNTER.stale.inc();
+            self.is_election_timeout = true;
+>>>>>>> 39a47fba00 (raftstore: warm up IME before transferring leadership (#17882))
         }
         self.is_stale
     }
