@@ -3,10 +3,7 @@
 use std::{
     cmp::{Ord, Ordering, Reverse},
     collections::BinaryHeap,
-    sync::{
-        atomic::{AtomicU64, Ordering as AtomicOrdering},
-        mpsc, Arc,
-    },
+    sync::{mpsc, Arc, Mutex},
     thread::Builder,
     time::Duration,
 };
@@ -200,40 +197,35 @@ fn start_global_steady_timer() -> SteadyTimer {
 ///
 /// [^1]: https://github.com/tokio-rs/tokio/pull/515
 struct RatchetClock<T: Now> {
-    clock: T,
+    // Although the RatchetClock has to be thread-safe (Now requires Sync+Send),
+    // the [`tokio_timer::timer::Clock`] that wraps it can only be accessed by
+    // the timer thread. Therefore, performance penalty of using a Mutex is negligible.
+    state: Mutex<RatchetClockState<T>>,
+}
+
+struct RatchetClockState<T> {
     start: std::time::Instant,
+    clock: T,
 
     // The last recorded time in milliseconds.
     //
     // Using u64 is sufficient here because tokio-timer operates with millisecond
     // precision, and `u64::MAX` milliseconds represent an extremely large time span
     // (several million years).
-    last_now_ms: AtomicU64,
+    last_now_ms: u64,
 }
 
 impl<T: Now> Now for RatchetClock<T> {
     fn now(&self) -> std::time::Instant {
-        let now = self.clock.now();
-        let now_ms = now.saturating_duration_since(self.start).as_millis() as u64;
-        let mut last_now_ms = self.last_now_ms.load(AtomicOrdering::Relaxed);
-        loop {
-            if now_ms > last_now_ms {
-                match self.last_now_ms.compare_exchange_weak(
-                    last_now_ms,
-                    now_ms,
-                    AtomicOrdering::SeqCst,
-                    AtomicOrdering::SeqCst,
-                ) {
-                    Ok(_) => {
-                        return self.start + Duration::from_millis(now_ms);
-                    }
-                    Err(last_now) => {
-                        last_now_ms = last_now;
-                    }
-                }
-            } else {
-                return self.start + Duration::from_millis(last_now_ms);
-            }
+        let mut state = self.state.lock().unwrap();
+        let now = state.clock.now();
+        let now_ms = now.saturating_duration_since(state.start).as_millis() as u64;
+
+        if now_ms > state.last_now_ms {
+            state.last_now_ms = now_ms;
+            state.start + Duration::from_millis(now_ms)
+        } else {
+            state.start + Duration::from_millis(state.last_now_ms)
         }
     }
 }
@@ -241,9 +233,11 @@ impl<T: Now> Now for RatchetClock<T> {
 impl<T: Now> RatchetClock<T> {
     fn new(clock: T) -> Self {
         RatchetClock {
-            clock,
-            start: std::time::Instant::now(),
-            last_now_ms: AtomicU64::new(0),
+            state: Mutex::new(RatchetClockState {
+                clock,
+                start: std::time::Instant::now(),
+                last_now_ms: 0,
+            }),
         }
     }
 }
@@ -271,7 +265,7 @@ fn start_timer_thread<T: Now>(name: &str, clock: T) -> Handle {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 
     use futures::{compat::Future01CompatExt, executor::block_on};
 
