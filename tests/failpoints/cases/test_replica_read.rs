@@ -864,7 +864,7 @@ fn test_read_index_cache() {
         )
         .unwrap();
 
-        let _resp = sync_get_snapshot(
+        let _ = sync_get_snapshot(
             &mut cluster,
             new_peer(2, 2),
             r1.clone(),
