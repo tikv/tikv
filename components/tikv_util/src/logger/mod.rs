@@ -28,7 +28,7 @@ use crate::config::{ReadableDuration, ReadableSize};
 const SLOG_CHANNEL_SIZE: usize = 10240;
 // Default is DropAndReport.
 // It is not desirable to have dropped logs in our use case.
-const SLOG_CHANNEL_OVERFLOW_STRATEGY: OverflowStrategy = OverflowStrategy::Drop;
+const SLOG_CHANNEL_OVERFLOW_STRATEGY: OverflowStrategy = OverflowStrategy::Block;
 const TIMESTAMP_FORMAT: &str = "%Y/%m/%d %H:%M:%S%.3f %:z";
 
 static LOG_LEVEL: AtomicUsize = AtomicUsize::new(usize::max_value());
