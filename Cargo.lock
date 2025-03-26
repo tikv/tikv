@@ -5211,6 +5211,7 @@ dependencies = [
  "bytes",
  "causal_ts",
  "chrono",
+ "codec",
  "collections",
  "concurrency_manager",
  "crc32fast",
