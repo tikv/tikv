@@ -630,6 +630,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                             pr,
                             tag,
                             CommandStageKind::precheck_write_err,
+                            tracker_token,
                         );
                     }
                 }
@@ -1196,6 +1197,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         pr: ProcessResult,
         tag: CommandKind,
         stage: CommandStageKind,
+        tracker_token: TrackerToken,
     ) {
         debug!("early return response"; "cid" => cid);
         SCHED_STAGE_COUNTER_VEC.get(tag).get(stage).inc();
@@ -1712,6 +1714,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                             final_pr.take().unwrap(),
                             tag,
                             CommandStageKind::async_apply_prewrite,
+                            tracker_token,
                         );
                     }
                 }
@@ -1738,6 +1741,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                             final_pr.take().unwrap(),
                             tag,
                             CommandStageKind::pipelined_write,
+                            sched_details.tracker,
                         );
                     }
                 }
