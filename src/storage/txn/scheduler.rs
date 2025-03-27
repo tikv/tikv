@@ -601,61 +601,66 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             return;
         }
         let task = tctx.task.as_ref().unwrap();
-        self.fail_fast_or_check_deadline(cid, task.cmd());
+        self.fail_fast_or_check_deadline(cid, task.cmd(), tracker_token);
         fail_point!("txn_scheduler_acquire_fail");
     }
 
-    fn fail_fast_or_check_deadline(&self, cid: u64, cmd: &Command) {
+    fn fail_fast_or_check_deadline(&self, cid: u64, cmd: &Command, tracker_token: TrackerToken) {
         let tag = cmd.tag();
         let ctx = cmd.ctx().clone();
         let deadline = cmd.deadline();
         let sched = self.clone();
+        let execution = async move {
+            match unsafe { with_tls_engine(|engine: &mut E| engine.precheck_write_with_ctx(&ctx)) }
+            {
+                // Precheck failed, try to return err early.
+                Err(e) => {
+                    let cb = sched.inner.try_own_and_take_cb(cid);
+                    // The task is not processing or finished currently. It's safe
+                    // to response early here. In the future, the task will be waked up
+                    // and it will finished with DeadlineExceeded error.
+                    // As the cb is taken here, it will not be executed anymore.
+                    if let Some(cb) = cb {
+                        let pr = ProcessResult::Failed {
+                            err: StorageError::from(e),
+                        };
+                        Self::early_response(
+                            cid,
+                            cb,
+                            pr,
+                            tag,
+                            CommandStageKind::precheck_write_err,
+                        );
+                    }
+                }
+                Ok(()) => {
+                    SCHED_STAGE_COUNTER_VEC.get(tag).precheck_write_ok.inc();
+                    // Check deadline in background.
+                    GLOBAL_TIMER_HANDLE
+                        .delay(deadline.to_std_instant())
+                        .compat()
+                        .await
+                        .unwrap();
+                    let cb = sched.inner.try_own_and_take_cb(cid);
+                    if let Some(cb) = cb {
+                        GLOBAL_TRACKERS.with_tracker(tracker_token, |tracker| {
+                            let now = Instant::now();
+                            TlsFutureTracker::collect_to_tracker(now, tracker);
+                        });
+                        cb.execute(ProcessResult::Failed {
+                            err: StorageErrorInner::DeadlineExceeded.into(),
+                        })
+                    }
+                }
+            }
+        };
+        let execution = track(execution, TlsFutureTracker::new(tracker_token, tag, cid));
         self.get_sched_pool()
             .spawn(
                 &cmd.ctx().request_source,
                 TaskMetadata::from_ctx(cmd.resource_control_ctx()),
                 cmd.priority(),
-                async move {
-                    match unsafe {
-                        with_tls_engine(|engine: &mut E| engine.precheck_write_with_ctx(&ctx))
-                    } {
-                        // Precheck failed, try to return err early.
-                        Err(e) => {
-                            let cb = sched.inner.try_own_and_take_cb(cid);
-                            // The task is not processing or finished currently. It's safe
-                            // to response early here. In the future, the task will be waked up
-                            // and it will finished with DeadlineExceeded error.
-                            // As the cb is taken here, it will not be executed anymore.
-                            if let Some(cb) = cb {
-                                let pr = ProcessResult::Failed {
-                                    err: StorageError::from(e),
-                                };
-                                Self::early_response(
-                                    cid,
-                                    cb,
-                                    pr,
-                                    tag,
-                                    CommandStageKind::precheck_write_err,
-                                );
-                            }
-                        }
-                        Ok(()) => {
-                            SCHED_STAGE_COUNTER_VEC.get(tag).precheck_write_ok.inc();
-                            // Check deadline in background.
-                            GLOBAL_TIMER_HANDLE
-                                .delay(deadline.to_std_instant())
-                                .compat()
-                                .await
-                                .unwrap();
-                            let cb = sched.inner.try_own_and_take_cb(cid);
-                            if let Some(cb) = cb {
-                                cb.execute(ProcessResult::Failed {
-                                    err: StorageErrorInner::DeadlineExceeded.into(),
-                                })
-                            }
-                        }
-                    }
-                },
+                execution,
             )
             .unwrap();
     }
@@ -1194,6 +1199,10 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
     ) {
         debug!("early return response"; "cid" => cid);
         SCHED_STAGE_COUNTER_VEC.get(tag).get(stage).inc();
+        GLOBAL_TRACKERS.with_tracker(tracker_token, |tracker| {
+            let now = Instant::now();
+            TlsFutureTracker::collect_to_tracker(now, tracker);
+        });
         cb.execute(pr);
         // It won't release locks here until write finished.
     }

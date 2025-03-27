@@ -13,11 +13,20 @@ thread_local! {
     static CURRENT_STATE: RefCell<Option<State>> = const { RefCell::new(None) };
 }
 
+/// PollState tracks the state of the future polling.
 #[derive(Debug, Clone, Copy)]
 enum PollState {
-    None,
-    Begin(Instant),
-    Finish(Instant),
+    // The state is set to Collected when [`TlsFutureTracker::collect_to_tracker`]
+    // is called, meaning the process time and suspend time are collected.
+    Collected,
+    // The state is set to Begin when `Future::poll` is called.
+    // Record the time when the future is polled, and the time is used to
+    // calculate the process time of the future.
+    Began(Instant),
+    // The state is set to Finish when `Future::poll` is finished.
+    // Record the time when the future is finished, and the time is used to
+    // calculate the suspend time before the next poll.
+    Finished(Instant),
 }
 
 #[derive(Debug)]
@@ -42,7 +51,7 @@ impl TlsFutureTracker {
             tag,
             cid,
             // Set to Finish state to tracking the wait time before the first poll.
-            current_stage: PollState::Finish(Instant::now()),
+            current_stage: PollState::Finished(Instant::now()),
 
             future_process_nanos: 0,
             future_suspend_nanos: 0,
@@ -61,14 +70,14 @@ impl TlsFutureTracker {
             let state = state.as_mut().expect("TLS future tracker state is not set");
             state.collect_to_tracker(now, tracker);
             // Prevent double counting.
-            state.current_stage = PollState::None;
+            state.current_stage = PollState::Collected;
         });
     }
 }
 
 impl State {
     fn collect_to_tracker(&mut self, now: Instant, tracker: &mut tracker::Tracker) {
-        if let PollState::Begin(at) = self.current_stage {
+        if let PollState::Began(at) = self.current_stage {
             self.future_process_nanos += now.saturating_duration_since(at).as_nanos() as u64;
         }
         tracker.metrics.future_process_nanos += self.future_process_nanos;
@@ -79,8 +88,8 @@ impl State {
 
     fn on_poll_begin(&mut self, now: Instant) {
         match self.current_stage {
-            PollState::None => {}
-            PollState::Finish(at) => {
+            PollState::Collected => {}
+            PollState::Finished(at) => {
                 self.future_suspend_nanos += now.saturating_duration_since(at).as_nanos() as u64;
             }
             _ => {
@@ -94,8 +103,8 @@ impl State {
 
     fn on_poll_finish(&mut self, now: Instant, tracker: &mut tracker::Tracker) {
         match self.current_stage {
-            PollState::None => {}
-            PollState::Begin(_) => {
+            PollState::Collected => {}
+            PollState::Began(_) => {
                 self.collect_to_tracker(now, tracker);
             }
             _ => {
@@ -120,7 +129,7 @@ impl FutureTrack for TlsFutureTracker {
                 current_state.borrow().as_ref().unwrap(),
                 state
             );
-            state.current_stage = PollState::Begin(now);
+            state.current_stage = PollState::Began(now);
             *current_state.borrow_mut() = Some(state);
         });
     }
@@ -136,7 +145,7 @@ impl FutureTrack for TlsFutureTracker {
                 state.on_poll_finish(now, tracker);
             });
             // Set to Finish state to tracking the wait time before the next poll.
-            state.current_stage = PollState::Finish(now);
+            state.current_stage = PollState::Finished(now);
             self.state = Some(state);
         });
     }
