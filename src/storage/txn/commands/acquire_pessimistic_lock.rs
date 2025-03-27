@@ -248,7 +248,7 @@ mod tests {
     }
 
     #[test]
-    fn test_pessimistic_with_value() {
+    fn test_pessimistic_with_return_values() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let mut statistics = Statistics::default();
 
