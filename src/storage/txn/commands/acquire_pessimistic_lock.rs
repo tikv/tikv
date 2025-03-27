@@ -331,9 +331,9 @@ mod tests {
             }
 
             // single key lock test
-            for (i, key) in keys.into_iter().enumerate() {
-                let start_ts = start_ts + 1;
-                let for_update_ts = start_ts + 50;
+            let start_ts = start_ts + 1;
+            let for_update_ts = start_ts + 50;
+            for (i, key) in keys.clone().into_iter().enumerate() {
                 let pk = key.to_vec();
                 let keys = vec![(key.as_ref(), false)];
                 let expect = &expects[i];
@@ -349,6 +349,8 @@ mod tests {
                 assert_eq!(res.0.len(), 1);
                 assert_eq!(&res.0[0], expect);
                 must_pessimistic_locked(&mut engine, key, start_ts, for_update_ts);
+            }
+            for key in keys {
                 must_rollback(&mut engine, key, start_ts, false);
             }
         }
