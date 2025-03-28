@@ -3,7 +3,7 @@
 use std::{
     cmp::{Ord, Ordering, Reverse},
     collections::BinaryHeap,
-    sync::{mpsc, Arc},
+    sync::{mpsc, Arc, Mutex},
     thread::Builder,
     time::Duration,
 };
@@ -92,27 +92,16 @@ impl<T> Ord for TimeoutTask<T> {
     }
 }
 
-lazy_static! {
-    pub static ref GLOBAL_TIMER_HANDLE: Handle = start_global_timer("timer");
+struct SystemClock;
+
+impl Now for SystemClock {
+    fn now(&self) -> std::time::Instant {
+        std::time::Instant::now()
+    }
 }
 
-/// Create a global timer with specific thread name.
-pub fn start_global_timer(name: &str) -> Handle {
-    let (tx, rx) = mpsc::channel();
-    let props = crate::thread_group::current_properties();
-    Builder::new()
-        .name(thd_name!(name))
-        .spawn_wrapper(move || {
-            crate::thread_group::set_properties(props);
-
-            let mut timer = tokio_timer::Timer::default();
-            tx.send(timer.handle()).unwrap();
-            loop {
-                timer.turn(None).unwrap();
-            }
-        })
-        .unwrap();
-    rx.recv().unwrap()
+lazy_static! {
+    pub static ref GLOBAL_TIMER_HANDLE: Handle = start_timer_thread("timer", SystemClock);
 }
 
 /// A struct that marks the *zero* time.
@@ -196,28 +185,88 @@ impl Default for SteadyTimer {
 }
 
 fn start_global_steady_timer() -> SteadyTimer {
-    let (tx, rx) = mpsc::channel();
     let clock = SteadyClock::default();
-    let clock_ = clock.clone();
+    let handle = start_timer_thread("steady-timer", clock.clone());
+    SteadyTimer { clock, handle }
+}
+
+/// A clock that ratchets forward.
+///
+/// It is used to workaround a panic[^1] in tokio-timer when the clock goes
+/// backward, which is possible in some environments, e.g., aliyun ECS g7.
+///
+/// [^1]: https://github.com/tokio-rs/tokio/pull/515
+struct RatchetClock<T: Now> {
+    // Although the RatchetClock has to be thread-safe (Now requires Sync+Send),
+    // the [`tokio_timer::timer::Clock`] that wraps it can only be accessed by
+    // the timer thread. Therefore, performance penalty of using a Mutex is negligible.
+    state: Mutex<RatchetClockState<T>>,
+}
+
+struct RatchetClockState<T> {
+    start: std::time::Instant,
+    clock: T,
+
+    // The last recorded time in milliseconds.
+    //
+    // Using u64 is sufficient here because tokio-timer operates with millisecond
+    // precision, and `u64::MAX` milliseconds represent an extremely large time span
+    // (several million years).
+    last_now_ms: u64,
+}
+
+impl<T: Now> Now for RatchetClock<T> {
+    fn now(&self) -> std::time::Instant {
+        let mut state = self.state.lock().unwrap();
+        let now = state.clock.now();
+        let now_ms = now.saturating_duration_since(state.start).as_millis() as u64;
+
+        if now_ms > state.last_now_ms {
+            state.last_now_ms = now_ms;
+            state.start + Duration::from_millis(now_ms)
+        } else {
+            state.start + Duration::from_millis(state.last_now_ms)
+        }
+    }
+}
+
+impl<T: Now> RatchetClock<T> {
+    fn new(clock: T) -> Self {
+        RatchetClock {
+            state: Mutex::new(RatchetClockState {
+                clock,
+                start: std::time::Instant::now(),
+                last_now_ms: 0,
+            }),
+        }
+    }
+}
+
+/// Start a timer thread with specific thread name and clock source.
+fn start_timer_thread<T: Now>(name: &str, clock: T) -> Handle {
+    let (tx, rx) = mpsc::channel();
+    let props = crate::thread_group::current_properties();
+    let ratchet_clock = RatchetClock::new(clock);
+    let clock = Clock::new_with_now(ratchet_clock);
     Builder::new()
-        .name(thd_name!("steady-timer"))
+        .name(thd_name!(name))
         .spawn_wrapper(move || {
-            let c = Clock::new_with_now(clock_);
-            let mut timer = tokio_timer::Timer::new_with_now(ParkThread::new(), c);
+            crate::thread_group::set_properties(props);
+
+            let mut timer = tokio_timer::Timer::new_with_now(ParkThread::new(), clock);
             tx.send(timer.handle()).unwrap();
             loop {
                 timer.turn(None).unwrap();
             }
         })
         .unwrap();
-    SteadyTimer {
-        clock,
-        handle: rx.recv().unwrap(),
-    }
+    rx.recv().unwrap()
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+
     use futures::{compat::Future01CompatExt, executor::block_on};
 
     use super::*;
@@ -275,5 +324,38 @@ mod tests {
             end,
             elapsed
         );
+    }
+
+    #[test]
+    fn test_ratchet_clock() {
+        struct BadClock {
+            backward: AtomicBool,
+        }
+        impl Now for BadClock {
+            fn now(&self) -> std::time::Instant {
+                let now = std::time::Instant::now();
+                if self.backward.load(AtomicOrdering::Relaxed) {
+                    self.backward.store(false, AtomicOrdering::Relaxed);
+                    now - Duration::from_millis(10)
+                } else {
+                    self.backward.store(true, AtomicOrdering::Relaxed);
+                    now
+                }
+            }
+        }
+        let clock = BadClock {
+            backward: AtomicBool::new(false),
+        };
+        let handle = start_timer_thread("timer", clock);
+
+        for i in 0..100 {
+            let deadline = if i % 2 == 0 {
+                std::time::Instant::now() + Duration::from_millis(i)
+            } else {
+                std::time::Instant::now() - Duration::from_millis(i)
+            };
+            let delay = handle.delay(deadline);
+            block_on(delay.compat()).unwrap();
+        }
     }
 }
