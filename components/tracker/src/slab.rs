@@ -219,10 +219,23 @@ impl<'a> TrackerTokenArray<'a> {
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, thread};
+    use std::{sync::Arc, thread, time::Instant};
 
     use super::*;
-    use crate::RequestInfo;
+    use crate::{RequestInfo, RequestType};
+
+    fn new_req_info(task_id: u64) -> RequestInfo {
+        RequestInfo {
+            region_id: 0,
+            start_ts: 0,
+            task_id,
+            resource_group_tag: vec![],
+            begin: Instant::now(),
+            request_type: RequestType::default(),
+            cid: 0,
+            is_external_req: false,
+        }
+    }
 
     #[test]
     fn test_tracker_token() {
@@ -241,10 +254,7 @@ mod tests {
         // Insert 192 trackers
         let tokens: Vec<TrackerToken> = (0..192)
             .map(|i| {
-                let tracker = Tracker::new(RequestInfo {
-                    task_id: i,
-                    ..Default::default()
-                });
+                let tracker = Tracker::new(new_req_info(i));
                 slab.insert(tracker)
             })
             .collect();
@@ -261,10 +271,7 @@ mod tests {
         }
         // Insert another 192 trackers
         for i in 192..384 {
-            let tracker = Tracker::new(RequestInfo {
-                task_id: i,
-                ..Default::default()
-            });
+            let tracker = Tracker::new(new_req_info(i));
             slab.insert(tracker);
         }
         // Iterate over all trackers in the slab
@@ -281,10 +288,7 @@ mod tests {
             let slab = slab.clone();
             thread::spawn(move || {
                 for _ in 0..SLAB_SHARD_COUNT {
-                    slab.insert(Tracker::new(RequestInfo {
-                        task_id: i,
-                        ..Default::default()
-                    }));
+                    slab.insert(Tracker::new(new_req_info(i)));
                 }
             })
         });
