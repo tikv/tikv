@@ -2,7 +2,7 @@
 
 use std::{cell::RefCell, marker::PhantomData};
 
-use ::tracker::{get_tls_tracker_token, with_tls_tracker};
+use ::tracker::{get_tls_tracker_token, with_tls_tracker, FutureTrack};
 use engine_traits::{PerfContext, PerfContextExt, PerfContextKind};
 use kvproto::{kvrpcpb, kvrpcpb::ScanDetailV2};
 use pd_client::BucketMeta;
@@ -436,6 +436,16 @@ impl<E: Engine> Tracker<E> {
             });
             f(perf_context)
         })
+    }
+}
+
+impl<E: Engine> FutureTrack for &mut Tracker<E> {
+    fn on_poll_begin(&mut self) {
+        self.on_begin_item();
+    }
+
+    fn on_poll_finish(&mut self) {
+        self.on_finish_item(None);
     }
 }
 

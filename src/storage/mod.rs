@@ -102,7 +102,8 @@ use tikv_util::{
     time::{duration_to_ms, duration_to_sec, Instant, InstantExt, ThreadReadId},
 };
 use tracker::{
-    clear_tls_tracker_token, set_tls_tracker_token, with_tls_tracker, TrackedFuture, TrackerToken,
+    clear_tls_tracker_token, set_tls_tracker_token, with_tls_tracker, TlsTrackedFuture,
+    TrackerToken,
 };
 use txn_types::{Key, KvPair, Lock, LockType, TimeStamp, TsSet, Value};
 
@@ -893,7 +894,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
                     let snap = Self::with_tls_engine(|engine| Self::snapshot(engine, snap_ctx));
                     req_snaps.push((
-                        TrackedFuture::new(snap),
+                        TlsTrackedFuture::new(snap),
                         key,
                         start_ts,
                         isolation_level,
