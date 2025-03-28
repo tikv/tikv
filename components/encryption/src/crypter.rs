@@ -24,7 +24,7 @@ pub fn get_method_key_length(method: EncryptionMethod) -> usize {
     }
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct FileEncryptionInfo {
     pub method: EncryptionMethod,
     pub key: Vec<u8>,

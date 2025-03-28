@@ -9,10 +9,11 @@ use std::{
     },
 };
 
+use encryption::MultiMasterKeyBackend;
 use engine_rocks::RocksEngine;
 use external_storage::ExternalStorage;
 use futures::{future::FutureExt, stream::TryStreamExt};
-use kvproto::brpb::StorageBackend;
+use kvproto::{brpb::StorageBackend, encryptionpb::EncryptionMethod};
 use tokio::sync::mpsc::Sender;
 
 use super::{Execution, ExecutionConfig};
@@ -25,7 +26,10 @@ use crate::{
     },
     execute::hooking::{CId, ExecHooks, SubcompactionFinishCtx},
     storage::LOCK_PREFIX,
-    test_util::{gen_step, CompactInMem, KvGen, LogFileBuilder, TmpStorage},
+    test_util::{
+        gen_step, init_multi_master_key_backend_with, CompactInMem, KvGen, LogFileBuilder,
+        TmpStorage,
+    },
     ErrorKind,
 };
 
@@ -76,6 +80,7 @@ pub fn create_compaction(st: StorageBackend) -> Execution {
         external_storage: st,
         db: None,
         out_prefix: "test-output".to_owned(),
+        master_key: Default::default(),
     }
 }
 
@@ -94,6 +99,58 @@ async fn test_exec_simple() {
     }
 
     let exec = create_compaction(st.backend());
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+    let bg_exec = tokio::task::spawn_blocking(move || {
+        exec.run((SaveMeta::default(), CompactionSpy(tx))).unwrap()
+    });
+    while let Some(item) = rx.recv().await {
+        let rid = item.meta.get_meta().get_region_id() as usize;
+        st.verify_result(item, cm.remove(&rid).unwrap());
+    }
+    bg_exec.await.unwrap();
+
+    let mut migs = st.load_migrations().await.unwrap();
+    assert_eq!(migs.len(), 1);
+    let (id, mig) = migs.pop().unwrap();
+    assert_eq!(id, 1);
+    assert_eq!(mig.edit_meta.len(), 3);
+    assert_eq!(mig.compactions.len(), 1);
+    let subc = st
+        .load_subcompactions(mig.compactions[0].get_artifacts())
+        .await
+        .unwrap();
+    assert_eq!(subc.len(), 10);
+}
+
+#[tokio::test]
+async fn test_exec_encrypted() {
+    use crate::test_util;
+    let st = TmpStorage::create();
+    let mut cm = HashMap::new();
+    let mut enc = MultiMasterKeyBackend::new();
+    let key_file = test_util::gen_aes256_key(st.path());
+    init_multi_master_key_backend_with(&key_file, &mut enc).await;
+
+    for i in 0..3 {
+        let mut builders = gen_builder(&mut cm, i, 10);
+        for builder in &mut builders {
+            builder
+                .encrypt_by_master_key(&enc, EncryptionMethod::Aes256Ctr)
+                .await;
+        }
+        st.build_flush(
+            &format!("{}.log", i),
+            &format!("v1/backupmeta/{}.meta", i),
+            builders,
+        )
+        .await;
+    }
+
+    let mut exec = create_compaction(st.backend());
+    exec.master_key
+        .mut_file()
+        .set_path(key_file.to_string_lossy().to_string());
 
     let (tx, mut rx) = tokio::sync::mpsc::channel(16);
     let bg_exec = tokio::task::spawn_blocking(move || {
