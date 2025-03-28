@@ -85,12 +85,13 @@ impl Tracker {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct RequestInfo {
     pub region_id: u64,
     pub start_ts: u64,
     pub task_id: u64,
     pub resource_group_tag: Vec<u8>,
+    pub begin: Instant,
 
     // Information recorded after the task is scheduled.
     pub request_type: RequestType,
@@ -105,6 +106,7 @@ impl RequestInfo {
             start_ts,
             task_id: ctx.get_task_id(),
             resource_group_tag: ctx.get_resource_group_tag().to_vec(),
+            begin: Instant::now(),
             request_type,
             cid: 0,
             is_external_req: ctx.get_request_source().contains("external"),

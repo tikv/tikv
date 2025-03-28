@@ -92,6 +92,7 @@ use crate::{
         DynamicConfigs, Error as StorageError, ErrorInner as StorageErrorInner,
         PessimisticLockKeyResult, PessimisticLockResults,
     },
+    tikv_util::time::InstantExt,
 };
 
 const TASKS_SLOTS_NUM: usize = 1 << 12; // 4096 slots.
@@ -566,7 +567,6 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         callback: SchedulerTaskCallback,
         prepared_latches: Option<Lock>,
     ) {
-        let now = Instant::now();
         let cid = task.cid();
         let tracker_token = task.tracker_token();
         let cmd = task.cmd();
@@ -587,7 +587,8 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 .new_task_context(task, callback, prepared_latches)
         });
         GLOBAL_TRACKERS.with_tracker(tracker_token, |tracker| {
-            tracker.metrics.grpc_process_nanos = now.saturating_elapsed().as_nanos() as u64;
+            tracker.metrics.grpc_process_nanos =
+                tracker.req_info.begin.saturating_elapsed().as_nanos() as u64;
             tracker.req_info.request_type = cmd_type;
             tracker.req_info.cid = cid;
         });
