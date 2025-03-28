@@ -55,6 +55,7 @@ use crate::{
     channel::CdcEvent,
     delegate::{
         post_init_downstream, Delegate, DownstreamId, DownstreamState, MiniLock, ObservedRange,
+        ScanPhase,
     },
     endpoint::Deregister,
     metrics::*,
@@ -117,6 +118,8 @@ pub(crate) struct Initializer<E> {
     pub(crate) ts_filter_ratio: f64,
     pub(crate) kv_api: ChangeDataRequestKvApi,
     pub(crate) filter_loop: bool,
+
+    pub(crate) scan_phase: Arc<AtomicCell<ScanPhase>>,
 }
 
 impl<E: KvEngine> Initializer<E> {
@@ -124,6 +127,8 @@ impl<E: KvEngine> Initializer<E> {
     where
         T: 'static + CdcHandle<E>,
     {
+        self.scan_phase.store(ScanPhase::Enqueued);
+
         fail_point!("cdc_before_initialize");
         let concurrency_semaphore = self.concurrency_semaphore.clone();
         let _permit = concurrency_semaphore.acquire().await;
@@ -186,6 +191,7 @@ impl<E: KvEngine> Initializer<E> {
         if let Err(e) = incremental_scan_barrier_fut.await {
             return Err(Error::Other(box_err!(e)));
         }
+        self.scan_phase.store(ScanPhase::SnapshotAcquired);
 
         match fut.await {
             Ok(resp) => self.on_change_cmd_response(resp).await,
@@ -277,6 +283,8 @@ impl<E: KvEngine> Initializer<E> {
         );
 
         if self.build_resolver.load(Ordering::Acquire) {
+            self.scan_phase.store(ScanPhase::FetchingLocks);
+
             // Scan and collect locks if build_resolver is true. The range
             // should be the whole region span instead of subscribed span,
             // because those locks will be shared between multiple Downstreams.
@@ -292,6 +300,7 @@ impl<E: KvEngine> Initializer<E> {
                     locks.insert(key, mini_lock);
                 }
             }
+            self.scan_phase.store(ScanPhase::LocksFetched);
             self.finish_scan_locks(region, locks);
         };
 
@@ -348,6 +357,7 @@ impl<E: KvEngine> Initializer<E> {
             CDC_SCAN_LONG_DURATION_REGIONS.dec();
         });
 
+        self.scan_phase.store(ScanPhase::FetchingRecords);
         while !done {
             // Add metrics to observe long time incremental scan region count
             if !scan_long_time.load(Ordering::SeqCst)
@@ -372,6 +382,7 @@ impl<E: KvEngine> Initializer<E> {
             if let Some(None) = entries.last() {
                 // If the last element is None, it means scanning is finished.
                 done = true;
+                self.scan_phase.store(ScanPhase::RecordsFetched);
             }
             debug!("cdc scan entries"; "len" => entries.len(), "region_id" => region_id);
             fail_point!("before_schedule_incremental_scan");
@@ -379,6 +390,7 @@ impl<E: KvEngine> Initializer<E> {
             self.sink_scan_events(entries, done).await?;
             sink_time += start_sink.saturating_elapsed();
         }
+        self.scan_phase.store(ScanPhase::Finished);
 
         fail_point!("before_post_incremental_scan");
         if !post_init_downstream(&self.downstream_state) {
@@ -532,6 +544,7 @@ impl<E: KvEngine> Initializer<E> {
             // incremental scan is finished.
             // Wait the barrier to ensure tikv sends out all scan events.
             let _ = barrier.await;
+            self.scan_phase.store(ScanPhase::BarrierOrdered);
         }
 
         Ok(())
@@ -555,6 +568,8 @@ impl<E: KvEngine> Initializer<E> {
             locks,
         }) {
             error!("cdc schedule task failed"; "error" => ?e);
+        } else {
+            self.scan_phase.store(ScanPhase::InitForwarded);
         }
     }
 
@@ -760,6 +775,8 @@ mod tests {
             ts_filter_ratio: 1.0, // always enable it.
             kv_api,
             filter_loop,
+
+            scan_phase: Arc::new(AtomicCell::new(ScanPhase::SnapshotAcquired)),
         };
 
         (receiver_worker, pool, initializer, rx, drain)
