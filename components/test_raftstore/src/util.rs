@@ -619,8 +619,7 @@ pub fn async_get_snapshot<T: Simulator>(
     start_ts: Option<u64>,
 ) -> BoxFuture<'static, RaftCmdResponse> {
     let node_id = peer.get_store_id();
-    let mut cmd = new_read_index_cmd();
-    cmd.mut_read_index().set_start_ts(u64::MAX);
+    let mut cmd = new_snap_cmd();
     cmd.mut_read_index()
         .set_start_ts(start_ts.unwrap_or(u64::MAX));
     cmd.mut_read_index()
@@ -632,7 +631,7 @@ pub fn async_get_snapshot<T: Simulator>(
         vec![cmd],
         true,
     );
-    // request.mut_header().set_replica_read(true);
+    request.mut_header().set_replica_read(true);
     if let Some(start_ts) = start_ts {
         encode_start_ts_into_flag_data(request.mut_header(), start_ts);
     }
