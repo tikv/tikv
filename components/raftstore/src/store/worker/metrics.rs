@@ -82,9 +82,13 @@ make_static_metric! {
 }
 
 pub struct LocalReadMetrics {
+    pub local_received_requests: LocalIntCounter,
     pub local_executed_requests: LocalIntCounter,
+    pub local_received_stale_read_requests: LocalIntCounter,
     pub local_executed_stale_read_requests: LocalIntCounter,
     pub local_executed_stale_read_fallback_success_requests: LocalIntCounter,
+    pub local_received_follower_read_requests: LocalIntCounter,
+    pub local_executed_follower_read_requests: LocalIntCounter,
     pub local_executed_stale_read_fallback_failure_requests: LocalIntCounter,
     pub local_executed_replica_read_requests: LocalIntCounter,
     pub local_executed_snapshot_cache_hit: LocalIntCounter,
@@ -96,8 +100,12 @@ pub struct LocalReadMetrics {
 thread_local! {
     pub static TLS_LOCAL_READ_METRICS: RefCell<LocalReadMetrics> = RefCell::new(
         LocalReadMetrics {
+            local_received_requests: LOCAL_READ_RECEIVED_REQUESTS.local(),
             local_executed_requests: LOCAL_READ_EXECUTED_REQUESTS.local(),
+            local_received_stale_read_requests: LOCAL_READ_RECEIVED_STALE_READ_REQUESTS.local(),
             local_executed_stale_read_requests: LOCAL_READ_EXECUTED_STALE_READ_REQUESTS.local(),
+            local_received_follower_read_requests: LOCAL_READ_RECEIVED_FOLLOWER_READ_REQUESTS.local(),
+            local_executed_follower_read_requests: LOCAL_READ_EXECUTED_FOLLOWER_READ_REQUESTS.local(),
             local_executed_stale_read_fallback_success_requests: LOCAL_READ_EXECUTED_STALE_READ_FALLBACK_SUCCESS_REQUESTS.local(),
             local_executed_stale_read_fallback_failure_requests: LOCAL_READ_EXECUTED_STALE_READ_FALLBACK_FAILURE_REQUESTS.local(),
             local_executed_replica_read_requests: LOCAL_READ_EXECUTED_REPLICA_READ_REQUESTS.local(),
@@ -116,8 +124,12 @@ pub fn maybe_tls_local_read_metrics_flush() {
         let mut m = m.borrow_mut();
 
         if m.last_flush_time.saturating_elapsed() >= Duration::from_millis(METRICS_FLUSH_INTERVAL) {
+            m.local_received_requests.flush();
             m.local_executed_requests.flush();
+            m.local_received_stale_read_requests.flush();
             m.local_executed_stale_read_requests.flush();
+            m.local_received_follower_read_requests.flush();
+            m.local_executed_follower_read_requests.flush();
             m.local_executed_stale_read_fallback_success_requests
                 .flush();
             m.local_executed_stale_read_fallback_failure_requests
@@ -227,6 +239,10 @@ lazy_static! {
         &["reason"]
     )
     .unwrap();
+    pub static ref LOCAL_READ_RECEIVED_REQUESTS: IntCounter = register_int_counter!(
+        "tikv_raftstore_local_read_received_requests",
+        "Total number of requests received by local reader."
+    ).unwrap();
     pub static ref LOCAL_READ_EXECUTED_REQUESTS: IntCounter = register_int_counter!(
         "tikv_raftstore_local_read_executed_requests",
         "Total number of requests directly executed by local reader."
@@ -237,11 +253,22 @@ lazy_static! {
         "Total number of requests directly executed by local reader."
     )
     .unwrap();
+    pub static ref LOCAL_READ_RECEIVED_STALE_READ_REQUESTS: IntCounter =register_int_counter!(
+        "tikv_raftstore_local_read_received_stale_read_requests",
+        "Total number of stale read requests received by local reader."
+    ).unwrap();
     pub static ref LOCAL_READ_EXECUTED_STALE_READ_REQUESTS: IntCounter = register_int_counter!(
         "tikv_raftstore_local_read_executed_stale_read_requests",
         "Total number of stale read requests directly executed by local reader."
-    )
-    .unwrap();
+    ).unwrap();
+    pub static ref LOCAL_READ_RECEIVED_FOLLOWER_READ_REQUESTS: IntCounter = register_int_counter!(
+        "tikv_raftstore_local_read_received_follower_read_requests",
+        "Total number of follower read requests received by local reader."
+    ).unwrap();
+    pub static ref LOCAL_READ_EXECUTED_FOLLOWER_READ_REQUESTS: IntCounter = register_int_counter!(
+        "tikv_raftstore_local_read_executed_follower_read_requests",
+        "Total number of follower read requests directly executed by local reader."
+    ).unwrap();
     pub static ref LOCAL_READ_EXECUTED_STALE_READ_FALLBACK_SUCCESS_REQUESTS: IntCounter =
         register_int_counter!(
             "tikv_raftstore_local_read_executed_stale_read_fallback_success_requests",
