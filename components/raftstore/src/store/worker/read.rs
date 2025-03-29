@@ -1084,14 +1084,11 @@ where
         snap_updated: &mut bool,
         last_valid_ts: Timespec,
     ) -> Option<ReadResponse<E::Snapshot>> {
-        TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_received_follower_read_requests.inc());
         if let Ok(read_ts) = decode_u64(&mut req.get_header().get_flag_data()) {
             if read_ts != 0 {
                 if let Ok(read_resp) =
                     self.try_local_stale_read(ctx, req, delegate, snap_updated, last_valid_ts)
                 {
-                    TLS_LOCAL_READ_METRICS
-                        .with(|m| m.borrow_mut().local_executed_follower_read_requests.inc());
                     return Some(read_resp);
                 }
             }
@@ -1197,12 +1194,12 @@ where
                         }
                     }
                     RequestPolicy::ReadIndex => {
-                        TLS_LOCAL_READ_METRICS
-                            .with(|m| m.borrow_mut().local_received_follower_read_requests.inc());
                         self.redirect(RaftCommand::new(req, cb));
                         return;
                     }
                     RequestPolicy::ReadIndexReplicaRead => {
+                        TLS_LOCAL_READ_METRICS
+                            .with(|m| m.borrow_mut().local_received_follower_read_requests.inc());
                         if let Some(read_resp) = self.try_local_follower_read(
                             ctx,
                             &req,
@@ -1210,6 +1207,9 @@ where
                             &mut snap_updated,
                             last_valid_ts,
                         ) {
+                            TLS_LOCAL_READ_METRICS.with(|m| {
+                                m.borrow_mut().local_executed_follower_read_requests.inc()
+                            });
                             read_resp
                         } else {
                             self.redirect(RaftCommand::new(req, cb));
@@ -2391,7 +2391,6 @@ mod tests {
         header.set_peer(leader1);
         header.set_region_epoch(epoch13);
         header.set_term(term6);
-        header.set_read_quorum(true);
         header.set_replica_read(true);
         cmd.set_header(header.clone());
         let mut req = Request::default();

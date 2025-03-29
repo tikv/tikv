@@ -6240,10 +6240,10 @@ pub trait RequestInspector {
             return Ok(RequestPolicy::StaleRead);
         }
 
+        if req.get_header().get_replica_read() {
+            return Ok(RequestPolicy::ReadIndexReplicaRead);
+        }
         if req.get_header().get_read_quorum() {
-            if req.get_header().get_replica_read() {
-                return Ok(RequestPolicy::ReadIndexReplicaRead);
-            }
             return Ok(RequestPolicy::ReadIndex);
         }
 

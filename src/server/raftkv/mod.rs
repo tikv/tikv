@@ -902,11 +902,10 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                             // cache on the follower side. Considering
                             // timestamps might require scanning the
                             // entire region.
-                            txn_types::Lock::check_lock_conflict_for_read_index_cache(
-                                Cow::Borrowed(lock),
-                                key,
-                                &Default::default(),
-                            )
+                            let raw_key = key.to_raw()?;
+                            Err(txn_types::Error::from(txn_types::ErrorInner::KeyIsLocked(
+                                lock.clone().into_lock_info(raw_key),
+                            )))
                         },
                     );
                     if !matches!(
