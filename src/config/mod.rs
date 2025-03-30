@@ -3614,7 +3614,10 @@ impl TikvConfig {
         config::canonicalize_sub_path(data_dir, DEFAULT_ROCKSDB_SUB_DIR)
     }
 
-    pub fn validate(&mut self) -> Result<(), Box<dyn Error>> {
+    pub fn validate(
+        &mut self,
+        online_changes: Option<&ConfigChange>,
+    ) -> Result<(), Box<dyn Error>> {
         // Setting up data paths.
         if self.cfg_path.is_empty() {
             self.cfg_path = Path::new(&self.storage.data_dir)
@@ -3961,7 +3964,13 @@ impl TikvConfig {
             return Err("in-memory-engine is unavailable for feature TTL or API v2".into());
         }
         self.in_memory_engine.expected_region_size = self.coprocessor.region_split_size();
+        let ime_online_changes =
+            online_changes.and_then(|changes| match changes.get("in_memory_engine") {
+                Some(ConfigValue::Module(ime_changes)) => Some(ime_changes),
+                _ => None,
+            });
         self.in_memory_engine.validate(
+            ime_online_changes,
             &mut self.storage.block_cache.capacity.as_mut().unwrap().0,
             self.coprocessor.region_split_size(),
         )?;
@@ -4426,13 +4435,13 @@ pub fn validate_and_persist_config(config: &mut TikvConfig, persist: bool) -> Re
     let mut last_cfg = get_last_config(&config.storage.data_dir);
     if let Some(last_cfg) = &mut last_cfg {
         last_cfg.compatible_adjust();
-        if let Err(e) = last_cfg.validate() {
+        if let Err(e) = last_cfg.validate(None) {
             warn!("last_tikv.toml is invalid but ignored: {:?}", e);
         }
     }
 
     config.compatible_adjust();
-    if let Err(e) = config.validate() {
+    if let Err(e) = config.validate(None) {
         return Err(format!("invalid configuration: {}", e));
     }
     if let Err(e) = config.optional_default_cfg_adjust_with(&last_cfg) {
@@ -4865,11 +4874,12 @@ impl ConfigController {
         persist: bool,
     ) -> CfgResult<()> {
         diff = {
+            let origianl_diff = diff.clone();
             let incoming = self.get_current();
             let mut updated = incoming.clone();
             updated.update(diff)?;
             // Config might be adjusted in `validate`.
-            updated.validate()?;
+            updated.validate(Some(&origianl_diff))?;
             incoming.diff(&updated)
         };
         let mut inner = self.inner.write().unwrap();
@@ -5014,27 +5024,27 @@ mod tests {
     fn test_check_critical_cfg_with() {
         let mut tikv_cfg = TikvConfig::default();
         let last_cfg = TikvConfig::default();
-        tikv_cfg.validate().unwrap();
+        tikv_cfg.validate(None).unwrap();
         tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap();
 
         let mut tikv_cfg = TikvConfig::default();
         let mut last_cfg = TikvConfig::default();
         tikv_cfg.rocksdb.wal_dir = "/data/wal_dir".to_owned();
-        tikv_cfg.validate().unwrap();
+        tikv_cfg.validate(None).unwrap();
         tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap_err();
 
         last_cfg.rocksdb.wal_dir = "/data/wal_dir".to_owned();
-        tikv_cfg.validate().unwrap();
+        tikv_cfg.validate(None).unwrap();
         tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap();
 
         let mut tikv_cfg = TikvConfig::default();
         let mut last_cfg = TikvConfig::default();
         tikv_cfg.storage.data_dir = "/data1".to_owned();
-        tikv_cfg.validate().unwrap();
+        tikv_cfg.validate(None).unwrap();
         tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap_err();
 
         last_cfg.storage.data_dir = "/data1".to_owned();
-        tikv_cfg.validate().unwrap();
+        tikv_cfg.validate(None).unwrap();
         tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap();
 
         // Enable Raft Engine.
@@ -5044,12 +5054,12 @@ mod tests {
         last_cfg.raft_engine.enable = true;
 
         tikv_cfg.raft_engine.mut_config().dir = "/raft/wal_dir".to_owned();
-        tikv_cfg.validate().unwrap();
+        tikv_cfg.validate(None).unwrap();
         // no actual raft engine data
         tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap();
 
         last_cfg.raft_engine.mut_config().dir = "/raft/wal_dir".to_owned();
-        tikv_cfg.validate().unwrap();
+        tikv_cfg.validate(None).unwrap();
         tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap();
 
         // Disable Raft Engine and uses RocksDB.
@@ -5059,19 +5069,19 @@ mod tests {
         last_cfg.raft_engine.enable = false;
 
         tikv_cfg.raftdb.wal_dir = "/raft/wal_dir".to_owned();
-        tikv_cfg.validate().unwrap();
+        tikv_cfg.validate(None).unwrap();
         tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap_err();
 
         last_cfg.raftdb.wal_dir = "/raft/wal_dir".to_owned();
-        tikv_cfg.validate().unwrap();
+        tikv_cfg.validate(None).unwrap();
         tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap();
 
         tikv_cfg.raft_store.raftdb_path = "/raft_path".to_owned();
-        tikv_cfg.validate().unwrap();
+        tikv_cfg.validate(None).unwrap();
         tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap_err();
 
         last_cfg.raft_store.raftdb_path = "/raft_path".to_owned();
-        tikv_cfg.validate().unwrap();
+        tikv_cfg.validate(None).unwrap();
         tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap();
 
         // Check api version.
@@ -5091,7 +5101,7 @@ mod tests {
             for (from_api, to_api, expected) in cases {
                 last_cfg.storage.set_api_version(from_api);
                 tikv_cfg.storage.set_api_version(to_api);
-                tikv_cfg.validate().unwrap();
+                tikv_cfg.validate(None).unwrap();
                 assert_eq!(
                     tikv_cfg.check_critical_cfg_with(&last_cfg).is_ok(),
                     expected
@@ -5125,7 +5135,7 @@ mod tests {
             create_mock_raftengine(&raft_dir);
             create_mock_kv_data(&data_dir);
 
-            tikv_cfg.validate().unwrap();
+            tikv_cfg.validate(None).unwrap();
             tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap();
             fs::remove_dir_all(&test_dir).unwrap();
         }
@@ -5150,7 +5160,7 @@ mod tests {
             create_mock_kv_data(&data_dir);
             create_mock_raftengine(&data_dir.join("raft-engine"));
 
-            tikv_cfg.validate().unwrap();
+            tikv_cfg.validate(None).unwrap();
             tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap();
             fs::remove_dir_all(&test_dir).unwrap();
         }
@@ -5175,7 +5185,7 @@ mod tests {
             create_mock_kv_data(&data_dir);
             create_mock_raftdb(&data_dir.join("raft"));
 
-            tikv_cfg.validate().unwrap();
+            tikv_cfg.validate(None).unwrap();
             tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap();
             fs::remove_dir_all(&test_dir).unwrap();
         }
@@ -5198,7 +5208,7 @@ mod tests {
             create_mock_raftdb(&data_dir.join("raft"));
             create_mock_raftengine(&data_dir.join("raft-engine"));
 
-            tikv_cfg.validate().unwrap_err();
+            tikv_cfg.validate(None).unwrap_err();
             tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap();
             fs::remove_dir_all(&test_dir).unwrap();
         }
@@ -5223,7 +5233,7 @@ mod tests {
             create_mock_kv_data(&data_dir);
             create_mock_raftdb(&test_dir.join("raft"));
 
-            tikv_cfg.validate().unwrap();
+            tikv_cfg.validate(None).unwrap();
             tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap();
             fs::remove_dir_all(&test_dir).unwrap();
         }
@@ -5247,7 +5257,7 @@ mod tests {
             create_mock_kv_data(&data_dir);
             create_mock_raftdb(&test_dir.join("raft"));
 
-            tikv_cfg.validate().unwrap();
+            tikv_cfg.validate(None).unwrap();
             assert_eq!(
                 tikv_cfg.raft_engine.config.dir,
                 test_dir.join("raft").join("raft-engine").to_str().unwrap()
@@ -5278,7 +5288,7 @@ mod tests {
             create_mock_kv_data(&data_dir);
             create_mock_raftengine(&data_dir.join("raft-engine"));
 
-            tikv_cfg.validate().unwrap();
+            tikv_cfg.validate(None).unwrap();
             tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap();
             fs::remove_dir_all(&test_dir).unwrap();
         }
@@ -5301,7 +5311,7 @@ mod tests {
             create_mock_kv_data(&data_dir);
             create_mock_raftengine(&data_dir.join("raft-engine"));
 
-            tikv_cfg.validate().unwrap_err();
+            tikv_cfg.validate(None).unwrap_err();
             tikv_cfg.check_critical_cfg_with(&last_cfg).unwrap_err();
             fs::remove_dir_all(&test_dir).unwrap();
         }
@@ -5413,9 +5423,9 @@ mod tests {
         tikv_cfg.pd.endpoints = vec!["".to_owned()];
         let dur = tikv_cfg.raft_store.raft_heartbeat_interval();
         tikv_cfg.server.grpc_keepalive_time = ReadableDuration(dur);
-        tikv_cfg.validate().unwrap_err();
+        tikv_cfg.validate(None).unwrap_err();
         tikv_cfg.server.grpc_keepalive_time = ReadableDuration(dur * 2);
-        tikv_cfg.validate().unwrap();
+        tikv_cfg.validate(None).unwrap();
     }
 
     #[test]
@@ -5440,13 +5450,13 @@ mod tests {
         tikv_cfg.rocksdb.writecf.block_size = ReadableSize::gb(10);
         tikv_cfg.rocksdb.raftcf.block_size = ReadableSize::gb(10);
         tikv_cfg.raftdb.defaultcf.block_size = ReadableSize::gb(10);
-        tikv_cfg.validate().unwrap_err();
+        tikv_cfg.validate(None).unwrap_err();
         tikv_cfg.rocksdb.defaultcf.block_size = ReadableSize::kb(10);
         tikv_cfg.rocksdb.lockcf.block_size = ReadableSize::kb(10);
         tikv_cfg.rocksdb.writecf.block_size = ReadableSize::kb(10);
         tikv_cfg.rocksdb.raftcf.block_size = ReadableSize::kb(10);
         tikv_cfg.raftdb.defaultcf.block_size = ReadableSize::kb(10);
-        tikv_cfg.validate().unwrap();
+        tikv_cfg.validate(None).unwrap();
     }
 
     #[test]
@@ -5682,7 +5692,7 @@ mod tests {
     fn test_flow_control() {
         let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
         cfg.storage.flow_control.l0_files_threshold = 50;
-        cfg.validate().unwrap();
+        cfg.validate(None).unwrap();
         let (storage, cfg_controller, _, flow_controller) = new_engines::<ApiV1>(cfg);
         let db = storage.get_engine().get_rocksdb();
         assert_eq!(
@@ -5807,7 +5817,7 @@ mod tests {
         cfg.rocksdb.rate_bytes_per_sec = ReadableSize::mb(64);
         cfg.rocksdb.rate_limiter_auto_tuned = false;
         cfg.rocksdb.lockcf.write_buffer_limit = Some(ReadableSize::mb(1));
-        cfg.validate().unwrap();
+        cfg.validate(None).unwrap();
         let (storage, cfg_controller, ..) = new_engines::<ApiV1>(cfg);
         let db = storage.get_engine().get_rocksdb();
 
@@ -5903,7 +5913,7 @@ mod tests {
         let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
         // vanilla limiter does not support dynamically changing auto-tuned mode.
         cfg.rocksdb.rate_limiter_auto_tuned = true;
-        cfg.validate().unwrap();
+        cfg.validate(None).unwrap();
         let (storage, cfg_controller, ..) = new_engines::<ApiV1>(cfg);
         let db = storage.get_engine().get_rocksdb();
 
@@ -5925,7 +5935,7 @@ mod tests {
     #[test]
     fn test_change_shared_block_cache() {
         let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
-        cfg.validate().unwrap();
+        cfg.validate(None).unwrap();
         let (storage, cfg_controller, ..) = new_engines::<ApiV1>(cfg);
         let db = storage.get_engine().get_rocksdb();
 
@@ -6043,7 +6053,7 @@ mod tests {
     #[test]
     fn test_change_ttl_check_poll_interval() {
         let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
-        cfg.validate().unwrap();
+        cfg.validate(None).unwrap();
         let (_, cfg_controller, mut rx, _) = new_engines::<ApiV1>(cfg);
 
         // Can not update shared block cache through rocksdb module
@@ -6218,7 +6228,7 @@ mod tests {
     fn test_change_store_scheduler_worker_pool_size() {
         let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
         cfg.storage.scheduler_worker_pool_size = 4;
-        cfg.validate().unwrap();
+        cfg.validate(None).unwrap();
         let (storage, cfg_controller, ..) = new_engines::<ApiV1>(cfg);
         let scheduler = storage.get_scheduler();
 
@@ -6257,7 +6267,7 @@ mod tests {
         let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
         cfg.storage.memory_quota = ReadableSize::mb(100);
         cfg.storage.scheduler_pending_write_threshold = ReadableSize::mb(10);
-        cfg.validate().unwrap();
+        cfg.validate(None).unwrap();
         let (storage, cfg_controller, ..) = new_engines::<ApiV1>(cfg.clone());
         let scheduler = storage.get_scheduler();
 
@@ -6289,7 +6299,7 @@ mod tests {
         cfg.quota.background_write_bandwidth = ReadableSize::mb(128);
         cfg.quota.background_read_bandwidth = ReadableSize::mb(256);
         cfg.quota.max_delay_duration = ReadableDuration::secs(1);
-        cfg.validate().unwrap();
+        cfg.validate(None).unwrap();
 
         let quota_limiter = Arc::new(QuotaLimiter::new(
             cfg.quota.foreground_cpu_time,
@@ -6395,7 +6405,7 @@ mod tests {
     #[test]
     fn test_change_server_config() {
         let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
-        cfg.validate().unwrap();
+        cfg.validate(None).unwrap();
         let cfg_controller = ConfigController::new(cfg.clone());
         let (scheduler, _receiver) = dummy_scheduler();
         let version_tracker = Arc::new(VersionTrack::new(cfg.server.clone()));
@@ -6433,7 +6443,7 @@ mod tests {
     fn test_endpoint_config() {
         let mut default_cfg = TikvConfig::default();
         default_cfg.storage.engine = EngineType::RaftKv;
-        default_cfg.validate().unwrap();
+        default_cfg.validate(None).unwrap();
         assert_eq!(
             default_cfg.server.end_point_request_max_handle_duration(),
             ReadableDuration::secs(60)
@@ -6441,7 +6451,7 @@ mod tests {
 
         let mut default_cfg = TikvConfig::default();
         default_cfg.storage.engine = EngineType::RaftKv2;
-        default_cfg.validate().unwrap();
+        default_cfg.validate(None).unwrap();
         assert_eq!(
             default_cfg.server.end_point_request_max_handle_duration(),
             ReadableDuration::secs(1800)
@@ -6451,7 +6461,7 @@ mod tests {
         default_cfg.storage.engine = EngineType::RaftKv2;
         default_cfg.server.end_point_request_max_handle_duration =
             Some(ReadableDuration::secs(900));
-        default_cfg.validate().unwrap();
+        default_cfg.validate(None).unwrap();
         assert_eq!(
             default_cfg.server.end_point_request_max_handle_duration(),
             ReadableDuration::secs(900)
@@ -6461,7 +6471,7 @@ mod tests {
     #[test]
     fn test_change_coprocessor_endpoint_config() {
         let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
-        cfg.validate().unwrap();
+        cfg.validate(None).unwrap();
         let cfg_controller = ConfigController::new(cfg.clone());
         let (scheduler, _receiver) = dummy_scheduler();
         let version_tracker = Arc::new(VersionTrack::new(cfg.server.clone()));
@@ -6498,11 +6508,11 @@ mod tests {
         let mut c = TikvConfig::default();
         let mut cfg = c.clone();
         c.compatible_adjust();
-        c.validate().unwrap();
+        c.validate(None).unwrap();
 
         for _ in 0..10 {
             cfg.compatible_adjust();
-            cfg.validate().unwrap();
+            cfg.validate(None).unwrap();
             assert_eq_debug(&c, &cfg);
         }
     }
@@ -6575,7 +6585,7 @@ mod tests {
             enable = true
         "#;
         let mut cfg: TikvConfig = toml::from_str(content).unwrap();
-        cfg.validate().unwrap();
+        cfg.validate(None).unwrap();
         assert_eq!(
             cfg.raft_engine.config.dir,
             config::canonicalize_sub_path(&cfg.storage.data_dir, "raft-engine").unwrap()
@@ -6631,11 +6641,11 @@ mod tests {
     #[test]
     fn test_validate_tikv_config() {
         let mut cfg = TikvConfig::default();
-        cfg.validate().unwrap();
+        cfg.validate(None).unwrap();
         let default_region_split_check_diff = cfg.raft_store.region_split_check_diff().0;
         cfg.raft_store.region_split_check_diff =
             Some(ReadableSize(cfg.raft_store.region_split_check_diff().0 + 1));
-        cfg.validate().unwrap();
+        cfg.validate(None).unwrap();
         assert_eq!(
             cfg.raft_store.region_split_check_diff().0,
             default_region_split_check_diff + 1
@@ -6643,12 +6653,12 @@ mod tests {
 
         // Test validating memory_usage_limit when it's greater than max.
         cfg.memory_usage_limit = Some(ReadableSize(SysQuota::memory_limit_in_bytes() * 2));
-        cfg.validate().unwrap_err();
+        cfg.validate(None).unwrap_err();
 
         // Test memory_usage_limit is based on block cache size if it's not configured.
         cfg.memory_usage_limit = None;
         cfg.storage.block_cache.capacity = Some(ReadableSize(3 * GIB));
-        cfg.validate().unwrap();
+        cfg.validate(None).unwrap();
         assert_eq!(cfg.memory_usage_limit.unwrap(), ReadableSize(5 * GIB));
 
         // Test memory_usage_limit will fallback to system memory capacity with huge
@@ -6656,38 +6666,38 @@ mod tests {
         cfg.memory_usage_limit = None;
         let system = SysQuota::memory_limit_in_bytes();
         cfg.storage.block_cache.capacity = Some(ReadableSize(system * 3 / 4));
-        cfg.validate().unwrap();
+        cfg.validate(None).unwrap();
         assert_eq!(cfg.memory_usage_limit.unwrap(), ReadableSize(system));
 
         // Test raftstore.enable-partitioned-raft-kv-compatible-learner.
         let mut cfg = TikvConfig::default();
         cfg.raft_store.enable_v2_compatible_learner = true;
         cfg.storage.engine = EngineType::RaftKv2;
-        cfg.validate().unwrap();
+        cfg.validate(None).unwrap();
         assert!(!cfg.raft_store.enable_v2_compatible_learner);
 
         // Ribbon filter and format version.
         let mut cfg = TikvConfig::default();
         cfg.rocksdb.writecf.ribbon_filter_above_level = Some(6);
         cfg.rocksdb.writecf.format_version = None;
-        cfg.validate().unwrap_err();
+        cfg.validate(None).unwrap_err();
         cfg.rocksdb.writecf.format_version = Some(3);
-        cfg.validate().unwrap_err();
+        cfg.validate(None).unwrap_err();
         cfg.rocksdb.writecf.format_version = Some(5);
-        cfg.validate().unwrap();
+        cfg.validate(None).unwrap();
 
         let mut valid_cfg = TikvConfig::default();
         valid_cfg.storage.api_version = 2;
         valid_cfg.storage.enable_ttl = true;
         valid_cfg.rocksdb.titan.enabled = None;
-        valid_cfg.validate().unwrap();
+        valid_cfg.validate(None).unwrap();
 
         let mut invalid_cfg = TikvConfig::default();
         invalid_cfg.storage.api_version = 2;
         invalid_cfg.storage.enable_ttl = true;
         invalid_cfg.rocksdb.titan.enabled = Some(true);
         assert_eq!(
-            invalid_cfg.validate().unwrap_err().to_string(),
+            invalid_cfg.validate(None).unwrap_err().to_string(),
             "Titan is unavailable for feature TTL"
         );
     }
@@ -6707,7 +6717,7 @@ mod tests {
 
         {
             let mut cfg = TikvConfig::default();
-            cfg.validate().unwrap();
+            cfg.validate(None).unwrap();
         }
 
         // raft path == kv path
@@ -6717,21 +6727,21 @@ mod tests {
             cfg.raft_engine.enable = false;
             cfg.storage.data_dir = tmp_path_string_generate!(tmp_path, "data");
             cfg.raft_store.raftdb_path = tmp_path_string_generate!(tmp_path, "data", "db");
-            cfg.validate().unwrap_err();
+            cfg.validate(None).unwrap_err();
 
             let mut cfg = TikvConfig::default();
             cfg.storage.engine = EngineType::RaftKv;
             cfg.raft_engine.enable = true;
             cfg.storage.data_dir = tmp_path_string_generate!(tmp_path, "data");
             cfg.raft_engine.config.dir = tmp_path_string_generate!(tmp_path, "data", "db");
-            cfg.validate().unwrap_err();
+            cfg.validate(None).unwrap_err();
 
             let mut cfg = TikvConfig::default();
             cfg.storage.engine = EngineType::RaftKv;
             cfg.raft_engine.enable = true;
             cfg.storage.data_dir = tmp_path_string_generate!(tmp_path, "data");
             cfg.raft_store.raftdb_path = tmp_path_string_generate!(tmp_path, "data", "db");
-            cfg.validate().unwrap();
+            cfg.validate(None).unwrap();
         }
 
         // raft path == kv wal path
@@ -6743,7 +6753,7 @@ mod tests {
             cfg.raft_store.raftdb_path =
                 tmp_path_string_generate!(tmp_path, "data", "raftdb", "db");
             cfg.rocksdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "raftdb", "db");
-            cfg.validate().unwrap_err();
+            cfg.validate(None).unwrap_err();
 
             let mut cfg = TikvConfig::default();
             cfg.storage.engine = EngineType::RaftKv;
@@ -6752,7 +6762,7 @@ mod tests {
             cfg.raft_store.raftdb_path =
                 tmp_path_string_generate!(tmp_path, "data", "raftdb", "db");
             cfg.rocksdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "raftdb", "db");
-            cfg.validate().unwrap();
+            cfg.validate(None).unwrap();
         }
 
         // raft wal path == kv path
@@ -6764,7 +6774,7 @@ mod tests {
             cfg.raft_store.raftdb_path =
                 tmp_path_string_generate!(tmp_path, "data", "raftdb", "db");
             cfg.raftdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "kvdb", "db");
-            cfg.validate().unwrap_err();
+            cfg.validate(None).unwrap_err();
 
             let mut cfg = TikvConfig::default();
             cfg.storage.engine = EngineType::RaftKv;
@@ -6773,7 +6783,7 @@ mod tests {
             cfg.raft_store.raftdb_path =
                 tmp_path_string_generate!(tmp_path, "data", "raftdb", "db");
             cfg.raftdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "kvdb", "db");
-            cfg.validate().unwrap();
+            cfg.validate(None).unwrap();
         }
 
         // raft wal path == kv wal path
@@ -6783,14 +6793,14 @@ mod tests {
             cfg.raft_engine.enable = false;
             cfg.rocksdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "wal");
             cfg.raftdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "wal");
-            cfg.validate().unwrap_err();
+            cfg.validate(None).unwrap_err();
 
             let mut cfg = TikvConfig::default();
             cfg.storage.engine = EngineType::RaftKv;
             cfg.raft_engine.enable = true;
             cfg.rocksdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "wal");
             cfg.raftdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "wal");
-            cfg.validate().unwrap();
+            cfg.validate(None).unwrap();
         }
 
         {
@@ -6802,7 +6812,7 @@ mod tests {
                 tmp_path_string_generate!(tmp_path, "data", "raftdb", "db");
             cfg.rocksdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "kvdb", "db");
             cfg.raftdb.wal_dir = tmp_path_string_generate!(tmp_path, "data", "raftdb", "db");
-            cfg.validate().unwrap();
+            cfg.validate(None).unwrap();
         }
     }
 
@@ -6982,7 +6992,7 @@ mod tests {
             .join("\n");
 
         let mut cfg: TikvConfig = toml::from_str(&template_config).unwrap();
-        cfg.validate().unwrap();
+        cfg.validate(None).unwrap();
     }
 
     fn must_no_unknown_key(content: &str) {
@@ -7171,7 +7181,7 @@ mod tests {
     fn test_region_size_config() {
         let mut default_cfg = TikvConfig::default();
         default_cfg.storage.engine = EngineType::RaftKv;
-        default_cfg.validate().unwrap();
+        default_cfg.validate(None).unwrap();
         assert_eq!(default_cfg.coprocessor.region_split_size(), SPLIT_SIZE);
         assert!(!default_cfg.coprocessor.enable_region_bucket());
 
@@ -7184,7 +7194,7 @@ mod tests {
 
         let mut default_cfg = TikvConfig::default();
         default_cfg.storage.engine = EngineType::RaftKv2;
-        default_cfg.validate().unwrap();
+        default_cfg.validate(None).unwrap();
         assert_eq!(
             default_cfg.coprocessor.region_split_size(),
             RAFTSTORE_V2_SPLIT_SIZE
@@ -7260,7 +7270,7 @@ mod tests {
             [cdc]
         "#;
         let mut cfg: TikvConfig = toml::from_str(content).unwrap();
-        cfg.validate().unwrap();
+        cfg.validate(None).unwrap();
 
         // old-value-cache-size is deprecated, 0 must not report error.
         let content = r#"
@@ -7268,28 +7278,28 @@ mod tests {
             old-value-cache-size = 0
         "#;
         let mut cfg: TikvConfig = toml::from_str(content).unwrap();
-        cfg.validate().unwrap();
+        cfg.validate(None).unwrap();
 
         let content = r#"
             [cdc]
             min-ts-interval = "0s"
         "#;
         let mut cfg: TikvConfig = toml::from_str(content).unwrap();
-        cfg.validate().unwrap();
+        cfg.validate(None).unwrap();
 
         let content = r#"
             [cdc]
             incremental-scan-threads = 0
         "#;
         let mut cfg: TikvConfig = toml::from_str(content).unwrap();
-        cfg.validate().unwrap();
+        cfg.validate(None).unwrap();
 
         let content = r#"
             [cdc]
             incremental-scan-concurrency = 0
         "#;
         let mut cfg: TikvConfig = toml::from_str(content).unwrap();
-        cfg.validate().unwrap();
+        cfg.validate(None).unwrap();
 
         let content = r#"
             [cdc]
@@ -7297,7 +7307,7 @@ mod tests {
             incremental-scan-threads = 2
         "#;
         let mut cfg: TikvConfig = toml::from_str(content).unwrap();
-        cfg.validate().unwrap();
+        cfg.validate(None).unwrap();
 
         let content = r#"
             [cdc]
@@ -7305,7 +7315,7 @@ mod tests {
             incremental-scan-concurrency-limit = 0
         "#;
         let mut cfg: TikvConfig = toml::from_str(content).unwrap();
-        cfg.validate().unwrap();
+        cfg.validate(None).unwrap();
         assert!(cfg.cdc.incremental_scan_concurrency_limit >= cfg.cdc.incremental_scan_concurrency);
 
         let content = r#"
@@ -7315,7 +7325,7 @@ mod tests {
             hibernate-regions-compatible = true
         "#;
         let mut cfg: TikvConfig = toml::from_str(content).unwrap();
-        cfg.validate().unwrap();
+        cfg.validate(None).unwrap();
         assert!(!cfg.cdc.hibernate_regions_compatible);
     }
 
@@ -7470,7 +7480,7 @@ mod tests {
             soft-pending-compaction-bytes-limit = "777GB"
         "#;
         let mut cfg: TikvConfig = toml::from_str(content).unwrap();
-        cfg.validate().unwrap();
+        cfg.validate(None).unwrap();
         assert_eq!(
             cfg.rocksdb.defaultcf.level0_slowdown_writes_trigger,
             Some(77)
@@ -7492,7 +7502,7 @@ mod tests {
             [rocksdb.writecf]
         "#;
         let mut cfg: TikvConfig = toml::from_str(content).unwrap();
-        cfg.validate().unwrap();
+        cfg.validate(None).unwrap();
         assert_eq!(
             cfg.rocksdb.defaultcf.level0_slowdown_writes_trigger,
             Some(888)
@@ -7515,7 +7525,7 @@ mod tests {
             soft-pending-compaction-bytes-limit = "666GB"
         "#;
         let mut cfg: TikvConfig = toml::from_str(content).unwrap();
-        cfg.validate().unwrap();
+        cfg.validate(None).unwrap();
         assert_eq!(
             cfg.rocksdb.defaultcf.level0_slowdown_writes_trigger,
             Some(66)
@@ -7536,7 +7546,7 @@ mod tests {
             soft-pending-compaction-bytes-limit = "888GB"
         "#;
         let mut cfg: TikvConfig = toml::from_str(content).unwrap();
-        cfg.validate().unwrap();
+        cfg.validate(None).unwrap();
         assert_eq!(
             cfg.rocksdb.defaultcf.level0_slowdown_writes_trigger,
             Some(1)
@@ -7554,7 +7564,7 @@ mod tests {
             region-compact-check-step = 50
         "#;
         let mut cfg: TikvConfig = toml::from_str(content).unwrap();
-        cfg.validate().unwrap();
+        cfg.validate(None).unwrap();
         assert_eq!(cfg.raft_store.region_compact_check_step.unwrap(), 50);
         assert_eq!(
             cfg.raft_store
@@ -7570,7 +7580,7 @@ mod tests {
             engine = "partitioned-raft-kv"
         "#;
         let mut cfg: TikvConfig = toml::from_str(content).unwrap();
-        cfg.validate().unwrap();
+        cfg.validate(None).unwrap();
         assert_eq!(cfg.raft_store.region_compact_check_step.unwrap(), 50);
         assert_eq!(
             cfg.raft_store
@@ -7584,7 +7594,7 @@ mod tests {
             region-compact-redundant-rows-percent = 50
         "#;
         let mut cfg: TikvConfig = toml::from_str(content).unwrap();
-        cfg.validate().unwrap();
+        cfg.validate(None).unwrap();
         assert_eq!(cfg.raft_store.region_compact_check_step.unwrap(), 100);
         assert_eq!(
             cfg.raft_store
@@ -7600,7 +7610,7 @@ mod tests {
             engine = "partitioned-raft-kv"
         "#;
         let mut cfg: TikvConfig = toml::from_str(content).unwrap();
-        cfg.validate().unwrap();
+        cfg.validate(None).unwrap();
         assert_eq!(cfg.raft_store.region_compact_check_step.unwrap(), 5);
         assert_eq!(
             cfg.raft_store
@@ -7676,9 +7686,9 @@ mod tests {
             for content in t.1 {
                 let mut cfg: TikvConfig = toml::from_str(content).unwrap();
                 if t.0 {
-                    cfg.validate().unwrap();
+                    cfg.validate(None).unwrap();
                 } else {
-                    cfg.validate().unwrap_err();
+                    cfg.validate(None).unwrap_err();
                 }
                 must_no_unknown_key(content);
             }
@@ -7694,7 +7704,7 @@ mod tests {
             capacity = "2GB"
         "#;
         let mut cfg: TikvConfig = toml::from_str(content).unwrap();
-        cfg.validate().unwrap();
+        cfg.validate(None).unwrap();
         let cfg_controller = ConfigController::new(cfg.clone());
         let version_tracker = Arc::new(VersionTrack::new(cfg.in_memory_engine.clone()));
         cfg_controller.register(
@@ -7702,52 +7712,49 @@ mod tests {
             Box::new(InMemoryEngineConfigManager::new(version_tracker.clone())),
         );
 
-        let check_cfg = |cfg: &TikvConfig| {
-            assert_eq_debug(&cfg_controller.get_current(), cfg);
-            assert_eq!(&*version_tracker.value(), &cfg.in_memory_engine);
-        };
+        cfg_controller
+            .update_config("in-memory-engine.capacity", "4GB")
+            .unwrap();
+        assert_eq!(version_tracker.value().capacity, Some(ReadableSize::gb(4)));
 
         cfg_controller
-            .update_config("in-memory-engine.capacity", "3GB")
+            .update_config("in-memory-engine.stop-load-threshold", "3GB")
             .unwrap();
-        cfg.in_memory_engine.capacity = Some(ReadableSize::gb(3));
-        check_cfg(&cfg);
+        assert_eq!(
+            version_tracker.value().stop_load_threshold,
+            Some(ReadableSize::gb(3))
+        );
 
         cfg_controller
-            .update_config("in-memory-engine.evict-threshold", "2GB")
+            .update_config("in-memory-engine.evict-threshold", "3200MB")
             .unwrap();
-        cfg.in_memory_engine.evict_threshold = Some(ReadableSize::gb(2));
-        check_cfg(&cfg);
-
-        cfg_controller
-            .update_config("in-memory-engine.stop-load-threshold", "1GB")
-            .unwrap();
-        cfg.in_memory_engine.stop_load_threshold = Some(ReadableSize::gb(1));
-        check_cfg(&cfg);
+        assert_eq!(
+            version_tracker.value().evict_threshold,
+            Some(ReadableSize::mb(3200))
+        );
 
         cfg_controller
             .update_config("in-memory-engine.mvcc-amplification-threshold", "777")
             .unwrap();
-        cfg.in_memory_engine.mvcc_amplification_threshold = 777;
-        check_cfg(&cfg);
+        assert_eq!(version_tracker.value().mvcc_amplification_threshold, 777);
 
         cfg_controller
             .update_config("in-memory-engine.gc-run-interval", "7m")
             .unwrap();
-        cfg.in_memory_engine.gc_run_interval = ReadableDuration::minutes(7);
-        check_cfg(&cfg);
+        assert_eq!(
+            version_tracker.value().gc_run_interval,
+            ReadableDuration::minutes(7)
+        );
 
         cfg_controller
             .update_config("in-memory-engine.enable", "false")
             .unwrap();
-        cfg.in_memory_engine.enable = false;
-        check_cfg(&cfg);
+        assert!(!version_tracker.value().enable);
 
         // Test snake case.
         cfg_controller
             .update_config("in_memory_engine.enable", "true")
             .unwrap();
-        cfg.in_memory_engine.enable = true;
-        check_cfg(&cfg);
+        assert!(version_tracker.value().enable);
     }
 }
