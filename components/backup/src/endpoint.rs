@@ -530,7 +530,6 @@ impl BackupRange {
             last_brange_end_key = end_key;
         }
 
-
         let msg = InMemBackupFiles {
             files: KvWriter::Txn(writer),
             start_key: next_file_start_key,
@@ -1609,7 +1608,7 @@ pub mod tests {
     use api_version::{api_v2::RAW_KEY_PREFIX, dispatch_api_version, KvFormat, RawValue};
     use collections::HashSet;
     use engine_rocks::RocksSstReader;
-    use engine_traits::{CF_WRITE, IterOptions, Iterator, MiscExt, RefIterable, SstReader};
+    use engine_traits::{IterOptions, Iterator, MiscExt, RefIterable, SstReader, CF_WRITE};
     use external_storage::{make_local_backend, make_noop_backend};
     use file_system::{IoOp, IoRateLimiter, IoType};
     use futures::{executor::block_on, stream::StreamExt};
@@ -1629,7 +1628,7 @@ pub mod tests {
     };
     use tikv_util::{config::ReadableSize, info, store::new_peer};
     use tokio::time;
-    use txn_types::{SHORT_VALUE_MAX_LEN, Write, WriteType};
+    use txn_types::{Write, WriteType, SHORT_VALUE_MAX_LEN};
 
     use super::*;
 
@@ -2148,8 +2147,8 @@ pub mod tests {
                     );
                     assert_eq!(
                         end_key
-                        .clone()
-                        .map_or_else(Vec::new, |k| k.into_raw().unwrap()),
+                            .clone()
+                            .map_or_else(Vec::new, |k| k.into_raw().unwrap()),
                         b.1
                     );
                 }
