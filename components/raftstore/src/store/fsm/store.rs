@@ -2787,10 +2787,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             self.fsm.store.last_compact_checked_key = last_key;
         }
 
-        // Schedule the task. 
-        // Since compaction-filter only works for the write-cf and during compaction it may perform(write) 
-        // deletion operations in the default-cf, so we compact the write-cf before the default-cf.
-        let cf_names = vec![CF_WRITE.to_owned(),CF_DEFAULT.to_owned()];
+        // Schedule the task.
+        // Since compaction-filter only works for the write-cf and during compaction it
+        // may perform(write) deletion operations in the default-cf, so we compact the
+        // write-cf before the default-cf.
+        let cf_names = vec![CF_WRITE.to_owned(), CF_DEFAULT.to_owned()];
         if let Err(e) = self.ctx.cleanup_scheduler.schedule(CleanupTask::Compact(
             CompactTask::CheckAndCompact {
                 cf_names,
