@@ -1076,6 +1076,8 @@ where
         Ok(response)
     }
 
+    // handle replica read request. It calls try_local_stale_read internally to see
+    // if it can be served locally
     fn try_local_follower_read(
         &mut self,
         ctx: &ReadContext,
