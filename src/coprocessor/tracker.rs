@@ -2,7 +2,7 @@
 
 use std::{cell::RefCell, marker::PhantomData};
 
-use ::tracker::{get_tls_tracker_token, with_tls_tracker, FutureTrack};
+use ::tracker::{get_tls_tracker_token, with_tls_tracker};
 use engine_traits::{PerfContext, PerfContextExt, PerfContextKind};
 use kvproto::{kvrpcpb, kvrpcpb::ScanDetailV2};
 use pd_client::BucketMeta;
@@ -151,7 +151,6 @@ impl<E: Engine> Tracker<E> {
         }
     }
 
-    #[inline]
     pub fn on_begin_item(&mut self) {
         let now = Instant::now();
         match self.current_stage {
@@ -169,7 +168,6 @@ impl<E: Engine> Tracker<E> {
         self.current_stage = TrackerState::ItemBegan(now);
     }
 
-    #[inline]
     pub fn on_finish_item(&mut self, some_storage_stats: Option<Statistics>) {
         if let TrackerState::ItemBegan(at) = self.current_stage {
             let now = Instant::now();
@@ -438,18 +436,6 @@ impl<E: Engine> Tracker<E> {
             });
             f(perf_context)
         })
-    }
-}
-
-impl<E: Engine> FutureTrack for &mut Tracker<E> {
-    #[inline]
-    fn on_poll_begin(&mut self) {
-        self.on_begin_item();
-    }
-
-    #[inline]
-    fn on_poll_finish(&mut self) {
-        self.on_finish_item(None);
     }
 }
 
