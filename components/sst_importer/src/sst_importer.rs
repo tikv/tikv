@@ -1159,6 +1159,20 @@ impl<E: KvEngine> SstImporter<E> {
         ext: DownloadExt<'_>,
     ) -> Result<Option<Range>> {
         let path = self.dir.join_for_write(meta)?;
+        let path_str = path.temp.to_string_lossy().to_string();
+
+        match self.file_locks.entry(path_str.clone()) {
+            Entry::Occupied(_guard) => {
+                // Another download is already in progress
+                info!("ignored duplicated download request {:?}", meta);
+                return Ok(None);
+            }
+            Entry::Vacant(entry) => {
+                // We're the first one, insert our marker and proceed with download
+                entry.insert((CacheKvFile::Fs(Arc::new(path.temp.clone())), Instant::now()));
+            }
+        }
+        defer! { {self.file_locks.remove(&path_str);} }
 
         let file_crypter = crypter.map(|c| FileEncryptionInfo {
             method: c.cipher_type,
