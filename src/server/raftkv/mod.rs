@@ -823,7 +823,13 @@ impl ReplicaReadLockChecker {
 impl Coprocessor for ReplicaReadLockChecker {}
 
 impl ReadIndexObserver for ReplicaReadLockChecker {
-    fn on_step(&self, msg: &mut eraftpb::Message, role: StateRole) {
+    fn on_step(
+        &self,
+        msg: &mut eraftpb::Message,
+        role: StateRole,
+        region_start_key: Option<&[u8]>,
+        region_end_key: Option<&[u8]>,
+    ) {
         // Only check and return result if the current peer is a leader.
         // If it's not a leader, the read index request will be redirected to the leader
         // later.
@@ -842,14 +848,14 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
             {
                 error!("failed to update max_ts in concurrency manager"; "err" => ?e);
             }
+            let key_bound = |key: Vec<u8>| {
+                if key.is_empty() {
+                    None
+                } else {
+                    Some(txn_types::Key::from_encoded(key))
+                }
+            };
             for range in request.mut_key_ranges().iter_mut() {
-                let key_bound = |key: Vec<u8>| {
-                    if key.is_empty() {
-                        None
-                    } else {
-                        Some(txn_types::Key::from_encoded(key))
-                    }
-                };
                 let start_key = key_bound(range.take_start_key());
                 let end_key = key_bound(range.take_end_key());
                 // The replica read is not compatible with `RcCheckTs` isolation level yet.
@@ -879,6 +885,37 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                         .observe(begin_instant.saturating_elapsed().as_secs_f64());
                 }
             }
+            if rctx.locked.is_none() {
+                if let (Some(region_start_key), Some(region_end_key)) =
+                    (region_start_key, region_end_key)
+                {
+                    // check if there is a memory lock on a region
+                    let start_key = key_bound(region_start_key.to_vec());
+                    let end_key = key_bound(region_end_key.to_vec());
+
+                    let res = self.concurrency_manager.read_range_check(
+                        start_key.as_ref(),
+                        end_key.as_ref(),
+                        |key, lock| {
+                            // It returns immediately upon encountering a lock in a region,
+                            // regardless of the timestamp.This optimization is for the read index
+                            // cache on the follower side. Considering
+                            // timestamps might require scanning the
+                            // entire region.
+                            let raw_key = key.to_raw()?;
+                            Err(txn_types::Error::from(txn_types::ErrorInner::KeyIsLocked(
+                                lock.clone().into_lock_info(raw_key),
+                            )))
+                        },
+                    );
+                    if !matches!(
+                        res,
+                        Err(txn_types::Error(box txn_types::ErrorInner::KeyIsLocked(_)))
+                    ) {
+                        rctx.read_index_safe_ts = Some(start_ts.into_inner());
+                    }
+                }
+            }
             msg.mut_entries()[0].set_data(rctx.to_bytes().into());
         }
     }
@@ -904,7 +941,7 @@ mod tests {
         e.set_data(uuid.as_bytes().to_vec().into());
         m.mut_entries().push(e);
 
-        checker.on_step(&mut m, StateRole::Leader);
+        checker.on_step(&mut m, StateRole::Leader, None, None);
         assert_eq!(m.get_entries()[0].get_data(), uuid.as_bytes());
     }
 
@@ -920,12 +957,13 @@ mod tests {
             id: Uuid::new_v4(),
             request: Some(request),
             locked: None,
+            read_index_safe_ts: None,
         };
         let mut e = eraftpb::Entry::default();
         e.set_data(rctx.to_bytes().into());
         m.mut_entries().push(e);
 
-        checker.on_step(&mut m, StateRole::Follower);
+        checker.on_step(&mut m, StateRole::Follower, None, None);
         assert_eq!(m.get_entries()[0].get_data(), rctx.to_bytes());
     }
 }

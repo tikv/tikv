@@ -40,8 +40,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             "request to get a read index from follower, retry";
             "request_id" => ?read.id,
         );
-        let ctx =
-            ReadIndexContext::fields_to_bytes(read.id, read.addition_request.as_deref(), None);
+        let ctx = ReadIndexContext::fields_to_bytes(
+            read.id,
+            read.addition_request.as_deref(),
+            None,
+            None,
+        );
         debug_assert!(read.read_index.is_none());
         self.raft_group_mut().read_index(ctx);
     }
