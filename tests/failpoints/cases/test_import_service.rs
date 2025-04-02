@@ -33,25 +33,37 @@ fn test_concurrent_download_sst() {
         .tempdir()
         .unwrap();
 
+    let temp_path = temp_dir.path().to_owned();
+    let local_backend = external_storage::make_local_backend(&temp_path);
+
     fail::cfg("create_local_storage_yield", "return(1000)").unwrap();
-    let metas = Arc::new(Mutex::new(Vec::new()));
+    let metas: Arc<Mutex<Vec<_>>> = Arc::new(Mutex::new(
+        (0..10)
+            .map(|i| {
+                let file_name: String = format!("test_{}.sst", i);
+                let sst_path = temp_path.clone().join(&file_name);
+                let sst_range: (u8, u8) = (i, (i + 1) * 2);
+                let (mut meta, _) = gen_sst_file(sst_path, sst_range);
+                meta.set_region_id(ctx.get_region_id());
+                meta.set_region_epoch(ctx.get_region_epoch().clone());
+                (meta, file_name, sst_range)
+            })
+            .collect(),
+    ));
+
     let threads: Vec<_> = (0..10)
+        .flat_map(|i: u8| vec![i, i]) // duplciate sst file
         .map(|i| {
-            let file_name = format!("test_{}.sst", i);
-            let temp_path = temp_dir.path().to_owned();
-            let sst_path = temp_path.join(&file_name);
-            let sst_range = (i, (i + 1) * 2);
-            let (mut meta, _) = gen_sst_file(sst_path, sst_range);
-            meta.set_region_id(ctx.get_region_id());
-            meta.set_region_epoch(ctx.get_region_epoch().clone());
-            let metas = Arc::clone(&metas);
             let import = import.clone();
+            let metas = Arc::clone(&metas);
+            let local_backend = local_backend.clone();
 
             std::thread::spawn(move || {
                 // Run multiple concurrent downloads
                 let mut download = DownloadRequest::default();
-                download.set_sst(meta.clone());
-                download.set_storage_backend(external_storage::make_local_backend(&temp_path));
+                let (meta, file_name, sst_range) = metas.lock().unwrap()[i as usize].clone();
+                download.set_sst(meta);
+                download.set_storage_backend(local_backend);
                 download.set_name(file_name);
                 // make the same cache key for different requests,
                 // so that dashmap will get a lock with same entry.
@@ -67,12 +79,11 @@ fn test_concurrent_download_sst() {
                 let download = download.clone();
 
                 let result: DownloadResponse = import.download(&download).unwrap();
-                assert!(!result.get_is_empty());
-                assert_eq!(result.get_range().get_start(), &[sst_range.0]);
-                assert_eq!(result.get_range().get_end(), &[sst_range.1 - 1]);
-                // Only store meta after successful download
-                metas.lock().unwrap().push((meta, sst_range));
-                println!("Thread {} completed download", i);
+                // Some download might fail, when there is duplicated request.
+                if !result.get_is_empty() {
+                    assert_eq!(result.get_range().get_start(), &[sst_range.0]);
+                    assert_eq!(result.get_range().get_end(), &[sst_range.1 - 1]);
+                }
             })
         })
         .collect();
@@ -85,7 +96,7 @@ fn test_concurrent_download_sst() {
 
     // Now ingest all SSTs in order
     let metas = metas.lock().unwrap();
-    for (meta, sst_range) in metas.iter() {
+    for (meta, _, sst_range) in metas.iter() {
         must_ingest_sst(&import, ctx.clone(), meta.clone());
         check_ingested_kvs(&tikv, &ctx, *sst_range);
     }
