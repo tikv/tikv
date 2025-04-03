@@ -30,7 +30,7 @@ use tikv_util::{
     worker::{Runnable, RunnableWithTimer, Scheduler, Worker},
     yatp_pool::{self, CleanupMethod, FuturePool, PoolTicker, YatpPoolBuilder},
 };
-use tracker::TlsTrackedFuture;
+use tracker::TrackedFuture;
 use yatp::{
     metrics::MULTILEVEL_LEVEL_ELAPSED, pool::Remote, queue::Extras, task::future::TaskCell,
 };
@@ -173,7 +173,7 @@ impl ReadPoolHandle {
                 extras.set_metadata(metadata.to_vec());
                 let task_cell = if let Some(resource_ctl) = resource_ctl {
                     TaskCell::new(
-                        TlsTrackedFuture::new(with_resource_limiter(
+                        TrackedFuture::new(with_resource_limiter(
                             ControlledFuture::new(
                                 f.map(move |_| {
                                     running_tasks.dec();
@@ -187,7 +187,7 @@ impl ReadPoolHandle {
                     )
                 } else {
                     TaskCell::new(
-                        TlsTrackedFuture::new(f.map(move |_| {
+                        TrackedFuture::new(f.map(move |_| {
                             running_tasks.dec();
                         })),
                         extras,
