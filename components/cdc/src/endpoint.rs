@@ -796,6 +796,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         let conn_id = downstream.conn_id;
         let downstream_id = downstream.id;
         let downstream_state = downstream.get_state();
+        let downstream_scan_phase = downstream.scan_phase.clone();
 
         // The connection can be deregistered by some internal errors. Clients will
         // always be notified by closing the GRPC server stream, so it's OK to drop
@@ -963,6 +964,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             ts_filter_ratio: self.config.incremental_scan_ts_filter_ratio,
             kv_api,
             filter_loop,
+
+            scan_phase: downstream_scan_phase.clone(),
         };
 
         let cdc_handle = self.cdc_handle.clone();
