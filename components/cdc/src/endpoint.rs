@@ -157,6 +157,7 @@ type InitCallback = Box<dyn FnOnce() + Send>;
 pub enum Validate {
     Region(u64, Box<dyn FnOnce(Option<&Delegate>) + Send>),
     OldValueCache(Box<dyn FnOnce(&OldValueCache) + Send>),
+    UnresolvedRegion(Box<dyn FnOnce(usize) + Send>),
 }
 
 pub enum Task {
@@ -286,6 +287,7 @@ impl fmt::Debug for Task {
             Task::Validate(validate) => match validate {
                 Validate::Region(region_id, _) => de.field("region_id", &region_id).finish(),
                 Validate::OldValueCache(_) => de.finish(),
+                Validate::UnresolvedRegion(_) => de.finish(),
             },
             Task::ChangeConfig(change) => de
                 .field("type", &"change_config")
@@ -1287,6 +1289,9 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
                 }
                 Validate::OldValueCache(validate) => {
                     validate(&self.old_value_cache);
+                }
+                Validate::UnresolvedRegion(validate) => {
+                    validate(self.unresolved_region_count);
                 }
             },
             Task::ChangeConfig(change) => self.on_change_cfg(change),
