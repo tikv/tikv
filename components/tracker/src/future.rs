@@ -19,7 +19,6 @@ pub trait FutureTrack {
 }
 
 /// A future that tracks the polling of the inner future.
-#[inline]
 pub fn track<F: Future, T: FutureTrack>(fut: F, fut_tracker: T) -> impl Future<Output = F::Output> {
     Tracker::new(fut, fut_tracker)
 }
