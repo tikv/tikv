@@ -38,32 +38,29 @@ where
     });
 }
 
-/// A future that sets the TLS tracker token before polling the inner future.
-/// It is used to propagate the tracker token to the inner future.
-/// The tracker token will be cleared after polling the inner future.
 #[pin_project]
-pub struct TlsTrackedFuture<F> {
+pub struct TrackedFuture<F> {
     #[pin]
     future: F,
-    token: TrackerToken,
+    tracker: TrackerToken,
 }
 
-impl<F> TlsTrackedFuture<F> {
-    pub fn new(future: F) -> TlsTrackedFuture<F> {
-        TlsTrackedFuture {
+impl<F> TrackedFuture<F> {
+    pub fn new(future: F) -> TrackedFuture<F> {
+        TrackedFuture {
             future,
-            token: get_tls_tracker_token(),
+            tracker: get_tls_tracker_token(),
         }
     }
 }
 
-impl<F: Future> Future for TlsTrackedFuture<F> {
+impl<F: Future> Future for TrackedFuture<F> {
     type Output = F::Output;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
         TLS_TRACKER_TOKEN.with(|c| {
-            c.set(*this.token);
+            c.set(*this.tracker);
             let res = this.future.poll(cx);
             c.set(INVALID_TRACKER_TOKEN);
             res
