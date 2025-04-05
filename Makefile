@@ -56,6 +56,13 @@ export CXXFLAGS := $(CXXFLAGS) -fno-omit-frame-pointer -mno-omit-leaf-frame-poin
 ENABLE_FEATURES += pprof-fp
 endif
 
+# This is a workaround for newer versions of Clang (used by Xcode/macOS) that treat variable-length arrays (VLAs) as error.
+# VLAs are used by RocksDB's encryption code.
+ifeq ($(shell uname -s),Darwin)
+export CFLAGS := $(CFLAGS) -Wno-error=vla -Wno-vla-extension
+export CXXFLAGS := $(CXXFLAGS) -Wno-error=vla -Wno-vla-extension
+endif
+
 # Pick an allocator
 ifeq ($(TCMALLOC),1)
 ENABLE_FEATURES += tcmalloc
