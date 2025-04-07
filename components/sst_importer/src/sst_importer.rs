@@ -44,7 +44,10 @@ use tikv_util::{
     time::{Instant, Limiter},
     Either, HandyRwLock,
 };
-use tokio::{runtime::Runtime, sync::OnceCell};
+use tokio::{
+    runtime::Runtime,
+    sync::{watch, OnceCell},
+};
 use txn_types::{Key, TimeStamp, WriteRef};
 
 use crate::{
@@ -78,6 +81,11 @@ impl ShareOwned for LoadedFile {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct DownloadState {
+    receiver: watch::Receiver<Option<Result<Option<Range>>>>,
+}
+
 #[derive(Default, Debug, Clone)]
 pub struct DownloadExt<'a> {
     cache_key: Option<&'a str>,
@@ -100,6 +108,7 @@ impl<'a> DownloadExt<'a> {
 pub enum CacheKvFile {
     Mem(Arc<OnceCell<LoadedFile>>),
     Fs(Arc<PathBuf>),
+    State(Arc<DownloadState>),
 }
 
 /// returns an error on an invalid internal state.
@@ -122,6 +131,7 @@ impl CacheKvFile {
                 Arc::strong_count(buff)
             }
             CacheKvFile::Fs(path) => Arc::strong_count(path),
+            CacheKvFile::State(state) => Arc::strong_count(state),
         }
     }
 
@@ -132,6 +142,8 @@ impl CacheKvFile {
             CacheKvFile::Mem(_) => start.saturating_elapsed() >= Duration::from_secs(60),
             // The expired duration for local file is 10min.
             CacheKvFile::Fs(_) => start.saturating_elapsed() >= Duration::from_secs(600),
+            // Never expired for download state, the download state remove lock by itself.
+            CacheKvFile::State(_) => false,
         }
     }
 }
@@ -592,6 +604,8 @@ impl<E: KvEngine> SstImporter<E> {
                         retain_file_count += 1;
                     }
                 }
+                // Do nothing
+                CacheKvFile::State(_) => {}
             }
 
             need_retain
@@ -890,6 +904,7 @@ impl<E: KvEngine> SstImporter<E> {
                 }
                 Ok(Arc::from(buffer.into_boxed_slice()))
             }
+            _ => unreachable!(),
         }
     }
 
@@ -1161,26 +1176,84 @@ impl<E: KvEngine> SstImporter<E> {
         let path = self.dir.join_for_write(meta)?;
         let path_str = path.temp.to_string_lossy().to_string();
 
-        match self.file_locks.entry(path_str.clone()) {
-            Entry::Occupied(_guard) => {
+        let res = match self.file_locks.entry(path_str.clone()) {
+            Entry::Occupied(guard) => {
                 // Another download is already in progress
-                info!("ignored duplicated download request {:?}", meta);
-                // Return error when another download is in progress, forcing client retry.
-                // This ensures consistency across peers - either all succeed or all fail.
-                // Returning Ok(None) could lead to inconsistent states where some peers 
-                // succeed while others fail.
-                return Err(Error::FileExists(
-                    path.temp.clone(),
-                    "duplicated download file",
-                ));
+                info!("duplicate download request ignored"; "meta" => ?meta, "name" => name);
+                let state = match &guard.get().0 {
+                    CacheKvFile::State(state) => state.clone(),
+                    _ => {
+                        error!("mismatched request type for download"; "meta" => ?meta, "name" => name);
+                        return Err(Error::MisMatchRequest);
+                    }
+                };
+                // DO NOT HOLD THE LOCK CROSS THE .await POINT
+                drop(guard);
+                let mut rx = state.receiver.clone();
+                if rx.changed().await.is_ok() {
+                    if let Some(res) = &*rx.borrow() {
+                        return res
+                            .as_ref()
+                            .map(|opt| opt.clone())
+                            .map_err(|e| Error::ErrorWrapper(e.to_string()));
+                    }
+                }
+                warn!("sender dropped, marking download as failed"; "meta" => ?meta, "name" => name);
+                return Err(Error::FileConflict);
             }
             Entry::Vacant(entry) => {
                 // We're the first one, insert our marker and proceed with download
-                entry.insert((CacheKvFile::Fs(Arc::new(path.temp.clone())), Instant::now()));
+                let (tx, rx) = watch::channel(None);
+                entry.insert((
+                    CacheKvFile::State(Arc::new(DownloadState { receiver: rx })),
+                    Instant::now(),
+                ));
+                // Do the actual download
+                let download_result = self
+                    .do_download_ext_after_lock_check(
+                        path,
+                        meta,
+                        backend,
+                        name,
+                        rewrite_rule,
+                        crypter,
+                        speed_limiter,
+                        engine,
+                        ext,
+                    )
+                    .await;
+                match download_result {
+                    Ok(range) => {
+                        let _ = tx.send(Some(Ok(range.clone())));
+                        Ok(range)
+                    }
+                    Err(e) => {
+                        // Since error is not cloneable,
+                        // we send the origin error to other tasks.
+                        // becasue this task has to fail.
+                        warn!("origin download failed"; "meta" => ?meta, "name" => name, "error" => %e);
+                        let _ = tx.send(Some(Err(e)));
+                        Err(Error::FileConflict)
+                    }
+                }
             }
-        }
-        defer! { {self.file_locks.remove(&path_str);} }
+        };
+        self.file_locks.remove(&path_str);
+        res
+    }
 
+    async fn do_download_ext_after_lock_check(
+        &self,
+        path: crate::import_file::ImportPath,
+        meta: &SstMeta,
+        backend: &StorageBackend,
+        name: &str,
+        rewrite_rule: &RewriteRule,
+        crypter: Option<CipherInfo>,
+        speed_limiter: &Limiter,
+        engine: E,
+        ext: DownloadExt<'_>,
+    ) -> Result<Option<Range>> {
         let file_crypter = crypter.map(|c| FileEncryptionInfo {
             method: c.cipher_type,
             key: c.cipher_key,
