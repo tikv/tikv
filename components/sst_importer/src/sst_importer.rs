@@ -1165,7 +1165,14 @@ impl<E: KvEngine> SstImporter<E> {
             Entry::Occupied(_guard) => {
                 // Another download is already in progress
                 info!("ignored duplicated download request {:?}", meta);
-                return Ok(None);
+                // Return error when another download is in progress, forcing client retry.
+                // This ensures consistency across peers - either all succeed or all fail.
+                // Returning Ok(None) could lead to inconsistent states where some peers 
+                // succeed while others fail.
+                return Err(Error::FileExists(
+                    path.temp.clone(),
+                    "duplicated download file",
+                ));
             }
             Entry::Vacant(entry) => {
                 // We're the first one, insert our marker and proceed with download

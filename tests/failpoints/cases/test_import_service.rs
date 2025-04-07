@@ -80,9 +80,15 @@ fn test_concurrent_download_sst() {
 
                 let result: DownloadResponse = import.download(&download).unwrap();
                 // Some download might fail, when there is duplicated request.
-                if !result.get_is_empty() {
+                if !result.has_error() {
                     assert_eq!(result.get_range().get_start(), &[sst_range.0]);
                     assert_eq!(result.get_range().get_end(), &[sst_range.1 - 1]);
+                } else {
+                    // ensure download do not set is_empty to true.
+                    assert_eq!(result.get_is_empty(), false);
+                    // ensure failed download report error.
+                    let err_msg = result.get_error().get_message();
+                    assert!(err_msg.contains("cannot duplicated download file"), "{:?}", err_msg);
                 }
             })
         })
