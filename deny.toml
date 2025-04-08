@@ -80,6 +80,13 @@ ignore = [
     # also upgrade the OpenSSL to v3.x which causes performance degradation.
     # See https://github.com/openssl/openssl/issues/17064
     "RUSTSEC-2025-0004",
+    # Ignore RUSTSEC-2025-0022, as it will trigger a recursive upgrade of OpenSSL
+    # to version 3.x.
+    #
+    # NB: Upgrading openssl the version >= 0.10.72 do fix the issue but it
+    # also upgrade the OpenSSL to v3.x which causes performance degradation.
+    # See https://github.com/openssl/openssl/issues/17064
+    "RUSTSEC-2025-0022",
 ]
 
 # TiKV is licensed under Apache 2.0, according to ASF 3RD PARTY LICENSE POLICY,
