@@ -1104,13 +1104,18 @@ where
     }
 
     fn on_flushed(&mut self, result: FlushResult) {
+        use tokio::sync::mpsc::error::TrySendError;
         if let Some(sender) = self.flush_done_subscribers.remove(&result.task) {
             // Send the message after the subscription manager have tried to sent this flush
             // result to subscribers.
             self.checkpoint_mgr.sync_with_subs_mgr(move |_| {
                 if let Err(err) = sender.try_send(result) {
                     let err_msg = err.to_string();
-                    info!("failed to send flush result, waiter is gone or channel blocked"; "err" => %err_msg, "result" => ?err.into_inner());
+                    let res = match err {
+                        TrySendError::Closed(v) => v,
+                        TrySendError::Full(v) => v,
+                    };
+                    info!("failed to send flush result, waiter is gone or channel blocked"; "err" => %err_msg, "result" => ?res);
                 }
             })
         }
