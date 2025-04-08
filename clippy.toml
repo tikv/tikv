@@ -90,5 +90,19 @@ openssl::asn1::Asn1GeneralizedTimeRef may call openssl::bio::MemBio::get_buf, \
 see RUSTSEC-2024-0357
 """
 
+# See more about RUSTSEC-2025-0022 in deny.toml.
+[[disallowed-types]]
+path = "openssl::cipher::Cipher::fetch"
+reason = """
+When a Some(...) value was passed to the properties argument of openssl::cipher::Cipher::fetch, \
+a use-after-free would result. See RUSTSEC-2025-0022
+"""
+[[disallowed-types]]
+path = "openssl::md::Md::fetch"
+reason = """
+When a Some(...) value was passed to the properties argument of openssl::md::Md::fetch, \
+a use-after-free would result. See RUSTSEC-2025-0022
+"""
+
 avoid-breaking-exported-api = false
 upper-case-acronyms-aggressive = true
