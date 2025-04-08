@@ -8904,7 +8904,7 @@ def ResolvedTS() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_avg(
-                            "tikv_resolved_ts_channel_penging_cmd_bytes_total",
+                            "tikv_resolved_ts_channel_pending_cmd_bytes_total",
                         ),
                     )
                 ],
