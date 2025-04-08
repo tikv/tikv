@@ -35,7 +35,7 @@ fn test_concurrent_download_sst_with_fail() {
 
     let temp_path = temp_dir.path().to_owned();
     let local_backend = external_storage::make_local_backend(&temp_path);
-    let inject_err_fn= |i| { i % 2 == 0 };
+    let inject_err_fn = |i| i % 2 == 0;
 
     let metas: Arc<Mutex<Vec<_>>> = Arc::new(Mutex::new(
         (0..10)
@@ -47,14 +47,13 @@ fn test_concurrent_download_sst_with_fail() {
                 meta.set_region_id(ctx.get_region_id());
                 meta.set_region_epoch(ctx.get_region_epoch().clone());
                 if inject_err_fn(i) {
-                    //random inject the wrong length to make download fail
+                    // random inject the wrong length to make download fail
                     meta.set_length(1);
                 }
                 (meta, file_name, sst_range)
             })
             .collect(),
     ));
-
 
     let threads: Vec<_> = (0..10)
         .flat_map(|i: u8| vec![i, i, i]) // duplciate sst file
@@ -86,10 +85,10 @@ fn test_concurrent_download_sst_with_fail() {
                     // we only allow two kinds of error
                     // the origin thread reports file conflict.
                     // the other threads report a wrapped error.
-                    if !err_msg.contains("ingest file conflict") {
+                    if !err_msg.contains("Cannot read local") {
                         assert!(err_msg.contains("a general error wrapper"), "{:?}", err_msg);
                     } else {
-                        assert!(err_msg.contains("ingest file conflict"), "{:?}", err_msg);
+                        assert!(err_msg.contains("Cannot read local"), "{:?}", err_msg);
                     }
                 } else {
                     assert_eq!(result.get_range().get_start(), &[sst_range.0]);
@@ -127,7 +126,7 @@ fn test_concurrent_download_sst() {
     let temp_path = temp_dir.path().to_owned();
     let local_backend = external_storage::make_local_backend(&temp_path);
 
-    fail::cfg("create_local_storage_yield", "return(1000)").unwrap();
+    fail::cfg("create_local_storage_yield", "return(100)").unwrap();
     let metas: Arc<Mutex<Vec<_>>> = Arc::new(Mutex::new(
         (0..10)
             .map(|i| {

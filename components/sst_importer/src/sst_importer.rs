@@ -1229,11 +1229,10 @@ impl<E: KvEngine> SstImporter<E> {
                     }
                     Err(e) => {
                         // Since error is not cloneable,
-                        // we send the origin error to other tasks.
-                        // becasue this task has to fail.
+                        // we send the error with wrapper.
                         warn!("origin download failed"; "meta" => ?meta, "name" => name, "error" => %e);
-                        let _ = tx.send(Some(Err(e)));
-                        Err(Error::FileConflict)
+                        let _ = tx.send(Some(Err(Error::ErrorWrapper(e.to_string().clone()))));
+                        Err(e)
                     }
                 }
             }
