@@ -1873,6 +1873,7 @@ name = "crypto"
 version = "0.0.1"
 dependencies = [
  "openssl",
+ "openssl-sys",
  "slog",
  "slog-global",
 ]

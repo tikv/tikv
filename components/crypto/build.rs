@@ -24,7 +24,7 @@ fn main() {
             "
 
 The DEP_OPENSSL_VERSION_NUMBER environment variable is not found.
-Please make sure \"openssl-sys\" is in fips's dependencies.
+Please make sure \"openssl-sys\" is in crypto's dependencies.
 
 "
         )
