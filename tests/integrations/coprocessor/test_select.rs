@@ -2370,3 +2370,25 @@ fn test_batch_request() {
         }
     }
 }
+
+// Make sure the response has process_wall_time_ns. Zero process_wall_time_ns
+// makes the response not be added into the TiDB coprocessor cache, which
+// will downgrade the performance.
+#[test]
+fn test_select_time_details() {
+    let data = vec![
+        (1, Some("name:0"), 2),
+        (2, Some("name:4"), 3),
+        (4, Some("name:3"), 1),
+        (5, Some("name:1"), 4),
+    ];
+
+    let product = ProductTable::new();
+    let (_, endpoint, limiter) = init_with_data_ext(&product, &data);
+    limiter.set_read_bandwidth_limit(ReadableSize::kb(1), true);
+    let req = DagSelect::from(&product).build();
+    let resp = handle_request(&endpoint, req);
+
+    let time_details_v2 = resp.get_exec_details_v2().get_time_detail_v2();
+    assert!(time_details_v2.process_wall_time_ns != 0, "{:?}", resp);
+}
