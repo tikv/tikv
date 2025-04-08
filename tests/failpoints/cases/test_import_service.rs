@@ -8,6 +8,7 @@ use std::{
 use futures::{executor::block_on, stream::StreamExt};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{disk_usage::DiskUsage, import_sstpb::*, tikvpb_grpc::TikvClient};
+use rand;
 use tempfile::{Builder, TempDir};
 use test_raftstore::{must_raw_put, Simulator};
 use test_sst_importer::*;
@@ -36,6 +37,7 @@ fn test_concurrent_download_sst_with_fail() {
     let temp_path = temp_dir.path().to_owned();
     let local_backend = external_storage::make_local_backend(&temp_path);
     let inject_err_fn = |i| i % 2 == 0;
+    let inject_mismatch_fn = |i| i == 3;
 
     let metas: Arc<Mutex<Vec<_>>> = Arc::new(Mutex::new(
         (0..10)
@@ -65,7 +67,11 @@ fn test_concurrent_download_sst_with_fail() {
             std::thread::spawn(move || {
                 // Run multiple concurrent downloads
                 let mut download = DownloadRequest::default();
-                let (meta, file_name, sst_range) = metas.lock().unwrap()[i as usize].clone();
+                let (mut meta, file_name, sst_range) = metas.lock().unwrap()[i as usize].clone();
+                if inject_mismatch_fn(i) {
+                    // make the partial download request broken
+                    meta.crc32 += rand::random::<u32>() % 1000 + 1; // Add a random value between 1 and 1000 to corrupt the checksum
+                }
                 download.set_sst(meta);
                 download.set_storage_backend(local_backend);
                 download.set_name(file_name);
@@ -90,6 +96,9 @@ fn test_concurrent_download_sst_with_fail() {
                     } else {
                         assert!(err_msg.contains("Cannot read local"), "{:?}", err_msg);
                     }
+                } else if inject_mismatch_fn(i) && result.has_error(){
+                    let err_msg = result.get_error().get_message();
+                    assert!(err_msg.contains("mismatch request type"), "{:?}", err_msg);
                 } else {
                     assert_eq!(result.get_range().get_start(), &[sst_range.0]);
                     assert_eq!(result.get_range().get_end(), &[sst_range.1 - 1]);
