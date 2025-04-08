@@ -3632,3 +3632,37 @@ fn test_check_cluster_id_for_batch_cmds() {
         }
     }
 }
+
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
+fn test_prewrite_future_execution_time() {
+    let (cluster, client, ctx) = new_cluster();
+
+    let start_ts = block_on(cluster.pd_client.get_tso()).unwrap();
+    let mut req = PrewriteRequest::default();
+    req.set_context(ctx.clone());
+    req.set_primary_lock(b"key".to_vec());
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(b"key".to_vec());
+    mutation.set_value(b"value".to_vec());
+    req.mut_mutations().push(mutation);
+    req.set_start_version(start_ts.into_inner());
+    req.set_lock_ttl(20000);
+    req.set_use_async_commit(true);
+    let resp = client.kv_prewrite(&req).unwrap();
+
+    assert!(
+        resp.get_exec_details_v2()
+            .get_time_detail_v2()
+            .get_process_wall_time_ns()
+            != 0
+            && resp
+                .get_exec_details_v2()
+                .get_time_detail_v2()
+                .get_process_suspend_wall_time_ns()
+                != 0,
+        "{:?}",
+        resp
+    );
+}

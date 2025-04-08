@@ -399,6 +399,7 @@ crossbeam = "0.8"
 crossbeam-channel = "0.5"
 crossbeam-utils = "0.8"
 crossbeam-epoch = "0.9"
+futures = { version = "0.3", features = ["executor"] }
 
 [profile.dev.package.grpcio-sys]
 debug = false
