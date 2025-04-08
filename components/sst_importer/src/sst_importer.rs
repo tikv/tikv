@@ -44,10 +44,7 @@ use tikv_util::{
     time::{Instant, Limiter},
     Either, HandyRwLock,
 };
-use tokio::{
-    runtime::Runtime,
-    sync::{watch, OnceCell},
-};
+use tokio::{runtime::Runtime, sync::OnceCell};
 use txn_types::{Key, TimeStamp, WriteRef};
 
 use crate::{
@@ -81,11 +78,6 @@ impl ShareOwned for LoadedFile {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct DownloadState {
-    receiver: watch::Receiver<Option<Result<Option<Range>>>>,
-}
-
 #[derive(Default, Debug, Clone)]
 pub struct DownloadExt<'a> {
     cache_key: Option<&'a str>,
@@ -108,7 +100,11 @@ impl<'a> DownloadExt<'a> {
 pub enum CacheKvFile {
     Mem(Arc<OnceCell<LoadedFile>>),
     Fs(Arc<PathBuf>),
-    State(Arc<DownloadState>),
+    /// Tracks the state of a file download operation.
+    /// This struct is used to prevent duplicate downloads of the same file.
+    /// The `meta` field stores the SST file metadata, while `range` indicates
+    /// the key range affected by the download operation.
+    State(Arc<(SstMeta, OnceCell<Option<Range>>)>),
 }
 
 /// returns an error on an invalid internal state.
@@ -142,8 +138,8 @@ impl CacheKvFile {
             CacheKvFile::Mem(_) => start.saturating_elapsed() >= Duration::from_secs(60),
             // The expired duration for local file is 10min.
             CacheKvFile::Fs(_) => start.saturating_elapsed() >= Duration::from_secs(600),
-            // Never expired for download state, the download state remove lock by itself.
-            CacheKvFile::State(_) => false,
+            // The expired duration for memory is 60s.
+            CacheKvFile::State(_) => start.saturating_elapsed() >= Duration::from_secs(60),
         }
     }
 }
@@ -604,8 +600,13 @@ impl<E: KvEngine> SstImporter<E> {
                         retain_file_count += 1;
                     }
                 }
-                // Do nothing
-                CacheKvFile::State(_) => {}
+                // regular check, normally the lock will resolved immediately
+                CacheKvFile::State(_) => {
+                    if c.ref_count() == 1 && c.is_expired(start) {
+                        CACHE_EVENT.with_label_values(&["remain-locks"]).inc();
+                        need_retain = false;
+                    }
+                }
             }
 
             need_retain
@@ -1176,69 +1177,51 @@ impl<E: KvEngine> SstImporter<E> {
         let path = self.dir.join_for_write(meta)?;
         let path_str = path.temp.to_string_lossy().to_string();
 
-        let res = match self.file_locks.entry(path_str.clone()) {
-            Entry::Occupied(guard) => {
-                // Another download is already in progress
-                info!("duplicate download request ignored"; "meta" => ?meta, "name" => name);
-                let state = match &guard.get().0 {
-                    CacheKvFile::State(state) => state.clone(),
+        let res = {
+            match self.file_locks.entry(path_str.clone()) {
+                Entry::Occupied(mut entry) => match entry.get_mut() {
+                    (CacheKvFile::State(state), last_used) => {
+                        // safety check
+                        if state.0 != *meta {
+                            error!("same uuid, but different download meta"; "meta" => ?meta, "name" => name);
+                            return Err(Error::MisMatchRequest);
+                        }
+                        // Another download is already in progress
+                        info!("duplicate download request ignored"; "meta" => ?meta, "name" => name);
+                        *last_used = Instant::now();
+                        Arc::clone(state)
+                    }
                     _ => {
                         error!("mismatched request type for download"; "meta" => ?meta, "name" => name);
                         return Err(Error::MisMatchRequest);
                     }
-                };
-                // DO NOT HOLD THE LOCK CROSS THE .await POINT
-                drop(guard);
-                let mut rx = state.receiver.clone();
-                if rx.changed().await.is_ok() {
-                    if let Some(res) = &*rx.borrow() {
-                        return res
-                            .as_ref()
-                            .map(|opt| opt.clone())
-                            .map_err(|e| Error::ErrorWrapper(e.to_string()));
-                    }
-                }
-                warn!("sender dropped, marking download as failed"; "meta" => ?meta, "name" => name);
-                return Err(Error::FileConflict);
-            }
-            Entry::Vacant(entry) => {
-                // We're the first one, insert our marker and proceed with download
-                let (tx, rx) = watch::channel(None);
-                entry.insert((
-                    CacheKvFile::State(Arc::new(DownloadState { receiver: rx })),
-                    Instant::now(),
-                ));
-                // Do the actual download
-                let download_result = self
-                    .do_download_ext_after_lock_check(
-                        path,
-                        meta,
-                        backend,
-                        name,
-                        rewrite_rule,
-                        crypter,
-                        speed_limiter,
-                        engine,
-                        ext,
-                    )
-                    .await;
-                match download_result {
-                    Ok(range) => {
-                        let _ = tx.send(Some(Ok(range.clone())));
-                        Ok(range)
-                    }
-                    Err(e) => {
-                        // Since error is not cloneable,
-                        // we send the error with wrapper.
-                        warn!("origin download failed"; "meta" => ?meta, "name" => name, "error" => %e);
-                        let _ = tx.send(Some(Err(Error::ErrorWrapper(e.to_string().clone()))));
-                        Err(e)
-                    }
+                },
+                Entry::Vacant(entry) => {
+                    // We're the first one, insert our marker and proceed with download
+                    let cache = Arc::new((meta.clone(), OnceCell::new()));
+                    entry.insert((CacheKvFile::State(Arc::clone(&cache)), Instant::now()));
+                    cache
                 }
             }
         };
-        self.file_locks.remove(&path_str);
-        res
+        defer! {{self.file_locks.remove(&path_str);}}
+
+        res.1
+            .get_or_try_init(|| {
+                self.do_download_ext_after_lock_check(
+                    path,
+                    meta,
+                    backend,
+                    name,
+                    rewrite_rule,
+                    crypter,
+                    speed_limiter,
+                    engine,
+                    ext,
+                )
+            })
+            .await
+            .map(|r| r.to_owned())
     }
 
     async fn do_download_ext_after_lock_check(
