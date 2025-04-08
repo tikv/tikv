@@ -1641,7 +1641,7 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat>(
                         .write_scan_detail(exec_detail_v2.mut_scan_detail_v2());
                     GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
                         tracker.write_scan_detail(exec_detail_v2.mut_scan_detail_v2());
-                        tracker.write_time_detail(exec_detail_v2.mut_time_detail_v2());
+                        tracker.merge_time_detail(exec_detail_v2.mut_time_detail_v2());
                     });
                     set_time_detail(exec_detail_v2, duration, &stats.latency_stats);
                     match val {
@@ -1758,7 +1758,7 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
                         .write_scan_detail(exec_detail_v2.mut_scan_detail_v2());
                     GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
                         tracker.write_scan_detail(exec_detail_v2.mut_scan_detail_v2());
-                        tracker.write_time_detail(exec_detail_v2.mut_time_detail_v2());
+                        tracker.merge_time_detail(exec_detail_v2.mut_time_detail_v2());
                     });
                     set_time_detail(exec_detail_v2, duration, &stats.latency_stats);
                     resp.set_pairs(pairs.into());
@@ -2362,7 +2362,7 @@ macro_rules! txn_command_future {
             GLOBAL_TRACKERS.with_tracker($tracker, |tracker| {
                 tracker.write_scan_detail($resp.mut_exec_details_v2().mut_scan_detail_v2());
                 tracker.write_write_detail($resp.mut_exec_details_v2().mut_write_detail());
-                tracker.write_time_detail($resp.mut_exec_details_v2().mut_time_detail_v2());
+                tracker.merge_time_detail($resp.mut_exec_details_v2().mut_time_detail_v2());
             });
         });
     };
@@ -2373,7 +2373,7 @@ macro_rules! txn_command_future {
             GLOBAL_TRACKERS.with_tracker($tracker, |tracker| {
                 tracker.write_scan_detail($resp.mut_exec_details_v2().mut_scan_detail_v2());
                 tracker.write_write_detail($resp.mut_exec_details_v2().mut_write_detail());
-                tracker.write_time_detail($resp.mut_exec_details_v2().mut_time_detail_v2());
+                tracker.merge_time_detail($resp.mut_exec_details_v2().mut_time_detail_v2());
             });
         });
     };

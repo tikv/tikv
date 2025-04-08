@@ -629,7 +629,7 @@ impl<E: Engine> Endpoint<E> {
                     GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
                         let exec_detail_v2 = res.mut_exec_details_v2();
                         tracker.write_scan_detail(exec_detail_v2.mut_scan_detail_v2());
-                        tracker.write_time_detail(exec_detail_v2.mut_time_detail_v2());
+                        tracker.merge_time_detail(exec_detail_v2.mut_time_detail_v2());
                     });
                     res
                 }

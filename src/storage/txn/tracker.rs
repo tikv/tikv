@@ -225,7 +225,7 @@ mod tests {
 
         let mut wait_details = pb::TimeDetailV2::default();
         GLOBAL_TRACKERS.with_tracker(token, |tracker| {
-            tracker.write_time_detail(&mut wait_details);
+            tracker.merge_time_detail(&mut wait_details);
         });
 
         let process_suspend_wall_time_ns = wait_details.get_process_suspend_wall_time_ns();
@@ -275,7 +275,7 @@ mod tests {
                 ));
                 TlsFutureTracker::collect_to_tracker(Instant::now(), &mut tracker);
                 let mut wait_details = pb::TimeDetailV2::default();
-                tracker.write_time_detail(&mut wait_details);
+                tracker.merge_time_detail(&mut wait_details);
                 assert!(
                     wait_details.get_process_suspend_wall_time_ns() > 0
                         && wait_details.get_process_wall_time_ns() > 0,
