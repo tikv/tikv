@@ -1280,9 +1280,15 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-channel"
+<<<<<<< HEAD
 version = "0.5.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2dd04ddaf88237dc3b8d8f9a3c1004b506b54b3313403944054d23c0870c521"
+=======
+version = "0.5.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "82b8f8f868b36967f9606790d1903570de9ceaf870a7bf9fbbd3016d636a2cb2"
+>>>>>>> be74cadcdd (chore: Upgrade crossbeam-channel from yanked 0.5.13 to 0.5.15 (#18367))
 dependencies = [
  "cfg-if 1.0.0",
  "crossbeam-utils",
