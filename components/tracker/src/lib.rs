@@ -29,10 +29,21 @@ impl Tracker {
         }
     }
 
-    pub fn write_time_detail(&self, detail_v2: &mut pb::TimeDetailV2) {
-        detail_v2.set_kv_grpc_process_time_ns(self.metrics.grpc_process_nanos);
-        detail_v2.set_process_wall_time_ns(self.metrics.future_process_nanos);
-        detail_v2.set_process_suspend_wall_time_ns(self.metrics.future_suspend_nanos);
+    /// This function is used to merge the time detail of the request into the
+    /// `TimeDetailV2` of the request.
+    // Note: This function uses merge because the
+    // [`tikv::coprocessor::tracker::Tracker`] sets the `TimeDetailV2`, and we
+    // don't want to overwrite the its result.
+    pub fn merge_time_detail(&self, detail_v2: &mut pb::TimeDetailV2) {
+        detail_v2.set_kv_grpc_process_time_ns(
+            detail_v2.kv_grpc_process_time_ns + self.metrics.grpc_process_nanos,
+        );
+        detail_v2.set_process_wall_time_ns(
+            detail_v2.process_wall_time_ns + self.metrics.future_process_nanos,
+        );
+        detail_v2.set_process_suspend_wall_time_ns(
+            detail_v2.process_suspend_wall_time_ns + self.metrics.future_suspend_nanos,
+        );
     }
 
     pub fn write_scan_detail(&self, detail_v2: &mut pb::ScanDetailV2) {
