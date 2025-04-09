@@ -8,7 +8,6 @@ use std::{
 use futures::{executor::block_on, stream::StreamExt};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{disk_usage::DiskUsage, import_sstpb::*, tikvpb_grpc::TikvClient};
-use rand;
 use tempfile::{Builder, TempDir};
 use test_raftstore::{must_raw_put, Simulator};
 use test_sst_importer::*;
