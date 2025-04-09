@@ -33,6 +33,7 @@ bytes = "1"
 cfg-if = "1"
 chrono = "0.4"
 concurrency_manager = { workspace = true }
+crc64fast = "0.1"
 crossbeam = "0.8"
 crossbeam-channel = "0.5"
 dashmap = "5"
