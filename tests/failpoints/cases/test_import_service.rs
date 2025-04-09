@@ -57,7 +57,7 @@ fn test_concurrent_download_sst_with_fail() {
     ));
 
     let threads: Vec<_> = (0..10)
-        .flat_map(|i: u8| vec![i, i, i]) // duplciate sst file
+        .flat_map(|i: u8| vec![i, i, i]) // duplicate sst file
         .map(|i| {
             let import = import.clone();
             let metas = Arc::clone(&metas);
