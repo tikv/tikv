@@ -100,6 +100,11 @@ impl<'a> DownloadExt<'a> {
 pub enum CacheKvFile {
     Mem(Arc<OnceCell<LoadedFile>>),
     Fs(Arc<PathBuf>),
+    /// Tracks the state of a file download operation.
+    /// This struct is used to prevent duplicate downloads of the same file.
+    /// The `meta` field stores the SST file metadata, while `range` indicates
+    /// the key range affected by the download operation.
+    State(Arc<(SstMeta, OnceCell<Option<Range>>)>),
 }
 
 /// returns an error on an invalid internal state.
@@ -122,6 +127,7 @@ impl CacheKvFile {
                 Arc::strong_count(buff)
             }
             CacheKvFile::Fs(path) => Arc::strong_count(path),
+            CacheKvFile::State(state) => Arc::strong_count(state),
         }
     }
 
@@ -132,6 +138,8 @@ impl CacheKvFile {
             CacheKvFile::Mem(_) => start.saturating_elapsed() >= Duration::from_secs(60),
             // The expired duration for local file is 10min.
             CacheKvFile::Fs(_) => start.saturating_elapsed() >= Duration::from_secs(600),
+            // The expired duration for memory is 60s.
+            CacheKvFile::State(_) => start.saturating_elapsed() >= Duration::from_secs(60),
         }
     }
 }
@@ -592,6 +600,13 @@ impl<E: KvEngine> SstImporter<E> {
                         retain_file_count += 1;
                     }
                 }
+                // regular check, normally the lock will resolved immediately
+                CacheKvFile::State(_) => {
+                    if c.ref_count() == 1 && c.is_expired(start) {
+                        CACHE_EVENT.with_label_values(&["remain-locks"]).inc();
+                        need_retain = false;
+                    }
+                }
             }
 
             need_retain
@@ -890,6 +905,7 @@ impl<E: KvEngine> SstImporter<E> {
                 }
                 Ok(Arc::from(buffer.into_boxed_slice()))
             }
+            _ => unreachable!(),
         }
     }
 
@@ -1161,19 +1177,65 @@ impl<E: KvEngine> SstImporter<E> {
         let path = self.dir.join_for_write(meta)?;
         let path_str = path.temp.to_string_lossy().to_string();
 
-        match self.file_locks.entry(path_str.clone()) {
-            Entry::Occupied(_guard) => {
-                // Another download is already in progress
-                info!("ignored duplicated download request {:?}", meta);
-                return Ok(None);
+        let res = {
+            match self.file_locks.entry(path_str.clone()) {
+                Entry::Occupied(mut entry) => match entry.get_mut() {
+                    (CacheKvFile::State(state), last_used) => {
+                        // safety check
+                        if state.0 != *meta {
+                            error!("same uuid, but different download meta"; "meta" => ?meta, "name" => name);
+                            return Err(Error::MisMatchRequest);
+                        }
+                        // Another download is already in progress
+                        info!("duplicate download request ignored"; "meta" => ?meta, "name" => name);
+                        *last_used = Instant::now();
+                        Arc::clone(state)
+                    }
+                    _ => {
+                        error!("mismatched request type for download"; "meta" => ?meta, "name" => name);
+                        return Err(Error::MisMatchRequest);
+                    }
+                },
+                Entry::Vacant(entry) => {
+                    // We're the first one, insert our marker and proceed with download
+                    let cache = Arc::new((meta.clone(), OnceCell::new()));
+                    entry.insert((CacheKvFile::State(Arc::clone(&cache)), Instant::now()));
+                    cache
+                }
             }
-            Entry::Vacant(entry) => {
-                // We're the first one, insert our marker and proceed with download
-                entry.insert((CacheKvFile::Fs(Arc::new(path.temp.clone())), Instant::now()));
-            }
-        }
-        defer! { {self.file_locks.remove(&path_str);} }
+        };
+        defer! {{self.file_locks.remove(&path_str);}}
 
+        res.1
+            .get_or_try_init(|| {
+                self.do_download_ext_after_lock_check(
+                    path,
+                    meta,
+                    backend,
+                    name,
+                    rewrite_rule,
+                    crypter,
+                    speed_limiter,
+                    engine,
+                    ext,
+                )
+            })
+            .await
+            .map(|r| r.to_owned())
+    }
+
+    async fn do_download_ext_after_lock_check(
+        &self,
+        path: crate::import_file::ImportPath,
+        meta: &SstMeta,
+        backend: &StorageBackend,
+        name: &str,
+        rewrite_rule: &RewriteRule,
+        crypter: Option<CipherInfo>,
+        speed_limiter: &Limiter,
+        engine: E,
+        ext: DownloadExt<'_>,
+    ) -> Result<Option<Range>> {
         let file_crypter = crypter.map(|c| FileEncryptionInfo {
             method: c.cipher_type,
             key: c.cipher_key,
