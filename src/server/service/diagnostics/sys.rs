@@ -722,6 +722,8 @@ mod tests {
         }
 
         assert!(memory_checked);
+
+        // panic!("verify the test is run in CI")
     }
 
     #[test]

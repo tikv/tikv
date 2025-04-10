@@ -525,6 +525,8 @@ fn test_invalid_external_storage() {
     f.set_permissions(perms).unwrap();
 
     suite.stop();
+
+    // panic!("verify the test is run in CI")
 }
 
 #[test]
