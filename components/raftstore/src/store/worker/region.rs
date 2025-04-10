@@ -392,7 +392,7 @@ where
 
         let tombstone = match self.apply_snap(region_id, peer_id, Arc::clone(&status)) {
             Ok(()) => {
-                fail_point!("region_apply_return_not_change_state", |_| { () });
+                fail_point!("region_apply_return_not_change_state");
                 status.swap(JOB_STATUS_FINISHED, Ordering::SeqCst);
                 SNAP_COUNTER.apply.success.inc();
                 false
