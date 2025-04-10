@@ -9,6 +9,7 @@ use std::{
     u64,
 };
 
+use encryption::{EncrypterWriter, FileConfig, Iv, MasterKeyConfig, MultiMasterKeyBackend};
 use engine_rocks::RocksEngine;
 use engine_traits::{IterOptions, Iterator as _, RefIterable, SstExt};
 use external_storage::ExternalStorage;
@@ -18,8 +19,12 @@ use futures::{
     stream::StreamExt,
 };
 use keys::origin_key;
-use kvproto::brpb::{self, Metadata};
+use kvproto::{
+    brpb::{self, Metadata},
+    encryptionpb::EncryptionMethod,
+};
 use protobuf::{parse_from_bytes, Message};
+use rand::Rng;
 use tempdir::TempDir;
 use tidb_query_datatype::codec::table::encode_row_key;
 use tikv_util::codec::stream_event::EventEncoder;
@@ -31,7 +36,7 @@ use crate::{
         Subcompaction, SubcompactionResult,
     },
     errors::{OtherErrExt, Result},
-    storage::{id_of_migration, Epoch, LogFile, LogFileId, MetaFile},
+    storage::{id_of_migration, Epoch, LogFile, LogFileEncryptionInfo, LogFileId, MetaFile},
 };
 
 #[derive(Debug, PartialEq, Eq)]
@@ -50,6 +55,9 @@ pub struct LogFileBuilder {
     pub region_start_key: Option<Vec<u8>>,
     pub region_end_key: Option<Vec<u8>>,
     pub region_epoches: Vec<Epoch>,
+
+    encryption: LogFileEncryptionInfo,
+    encrypt_use_key: Vec<u8>,
 
     content: zstd::Encoder<'static, Cursor<Vec<u8>>>,
     min_ts: u64,
@@ -222,6 +230,34 @@ impl<S: Iterator<Item = KeySeed>> Iterator for KvGen<S> {
     }
 }
 
+pub fn gen_aes256_key(p: &Path) -> PathBuf {
+    let key_path = p.join("key.bin");
+    let mut raw_key = vec![0u8; 32];
+    rand::thread_rng().fill(raw_key.as_mut_slice());
+    let mut key = hex::encode(raw_key);
+    key.push('\n');
+    std::fs::write(&key_path, &key).unwrap();
+    key_path
+}
+
+pub async fn init_multi_master_key_backend_with(key_file: &Path, enc: &mut MultiMasterKeyBackend) {
+    let mut config = FileConfig::default();
+    config.path = key_file.to_string_lossy().to_string();
+    enc.update_from_config_if_needed(
+        vec![MasterKeyConfig::File { config }],
+        encryption_export::create_async_backend,
+    )
+    .await
+    .unwrap();
+    assert!(enc.is_initialized().await);
+}
+
+pub async fn enable_encryption(enc: &mut MultiMasterKeyBackend) {
+    let file = TempDir::new("master_key").unwrap();
+    let key_path = gen_aes256_key(file.path());
+    init_multi_master_key_backend_with(&key_path, enc).await;
+}
+
 pub fn gen_step(table_id: i64, start: i64, step: i64) -> impl Iterator<Item = KeySeed> {
     (0..).map(move |v| (table_id, v * step + start, 42))
 }
@@ -265,9 +301,30 @@ impl LogFileBuilder {
             region_start_key: None,
             region_end_key: None,
             region_epoches: vec![],
+            encryption: LogFileEncryptionInfo::plaintext(),
+            encrypt_use_key: vec![],
         };
         configure(&mut res);
         res
+    }
+
+    pub async fn encrypt_by_master_key(
+        &mut self,
+        mk: &MultiMasterKeyBackend,
+        method: EncryptionMethod,
+    ) {
+        assert_ne!(method, EncryptionMethod::Plaintext);
+
+        let dk = mk.generate_data_key(method).unwrap();
+        let iv = Iv::new_ctr().unwrap();
+        let enck = mk.encrypt(&dk).await.unwrap();
+
+        self.encrypt_use_key = dk;
+        self.encryption = LogFileEncryptionInfo::EncryptedKey {
+            encrypted_key: enck,
+            iv_of_data: iv.as_slice().to_vec(),
+            method_of_data: method,
+        }
     }
 
     pub fn from_iter(it: impl IntoIterator<Item = Kv>, configure: impl FnOnce(&mut Self)) -> Self {
@@ -312,11 +369,26 @@ impl LogFileBuilder {
         info
     }
 
+    /// Generate the log file's metadata and its content.
     pub fn build(self) -> (LogFile, Vec<u8>) {
-        let cnt = self
+        let mut cnt = self
             .content
             .finish()
-            .expect("failed to do zstd compression");
+            .expect("failed to do zstd compression")
+            .into_inner();
+        if !self.encrypt_use_key.is_empty() {
+            let mut encrypted_cnt = Cursor::new(Vec::<u8>::new());
+            let mut encryption = EncrypterWriter::new(
+                &mut encrypted_cnt,
+                self.encryption.method(),
+                &self.encrypt_use_key,
+                Iv::Ctr(self.encryption.iv().try_into().unwrap()),
+            )
+            .unwrap();
+            std::io::copy(&mut Cursor::new(cnt), &mut encryption).unwrap();
+            cnt = encrypted_cnt.into_inner();
+        }
+
         let file = LogFile {
             region_id: self.region_id,
             cf: self.cf,
@@ -335,13 +407,13 @@ impl LogFileBuilder {
             id: LogFileId {
                 name: Arc::from(self.name.into_boxed_str()),
                 offset: 0,
-                length: cnt.get_ref().len() as u64,
+                length: cnt.len() as u64,
             },
             min_start_ts: 0,
             table_id: 0,
             resolved_ts: 0,
             sha256: Arc::from(
-                sha256(cnt.get_ref())
+                sha256(&cnt)
                     .expect("cannot calculate sha256 for file")
                     .into_boxed_slice(),
             ),
@@ -352,8 +424,9 @@ impl LogFileBuilder {
                 .is_empty()
                 .not()
                 .then(|| self.region_epoches.into_boxed_slice().into()),
+            encryption: self.encryption,
         };
-        (file, cnt.into_inner())
+        (file, cnt)
     }
 }
 

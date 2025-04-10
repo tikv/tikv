@@ -42,6 +42,8 @@ pub enum ErrorKind {
     Engine(#[from] engine_traits::Error),
     #[error("Codec {0}")]
     Codec(#[from] codec::Error),
+    #[error("Encryption {0}")]
+    Encryption(#[from] encryption::Error),
     #[error("Uncategorised Error {0}")]
     Other(String),
 }
