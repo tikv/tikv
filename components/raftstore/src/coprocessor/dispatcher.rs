@@ -819,6 +819,20 @@ impl<E: KvEngine> CoprocessorHost<E> {
         }
     }
 
+    pub fn on_apply_snapshot_committed(
+        &self,
+        region: &Region,
+        peer_id: u64,
+        snap_key: &crate::store::SnapKey,
+        snap: Option<&crate::store::Snapshot>,
+    ) {
+        let mut ctx = ObserverContext::new(region);
+        for observer in &self.registry.apply_snapshot_observers {
+            let observer = observer.observer.inner();
+            observer.on_apply_snapshot_committed(&mut ctx, peer_id, snap_key, snap);
+        }
+    }
+
     pub fn new_split_checker_host<'a>(
         &'a self,
         region: &Region,
