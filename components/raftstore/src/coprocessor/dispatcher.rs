@@ -1101,6 +1101,7 @@ mod tests {
         PreWriteApplyState = 25,
         OnRaftMessage = 26,
         CancelApplySnapshot = 27,
+        ApplySnapshotCommitted = 28,
     }
 
     impl Coprocessor for TestCoprocessor {}
@@ -1326,6 +1327,19 @@ mod tests {
                 Ordering::SeqCst,
             );
         }
+
+        fn on_apply_snapshot_committed(
+            &self,
+            _: &mut ObserverContext<'_>,
+            _: u64,
+            _: &crate::store::SnapKey,
+            _: Option<&crate::store::Snapshot>,
+        ) {
+            self.called.fetch_add(
+                ObserverIndex::ApplySnapshotCommitted as usize,
+                Ordering::SeqCst,
+            );
+        }
     }
 
     impl CmdObserver<PanicEngine> for TestCoprocessor {
@@ -1518,6 +1532,15 @@ mod tests {
 
         host.cancel_apply_snapshot(region.get_id(), 0);
         index += ObserverIndex::CancelApplySnapshot as usize;
+        assert_all!([&ob.called], &[index]);
+
+        let sk = SnapKey {
+            region_id: region.get_id(),
+            term: 0,
+            idx: 0,
+        };
+        host.on_apply_snapshot_committed(region.get_id(), 0, &sk, None);
+        index += ObserverIndex::ApplySnapshotCommitted as usize;
         assert_all!([&ob.called], &[index]);
     }
 
