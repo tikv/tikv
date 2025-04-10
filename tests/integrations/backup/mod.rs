@@ -526,7 +526,7 @@ fn test_invalid_external_storage() {
 
     suite.stop();
 
-    //panic!("verify the test is run in CI")
+    // panic!("verify the test is run in CI")
 }
 
 #[test]

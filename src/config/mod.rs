@@ -5998,7 +5998,7 @@ mod tests {
             .update_config("memory.profiling_sample_per_bytes", "invalid")
             .unwrap_err();
 
-        //panic!("verify the test is run in CI")
+        // panic!("verify the test is run in CI")
     }
 
     #[test]
