@@ -73,6 +73,18 @@ groups:
       value: '{{ $value }}'
       summary: TiKV write stall
 
+  - alert: TiKV_maybe_write_stall
+    expr: max(tikv_scheduler_l0_avg[10m]) by (instance) > 80
+    for: 1m
+    labels:
+      env: ENV_LABELS_ENV
+      level: critical
+      expr:  max(tikv_scheduler_l0_avg[10m]) by (instance) > 80
+    annotations:
+      description: 'cluster: ENV_LABELS_ENV, type: {{ $labels.type }}, instance: {{ $labels.instance }}, values: {{ $value }}'
+      value: '{{ $value }}'
+      summary: TiKV the number of L0 files exceeds 80
+
   - alert: TiKV_raft_log_lag
     expr: histogram_quantile(0.99, sum(rate(tikv_raftstore_log_lag_bucket[1m])) by (le, instance))  > 5000
     for: 1m
