@@ -286,9 +286,9 @@ pub struct TxnStatusCache {
     // for large txns, or any txn whose min_commit_ts needs to be cached
     // It is isolated from the normal cache to prevents large transactions from being evicted due
     // to normal transactions. This is how this module "prioritizes" large transactions.
-    // 
-    // Invariant: when a process needs to acquire both locks, 
-    // it must first acquire the large_txn_cache lock, then the normal_cache lock, 
+    //
+    // Invariant: when a process needs to acquire both locks,
+    // it must first acquire the large_txn_cache lock, then the normal_cache lock,
     // to avoid deadlock.
     large_txn_cache: Vec<CachePadded<Mutex<TxnStatusCacheSlot>>>,
     is_enabled: bool,
@@ -490,7 +490,7 @@ impl TxnStatusCache {
                 }
                 after_size = normal_cache.size();
                 after_allocated = normal_cache.internal_allocated_capacity();
-                
+
                 fail_point!("txn_status_cache_upsert_after_normal_before_large");
 
                 if let Some(existing_entry) = large_cache.get_mut(&start_ts) {
@@ -535,7 +535,7 @@ impl TxnStatusCache {
         if let Some(entry) = large_txn_cache.get(&start_ts) {
             return Some(entry.state);
         }
-        
+
         fail_point!("txn_status_cache_get_after_large_before_normal");
 
         let mut normal_cache = self.normal_cache[slot_index].lock();
@@ -1525,9 +1525,8 @@ mod tests {
 
     #[test]
     fn test_txn_status_cache_lock_order() {
-        use std::sync::Arc;
-        use std::thread;
-        use std::time::Duration;
+        use std::{sync::Arc, thread, time::Duration};
+
         use fail::FailScenario;
         use txn_types::TimeStamp;
 
@@ -1541,30 +1540,32 @@ mod tests {
             Duration::from_secs(60),
             1000,
         ));
-        
+
         let start_ts = TimeStamp::from(42);
         let now = SystemTime::now();
 
         // Start thread 1 (upsert operation)
         let cache_clone1 = cache.clone();
         let thread1 = thread::spawn(move || {
-            let state = TxnState::Committed { commit_ts: TimeStamp::from(43) };
+            let state = TxnState::Committed {
+                commit_ts: TimeStamp::from(43),
+            };
             cache_clone1.upsert(start_ts, state, now);
         });
-        
+
         // Start thread 2 (get operation)
         let cache_clone2 = cache.clone();
         let thread2 = thread::spawn(move || {
             let _ = cache_clone2.get(start_ts);
         });
-        
+
         // Wait a moment to ensure both threads have reached their failpoints
         thread::sleep(Duration::from_millis(300));
-        
+
         // Release the failpoints
         fail::remove("txn_status_cache_get_after_large_before_normal");
         fail::remove("txn_status_cache_upsert_after_normal_before_large");
-        
+
         // if deadlock, thread1 will not join, test will hang here
         thread1.join().unwrap();
         thread2.join().unwrap();
