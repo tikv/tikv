@@ -1539,7 +1539,7 @@ mod tests {
             term: 0,
             idx: 0,
         };
-        host.on_apply_snapshot_committed(region, 0, &sk, None);
+        host.on_apply_snapshot_committed(&region, 0, &sk, None);
         index += ObserverIndex::ApplySnapshotCommitted as usize;
         assert_all!([&ob.called], &[index]);
     }
