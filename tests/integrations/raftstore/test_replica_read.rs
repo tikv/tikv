@@ -573,6 +573,7 @@ fn test_malformed_read_index() {
         id: Uuid::new_v4(),
         request: None,
         locked: None,
+        read_index_safe_ts: None,
     };
     let mut e = raft::eraftpb::Entry::default();
     e.set_data(rctx.to_bytes().into());

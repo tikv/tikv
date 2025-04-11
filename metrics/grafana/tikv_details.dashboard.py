@@ -1403,7 +1403,7 @@ def ThreadCPU() -> RowPanel:
                     target(
                         expr=expr_sum_rate(
                             "tikv_thread_cpu_seconds_total",
-                            label_selectors=['name=~"(sst_|impwkr_).*"'],
+                            label_selectors=['name=~"sst_.*"'],
                         ),
                     ),
                 ],
@@ -2999,7 +2999,7 @@ def LocalReader() -> RowPanel:
     layout.row(
         [
             graph_panel(
-                title="Local reader requests",
+                title="Local reader reject requests",
                 targets=[
                     target(
                         expr=expr_sum_rate(
@@ -3008,23 +3008,56 @@ def LocalReader() -> RowPanel:
                         ),
                         legend_format="{{instance}}-reject-by-{{reason}}",
                     ),
+                ],
+            ),
+            graph_panel(
+                title="Local reader read requests",
+                targets=[
                     target(
                         expr=expr_sum_rate(
-                            "tikv_raftstore_local_read_executed_requests",
+                            "tikv_raftstore_local_read_executed_requests", by_labels=[]
                         ),
-                        legend_format="{{instance}}-total",
+                        legend_format="tikv_raftstore_local_read_executed_requests",
+                        additional_groupby=True,
                     ),
                     target(
                         expr=expr_sum_rate(
                             "tikv_raftstore_local_read_executed_stale_read_requests",
+                            by_labels=[],
                         ),
-                        legend_format="{{instance}}-stale-read",
+                        legend_format="tikv_raftstore_local_read_executed_stale_read_requests",
+                        additional_groupby=True,
                     ),
-                ],
-                series_overrides=[
-                    series_override(
-                        alias="/.*-total/",
-                        yaxis=2,
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raftstore_local_read_executed_follower_read_requests",
+                            by_labels=[],
+                        ),
+                        legend_format="tikv_raftstore_local_read_executed_follower_read_requests",
+                        additional_groupby=True,
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raftstore_local_read_received_requests", by_labels=[]
+                        ),
+                        legend_format="tikv_raftstore_local_read_received_requests",
+                        additional_groupby=True,
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raftstore_local_read_received_stale_read_requests",
+                            by_labels=[],
+                        ),
+                        legend_format="tikv_raftstore_local_read_received_stale_read_requests",
+                        additional_groupby=True,
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raftstore_local_read_received_follower_read_requests",
+                            by_labels=[],
+                        ),
+                        legend_format="tikv_raftstore_local_read_received_follower_read_requests",
+                        additional_groupby=True,
                     ),
                 ],
             ),
