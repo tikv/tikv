@@ -10,8 +10,13 @@ use std::{
 
 use api_version::KvFormat;
 use futures::{compat::Stream01CompatExt, stream::StreamExt};
-use grpcio::CompressionLevel::{GRPC_COMPRESS_LEVEL_HIGH, GRPC_COMPRESS_LEVEL_LOW, GRPC_COMPRESS_LEVEL_NONE};
-use grpcio::{ChannelBuilder, Environment, ResourceQuota, Server as GrpcServer, ServerBuilder};
+use grpcio::{
+    ChannelBuilder,
+    CompressionLevel::{
+        GRPC_COMPRESS_LEVEL_HIGH, GRPC_COMPRESS_LEVEL_LOW, GRPC_COMPRESS_LEVEL_NONE,
+    },
+    Environment, ResourceQuota, Server as GrpcServer, ServerBuilder,
+};
 use grpcio_health::{create_health, HealthService};
 use health_controller::HealthController;
 use kvproto::tikvpb::*;
@@ -39,12 +44,11 @@ use super::{
     transport::ServerTransport,
     Config, Error, Result,
 };
-use crate::server::config::GrpcCompressionType;
 use crate::{
     coprocessor::Endpoint,
     coprocessor_v2,
     read_pool::ReadPool,
-    server::{gc_worker::GcWorker, tablet_snap::TabletRunner, Proxy},
+    server::{config::GrpcCompressionType, gc_worker::GcWorker, tablet_snap::TabletRunner, Proxy},
     storage::{lock_manager::LockManager, Engine, Storage},
     tikv_util::sys::thread::ThreadBuildWrapper,
 };
@@ -96,14 +100,15 @@ where
         let mem_quota = ResourceQuota::new(Some("ServerMemQuota"))
             .resize_memory(self.cfg.value().grpc_memory_pool_quota.0 as usize);
 
-        // Best-effort algorithm selection: If the client doesn't support the specified algorithm,
-        // the server may fall back to a different one or disable compression entirely.
+        // Best-effort algorithm selection: If the client doesn't support the specified
+        // algorithm, the server may fall back to a different one or disable
+        // compression entirely.
         //
         // This is a bit hacky to map Low and High to gzip and deflate respectively.
         // See CompressionAlgorithmForLevel in gRPC implementation for details.
         //
-        // We cannot set default compression algorithm to here, because it won't check whether the
-        // client side supports the algorithm
+        // We cannot set default compression algorithm here, because it won't check
+        // whether the client side supports the algorithm
         let compression_level = match self.cfg.value().grpc_compression_type {
             GrpcCompressionType::None => GRPC_COMPRESS_LEVEL_NONE,
             GrpcCompressionType::Deflate => GRPC_COMPRESS_LEVEL_HIGH,
