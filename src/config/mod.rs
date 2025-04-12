@@ -5522,7 +5522,7 @@ mod tests {
         incoming.gc.max_write_bytes_per_sec = ReadableSize::mb(100);
         incoming.rocksdb.defaultcf.block_cache_size = Some(ReadableSize::mb(500));
         incoming.storage.io_rate_limit.import_priority = file_system::IoPriority::High;
-        incoming.security.redact_info_log = log_wrappers::RedactOption::Marker.to_string();
+        incoming.security.redact_info_log = log_wrappers::RedactOption::Mode("marker".to_owned());
         let diff = old.diff(&incoming);
         let mut change = HashMap::new();
         change.insert(
@@ -7069,7 +7069,7 @@ mod tests {
             default_cfg.raft_engine.config().batch_compression_threshold,
             RaftEngineReadableSize::kb(4)
         );
-        default_cfg.security.redact_info_log = log_wrappers::RedactOption::default().to_string();
+        default_cfg.security.redact_info_log = log_wrappers::RedactOption::default();
         default_cfg.coprocessor.region_max_size = Some(default_cfg.coprocessor.region_max_size());
         default_cfg.coprocessor.region_max_keys = Some(default_cfg.coprocessor.region_max_keys());
         default_cfg.coprocessor.region_split_keys =

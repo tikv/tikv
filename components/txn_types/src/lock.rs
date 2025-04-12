@@ -1241,7 +1241,7 @@ mod tests {
             }"
         );
 
-        log_wrappers::set_redact_info_log(log_wrappers::RedactOption::Marker);
+        log_wrappers::set_redact_info_log(log_wrappers::RedactOption::Mode("marker".to_string()));
         let redact_result = format!("{:?}", lock);
         log_wrappers::set_redact_info_log(log_wrappers::RedactOption::Flag(false));
         assert_eq!(
