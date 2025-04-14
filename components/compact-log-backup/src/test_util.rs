@@ -491,6 +491,19 @@ impl TmpStorage {
             // Verify the actual content
             res.verify_checksum().unwrap();
             verify_the_same::<RocksEngine>(sst_path, cm.must_iter()).unwrap();
+
+            // For now, only one SSTs should be written.
+            assert_eq!(res.meta.sst_outputs.len(), 1);
+            let sst_file = &res.meta.sst_outputs[0];
+            assert_eq!(res.origin.input_min_ts, sst_file.start_version);
+            assert_eq!(res.origin.input_max_ts, sst_file.end_version);
+            assert_eq!(res.origin.cf, sst_file.cf);
+
+            if res.expected_crc64.is_some() {
+                assert_eq!(res.expected_crc64, Some(sst_file.crc64xor));
+            }
+            assert_eq!(res.expected_size, sst_file.total_bytes);
+            assert_eq!(res.expected_keys, sst_file.total_kvs);
         }
     }
 
