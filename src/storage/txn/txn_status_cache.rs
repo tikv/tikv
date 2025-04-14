@@ -1530,7 +1530,7 @@ mod tests {
         use fail::FailScenario;
         use txn_types::TimeStamp;
 
-        let scenario = FailScenario::setup();
+        let _scenario = FailScenario::setup();
         fail::cfg("txn_status_cache_get_after_large_before_normal", "pause").unwrap();
         fail::cfg("txn_status_cache_upsert_after_normal_before_large", "pause").unwrap();
 
@@ -1569,6 +1569,5 @@ mod tests {
         // if deadlock, thread1 will not join, test will hang here
         thread1.join().unwrap();
         thread2.join().unwrap();
-        drop(scenario);
     }
 }
