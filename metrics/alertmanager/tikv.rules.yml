@@ -73,6 +73,21 @@ groups:
       value: '{{ $value }}'
       summary: TiKV write stall
 
+<<<<<<< HEAD
+=======
+  - alert: TiKV_maybe_write_stall
+    expr: max(tikv_scheduler_l0_avg) by (instance) > 80
+    for: 1m
+    labels:
+      env: ENV_LABELS_ENV
+      level: critical
+      expr:  max(tikv_scheduler_l0_avg) by (instance) > 80
+    annotations:
+      description: 'cluster: ENV_LABELS_ENV, type: {{ $labels.type }}, instance: {{ $labels.instance }}, values: {{ $value }}'
+      value: '{{ $value }}'
+      summary: TiKV the average number of L0 files exceeds 80
+
+>>>>>>> 95c8f8c098 (alter_rules: fix incorrect aggregation expression with range vector. (#18387))
   - alert: TiKV_raft_log_lag
     expr: histogram_quantile(0.99, sum(rate(tikv_raftstore_log_lag_bucket[1m])) by (le, instance))  > 5000
     for: 1m
