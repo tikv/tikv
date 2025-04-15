@@ -5969,8 +5969,9 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "#ifdef MALLOC_CONF"]
     #[cfg(feature = "mem-profiling")]
-    fn test_change_memory_config() {
+    fn test_change_memory_config_ifdef_malloc_conf() {
         let (cfg, _dir) = TikvConfig::with_tmp().unwrap();
         let cfg_controller = ConfigController::new(cfg);
 
