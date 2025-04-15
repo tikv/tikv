@@ -24,8 +24,6 @@ use self::util::{
     open_cluster_and_tikv_import_client_v2,
 };
 
-<<<<<<< HEAD
-=======
 #[test]
 fn test_concurrent_download_sst_with_fail() {
     let mut config = TikvConfig::default();
@@ -201,7 +199,6 @@ fn test_concurrent_download_sst() {
     }
 }
 
->>>>>>> 3eb3439fd8 (sst_importer: add lock for ponential duplicate download (#18344))
 // Opening sst writer involves IO operation, it may block threads for a while.
 // Test if download sst works when opening sst writer is blocked.
 #[test]
