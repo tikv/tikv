@@ -21,7 +21,7 @@ mod util;
 
 use self::util::{
     new_cluster_and_tikv_import_client, new_cluster_and_tikv_import_client_tde,
-    open_cluster_and_tikv_import_client_v2,
+    open_cluster_and_tikv_import_client, open_cluster_and_tikv_import_client_v2,
 };
 
 #[test]
